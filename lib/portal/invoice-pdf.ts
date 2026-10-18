@@ -6,6 +6,7 @@ import { invoiceLabels, type InvoiceLang } from '@/lib/portal/invoice-labels'
 import { sanitizePdfLine } from '@/lib/pdf/sanitize'
 import { wrapPdfText } from '@/lib/pdf/wrap-text'
 import { resolveMailingAddress } from '@/lib/addresses'
+import { displayCustomerAddress } from '@/lib/portal/customer-address'
 
 /**
  * Builds the PDF of a client sales invoice. Shared by the PDF download route and the Send route, so
@@ -24,7 +25,7 @@ export async function renderInvoicePdf(opts: {
   const { invoice, shownStatus, langParam = null } = opts
   const id = invoice.id as string
   const { data: customer } = invoice.customer_id
-    ? await supabaseAdmin.from('client_customers').select('name, email, address, vat_number').eq('id', invoice.customer_id).eq('account_id', invoice.account_id).maybeSingle()
+    ? await supabaseAdmin.from('client_customers').select('name, email, address, postal_code, city, region, country, vat_number').eq('id', invoice.customer_id).eq('account_id', invoice.account_id).maybeSingle()
     : { data: null }
 
   const { data: items } = await supabaseAdmin
@@ -160,7 +161,8 @@ export async function renderInvoicePdf(opts: {
     page.drawText(sanitizePdfLine(customer.name), { x: 50, y, size: 11, font: helveticaBold, color: black })
     y -= 14
     if (customer.email) { page.drawText(sanitizePdfLine(customer.email), { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
-    if (customer.address) { page.drawText(sanitizePdfLine(customer.address), { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
+    const customerAddress = displayCustomerAddress(customer)
+    if (customerAddress) { page.drawText(sanitizePdfLine(customerAddress), { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
     if (customer.vat_number) { page.drawText(sanitizePdfLine(`VAT: ${customer.vat_number}`), { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
   }
 

@@ -5,6 +5,8 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
+import { isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
+import { getHistoryCutoff } from '@/lib/portal/history-cutoff'
 
 /**
  * GET /api/portal/documents/[id]
@@ -26,7 +28,7 @@ export async function GET(
   // Get the document
   const { data: doc } = await supabaseAdmin
     .from('documents')
-    .select('id, file_name, account_id, contact_id, category, drive_file_id, portal_visible, service_delivery_id, flow_stage')
+    .select('id, file_name, account_id, contact_id, category, drive_file_id, portal_visible, service_delivery_id, flow_stage, created_at, visible_to_new_owners')
     .eq('id', params.id)
     .single()
 
@@ -62,6 +64,12 @@ export async function GET(
   // its own person may open it — never a co-member or a teammate (Master Rules MM6).
   if (isPersonalDocumentHiddenFrom(doc, contactId)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+
+  // A person added to the company later may not open files saved before their start date (unless staff opened this one) —
+  // otherwise an old file would still be reachable by its id (dev job d14e823f).
+  if (doc.account_id && contactId && isHiddenByHistoryCutoff(doc, await getHistoryCutoff(doc.account_id, contactId), contactId)) {
+    return NextResponse.json({ error: 'Document not found' }, { status: 404 })
   }
 
   // Record that this contact opened the document (clears its "New" state for

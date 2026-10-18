@@ -52,6 +52,7 @@ export type ChatEventKind =
   | "formation_wizard_submitted" // client submitted the Company Formation wizard via the portal
   | "onboarding_wizard_submitted" // client submitted the Client Onboarding data form (existing-LLC clients)
   | "closure_wizard_submitted" // client submitted the Company Closure form (portal wizard or legacy link)
+  | "person_left" // STAFF removed a person from a company (Antonio 2026-10-17: every notification goes in the Calendar) — exception to "client actions only"
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -908,4 +909,39 @@ export async function retireWizardSubmittedNote(params: {
     )
     return { retired: 0 }
   }
+}
+
+/**
+ * A person was removed from a company (Storage check, Phase 2). Antonio 2026-10-17: "all notifications must go in the Calendar"
+ * — so the removal shows in What's New there. NOTE: this is a STAFF action; the What's New rule of 2026-09-24 ("client actions
+ * only") is deliberately extended by his word for this one kind. The note is staff-only like every other (hidden from clients).
+ * Idempotent on the Storage check note id.
+ */
+export async function emitPersonLeftEvent(p: {
+  noteId: string
+  accountId: string
+  personName: string | null
+  companyName: string | null
+  via: string
+  onlyLinkedPerson: boolean
+}): Promise<EmitResult> {
+  const who = p.personName?.trim() || "A person"
+  const company = p.companyName?.trim() || "this company"
+  const how = p.via === "member-delete" ? "removed as a member"
+    : p.via === "unlink" ? "unlinked from the company"
+    : p.via === "revoke-access" ? "had their portal access revoked"
+    : p.via === "delete-contact" ? "deleted from the CRM"
+    : "removed"
+  const lines = [
+    `${who} was ${how} on ${company}.`,
+    "Their access to this company's documents in the client portal ended. Nothing was sent to them — if they ask for their documents, send them by hand.",
+  ]
+  if (p.onlyLinkedPerson) lines.push(`${company} now has NO linked person — add one.`)
+  return emitClientChatEvent({
+    account_id: p.accountId,
+    topic: "Person left",
+    message: lines.join("\n"),
+    source: { table: "storage_check_notes", id: p.noteId },
+    event_kind: "person_left",
+  })
 }

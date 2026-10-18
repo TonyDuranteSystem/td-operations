@@ -8,6 +8,8 @@ import { cookies } from 'next/headers'
 import { DocumentList } from '@/components/portal/document-list'
 import { getNewDocumentIds } from '@/lib/portal/document-alerts'
 import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
+import { isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
+import { getHistoryCutoff } from '@/lib/portal/history-cutoff'
 import { DocumentUploadButton } from '@/components/portal/document-upload-button'
 import { CorrespondenceList } from '@/components/portal/correspondence-list'
 import { t, getLocale } from '@/lib/portal/i18n'
@@ -59,6 +61,7 @@ export default async function PortalDocumentsPage() {
     category: number | null; drive_file_id: string | null
     processed_at: string | null; created_at: string
     service_delivery_id: string | null
+    visible_to_new_owners?: boolean | null
   }
 
   let companyDocs: DocRow[] = []
@@ -69,10 +72,12 @@ export default async function PortalDocumentsPage() {
   let flowGroups: { id: string; title: string; docs: DocRow[] }[] = []
 
   if (selectedAccountId) {
+    // A person added to a company that already had history may see only what comes from a date on (dev job d14e823f).
+    const historyCutoff = await getHistoryCutoff(selectedAccountId, contactId)
     // Company docs: shared categories (1,3,4,5) OR no contact assigned
     const { data: cdData } = await supabaseAdmin
       .from('documents')
-      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id')
+      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id, visible_to_new_owners')
       .eq('account_id', selectedAccountId)
       .eq('portal_visible', true)
       .or(`category.in.(${COMPANY_CATEGORIES.join(',')}),contact_id.is.null`)
@@ -84,7 +89,7 @@ export default async function PortalDocumentsPage() {
     // They appear ONLY in "My Documents" for their owner; an ownerless personal
     // doc stays hidden from all clients until an admin assigns it. This closes a
     // multi-member leak where an unassigned passport could be shown to everyone.
-    companyDocs = ((cdData ?? []) as unknown as DocRow[]).filter(d => d.category !== 2)
+    companyDocs = ((cdData ?? []) as unknown as DocRow[]).filter(d => d.category !== 2 && !isHiddenByHistoryCutoff(d, historyCutoff, contactId))
 
     // My docs: personal category (Contacts = 2) belonging to this contact only.
     // Teammates have no contact id → they NEVER see anyone's personal docs.
@@ -141,7 +146,7 @@ export default async function PortalDocumentsPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: flowData } = await (supabaseAdmin as any)
       .from('documents')
-      .select('id, file_name, document_type_name, category, contact_id, drive_file_id, processed_at, created_at, service_delivery_id, flow_stage, portal_visible')
+      .select('id, file_name, document_type_name, category, contact_id, drive_file_id, processed_at, created_at, service_delivery_id, flow_stage, portal_visible, visible_to_new_owners')
       .eq('account_id', selectedAccountId)
       .not('service_delivery_id', 'is', null)
       .order('created_at', { ascending: false })
@@ -183,6 +188,8 @@ export default async function PortalDocumentsPage() {
         return isClientSafeFlowDoc(meta?.serviceType, d.flow_stage, d.portal_visible)
           // never another member's personal document (passport/ID/ITIN…) in a flow group
           && !isPersonalDocumentHiddenFrom(d, contactId)
+          // a person who joined later sees only what came after they were added (unless staff opened it)
+          && !isHiddenByHistoryCutoff(d, historyCutoff, contactId)
       })
 
       const flowIds = new Set(flowDocs.map(d => d.id))

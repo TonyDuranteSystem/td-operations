@@ -153,6 +153,8 @@ export interface Account {
 export interface Contact {
   id: string
   full_name: string
+  // account_contacts.history_visible_from for the account being viewed: this person sees the company's history only from then (NULL = everything)
+  history_visible_from?: string | null
   first_name: string | null
   last_name: string | null
   email: string | null

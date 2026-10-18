@@ -12,6 +12,7 @@ import { toast } from 'sonner'
 import { format, parseISO } from 'date-fns'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
+import { displayCustomerAddress } from '@/lib/portal/customer-address'
 
 interface Customer {
   id: string
@@ -23,6 +24,7 @@ interface Customer {
   phone: string | null
   address: string | null
   city: string | null
+  postal_code: string | null
   region: string | null
   country: string | null
   vat_number: string | null
@@ -155,6 +157,7 @@ export default function CustomerDetailPage() {
             <EditField label={t('customers.email')} value={editData.email ?? ''} onChange={v => setEditData({ ...editData, email: v })} />
             <EditField label={t('customers.phone')} value={editData.phone ?? ''} onChange={v => setEditData({ ...editData, phone: v })} />
             <EditField label={t('customers.address')} value={editData.address ?? ''} onChange={v => setEditData({ ...editData, address: v })} />
+            <EditField label={t('customers.postalCode')} value={editData.postal_code ?? ''} onChange={v => setEditData({ ...editData, postal_code: v })} />
             <EditField label={t('customers.city')} value={editData.city ?? ''} onChange={v => setEditData({ ...editData, city: v })} />
             <EditField label={t('customers.region')} value={editData.region ?? ''} onChange={v => setEditData({ ...editData, region: v })} />
             <EditField label={t('customers.country')} value={editData.country ?? ''} onChange={v => setEditData({ ...editData, country: v })} />
@@ -171,7 +174,7 @@ export default function CustomerDetailPage() {
             {!customer.first_name && !customer.company_name && <InfoRow icon={User} label={t('customers.name')} value={customer.name} />}
             <InfoRow icon={Mail} label={t('customers.email')} value={customer.email ?? '\u2014'} />
             {customer.phone && <InfoRow icon={Mail} label={t('customers.phone')} value={customer.phone} />}
-            <InfoRow icon={MapPin} label={t('customers.address')} value={[customer.address, customer.city, customer.region, customer.country].filter(Boolean).join(', ') || '\u2014'} />
+            <InfoRow icon={MapPin} label={t('customers.address')} value={displayCustomerAddress(customer) || '\u2014'} />
             <InfoRow icon={FileText} label={t('customers.vat')} value={customer.vat_number ?? '\u2014'} />
             {customer.notes && <div className="sm:col-span-2"><InfoRow icon={FileText} label={t('customers.notes')} value={customer.notes} /></div>}
           </div>

@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { account_id, name, first_name, last_name, company_name, email, phone, address, city, region, country, vat_number, notes } = body
+  const { account_id, name, first_name, last_name, company_name, email, phone, address, city, postal_code, region, country, vat_number, notes } = body
 
   if (!account_id) return NextResponse.json({ error: 'account_id required' }, { status: 400 })
   if (!name && !first_name && !company_name) return NextResponse.json({ error: 'Name or company name required' }, { status: 400 })
@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
       phone: phone || null,
       address: address || null,
       city: city || null,
+      postal_code: postal_code || null,
       region: region || null,
       country: country || null,
       vat_number: vat_number || null,
