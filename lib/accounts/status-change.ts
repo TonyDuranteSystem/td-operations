@@ -16,7 +16,7 @@ export type StatusNote = { notify: false; reason: string } | { notify: true; hea
 const HIDDEN_FROM_PORTAL = new Set(["Offboarding", "Closed", "Cancelled", "Delinquent"])
 
 /** Pure: what, if anything, staff should be told about this change. */
-export function describeStatusChange(oldStatus: string | null, newStatus: string | null, ctx: { hasStorage: boolean }): StatusNote {
+export function describeStatusChange(oldStatus: string | null, newStatus: string | null, ctx: { hasStorage: boolean; /** the automatic step that brings old documents back is switched on (STORE_REACTIVATION) */ autoBringBack?: boolean }): StatusNote {
   if (!newStatus || oldStatus === newStatus) return { notify: false, reason: "no change" }
   const storageLine = ctx.hasStorage ? "Its storage is kept; nothing was deleted or moved." : "It has no storage."
   if (newStatus === "Suspended") {
@@ -35,7 +35,7 @@ export function describeStatusChange(oldStatus: string | null, newStatus: string
         headline: "was reactivated",
         lines: [
           "The client sees the company in the portal again.",
-          ctx.hasStorage ? "Its storage is still there." : "It has NO storage yet — its old documents still have to be brought in.",
+          ctx.hasStorage ? "Its storage is still there." : ctx.autoBringBack ? "It has no storage yet — the system is bringing its old documents back in; each step is noted here." : "It has NO storage yet — its old documents still have to be brought in.",
         ],
       }
     }
@@ -61,7 +61,8 @@ export async function processAccountStatusEvents(opts: { budgetMs: number }): Pr
     try {
       const { data: acct } = await db().from("accounts").select("company_name").eq("id", ev.account_id).maybeSingle()
       const { count } = await db().from("store_owners").select("id", { count: "exact", head: true }).eq("account_id", ev.account_id).eq("kind", "company")
-      const note = describeStatusChange(ev.old_status, ev.new_status, { hasStorage: (count ?? 0) > 0 })
+      const { reactivationAllowed } = await import("@/lib/crm-store/go-live")
+      const note = describeStatusChange(ev.old_status, ev.new_status, { hasStorage: (count ?? 0) > 0, autoBringBack: reactivationAllowed() })
       if ("reason" in note) {
         await db().from("account_status_events").update({ handled_at: new Date().toISOString(), handled_note: `skipped: ${note.reason}` }).eq("id", ev.id)
         out.skipped++

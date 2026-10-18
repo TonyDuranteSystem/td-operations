@@ -194,9 +194,10 @@ const sha256Hex = (b: Buffer) => createHash("sha256").update(b).digest("hex")
 
 /** Throws unless a move may run here: the pilot environment, a live (not faked) Drive, and outside production
  *  only a folder in the TEST Shared Drive. */
-export async function assertMayImportFrom(driveFolderId: string, mode: ImportMode = "move"): Promise<void> {
+export async function assertMayImportFrom(driveFolderId: string, mode: ImportMode = "move", automatic = false): Promise<void> {
   const { pilotEnvironmentAllowed } = await import("./formation-pilot")
-  if (!pilotEnvironmentAllowed() && !(mode === "copy" && (studyCopyAllowed() || planBuildAllowed()))) throw new Error(mode === "copy" ? "Copying clients from Google Drive is not switched on here." : "Moving a company to the new storage is not switched on here.")
+  const { reactivationAllowed } = await import("./go-live")
+  if (!pilotEnvironmentAllowed() && !(mode === "copy" && (studyCopyAllowed() || planBuildAllowed() || (automatic && reactivationAllowed())))) throw new Error(mode === "copy" ? "Copying clients from Google Drive is not switched on here." : "Moving a company to the new storage is not switched on here.")
   const { isProductionDatabase } = await import("@/lib/google-drive-guard")
   const { getDriveItemAnyDrive } = await import("@/lib/google-drive")
   const item = await getDriveItemAnyDrive(driveFolderId)
@@ -241,14 +242,15 @@ export async function runIsCopy(runId: string): Promise<boolean> {
 // ─────────────────────────────────────────────────────────────── start
 
 /** Start (or resume) the move of one company. Scans the Drive folder and the company's storage: rows into the ledger. */
-export async function startDriveImport(accountId: string, actorId: string | null, opts: { mode?: ImportMode } = {}): Promise<RunView> {
+export async function startDriveImport(accountId: string, actorId: string | null, opts: { mode?: ImportMode; /** the reactivation step (switch STORE_REACTIVATION) — a COPY only, never a move */ automatic?: boolean } = {}): Promise<RunView> {
   const mode: ImportMode = opts.mode ?? "move"
   const { data: acct, error: aErr } = await db().from("accounts").select("id, company_name, drive_folder_id").eq("id", accountId).maybeSingle()
   if (aErr) throw new Error(`Could not read the company (${aErr.message}).`)
   if (!acct) throw new Error("Company not found.")
   // where may this run at all (checked before anything is touched)
   const { pilotEnvironmentAllowed } = await import("./formation-pilot")
-  if (!pilotEnvironmentAllowed() && !(mode === "copy" && studyCopyAllowed())) throw new Error(mode === "copy" ? "Copying clients from Google Drive is not switched on here." : "Moving a company to the new storage is not switched on here.")
+  const { reactivationAllowed } = await import("./go-live")
+  if (!pilotEnvironmentAllowed() && !(mode === "copy" && (studyCopyAllowed() || (opts.automatic === true && reactivationAllowed())))) throw new Error(mode === "copy" ? "Copying clients from Google Drive is not switched on here." : "Moving a company to the new storage is not switched on here.")
   // an open run continues — never a second one
   const { data: open } = await db().from("store_import_runs").select("id, status, updated_at, mode").eq("account_id", accountId).in("status", ["scanning", "moving", "undoing"]).maybeSingle()
   if (open && (open.mode === "copy") !== (mode === "copy")) throw new Error(open.mode === "copy" ? "A study copy of this company is open — finish or remove it first." : "A move of this company is running.")
@@ -272,7 +274,7 @@ export async function startDriveImport(accountId: string, actorId: string | null
     const why = importStartBlocker({ companyName: acct.company_name as string, otherAccountsOnSameFolder: otherAccounts ?? 0, contactsOnSameFolder: contactHolders ?? 0, hasLiveStorage: !!ownerRow && ownerRow.study_only === false, mode })
     if (why) throw new Error(why)
   }
-  await assertMayImportFrom(acct.drive_folder_id as string, mode)
+  await assertMayImportFrom(acct.drive_folder_id as string, mode, opts.automatic === true)
 
   const { data: run, error: rErr } = await db().from("store_import_runs")
     .insert({ account_id: accountId, drive_folder_id: acct.drive_folder_id, status: "scanning", started_by: actorId, mode }).select("id").single()

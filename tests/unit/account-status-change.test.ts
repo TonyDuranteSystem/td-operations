@@ -34,6 +34,8 @@ describe("describeStatusChange", () => {
     const a = describeStatusChange("Closed", "Active", no)
     expect(a).toMatchObject({ notify: true, headline: "was reactivated" })
     if (a.notify) expect(a.lines.join(" ")).toMatch(/NO storage yet/)
+    const auto = describeStatusChange("Closed", "Active", { hasStorage: false, autoBringBack: true })
+    if (auto.notify) expect(auto.lines.join(" ")).toMatch(/system is bringing its old documents back/)
     const b = describeStatusChange("Cancelled", "Active", yes)
     if (b.notify) expect(b.lines.join(" ")).toMatch(/storage is still there/)
   })

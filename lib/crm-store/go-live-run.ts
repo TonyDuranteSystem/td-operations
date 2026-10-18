@@ -8,7 +8,7 @@
  */
 
 import {
-  buildGoLiveReport, filesWithoutRecord, goLiveAllowed, goLiveBlockers, isExcludedCompany, mapRows, planFingerprint, storeDocumentLink, storePointer,
+  buildGoLiveReport, filesWithoutRecord, goLiveAllowed, goLiveBlockers, reactivationAllowed, isExcludedCompany, mapRows, planFingerprint, storeDocumentLink, storePointer,
   type CrmDocRow, type GoLiveReport, type LedgerFile, type RowVerdict, type StoredFileInfo,
 } from "./go-live"
 
@@ -228,9 +228,10 @@ function emptyResult(message: string): GoLiveResult { return { ok: false, runId:
 /** The fields of a record the switch may change — saved before, put back by undo. */
 const BEFORE_COLS = "file_name, mime_type, file_size, document_type_id, document_type_name, category, category_name, tax_year, portal_visible, status, drive_link, updated_at"
 
-export async function runGoLive(accountId: string, actorId: string | null, opts: { expectedPlanHash?: string } = {}): Promise<GoLiveResult> {
-  if (!goLiveAllowed()) throw new Error("Going live is switched off in this environment.")
-  if (!actorId) throw new Error("Only a signed-in owner can switch a company.")
+export async function runGoLive(accountId: string, actorId: string | null, opts: { expectedPlanHash?: string; /** the reactivation step: needs STORE_REACTIVATION, no signed-in person */ automatic?: boolean } = {}): Promise<GoLiveResult> {
+  const automatic = opts.automatic === true && reactivationAllowed()
+  if (!goLiveAllowed() && !automatic) throw new Error("Going live is switched off in this environment.")
+  if (!actorId && !automatic) throw new Error("Only a signed-in owner can switch a company.")
   const d = await db()
   const deadline = Date.now() + COMPANY_BUDGET_MS
 
@@ -409,7 +410,7 @@ interface LedgerEntry { id: string; drive_file_id: string; drive_link: string | 
  * switch itself (`internal`) or once it is dead (stale).
  */
 export async function undoGoLive(runId: string, actorId: string | null, opts: { reason?: string; internal?: boolean } = {}): Promise<{ restored: number; problems: string[]; filesAddedSince: number }> {
-  if (!actorId) throw new Error("Only a signed-in owner can undo a switch.")
+  if (!actorId && !opts.internal) throw new Error("Only a signed-in owner can undo a switch.")
   const d = await db()
   const { data: run, error } = await d.from("store_import_runs").select("id, owner_id, status, finished_at, updated_at, mode, report").eq("id", runId).maybeSingle()
   if (error || !run) throw new Error("Switch not found.")

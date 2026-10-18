@@ -101,6 +101,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/reactivation-storage",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/hermes-bridge",
       "schedule": "*/5 * * * *"
     },

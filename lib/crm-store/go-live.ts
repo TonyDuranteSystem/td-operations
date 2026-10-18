@@ -25,6 +25,15 @@ export function goLiveAllowed(env: Record<string, string | undefined> = process.
   return env.STORE_GO_LIVE === "1"
 }
 
+/**
+ * The REACTIVATION switch (Storage check Phase 3, slice 3a): lets the automatic step that follows a company's return to Active
+ * copy that ONE company's old Drive files and switch it. It does NOT open the night run or the owner's go-live button
+ * (those stay behind STORE_GO_LIVE). Anything but "1" is off.
+ */
+export function reactivationAllowed(env: Record<string, string | undefined> = process.env): boolean {
+  return env.STORE_REACTIVATION === "1"
+}
+
 // ───────────────────────────────────────────────────────────── pure part (unit-tested)
 
 /** The one company that is only ever a test company (Antonio 2026-10-13: stays Drive-only). */

@@ -43,6 +43,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/annual-installments": "0 10 1 * *",
   "/api/cron/drive-pickup": "*/5 * * * *", // registered 2026-10-17 so the completeness test passes (drive pickup cron from job ad09ea91)
   "/api/cron/account-status-events": "*/5 * * * *", // company status changes → staff-only note in What's New (job f855295a)
+  "/api/cron/reactivation-storage": "*/5 * * * *", // reactivated company → old documents back into storage (job f855295a, slice 3a)
   "/api/cron/drive-gap": "*/5 * * * *", // added 2026-10-17 so main's completeness test passes (drive check cron from job ad09ea91)
   "/api/cron/deadline-reminders": "0 8 * * *",
   "/api/cron/wizard-reminders": "17 9 * * *",

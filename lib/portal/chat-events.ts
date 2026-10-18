@@ -967,3 +967,25 @@ export async function emitAccountStatusEvent(p: {
     event_kind: "account_status_changed",
   })
 }
+
+/**
+ * The storage step after a company is reactivated (Storage check Phase 3, slice 3a): one staff-only note per STEP, so `key`
+ * (a short fixed word or hash) is part of the source id — the same step is never noted twice, a new step always is.
+ */
+export async function emitStorageReactivationNote(p: {
+  eventId: string
+  key: string
+  accountId: string
+  companyName: string | null
+  headline: string
+  lines: string[]
+}): Promise<EmitResult> {
+  const company = p.companyName?.trim() || "This company"
+  return emitClientChatEvent({
+    account_id: p.accountId,
+    topic: "Company status",
+    message: [`${company} ${p.headline}.`, ...p.lines].join("\n"),
+    source: { table: "account_status_events", id: `${p.eventId}:${p.key}` },
+    event_kind: "account_status_changed",
+  })
+}
