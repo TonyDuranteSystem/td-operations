@@ -265,9 +265,9 @@ export async function fileRenewal(
       } else {
         // No storage: a company left on its old folder (not finished, has a folder) carries on there, exactly as the flow
         // upload does; everyone else gets the one plain sentence — before anything is written.
-        const { decideNoStorage, NO_STORAGE_SENTENCE } = await import("@/lib/crm-store/no-storage")
+        const { decideNoStorage } = await import("@/lib/crm-store/no-storage")
         const decision = decideNoStorage(account as { status?: string | null; drive_folder_id?: string | null; gdrive_folder_url?: string | null })
-        if (decision.route === "refuse") throw new Error(NO_STORAGE_SENTENCE)
+        if (decision.route === "refuse") throw new Error(decision.sentence)
         const oldFolderId = decision.folderId
 
         // 2. Ensure Compliance/ subfolder under the account folder (per SOP v7.0)

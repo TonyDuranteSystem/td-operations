@@ -19,6 +19,7 @@ const state = vi.hoisted(() => ({
   pdf: new Uint8Array(),
   driveMode: "forbid" as "forbid" | "record",
   listEmpty: false,
+  moving: false,
 }))
 
 vi.mock("@/lib/supabase-admin", async () => {
@@ -40,14 +41,16 @@ vi.mock("@/lib/ss4/resolve-articles-pdf", () => ({ resolveArticlesForSs4: async 
 vi.mock("@/lib/system-errors", () => ({ reportSystemError: async () => null }))
 vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: async () => state.companyState }))
 vi.mock("@/lib/crm-store/save-for-account", () => ({
+  CompanyMovingError: class CompanyMovingError extends Error { constructor() { super("This company's files are being moved to the new storage right now — please try again in a few minutes."); this.name = "CompanyMovingError" } },
   saveSignedPdfForAccount: vi.fn(async (input: Record<string, unknown>) => {
+    if (state.moving) { const { CompanyMovingError } = await import("@/lib/crm-store/save-for-account"); throw new CompanyMovingError() }
     state.saves.push(input)
     return { route: "store", fileId: `f-${state.saves.length}`, pointer: `store:f-${state.saves.length}`, documentRowId: "doc-1", status: "created" }
   }),
 }))
 
 import { NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
-import { ACCOUNT_OLD_FOLDER } from "./_stop-drive-mocks"
+import { ACCOUNT_OLD_FOLDER, ACCOUNT_CLOSED_WITH_FOLDER, setDriveMocked } from "./_stop-drive-mocks"
 
 const req = () => new NextRequest("http://localhost/api/ss4-signed", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ss4_id: "ss4-1", token: "tok" }) })
 
@@ -58,6 +61,8 @@ beforeEach(async () => {
   state.companyState = "store"
   state.driveMode = "forbid"
   state.listEmpty = false
+  state.moving = false
+  setDriveMocked(false)
   state.recorded.length = 0
   state.driveCalls.length = 0
   state.saves.length = 0
@@ -113,7 +118,8 @@ describe("/api/ss4-signed", () => {
     expect(steps.find((s) => s.step === "signed_doc")).toBeUndefined()
   })
 
-  it("a webhook RETRY whose fallback row already exists is not reported as 'no storage' (the signed copy IS filed)", async () => {
+  it("a webhook RETRY whose fallback row already exists is not reported as 'no storage' (the signed copy IS filed) — sandbox fallback", async () => {
+    setDriveMocked(true) // the holding-area row exists only where Drive is faked (the sandbox)
     state.companyState = "drive"
     state.rows.service_deliveries = { id: "sd-1", stage: "SS-4 Signed", stage_history: [] }
     state.rows.documents = { id: "existing-row" }
@@ -135,12 +141,62 @@ describe("/api/ss4-signed", () => {
     expect(sd?.detail).toContain("could not be filed in the company's storage")
   })
 
-  it("the fax task tells staff where the file is (the company's Documents) — no Drive wording", async () => {
+  it("the fax task points to the notification email (always true) — no Drive wording, no claim about where it is filed", async () => {
     const { POST } = await import("@/app/api/ss4-signed/route")
     await POST(req())
     const task = state.recorded.find((r) => r.table === "tasks" && r.op === "insert")?.payload as { description: string }
-    expect(task.description).toContain("Documents")
+    expect(task.description).toContain("attached to the notification email")
     expect(task.description.toLowerCase()).not.toContain("drive")
+  })
+
+  // the body part of the email is base64: decode it
+  const stateMail = () => {
+    const raw = state.mails[0] ?? ""
+    const m = /Content-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+?)(?:\r\n--|$)/.exec(raw)
+    return m ? Buffer.from(m[1].replace(/\s+/g, ""), "base64").toString("utf8") : raw
+  }
+  it("a CLOSED company (no storage place): no holding-area pointer is recorded, the email says plainly what was NOT filed", async () => {
+    state.companyState = "drive"
+    state.rows.accounts = ACCOUNT_CLOSED_WITH_FOLDER
+    state.rows.service_deliveries = { id: "sd-1", stage: "SS-4 Signed", stage_history: [] }
+    state.rows.documents = null
+    const { POST } = await import("@/app/api/ss4-signed/route")
+    const res = await POST(req())
+    const steps = (await res.json()).results as Array<{ step: string; status: string }>
+    expect(state.recorded.filter((r) => r.table === "documents" && r.op === "insert")).toEqual([]) // no holding-area row
+    expect(steps.find((x) => x.step === "signed_doc_storage")).toBeUndefined()
+    expect(steps.find((x) => x.step === "signed_doc")?.status).toBe("error")
+    expect(stateMail()).toContain("NOT FILED")
+    expect(stateMail()).toContain("could not be filed in the company's documents")
+    expect(state.driveCalls.filter((c) => c.startsWith("upload"))).toEqual([])
+  })
+
+  it("a company being MOVED: nothing recorded as filed, no holding-area row, the email says what was not filed", async () => {
+    state.moving = true
+    state.rows.service_deliveries = { id: "sd-1", stage: "SS-4 Signed", stage_history: [] }
+    state.rows.documents = null
+    const { POST } = await import("@/app/api/ss4-signed/route")
+    const res = await POST(req())
+    const steps = (await res.json()).results as Array<{ step: string; status: string }>
+    expect(state.recorded.filter((r) => r.table === "documents" && r.op === "insert")).toEqual([])
+    expect(steps.find((x) => x.step === "signed_doc")?.status).toBe("error")
+    expect(stateMail()).toContain("NOT FILED")
+  })
+
+  it("a company that IS filed gets no 'NOT FILED' line in the email", async () => {
+    const { POST } = await import("@/app/api/ss4-signed/route")
+    await POST(req())
+    expect(stateMail()).not.toContain("NOT FILED")
+  })
+
+  it("sandbox only (Drive faked): the holding-area row still exists there, so the workspace works end to end", async () => {
+    setDriveMocked(true)
+    state.companyState = "drive"
+    state.rows.service_deliveries = { id: "sd-1", stage: "SS-4 Signed", stage_history: [] }
+    state.rows.documents = null
+    const { POST } = await import("@/app/api/ss4-signed/route")
+    await POST(req())
+    expect(state.recorded.some((r) => r.table === "documents" && r.op === "insert")).toBe(true)
   })
 
   it("a company left on its old folder whose upload FAILED is told what is true — never 'no storage'", async () => {

@@ -39,7 +39,7 @@ vi.mock("@/lib/crm-store/save-form", () => ({
 }))
 vi.mock("@/lib/tax/financials-orchestration", () => ({ buildFinancialsWorkbookForAccount: async () => ({ buffer: new Uint8Array([1, 2, 3]) }) }))
 
-import { NO_STORAGE_SENTENCE, NO_PERSON_STORAGE_SENTENCE, NO_STORAGE_STATUS, notStored, decideNoStorage, folderIdOf, noStorageDecisionFor, accountCanReceiveFiles } from "@/lib/crm-store/no-storage"
+import { NO_STORAGE_SENTENCE, NO_PERSON_STORAGE_SENTENCE, NO_STORAGE_STATUS, notStored, decideNoStorage, folderIdOf, noStorageDecisionFor, accountCanReceiveFiles, receiveVerdictFor, decideNoStorageForContact } from "@/lib/crm-store/no-storage"
 import { saveFormForAccount, describeFiling, type SaveAccountFormDeps } from "@/lib/crm-store/save-account-form"
 
 beforeEach(() => {
@@ -193,10 +193,11 @@ describe("decideNoStorage / folderIdOf", () => {
     for (const status of ["Active", "Suspended", "Offboarding"]) expect(decideNoStorage({ status, drive_folder_id: "F" })).toEqual({ route: "drive", folderId: "F" })
   })
   it("Closed / Cancelled are refused even with a folder; no folder is refused; unknown account is refused", () => {
-    expect(decideNoStorage({ status: "Closed", drive_folder_id: "F" })).toEqual({ route: "refuse" })
-    expect(decideNoStorage({ status: " cancelled ", drive_folder_id: "F" })).toEqual({ route: "refuse" })
-    expect(decideNoStorage({ status: "Active", drive_folder_id: null })).toEqual({ route: "refuse" })
-    expect(decideNoStorage(null)).toEqual({ route: "refuse" })
+    expect(decideNoStorage({ status: "Closed", drive_folder_id: "F" })).toMatchObject({ route: "refuse", reason: "archived", sentence: "This company is closed, so nothing new can be saved for it." })
+    expect(decideNoStorage({ status: " CANCELLED ", drive_folder_id: "F" })).toMatchObject({ route: "refuse", reason: "archived" })
+    expect(decideNoStorage({ status: "Active", drive_folder_id: null })).toMatchObject({ route: "refuse", reason: "no_folder", sentence: NO_STORAGE_SENTENCE })
+    expect(decideNoStorage({ status: "Active", gdrive_folder_url: "https://drive.google.com/drive/folders/AbC" })).toEqual({ route: "drive", folderId: "AbC" })
+    expect(decideNoStorage(null)).toMatchObject({ route: "refuse", reason: "no_company" })
   })
   it("the folder id also comes from the older link", () => {
     expect(folderIdOf({ gdrive_folder_url: "https://drive.google.com/drive/folders/AbC-12_x?usp=sharing" })).toBe("AbC-12_x")
@@ -212,5 +213,40 @@ describe("decideNoStorage / folderIdOf", () => {
     expect(await accountCanReceiveFiles("a")).toBe(false)
     state.companyState = "store"
     expect(await accountCanReceiveFiles("a")).toBe(true)
+  })
+})
+
+describe("receiveVerdictFor — the pre-check every 'change something, then file' action asks first", () => {
+  it("storage → ok; moving → not now (try again), nothing else; a company left on its folder → ok; closed / no folder → refused with the true reason", async () => {
+    state.companyState = "store"
+    expect(await receiveVerdictFor("a")).toEqual({ ok: true })
+    state.companyState = "moving"
+    expect(await receiveVerdictFor("a")).toMatchObject({ ok: false, reason: "moving", sentence: expect.stringContaining("try again in a few minutes") })
+    state.companyState = "drive"
+    state.rows.accounts = { status: "Active", drive_folder_id: "F" }
+    expect(await receiveVerdictFor("a")).toEqual({ ok: true })
+    state.rows.accounts = { status: "Closed", drive_folder_id: "F" }
+    expect(await receiveVerdictFor("a")).toMatchObject({ ok: false, reason: "archived" })
+    state.rows.accounts = { status: "Active", drive_folder_id: null }
+    expect(await receiveVerdictFor("a")).toMatchObject({ ok: false, reason: "no_folder" })
+  })
+})
+
+describe("decideNoStorageForContact — the same rule for a person (one definition)", () => {
+  const drive = { route: "drive" as const, folderId: "COMPANYFOLDER" }
+  const archived = decideNoStorage({ status: "Closed", drive_folder_id: "F" })
+  const noFolder = decideNoStorage({ status: "Active" })
+  it("a person with no storage who belongs to a company left on its folder → that folder (their own folder first)", () => {
+    expect(decideNoStorageForContact({ liveOwner: false, folderId: null, companyVerdicts: [noFolder, drive], companyInStorageOrMoving: false })).toEqual({ route: "drive", folderId: "COMPANYFOLDER" })
+    expect(decideNoStorageForContact({ liveOwner: false, folderId: "OWN", companyVerdicts: [drive], companyInStorageOrMoving: false })).toEqual({ route: "drive", folderId: "OWN" })
+  })
+  it("a person with their own storage, or with a company in storage / being moved, is never given a Drive folder", () => {
+    expect(decideNoStorageForContact({ liveOwner: true, folderId: "OWN", companyVerdicts: [drive], companyInStorageOrMoving: false }).route).toBe("refuse")
+    expect(decideNoStorageForContact({ liveOwner: false, folderId: null, companyVerdicts: [drive], companyInStorageOrMoving: true }).route).toBe("refuse")
+  })
+  it("no company at all: refused; only closed companies: refused as closed", () => {
+    expect(decideNoStorageForContact({ liveOwner: false, folderId: null, companyVerdicts: [], companyInStorageOrMoving: false })).toMatchObject({ route: "refuse", reason: "no_folder" })
+    expect(decideNoStorageForContact({ liveOwner: false, folderId: "OWN", companyVerdicts: [], companyInStorageOrMoving: false })).toMatchObject({ route: "refuse", reason: "no_company" })
+    expect(decideNoStorageForContact({ liveOwner: false, folderId: null, companyVerdicts: [archived], companyInStorageOrMoving: false })).toMatchObject({ route: "refuse", reason: "archived" })
   })
 })

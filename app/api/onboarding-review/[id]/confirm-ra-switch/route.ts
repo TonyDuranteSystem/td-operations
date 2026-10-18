@@ -43,7 +43,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { advanceStageIfAt } from '@/lib/operations/service-delivery'
-import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, accountCanReceiveFiles, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
+import { NO_STORAGE_STATUS, receiveVerdictFor, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 import { deriveRenewalDates, applyRenewalDateFills } from '@/lib/operations/renewal-dates'
 
 const MAX_RECEIPT_BYTES = 15 * 1024 * 1024
@@ -118,11 +118,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     // A company that can receive no file at all (no storage, and finished or without a folder): one plain sentence, nothing
     // saved, the stage not advanced.
-    let canReceive: boolean
-    try { canReceive = await accountCanReceiveFiles(sub.account_id) } catch {
+    let verdict
+    try { verdict = await receiveVerdictFor(sub.account_id) } catch {
       return NextResponse.json({ success: false, error: "Could not check where this company's files live — please try again." }, { status: 500 })
     }
-    if (!canReceive) return NextResponse.json({ success: false, error: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+    if (!verdict.ok) return NextResponse.json({ success: false, error: verdict.sentence }, { status: NO_STORAGE_STATUS })
 
     // 1. Durable copy FIRST — the same Supabase Storage bucket the client's
     // own wizard uploads already use (confirmed working live, 2026-09-22).

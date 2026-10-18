@@ -65,6 +65,8 @@ export async function POST(req: NextRequest) {
     // a LOUD staff warning in the email below + an error-audit report — the fax
     // package must NEVER go out silently incomplete (2026-07-08 Slack report).
     let articlesMissing = false
+    // Set when the combined IRS package was filed (storage, the company's old folder, or the formation's storage)
+    let packageFiled = false
 
     // ─── 1. CREATE TASK FOR LUCA ───
     if (ss4.account_id) {
@@ -72,7 +74,7 @@ export async function POST(req: NextRequest) {
         // eslint-disable-next-line no-restricted-syntax -- pre-existing SS-4 fax task insert; left in place
         await supabaseAdmin.from("tasks").insert({
           task_title: `Fax SS-4 to IRS: ${ss4.company_name}`,
-          description: `The SS-4 for ${ss4.company_name} has been signed. Open the signed SS-4 / IRS package in the company's Documents (Company) and fax it to the IRS at (855) 641-6935.`,
+          description: `The SS-4 for ${ss4.company_name} has been signed. The signed SS-4 and the IRS package are attached to the notification email sent to support@ — fax them to the IRS at (855) 641-6935.`,
           assigned_to: "Luca",
           priority: "High",
           category: "Filing",
@@ -303,7 +305,10 @@ export async function POST(req: NextRequest) {
     // Supabase Storage (signed-ss4). Register an SD-stamped documents row backed
     // by a long-lived signed URL so the workspace + portal "View" works in every
     // environment. Idempotent + non-fatal.
-    if (!signedDocLinked && formationSdId) {
+    // Only an environment whose Drive is faked (the sandbox) uses this holding-area row; a real environment never records a holding-area
+    // pointer as if the file were filed — what was not filed is reported plainly (below) and in the email.
+    const { driveIsMocked } = await import("@/lib/google-drive")
+    if (!signedDocLinked && formationSdId && driveIsMocked()) {
       try {
         const { data: files } = await supabaseAdmin.storage
           .from("signed-ss4")
@@ -458,6 +463,7 @@ export async function POST(req: NextRequest) {
                 callerKey: `ss4-irs-package:${ss4.id}`, portalVisible: false, serviceDeliveryId: formationSdId, documentType: "irs_fax",
               })
               if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the IRS package was being saved — nothing was saved.")
+              packageFiled = true
               results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles saved to the new storage (${articlesSource}): ${routed.pointer} (${ss4Pages.length + articlesPages.length} pages)` })
               results.push({ step: "irs_package_doc", status: "ok", detail: "Combined package registered in workspace" })
             } catch (e) {
@@ -473,6 +479,7 @@ export async function POST(req: NextRequest) {
             } catch { /* keep the folder root */ }
             // Stable name -> UPSERT: webhook retry refreshes in place, no copies.
             const driveResult = await uploadBinaryToDriveUpsert(mergedFileName, Buffer.from(mergedPdfBytes), "application/pdf", targetFolderId) as { id: string }
+            packageFiled = true
             results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles uploaded (${articlesSource}): ${driveResult.id} (${ss4Pages.length + articlesPages.length} pages)` })
 
             // Register the combined package as an INTERNAL workspace document (SD-scoped), NEVER client-visible
@@ -516,6 +523,7 @@ export async function POST(req: NextRequest) {
                 })
                 if (saved.status === "saved") {
                   storedInStore = true
+                  packageFiled = true
                   results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles (${articlesSource}) saved in the CRM Store (${saved.write}, ${ss4Pages.length + articlesPages.length} pages)` })
                 }
               } catch (e) {
@@ -580,6 +588,12 @@ export async function POST(req: NextRequest) {
         ``,
         `IRS Fax Number: (855) 641-6935`,
         ``,
+        ...(!signedDocLinked || (mergedPdfBytes && !packageFiled)
+          ? [
+              `⚠️ NOT FILED: ${[!signedDocLinked ? "the signed SS-4" : null, mergedPdfBytes && !packageFiled ? "the combined SS-4 + Articles package" : null].filter(Boolean).join(" and ")} could not be filed in the company's documents. ${attachmentBytes ? "The attachment on this email is the only copy outside the signing record." : "It is in the signing record only."}`,
+              ``,
+            ]
+          : []),
         attachmentBytes
           ? articlesMissing
             ? `The signed SS-4 is attached (SS-4 ONLY — add the Articles before faxing).`

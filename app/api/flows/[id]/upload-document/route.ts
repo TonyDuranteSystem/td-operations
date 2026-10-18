@@ -32,7 +32,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { advanceServiceDelivery } from '@/lib/service-delivery'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
-import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
+import { NO_STORAGE_REASON_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 import { parsePrincipalOfficeDecision, applyPrincipalOfficeDecision, type PrincipalOfficeDecision } from '@/lib/operations/principal-office'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
@@ -297,15 +297,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         const decision = await noStorageDecisionFor(accountId)
         if (decision.route === 'refuse') {
           discardStaged()
-          return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+          return NextResponse.json({ success: false, detail: decision.sentence }, { status: NO_STORAGE_STATUS })
         }
-        // the sandbox has no live Drive: the file stays in the upload bucket there (row and stage advance work the same)
-        if (process.env.SANDBOX_MODE !== '1') driveFolderId = decision.folderId
+        // a company left on its old folder: its file goes to ITS folder, exactly as the other routes do. Only an environment whose
+        // Drive is faked (the sandbox without live Drive) keeps the file in the upload bucket instead.
+        if (!(await import('@/lib/google-drive')).driveIsMocked()) driveFolderId = decision.folderId
       } else if (contactId) {
-        if (process.env.SANDBOX_MODE !== '1') driveFolderId = await resolveContactLinkedDriveFolder(contactId)
+        if (!(await import('@/lib/google-drive')).driveIsMocked()) driveFolderId = await resolveContactLinkedDriveFolder(contactId)
       } else {
         discardStaged()
-        return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+        return NextResponse.json({ success: false, detail: NO_STORAGE_REASON_SENTENCE.no_company }, { status: NO_STORAGE_STATUS })
       }
     }
     let useBucketCopy = !routed && pilot.status !== 'saved' && !driveFolderId

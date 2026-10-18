@@ -24,7 +24,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isDashboardUser } from "@/lib/auth"
-import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from "@/lib/crm-store/no-storage"
+import { NO_STORAGE_STATUS, noStorageDecisionFor } from "@/lib/crm-store/no-storage"
 import { listFolder, createFolder, uploadBinaryToDrive } from "@/lib/google-drive"
 
 export const maxDuration = 60
@@ -130,7 +130,7 @@ export async function POST(request: NextRequest) {
   try { decision = await noStorageDecisionFor(account.id as string) } catch (err) {
     return json({ error: `Saving the file failed: ${err instanceof Error ? err.message : String(err)}` }, 500)
   }
-  if (decision.route === "refuse") return json({ error: NO_STORAGE_SENTENCE }, NO_STORAGE_STATUS)
+  if (decision.route === "refuse") return json({ error: decision.sentence }, NO_STORAGE_STATUS)
 
   let destinationFolderId = decision.folderId
   if (typeof subfolderRaw === "string" && subfolderRaw.trim()) {

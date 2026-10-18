@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { generateLeasePDF } from '@/lib/lease-pdf'
-import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor, accountCanReceiveFiles } from '@/lib/crm-store/no-storage'
+import { NO_STORAGE_STATUS, noStorageDecisionFor, receiveVerdictFor } from '@/lib/crm-store/no-storage'
 import { listFolder, uploadBinaryToDriveUpsert } from '@/lib/google-drive'
 
 export async function POST(req: NextRequest) {
@@ -45,9 +45,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Decide before building or storing anything: a company that cannot receive the copy is told so and nothing is changed.
-    if (!(await accountCanReceiveFiles(lease.account_id))) {
-      return NextResponse.json({ error: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
-    }
+    const verdict = await receiveVerdictFor(lease.account_id)
+    if (!verdict.ok) return NextResponse.json({ error: verdict.sentence }, { status: NO_STORAGE_STATUS })
 
     const signedDate = (lease.signed_at as string).split('T')[0]
     const isV2 = (lease.template_version ?? 1) === 2
@@ -90,12 +89,19 @@ export async function POST(req: NextRequest) {
     // The regenerated lease goes to the company's storage — the same file key as the original signing, so it is a new
     // VERSION of that file. A company with no storage gets one plain sentence back.
     {
-      const { saveSignedPdfForAccount } = await import('@/lib/crm-store/save-for-account')
-      const routed = await saveSignedPdfForAccount({
+      const { saveSignedPdfForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+      let routed
+      try {
+      routed = await saveSignedPdfForAccount({
         accountId: lease.account_id,
         fileName: `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`,
         bytes: Buffer.from(pdfBytes), label: 'Lease Agreement', category: 1, callerKey: `lease-signed:${lease.id}`, documentType: 'office_lease',
       })
+      } catch (e) {
+        // the company started moving after the check: a clean "try again", never a 500 (the lease row is not touched)
+        if (e instanceof CompanyMovingError) return NextResponse.json({ error: e.message }, { status: 409 })
+        throw e
+      }
       if (routed.route === 'store') {
         await supabaseAdmin
           .from('lease_agreements')
@@ -108,7 +114,7 @@ export async function POST(req: NextRequest) {
     // No storage: a company left on its old folder carries on as before; everyone else gets one plain sentence
     // (and the lease row is left untouched).
     const decision = await noStorageDecisionFor(lease.account_id)
-    if (decision.route === 'refuse') return NextResponse.json({ error: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+    if (decision.route === 'refuse') return NextResponse.json({ error: decision.sentence }, { status: NO_STORAGE_STATUS })
 
     // Find Company subfolder
     const folderResult = await listFolder(decision.folderId) as {

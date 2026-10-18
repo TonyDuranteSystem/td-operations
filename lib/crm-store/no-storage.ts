@@ -26,24 +26,45 @@ export function notStored(routed: { route: string }): boolean {
 // Suspended / Offboarding, they HAVE a Drive folder and NO storage). They must keep working exactly as before. Everything else
 // that has no storage — a Closed or Cancelled company, or a company with no folder at all — gets the one sentence.
 
-export type NoStorageDecision = { route: "drive"; folderId: string } | { route: "refuse" }
+export type NoStorageReason = "moving" | "archived" | "no_folder" | "no_company"
 
-/** Statuses of a finished company: never written to, whatever folder it still has. */
+/** The ONE plain sentence per reason (the answer of the action that was asked for — not a notice, label or banner). */
+export const NO_STORAGE_REASON_SENTENCE: Record<NoStorageReason, string> = {
+  moving: "This company's files are being moved to the CRM storage right now — please try again in a few minutes.",
+  archived: "This company is closed, so nothing new can be saved for it.",
+  no_folder: NO_STORAGE_SENTENCE,
+  no_company: "This file has no company to be saved for, so it could not be saved.",
+}
+
+/** What a CLIENT is told while their company's files are being moved. */
+export const CLIENT_MOVING_SENTENCE = "We are updating your documents right now. Please try again in a few minutes."
+
+export type NoStorageDecision =
+  | { route: "drive"; folderId: string; reason?: undefined; sentence?: undefined }
+  | { route: "refuse"; reason: NoStorageReason; sentence: string; folderId?: undefined }
+
+const refuse = (reason: NoStorageReason): NoStorageDecision => ({ route: "refuse", reason, sentence: NO_STORAGE_REASON_SENTENCE[reason] })
+
+/** Statuses of a finished company: never written to, whatever folder it still has. Case-insensitive; 'canceled' is accepted too. */
 const FINISHED_STATUSES = new Set(["closed", "cancelled", "canceled"])
 
-/** Pure: the folder id from the two places a company keeps it. */
-export function folderIdOf(a: { drive_folder_id?: string | null; gdrive_folder_url?: string | null }): string | null {
+/** Pure: the folder id from the two places a company / person keeps it: `drive_folder_id`, else the id inside the older link. */
+export function folderIdOf(a: { drive_folder_id?: string | null; gdrive_folder_url?: string | null } | null | undefined): string | null {
+  if (!a) return null
   if (a.drive_folder_id) return a.drive_folder_id
   const m = /\/folders\/([A-Za-z0-9_-]+)/.exec(a.gdrive_folder_url ?? "")
   return m ? m[1] : null
 }
 
-/** Pure: keep the company's own folder only when it is not finished AND has a folder. */
+/**
+ * Pure: THE rule for a company that has no storage. Keep its own folder only when it is not finished AND has a folder
+ * (the companies deliberately left on their old folder); otherwise refuse with the true reason.
+ */
 export function decideNoStorage(a: { status?: string | null; drive_folder_id?: string | null; gdrive_folder_url?: string | null } | null | undefined): NoStorageDecision {
-  if (!a) return { route: "refuse" }
-  if (FINISHED_STATUSES.has(String(a.status ?? "").trim().toLowerCase())) return { route: "refuse" }
+  if (!a) return refuse("no_company")
+  if (FINISHED_STATUSES.has(String(a.status ?? "").trim().toLowerCase())) return refuse("archived")
   const folderId = folderIdOf(a)
-  return folderId ? { route: "drive", folderId } : { route: "refuse" }
+  return folderId ? { route: "drive", folderId } : refuse("no_folder")
 }
 
 /** Strict read (a read error throws — it is never mistaken for "no folder"). Call ONLY after a save came back `route: "drive"`. */
@@ -54,14 +75,82 @@ export async function noStorageDecisionFor(accountId: string): Promise<NoStorage
   return decideNoStorage(data as { status?: string | null; drive_folder_id?: string | null; gdrive_folder_url?: string | null } | null)
 }
 
+// The optional `undefined` members let a caller read `.reason` / `.sentence` without a narrowing step (the project is not strict).
+export type ReceiveVerdict = { ok: true; reason?: undefined; sentence?: undefined } | { ok: false; reason: NoStorageReason; sentence: string }
+
 /**
- * Can a new file for this company be saved at all? (storage, or a company left on its old folder) — decided BEFORE a caller
- * changes anything else, so a refusal never leaves a half-done update behind. Strict: a read error throws.
+ * Can a new file for this company be saved at all — decided BEFORE a caller changes anything else, so a refusal never leaves a
+ * half-done update behind. Storage → ok; a company being moved → not now (try again); a company left on its old folder → ok;
+ * everything else → refused with the true reason. Strict: a read error throws.
  */
-export async function accountCanReceiveFiles(accountId: string): Promise<boolean> {
+export async function receiveVerdictFor(accountId: string): Promise<ReceiveVerdict> {
   const { companyDocState } = await import("./switched-drive-guard")
-  if ((await companyDocState(accountId)) !== "drive") return true
-  return (await noStorageDecisionFor(accountId)).route === "drive"
+  const state = await companyDocState(accountId)
+  if (state === "store") return { ok: true }
+  if (state === "moving") return { ok: false, reason: "moving", sentence: NO_STORAGE_REASON_SENTENCE.moving }
+  const d = await noStorageDecisionFor(accountId)
+  return d.route === "drive" ? { ok: true } : { ok: false, reason: d.reason, sentence: d.sentence }
+}
+
+/** Boolean form of `receiveVerdictFor` (a company being moved counts as "cannot receive right now"). */
+export async function accountCanReceiveFiles(accountId: string): Promise<boolean> {
+  return (await receiveVerdictFor(accountId)).ok
+}
+
+// ─── The same rule for a PERSON (a contact) ────────────────────────────────────────────────────────────────────────────
+
+export interface ContactFacts {
+  /** the person has their own live storage */
+  liveOwner: boolean
+  /** the person's own folder id (contacts.drive_folder_id / gdrive_folder_url) */
+  folderId: string | null
+  /** one verdict per company the person belongs to (see noStorageDecisionFor) */
+  companyVerdicts: NoStorageDecision[]
+  /** at least one company of theirs is in storage or being moved */
+  companyInStorageOrMoving: boolean
+}
+
+/**
+ * Pure: may a NEW write still go into Drive for this PERSON? Only when they have no storage of their own and belong to a company
+ * deliberately left on its old folder (the person's own folder, else that company's). Anyone else gets their own storage — never a
+ * Drive folder. Reuses the company rule above, so there is ONE definition.
+ */
+export function decideNoStorageForContact(f: ContactFacts): NoStorageDecision {
+  const d = decideContactInner(f)
+  // a person is not a "company": the refusal that names the missing storage speaks about the person
+  return d.route === "refuse" && d.reason === "no_folder" ? { ...d, sentence: NO_PERSON_STORAGE_SENTENCE } : d
+}
+
+function decideContactInner(f: ContactFacts): NoStorageDecision {
+  if (f.liveOwner || f.companyInStorageOrMoving) return refuse("no_folder")
+  if (f.companyVerdicts.length === 0) return refuse(f.folderId ? "no_company" : "no_folder")
+  for (const v of f.companyVerdicts) if (v.route === "drive") return { route: "drive", folderId: f.folderId ?? v.folderId }
+  if (f.companyVerdicts.some((v) => v.reason === "archived")) return refuse("archived")
+  return refuse("no_folder")
+}
+
+/** Strict read of everything `decideNoStorageForContact` needs for one person (a read error throws). */
+export async function noStorageDecisionForContact(contactId: string): Promise<NoStorageDecision> {
+  const { supabaseAdmin } = await import("@/lib/supabase-admin")
+  const { liveOwnerOfContact, companyDocState } = await import("./switched-drive-guard")
+  const { data: c, error } = await supabaseAdmin.from("contacts").select("drive_folder_id, gdrive_folder_url").eq("id", contactId).maybeSingle()
+  if (error) throw new Error("Could not check where this person's files live — please try again.")
+  const { data: links, error: lErr } = await supabaseAdmin.from("account_contacts").select("account_id").eq("contact_id", contactId)
+  if (lErr) throw new Error("Could not check where this person's files live — please try again.")
+  const accountIds = ((links ?? []) as Array<{ account_id: string | null }>).map((l) => l.account_id).filter((x): x is string => !!x)
+  let inStorageOrMoving = false
+  const verdicts: NoStorageDecision[] = []
+  for (const id of accountIds) {
+    const st = await companyDocState(id)
+    if (st !== "drive") { inStorageOrMoving = true; continue }
+    verdicts.push(await noStorageDecisionFor(id))
+  }
+  return decideNoStorageForContact({
+    liveOwner: !!(await liveOwnerOfContact(contactId)),
+    folderId: folderIdOf(c as { drive_folder_id?: string | null; gdrive_folder_url?: string | null } | null),
+    companyVerdicts: verdicts,
+    companyInStorageOrMoving: inStorageOrMoving,
+  })
 }
 
 /** Pure: is this a finished (Closed / Cancelled) company status? */

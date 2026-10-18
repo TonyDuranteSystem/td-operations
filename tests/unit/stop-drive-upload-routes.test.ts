@@ -11,6 +11,7 @@ import { NextRequest } from "next/server"
 const { MovingError } = vi.hoisted(() => ({ MovingError: class MovingError extends Error {} }))
 const state = vi.hoisted(() => ({
   moving: false,
+  movingMidSave: false,
   rows: {} as Record<string, unknown>,
   recorded: [] as Array<{ table: string; op: string; payload: unknown }>,
   driveCalls: [] as string[],
@@ -28,7 +29,7 @@ vi.mock("@/lib/google-drive", async () => {
   const h = await import("./_stop-drive-mocks")
   return h.driveSpyDynamic(state.driveCalls, () => state.driveMode)
 })
-vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: async () => (state.route === "store" ? "store" : "drive") }))
+vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: async () => (state.moving ? "moving" : state.route === "store" ? "store" : "drive") }))
 vi.mock("@/lib/portal/auto-save-document", () => ({ autoSaveDocument: async () => ({ id: "doc-drive-1" }) }))
 vi.mock("@/lib/supabase/server", () => ({
   createClient: () => ({ auth: { getUser: async () => ({ data: { user: { id: "u1", app_metadata: { role: "admin" }, user_metadata: {}, email: "staff@tonydurante.us" } } }) } }),
@@ -54,6 +55,7 @@ vi.mock("@/lib/crm-store/save-for-account", () => ({
       : { route: "drive" }
   }),
   saveSignedPdfForAccount: vi.fn(async (input: Record<string, unknown>) => {
+    if (state.movingMidSave) throw new MovingError("This company's files are being moved to the new storage right now — please try again in a few minutes.")
     state.saves.push(input)
     return state.route === "store"
       ? { route: "store", fileId: "f-1", pointer: "store:f-1", documentRowId: "doc-1", status: "created" }
@@ -79,6 +81,7 @@ beforeEach(() => {
   state.saves.length = 0
   state.removed.length = 0
   state.moving = false
+  state.movingMidSave = false
   state.driveMode = "forbid"
   for (const k of Object.keys(state.rows)) delete state.rows[k]
 })
@@ -352,5 +355,44 @@ describe("a company being moved is a TRANSIENT refusal: the staged file is kept 
     const res = await POST(json({ storage_path: "p/dba.pdf", file_name: "dba.pdf", mime_type: "application/pdf" }), { params: { id: "acct-1", dbaId: "dba-1" } })
     expect(res.status).toBe(409)
     expect(state.removed).toEqual([])
+  })
+})
+
+describe("a company being MOVED on the lease routes: a clean 409 'try again', never a 500, and nothing is half-changed", () => {
+  const MOVING = "This company's files are being moved to the CRM storage right now — please try again in a few minutes."
+  beforeEach(() => {
+    state.rows.lease_agreements = { id: "lease-1", token: "tok", tenant_company: "Acme LLC", suite_number: "12", account_id: "acct-1", status: "signed", signed_at: "2026-01-02T00:00:00Z", pdf_storage_path: "tok/signed.pdf", template_version: 1, effective_date: "2026-01-02", term_start_date: "2026-01-02", term_end_date: "2027-01-01", tenant_contact_name: "A B" }
+  })
+  it("regen-lease-pdf: refused up front (nothing built, nothing stored, lease row untouched)", async () => {
+    state.moving = true
+    const { POST } = await import("@/app/api/crm/admin-actions/regen-lease-pdf/route")
+    const res = await POST(json({ lease_id: "lease-1" }))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe(MOVING)
+    expect(state.recorded.filter((r) => r.table === "lease_agreements")).toEqual([])
+  })
+  it("regen-lease-pdf: the company starts moving DURING the save → still a clean 409", async () => {
+    state.movingMidSave = true
+    const { POST } = await import("@/app/api/crm/admin-actions/regen-lease-pdf/route")
+    const res = await POST(json({ lease_id: "lease-1" }))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toContain("try again in a few minutes")
+    expect(state.recorded.filter((r) => r.table === "lease_agreements")).toEqual([])
+  })
+  it("lease-regen-drive: a clean 409, never a 500", async () => {
+    state.movingMidSave = true
+    const { POST } = await import("@/app/api/lease-regen-drive/route")
+    const res = await POST(json({ lease_id: "lease-1", token: "tok" }))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toContain("try again in a few minutes")
+  })
+})
+
+describe("flow upload for a company left on its old folder (folder, no storage) — consistent with the other routes", () => {
+  it("the decision helper is the single rule: Active + folder → its folder; Closed/Cancelled/no folder → refused", async () => {
+    const { decideNoStorage } = await import("@/lib/crm-store/no-storage")
+    expect(decideNoStorage(ACCOUNT_OLD_FOLDER).route).toBe("drive")
+    expect(decideNoStorage(ACCOUNT_CLOSED_WITH_FOLDER).route).toBe("refuse")
+    expect(decideNoStorage(ACCOUNT_REFUSED).route).toBe("refuse")
   })
 })

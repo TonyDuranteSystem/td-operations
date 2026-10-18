@@ -23,7 +23,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { extractDbaFieldsFromOcr } from '@/lib/dba-ocr'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
-import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
+import { NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 
 type DbaDetailRow = {
   id: string
@@ -140,7 +140,7 @@ export async function POST(
       const decision = await noStorageDecisionFor(accountId)
       if (decision.route === 'refuse') {
         discardStaged()
-        return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+        return NextResponse.json({ success: false, detail: decision.sentence }, { status: NO_STORAGE_STATUS })
       }
 
       // 4. Find "1. Company" subfolder (DBA registrations live with company docs).

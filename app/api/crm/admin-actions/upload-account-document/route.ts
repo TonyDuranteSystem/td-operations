@@ -15,7 +15,8 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 
 const CATEGORY_MAP: Record<string, { num: number; subfolder: string }> = {
   Company: { num: 1, subfolder: '1. Company' },
@@ -25,6 +26,10 @@ const CATEGORY_MAP: Record<string, { num: number; subfolder: string }> = {
 }
 
 export async function POST(req: NextRequest) {
+  // STAFF ONLY. `/api/*` inherits only "is logged in" from the middleware, and a portal client has a login: without this check any
+  // signed-in client could file a document into ANY company's storage by naming its account_id.
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const body = await req.json()
     const {
@@ -124,7 +129,7 @@ export async function POST(req: NextRequest) {
     const decision = await noStorageDecisionFor(accountId)
     if (decision.route === 'refuse') {
       discardStaged()
-      return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+      return NextResponse.json({ success: false, detail: decision.sentence }, { status: NO_STORAGE_STATUS })
     }
 
     // Find target subfolder

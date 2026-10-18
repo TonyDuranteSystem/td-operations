@@ -111,6 +111,18 @@ const baseParams = () => ({
 })
 
 describe('saveSignedGeneratedDocument', () => {
+  it('a company being MOVED is a plain "try again" (moving), not a failure and not a 500', async () => {
+    const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
+    const e = new Error("This company's files are being moved to the new storage right now — please try again in a few minutes.")
+    e.name = 'CompanyMovingError'
+    vi.mocked(saveDocumentForAccount).mockRejectedValueOnce(e)
+    const { saveSignedGeneratedDocument } = await import('@/lib/portal/save-generated-document')
+    const r = await saveSignedGeneratedDocument(baseParams())
+    expect(r).toMatchObject({ success: false, moving: true })
+    expect(r.error).toContain('try again in a few minutes')
+    expect(driveUploads.length).toBe(0)
+  })
+
   it('a company with no storage and no folder: one plain sentence, flagged as a plain refusal, nothing saved, Drive never called', async () => {
     const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
     vi.mocked(saveDocumentForAccount).mockResolvedValueOnce({ route: 'drive' })

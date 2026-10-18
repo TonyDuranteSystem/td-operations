@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   recorded: [] as Array<{ table: string; op: string; payload: unknown }>,
   driveCalls: [] as string[],
   route: "drive" as "store" | "drive",
+  moving: false,
   alarms: [] as Array<Record<string, unknown>>,
   saveResult: { success: false } as Record<string, unknown>,
   refiled: [] as string[],
@@ -27,7 +28,7 @@ vi.mock("@/lib/google-drive", async () => {
   const h = await import("./_stop-drive-mocks")
   return h.driveSpyDynamic(state.driveCalls, () => "record")
 })
-vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: async () => state.route }))
+vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: async () => (state.moving ? "moving" : state.route) }))
 vi.mock("@/lib/crm-store/save-for-account", () => ({
   CompanyMovingError: class extends Error {},
   saveDocumentForAccount: vi.fn(async () => (state.route === "store" ? { route: "store", fileId: "f", pointer: "store:f", documentRowId: "d1", status: "created" } : { route: "drive" })),
@@ -43,11 +44,12 @@ vi.mock("@/lib/portal/rate-limit", () => ({ checkRateLimit: () => ({ allowed: tr
 vi.mock("@/lib/portal/save-generated-document", () => ({ saveSignedGeneratedDocument: vi.fn(async () => state.saveResult) }))
 vi.mock("@/lib/auth/staff-preview", () => ({ isStaffPreview: async () => true }))
 
-import { NO_STORAGE_SENTENCE, CLIENT_NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
+import { NO_STORAGE_SENTENCE, CLIENT_NO_STORAGE_SENTENCE, CLIENT_MOVING_SENTENCE } from "@/lib/crm-store/no-storage"
 import { ACCOUNT_REFUSED, ACCOUNT_CLOSED_WITH_FOLDER, ACCOUNT_OLD_FOLDER } from "./_stop-drive-mocks"
 
 beforeEach(() => {
   state.route = "drive"
+  state.moving = false
   state.recorded.length = 0
   state.driveCalls.length = 0
   state.alarms.length = 0
@@ -73,7 +75,7 @@ describe("fileRenewal (Calendar 'Mark filed') — same rule as the flow upload",
   it("a Closed company with a folder is refused too", async () => {
     state.rows.accounts = account(ACCOUNT_CLOSED_WITH_FOLDER)
     const { fileRenewal } = await import("@/lib/operations/file-renewal")
-    expect((await fileRenewal(params())).error).toBe(NO_STORAGE_SENTENCE)
+    expect((await fileRenewal(params())).error).toBe("This company is closed, so nothing new can be saved for it.")
     expect(state.driveCalls).toEqual([])
   })
   it("a company left on its old folder: the receipt goes to its folder (Compliance), as before", async () => {
@@ -98,6 +100,14 @@ describe("save-signed route", () => {
     const res = await POST(req())
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({ error: CLIENT_NO_STORAGE_SENTENCE })
+    expect(state.alarms).toEqual([])
+  })
+  it("the company is being MOVED → a clean 409 with the plain client 'try again' sentence and NO system error", async () => {
+    state.saveResult = { success: false, error: "This company's files are being moved…", moving: true }
+    const { POST } = await import("@/app/api/portal/generated-documents/save-signed/route")
+    const res = await POST(req())
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: CLIENT_MOVING_SENTENCE })
     expect(state.alarms).toEqual([])
   })
   it("a real failure → 500 and a system error, as before", async () => {
@@ -133,5 +143,13 @@ describe("lease regenerate (page) — refusal before the lease row changes", () 
     state.rows.accounts = ACCOUNT_OLD_FOLDER
     const res = await regen()
     expect(res.status).toBe(200)
+  })
+
+  it("a company being MOVED: refused BEFORE the lease row changes (409 'try again')", async () => {
+    state.moving = true
+    const res = await regen()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toContain("try again in a few minutes")
+    expect(state.recorded.filter((r) => r.table === "lease_agreements")).toEqual([])
   })
 })

@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
+import { setDriveMocked } from "./_stop-drive-mocks"
 
 // ── Mutable per-test state ──────────────────────────────────────────────────
 const { MovingError } = vi.hoisted(() => ({ MovingError: class MovingError extends Error {} }))
@@ -93,7 +94,7 @@ vi.mock("@/lib/supabase-admin", () => ({
 vi.mock("@/lib/google-drive", async () => {
   const h = await import("./_stop-drive-mocks")
   const dyn = h.driveSpyDynamic(driveCalls, () => driveMode)
-  return { ...dyn, uploadBinaryToDrive: async (...a: unknown[]) => { if (driveError) throw driveError; return (dyn.uploadBinaryToDrive as (...x: unknown[]) => unknown)(...a) } }
+  return { ...dyn, uploadBinaryToDrive: async (...a: unknown[]) => { if (driveError) throw driveError; return ((dyn as unknown as Record<string, (...x: unknown[]) => unknown>).uploadBinaryToDrive)(...a) } }
 })
 
 vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: vi.fn(async () => { if (stateThrows) throw new Error("lookup down"); return companyState }), liveOwnerOfContact: vi.fn(async () => (ensuredPersons.length > 0 ? "person-owner" : null)) }))
@@ -167,6 +168,7 @@ beforeEach(() => {
   movingPerson = false
   driveError = null
   stateThrows = false
+  setDriveMocked(false)
   saveCalls = []
   sdRow = {
     id: "sd-1",
@@ -384,5 +386,31 @@ describe("EIN letter upload — storage filing + auto-rename (route E2E)", () =>
     expect(res.status).toBe(200)
     expect(driveCalls).toEqual([])
     expect(documentsInsertPayload?.drive_file_id).toContain("storage:")
+  })
+
+  it("Scenario 18 — a company left on its old folder is filed in ITS FOLDER (not left in the upload bucket) wherever Drive is real; only a faked-Drive sandbox keeps the bucket copy", async () => {
+    companyState = "drive"
+    driveMode = "record"
+    accountRow = { company_name: "Old Co LLC", entity_type: null, status: "Active", drive_folder_id: "OLDFOLDER", gdrive_folder_url: null }
+    let res = await call({ ...EIN_BODY, rename: undefined, folder: undefined })
+    expect(res.status).toBe(200)
+    expect(driveCalls).toContain("uploadBinaryToDrive")
+    expect(documentsInsertPayload?.drive_file_id).toBe("drive-file-1")
+    // faked Drive (sandbox without live Drive)
+    driveCalls.length = 0
+    documentsInsertPayload = null
+    setDriveMocked(true)
+    res = await call({ ...EIN_BODY, rename: undefined, folder: undefined })
+    expect(res.status).toBe(200)
+    expect(driveCalls).toEqual([])
+    expect(documentsInsertPayload?.drive_file_id).toContain("storage:")
+  })
+
+  it("Scenario 19 — a Closed company's refusal uses the true reason ('closed'), not the generic sentence", async () => {
+    companyState = "drive"
+    accountRow = { company_name: "Old Co LLC", entity_type: null, status: "Cancelled", drive_folder_id: "OLDFOLDER", gdrive_folder_url: null }
+    const res = await call(EIN_BODY)
+    expect(res.status).toBe(409)
+    expect((await res.json()).detail).toBe("This company is closed, so nothing new can be saved for it.")
   })
 })

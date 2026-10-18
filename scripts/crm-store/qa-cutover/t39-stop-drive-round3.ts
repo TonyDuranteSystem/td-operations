@@ -82,6 +82,18 @@ async function main() {
   const c2 = await fileClosureSubmission({ token: `qa-t39-${tag}-c2`, account_id: null, contact_id: null, upload_paths: [], completed_at: null }, {}, "QA Test", "qa/t39")
   check("C2 a closure form with neither company nor person is never stuck: reviewable, with a clear note", c2.ok === true && c2.lines.join(" ").includes("stay on the submission"), JSON.stringify(c2))
 
+  // ── round 4: a company being MOVED is 'try again' (decided before anything changes); the contact variant of the one rule ──
+  const { receiveVerdictFor, noStorageDecisionForContact } = await import("../../../lib/crm-store/no-storage")
+  const { data: tc } = await sb.from("accounts").select("id").eq("company_name", "QA Test Co LLC").limit(1).maybeSingle()
+  const run = await sb.from("store_import_runs").insert({ account_id: tc.id, mode: "move", status: "moving" }).select("id").single()
+  const mv = await receiveVerdictFor(tc.id)
+  check("M1 a company mid-move: the pre-check says 'try again in a few minutes' (so the lease row etc. are never touched)", mv.ok === false && mv.reason === "moving" && mv.sentence.includes("try again in a few minutes"), JSON.stringify(mv))
+  if (run.data) await sb.from("store_import_runs").delete().eq("id", run.data.id)
+  const idle = await receiveVerdictFor(tc.id)
+  check("M2 the same company when idle (Active, no folder, no storage): refused with the true reason", idle.ok === false && idle.reason === "no_folder", JSON.stringify(idle))
+  const cd = await noStorageDecisionForContact(ct.data.id)
+  check("M3 the contact variant of the one rule: a person with their own storage is never given a Drive folder", cd.route === "refuse", JSON.stringify(cd))
+
   // cleanup
   await sb.from("job_queue").delete().in("related_entity_id", created)
   await sb.from("tax_return_submissions").delete().in("id", created)

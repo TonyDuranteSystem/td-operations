@@ -1,4 +1,5 @@
 # Onboarding
+_Last verified against code: 2026-10-18 (S1c round 4) — Claude (dev job `264bb882`, 'Stop Drive' slice S1c ROUND 4 after browser QA, SANDBOX — Antonio ships). `confirm-ra-switch` also refuses a company being moved up front ('try again'). See storage.md._
 _Last verified against code: 2026-10-18 (S1c round 3) — Claude (dev job `264bb882`, 'Stop Drive' slice S1c ROUND 3 after the third bug-hunt, SANDBOX — Antonio ships). No change to onboarding behaviour in this round. See storage.md._
 _Last verified against code: 2026-10-18 (S1c round 2) — Claude (dev job `264bb882`, 'Stop Drive' slice S1c ROUND 2 after the second bug-hunt, SANDBOX — Antonio ships). No change to onboarding behaviour in this round (RA receipt refusal unchanged). See storage.md._
 _Last verified against code: 2026-10-18 (S1c fix round) — Claude (dev job `264bb882`, 'Stop Drive' slice S1c FIX ROUND after the bug-hunt + E2E QA, SANDBOX — Antonio ships). `confirm-ra-switch` refuses up front (409, nothing saved, stage not moved) for a company that can receive no file; a company left on its folder gets the receipt copied there as before. See storage.md._

@@ -58,7 +58,7 @@ export function driveSpy(driveCalls: string[], mode: "forbid" | "record" = "forb
     return answer(name)
   })
   const names = ["listFolder", "listFolderAnyDrive", "createFolder", "uploadBinaryToDrive", "uploadBinaryToDriveUpsert", "downloadFileBinary", "findTaxFolder", "findOrCreateYearFolder", "driveParentIds", "trashFile", "moveFile", "ensureDrivePath"]
-  return Object.fromEntries(names.map((n) => [n, spy(n)]))
+  return { ...Object.fromEntries(names.map((n) => [n, spy(n)])), driveIsMocked: () => driveMockedFlag }
 }
 
 /** The accounts row a test gives the company: how the "no storage" decision is made. */
@@ -70,5 +70,9 @@ export const ACCOUNT_OLD_FOLDER = { status: "Active", drive_folder_id: "OLDFOLDE
 export function driveSpyDynamic(driveCalls: string[], getMode: () => "forbid" | "record") {
   const forbid = driveSpy(driveCalls, "forbid")
   const record = driveSpy(driveCalls, "record")
-  return Object.fromEntries(Object.keys(forbid).map((k) => [k, (...a: unknown[]) => (getMode() === "forbid" ? forbid : record)[k](...(a as []))]))
+  return { ...Object.fromEntries(Object.keys(forbid).filter((k) => k !== "driveIsMocked").map((k) => [k, (...a: unknown[]) => (getMode() === "forbid" ? forbid : record)[k](...(a as []))])), driveIsMocked: () => driveMockedFlag }
 }
+
+let driveMockedFlag = false
+/** What lib/google-drive's driveIsMocked() answers in a test (true = the faked-Drive sandbox). Reset to false in a beforeEach that needs it. */
+export function setDriveMocked(v: boolean) { driveMockedFlag = v }

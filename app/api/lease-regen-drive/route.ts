@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
+import { NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 import { autoSaveDocument } from '@/lib/portal/auto-save-document'
 
 export async function POST(req: NextRequest) {
@@ -49,18 +49,25 @@ export async function POST(req: NextRequest) {
     // VERSION of that file, never a copy. A company with no storage gets one plain sentence back.
     {
       const regenFileData = Buffer.from(await blob.arrayBuffer())
-      const { saveSignedPdfForAccount } = await import('@/lib/crm-store/save-for-account')
-      const routed = await saveSignedPdfForAccount({
+      const { saveSignedPdfForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+      let routed
+      try {
+      routed = await saveSignedPdfForAccount({
         accountId: lease.account_id,
         fileName: `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`,
         bytes: regenFileData, label: 'Lease Agreement', category: 1, callerKey: `lease-signed:${lease.id}`, documentType: 'office_lease',
       })
+      } catch (e) {
+        // a company that is being moved: a clean "try again", never a 500
+        if (e instanceof CompanyMovingError) return NextResponse.json({ error: e.message }, { status: 409 })
+        throw e
+      }
       if (routed.route === 'store') return NextResponse.json({ ok: true, driveFileId: routed.pointer })
     }
 
     // No storage: a company left on its old folder carries on as before; everyone else gets one plain sentence.
     const decision = await noStorageDecisionFor(lease.account_id)
-    if (decision.route === 'refuse') return NextResponse.json({ error: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+    if (decision.route === 'refuse') return NextResponse.json({ error: decision.sentence }, { status: NO_STORAGE_STATUS })
 
     const { listFolder, uploadBinaryToDriveUpsert } = await import('@/lib/google-drive')
     const folderResult = await listFolder(decision.folderId) as {

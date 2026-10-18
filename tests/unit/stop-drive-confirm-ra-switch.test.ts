@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   route: "store" as "store" | "drive",
   saves: [] as Array<Record<string, unknown>>,
   removed: [] as string[],
+  moving: false,
   uploaded: [] as string[],
 }))
 
@@ -26,7 +27,7 @@ vi.mock("@/lib/google-drive", async () => {
   const h = await import("./_stop-drive-mocks")
   return h.driveSpyDynamic(state.driveCalls, () => (state.route === "drive" && state.rows.accounts && (state.rows.accounts as { drive_folder_id?: string }).drive_folder_id ? "record" : "forbid"))
 })
-vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: async () => (state.route === "store" ? "store" : "drive") }))
+vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: async () => (state.moving ? "moving" : state.route === "store" ? "store" : "drive") }))
 vi.mock("@/lib/drive-folder-utils", () => ({ ensureCompanyFolder: vi.fn(async () => { state.driveCalls.push("ensureCompanyFolder"); throw new Error("no") }) }))
 vi.mock("@/lib/auth/require-staff-route", () => ({ requireStaffRoute: async () => null }))
 vi.mock("@/lib/operations/service-delivery", () => ({ advanceStageIfAt: async () => ({ advanced: true }) }))
@@ -47,6 +48,7 @@ const req = () => {
 
 beforeEach(() => {
   state.route = "store"
+  state.moving = false
   state.recorded.length = 0
   state.driveCalls.length = 0
   state.saves.length = 0
@@ -91,5 +93,15 @@ describe("confirm-ra-switch", () => {
     expect(body.success).toBe(true)
     expect(body.message).toContain("also filed to the company's folder")
     expect(state.driveCalls).toEqual(["uploadBinaryToDrive"])
+  })
+
+  it("a company being MOVED: refused up front with 'try again' — nothing saved, the stage not moved, no staged copy made", async () => {
+    state.moving = true
+    const { POST } = await import("@/app/api/onboarding-review/[id]/confirm-ra-switch/route")
+    const res = await POST(req(), { params: { id: "sub-1" } })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toContain("try again in a few minutes")
+    expect(state.saves).toEqual([])
+    expect(state.recorded.filter((r) => r.table === "service_deliveries")).toEqual([])
   })
 })

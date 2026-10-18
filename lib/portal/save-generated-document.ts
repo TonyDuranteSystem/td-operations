@@ -25,7 +25,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { NO_STORAGE_SENTENCE, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
+import { noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 import { uploadBinaryToDrive } from '@/lib/google-drive'
 import { autoSaveDocument } from '@/lib/portal/auto-save-document'
 import { createPortalNotification } from '@/lib/portal/notifications'
@@ -59,6 +59,8 @@ export interface SaveGeneratedDocumentResult {
   driveFileId?: string
   /** true = a plain refusal (the company can receive no file): not a failure to alarm about */
   refused?: boolean
+  /** true = the company's files are being moved right now: try again in a few minutes (not a failure, no alarm) */
+  moving?: boolean
   coOwnersAlerted?: number
   error?: string
 }
@@ -89,7 +91,7 @@ export async function saveSignedGeneratedDocument(
     } else {
       // No storage: a company left on its old folder carries on there; everyone else is refused with one plain sentence.
       const decision = await noStorageDecisionFor(accountId)
-      if (decision.route === 'refuse') return { success: false, error: NO_STORAGE_SENTENCE, refused: true }
+      if (decision.route === 'refuse') return { success: false, error: decision.sentence, refused: true }
 
       // 1. Old folder
       try {
@@ -117,6 +119,8 @@ export async function saveSignedGeneratedDocument(
       documentId = saved.id
     }
   } catch (err) {
+    // a company that is being moved is a plain "try again", not a failure
+    if (err instanceof Error && err.name === 'CompanyMovingError') return { success: false, error: err.message, moving: true }
     return { success: false, error: `Save failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 
