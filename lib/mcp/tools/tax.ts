@@ -667,6 +667,14 @@ export function registerTaxTools(server: McpServer) {
               const d = describeFiling(saved)
               filed = d.ok
               lines.push(...d.lines)
+              if (filed && saved.route !== "none") {
+                // the durable "filed" marker the archive sweep keys on: this submission never needs archiving again
+                await supabaseAdmin
+                  .from("tax_return_submissions")
+                  .update({ drive_archived_at: new Date().toISOString(), drive_archive_meta: { filed_in: saved.route === "store" ? "storage" : "folder", via: "tax_form_review" } } as never)
+                  .eq("id", sub.id)
+                  .is("drive_archived_at", null)
+              }
             } catch (e) {
               filed = false
               lines.push(`⚠️ Saving the form data failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -698,13 +706,17 @@ export function registerTaxTools(server: McpServer) {
             return { content: [{ type: "text" as const, text: lines.join("\n") }] }
           }
 
-          lines.push(`✅ Background job enqueued: ${apply.job_id}`)
-          lines.push(`   Steps: Contact update → Account update → Tax return → Data Received → Form → reviewed`)
+          if (apply.correctionsAlreadyApplied) {
+            lines.push(`ℹ️ The client's corrections were already applied by an earlier review (job ${apply.job_id}) — they were NOT applied again, and no email was re-sent.`)
+          } else {
+            lines.push(`✅ Background job enqueued: ${apply.job_id}`)
+            lines.push(`   Steps: Contact update → Account update → Tax return → Data Received → Form → reviewed`)
+          }
           lines.push("")
           lines.push(`➡️ Check progress: job_status('${apply.job_id}')`)
           if (filedNote) {
             lines.push("")
-            lines.push(`⚠️ The client's corrections were applied. ${filedNote} Once the problem above is fixed, run this review again to file it and mark it reviewed.`)
+            lines.push(`⚠️ The client's corrections are applied. ${filedNote} Once the problem above is fixed, run this review again: it will only retry the filing and mark the form reviewed — nothing will be applied twice.`)
           }
         }
 

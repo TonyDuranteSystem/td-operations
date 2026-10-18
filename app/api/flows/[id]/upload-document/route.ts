@@ -245,12 +245,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         .order('account_id', { ascending: true })
       let viaAccountId: string | null = null
       let memberOfOldFolderCompany = false
-      for (const l of links ?? []) {
-        const accId = (l as { account_id: string }).account_id
-        if ((await companyDocState(accId)) !== 'drive') { viaAccountId = accId; break }
-        if (!memberOfOldFolderCompany && (await noStorageDecisionFor(accId)).route === 'drive') memberOfOldFolderCompany = true
+      let hasOwner = false
+      try {
+        for (const l of links ?? []) {
+          const accId = (l as { account_id: string }).account_id
+          if ((await companyDocState(accId)) !== 'drive') { viaAccountId = accId; break }
+          if (!memberOfOldFolderCompany && (await noStorageDecisionFor(accId)).route === 'drive') memberOfOldFolderCompany = true
+        }
+        hasOwner = !!(await liveOwnerOfContact(contactId))
+      } catch {
+        // a read error here must not become a bare 500 — and must not guess where the file belongs
+        return NextResponse.json({ success: false, detail: "Could not check where this person's files live — please try again." }, { status: 500 })
       }
-      const hasOwner = !!(await liveOwnerOfContact(contactId))
       if (viaAccountId || hasOwner || !memberOfOldFolderCompany) {
         const { saveDocumentForContact, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
         const { storeNameKey } = await import('@/lib/crm-store/rules')
@@ -302,7 +308,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
       }
     }
-    const useBucketCopy = !routed && pilot.status !== 'saved' && !driveFolderId
+    let useBucketCopy = !routed && pilot.status !== 'saved' && !driveFolderId
 
     // 3c. When the stage requests a named subfolder (e.g. "1. Company"), resolve it within the old folder. Not found /
     //     listing failure → file into the root (never block the upload) but LOG it so a misfiled document is visible.
@@ -329,19 +335,39 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       docFileId = pilot.pointer
       docLink = pilot.link
     } else if (driveFolderId) {
-      // A company left on its old folder: copy the file there. A canonical, deterministic name OVERWRITES any same-named
-      // file (upsert) so a re-upload replaces it; un-renamed uploads keep the historical blind-create behaviour.
+      // A company left on its old folder (or, for a flow with no company yet, the contact's linked company folder): copy the file
+      // there. A canonical, deterministic name OVERWRITES any same-named file (upsert) so a re-upload replaces it; un-renamed
+      // uploads keep the historical blind-create behaviour. The folder may be one the storage has since locked: that is NOT an
+      // error for staff (no raw Drive text) — the file simply stays in the upload bucket as its copy.
       const targetFolderId = uploadTargetFolderId as string
-      let driveFile: { id: string; name: string }
-      if (renameTemplate) {
-        const { uploadBinaryToDriveUpsert } = await import('@/lib/google-drive')
-        driveFile = await uploadBinaryToDriveUpsert(effectiveName, buffer, fileMime, targetFolderId)
-      } else {
-        const { uploadBinaryToDrive } = await import('@/lib/google-drive')
-        driveFile = (await uploadBinaryToDrive(effectiveName, buffer, fileMime, targetFolderId)) as { id: string; name: string }
+      let driveFile: { id: string; name: string } | null = null
+      try {
+        if (renameTemplate) {
+          const { uploadBinaryToDriveUpsert } = await import('@/lib/google-drive')
+          driveFile = await uploadBinaryToDriveUpsert(effectiveName, buffer, fileMime, targetFolderId)
+        } else {
+          const { uploadBinaryToDrive } = await import('@/lib/google-drive')
+          driveFile = (await uploadBinaryToDrive(effectiveName, buffer, fileMime, targetFolderId)) as { id: string; name: string }
+        }
+      } catch (e) {
+        if (e instanceof Error && e.name === 'SwitchedCompanyDriveWriteError') {
+          driveFile = null // locked folder: keep the bucket copy below
+        } else {
+          console.error('[flow-upload-document] old-folder upload failed:', e)
+          return NextResponse.json({ success: false, detail: 'The file could not be saved. Please try again.' }, { status: 500 })
+        }
       }
-      docFileId = driveFile.id
-      docLink = `https://drive.google.com/file/d/${driveFile.id}/view`
+      if (driveFile) {
+        docFileId = driveFile.id
+        docLink = `https://drive.google.com/file/d/${driveFile.id}/view`
+      } else {
+        useBucketCopy = true
+        docFileId = `storage:${storagePath}`
+        const { data: signed } = await supabaseAdmin.storage
+          .from('onboarding-uploads')
+          .createSignedUrl(storagePath, 60 * 60 * 24 * 365)
+        docLink = signed?.signedUrl ?? `onboarding-uploads/${storagePath}`
+      }
     } else {
       // Sandbox only (no live Drive): the file already lives in onboarding-uploads from the signed-URL PUT — keep it (do NOT
       // delete it in step 8) behind a per-upload-unique synthetic id that doubles as the idempotency key.

@@ -113,6 +113,7 @@ export async function approveAndApplyClosureReview(
     {
       token: sub.token,
       account_id: sub.account_id,
+      contact_id: sub.contact_id ?? null,
       upload_paths: (sub.upload_paths as string[] | null) ?? [],
       completed_at: sub.completed_at,
     },

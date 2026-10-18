@@ -393,11 +393,15 @@ export async function fileEsignSignedPdf(envelopeId: string): Promise<EsignFilin
         callerKey: `esign-signed:${env.id}`, contactId: env.contact_id ?? null,
       })
       if (routed.route !== "store") return { filed: false, reason: "the company's storage did not accept the file", hasStorage }
-      await db.from("esign_envelopes").update({ signed_pdf_drive_id: routed.pointer }).eq("id", env.id)
-      // the client is told about the new document exactly as when a document is made visible
-      const { notifyClientsOfNewDocument } = await import("@/lib/portal/document-alerts")
-      notifyClientsOfNewDocument(routed.documentRowId).catch((e) =>
-        console.warn("[esign] new-document alert failed:", e instanceof Error ? e.message : String(e)))
+      // The pointer is the durable "filed" marker. A failed marker write is NOT fatal (the file IS filed, and re-filing is an
+      // idempotent no-op), but it is logged — and the client is told only about a NEW file, never again for a re-run.
+      const { error: markErr } = await db.from("esign_envelopes").update({ signed_pdf_drive_id: routed.pointer }).eq("id", env.id)
+      if (markErr) console.error("[esign] could not record the filing marker (the file is filed; a re-run is a no-op):", markErr.message)
+      if (routed.status === "created") {
+        const { notifyClientsOfNewDocument } = await import("@/lib/portal/document-alerts")
+        notifyClientsOfNewDocument(routed.documentRowId).catch((e) =>
+          console.warn("[esign] new-document alert failed:", e instanceof Error ? e.message : String(e)))
+      }
       return { filed: true, reason: null, hasStorage }
     }
   } catch (e) {
@@ -451,8 +455,22 @@ export async function fileEsignSignedPdf(envelopeId: string): Promise<EsignFilin
   }
 
   // 1c. Any other company (or the old folder did not take it): a documents row served from the signed-documents bucket.
+  // The marker is CLAIMED first (an atomic "set it if still empty"): only the caller that wins the claim writes the row, so the
+  // signer's submit and the reconciliation cron can never both insert one. If the row cannot be written the claim is released,
+  // so the next run files it.
+  const driveRef = `storage:${SIGNED_BUCKET}/${env.signed_pdf_path}`
+  let claimed = false
   try {
-    const driveRef = `storage:${SIGNED_BUCKET}/${env.signed_pdf_path}`
+    const { data: won, error: claimErr } = await db
+      .from("esign_envelopes")
+      .update({ signed_pdf_drive_id: driveRef })
+      .eq("id", env.id)
+      .is("signed_pdf_drive_id", null)
+      .select("id")
+      .maybeSingle()
+    if (claimErr) throw new Error(`could not record the filing marker: ${claimErr.message}`)
+    if (!won) return { filed: true, reason: null, hasStorage } // another caller already filed it
+    claimed = true
     const { data: existing } = await db
       .from("documents")
       .select("id")
@@ -478,11 +496,13 @@ export async function fileEsignSignedPdf(envelopeId: string): Promise<EsignFilin
       })
       if (insErr) throw new Error(insErr.message)
     }
-    // Durable marker: this envelope is filed (served from the bucket) — the reconciliation cron must never pick it up again.
-    await db.from("esign_envelopes").update({ signed_pdf_drive_id: driveRef }).eq("id", env.id)
     return { filed: true, reason: null, hasStorage }
   } catch (e) {
     reason = `filing failed: ${e instanceof Error ? e.message : String(e)}`
+    if (claimed) {
+      // release the claim so the next run files it
+      try { await db.from("esign_envelopes").update({ signed_pdf_drive_id: null }).eq("id", env.id).eq("signed_pdf_drive_id", driveRef) } catch { /* the cron window ends in 3 days */ }
+    }
   }
   return { filed: false, reason, hasStorage }
 }

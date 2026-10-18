@@ -1,6 +1,7 @@
 /**
- * readSweepWindows: the window is filtered in the QUERY — an inner join on the company with a folder / status filter — so
- * skipped rows can never fill it. Checked against a recording fake of the Supabase builder.
+ * readSweepWindow: the window is filtered in the QUERY — real submissions only, not-yet-alerted only, companies that are not
+ * Closed/Cancelled (a missing status counts as not finished), completed rows with NO company kept — so rows that can never be
+ * acted on can never fill it. Checked against a recording fake of the Supabase builder.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
@@ -16,7 +17,7 @@ vi.mock("@/lib/supabase-admin", () => ({
         const q = { table, select, opts, calls: [] as Array<[string, unknown[]]> }
         state.queries.push(q)
         const c: Record<string, unknown> = {}
-        for (const m of ["is", "gte", "not", "in", "order", "limit"]) c[m] = (...a: unknown[]) => { q.calls.push([m, a]); return c }
+        for (const m of ["is", "gte", "not", "in", "or", "order", "limit"]) c[m] = (...a: unknown[]) => { q.calls.push([m, a]); return c }
         c.then = (r: (v: unknown) => unknown) => Promise.resolve(state.answers.shift() ?? { data: [], count: 0, error: null }).then(r)
         return c
       },
@@ -24,41 +25,45 @@ vi.mock("@/lib/supabase-admin", () => ({
   },
 }))
 
-import { readSweepWindows, raiseUnfiledAlarm } from "@/lib/archive/skip-no-drive-folder"
+import { readSweepWindow } from "@/lib/archive/skip-no-drive-folder"
 
+const REAL = "status.in.(completed,reviewed),review_status.not.is.null"
 beforeEach(() => { state.queries.length = 0; state.answers.length = 0 })
 
-describe("readSweepWindows", () => {
-  it("asks for companies WITH a folder that are not Closed/Cancelled, oldest first, limited — in the query", async () => {
-    state.answers.push({ data: [{ id: "r1" }], error: null }, { data: [{ id: "n1" }], error: null }, { data: null, count: 1500, error: null }, { data: null, count: 40, error: null })
-    const w = await readSweepWindows<{ id: string }>("tax_return_submissions", "id, account_id", "2026-01-01T00:00:00Z")
-    expect(w.withFolder).toEqual([{ id: "r1" }])
-    expect(w.noFolder).toEqual([{ id: "n1" }])
-    expect(w.skippedNoFolder).toBe(1500)
+describe("readSweepWindow", () => {
+  it("asks for REAL, not-yet-alerted rows of companies that are not finished — all in the query — oldest first, limited", async () => {
+    state.answers.push({ data: [{ id: "r1" }], error: null }, { data: [{ id: "n1" }], error: null }, { data: null, count: 40, error: null })
+    const w = await readSweepWindow<{ id: string }>("tax_return_submissions", "id, account_id", "2026-01-01T00:00:00Z", REAL)
+    expect(w.candidates.map((r) => r.id)).toEqual(["r1", "n1"])
     expect(w.skippedFinished).toBe(40)
-    const [withFolder, noFolder, countNo, countFin] = state.queries
-    expect(withFolder.select).toContain("accounts!inner(drive_folder_id, status)")
-    expect(withFolder.calls).toContainEqual(["not", ["accounts.drive_folder_id", "is", null]])
-    expect(withFolder.calls).toContainEqual(["not", ["accounts.status", "in", "(Closed,Cancelled)"]])
-    expect(withFolder.calls).toContainEqual(["limit", [200]])
-    expect(withFolder.calls).toContainEqual(["is", ["drive_archived_at", null]])
-    expect(withFolder.calls).toContainEqual(["gte", ["created_at", "2026-01-01T00:00:00Z"]])
-    expect(noFolder.calls).toContainEqual(["is", ["accounts.drive_folder_id", null]])
-    expect(noFolder.calls).toContainEqual(["not", ["accounts.status", "in", "(Closed,Cancelled)"]])
-    expect(countNo.opts).toEqual({ count: "exact", head: true })
-    expect(countFin.calls).toContainEqual(["in", ["accounts.status", ["Closed", "Cancelled"]]])
+    const [withCompany, noCompany, finished] = state.queries
+    // rows of a company that is not finished (status missing counts as not finished)
+    expect(withCompany.select).toContain("accounts!inner(status)")
+    expect(withCompany.calls).toContainEqual(["or", ["status.is.null,status.not.in.(Closed,Cancelled)", { referencedTable: "accounts" }]])
+    // only real submissions; only rows whose one alert has not fired; only not-yet-archived, forward of the cutoff
+    expect(withCompany.calls).toContainEqual(["or", [REAL]])
+    expect(withCompany.calls).toContainEqual(["is", ["drive_archive_meta->>sweep_alerted", null]])
+    expect(withCompany.calls).toContainEqual(["is", ["drive_archived_at", null]])
+    expect(withCompany.calls).toContainEqual(["gte", ["created_at", "2026-01-01T00:00:00Z"]])
+    expect(withCompany.calls).toContainEqual(["limit", [200]])
+    // a completed row with NO company stays visible (the loud anomaly)
+    expect(noCompany.calls).toContainEqual(["is", ["account_id", null]])
+    expect(noCompany.calls).toContainEqual(["or", [REAL]])
+    // the finished ones are only counted
+    expect(finished.opts).toEqual({ count: "exact", head: true })
+    expect(finished.calls).toContainEqual(["in", ["accounts.status", ["Closed", "Cancelled"]]])
+  })
+
+  it("a row that is in both result sets appears once", async () => {
+    state.answers.push({ data: [{ id: "x" }], error: null }, { data: [{ id: "x" }], error: null }, { data: null, count: 0, error: null })
+    const w = await readSweepWindow<{ id: string }>("banking_submissions", "id", "2026-01-01", "status.in.(completed,reviewed)")
+    expect(w.candidates).toEqual([{ id: "x" }])
   })
 
   it("a read error is returned, never turned into 'nothing to do'", async () => {
     state.answers.push({ data: null, error: { message: "db down" } })
-    const w = await readSweepWindows("banking_submissions", "id", "2026-01-01")
+    const w = await readSweepWindow("banking_submissions", "id", "2026-01-01", "status.in.(completed,reviewed)")
     expect(w.readError).toBe("db down")
-    expect(w.withFolder).toEqual([])
-  })
-})
-
-describe("raiseUnfiledAlarm", () => {
-  it("does nothing for an empty list", async () => {
-    await expect(raiseUnfiledAlarm("/x", "things", [])).resolves.toBeUndefined()
+    expect(w.candidates).toEqual([])
   })
 })

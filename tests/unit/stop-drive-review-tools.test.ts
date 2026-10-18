@@ -13,8 +13,10 @@ const state = vi.hoisted(() => ({
   companyState: "store" as "store" | "drive" | "moving",
   store: { summaryFileId: "store:s" as string | null, copied: [] as string[], failed: [] as string[], skipped: [] as string[], errors: [] as string[] },
   folderSaves: 0,
+  storeSpecs: [] as Array<Record<string, unknown>>,
   alarms: [] as Array<Record<string, unknown>>,
   applied: [] as Array<{ id: string; leaveUnreviewed: boolean }>,
+  alreadyApplied: false,
 }))
 
 vi.mock("@/lib/supabase-admin", async () => {
@@ -24,8 +26,9 @@ vi.mock("@/lib/supabase-admin", async () => {
 vi.mock("@/lib/crm-store/switched-drive-guard", () => ({
   companyDocState: async () => state.companyState,
   liveOwnerOfAccount: async () => "owner-1",
+  liveOwnerOfContact: async () => "person-owner",
 }))
-vi.mock("@/lib/crm-store/save-form", () => ({ saveFormToStore: vi.fn(async () => state.store) }))
+vi.mock("@/lib/crm-store/save-form", () => ({ saveFormToStore: vi.fn(async (spec: Record<string, unknown>) => { state.storeSpecs.push(spec); return state.store }) }))
 vi.mock("@/lib/form-to-drive", async () => {
   const actual = await vi.importActual<typeof import("@/lib/form-to-drive")>("@/lib/form-to-drive")
   return { ...actual, saveFormToDrive: vi.fn(async () => { state.folderSaves++; return { summaryFileId: "drive:s", copied: [], failed: [], skipped: [], errors: [] } }) }
@@ -34,7 +37,7 @@ vi.mock("@/lib/system-errors", () => ({ reportSystemError: async (e: Record<stri
 vi.mock("@/lib/operations/tax-review", () => ({
   approveAndApplyTaxReview: vi.fn(async ({ submission_id, leaveUnreviewed }: { submission_id: string; leaveUnreviewed?: boolean }) => {
     state.applied.push({ id: submission_id, leaveUnreviewed: !!leaveUnreviewed })
-    return { ok: true, job_id: "job-1", alreadyApplied: false }
+    return { ok: true, job_id: "job-1", alreadyApplied: false, correctionsAlreadyApplied: state.alreadyApplied }
   }),
 }))
 
@@ -51,8 +54,10 @@ beforeEach(() => {
   state.companyState = "store"
   state.store = { summaryFileId: "store:s", copied: ["a.pdf"], failed: [], skipped: [], errors: [] }
   state.folderSaves = 0
+  state.storeSpecs.length = 0
   state.alarms.length = 0
   state.applied.length = 0
+  state.alreadyApplied = false
   state.recorded.length = 0
   for (const k of Object.keys(state.rows)) delete state.rows[k]
   state.rows.closure_submissions = { id: "cs-1", token: "tok", status: "completed", account_id: "acct-1", contact_id: null, lead_id: null, reviewed_at: null, language: "en", submitted_data: { llc_name: "Acme" }, upload_paths: ["u/a.pdf"], changed_fields: null, completed_at: "2026-10-01" }
@@ -108,11 +113,34 @@ describe("closure_form_review mark_reviewed (MCP)", () => {
     expect(marked()).toBe(false)
     expect(state.alarms).toEqual([])
   })
-  it("a form not linked to a company → NOT filed and NOT reviewed", async () => {
-    ;(state.rows.closure_submissions as Record<string, unknown>).account_id = null
+  it("a form with NO company but a PERSON (a contact-only closure): filed in the person's own storage, then marked reviewed", async () => {
+    const sub = state.rows.closure_submissions as Record<string, unknown>
+    sub.account_id = null
+    sub.contact_id = "contact-1"
+    state.rows.contacts = { full_name: "Mario Rossi" }
     const text = await run()
+    expect(marked()).toBe(true)
+    expect(text).toContain("Form marked as reviewed")
+    expect(state.storeSpecs[0].target).toEqual({ kind: "contact", id: "contact-1", ownerId: "person-owner" })
+  })
+  it("a form with neither a company nor a person (a lead-only closure): never stuck — marked reviewed with a clear note that nothing was filed", async () => {
+    const sub = state.rows.closure_submissions as Record<string, unknown>
+    sub.account_id = null
+    sub.contact_id = null
+    sub.lead_id = "lead-1"
+    state.rows.leads = { full_name: "Lead Person" }
+    const text = await run()
+    expect(marked()).toBe(true)
+    expect(text).toContain("answers stay on the submission itself")
+    expect(state.storeSpecs).toEqual([])
+  })
+  it("a person-only form whose storage save fails → NOT reviewed", async () => {
+    const sub = state.rows.closure_submissions as Record<string, unknown>
+    sub.account_id = null
+    sub.contact_id = "contact-1"
+    state.store = { summaryFileId: null, copied: [], failed: [], skipped: [], errors: ["Summary PDF error: x"] }
+    await run()
     expect(marked()).toBe(false)
-    expect(text).toContain("not linked to a company")
   })
   it("a company left on its old folder → filed there (old route), marked reviewed", async () => {
     state.companyState = "drive"
@@ -173,7 +201,7 @@ describe("tax_form_review apply_changes", () => {
       if (mode === "errors") state.store = { summaryFileId: null, copied: [], failed: [], skipped: [], errors: ["Summary PDF error: x"] }
       const text = await run()
       expect(state.applied).toEqual([{ id: "ts-1", leaveUnreviewed: true }])
-      expect(text).toContain("corrections were applied")
+      expect(text).toContain("corrections are applied")
       expect(text).toContain("NOT filed anywhere")
       expect(text).toContain("NOT marked as reviewed")
     })
@@ -184,5 +212,33 @@ describe("tax_form_review apply_changes", () => {
     state.rows.accounts = { company_name: "Acme LLC", ...ACCOUNT_REFUSED }
     await run()
     expect(state.applied).toEqual([{ id: "ts-1", leaveUnreviewed: false }])
+  })
+
+  it("running the review a SECOND time (after the filing problem was fixed) only retries the filing: nothing is applied twice", async () => {
+    // first run: nothing could receive the form → corrections applied, left unreviewed
+    state.companyState = "drive"
+    state.rows.accounts = { company_name: "Acme LLC", ...ACCOUNT_REFUSED }
+    await run()
+    expect(state.applied).toEqual([{ id: "ts-1", leaveUnreviewed: true }])
+    // the problem is fixed (the company now has storage); second run
+    state.companyState = "store"
+    state.applied.length = 0
+    const text = await run()
+    // the helper (mocked here) is called again, but WITHOUT the leave flag — it is the helper's own once-only rule (see
+    // operations-tax-review.test.ts) that decides not to enqueue again; the reply must not claim it applied anything twice
+    expect(state.applied).toEqual([{ id: "ts-1", leaveUnreviewed: false }])
+    expect(text).not.toContain("NOT marked as reviewed")
+  })
+  it("a successful filing records the durable 'filed' marker on the submission", async () => {
+    await run()
+    const m = state.recorded.find((r) => r.table === "tax_return_submissions" && r.op === "update")?.payload as { drive_archive_meta: { filed_in: string } }
+    expect(m.drive_archive_meta.filed_in).toBe("storage")
+  })
+
+  it("when the corrections were already applied by an earlier run, the reply says they were NOT applied again", async () => {
+    state.alreadyApplied = true
+    const text = await run()
+    expect(text).toContain("NOT applied again")
+    expect(text).not.toContain("Background job enqueued")
   })
 })

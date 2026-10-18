@@ -20,6 +20,8 @@ let ensuredPersons: string[]
 let contactSaves: Array<Record<string, unknown>>
 let contactLinks: Array<Record<string, unknown>>
 let movingPerson: boolean
+let driveError: Error | null
+let stateThrows: boolean
 let saveCalls: Array<Record<string, unknown>>
 let existingDocs: Array<{ id: string }>
 let docInsertError: { message: string } | null
@@ -90,10 +92,11 @@ vi.mock("@/lib/supabase-admin", () => ({
 // Google Drive is a SPY: nothing may call it unless the test says the company is left on its old folder.
 vi.mock("@/lib/google-drive", async () => {
   const h = await import("./_stop-drive-mocks")
-  return h.driveSpyDynamic(driveCalls, () => driveMode)
+  const dyn = h.driveSpyDynamic(driveCalls, () => driveMode)
+  return { ...dyn, uploadBinaryToDrive: async (...a: unknown[]) => { if (driveError) throw driveError; return (dyn.uploadBinaryToDrive as (...x: unknown[]) => unknown)(...a) } }
 })
 
-vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: vi.fn(async () => companyState), liveOwnerOfContact: vi.fn(async () => (ensuredPersons.length > 0 ? "person-owner" : null)) }))
+vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: vi.fn(async () => { if (stateThrows) throw new Error("lookup down"); return companyState }), liveOwnerOfContact: vi.fn(async () => (ensuredPersons.length > 0 ? "person-owner" : null)) }))
 
 vi.mock("@/lib/crm-store/formation-pilot", () => ({
   pilotSaveFormationUpload: vi.fn(async () => ({ status: "not_pilot" })),
@@ -162,6 +165,8 @@ beforeEach(() => {
   contactSaves = []
   contactLinks = []
   movingPerson = false
+  driveError = null
+  stateThrows = false
   saveCalls = []
   sdRow = {
     id: "sd-1",
@@ -333,5 +338,51 @@ describe("EIN letter upload — storage filing + auto-rename (route E2E)", () =>
     expect(res.status).toBe(409)
     expect(removedPaths).toEqual([])
     expect(advanceCalled).toBe(false)
+  })
+
+  it("Scenario 14 — a read error while looking up the person's companies is a plain sentence, not a bare 500, and nothing is guessed", async () => {
+    sdRow = { ...(sdRow as object), account_id: null, service_type: "ITIN", stage: "ITIN Approved" }
+    contactLinks = [{ account_id: "acct-x", is_primary: true }]
+    stateThrows = true
+    const res = await call({ ...EIN_BODY, flow_stage: "ITIN Approved", folder: undefined, rename: undefined })
+    expect(res.status).toBe(500)
+    expect((await res.json()).detail).toBe("Could not check where this person's files live — please try again.")
+    expect(ensuredPersons).toEqual([])
+    expect(contactSaves).toEqual([])
+  })
+
+  it("Scenario 15 — a formation that started on its old folder whose linked folder is now LOCKED by the storage: no raw Drive error — the file stays in the upload bucket and the stage still moves", async () => {
+    sdRow = { ...(sdRow as object), account_id: null, service_type: "Company Formation" }
+    driveMode = "record"
+    contactLinks = [{ account_id: "acct-old", is_primary: true, accounts: { drive_folder_id: "LOCKED", gdrive_folder_url: null, status: "Active" } }]
+    driveError = Object.assign(new Error("This company's files live in the new CRM storage — nothing may be written to its Google Drive folder."), { name: "SwitchedCompanyDriveWriteError" })
+    const res = await call({ ...EIN_BODY, rename: undefined, folder: undefined })
+    expect(res.status).toBe(200)
+    expect(documentsInsertPayload?.drive_file_id).toContain("storage:")
+    expect(removedPaths).toEqual([]) // the bucket object is now the document
+    expect(advanceCalled).toBe(true)
+  })
+
+  it("Scenario 16 — any other old-folder upload failure is a plain sentence, never raw Drive text", async () => {
+    sdRow = { ...(sdRow as object), account_id: null, service_type: "Company Formation" }
+    driveMode = "record"
+    contactLinks = [{ account_id: "acct-old", is_primary: true, accounts: { drive_folder_id: "F", gdrive_folder_url: null, status: "Active" } }]
+    driveError = new Error("googleapis: 503 backend error {internal}")
+    const res = await call({ ...EIN_BODY, rename: undefined, folder: undefined })
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.detail).toBe("The file could not be saved. Please try again.")
+    expect(JSON.stringify(body)).not.toContain("googleapis")
+    expect(advanceCalled).toBe(false)
+  })
+
+  it("Scenario 17 — a Closed company's retained folder never receives a member's file (legacy contact path)", async () => {
+    sdRow = { ...(sdRow as object), account_id: null, service_type: "Company Formation" }
+    driveMode = "record"
+    contactLinks = [{ account_id: "acct-closed", is_primary: true, accounts: { drive_folder_id: "CLOSEDFOLDER", gdrive_folder_url: null, status: "Closed" } }]
+    const res = await call({ ...EIN_BODY, rename: undefined, folder: undefined })
+    expect(res.status).toBe(200)
+    expect(driveCalls).toEqual([])
+    expect(documentsInsertPayload?.drive_file_id).toContain("storage:")
   })
 })

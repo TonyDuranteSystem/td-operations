@@ -40,7 +40,6 @@ vi.mock("@/lib/crm-store/save-form", () => ({
 vi.mock("@/lib/tax/financials-orchestration", () => ({ buildFinancialsWorkbookForAccount: async () => ({ buffer: new Uint8Array([1, 2, 3]) }) }))
 
 import { NO_STORAGE_SENTENCE, NO_PERSON_STORAGE_SENTENCE, NO_STORAGE_STATUS, notStored, decideNoStorage, folderIdOf, noStorageDecisionFor, accountCanReceiveFiles } from "@/lib/crm-store/no-storage"
-import { unfiledOf } from "@/lib/archive/skip-no-drive-folder"
 import { saveFormForAccount, describeFiling, type SaveAccountFormDeps } from "@/lib/crm-store/save-account-form"
 
 beforeEach(() => {
@@ -213,14 +212,5 @@ describe("decideNoStorage / folderIdOf", () => {
     expect(await accountCanReceiveFiles("a")).toBe(false)
     state.companyState = "store"
     expect(await accountCanReceiveFiles("a")).toBe(true)
-  })
-})
-
-
-describe("sweep helpers", () => {
-  it("unfiledOf keeps what the sweep would act on (enqueue or alert), drops 'skip'", () => {
-    const rows = [{ id: "a" }, { id: "b" }, { id: "c" }]
-    const decide = (r: { id: string }) => (r.id === "a" ? "skip" : r.id === "b" ? "enqueue" : "alert") as "skip" | "enqueue" | "alert"
-    expect(unfiledOf(rows, decide).map((r) => r.id)).toEqual(["b", "c"])
   })
 })

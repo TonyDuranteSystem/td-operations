@@ -67,14 +67,14 @@ async function main() {
   check("P1 the file lands in the person's own storage (no signed link, a storage pointer)", sv.route === "store" && sv.pointer.startsWith("store:"), JSON.stringify(sv))
   if (sv.route === "store") await sb.from("documents").delete().eq("id", sv.documentRowId)
 
-  // ── round 2: the sweep window is filtered in the query; the closure filing rule ──
-  const { readSweepWindows } = await import("../../../lib/archive/skip-no-drive-folder")
-  for (const [table, cols] of [["tax_return_submissions", "id, account_id"], ["banking_submissions", "id, account_id"]] as const) {
-    const w = await readSweepWindows<{ id: string; account_id: string }>(table, cols, "2020-01-01T00:00:00Z")
-    const ids = Array.from(new Set(w.withFolder.map((r) => r.account_id)))
-    const { data: accs } = ids.length ? await sb.from("accounts").select("id, drive_folder_id, status").in("id", ids) : { data: [] }
-    const bad = (accs ?? []).filter((a: { drive_folder_id: string | null; status: string }) => !a.drive_folder_id || a.status === "Closed" || a.status === "Cancelled")
-    check(`W-${table} the sweep window holds only companies WITH a folder that are not finished (read from the real database)`, !w.readError && bad.length === 0, JSON.stringify({ err: w.readError, rows: w.withFolder.length, noFolderRows: w.noFolder.length, skippedNoFolder: w.skippedNoFolder, skippedFinished: w.skippedFinished, bad: bad.length }))
+  // ── round 2/3: the sweep window is filtered in the query ──
+  const { readSweepWindow } = await import("../../../lib/archive/skip-no-drive-folder")
+  for (const [table, cols, real] of [["tax_return_submissions", "id, account_id, status, review_status, created_at, drive_archived_at, drive_archive_meta", "status.in.(completed,reviewed),review_status.not.is.null"], ["banking_submissions", "id, account_id, status, created_at, drive_archived_at, drive_archive_meta", "status.in.(completed,reviewed)"]] as const) {
+    const w = await readSweepWindow<{ id: string; account_id: string | null; status: string | null }>(table, cols, "2020-01-01T00:00:00Z", real)
+    const ids = Array.from(new Set(w.candidates.map((r) => r.account_id).filter((x): x is string => !!x)))
+    const { data: accs } = ids.length ? await sb.from("accounts").select("id, status").in("id", ids) : { data: [] }
+    const bad = (accs ?? []).filter((a: { status: string }) => a.status === "Closed" || a.status === "Cancelled")
+    check(`W-${table} the sweep window holds only real rows of companies that are not finished (read from the real database)`, !w.readError && bad.length === 0 && w.candidates.every((r) => r.status === "completed" || r.status === "reviewed" || table === "tax_return_submissions"), JSON.stringify({ err: w.readError, rows: w.candidates.length, skippedFinished: w.skippedFinished, bad: bad.length }))
   }
   const { fileClosureSubmission } = await import("../../../lib/crm-store/save-account-form")
   const sub = (account_id: string | null) => ({ token: `qa-t38-${tag}`, account_id, upload_paths: [] as string[], completed_at: new Date().toISOString() })
@@ -88,7 +88,7 @@ async function main() {
     check("C3 closure: a Cancelled company with nothing to file → reviewable, and it says so", cCl.ok === true && cCl.lines.join(" ").includes("closed"), JSON.stringify(cCl))
   }
   const cNo = await fileClosureSubmission(sub(null), {}, "x", "qa/t38")
-  check("C4 closure: a form not linked to a company → NOT reviewable", cNo.ok === false)
+  check("C4 closure: a form linked to neither a company nor a person is never stuck: reviewable, with a clear note", cNo.ok === true && cNo.lines.join(" ").includes("stay on the submission"), JSON.stringify(cNo))
 
   // cleanup of fixtures that are not storage objects
   await sb.from("documents").delete().eq("account_id", TC).like("drive_file_id", `storage:signed-documents/esign/qa-t38-${tag}-%`)

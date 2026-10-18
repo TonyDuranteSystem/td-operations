@@ -47,6 +47,8 @@ interface TaxFormPayload {
   source?: "portal_wizard" | string
   /** the form could not be filed: apply the corrections but do NOT mark the form reviewed */
   leave_unreviewed?: boolean
+  /** enqueued by a staff/workflow REVIEW (not by the wizard): the review runs this once per submission */
+  review_apply?: boolean
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {

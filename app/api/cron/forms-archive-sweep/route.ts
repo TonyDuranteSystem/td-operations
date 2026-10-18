@@ -30,7 +30,7 @@ import {
   FORM_ARCHIVE_SWEEP_ALERTED_KEY,
   FORM_ARCHIVE_SWEEP_CHANNEL,
 } from "@/lib/forms/archive-sweep"
-import { readSweepWindows, unfiledOf, raiseUnfiledAlarm } from "@/lib/archive/skip-no-drive-folder"
+import { readSweepWindow } from "@/lib/archive/skip-no-drive-folder"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 120
@@ -51,35 +51,29 @@ export async function GET(req: NextRequest) {
   let enqueued = 0
   const enqueuedIds: string[] = []
   const stuck: string[] = []
-  const perForm: Record<string, { candidates: number; enqueued: number; stuck: number; skippedNoFolder: number; skippedFinished: number; unfiledNoFolder: number }> = {}
-  let skippedNoFolder = 0
+  const perForm: Record<string, { candidates: number; enqueued: number; stuck: number; skippedFinished: number }> = {}
   let skippedFinished = 0
 
   for (const recipe of Object.values(ARCHIVE_RECIPES)) {
-    const stats = { candidates: 0, enqueued: 0, stuck: 0, skippedNoFolder: 0, skippedFinished: 0, unfiledNoFolder: 0 }
+    const stats = { candidates: 0, enqueued: 0, stuck: 0, skippedFinished: 0 }
     perForm[recipe.formType] = stats
 
     // Cast: recipe.table is a runtime string; the typed client needs a table
     // literal (every recipe.table IS a real submission table).
     const tbl = recipe.table as "banking_submissions"
-    // Only the banking archive resolves the company's own folder (itin / closure resolve others). For it the window holds only
-    // companies that HAVE a folder and are not Closed / Cancelled (filtered in the query — skipped rows can never fill it); a
-    // company with no folder is counted and raises ONE alarm until its submissions are filed.
+    // Banking: the window holds only REAL (completed / reviewed) submissions whose one stuck-row alert has not fired yet, of
+    // companies that are not Closed / Cancelled — filtered IN the query, so shells and used-up rows never fill it. A company with
+    // no folder is archived into its storage by the job itself; a completed row with no company stays in (and fails loudly).
     let formRows: Record<string, unknown>[]
     if (recipe.formType === "banking") {
-      const win = await readSweepWindows<Record<string, unknown> & { id: string }>(recipe.table, recipe.selectColumns, FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
+      const win = await readSweepWindow<Record<string, unknown>>(recipe.table, recipe.selectColumns, FORM_ARCHIVE_SWEEP_CUTOFF_ISO, "status.in.(completed,reviewed)")
       if (win.readError) {
         await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${win.readError}` }).catch(() => {})
         continue
       }
-      formRows = win.withFolder
-      stats.skippedNoFolder = win.skippedNoFolder
+      formRows = win.candidates
       stats.skippedFinished = win.skippedFinished
-      skippedNoFolder += win.skippedNoFolder
       skippedFinished += win.skippedFinished
-      const unfiled = unfiledOf(win.noFolder, (r) => decideFormArchiveSweep(r, recipe, now))
-      stats.unfiledNoFolder = unfiled.length
-      await raiseUnfiledAlarm(ENDPOINT, "banking submissions", unfiled.map((r) => String(r.id)))
     } else {
       const { data: rows, error } = await supabaseAdmin
         .from(tbl)
@@ -141,7 +135,7 @@ export async function GET(req: NextRequest) {
     }).catch(() => {})
   }
 
-  const summary = { dryRun, skippedNoFolder, skippedFinished, enqueued, enqueuedIds, stuck, perForm }
+  const summary = { dryRun, skippedFinished, enqueued, enqueuedIds, stuck, perForm }
   logCron({ endpoint: ENDPOINT, status: "success", duration_ms: Date.now() - startTime, details: summary })
   return NextResponse.json({ ok: true, ...summary })
 }
