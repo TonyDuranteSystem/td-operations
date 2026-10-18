@@ -20,6 +20,8 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import type { PortalChatEntity } from '@/lib/portal/queries'
+import { isItemHiddenByCutoff } from '@/lib/documents/history-cutoff'
+import { getHistoryCutoffs, getOpenedItemIds } from '@/lib/portal/history-cutoff'
 
 export interface UnreadRow {
   account_id: string | null
@@ -85,7 +87,7 @@ export async function fetchClientUnreadRows(contactId: string, accountIds: strin
   // PostgREST `or` group per query keeps the filter unambiguous.
   const base = () => supabaseAdmin
     .from('portal_messages')
-    .select('id, account_id, contact_id, topic')
+    .select('id, account_id, contact_id, topic, created_at, addressed_to_contact_id')
     .eq('sender_type', 'admin')
     .is('deleted_at', null)
     .or(scope)
@@ -94,8 +96,15 @@ export async function fetchClientUnreadRows(contactId: string, accountIds: strin
   const [neverRead, keptUnread] = await Promise.all([base().is('read_at', null), (base() as any).eq('client_kept_unread', true)])
   if (neverRead.error) throw new Error(neverRead.error.message)
   if (keptUnread.error) throw new Error(keptUnread.error.message)
+  // A message from before this person's start date at a company is not theirs to see, so it must not make a badge either
+  // (dev job d14e823f) — the same rule the chat applies, from lib/documents/history-cutoff.ts.
+  const cutoffs = await getHistoryCutoffs(contactId)
+  const opened = new Map<string, Set<string>>()
+  for (const accId of cutoffs.keys()) opened.set(accId, await getOpenedItemIds(accId, 'message'))
   const byId = new Map<string, UnreadRow>()
-  for (const r of [...(neverRead.data ?? []), ...(keptUnread.data ?? [])] as Array<UnreadRow & { id: string }>) {
+  for (const r of [...(neverRead.data ?? []), ...(keptUnread.data ?? [])] as Array<UnreadRow & { id: string; created_at: string; addressed_to_contact_id: string | null }>) {
+    const cutoff = r.account_id ? cutoffs.get(r.account_id) : null
+    if (cutoff && isItemHiddenByCutoff({ created_at: r.created_at, ownerContactId: r.contact_id, addressedToContactId: r.addressed_to_contact_id, opened: opened.get(r.account_id as string)?.has(r.id) ?? false }, cutoff, contactId)) continue
     byId.set(r.id, { account_id: r.account_id, contact_id: r.contact_id, topic: r.topic })
   }
   return Array.from(byId.values())

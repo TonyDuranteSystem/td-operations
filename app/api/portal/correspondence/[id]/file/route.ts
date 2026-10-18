@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId } from '@/lib/portal-auth'
+import { isItemHiddenFromViewer } from '@/lib/portal/history-cutoff'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { parseStorePointer } from '@/lib/crm-store/document-pointer'
 
@@ -23,7 +24,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
   const { data: item } = await supabaseAdmin
     .from('client_correspondence')
-    .select('id, file_name, account_id, contact_id, drive_file_id')
+    .select('id, file_name, account_id, contact_id, drive_file_id, created_at')
     .eq('id', params.id)
     .maybeSingle()
 
@@ -34,6 +35,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   const ownContact = !!contactId && item.contact_id === contactId
   const companyAccess = item.account_id ? await canAccessAccount(user, item.account_id as string, 'documents') : false
   if (!ownContact && !companyAccess) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  // A person who joined the company later cannot open a letter received before their start date (dev job d14e823f).
+  if (!ownContact && await isItemHiddenFromViewer({ accountId: item.account_id as string | null, contactId, kind: 'correspondence', itemId: item.id as string, item: { created_at: item.created_at as string } })) {
+    return NextResponse.json({ error: 'File not found' }, { status: 404 })
+  }
 
   try {
     const { readStoreFile, StoreFileUnavailableError } = await import('@/lib/crm-store/document-pointer')
