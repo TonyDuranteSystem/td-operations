@@ -66,6 +66,8 @@ export interface SaveDeps {
   save: (p: PilotSave) => Promise<WriteResult>
   upsertRow: (fileId: string, row: DocumentsRow, status?: WriteResult["status"]) => Promise<{ id: string; inserted: boolean }>
   pointer: (fileId: string) => string
+  /** an OPEN company with no folder and no storage gets its storage opened (see openStorageForOpenCompany); absent = never */
+  openStorage?: (accountId: string) => Promise<boolean>
 }
 
 async function defaultDeps(): Promise<SaveDeps> {
@@ -79,12 +81,15 @@ async function defaultDeps(): Promise<SaveDeps> {
     save: pilot.savePilotFile,
     upsertRow: pilot.upsertStoreDocumentRow,
     pointer: ptr.storePointer,
+    openStorage: async (accountId) => (await import("./no-storage")).openStorageForOpenCompany(accountId),
   }
 }
 
 export async function saveDocumentForAccount(input: SaveForAccountInput, deps?: SaveDeps): Promise<SaveForAccountResult> {
   const d = deps ?? (await defaultDeps())
-  const state = await d.state(input.accountId)
+  let state = await d.state(input.accountId)
+  // Stop Drive S1d: an open company with no folder and no storage is not a dead end — its storage is opened and the file lands in it
+  if (state === "drive" && d.openStorage && (await d.openStorage(input.accountId))) state = await d.state(input.accountId)
   if (state === "drive") return { route: "drive" }
   if (state === "moving") throw new CompanyMovingError()
 

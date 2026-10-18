@@ -84,6 +84,33 @@ async function main() {
     check("L11 a company with storage is refused", /StoreOwned|Switched|DriveWriteRefused/.test(l11), l11.slice(0, 200) || "NO ERROR")
     const l12 = await attempt(() => drive.uploadFile(folderUx, "QA Test s1d storage.txt", "x"))
     check("L12 a write into a storage company's folder is still refused", l12.startsWith("SwitchedCompanyDriveWriteError"), l12.slice(0, 200) || "NO ERROR — written")
+
+    // L13 two open formations, one with a live formation storage: the new company gets NO second owner
+    const { ensureCompanyStorage } = await import("../../../lib/crm-store/company-storage")
+    const { data: buyer } = await sb.from("contacts").insert({ first_name: "Qa", last_name: "Buyer", full_name: `Qa Buyer ${Date.now()}`, email: `qa-buyer-${Date.now()}@example.invalid` }).select("id").single()
+    const mkSd = async () => (await sb.from("service_deliveries").insert({ contact_id: buyer.id, service_type: "Company Formation", service_name: "QA formation", status: "active", stage: "Data Collection" }).select("id").single()).data.id as string
+    const sd1 = await mkSd(); await mkSd()
+    const { data: fo, error: foErr } = await sb.rpc("store_ensure_owner", { p_kind: "formation", p_ref: sd1 })
+    if (foErr) throw new Error(`formation owner: ${foErr.message}`)
+    const { data: newCo } = await sb.from("accounts").insert({ company_name: `QA S1d new-co ${Date.now()} LLC`, state_of_formation: "Wyoming", entity_type: "Single Member LLC", status: "Active" }).select("id").single()
+    await sb.from("account_contacts").insert({ account_id: newCo.id, contact_id: buyer.id, role: "Owner", is_primary: true })
+    const l13 = await attempt(() => ensureCompanyStorage(newCo.id, "QA new co"))
+    const { data: coOwners } = await sb.from("store_owners").select("id").eq("account_id", newCo.id).eq("kind", "company")
+    check("L13 with a formation storage open for the buyer, NO second company storage is created", l13.startsWith("FormationOwnerPendingError") && (coOwners ?? []).length === 0, `${l13.slice(0, 120)} companyOwners=${(coOwners ?? []).length}`)
+    const l13b = await attempt(() => ensureCompanyFolder(newCo.id, "QA new co", "Wyoming"))
+    check("L13b the folder helper turns it into the store-owned refusal (callers take their storage branch)", l13b.startsWith("StoreOwnedAccountError"), l13b.slice(0, 160))
+
+    // L14 a returning client whose companies are ALL closed gets their own storage (not a refusal)
+    const { ensureContactFolder } = await import("../../../lib/drive-folder-utils")
+    const { data: ret } = await sb.from("contacts").insert({ first_name: "Qa", last_name: "Returning", full_name: `Qa Returning ${Date.now()}`, email: `qa-ret-${Date.now()}@example.invalid`, drive_folder_id: folderB }).select("id").single()
+    const { data: closedCo } = await sb.from("accounts").insert({ company_name: `QA S1d closed-co ${Date.now()} LLC`, state_of_formation: "Wyoming", entity_type: "Single Member LLC", status: "Closed", drive_folder_id: folderB }).select("id").single()
+    await sb.from("account_contacts").insert({ account_id: closedCo.id, contact_id: ret.id, role: "Owner", is_primary: true })
+    const l14 = await attempt(() => ensureContactFolder(ret.id, "Qa Returning"))
+    const { data: pOwner } = await sb.from("store_owners").select("id").eq("contact_id", ret.id).eq("study_only", false).maybeSingle()
+    check("L14 a returning client of only-closed companies gets their OWN storage (no refusal, no Drive write)", l14.startsWith("PersonFilesInStorageError") && !!pOwner, `${l14.slice(0, 120)} owner=${!!pOwner}`)
+    for (const o of [pOwner?.id, fo]) if (o) await sb.from("store_owners").update({ study_only: true }).eq("id", o)
+    await sb.from("accounts").update({ status: "Cancelled", drive_folder_id: null }).in("id", [newCo.id, closedCo.id])
+    await sb.from("service_deliveries").update({ status: "cancelled" }).eq("contact_id", buyer.id)
   } finally {
     await sb.from("accounts").update({ drive_folder_id: ux.drive_folder_id, status: ux.status }).eq("id", UX)
     await sb.from("accounts").update({ drive_folder_id: null, status: "Cancelled" }).eq("id", tc.id) // retire the throw-away company

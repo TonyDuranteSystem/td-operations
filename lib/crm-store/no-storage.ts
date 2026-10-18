@@ -52,7 +52,13 @@ const FINISHED_STATUSES = new Set(["closed", "cancelled", "canceled"])
 export function folderIdOf(a: { drive_folder_id?: string | null; gdrive_folder_url?: string | null } | null | undefined): string | null {
   if (!a) return null
   if (a.drive_folder_id) return a.drive_folder_id
-  const m = /\/folders\/([A-Za-z0-9_-]+)/.exec(a.gdrive_folder_url ?? "")
+  return driveIdFromUrl(a.gdrive_folder_url)
+}
+
+/** The id in any Google Drive folder link: /folders/<id>, /drive/u/0/folders/<id>, open?id=<id>, ?id=<id> (also a folders link with extra query). */
+export function driveIdFromUrl(url: string | null | undefined): string | null {
+  const u = url ?? ""
+  const m = /\/folders\/([A-Za-z0-9_-]+)/.exec(u) ?? /[?&]id=([A-Za-z0-9_-]+)/.exec(u)
   return m ? m[1] : null
 }
 
@@ -75,6 +81,31 @@ export async function noStorageDecisionFor(accountId: string): Promise<NoStorage
   return decideNoStorage(data as { status?: string | null; drive_folder_id?: string | null; gdrive_folder_url?: string | null } | null)
 }
 
+/**
+ * An OPEN company (not Closed / Cancelled) with no storage and no folder — made by onboarding, "place client" or a standalone tax
+ * intake — is not a dead end: its storage is opened here, so the save that asked can land in it. Closed / Cancelled companies and the
+ * few left on their old folder are untouched (they have no folder to be missing, or are finished). Returns true when the company now
+ * has a storage. Idempotent; a read error throws; a formation that already owns a storage is not duplicated (returns false).
+ */
+export async function openStorageForOpenCompany(accountId: string): Promise<boolean> {
+  const { companyDocState } = await import("./switched-drive-guard")
+  if ((await companyDocState(accountId)) !== "drive") return false
+  const { supabaseAdmin } = await import("@/lib/supabase-admin")
+  const { data, error } = await supabaseAdmin.from("accounts").select("company_name, status, drive_folder_id, gdrive_folder_url").eq("id", accountId).maybeSingle()
+  if (error) throw new Error("Could not check this company — please try again.")
+  if (!data) return false
+  const d = decideNoStorage(data as { status?: string | null; drive_folder_id?: string | null; gdrive_folder_url?: string | null })
+  if (d.route !== "refuse" || d.reason !== "no_folder") return false
+  const { ensureCompanyStorage } = await import("./company-storage")
+  try {
+    await ensureCompanyStorage(accountId, (data as { company_name?: string | null }).company_name || "Company")
+    return true
+  } catch (e) {
+    if (e instanceof Error && e.name === "FormationOwnerPendingError") return false
+    throw e
+  }
+}
+
 // The optional `undefined` members let a caller read `.reason` / `.sentence` without a narrowing step (the project is not strict).
 export type ReceiveVerdict = { ok: true; reason?: undefined; sentence?: undefined } | { ok: false; reason: NoStorageReason; sentence: string }
 
@@ -85,7 +116,8 @@ export type ReceiveVerdict = { ok: true; reason?: undefined; sentence?: undefine
  */
 export async function receiveVerdictFor(accountId: string): Promise<ReceiveVerdict> {
   const { companyDocState } = await import("./switched-drive-guard")
-  const state = await companyDocState(accountId)
+  let state = await companyDocState(accountId)
+  if (state === "drive" && (await openStorageForOpenCompany(accountId))) state = await companyDocState(accountId)
   if (state === "store") return { ok: true }
   if (state === "moving") return { ok: false, reason: "moving", sentence: NO_STORAGE_REASON_SENTENCE.moving }
   const d = await noStorageDecisionFor(accountId)

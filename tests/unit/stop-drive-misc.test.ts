@@ -44,7 +44,7 @@ vi.mock("@/lib/portal/rate-limit", () => ({ checkRateLimit: () => ({ allowed: tr
 vi.mock("@/lib/portal/save-generated-document", () => ({ saveSignedGeneratedDocument: vi.fn(async () => state.saveResult) }))
 vi.mock("@/lib/auth/staff-preview", () => ({ isStaffPreview: async () => true }))
 
-import { NO_STORAGE_SENTENCE, CLIENT_NO_STORAGE_SENTENCE, CLIENT_MOVING_SENTENCE } from "@/lib/crm-store/no-storage"
+import { NO_STORAGE_SENTENCE, CLIENT_NO_STORAGE_SENTENCE, CLIENT_MOVING_SENTENCE, NO_STORAGE_REASON_SENTENCE } from "@/lib/crm-store/no-storage"
 import { ACCOUNT_REFUSED, ACCOUNT_CLOSED_WITH_FOLDER, ACCOUNT_OLD_FOLDER } from "./_stop-drive-mocks"
 
 beforeEach(() => {
@@ -127,10 +127,10 @@ describe("lease regenerate (page) — refusal before the lease row changes", () 
   beforeEach(() => { state.rows.lease_agreements = { id: "lease-1", account_id: "acct-1" } })
 
   it("a company that can receive no file: 409 with the sentence and the lease row is NOT updated", async () => {
-    state.rows.accounts = ACCOUNT_REFUSED
+    state.rows.accounts = { status: "Closed", drive_folder_id: "F-old", gdrive_folder_url: null }
     const res = await regen()
     expect(res.status).toBe(409)
-    expect(await res.json()).toEqual({ error: NO_STORAGE_SENTENCE })
+    expect(await res.json()).toEqual({ error: NO_STORAGE_REASON_SENTENCE.archived })
     expect(state.recorded.filter((r) => r.table === "lease_agreements")).toEqual([])
   })
   it("a storage company: the lease row is updated", async () => {

@@ -5,8 +5,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { NextRequest } from "next/server"
-import { ACCOUNT_REFUSED, ACCOUNT_OLD_FOLDER } from "./_stop-drive-mocks"
-import { NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
+import { ACCOUNT_OLD_FOLDER } from "./_stop-drive-mocks"
+import { NO_STORAGE_REASON_SENTENCE } from "@/lib/crm-store/no-storage"
 
 const state = vi.hoisted(() => ({
   rows: {} as Record<string, unknown>,
@@ -73,11 +73,11 @@ describe("confirm-ra-switch", () => {
 
   it("a company that can receive no file (no storage, no folder): refused up front with the one sentence — nothing saved, the stage NOT moved, zero Drive calls", async () => {
     state.route = "drive"
-    state.rows.accounts = { ...(state.rows.accounts as object), ...ACCOUNT_REFUSED }
+    state.rows.accounts = { ...(state.rows.accounts as object), ...{ status: "Closed", drive_folder_id: "F-old", gdrive_folder_url: null } }
     const { POST } = await import("@/app/api/onboarding-review/[id]/confirm-ra-switch/route")
     const res = await POST(req(), { params: { id: "sub-1" } })
     expect(res.status).toBe(409)
-    expect(await res.json()).toEqual({ success: false, error: NO_STORAGE_SENTENCE })
+    expect(await res.json()).toEqual({ success: false, error: NO_STORAGE_REASON_SENTENCE.archived })
     expect(state.saves).toEqual([])
     expect(state.driveCalls).toEqual([])
     // nothing was stored (no durable copy was made for a refused confirmation)

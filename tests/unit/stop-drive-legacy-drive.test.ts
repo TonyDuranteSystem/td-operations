@@ -108,6 +108,24 @@ describe('alarm throttle — a retrying job cannot spam staff', () => {
     await raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'archived' }, t0 + ALARM_THROTTLE_MS + 10_000, deps)
     expect(raise).toHaveBeenCalledTimes(4)
   })
+  it('a refusal for a DIFFERENT file of the same company is a different problem and alarms again', async () => {
+    const raise = vi.fn(async () => {})
+    const deps = { alreadyAlarmed: async () => false, raise }
+    await raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'archived', detail: 'file-1.pdf' }, 1_000_000, deps)
+    await raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'archived', detail: 'file-2.pdf' }, 1_000_100, deps)
+    await raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'archived', detail: 'file-1.pdf' }, 1_000_200, deps)
+    expect(raise).toHaveBeenCalledTimes(2)
+  })
+  it('a FAILED raise is not remembered: the next refusal tries again', async () => {
+    let fail = true
+    const raise = vi.fn(async () => { if (fail) throw new Error('down') })
+    const deps = { alreadyAlarmed: async () => false, raise }
+    await raiseDriveWriteRefused({ flow: 'z', accountId: 'a', reason: 'archived' }, 2_000_000, deps)
+    fail = false
+    await raiseDriveWriteRefused({ flow: 'z', accountId: 'a', reason: 'archived' }, 2_000_100, deps)
+    await raiseDriveWriteRefused({ flow: 'z', accountId: 'a', reason: 'archived' }, 2_000_200, deps)
+    expect(raise).toHaveBeenCalledTimes(2) // the failed one, then the one that went out; the third is quiet
+  })
   it('another server instance that already alarmed (found in the store history) keeps this one quiet', async () => {
     const raise = vi.fn(async () => {})
     await raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'archived' }, Date.now(), { alreadyAlarmed: async () => true, raise })

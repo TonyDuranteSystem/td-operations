@@ -99,12 +99,18 @@ describe('ensureContactFolder', () => {
     await expect(ensureContactFolder('c2', 'New Lead')).rejects.toMatchObject({ name: 'PersonFilesInStorageError' })
     expect(st.openedPersonStorage).toEqual(['c2']); expect(st.driveWrites).toEqual([])
   })
-  it('a person only of a CLOSED company: refused with an alarm (no storage is opened for them)', async () => {
+  it('a person only of CLOSED companies (a returning client starting a new formation): their OWN storage is opened — a closed company is a property of the company, not of the person', async () => {
     acct('Closed', 'F-old'); st.rows.contacts = { drive_folder_id: 'P-old', gdrive_folder_url: null }; links(['a1'])
     const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
-    await expect(ensureContactFolder('c3', 'Old Person')).rejects.toMatchObject({ name: 'LegacyDriveRefusedError', reason: 'archived' })
-    expect(st.openedPersonStorage).toEqual([]); expect(st.driveReads).toEqual([])
-    expect(st.alarms.map((a) => a.kind)).toEqual(['drive_write_refused'])
+    await expect(ensureContactFolder('c3', 'Old Person')).rejects.toMatchObject({ name: 'PersonFilesInStorageError' })
+    expect(st.openedPersonStorage).toEqual(['c3']); expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
+    expect(st.alarms).toEqual([])
+  })
+  it('a person of a company that is being MOVED right now is refused with ONE alarm (no storage opened)', async () => {
+    st.companyState = 'moving'; acct('Active', 'F-x'); st.rows.contacts = { drive_folder_id: 'P-x', gdrive_folder_url: null }; links(['a1'])
+    const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
+    await expect(ensureContactFolder('c9', 'Moving Person')).rejects.toMatchObject({ name: 'LegacyDriveRefusedError', reason: 'moving' })
+    expect(st.openedPersonStorage).toEqual([]); expect(st.alarms.map((a) => a.kind)).toEqual(['drive_write_refused'])
   })
   it('a person of a left-on-Drive company: their own folder back, nothing created', async () => {
     acct('Offboarding', 'F-rebis'); st.rows.contacts = { drive_folder_id: 'P-folder', gdrive_folder_url: null }; links(['a1'])

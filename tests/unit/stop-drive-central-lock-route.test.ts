@@ -17,12 +17,15 @@ vi.mock('@/lib/supabase-admin', () => {
     let folderIn: string[] | null = null
     let notClosed = false
     const b: Record<string, unknown> = {}
+    let linkOnly = false
     for (const m of ['select', 'eq', 'order', 'delete']) b[m] = () => b
+    b.is = () => { linkOnly = true; return b }
     b.in = (c: string, v: string[]) => { if (c === 'status') statusIn = v; if (c === 'drive_folder_id') folderIn = v; return b }
     b.not = () => { notClosed = true; return b }
     b.maybeSingle = () => Promise.resolve({ data: null, error: null })
     const rowsFor = () => {
       if (table !== 'accounts') return []
+      if (linkOnly) return st.accounts.filter((a) => !a.drive_folder_id && a.gdrive_folder_url && !['Closed', 'Cancelled'].includes(a.status))
       if (folderIn) return st.accounts.filter((a) => folderIn!.includes(a.drive_folder_id ?? '') && (!notClosed || !['Closed', 'Cancelled'].includes(a.status)))
       if (statusIn) return st.accounts.filter((a) => statusIn!.includes(a.status))
       return []
