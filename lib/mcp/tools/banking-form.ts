@@ -345,6 +345,40 @@ export function registerBankingFormTools(server: McpServer) {
           lines.push("APPLYING CHANGES...")
           lines.push("")
 
+          // ── File the package FIRST (Stop Drive S1d, dev job 264bb882) ────────────────────────────
+          // The company's storage (or its Drive folder if it was left on Drive); the client's personal papers go to the PERSON's own
+          // storage. Filing is idempotent (same submission key = same files), so this tool can simply be run again after a failure —
+          // the form is marked reviewed ONLY when everything was filed, and a re-run on an already-reviewed form still files
+          // whatever is missing.
+          const { fileBankingPackage } = await import("@/lib/forms/file-banking-package")
+          const pkg = await fileBankingPackage({
+            flow: "banking_form_review", formType: "banking", accountId: sub.account_id, contactId: sub.contact_id ?? null,
+            submittedData: submitted, uploadPaths: (sub.upload_paths as string[]) || [], bucket: "banking-uploads",
+            token: sub.token, submittedAt: sub.completed_at, companyName: accountName || token,
+          })
+          if (pkg.summaryFileId) lines.push(`✅ Data summary filed (${pkg.summaryFileId})`)
+          if (pkg.copied.length > 0) lines.push(`✅ ${pkg.copied.length} file(s) filed`)
+          if (pkg.pinFolderId) {
+            try {
+              const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
+              await enqueueFormArchiveJob({
+                formType: "banking",
+                submissionId: sub.id,
+                pin: { folderId: pkg.pinFolderId, bucket: "banking-uploads", configKey: "banking", uploadPaths: (sub.upload_paths as string[]) || [], companyName: accountName || token },
+                createdBy: "banking_form_review",
+              })
+            } catch (e) {
+              lines.push(`⚠️ Archive enqueue failed: ${e instanceof Error ? e.message : String(e)}`)
+            }
+          }
+          if (!pkg.ok) {
+            if (pkg.sentence) lines.push(`❌ Form data NOT filed: ${pkg.sentence}`)
+            for (const f of pkg.failed) lines.push(`❌ Not filed: ${f}`)
+            for (const e of pkg.errors) if (e !== pkg.sentence) lines.push(`❌ ${e}`)
+            lines.push(`❌ The form was NOT marked as reviewed. Run this tool again to file what is missing${pkg.retryLater ? " (the company is being moved right now — wait a few minutes)" : ""}.`)
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+          }
+
           // ── Apply via shared helper (Slice 8) ──────────────────────────
           // Helper handles: services.status update + reviewed_at flip with
           // a reviewed_at IS NOT NULL short-circuit. Same code path used by
@@ -362,7 +396,7 @@ export function registerBankingFormTools(server: McpServer) {
           }
 
           if (apply.alreadyApplied) {
-            lines.push(`ℹ️ Submission already reviewed (reviewed_at was set). Skipping follow-up task + Drive save to avoid duplicates.`)
+            lines.push(`ℹ️ Submission already reviewed (reviewed_at was set). Skipping the follow-up task to avoid duplicates (the package was checked and filed above).`)
             return { content: [{ type: "text" as const, text: lines.join("\n") }] }
           }
 
@@ -407,52 +441,6 @@ export function registerBankingFormTools(server: McpServer) {
             lines.push(`❌ Task creation failed: ${taskErr.message}`)
           } else {
             lines.push(`✅ Task created: "${taskTitle}"`)
-          }
-
-          // Save form data + uploads to Drive
-          try {
-            const { saveFormToDrive } = await import("@/lib/form-to-drive")
-            // Stop Drive (dev job 264bb882, S1d): a company in storage files here; only a company left on Drive uses its Drive folder.
-            const { formDestinationForAccount } = await import("@/lib/crm-store/form-destination")
-            const dest = await formDestinationForAccount(sub.account_id, "banking_form_review")
-            const driveFolderId = dest.ok ? dest.folderId : null
-            if (driveFolderId) {
-              const driveResult = await saveFormToDrive(
-                "banking",
-                submitted,
-                (sub.upload_paths as string[]) || [],
-                driveFolderId,
-                { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: accountName || token }
-              )
-              if (driveResult.summaryFileId) lines.push(`✅ Data summary filed (${driveResult.summaryFileId})`)
-              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) filed`)
-              if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy: ${driveResult.failed.join(", ")}`)
-              if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
-
-              // Durable backstop (2026-07-24): enqueue the reliable archive job
-              // with the plan pinned so a slow/failed inline copy self-heals.
-              try {
-                const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
-                await enqueueFormArchiveJob({
-                  formType: "banking",
-                  submissionId: sub.id,
-                  pin: {
-                    folderId: driveFolderId,
-                    bucket: "banking-uploads",
-                    configKey: "banking",
-                    uploadPaths: (sub.upload_paths as string[]) || [],
-                    companyName: accountName || token,
-                  },
-                  createdBy: "banking_form_review",
-                })
-              } catch (e) {
-                lines.push(`⚠️ Archive enqueue failed: ${e instanceof Error ? e.message : String(e)}`)
-              }
-            } else {
-              lines.push(`❌ Form data NOT filed: ${dest.ok ? "no destination" : dest.sentence}`)
-            }
-          } catch (driveErr) {
-            lines.push(`⚠️ Drive save failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
           }
 
           lines.push(`✅ Form marked as reviewed`)

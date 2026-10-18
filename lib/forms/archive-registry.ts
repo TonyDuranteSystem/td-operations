@@ -64,23 +64,6 @@ export interface ArchiveRecipe {
   resolveBucket?: (path: string) => string
 }
 
-/** Read an account's stable Drive folder id. Throws retryable on a read error,
- *  loud on a genuinely-absent folder — the exact distinction the Carasso incident
- *  turned on (a swallowed read error read as "no folder" → silent skip). */
-async function resolveAccountFolder(accountId: string): Promise<{ folderId: string; companyName?: string }> {
-  const { data: acc, error } = await supabaseAdmin
-    .from("accounts")
-    .select("drive_folder_id, company_name")
-    .eq("id", accountId)
-    .maybeSingle()
-  if (error) throw new Error(`archive: account read failed (retryable): ${error.message}`)
-  if (!acc) throw new Error(`archive: account ${accountId} not found`)
-  if (!acc.drive_folder_id) {
-    throw new Error(`archive: account ${accountId} (${acc.company_name ?? "?"}) has NO drive_folder_id — needs a Drive folder before its package can be archived`)
-  }
-  return { folderId: acc.drive_folder_id, companyName: acc.company_name ?? undefined }
-}
-
 function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? (v as unknown[]).filter((p): p is string => typeof p === "string") : []
 }
@@ -125,7 +108,7 @@ const bankingRecipe: ArchiveRecipe = {
   formType: "banking",
   table: "banking_submissions",
   selectColumns:
-    "id, account_id, token, provider, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
+    "id, account_id, contact_id, token, provider, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
   isReal(row) {
     const status = row.status as string | null
     return status === "completed" || status === "reviewed"
@@ -135,7 +118,15 @@ const bankingRecipe: ArchiveRecipe = {
     if (!accountId) {
       throw new Error(`archive: banking submission ${row.id} is completed but has no account_id — cannot resolve a company Drive folder`)
     }
-    const { folderId, companyName } = await resolveAccountFolder(accountId)
+    // Stop Drive (dev job 264bb882, S1d): the company's STORAGE (or its Drive folder if it was left on Drive) — a company in storage
+    // with no Drive folder used to make this throw "NO drive_folder_id" on every sweep, so a row whose pin was never written could never heal.
+    const { formDestinationForAccount } = await import("@/lib/crm-store/form-destination")
+    const dest = await formDestinationForAccount(accountId, "banking-archive")
+    if (!dest.ok) throw new Error(`archive: banking submission ${row.id} has nowhere to be filed — ${dest.sentence}`)
+    const folderId = dest.folderId
+    const { data: acctRow, error: acctErr } = await supabaseAdmin.from("accounts").select("company_name").eq("id", accountId).maybeSingle()
+    if (acctErr) throw new Error(`archive: account read failed (retryable): ${acctErr.message}`)
+    const companyName = (acctRow?.company_name as string | null | undefined) ?? undefined
     const { configKey, bucket } = bankingConfigAndBucket(row.provider as string | null)
     // CRITICAL (bug-hunter blocker, 2026-07-24): the portal-wizard banking rows
     // (payset/relay) NEVER persist the upload_paths COLUMN — the client's file

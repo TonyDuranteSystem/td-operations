@@ -252,47 +252,40 @@ export async function POST(req: NextRequest) {
     // ─── 4. SAVE FORM DATA TO DRIVE ───
     if (sub.account_id) {
       try {
-        // Stop Drive (dev job 264bb882, S1d): a company in storage files here; only a company left on Drive uses its Drive folder;
-        // any other state is an ERROR step + a staff alarm (it used to file nothing, silently, when there was no Drive folder).
-        const { formDestinationForAccount } = await import("@/lib/crm-store/form-destination")
-        const dest = await formDestinationForAccount(sub.account_id, "banking-form-completed")
-        const acct = dest.ok ? { drive_folder_id: dest.folderId } : null
-        if (!dest.ok) results.push({ step: "save_to_drive", status: "error", detail: dest.sentence })
+        // Stop Drive (dev job 264bb882, S1d): ONE filer for every banking lane (lib/forms/file-banking-package.ts): the company's
+        // storage (or its Drive folder if it was left on Drive); the client's personal papers go to the PERSON's own storage; a
+        // failure is an ERROR step with ONE staff alarm; the durable job is queued whenever there is a destination.
+        const { data: fullSub } = await supabaseAdmin
+          .from("banking_submissions")
+          .select("submitted_data, upload_paths, completed_at")
+          .eq("id", submission_id)
+          .single()
 
-        if (acct?.drive_folder_id) {
-          const { data: fullSub } = await supabaseAdmin
-            .from("banking_submissions")
-            .select("submitted_data, upload_paths, completed_at")
-            .eq("id", submission_id)
-            .single()
-
-          if (fullSub?.submitted_data) {
-            const { saveFormToDrive } = await import("@/lib/form-to-drive")
-            const driveResult = await saveFormToDrive(
-              "banking",
-              fullSub.submitted_data as Record<string, unknown>,
-              (fullSub.upload_paths as string[]) || [],
-              acct.drive_folder_id,
-              { token: sub.token, submittedAt: fullSub.completed_at || new Date().toISOString(), companyName }
-            )
-            results.push({
-              step: "save_to_drive",
-              status: driveResult.errors.length ? "partial" : "ok",
-              detail: `PDF: ${driveResult.summaryFileId || "none"}, copied: ${driveResult.copied.length}, failed: ${driveResult.failed.length}`,
-            })
-
-            // Durable backstop (2026-07-24): the inline save above is best-effort.
-            // Enqueue the reliable archive job with the plan PINNED (folder +
-            // bucket + config + paths) so a slow/failed inline copy self-heals via
-            // retry, and the sweep can alert if it never lands. External banking
-            // form → bucket "banking-uploads", config "banking".
+        if (!fullSub?.submitted_data) {
+          results.push({ step: "save_to_drive", status: "skipped", detail: "No submitted_data" })
+        } else {
+          const { fileBankingPackage } = await import("@/lib/forms/file-banking-package")
+          const pkg = await fileBankingPackage({
+            flow: "banking-form-completed", formType: "banking", accountId: sub.account_id, contactId: sub.contact_id ?? null,
+            submittedData: fullSub.submitted_data as Record<string, unknown>, uploadPaths: (fullSub.upload_paths as string[]) || [],
+            bucket: "banking-uploads", token: sub.token, submittedAt: fullSub.completed_at, companyName: companyName || undefined,
+          })
+          results.push({
+            step: "save_to_drive",
+            status: pkg.ok ? "ok" : "error",
+            detail: pkg.ok
+              ? `PDF: ${pkg.summaryFileId || "none"}, filed: ${pkg.copied.length}`
+              : `${pkg.sentence ?? pkg.errors.join("; ")} (filed: ${pkg.copied.length}, not filed: ${pkg.failed.length})${pkg.retryLater ? " — will be retried" : ""}`,
+          })
+          if (pkg.pinFolderId) {
+            // Durable backstop: the reliable archive job with the plan PINNED, so a failed or postponed filing heals by retry.
             try {
               const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
               await enqueueFormArchiveJob({
                 formType: "banking",
                 submissionId: submission_id,
                 pin: {
-                  folderId: acct.drive_folder_id,
+                  folderId: pkg.pinFolderId,
                   bucket: "banking-uploads",
                   configKey: "banking",
                   uploadPaths: (fullSub.upload_paths as string[]) || [],
@@ -303,8 +296,6 @@ export async function POST(req: NextRequest) {
             } catch (e) {
               results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
             }
-          } else {
-            results.push({ step: "save_to_drive", status: "skipped", detail: "No submitted_data" })
           }
         }
       } catch (e) {

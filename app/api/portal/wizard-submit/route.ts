@@ -734,62 +734,16 @@ export async function POST(req: NextRequest) {
 
       // Fire-and-forget: Drive PDF, portal chat, CRM task, SD advance, action_log
       ;(async () => {
-        // Get account Drive folder — wrapped so any throw stays in background
-        let driveFolderId: string | null = null
+        // The moment of this submission: ONE value for the banking row's completed_at AND the filed PDF, so a retry or a sweep
+        // (which reads completed_at) files the very same package instead of piling up versions.
+        const submissionTime = new Date().toISOString()
         let compName = capturedCompanyName
-        if (capturedAccountId) {
+        if (capturedAccountId && !compName) {
           try {
-            const { data: acct } = await supabaseAdmin
-              .from('accounts')
-              .select('company_name')
-              .eq('id', capturedAccountId)
-              .single()
-            if (!compName) compName = acct?.company_name ?? ''
-            // Stop Drive (dev job 264bb882, S1d): a company in storage files its banking PDF there; only a company left on
-            // Drive uses its Drive folder; any other state raises a staff alarm (it used to file nothing, silently).
-            const { formDestinationForAccount } = await import('@/lib/crm-store/form-destination')
-            const dest = await formDestinationForAccount(capturedAccountId, 'wizard-submit:banking')
-            driveFolderId = dest.ok ? dest.folderId : null
+            const { data: acct } = await supabaseAdmin.from('accounts').select('company_name').eq('id', capturedAccountId).single()
+            compName = acct?.company_name ?? ''
           } catch (e) {
             console.error('[wizard-submit] Banking accounts query error:', e)
-          }
-        }
-
-        // Generate PDF + save to Drive
-        if (driveFolderId) {
-          try {
-            const { saveFormToDrive } = await import('@/lib/form-to-drive')
-            const uploadPaths = extractUploadPaths(capturedData)
-            const result = await saveFormToDrive(capturedWizardType, capturedData, uploadPaths, driveFolderId, {
-              token: submissionToken || capturedWizardType,
-              submittedAt: new Date().toISOString(),
-              companyName: compName,
-            })
-
-            // Create document record for the summary PDF. Routed through
-            // autoSaveDocument (2026-07-07) so the row gets a drive_link
-            // (the raw insert here produced "No link" rows in the CRM
-            // Documents tab) and so a resubmit can't insert a second row
-            // for the same Drive file (the upsert save keeps the id stable;
-            // autoSaveDocument dedupes on drive_file_id).
-            if (result.summaryFileId) {
-              const slug = compName.replace(/\s+/g, '_')
-              const { autoSaveDocument } = await import('@/lib/portal/auto-save-document')
-              const saved = await autoSaveDocument({
-                accountId: capturedAccountId || undefined,
-                contactId: capturedContactId || undefined,
-                fileName: `Banking_${capturedWizardType === 'banking_relay' ? 'Relay' : 'Payset'}_${slug}.pdf`,
-                documentType: 'Banking Application',
-                category: 4, // Banking
-                driveFileId: result.summaryFileId,
-                portalVisible: false,
-              })
-              if (saved.error) {
-                console.error('[wizard-submit] Banking document record error:', saved.error)
-              }
-            }
-          } catch (e) {
-            console.error('[wizard-submit] Banking PDF/Drive error:', e)
           }
         }
 
@@ -824,11 +778,12 @@ export async function POST(req: NextRequest) {
         // the new one.
         let bankingSubmissionId: string | null = null
         let bankingSubmissionWasAlreadyCompleted = false
+        let bankingSubmissionToken: string | null = null
         if (capturedAccountId) {
           try {
             const { data: subRow } = await supabaseAdmin
               .from('banking_submissions')
-              .select('id, status')
+              .select('id, status, token')
               .eq('account_id', capturedAccountId)
               .eq('provider', providerSlug)
               .order('created_at', { ascending: false })
@@ -836,6 +791,7 @@ export async function POST(req: NextRequest) {
               .maybeSingle()
             if (subRow) {
               bankingSubmissionId = subRow.id
+              bankingSubmissionToken = (subRow as { token?: string | null }).token ?? null
               bankingSubmissionWasAlreadyCompleted = subRow.status === 'completed'
             } else {
               // Safety net (dev job c3efa6cb): the row is normally pre-seeded
@@ -849,6 +805,7 @@ export async function POST(req: NextRequest) {
               const created = await getOrCreateBankingSubmission({ accountId: capturedAccountId, provider: providerSlug, contactId: capturedContactId ?? null })
               if (created.outcome === 'ok') {
                 bankingSubmissionId = created.record.id
+                bankingSubmissionToken = (created.record as { token?: string | null }).token ?? null
                 bankingSubmissionWasAlreadyCompleted = created.record.status === 'completed'
               } else {
                 console.error(`[wizard-submit] could not create banking_submissions row for account ${capturedAccountId} provider ${providerSlug}: ${created.message} — staff notifications NOT sent (client confirmation above still sent)`)
@@ -958,6 +915,7 @@ export async function POST(req: NextRequest) {
               .update({
                 submitted_data: capturedData,
                 status: 'completed',
+                completed_at: submissionTime,
                 updated_at: new Date().toISOString(),
               })
             const { data: updatedRow } = await (
@@ -965,23 +923,53 @@ export async function POST(req: NextRequest) {
                 ? updateQuery.eq('id', bankingSubmissionId)
                 : updateQuery.eq('account_id', capturedAccountId).eq('provider', providerSlug)
             )
-              .select('id')
+              .select('id, token')
               .maybeSingle()
+            if (updatedRow?.token) bankingSubmissionToken = updatedRow.token
+            if (updatedRow?.id) bankingSubmissionId = updatedRow.id
 
-            // Durable backstop (2026-07-24): the inline Drive save above is
-            // best-effort. Enqueue the reliable archive job with the plan PINNED
-            // — the wizard uploads to "onboarding-uploads" and this update does
-            // NOT persist upload_paths on the row, so we pin the paths (from the
-            // submitted data) + folder + config here so the durable job never
-            // re-guesses. config = the wizard type (banking_payset|banking_relay).
-            if (updatedRow?.id && driveFolderId) {
+            // File the package (summary PDF + the client's uploads) — Stop Drive S1d, dev job 264bb882: the company's storage (or its
+            // Drive folder if it was left on Drive); the client's PERSONAL papers (passport, ID, proof of address) go to the PERSON's own
+            // storage, never the company's folder. A failure is an ERROR with ONE staff alarm and is retried by the durable job below,
+            // which is queued whenever there is somewhere to file (also while the company is merely moving).
+            const { fileBankingPackage } = await import('@/lib/forms/file-banking-package')
+            const pkg = await fileBankingPackage({
+              flow: 'wizard-submit:banking', formType: capturedWizardType, accountId: capturedAccountId, contactId: capturedContactId ?? null,
+              submittedData: capturedData, uploadPaths: extractUploadPaths(capturedData), bucket: 'onboarding-uploads',
+              token: bankingSubmissionToken || `wizard:${capturedProgressId || capturedWizardType}`, submittedAt: submissionTime, companyName: compName || undefined,
+            })
+            if (pkg.summaryFileId) {
+              try {
+                const slug = compName.replace(/\s+/g, '_')
+                const { autoSaveDocument } = await import('@/lib/portal/auto-save-document')
+                const saved = await autoSaveDocument({
+                  accountId: capturedAccountId || undefined,
+                  contactId: capturedContactId || undefined,
+                  fileName: `Banking_${capturedWizardType === 'banking_relay' ? 'Relay' : 'Payset'}_${slug}.pdf`,
+                  documentType: 'Banking Application',
+                  category: 4, // Banking
+                  driveFileId: pkg.summaryFileId,
+                  portalVisible: false,
+                })
+                if (saved.error) console.error('[wizard-submit] Banking document record error:', saved.error)
+              } catch (e) {
+                console.error('[wizard-submit] Banking document record error:', e)
+              }
+            }
+            if (!pkg.ok) {
+              console.error('[wizard-submit] Banking package NOT fully filed:', pkg.errors.join(' | '), pkg.failed.join(', '))
+            }
+
+            // Durable backstop: queue the reliable archive job with the plan PINNED. It is queued whenever there is a destination —
+            // also when the first attempt failed or the company is moving — so the retry can heal it.
+            if (updatedRow?.id && pkg.pinFolderId) {
               try {
                 const { enqueueFormArchiveJob } = await import('@/lib/forms/archive-enqueue')
                 await enqueueFormArchiveJob({
                   formType: 'banking',
                   submissionId: updatedRow.id,
                   pin: {
-                    folderId: driveFolderId,
+                    folderId: pkg.pinFolderId,
                     bucket: 'onboarding-uploads',
                     configKey: capturedWizardType,
                     uploadPaths: extractUploadPaths(capturedData),
@@ -993,11 +981,7 @@ export async function POST(req: NextRequest) {
                 console.error('[wizard-submit] banking archive enqueue error:', e)
               }
             } else if (!updatedRow?.id) {
-              // No banking_submissions row for this account+provider — the durable
-              // archival layer has nothing to attach to (only the inline best-
-              // effort save above covers it). Rare (the row is normally seeded at
-              // onboarding), but log it loudly rather than drop silently.
-              console.error(`[wizard-submit] no banking_submissions row for account ${capturedAccountId} provider ${providerSlug} — durable archival NOT enqueued (inline save only)`)
+              console.error(`[wizard-submit] no banking_submissions row for account ${capturedAccountId} provider ${providerSlug} — durable archival NOT enqueued`)
             }
           } catch (e) {
             console.error('[wizard-submit] banking_submissions update error:', e)

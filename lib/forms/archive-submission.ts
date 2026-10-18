@@ -100,6 +100,18 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
 
   let result: Awaited<ReturnType<typeof saveFormToDrive>>
   try {
+    if (formType === "banking") {
+      // Stop Drive (dev job 264bb882, S1d): the banking package goes through the ONE banking filer — company storage (or its Drive
+      // folder if left on Drive), the client's personal papers to the PERSON's own storage — with the submission's own token and
+      // completed_at, so this retry makes the same files as the inline attempt.
+      const { fileBankingPackage } = await import("@/lib/forms/file-banking-package")
+      const pkg = await fileBankingPackage({
+        flow: "banking-archive", formType: plan.configKey, accountId: (r["account_id"] as string | null) ?? null, contactId: (r["contact_id"] as string | null) ?? null,
+        submittedData: (r.submitted_data ?? {}) as Record<string, unknown>, uploadPaths: plan.uploadPaths, bucket: plan.bucket,
+        token: r.token ?? plan.configKey, submittedAt: r.completed_at ?? r["created_at"] as string | null, companyName: plan.companyName, folderId: plan.folderId,
+      })
+      result = { summaryFileId: pkg.summaryFileId, copied: pkg.copied, failed: pkg.failed, skipped: [], errors: pkg.errors }
+    } else {
     result = await saveFormToDrive(
       plan.configKey,
       (r.submitted_data ?? {}) as Record<string, unknown>,
@@ -121,6 +133,7 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
         person: formType === "itin" && typeof r["contact_id"] === "string" ? { contactId: r["contact_id"] as string, viaAccountId: (r["account_id"] as string | null) ?? null, name: plan.companyName } : undefined,
       },
     )
+    }
   } catch (e) {
     await recordAttempt(recipe.table, submissionId, priorMeta, priorAttempts + 1, `save threw: ${e instanceof Error ? e.message : String(e)}`, null)
     throw e
