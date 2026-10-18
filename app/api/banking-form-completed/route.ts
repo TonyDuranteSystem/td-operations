@@ -252,11 +252,12 @@ export async function POST(req: NextRequest) {
     // ─── 4. SAVE FORM DATA TO DRIVE ───
     if (sub.account_id) {
       try {
-        const { data: acct } = await supabaseAdmin
-          .from("accounts")
-          .select("drive_folder_id")
-          .eq("id", sub.account_id)
-          .single()
+        // Stop Drive (dev job 264bb882, S1d): a company in storage files here; only a company left on Drive uses its Drive folder;
+        // any other state is an ERROR step + a staff alarm (it used to file nothing, silently, when there was no Drive folder).
+        const { formDestinationForAccount } = await import("@/lib/crm-store/form-destination")
+        const dest = await formDestinationForAccount(sub.account_id, "banking-form-completed")
+        const acct = dest.ok ? { drive_folder_id: dest.folderId } : null
+        if (!dest.ok) results.push({ step: "save_to_drive", status: "error", detail: dest.sentence })
 
         if (acct?.drive_folder_id) {
           const { data: fullSub } = await supabaseAdmin
@@ -305,8 +306,6 @@ export async function POST(req: NextRequest) {
           } else {
             results.push({ step: "save_to_drive", status: "skipped", detail: "No submitted_data" })
           }
-        } else {
-          results.push({ step: "save_to_drive", status: "skipped", detail: "No drive_folder_id on account" })
         }
       } catch (e) {
         results.push({ step: "save_to_drive", status: "error", detail: e instanceof Error ? e.message : String(e) })

@@ -343,12 +343,10 @@ export function registerFormationTools(server: McpServer) {
                       .limit(1)
                       .maybeSingle()
                     if (ac?.account_id) {
-                      const { data: acct } = await supabaseAdmin
-                        .from("accounts")
-                        .select("drive_folder_id")
-                        .eq("id", ac.account_id)
-                        .single()
-                      return acct?.drive_folder_id || null
+                      // Stop Drive (dev job 264bb882, S1d): storage for a company in storage, Drive only for a company left on it.
+                      const { formDestinationForAccount } = await import("@/lib/crm-store/form-destination")
+                      const dest = await formDestinationForAccount(ac.account_id, "formation_form_review")
+                      return dest.ok ? dest.folderId : null
                     }
                   }
                   return null
@@ -367,7 +365,7 @@ export function registerFormationTools(server: McpServer) {
               if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy`)
               if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
             } else {
-              lines.push("⚠️ No Drive folder found — data not saved to Drive")
+              lines.push("⚠️ No company storage found for this lead — nothing more was filed here")
             }
           } catch (driveErr) {
             lines.push(`⚠️ Drive save failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)

@@ -412,9 +412,10 @@ export function registerBankingFormTools(server: McpServer) {
           // Save form data + uploads to Drive
           try {
             const { saveFormToDrive } = await import("@/lib/form-to-drive")
-            const driveFolderId = sub.account_id
-              ? (await supabaseAdmin.from("accounts").select("drive_folder_id").eq("id", sub.account_id).single()).data?.drive_folder_id
-              : null
+            // Stop Drive (dev job 264bb882, S1d): a company in storage files here; only a company left on Drive uses its Drive folder.
+            const { formDestinationForAccount } = await import("@/lib/crm-store/form-destination")
+            const dest = await formDestinationForAccount(sub.account_id, "banking_form_review")
+            const driveFolderId = dest.ok ? dest.folderId : null
             if (driveFolderId) {
               const driveResult = await saveFormToDrive(
                 "banking",
@@ -423,8 +424,8 @@ export function registerBankingFormTools(server: McpServer) {
                 driveFolderId,
                 { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: accountName || token }
               )
-              if (driveResult.summaryFileId) lines.push(`✅ Data summary saved to Drive (${driveResult.summaryFileId})`)
-              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
+              if (driveResult.summaryFileId) lines.push(`✅ Data summary filed (${driveResult.summaryFileId})`)
+              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) filed`)
               if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy: ${driveResult.failed.join(", ")}`)
               if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
 
@@ -448,7 +449,7 @@ export function registerBankingFormTools(server: McpServer) {
                 lines.push(`⚠️ Archive enqueue failed: ${e instanceof Error ? e.message : String(e)}`)
               }
             } else {
-              lines.push("⚠️ No Drive folder found — data not saved to Drive")
+              lines.push(`❌ Form data NOT filed: ${dest.ok ? "no destination" : dest.sentence}`)
             }
           } catch (driveErr) {
             lines.push(`⚠️ Drive save failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)

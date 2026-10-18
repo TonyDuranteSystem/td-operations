@@ -110,18 +110,19 @@ export async function approveAndApplyClosureReview(
   let drive_save_error: string | undefined
   if (sub.account_id) {
     try {
-      const { data: acct } = await supabaseAdmin
-        .from("accounts")
-        .select("drive_folder_id")
-        .eq("id", sub.account_id)
-        .maybeSingle()
-      if (acct?.drive_folder_id) {
+      // Stop Drive (dev job 264bb882, S1d): storage for a company in storage, Drive only for a company left on it, else an error.
+      const { formDestinationForAccount } = await import("@/lib/crm-store/form-destination")
+      const dest = await formDestinationForAccount(sub.account_id, "closure-review")
+      if (!dest.ok) {
+        drive_save = "error"
+        drive_save_error = dest.sentence
+      } else {
         const { saveFormToDrive } = await import("@/lib/form-to-drive")
         await saveFormToDrive(
           "closure",
           submitted,
           (sub.upload_paths as string[]) || [],
-          acct.drive_folder_id,
+          dest.folderId,
           {
             token: sub.token,
             submittedAt: sub.completed_at || new Date().toISOString(),

@@ -741,11 +741,15 @@ export async function POST(req: NextRequest) {
           try {
             const { data: acct } = await supabaseAdmin
               .from('accounts')
-              .select('drive_folder_id, company_name')
+              .select('company_name')
               .eq('id', capturedAccountId)
               .single()
-            driveFolderId = acct?.drive_folder_id ?? null
             if (!compName) compName = acct?.company_name ?? ''
+            // Stop Drive (dev job 264bb882, S1d): a company in storage files its banking PDF there; only a company left on
+            // Drive uses its Drive folder; any other state raises a staff alarm (it used to file nothing, silently).
+            const { formDestinationForAccount } = await import('@/lib/crm-store/form-destination')
+            const dest = await formDestinationForAccount(capturedAccountId, 'wizard-submit:banking')
+            driveFolderId = dest.ok ? dest.folderId : null
           } catch (e) {
             console.error('[wizard-submit] Banking accounts query error:', e)
           }
