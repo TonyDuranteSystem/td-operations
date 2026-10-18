@@ -31,7 +31,8 @@ final class ContainerEnumerator: NSObject, NSFileProviderEnumerator {
 final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
     private let api: StorageAPI
     private let catalog: Catalog
-    init(api: StorageAPI, catalog: Catalog) { self.api = api; self.catalog = catalog }
+    private let domain: NSFileProviderDomain?
+    init(api: StorageAPI, catalog: Catalog, domain: NSFileProviderDomain? = nil) { self.api = api; self.catalog = catalog; self.domain = domain }
 
     func invalidate() {}
     func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt page: NSFileProviderPage) { observer.finishEnumerating(upTo: nil) }
@@ -51,13 +52,20 @@ final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
                 let page = try await api.changes(since: raw == "start" || raw == "v1" ? nil : raw)
                 let clock = UserDefaults.standard, key = "td-storage-last-full-refresh"
                 let last = (clock.object(forKey: key) as? Date)
-                // a full refresh: when the CRM says so, or every `resyncMinutes` (a company / person RENAME has no change-feed row: this is how Finder learns it)
-                if page.resync || ResyncClock.due(last: last, minutes: page.resyncMinutes) {
+                Trace.log("workingSet.changes", ["resync": page.resync, "minutes": page.resyncMinutes ?? -1, "lastAgoSec": last.map { Int(Date().timeIntervalSince($0)) } ?? -1])
+                // the CRM says "start over" -> Finder lists everything again. Otherwise every `resyncMinutes` the groups and the company / person
+                // folders are re-read and reported as updated (a company / person RENAME has no change-feed row: this is how Finder learns it).
+                var refreshed: [NSFileProviderItem] = []
+                if page.resync { clock.set(Date(), forKey: key); observer.finishEnumeratingWithError(NSFileProviderError(.syncAnchorExpired)); return }
+                if ResyncClock.due(last: last, minutes: page.resyncMinutes) {
                     clock.set(Date(), forKey: key)
-                    observer.finishEnumeratingWithError(NSFileProviderError(.syncAnchorExpired)); return
+                    for group in (try? await catalog.children(of: .root)) ?? [] {
+                        refreshed.append(group)
+                        if let gid = ItemID(raw: group.itemIdentifier.rawValue) { refreshed.append(contentsOf: (try? await catalog.children(of: gid)) ?? []) }
+                    }
                 }
                 if last == nil { clock.set(Date(), forKey: key) }
-                var updated: [NSFileProviderItem] = []
+                var updated: [NSFileProviderItem] = refreshed
                 var deleted: [NSFileProviderItemIdentifier] = []
                 for c in page.changes {
                     let id: ItemID?

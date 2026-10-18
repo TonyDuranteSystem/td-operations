@@ -57,7 +57,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     }
 
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier, request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
-        if containerItemIdentifier == .workingSet { return WorkingSetEnumerator(api: api, catalog: catalog) }
+        if containerItemIdentifier == .workingSet { return WorkingSetEnumerator(api: api, catalog: catalog, domain: domain) }
         guard let id = FPItem.itemID(for: containerItemIdentifier) else { throw NSFileProviderError(.noSuchItem) }
         return ContainerEnumerator(container: id, catalog: catalog)
     }
