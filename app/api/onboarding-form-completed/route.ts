@@ -90,14 +90,14 @@ export async function POST(req: NextRequest) {
       // only. Deliberately NEVER auto-creates or updates a contact here —
       // that write belongs to staff review/confirm (onboarding_form_review),
       // not to this pre-review notification step (Antonio, 2026-09-20).
-      const { data: contacts } = await supabaseAdmin
-        .from("contacts")
-        .select("id")
-        .eq("email", leadEmail || "noemail")
-        .limit(1)
-
-      if (contacts?.length) {
-        contactId = contacts[0].id
+      // EXACT email, case-insensitive, no wildcards. Several matches = nobody is guessed (one staff alarm, nothing linked or filed).
+      const { findContactByExactEmail } = await import("@/lib/crm-store/lead-form-store")
+      const match = await findContactByExactEmail(leadEmail)
+      if (match.status === "one") {
+        contactId = match.id
+      } else if (match.status === "many") {
+        const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
+        await raisePilotAlarm("lead_form_contact_ambiguous", { route: "onboarding-form-completed", leadId, token, contactIds: match.ids })
       }
     }
 
@@ -108,31 +108,15 @@ export async function POST(req: NextRequest) {
     const deliveryId: string | null = null
 
     // ---- STEP 3: File the data PDF + uploads in the client's storage ----
-    // (Stop-Drive S1a: this used to build a Leads/{name} folder in Drive.) Onboarding deliberately creates no contact before
-    // staff review, so a lead with no contact record yet keeps its uploads with the submission; review files them under the company.
-    try {
-      const { saveFormToDrive } = await import("@/lib/form-to-drive")
-      const { storageDestinationForForm } = await import("@/lib/crm-store/lead-form-store")
-
-      const destination = await storageDestinationForForm({ contactId, personName: leadName })
-      if (!destination) {
-        results.push({ step: "storage_save", status: "skipped", detail: "No contact record yet — the uploads stay with the submission until staff review" })
-      } else {
-        const saved = await saveFormToDrive(
-          "onboarding",
-          submittedData,
-          uploadPaths,
-          destination,
-          { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName }
-        )
-        results.push({
-          step: "storage_save",
-          status: saved.errors.length > 0 ? "error" : "ok",
-          detail: `Summary: ${saved.summaryFileId ? "saved" : "failed"}. Files: ${saved.copied.length} filed.${saved.errors.length > 0 ? ` Errors: ${saved.errors.join("; ")}` : ""}`,
-        })
-      }
-    } catch (e) {
-      results.push({ step: "storage_save", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    // (Stop-Drive S1a: this used to build a Leads/{name} folder in Drive.) Onboarding deliberately creates no contact before staff
+    // review, so a lead with no contact record yet keeps its uploads with the submission; review files them under the company.
+    {
+      const { fileFormPackage } = await import("@/lib/forms/file-form-package")
+      results.push(await fileFormPackage({
+        route: "onboarding-form-completed", formType: "onboarding", submittedData, uploadPaths, contactId, personName: leadName,
+        noContactIsExpected: true,
+        meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName },
+      }))
     }
 
     // ---- STEP 4: Check passport ----

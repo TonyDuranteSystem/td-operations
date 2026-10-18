@@ -42,7 +42,7 @@ vi.mock("@/lib/supabase-admin", () => {
 })
 
 import { saveFormToDrive } from "@/lib/form-to-drive"
-import { storageDestinationForForm } from "@/lib/crm-store/lead-form-store"
+import { storageDestinationForForm, type FormStorageDeps } from "@/lib/crm-store/lead-form-store"
 import { parseStorageMarker } from "@/lib/crm-store/save-form"
 
 const CONTACT = "11111111-1111-4111-8111-111111111111"
@@ -61,31 +61,74 @@ describe("parseStorageMarker", () => {
   })
 })
 
+const mkDeps = (over: Partial<FormStorageDeps> = {}) => {
+  const opened: Array<[string, string]> = []
+  const deps: FormStorageDeps = {
+    liveOwnerOfAccount: async (id) => owners.account.get(id) ?? null,
+    liveOwnerOfContact: async (id) => owners.contact.get(id) ?? null,
+    hasStudyOnlyOwner: async () => false,
+    contactFacts: async () => ({ fullName: "Mario Rossi", hasDriveFolder: false, accountIds: [] }),
+    companyState: async () => "drive",
+    ensurePersonOwner: async (id, name) => { opened.push([id, name]); owners.contact.set(id, `person-owner-${id}`); return `person-owner-${id}` },
+    ...over,
+  }
+  return { deps, opened }
+}
+
 describe("storageDestinationForForm — where a lead/client form package goes", () => {
-  it("opens the person's storage when they have none and points at it", async () => {
-    const dest = await storageDestinationForForm({ contactId: CONTACT, personName: "Mario Rossi" })
-    expect(dest).toBe(`person-storage:${CONTACT}`)
-    expect(owners.contact.get(CONTACT)).toBe(`person-owner-${CONTACT}`)
+  it("opens the person's storage when they have none and points at it, naming the root from the CRM contact name", async () => {
+    const { deps, opened } = mkDeps()
+    const dest = await storageDestinationForForm({ contactId: CONTACT, personName: "mario rossi (form text)" }, deps)
+    expect(dest).toEqual({ marker: `person-storage:${CONTACT}` })
+    expect(opened).toEqual([[CONTACT, "Mario Rossi"]]) // CRM name, not the raw form text
+  })
+  it("falls back to the form's name only when the CRM has none", async () => {
+    const { deps, opened } = mkDeps({ contactFacts: async () => ({ fullName: null, hasDriveFolder: false, accountIds: [] }) })
+    await storageDestinationForForm({ contactId: CONTACT, personName: "Form Name" }, deps)
+    expect(opened).toEqual([[CONTACT, "Form Name"]])
   })
   it("a company that already has storage wins over the person", async () => {
     owners.account.set(ACCOUNT, "acc-owner")
-    expect(await storageDestinationForForm({ accountId: ACCOUNT, contactId: CONTACT })).toBe(`account-storage:${ACCOUNT}`)
-    expect(owners.contact.size).toBe(0) // nobody's personal storage was opened for nothing
+    const { deps, opened } = mkDeps()
+    expect(await storageDestinationForForm({ accountId: ACCOUNT, contactId: CONTACT }, deps)).toEqual({ marker: `account-storage:${ACCOUNT}` })
+    expect(opened).toEqual([]) // nobody's personal storage was opened for nothing
   })
-  it("an account with no storage falls to the person", async () => {
-    expect(await storageDestinationForForm({ accountId: ACCOUNT, contactId: CONTACT, personName: "X" })).toBe(`person-storage:${CONTACT}`)
-  })
-  it("neither a company storage nor a contact → null (never a Drive fallback)", async () => {
-    expect(await storageDestinationForForm({})).toBeNull()
-    expect(await storageDestinationForForm({ accountId: ACCOUNT })).toBeNull()
+  it("neither a company storage nor a contact → no_contact (never a Drive fallback)", async () => {
+    const { deps } = mkDeps()
+    expect(await storageDestinationForForm({}, deps)).toEqual({ marker: null, reason: "no_contact" })
+    expect(await storageDestinationForForm({ accountId: ACCOUNT }, deps)).toEqual({ marker: null, reason: "no_contact" })
     expect(driveCalls).toEqual([])
   })
-  it("uses the contact's name from the CRM when none is given, and opens the storage only once", async () => {
-    await storageDestinationForForm({ contactId: CONTACT })
-    await storageDestinationForForm({ contactId: CONTACT })
-    const pilot = await import("@/lib/crm-store/formation-pilot")
-    expect(pilot.ensurePersonOwner).toHaveBeenCalledTimes(1)
-    expect(pilot.ensurePersonOwner).toHaveBeenCalledWith(CONTACT, "Mario Rossi")
+  it("a person who already has a live storage is used as is, opened only once", async () => {
+    owners.contact.set(CONTACT, "person-owner")
+    const { deps, opened } = mkDeps()
+    expect(await storageDestinationForForm({ contactId: CONTACT }, deps)).toEqual({ marker: `person-storage:${CONTACT}` })
+    expect(opened).toEqual([])
+  })
+  it("STUDY-ONLY owner: the person still lives on Drive — nothing is opened or filed into the hidden copy", async () => {
+    const { deps, opened } = mkDeps({ hasStudyOnlyOwner: async () => true })
+    expect(await storageDestinationForForm({ contactId: CONTACT }, deps)).toEqual({ marker: null, reason: "study_only_owner" })
+    expect(opened).toEqual([])
+  })
+  it("a member of a still-Drive company (Drive folder, company on Drive) gets NO storage — their Drive folder must not become locked", async () => {
+    const { deps, opened } = mkDeps({ contactFacts: async () => ({ fullName: "M", hasDriveFolder: true, accountIds: [ACCOUNT] }), companyState: async () => "drive" })
+    expect(await storageDestinationForForm({ contactId: CONTACT }, deps)).toEqual({ marker: null, reason: "person_on_drive" })
+    expect(opened).toEqual([])
+  })
+  it("a Drive folder with no company at all, or a company mid-move, also stays on Drive", async () => {
+    const a = mkDeps({ contactFacts: async () => ({ fullName: "M", hasDriveFolder: true, accountIds: [] }) })
+    expect(await storageDestinationForForm({ contactId: CONTACT }, a.deps)).toMatchObject({ reason: "person_on_drive" })
+    const b = mkDeps({ contactFacts: async () => ({ fullName: "M", hasDriveFolder: true, accountIds: [ACCOUNT] }), companyState: async () => "moving" })
+    expect(await storageDestinationForForm({ contactId: CONTACT }, b.deps)).toMatchObject({ reason: "person_on_drive" })
+  })
+  it("a person with a Drive folder whose companies are ALL already in the storage gets their storage opened", async () => {
+    const { deps, opened } = mkDeps({ contactFacts: async () => ({ fullName: "M", hasDriveFolder: true, accountIds: [ACCOUNT] }), companyState: async () => "store" })
+    expect(await storageDestinationForForm({ contactId: CONTACT }, deps)).toEqual({ marker: `person-storage:${CONTACT}` })
+    expect(opened).toHaveLength(1)
+  })
+  it("a brand-new contact with no Drive folder is fine even if linked to a Drive company", async () => {
+    const { deps } = mkDeps({ contactFacts: async () => ({ fullName: "M", hasDriveFolder: false, accountIds: [ACCOUNT] }), companyState: async () => "drive" })
+    expect(await storageDestinationForForm({ contactId: CONTACT }, deps)).toEqual({ marker: `person-storage:${CONTACT}` })
   })
 })
 

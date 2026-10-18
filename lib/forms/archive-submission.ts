@@ -88,7 +88,15 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
   const nowIso = new Date().toISOString()
 
   // Prefer the plan pinned at submission; else derive it fresh (sweep path).
-  const plan = pinnedPlan(priorMeta) ?? (await recipe.resolvePlan(r))
+  // A destination that cannot be resolved is an ATTEMPT like any other failure: it is counted, so the sweep stops re-enqueuing at
+  // the limit and raises its ONE staff alert instead of retrying forever with attempts stuck at 0.
+  let plan: ArchivePlan
+  try {
+    plan = pinnedPlan(priorMeta) ?? (await recipe.resolvePlan(r))
+  } catch (e) {
+    await recordAttempt(recipe.table, submissionId, priorMeta, priorAttempts + 1, `destination unresolved: ${e instanceof Error ? e.message : String(e)}`, null)
+    throw e
+  }
 
   let result: Awaited<ReturnType<typeof saveFormToDrive>>
   try {

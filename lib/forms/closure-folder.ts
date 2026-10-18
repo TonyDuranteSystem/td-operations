@@ -56,9 +56,13 @@ export async function resolveClosureFolder(params: {
   }
 
   const { storageDestinationForForm } = await import("@/lib/crm-store/lead-form-store")
-  const destination = await storageDestinationForForm({ accountId: params.accountId, contactId: params.contactId, personName: params.clientName })
-  if (!destination) {
-    throw new Error("closure folder: no company storage and no contact record to file this closure under — needs a contact or company first")
+  const dest = await storageDestinationForForm({ accountId: params.accountId, contactId: params.contactId, personName: params.clientName })
+  if (!dest.marker) {
+    throw new Error(
+      dest.reason === "no_contact"
+        ? "closure folder: no company storage and no contact record to file this closure under — needs a contact or company first"
+        : "closure folder: this person still lives on Drive (no storage opened) — the closure package was not filed; staff decide where it goes",
+    )
   }
-  return destination
+  return dest.marker
 }

@@ -80,15 +80,16 @@ export async function POST(req: NextRequest) {
         referrerName = lead.referrer_name || ""
       }
 
-      // Find contact linked to this lead
-      const { data: contacts } = await supabaseAdmin
-        .from("contacts")
-        .select("id")
-        .ilike("email", leadEmail || "noemail")
-        .limit(1)
-
-      if (contacts?.length) {
-        contactId = contacts[0].id
+      // Find the contact for this lead by EXACT email (case-insensitive, no wildcards). Several matches = nobody is guessed:
+      // nothing is updated or filed under any of them and staff get ONE alarm.
+      const { findContactByExactEmail } = await import("@/lib/crm-store/lead-form-store")
+      const match = await findContactByExactEmail(leadEmail)
+      if (match.status === "many") {
+        results.push({ step: "contact_lookup", status: "error", detail: `${match.ids.length} contacts share this email — none was used` })
+        const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
+        await raisePilotAlarm("lead_form_contact_ambiguous", { route: "formation-form-completed", leadId, token, contactIds: match.ids })
+      } else if (match.status === "one") {
+        contactId = match.id
       } else if (lead) {
         // AUTO-CREATE contact from lead data
         try {
@@ -194,29 +195,12 @@ export async function POST(req: NextRequest) {
 
     // ─── STEP 3: File the data PDF + uploads in the client's storage ───
     // (Stop-Drive S1a: this used to build a Leads/{name} folder in Drive. The person's own storage is opened exactly as for any new client.)
-    try {
-      const { saveFormToDrive } = await import("@/lib/form-to-drive")
-      const { storageDestinationForForm } = await import("@/lib/crm-store/lead-form-store")
-
-      const destination = await storageDestinationForForm({ contactId, personName: leadName })
-      if (!destination) {
-        results.push({ step: "storage_save", status: "skipped", detail: "No contact record to file under — the uploads stay with the submission" })
-      } else {
-        const saved = await saveFormToDrive(
-          "formation",
-          submittedData,
-          uploadPaths,
-          destination,
-          { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName }
-        )
-        results.push({
-          step: "storage_save",
-          status: saved.errors.length > 0 ? "error" : "ok",
-          detail: `Summary: ${saved.summaryFileId ? "saved" : "failed"}. Files: ${saved.copied.length} filed.${saved.errors.length > 0 ? ` Errors: ${saved.errors.join("; ")}` : ""}`,
-        })
-      }
-    } catch (e) {
-      results.push({ step: "storage_save", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    {
+      const { fileFormPackage } = await import("@/lib/forms/file-form-package")
+      results.push(await fileFormPackage({
+        route: "formation-form-completed", formType: "formation", submittedData, uploadPaths, contactId, personName: leadName,
+        meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName },
+      }))
     }
 
     // ─── STEP 4: Check passport uploaded ───

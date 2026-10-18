@@ -108,9 +108,15 @@ export async function POST(req: NextRequest) {
       // Find or create contact from lead
       const { data: lead } = await supabaseAdmin.from("leads").select("full_name, email, phone, language").eq("id", sub.lead_id).single()
       if (lead) {
-        const { data: existing } = await supabaseAdmin.from("contacts").select("id").ilike("email", lead.email || "noemail").limit(1)
-        if (existing?.length) {
-          contactId = existing[0].id
+        // EXACT email, case-insensitive, no wildcards; several matches = nobody is guessed (one staff alarm, no contact used)
+        const { findContactByExactEmail } = await import("@/lib/crm-store/lead-form-store")
+        const match = await findContactByExactEmail(lead.email)
+        if (match.status === "one") {
+          contactId = match.id
+        } else if (match.status === "many") {
+          results.push({ step: "contact_lookup", status: "error", detail: `${match.ids.length} contacts share this email — none was used` })
+          const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
+          await raisePilotAlarm("lead_form_contact_ambiguous", { route: "itin-form-completed", leadId: sub.lead_id, contactIds: match.ids })
         } else {
           const newC = await dbWrite(
             // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task fda76fd3

@@ -125,39 +125,34 @@ export async function POST(req: NextRequest) {
     const registeredAgent = String(submittedData.registered_agent || "N/A")
 
     // ---- STEP 2: File the data PDF + uploads ----
+    // Stop-Drive S1a: the "Leads/{client} - {llc} (Closure)" Drive folder is gone. A company that still has a Drive folder keeps
+    // filing there (the storage gate inside saveFormToDrive redirects a switched one); everyone else is filed in their storage —
+    // the company's if it has one, else the person's. Every missing file is an error step plus a staff alarm (fileFormPackage).
+    let targetFolderId: string | null = null
     try {
-      const { storageDestinationForForm } = await import("@/lib/crm-store/lead-form-store")
-      const { saveFormToDrive } = await import("@/lib/form-to-drive")
+      const { resolveClosureFolder } = await import("@/lib/forms/closure-folder")
+      targetFolderId = await resolveClosureFolder({ accountId, contactId, clientName })
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e)
+      results.push({ step: "storage_save", status: "error", detail })
+      const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
+      await raisePilotAlarm("lead_form_filing_failed", { route: "closure-form-completed", formType: "closure", token, contactId, accountId, problems: [detail] })
+    }
+    if (targetFolderId) {
+      const { fileFormPackage } = await import("@/lib/forms/file-form-package")
+      const { isWizardUploadPath } = await import("@/lib/portal/wizard-uploads")
+      results.push(await fileFormPackage({
+        route: "closure-form-completed", formType: "closure", submittedData, uploadPaths, accountId, contactId, personName: clientName,
+        driveFolderId: targetFolderId,
+        // two upload origins: the external form (closure-uploads) and the portal wizard (onboarding-uploads) — same rule as the archive recipe
+        bucket: "closure-uploads",
+        resolveBucket: (path) => (isWizardUploadPath(path) ? "onboarding-uploads" : "closure-uploads"),
+        meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: llcName },
+      }))
 
-      // Stop-Drive S1a: the "Leads/{client} - {llc} (Closure)" Drive folder is gone. A company that still has a Drive
-      // folder keeps filing there (the storage gate inside saveFormToDrive redirects a switched one); everyone else is
-      // filed in their storage — the company's if it has one, else the person's.
-      let targetFolderId: string | null = null
-      if (accountId) {
-        const { data: acc } = await supabaseAdmin.from("accounts").select("drive_folder_id").eq("id", accountId).single()
-        if (acc?.drive_folder_id) targetFolderId = acc.drive_folder_id
-      }
-      if (!targetFolderId) targetFolderId = await storageDestinationForForm({ accountId, contactId, personName: clientName })
-      if (!targetFolderId) throw new Error("No company storage or contact record to file this closure under — the uploads stay with the submission")
-
-      const driveResult = await saveFormToDrive(
-        "closure",
-        submittedData,
-        uploadPaths,
-        targetFolderId,
-        { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: llcName }
-      )
-
-      results.push({
-        step: "storage_save",
-        status: "ok",
-        detail: `Summary: ${driveResult.summaryFileId ? "saved" : "failed"}. Files: ${driveResult.copied.length} copied.`,
-      })
-
-      // Durable backstop (2026-07-26): the inline save above is best-effort (as
-      // are the review + MCP re-saves). Enqueue the reliable archive job with the
-      // plan PINNED (the SAME folder we just resolved) so a slow/failed copy
-      // self-heals via retry, and the sweep alerts if it never lands.
+      // Durable backstop (2026-07-26): the inline save above is best-effort (as are the review + MCP re-saves). Enqueue the
+      // reliable archive job with the plan PINNED (the SAME destination we just resolved) so a slow/failed copy self-heals via
+      // retry, and the sweep alerts if it never lands.
       try {
         const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
         const { deriveUploadPaths } = await import("@/lib/forms/archive-registry")
@@ -176,8 +171,6 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
-    } catch (e) {
-      results.push({ step: "storage_save", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
     // ---- STEP 3: Ensure Service Delivery exists ----
