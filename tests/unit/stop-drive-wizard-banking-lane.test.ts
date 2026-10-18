@@ -75,7 +75,8 @@ const submit = async () => {
 describe('/api/portal/wizard-submit — banking lane', () => {
   it('company in storage: business -> company, personal -> person, the row and the PDF share one completed_at, durable job queued', async () => {
     await submit()
-    await vi.waitFor(() => expect(st.enqueued.length).toBe(1), { timeout: 3000 })
+    await vi.waitFor(() => expect(st.recorded.some((r) => r.table === 'banking_submissions' && typeof (r.payload as Record<string, unknown>).drive_archived_at === 'string')).toBe(true), { timeout: 3000 })
+    expect(st.enqueued).toEqual([]) // fully filed: marker set, nothing to heal
     expect(st.companyCalls).toHaveLength(1)
     expect(st.companyCalls[0]).toMatchObject({ folderId: 'account-storage:acc-1', paths: [STATEMENT], token: 'tok-s1' })
     expect(st.personCalls[0]).toMatchObject({ target: { kind: 'contact', id: 'c1' }, uploadPaths: [PASSPORT, PROOF] })
@@ -83,7 +84,6 @@ describe('/api/portal/wizard-submit — banking lane', () => {
     const completedAt = (upd?.payload as Record<string, string>).completed_at
     expect(completedAt).toBeTruthy()
     expect(st.companyCalls[0].submittedAt.slice(0, 10)).toBe(completedAt.slice(0, 10))
-    expect(st.enqueued[0]).toMatchObject({ pin: { folderId: 'account-storage:acc-1', configKey: 'banking_relay' } })
   })
   it('company moving: nothing is filed now, but the durable job is queued so it can heal, and the staff task / chat message still go out', async () => {
     st.companyState = 'moving'

@@ -358,7 +358,12 @@ export function registerBankingFormTools(server: McpServer) {
           })
           if (pkg.summaryFileId) lines.push(`✅ Data summary filed (${pkg.summaryFileId})`)
           if (pkg.copied.length > 0) lines.push(`✅ ${pkg.copied.length} file(s) filed`)
-          if (pkg.pinFolderId || pkg.enqueueUnpinned) {
+          let markedFiled = false
+          if (pkg.ok) {
+            const { markBankingSubmissionFiled } = await import("@/lib/forms/mark-banking-filed")
+            markedFiled = await markBankingSubmissionFiled(sub.id, { flow: "banking_form_review", summaryFileId: pkg.summaryFileId, copied: pkg.copied, folderId: pkg.pinFolderId })
+          }
+          if (!markedFiled && (pkg.pinFolderId || pkg.enqueueUnpinned)) {
             try {
               const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
               await enqueueFormArchiveJob({

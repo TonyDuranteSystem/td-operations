@@ -962,7 +962,13 @@ export async function POST(req: NextRequest) {
 
             // Durable backstop: queue the reliable archive job with the plan PINNED. It is queued whenever there is a destination —
             // also when the first attempt failed or the company is moving — so the retry can heal it.
-            if (updatedRow?.id && (pkg.pinFolderId || pkg.enqueueUnpinned)) {
+            // Fully filed: set the same marker the archive job sets (the sweep then leaves this row alone). Not fully filed: queue the job.
+            let markedFiled = false
+            if (pkg.ok && updatedRow?.id) {
+              const { markBankingSubmissionFiled } = await import('@/lib/forms/mark-banking-filed')
+              markedFiled = await markBankingSubmissionFiled(updatedRow.id, { flow: 'wizard-submit:banking', summaryFileId: pkg.summaryFileId, copied: pkg.copied, folderId: pkg.pinFolderId })
+            }
+            if (updatedRow?.id && !markedFiled && (pkg.pinFolderId || pkg.enqueueUnpinned)) {
               try {
                 const { enqueueFormArchiveJob } = await import('@/lib/forms/archive-enqueue')
                 await enqueueFormArchiveJob({

@@ -83,7 +83,9 @@ describe('/api/banking-form-completed', () => {
     expect(st.companyCalls[0]).toMatchObject({ folderId: 'account-storage:acc-1', paths: [STATEMENT], token: 'tok' })
     expect(st.personCalls).toHaveLength(1)
     expect(st.personCalls[0]).toMatchObject({ target: { kind: 'contact', id: 'c1' }, uploadPaths: [PASSPORT, PROOF] })
-    expect(st.enqueued[0]).toMatchObject({ formType: 'banking', pin: { folderId: 'account-storage:acc-1' } })
+    // fully filed: the marker the sweep keys on is set, and the durable job is NOT queued (nothing left to heal)
+    expect(st.recorded.some((r) => r.table === 'banking_submissions' && r.op === 'update' && typeof (r.payload as Record<string, unknown>).drive_archived_at === 'string')).toBe(true)
+    expect(st.enqueued).toEqual([])
   })
   it('a replay of the same POST files the very same thing (same key, same day-stable date) and does not add alarms', async () => {
     await post(); await post()
@@ -116,16 +118,19 @@ describe('/api/banking-form-completed', () => {
 })
 
 describe('banking archive recipe (the sweep)', () => {
-  it('a company in storage with no Drive folder resolves to its storage instead of throwing "NO drive_folder_id"', async () => {
+  it('a company in storage with no Drive folder resolves (no "NO drive_folder_id" throw); the filer decides the destination when the job runs', async () => {
     const { getArchiveRecipe } = await import('@/lib/forms/archive-registry')
     const plan = await getArchiveRecipe('banking')!.resolvePlan({ id: 's1', account_id: 'acc-1', provider: 'relay', upload_paths: [PASSPORT], submitted_data: {} } as never)
-    expect(plan.folderId).toBe('account-storage:acc-1')
+    expect(plan.folderId).toBeNull()
     expect(plan.configKey).toBe('banking_relay')
+    expect(plan.uploadPaths).toEqual([PASSPORT])
   })
-  it('a company that cannot be filed for says so plainly', async () => {
+  it('a Closed company: the filer says so plainly (the job then fails loudly and the sweep alerts once)', async () => {
     st.companyState = 'drive'; st.rows.accounts = { status: 'Closed', drive_folder_id: 'F-old', gdrive_folder_url: null, company_name: 'Acme LLC' }
-    const { getArchiveRecipe } = await import('@/lib/forms/archive-registry')
-    await expect(getArchiveRecipe('banking')!.resolvePlan({ id: 's1', account_id: 'acc-1', provider: 'relay', upload_paths: [], submitted_data: {} } as never)).rejects.toThrow(/nowhere to be filed/)
+    const { fileBankingPackage } = await import('@/lib/forms/file-banking-package')
+    const r = await fileBankingPackage({ flow: 'banking-archive', formType: 'banking_relay', accountId: 'acc-1', contactId: 'c1', submittedData: {}, uploadPaths: [], bucket: 'b', token: 't', folderId: null })
+    expect(r.ok).toBe(false)
+    expect(r.sentence).toMatch(/closed/)
   })
 })
 

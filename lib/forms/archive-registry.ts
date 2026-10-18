@@ -123,12 +123,10 @@ const bankingRecipe: ArchiveRecipe = {
     if (!accountId) {
       throw new Error(`archive: banking submission ${row.id} is completed but has no account_id — cannot resolve a company Drive folder`)
     }
-    // Stop Drive (dev job 264bb882, S1d): the company's STORAGE (or its Drive folder if it was left on Drive) — a company in storage
-    // with no Drive folder used to make this throw "NO drive_folder_id" on every sweep, so a row whose pin was never written could never heal.
-    const { formDestinationForAccount } = await import("@/lib/crm-store/form-destination")
-    const dest = await formDestinationForAccount(accountId, "banking-archive")
-    if (!dest.ok) throw new Error(`archive: banking submission ${row.id} has nowhere to be filed — ${dest.sentence}`)
-    const folderId = dest.folderId
+    // Stop Drive (dev job 264bb882, S1d): no destination is worked out here — the banking filer (lib/forms/file-banking-package.ts) decides
+    // it when the job runs (the company's storage, or its Drive folder if it was left on Drive; personal papers to the person), so a
+    // company in storage with no Drive folder no longer makes this throw "NO drive_folder_id" and a row whose pin was never written heals.
+    const folderId = null
     const { data: acctRow, error: acctErr } = await supabaseAdmin.from("accounts").select("company_name").eq("id", accountId).maybeSingle()
     if (acctErr) throw new Error(`archive: account read failed (retryable): ${acctErr.message}`)
     const companyName = (acctRow?.company_name as string | null | undefined) ?? undefined

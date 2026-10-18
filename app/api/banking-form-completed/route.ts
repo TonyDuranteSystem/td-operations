@@ -277,7 +277,13 @@ export async function POST(req: NextRequest) {
               ? `PDF: ${pkg.summaryFileId || "none"}, filed: ${pkg.copied.length}`
               : `${pkg.sentence ?? pkg.errors.join("; ")} (filed: ${pkg.copied.length}, not filed: ${pkg.failed.length})${pkg.retryLater ? " — will be retried" : ""}`,
           })
-          if (pkg.pinFolderId || pkg.enqueueUnpinned) {
+          let markedFiled = false
+          if (pkg.ok) {
+            // fully filed: the very marker the archive job sets, so the sweep leaves this row alone
+            const { markBankingSubmissionFiled } = await import("@/lib/forms/mark-banking-filed")
+            markedFiled = await markBankingSubmissionFiled(submission_id, { flow: "banking-form-completed", summaryFileId: pkg.summaryFileId, copied: pkg.copied, folderId: pkg.pinFolderId })
+          }
+          if (!markedFiled && (pkg.pinFolderId || pkg.enqueueUnpinned)) {
             // Durable backstop: the reliable archive job with the plan PINNED, so a failed or postponed filing heals by retry.
             try {
               const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
