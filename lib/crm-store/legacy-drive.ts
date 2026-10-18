@@ -13,20 +13,13 @@
  * ERROR for the caller plus a staff-visible alarm (`raiseDriveWriteRefused`), never an "ok" and never a silent skip.
  */
 
-export const ARCHIVE_ACCOUNT_STATUSES = ["closed", "cancelled"] as const
+import { decideNoStorage, folderIdOf, isFinishedStatus } from "./no-storage"
 
-/** Closed / Cancelled, whatever the letter case or surrounding spaces. THE one definition (the central folder lock uses it too). */
-export function isArchivedStatus(status: string | null | undefined): boolean {
-  return (ARCHIVE_ACCOUNT_STATUSES as readonly string[]).includes((status ?? "").trim().toLowerCase())
-}
-
-/** The Drive folder id on a company / person record: `drive_folder_id`, else the id inside the older `gdrive_folder_url` link. */
-export function folderIdOfRecord(r: { drive_folder_id?: string | null; gdrive_folder_url?: string | null } | null | undefined): string | null {
-  if (!r) return null
-  if (r.drive_folder_id) return r.drive_folder_id
-  const m = /\/folders\/([A-Za-z0-9_-]+)/.exec(r.gdrive_folder_url ?? "")
-  return m ? m[1] : null
-}
+// ONE rule (Stop Drive S1c/S1d): "which companies may still be written to in Drive" is `decideNoStorage` in no-storage.ts (folder, no
+// storage, not finished). This module adds only what a WRITER needs on top: the storage / moving states, the person variant, the
+// staff alarm. The helpers below are that module's, re-exported under the names the S1d writers use.
+export const isArchivedStatus = isFinishedStatus
+export const folderIdOfRecord = folderIdOf
 
 export type LegacyRefusalReason = "has_storage" | "moving" | "archived" | "no_folder" | "no_company"
 
@@ -60,9 +53,8 @@ export function decideLegacyAccount(f: AccountFacts | null): LegacyDriveVerdict 
   if (!f || f.status === null) return refuse("no_company")
   if (f.state === "store") return refuse("has_storage")
   if (f.state === "moving") return refuse("moving")
-  if (isArchivedStatus(f.status)) return refuse("archived")
-  if (!f.driveFolderId) return refuse("no_folder")
-  return { allowed: true, folderId: f.driveFolderId }
+  const d = decideNoStorage({ status: f.status, drive_folder_id: f.driveFolderId })
+  return d.route === "drive" ? { allowed: true, folderId: d.folderId } : refuse(d.reason === "moving" ? "no_folder" : d.reason)
 }
 
 export interface LegacyAccountDeps {
@@ -160,23 +152,37 @@ export function forgetRecentAlarms(): void { recentAlarms.clear() }
  * sentence for the caller to report. Never throws — the alarm must not hide the caller's own error. Throttled per
  * flow + company + person + reason (this server instance, and the store's own event history for other instances).
  */
-export async function raiseDriveWriteRefused(p: { flow: string; accountId?: string | null; contactId?: string | null; reason: LegacyRefusalReason; detail?: string }, now: number = Date.now()): Promise<string> {
+export interface AlarmDeps {
+  /** was the same refusal already alarmed (any server instance) since `sinceIso`? */
+  alreadyAlarmed: (details: Record<string, unknown>, sinceIso: string) => Promise<boolean>
+  raise: (details: Record<string, unknown>) => Promise<void>
+}
+
+async function defaultAlarmDeps(): Promise<AlarmDeps> {
+  return {
+    alreadyAlarmed: async (details, sinceIso) => {
+      const { supabaseAdmin } = await import("@/lib/supabase-admin")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_events is not in the generated types
+      const { data } = await (supabaseAdmin as any).from("store_events").select("id").eq("event", "pilot_alarm").eq("reason", "drive_write_refused").gte("occurred_at", sinceIso).contains("details", details).limit(1)
+      return Array.isArray(data) && data.length > 0
+    },
+    raise: async (details) => { const { raisePilotAlarm } = await import("./formation-pilot"); await raisePilotAlarm("drive_write_refused", details) },
+  }
+}
+
+export async function raiseDriveWriteRefused(p: { flow: string; accountId?: string | null; contactId?: string | null; reason: LegacyRefusalReason; detail?: string }, now: number = Date.now(), deps?: AlarmDeps): Promise<string> {
   const sentence = LEGACY_REFUSAL_SENTENCE[p.reason]
   const key = [p.flow, p.accountId ?? "", p.contactId ?? "", p.reason].join("|")
   const last = recentAlarms.get(key)
   if (last !== undefined && now - last < ALARM_THROTTLE_MS) return sentence
   recentAlarms.set(key, now)
+  const d = deps ?? (await defaultAlarmDeps())
+  const identity = { flow: p.flow, accountId: p.accountId ?? null, contactId: p.contactId ?? null, reason: p.reason }
   try {
-    const { supabaseAdmin } = await import("@/lib/supabase-admin")
-    const since = new Date(now - ALARM_THROTTLE_MS).toISOString()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_events is not in the generated types
-    const { data } = await (supabaseAdmin as any).from("store_events").select("id").eq("event", "pilot_alarm").eq("reason", "drive_write_refused").gte("occurred_at", since)
-      .contains("details", { flow: p.flow, accountId: p.accountId ?? null, contactId: p.contactId ?? null, reason: p.reason }).limit(1)
-    if (Array.isArray(data) && data.length > 0) return sentence
+    if (await d.alreadyAlarmed(identity, new Date(now - ALARM_THROTTLE_MS).toISOString())) return sentence
   } catch { /* cannot tell: alarm anyway */ }
   try {
-    const { raisePilotAlarm } = await import("./formation-pilot")
-    await raisePilotAlarm("drive_write_refused", { flow: p.flow, accountId: p.accountId ?? null, contactId: p.contactId ?? null, reason: p.reason, detail: p.detail ?? null })
+    await d.raise({ ...identity, detail: p.detail ?? null })
   } catch { /* an alarm never breaks the caller */ }
   return sentence
 }

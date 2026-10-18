@@ -82,58 +82,67 @@ describe('legacyDriveForContact', () => {
 
 describe('refusal reporting', () => {
   beforeEach(() => forgetRecentAlarms())
-  it('raiseDriveWriteRefused returns the plain sentence and never throws, even if the alarm itself fails', async () => {
-    vi.resetModules()
-    vi.doMock('@/lib/crm-store/formation-pilot', () => ({ raisePilotAlarm: async () => { throw new Error('alarm down') } }))
-    const m = await import('@/lib/crm-store/legacy-drive')
-    await expect(m.raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'archived' })).resolves.toBe(LEGACY_REFUSAL_SENTENCE.archived)
-    vi.doUnmock('@/lib/crm-store/formation-pilot')
-  })
   it('the alarm carries the flow, the company and the reason', async () => {
-    vi.resetModules()
     const raise = vi.fn(async () => {})
-    vi.doMock('@/lib/crm-store/formation-pilot', () => ({ raisePilotAlarm: raise }))
-    const m = await import('@/lib/crm-store/legacy-drive')
-    await m.raiseDriveWriteRefused({ flow: 'lease-signed', accountId: 'a1', reason: 'has_storage', detail: 'lease 9' })
-    expect(raise).toHaveBeenCalledWith('drive_write_refused', { flow: 'lease-signed', accountId: 'a1', contactId: null, reason: 'has_storage', detail: 'lease 9' })
-    vi.doUnmock('@/lib/crm-store/formation-pilot')
+    await raiseDriveWriteRefused({ flow: 'lease-signed', accountId: 'a1', reason: 'has_storage', detail: 'lease 9' }, Date.now(), { alreadyAlarmed: async () => false, raise })
+    expect(raise).toHaveBeenCalledWith({ flow: 'lease-signed', accountId: 'a1', contactId: null, reason: 'has_storage', detail: 'lease 9' })
   })
   it('LegacyDriveRefusedError carries the reason and the sentence', () => {
     const e = new LegacyDriveRefusedError('archived')
     expect(e.name).toBe('LegacyDriveRefusedError')
     expect(e.message).toBe(LEGACY_REFUSAL_SENTENCE.archived)
-    expect(raiseDriveWriteRefused).toBeTypeOf('function')
   })
 })
 
 describe('alarm throttle — a retrying job cannot spam staff', () => {
   beforeEach(() => forgetRecentAlarms())
   it('the same refusal alarms once per window, a different reason / company alarms again', async () => {
-    vi.resetModules()
     const raise = vi.fn(async () => {})
-    vi.doMock('@/lib/crm-store/formation-pilot', () => ({ raisePilotAlarm: raise }))
-    vi.doMock('@/lib/supabase-admin', () => ({ supabaseAdmin: { from: () => { const c: Record<string, unknown> = {}; for (const m of ['select', 'eq', 'gte', 'contains', 'limit']) c[m] = () => c; c.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(r); return c } } }))
-    const m = await import('@/lib/crm-store/legacy-drive')
-    m.forgetRecentAlarms()
+    const deps = { alreadyAlarmed: async () => false, raise }
     const t0 = 1_000_000
-    for (let i = 0; i < 5; i++) await m.raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'archived' }, t0 + i * 1000)
+    for (let i = 0; i < 5; i++) await raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'archived' }, t0 + i * 1000, deps)
     expect(raise).toHaveBeenCalledTimes(1)
-    await m.raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'no_folder' }, t0 + 6000)
-    await m.raiseDriveWriteRefused({ flow: 'x', accountId: 'b', reason: 'archived' }, t0 + 7000)
+    await raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'no_folder' }, t0 + 6000, deps)
+    await raiseDriveWriteRefused({ flow: 'x', accountId: 'b', reason: 'archived' }, t0 + 7000, deps)
     expect(raise).toHaveBeenCalledTimes(3)
-    await m.raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'archived' }, t0 + ALARM_THROTTLE_MS + 10_000)
+    await raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'archived' }, t0 + ALARM_THROTTLE_MS + 10_000, deps)
     expect(raise).toHaveBeenCalledTimes(4)
-    vi.doUnmock('@/lib/crm-store/formation-pilot'); vi.doUnmock('@/lib/supabase-admin')
   })
   it('another server instance that already alarmed (found in the store history) keeps this one quiet', async () => {
-    vi.resetModules()
     const raise = vi.fn(async () => {})
-    vi.doMock('@/lib/crm-store/formation-pilot', () => ({ raisePilotAlarm: raise }))
-    vi.doMock('@/lib/supabase-admin', () => ({ supabaseAdmin: { from: () => { const c: Record<string, unknown> = {}; for (const m of ['select', 'eq', 'gte', 'contains', 'limit']) c[m] = () => c; c.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: [{ id: 1 }], error: null }).then(r); return c } } }))
-    const m = await import('@/lib/crm-store/legacy-drive')
-    m.forgetRecentAlarms()
-    await m.raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'archived' })
+    await raiseDriveWriteRefused({ flow: 'x', accountId: 'a', reason: 'archived' }, Date.now(), { alreadyAlarmed: async () => true, raise })
     expect(raise).not.toHaveBeenCalled()
-    vi.doUnmock('@/lib/crm-store/formation-pilot'); vi.doUnmock('@/lib/supabase-admin')
+  })
+  it('a failing history lookup alarms anyway; a failing alarm never throws', async () => {
+    const raise = vi.fn(async () => { throw new Error('alarm down') })
+    await expect(raiseDriveWriteRefused({ flow: 'y', accountId: 'a', reason: 'archived' }, Date.now(), { alreadyAlarmed: async () => { throw new Error('db down') }, raise })).resolves.toBe(LEGACY_REFUSAL_SENTENCE.archived)
+    expect(raise).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ONE rule: legacy-drive.ts agrees with no-storage.ts (#731) on every combination', () => {
+  const statuses = ['Active', 'Suspended', 'Offboarding', 'Pending Formation', 'Closed', 'closed', ' Cancelled ', 'CANCELED', '', null]
+  const folders = [null, 'F1']
+  it('a company may be written to in Drive exactly when decideNoStorage says "drive" (and has no storage)', async () => {
+    const { decideNoStorage } = await import('@/lib/crm-store/no-storage')
+    for (const status of statuses) for (const folder of folders) {
+      const mine = decideLegacyAccount({ status: status ?? '', driveFolderId: folder, state: 'drive' })
+      const theirs = decideNoStorage({ status, drive_folder_id: folder })
+      expect(mine.allowed, `${status}/${folder}`).toBe(theirs.route === 'drive')
+      if (!mine.allowed && theirs.route === 'refuse') expect(mine.reason).toBe(theirs.reason)
+    }
+  })
+  it('a person may be written to in Drive exactly when decideNoStorageForContact says "drive"', async () => {
+    const { decideNoStorageForContact, decideNoStorage } = await import('@/lib/crm-store/no-storage')
+    const companyCases = [{ status: 'Offboarding', folder: 'F1' }, { status: 'Closed', folder: 'F1' }, { status: 'Active', folder: null }]
+    for (const own of [null, 'P1']) for (const live of [false, true]) for (const c of companyCases) {
+      const verdict = decideNoStorage({ status: c.status, drive_folder_id: c.folder })
+      const theirs = decideNoStorageForContact({ liveOwner: live, folderId: own, companyVerdicts: [verdict], companyInStorageOrMoving: false })
+      const mine = await legacyDriveForContact('c', {
+        load: async () => ({ liveOwner: live, driveFolderId: own, accountIds: ['a'] }),
+        account: async () => decideLegacyAccount({ status: c.status, driveFolderId: c.folder, state: 'drive' }),
+      })
+      expect(mine.allowed, JSON.stringify({ own, live, c })).toBe(theirs.route === 'drive')
+    }
   })
 })

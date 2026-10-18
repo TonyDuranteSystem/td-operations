@@ -50,7 +50,7 @@ export async function GET(
   }
 
   if (!contact.drive_folder_id) {
-    return NextResponse.json({ error: 'No Drive folder linked to this contact', folders: [], rootFiles: [] }, { status: 200 })
+    return NextResponse.json({ folders: [], rootFiles: [] }, { status: 200 })
   }
 
   try {

@@ -51,7 +51,7 @@ export async function GET(
   }
 
   if (!account.drive_folder_id) {
-    return NextResponse.json({ error: 'No Drive folder linked to this account', folders: [], rootFiles: [] }, { status: 200 })
+    return NextResponse.json({ folders: [], rootFiles: [] }, { status: 200 })
   }
 
   try {
