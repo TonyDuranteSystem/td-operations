@@ -1,10 +1,22 @@
 import { NextResponse } from "next/server"
+import type { User } from "@supabase/supabase-js"
 import { createClient } from "@/lib/supabase/server"
 import { isStoreStaffUser } from "@/lib/crm-store/access"
 
-/** Staff allow-list (admin / team) for the read-only new-store browser. null = allowed. */
-export async function denyUnlessStoreStaff(): Promise<NextResponse | null> {
+/**
+ * Who is asking. The browser routes read the cookie login; the Mac app's routes (`/api/storage-app/*`) resolve the user from
+ * the device token and PASS it in, so both go through exactly the same checks below (dev job 1992a087). `undefined` = read the
+ * cookie (the old behaviour, unchanged); an explicit `null` = nobody is signed in.
+ */
+async function askingUser(passed?: User | null): Promise<User | null> {
+  if (passed !== undefined) return passed
   const { data: { user } } = await createClient().auth.getUser()
+  return user
+}
+
+/** Staff allow-list (admin / team) for the read-only new-store browser. null = allowed. */
+export async function denyUnlessStoreStaff(passedUser?: User | null): Promise<NextResponse | null> {
+  const user = await askingUser(passedUser)
   if (!isStoreStaffUser(user)) return NextResponse.json({ error: "Staff only" }, { status: 403 })
   return null
 }
@@ -15,7 +27,7 @@ export async function denyUnlessStoreStaff(): Promise<NextResponse | null> {
  *  has already checked that the user is staff; a hidden study copy keeps the stricter rules below. `study: true` = an
  *  action that only organises files staff study (type, rename, move, folders, trash) — it also runs where the
  *  STUDY copy is switched on (production, STORE_STUDY_COPY=1); nothing the client could see is ever allowed there. */
-export async function denyUnlessStorePilotEnv(opts: { study?: boolean; fileId?: string | null; folderId?: string | null; ownerId?: string | null } = {}): Promise<NextResponse | null> {
+export async function denyUnlessStorePilotEnv(opts: { study?: boolean; fileId?: string | null; folderId?: string | null; ownerId?: string | null; user?: User | null } = {}): Promise<NextResponse | null> {
   const { pilotEnvironmentAllowed } = await import("@/lib/crm-store/formation-pilot")
   if (pilotEnvironmentAllowed()) return null
   // The firm's OWN areas (Business, a staff member's My files) are a normal storage everywhere (Antonio 2026-10-01): no client, no
@@ -38,7 +50,7 @@ export async function denyUnlessStorePilotEnv(opts: { study?: boolean; fileId?: 
     const { studyCopyAllowed } = await import("@/lib/crm-store/drive-import")
     if (studyCopyAllowed()) {
       // study mode: owners only, and never a file a CRM record points at (study copies have none — a real one would)
-      const { data: { user } } = await createClient().auth.getUser()
+      const user = await askingUser(opts.user)
       const { isOwnerOnly } = await import("@/lib/auth")
       if (!user || !isOwnerOnly(user)) return NextResponse.json({ error: "Owners only while the new storage holds study copies." }, { status: 403 })
       const { supabaseAdmin } = await import("@/lib/supabase-admin")
@@ -70,8 +82,8 @@ export async function denyUnlessStorePilotEnv(opts: { study?: boolean; fileId?: 
  * A private "My files" area opens ONLY for the login it belongs to — every browse route that names an
  * owner, a folder or a file checks it (a private area is answered as "Not found", never "forbidden").
  */
-export async function denyUnlessAreaAccess(ref: { ownerId?: string | null; folderId?: string | null; fileId?: string | null }, opts: { allowSharedRead?: boolean } = {}): Promise<NextResponse | null> {
-  const { data: { user } } = await createClient().auth.getUser()
+export async function denyUnlessAreaAccess(ref: { ownerId?: string | null; folderId?: string | null; fileId?: string | null }, opts: { allowSharedRead?: boolean; user?: User | null } = {}): Promise<NextResponse | null> {
+  const user = await askingUser(opts.user)
   try {
     // READ-ONLY routes (open / download a file): a staff member may read a file shared with them from "Shared with staff"
     if (opts.allowSharedRead && ref.fileId && !ref.ownerId && !ref.folderId && user) {

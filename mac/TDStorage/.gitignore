@@ -1,0 +1,5 @@
+.build/
+TDStorage.xcodeproj/
+xcuserdata/
+*.xcuserstate
+DerivedData/
