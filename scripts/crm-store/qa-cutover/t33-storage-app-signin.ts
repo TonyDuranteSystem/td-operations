@@ -110,7 +110,7 @@ async function main() {
     const n = await call("navigation", t1.access_token, nav)
     const groups = (n.body?.groups ?? []) as Array<{ key: string; section: string; owners: Array<{ id: string; kind: string }> }>
     const ownerIds = groups.flatMap((g) => g.owners.map((o) => o.id))
-    check("13 navigation lists the clients and Business", n.status === 200 && groups.some((g) => g.section === "clients") && groups.some((g) => g.section === "business"), `${groups.map((g) => g.label ?? g.key).join(",")}`)
+    check("13 navigation lists the clients and Business", n.status === 200 && groups.some((g) => g.section === "clients") && groups.some((g) => g.section === "business"), `${groups.map((g) => (g as { label?: string }).label ?? g.key).join(",")}`)
     check("14 navigation has NO My files group for a team login", !groups.some((g) => g.section === "private") && !groups.flatMap((g) => g.owners).some((o) => o.kind === "private"))
     const { data: uxOwner } = await admin.from("store_owners").select("id").eq("account_id", UX_ACCOUNT).eq("kind", "company").maybeSingle()
     check("15 the live test company is listed", ownerIds.includes(uxOwner.id))
@@ -144,9 +144,9 @@ async function main() {
     if (passport) { const l = await listFolder(passport.folder_id); check("23 a passport is listed as sensitive AND downloadable", l.find((x) => x.id === passport.id)?.sensitive === true && l.find((x) => x.id === passport.id)?.downloadable === true, passport.name) }
     if (typedOk) { const l = await listFolder(typedOk.folder_id); check("24 an ordinary typed file in a person storage is downloadable and not sensitive", l.find((x) => x.id === typedOk.id)?.downloadable === true && l.find((x) => x.id === typedOk.id)?.sensitive === false, typedOk.name) }
     if (untyped) { const l = await listFolder(untyped.folder_id); check("25 an UNTYPED file in a person storage is sensitive but downloadable", l.find((x) => x.id === untyped.id)?.sensitive === true && l.find((x) => x.id === untyped.id)?.downloadable === true, untyped.name) }
+    const listFolder2 = async (ownerId: string, folderId: string) => { return (await call("folder", t1.access_token, folder, `?owner=${ownerId}&folder=${folderId}`)).body.files as Array<{ id: string; downloadable: boolean; sensitive: boolean }> }
     const { data: coFile } = await admin.from("store_files").select("id, name, folder_id").eq("owner_id", uxOwner.id).eq("state", "live").is("document_type", null).limit(1).maybeSingle()
     if (coFile) { const l = await listFolder2(uxOwner.id, coFile.folder_id); check("26 an untyped file in a COMPANY storage is downloadable", l.find((x) => x.id === coFile.id)?.downloadable === true, coFile.name) }
-    async function listFolder2(ownerId: string, folderId: string) { return (await call("folder", t1.access_token, folder, `?owner=${ownerId}&folder=${folderId}`)).body.files as Array<{ id: string; downloadable: boolean; sensitive: boolean }> }
 
     // ── one item by id, with its parent (what Finder asks)
     if (passport) {

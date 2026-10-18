@@ -45,7 +45,7 @@ async function main() {
   }
   const slot = (token: string, o: Record<string, unknown>) => call(slotRoute as never, token, "/api/storage-app/upload-slot", o)
   const save = (token: string, o: Record<string, unknown>) => call(saveRoute as never, token, "/api/storage-app/save", o)
-  const put = async (url: string, bytes: Buffer) => (await fetch(url, { method: "PUT", headers: { "content-type": "application/octet-stream", "x-upsert": "false", "cache-control": "max-age=3600" }, body: bytes })).status
+  const put = async (url: string, bytes: Buffer) => (await fetch(url, { method: "PUT", headers: { "content-type": "application/octet-stream", "x-upsert": "false", "cache-control": "max-age=3600" }, body: bytes as unknown as BodyInit })).status
 
   try {
     const code = await A.createAuthCode({ userId: user.id, deviceName: "QA save Mac", codeChallenge: challenge, redirectUri: REDIRECT })

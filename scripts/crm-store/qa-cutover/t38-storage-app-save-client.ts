@@ -53,7 +53,7 @@ async function main() {
   }
   const slot = (t: string, o: Record<string, unknown>) => call(slotRoute as never, t, "/api/storage-app/upload-slot", o)
   const save = (t: string, o: Record<string, unknown>) => call(saveRoute as never, t, "/api/storage-app/save", o)
-  const put = async (url: string, bytes: Buffer) => (await fetch(url, { method: "PUT", headers: { "content-type": "application/octet-stream", "x-upsert": "false", "cache-control": "max-age=3600" }, body: bytes })).status
+  const put = async (url: string, bytes: Buffer) => (await fetch(url, { method: "PUT", headers: { "content-type": "application/octet-stream", "x-upsert": "false", "cache-control": "max-age=3600" }, body: bytes as unknown as BodyInit })).status
   const saveFile = async (t: string, ownerId: string, folderId: string, name: string, bytes: Buffer) => {
     const key = randomUUID()
     const s = await slot(t, { ownerId, folderId, name, size: bytes.length, mimeType: "text/plain", itemKey: key })

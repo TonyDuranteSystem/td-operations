@@ -47,7 +47,7 @@ async function main() {
   }
   const slot = (t: string, o: Record<string, unknown>) => call(slotRoute as never, t, "/api/storage-app/upload-slot", o)
   const save = (t: string, o: Record<string, unknown>) => call(saveRoute as never, t, "/api/storage-app/save", o)
-  const put = async (url: string, bytes: Buffer) => (await fetch(url, { method: "PUT", headers: { "content-type": "application/octet-stream", "x-upsert": "false", "cache-control": "max-age=3600" }, body: bytes })).status
+  const put = async (url: string, bytes: Buffer) => (await fetch(url, { method: "PUT", headers: { "content-type": "application/octet-stream", "x-upsert": "false", "cache-control": "max-age=3600" }, body: bytes as unknown as BodyInit })).status
   const versions = async (fileId: string) => ((await admin.from("store_file_versions").select("version_no, sha256, size_bytes").eq("file_id", fileId).order("version_no")).data ?? []) as { version_no: number; sha256: string; size_bytes: number }[]
 
   try {
