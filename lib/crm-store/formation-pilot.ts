@@ -492,6 +492,7 @@ export type PilotAlarmKind =
   | "lead_form_filing_failed"      // a lead-stage form (formation/onboarding/closure) package could not be fully filed in storage
   | "lead_form_contact_ambiguous"  // a lead's email matches several CRM contacts: nothing was filed under a guessed person
   | "lead_form_person_on_drive"    // the person still lives on Drive (or in a hidden study copy): no storage was opened, nothing was filed
+  | "storage_pointer_adopt_failed" // a client file parked in the older bucket (storage: pointer) could not be filed into the CRM storage
   | "store_move_stale"             // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
 
 /**
