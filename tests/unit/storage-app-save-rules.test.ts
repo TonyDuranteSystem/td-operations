@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { checkDestination, checkNewFile, cleanFileName, isJunkName, isItemKey, saveCallerKey, writeLimitBytes, MAX_SAVE_BYTES } from "@/lib/storage-app/save-rules"
+import { checkDestination, checkNewFile, cleanFileName, isJunkName, isItemKey, saveCallerKey, writeLimitBytes, isClientSaveOwner, MAX_SAVE_BYTES } from "@/lib/storage-app/save-rules"
 
 describe("where a Mac may save a new file (step A: Business and My files only)", () => {
   const ok = { ownerKind: "business", folderKind: "custom", inStaffShare: false, folderTrashed: false }
@@ -15,8 +15,20 @@ describe("where a Mac may save a new file (step A: Business and My files only)",
     expect(checkDestination({ ...ok, inStaffShare: true }).ok).toBe(false)
     expect(checkDestination({ ...ok, folderTrashed: true }).ok).toBe(false)
   })
-  it("not client or person storages yet", () => {
-    for (const k of ["company", "person", "formation", null, undefined]) expect(checkDestination({ ...ok, ownerKind: k as string }).ok).toBe(false)
+  it("a company's or person's own folders: only the team-made ones and Correspondence (step B slice 1)", () => {
+    for (const owner of ["company", "person"]) {
+      for (const k of ["custom", "correspondence"]) expect(checkDestination({ ...ok, ownerKind: owner, folderKind: k }).ok).toBe(true)
+      for (const k of ["banking", "tax", "tax_year", "company", "itin", "personal", "person_tax", "person_tax_year", "contacts", "root"]) expect(checkDestination({ ...ok, ownerKind: owner, folderKind: k }).ok).toBe(false)
+    }
+  })
+  it("still not companies being formed or unknown storages", () => {
+    for (const k of ["formation", null, undefined, "something"]) expect(checkDestination({ ...ok, ownerKind: k as string }).ok).toBe(false)
+  })
+  it("a client folder is still refused when trashed, in Shared with staff, or a top folder", () => {
+    const c = { ownerKind: "company", folderKind: "custom", inStaffShare: false, folderTrashed: false }
+    expect(checkDestination({ ...c, folderTrashed: true }).ok).toBe(false)
+    expect(checkDestination({ ...c, inStaffShare: true }).ok).toBe(false)
+    expect(checkDestination({ ...c, folderKind: "root" }).ok).toBe(false)
   })
 })
 
@@ -50,5 +62,13 @@ describe("the key that makes saving safe to retry", () => {
     expect(writeLimitBytes(undefined)).toBe(500 * 1024 * 1024)
     expect(writeLimitBytes("2")).toBe(2 * 1024 * 1024)
     expect(writeLimitBytes("0")).toBe(500 * 1024 * 1024)
+  })
+})
+
+describe("which storages count as client storages for a Mac save", () => {
+  it("company and person only (slice 1)", () => {
+    expect(isClientSaveOwner("company")).toBe(true)
+    expect(isClientSaveOwner("person")).toBe(true)
+    for (const k of ["formation", "business", "private", null, undefined, ""]) expect(isClientSaveOwner(k as string)).toBe(false)
   })
 })

@@ -32,7 +32,7 @@ async function main() {
   if (error || !made?.user) throw new Error(`could not create the test login: ${error?.message}`)
   const user = made.user as { id: string; email: string }
   const { data: priorList } = await admin.from("app_settings").select("value").eq("key", "storage_app_allowed_emails").maybeSingle()
-  await admin.from("app_settings").upsert({ key: "storage_app_allowed_emails", value: [user.email], updated_at: new Date().toISOString() })
+  await admin.from("app_settings").upsert({ key: "storage_app_allowed_emails", value: [...(Array.isArray(priorList?.value) ? priorList.value : []), user.email], updated_at: new Date().toISOString() })   // ADD to the list: replacing it would lock the real Macs out for the length of the test
   const { data: adminUsers } = await admin.auth.admin.listUsers({ page: 1, perPage: 200 })
   const qa = (adminUsers?.users ?? []).find((u: { app_metadata?: { role?: string } }) => u.app_metadata?.role === "admin")
   const ACTOR = { id: qa.id as string, app_metadata: { role: "admin" } } as never
@@ -108,10 +108,10 @@ async function main() {
     const top = await slot(t.access_token, { ownerId, folderId: rootF.id, name: `top ${stamp}.txt`, size: 5, mimeType: null, itemKey: randomUUID() })
     check("18 a storage's top folder → 422", top.status === 422 && top.body?.error === "not_allowed", `status ${top.status} ${JSON.stringify(top.body)}`)
     const { data: coOwner } = await admin.from("store_owners").select("id").eq("kind", "company").eq("study_only", false).limit(1).maybeSingle()
-    const { data: coFolder } = await admin.from("store_folders").select("id").eq("owner_id", coOwner.id).not("parent_id", "is", null).eq("kind", "custom").is("trashed_at", null).limit(1).maybeSingle()
-    const target = coFolder ?? (await admin.from("store_folders").select("id").eq("owner_id", coOwner.id).not("parent_id", "is", null).is("trashed_at", null).limit(1).maybeSingle()).data
-    const client = await slot(t.access_token, { ownerId: coOwner.id, folderId: target.id, name: `client ${stamp}.txt`, size: 5, mimeType: null, itemKey: randomUUID() })
-    check("19 a client company's folder → 422 (not available yet)", client.status === 422 && client.body?.error === "not_allowed", `status ${client.status}`)
+    // a client folder of a kind that is NOT allowed (Banking): refused. (Allowed client folders are tested in t38.)
+    const { data: coFolder } = await admin.from("store_folders").select("id").eq("owner_id", coOwner.id).eq("kind", "banking").is("trashed_at", null).limit(1).maybeSingle()
+    const client = await slot(t.access_token, { ownerId: coOwner.id, folderId: coFolder.id, name: `client ${stamp}.txt`, size: 5, mimeType: null, itemKey: randomUUID() })
+    check("19 a client company's BANKING folder → 422 (not available yet)", client.status === 422 && client.body?.error === "not_allowed", `status ${client.status}`)
     const { data: study } = await admin.from("store_owners").select("id").eq("study_only", true).limit(1).maybeSingle()
     if (study) {
       const { data: sf } = await admin.from("store_folders").select("id").eq("owner_id", study.id).limit(1).maybeSingle()

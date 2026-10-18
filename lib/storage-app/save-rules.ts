@@ -4,6 +4,11 @@
  */
 import { isInternalOwnerKind } from "@/lib/crm-store/plain-drop"
 
+/** Step B slice 1: client storages a Mac may save into, and the folder kinds inside them (a team-made folder, or Correspondence). Banking, Tax, Tax year, the company's own papers, ITIN, personal folders and companies being formed come later. */
+export const CLIENT_SAVE_OWNER_KINDS: ReadonlySet<string> = new Set(["company", "person"])
+export const CLIENT_SAVE_FOLDER_KINDS: ReadonlySet<string> = new Set(["custom", "correspondence"])
+export const isClientSaveOwner = (kind: string | null | undefined): boolean => !!kind && CLIENT_SAVE_OWNER_KINDS.has(kind)
+
 /** Staged and registered inline up to this size (the CRM's own limit for the inline path); bigger files are refused for now. */
 export const MAX_SAVE_BYTES = 150 * 1024 * 1024
 export const MAX_NAME_BYTES = 255
@@ -44,8 +49,12 @@ export function checkDestination(p: { ownerKind: string | null | undefined; fold
   if (/(^|_)root$/.test(p.folderKind ?? "")) return { ok: false, code: "not_allowed", message: "Open one of the folders first — files go inside a folder, not at the top." }
   if (p.folderKind === "contacts") return { ok: false, code: "not_allowed", message: "People's documents are added in the CRM, not from the Mac." }
   if (p.inStaffShare) return { ok: false, code: "not_allowed", message: "\"Shared with staff\" is managed in the CRM." }
-  if (!isInternalOwnerKind(p.ownerKind)) return { ok: false, code: "not_allowed", message: "Saving here from the Mac is not available yet — only Business and My files for now." }
-  return { ok: true }
+  if (isInternalOwnerKind(p.ownerKind)) return { ok: true }
+  if (isClientSaveOwner(p.ownerKind)) {
+    if (CLIENT_SAVE_FOLDER_KINDS.has(p.folderKind ?? "")) return { ok: true }
+    return { ok: false, code: "not_allowed", message: "Saving into this folder from the Mac is not available yet — for now only Correspondence and the folders your team added." }
+  }
+  return { ok: false, code: "not_allowed", message: "Saving here from the Mac is not available yet." }
 }
 
 export function checkNewFile(p: { name: unknown; size: unknown }): SaveRefusal & { cleanName?: string } {

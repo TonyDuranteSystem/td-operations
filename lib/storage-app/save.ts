@@ -17,7 +17,8 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { User } from "@supabase/supabase-js"
 import { logAppEvent } from "./device-auth"
-import { checkDestination, checkNewFile, saveCallerKey, isItemKey, writeLimitBytes, MAX_SAVE_BYTES, type SaveRefusal } from "./save-rules"
+import { checkDestination, checkNewFile, saveCallerKey, isItemKey, writeLimitBytes, isClientSaveOwner, MAX_SAVE_BYTES, type SaveRefusal } from "./save-rules"
+import { ensureClientFileRecords, refreshClientRow } from "./client-records"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
@@ -31,11 +32,11 @@ const fromRefusal = (r: Extract<SaveRefusal, { ok: false }>): SaveAnswer => refu
 interface Target { ownerId: string; folderId: string }
 
 /** The destination, from the database: live storage, live folder of THAT storage, allowed area, this login may open it. */
-async function checkTarget(t: Target, user: User): Promise<SaveRefusal> {
+async function checkTarget(t: Target, user: User): Promise<SaveRefusal & { ownerKind?: string }> {
   const { data: folder, error } = await db().from("store_folders").select("id, owner_id, kind, trashed_at").eq("id", t.folderId).maybeSingle()
   if (error) throw new Error(`Could not read the folder (${error.message}).`)
   if (!folder || folder.owner_id !== t.ownerId) return { ok: false, code: "not_found", message: "Folder not found." }
-  const { data: owner, error: oErr } = await db().from("store_owners").select("kind, study_only").eq("id", t.ownerId).maybeSingle()
+  const { data: owner, error: oErr } = await db().from("store_owners").select("kind, study_only, account_id, contact_id, service_delivery_id").eq("id", t.ownerId).maybeSingle()
   if (oErr) throw new Error(`Could not read the storage (${oErr.message}).`)
   if (!owner || owner.study_only !== false) return { ok: false, code: "not_found", message: "Folder not found." }
   const { isInStaffShare } = await import("@/lib/crm-store/staff-share")
@@ -44,7 +45,13 @@ async function checkTarget(t: Target, user: User): Promise<SaveRefusal> {
   const { denyUnlessAreaAccess, denyUnlessStorePilotEnv } = await import("@/app/api/crm-store/browse/_auth")
   const noAccess = (await denyUnlessAreaAccess({ ownerId: t.ownerId, folderId: t.folderId }, { user })) ?? (await denyUnlessStorePilotEnv({ ownerId: t.ownerId, folderId: t.folderId, user }))
   if (noAccess) return { ok: false, code: "not_found", message: "Folder not found." }
-  return { ok: true }
+  // a client storage must be linked to a company or a client (checked HERE, before any file is written — the CRM row needs it)
+  if (isClientSaveOwner(owner.kind)) {
+    const { rowLinksForOwner } = await import("@/lib/crm-store/owner-links")
+    const links = await rowLinksForOwner({ kind: owner.kind, account_id: owner.account_id ?? null, contact_id: owner.contact_id ?? null, service_delivery_id: owner.service_delivery_id ?? null })
+    if (!links.account && !links.contact) return { ok: false, code: "not_allowed", message: "This storage is not linked to a company or a client — files cannot be added here." }
+  }
+  return { ok: true, ownerKind: owner.kind }
 }
 
 /** The name the file will really have (an iPhone HEIC photo is stored as a JPEG) — refuse a name that is already taken in the folder. */
@@ -66,17 +73,24 @@ async function existingByKey(callerKey: string): Promise<{ id: string; owner_id:
 }
 
 
-export interface OwnFile { id: string; owner_id: string; folder_id: string; name: string; caller_key: string; state: string; filing_status: string | null }
+export interface OwnFile { id: string; owner_id: string; folder_id: string; name: string; caller_key: string; state: string; filing_status: string | null; document_type?: string | null; needs_review_at?: string | null }
 
 /** The file to update, ONLY if this Mac saved it: its key carries this Mac's id. Anything else is refused with the same plain words. */
 async function loadOwnFile(fileId: string, deviceId: string): Promise<OwnFile | { refusal: SaveAnswer }> {
   const none = (message = "Only a file this Mac saved can be changed from this Mac. Open the CRM to change it.") => ({ refusal: refuse(422, "not_own", message) })
-  const { data, error } = await db().from("store_files").select("id, owner_id, folder_id, name, caller_key, state, filing_status").eq("id", fileId).maybeSingle()
+  const { data, error } = await db().from("store_files").select("id, owner_id, folder_id, name, caller_key, state, filing_status, document_type, needs_review_at").eq("id", fileId).maybeSingle()
   if (error) throw new Error(`Could not read the file (${error.message}).`)
   if (!data || data.state === "purged") return { refusal: refuse(404, "not_found", "That file was not found.") }
   if (typeof data.caller_key !== "string" || !data.caller_key.startsWith(`storage-app:${deviceId}:`)) return none()
   if (data.state !== "live") return { refusal: refuse(409, "trashed", "That file is in the trash. Restore it in the CRM first.") }
   if (data.filing_status === "filed") return none("This file is filed and frozen. Open the CRM to change it.")
+  // a file in a CLIENT storage can be changed from the Mac only while it is still the untouched "Saved from a Mac" file: no type chosen, still marked
+  // "Needs review", and not shown by a workspace. Once staff typed it or cleared the mark it is theirs (a hidden-but-typed file is NOT enough).
+  const { data: ow } = await db().from("store_owners").select("kind").eq("id", data.owner_id).maybeSingle()
+  if (isClientSaveOwner(ow?.kind)) {
+    const shown = await (await import("@/lib/crm-store/client-visibility")).workspaceShownFiles([data.id])
+    if (data.document_type || !data.needs_review_at || shown.size > 0) return none("This file has been typed or reviewed in the CRM, so it can't be changed from the Mac. Open the CRM to change it.")
+  }
   return data as OwnFile
 }
 
@@ -90,7 +104,7 @@ export async function createSaveSlot(p: { user: User; deviceId: string; ownerId:
   }
   const callerKey = saveCallerKey(p.deviceId, p.itemKey)
   const earlier = await existingByKey(callerKey)
-  if (earlier) return { status: 200, body: { alreadySaved: true, fileId: earlier.id, ownerId: earlier.owner_id, name: earlier.name } }
+  if (earlier) { await ensureClientFileRecords(earlier.id, p.user.id); return { status: 200, body: { alreadySaved: true, fileId: earlier.id, ownerId: earlier.owner_id, name: earlier.name } } }
   const file = checkNewFile({ name: p.name, size: p.size })
   if (!file.ok) return refused(file.code, file.message, STATUS_OF[file.code] ?? 422)
   const mimeType = typeof p.mimeType === "string" && p.mimeType ? p.mimeType.slice(0, 200) : null
@@ -183,6 +197,7 @@ async function saveUpdate(p: { user: User; deviceId: string; intentId: unknown; 
   try { result = await registerStagedUpload({ intentId: p.intentId, actor: p.user.id }) } catch (e) { await back(); throw e }
   if (result.status === "queued") throw new Error("A file this big should have been refused earlier.")
   if (result.status === "frozen" || result.status === "trashed") { await back(); return refuse(409, result.status, "This file can no longer be changed from the Mac. Open the CRM.") }
+  await refreshClientRow(own.id)      // a client storage: the documents row follows the new size / type (no-op elsewhere)
   await logAppEvent("app_file_updated", p.user.id, { deviceId: p.deviceId, userId: p.user.id, name: own.name, size, outcome: result.status }, ids)
   return { status: 200, body: { fileId: own.id, ownerId: own.owner_id, name: own.name, size, outcome: result.status } }
 }
@@ -192,7 +207,7 @@ export async function saveFromSlot(p: { user: User; deviceId: string; intentId: 
   if (typeof p.intentId !== "string" || !isItemKey(p.itemKey)) return refuse(400, "bad_request", "The upload is not complete.")
   const callerKey = saveCallerKey(p.deviceId, p.itemKey)
   const earlier = await existingByKey(callerKey)
-  if (earlier) return { status: 200, body: { fileId: earlier.id, ownerId: earlier.owner_id, name: earlier.name, repeated: true } }
+  if (earlier) { await ensureClientFileRecords(earlier.id, p.user.id); return { status: 200, body: { fileId: earlier.id, ownerId: earlier.owner_id, name: earlier.name, repeated: true } } }
   const { data: slot, error } = await db().from("store_upload_intents").select("id, owner_id, folder_id, file_name, mime_type, caller_key, created_by, consumed_at, expires_at, staging_path").eq("id", p.intentId).maybeSingle()
   if (error) throw new Error(`Could not read the upload slot (${error.message}).`)
   if (!slot || slot.created_by !== p.user.id || slot.caller_key !== callerKey) return refuse(404, "not_found", "This upload was not found. Try saving again.")
@@ -210,14 +225,19 @@ export async function saveFromSlot(p: { user: User; deviceId: string; intentId: 
   if (!free.ok) { await back({}); await logAppEvent("app_save_refused", p.user.id, { deviceId: p.deviceId, reason: free.code, name: slot.file_name }, ids); return fromRefusal(free) }
   let result
   try {
-    // HIDDEN from clients (published:false) and no document type — Business and My files have no client and need none
-    result = await registerStagedUpload({ intentId: p.intentId, actor: p.user.id, published: false })
+    // HIDDEN from clients (published:false) and no document type — Business and My files have no client and need none; a client storage gets
+    // "Needs review" + its documents row right after (ensureClientFileRecords), and the year of a Tax › year folder
+    const clientSave = isClientSaveOwner(target.ownerKind)
+    const periodYear = clientSave ? await (await import("@/lib/crm-store/structure")).nearestYear(slot.folder_id) : null
+    result = await registerStagedUpload({ intentId: p.intentId, actor: p.user.id, published: false, ...(periodYear ? { periodYear } : {}) })
   } catch (e) {
     await back({})
     throw e
   }
   if (result.status === "queued") throw new Error("A file this big should have been refused earlier.")   // cannot happen: size is capped above the inline limit
   if (result.status !== "created" && result.status !== "unchanged") { await back({}); return refuse(409, result.status, "This file could not be saved here.") }
-  await logAppEvent("app_file_saved", p.user.id, { deviceId: p.deviceId, userId: p.user.id, name: result.name, size }, { ownerId: slot.owner_id, folderId: slot.folder_id, fileId: result.fileId })
+  await logAppEvent("app_file_saved", p.user.id, { deviceId: p.deviceId, userId: p.user.id, name: result.name, size, needsType: isClientSaveOwner(target.ownerKind) }, { ownerId: slot.owner_id, folderId: slot.folder_id, fileId: result.fileId })
+  // a failure here leaves a HIDDEN file without its mark/row: the Mac is told it failed, its retry (or the nightly sweep) applies them
+  await ensureClientFileRecords(result.fileId, p.user.id)
   return { status: 200, body: { fileId: result.fileId, ownerId: slot.owner_id, name: result.name, size } }
 }

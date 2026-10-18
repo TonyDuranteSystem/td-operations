@@ -26,7 +26,7 @@ async function main() {
   if (error || !data?.user) throw new Error(`could not create the test login: ${error?.message}`)
   const user = data.user as { id: string; email: string }
   const { data: priorList } = await admin.from("app_settings").select("value").eq("key", "storage_app_allowed_emails").maybeSingle()
-  await admin.from("app_settings").upsert({ key: "storage_app_allowed_emails", value: [user.email], updated_at: new Date().toISOString() })
+  await admin.from("app_settings").upsert({ key: "storage_app_allowed_emails", value: [...(Array.isArray(priorList?.value) ? priorList.value : []), user.email], updated_at: new Date().toISOString() })   // ADD to the list: replacing it would lock the real Macs out for the length of the test
 
   const http = async (path: string, init: RequestInit = {}) => {
     const res = await fetch(BASE + path, { redirect: "manual", ...init })

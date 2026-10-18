@@ -38,7 +38,7 @@ async function main() {
   if (error || !made?.user) throw new Error(`could not create the test login: ${error?.message}`)
   const user = made.user as { id: string; email: string }
   const { data: priorList } = await admin.from("app_settings").select("value").eq("key", "storage_app_allowed_emails").maybeSingle()
-  await admin.from("app_settings").upsert({ key: "storage_app_allowed_emails", value: [user.email], updated_at: new Date().toISOString() })
+  await admin.from("app_settings").upsert({ key: "storage_app_allowed_emails", value: [...(Array.isArray(priorList?.value) ? priorList.value : []), user.email], updated_at: new Date().toISOString() })   // ADD to the list: replacing it would lock the real Macs out for the length of the test
   const { data: adminUsers } = await admin.auth.admin.listUsers({ page: 1, perPage: 200 })
   const qa = (adminUsers?.users ?? []).find((u: { app_metadata?: { role?: string } }) => u.app_metadata?.role === "admin")
   const ACTOR = { id: qa.id as string, app_metadata: { role: "admin" } } as never
@@ -141,7 +141,7 @@ async function main() {
     await admin.from("storage_app_devices").delete().eq("user_id", user2.id)
     await admin.from("storage_app_auth_codes").delete().eq("user_id", user2.id)
     await admin.auth.admin.deleteUser(user2.id).catch(() => null)
-    await admin.from("app_settings").upsert({ key: "storage_app_allowed_emails", value: [user.email], updated_at: new Date().toISOString() })
+    await admin.from("app_settings").upsert({ key: "storage_app_allowed_emails", value: [...(Array.isArray(priorList?.value) ? priorList.value : []), user.email], updated_at: new Date().toISOString() })   // ADD to the list: replacing it would lock the real Macs out for the length of the test
     process.env.STORAGE_APP_READ_LIMIT_MB = "500"
     for (const f of [fItin, fPlain, ...six]) await trashFile(ACTOR, f.fileId, "qa file open")
 

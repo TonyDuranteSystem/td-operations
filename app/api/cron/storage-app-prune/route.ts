@@ -1,6 +1,7 @@
 /**
  * CRON (daily): housekeeping for the TD Storage Mac app (dev job 1992a087). Keeps 30 days of the change feed (an older cursor is told to
- * refresh in full) and deletes used / expired one-time codes, expired tokens and Macs signed out more than 90 days ago.
+ * refresh in full) and deletes used / expired one-time codes, expired tokens and Macs signed out more than 90 days ago; and repairs any Mac-saved
+ * file in a client folder that lacks its "Needs review" mark / documents row (a crash between the write and the mark).
  * Auth: Bearer CRON_SECRET — a missing env var refuses. Needs the migration 20261017-0100 (on production only after Antonio's go).
  */
 export const dynamic = 'force-dynamic'
@@ -23,7 +24,10 @@ export async function GET(req: NextRequest) {
     if (feed.error) throw new Error(`change log: ${feed.error.message}`)
     const signin = await sb.rpc('storage_app_prune')
     if (signin.error) throw new Error(`sign-in tables: ${signin.error.message}`)
-    const details = { changeLogRowsDeleted: feed.data, signInRowsDeleted: signin.data }
+    // safety net: a Mac-saved file in a client folder that still has no "Needs review" mark / documents row gets them (see lib/storage-app/client-records.ts)
+    const { sweepClientSaves } = await import('@/lib/storage-app/client-records')
+    const sweep = await sweepClientSaves()
+    const details = { changeLogRowsDeleted: feed.data, signInRowsDeleted: signin.data, macSaveSweep: sweep }
     logCron({ endpoint: 'storage-app-prune', status: 'success', duration_ms: Date.now() - startTime, details })
     return NextResponse.json({ success: true, ...details })
   } catch (e) {
