@@ -63,7 +63,7 @@ export async function GET(req: NextRequest) {
       .from(tbl)
       .select(recipe.selectColumns)
       .is("drive_archived_at", null)
-      .gte("created_at", FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
+      .gte("created_at", recipe.sweepNotBefore && recipe.sweepNotBefore > FORM_ARCHIVE_SWEEP_CUTOFF_ISO ? recipe.sweepNotBefore : FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
       .order("created_at", { ascending: true })
       .limit(200)
 
@@ -106,7 +106,7 @@ export async function GET(req: NextRequest) {
   // One digest alert per run for stuck rows — loud, and durable via system_errors
   // so a failed chat post can't re-hide the failure.
   if (stuck.length > 0) {
-    const msg = `⚠️ @Luca ${stuck.length} form submission(s) could NOT be archived to Google Drive after repeated attempts — their package is missing from the client folder and needs a manual check: ${stuck.join(", ")}`
+    const msg = `⚠️ @Luca ${stuck.length} form submission(s) could NOT be filed in the client's storage after repeated attempts — their package is missing there and needs a manual check: ${stuck.join(", ")}`
     if (!dryRun) {
       await postTeamMessage({ channel: FORM_ARCHIVE_SWEEP_CHANNEL, message: msg }).catch(e =>
         console.error("[forms-archive-sweep] team alert post failed:", e))

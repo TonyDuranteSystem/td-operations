@@ -136,6 +136,8 @@ export interface FormStoreSpec {
   bucketOf: (path: string) => string
   /** unique per submission: the same key on a retry makes new VERSIONS, never copies */
   submissionKey: string
+  /** the stored file's name for an upload path (default: the path's last part). The idempotency key still uses the path. */
+  fileNameOf?: (path: string) => string
 }
 
 export interface FormStoreDeps {
@@ -197,7 +199,7 @@ export async function saveFormToStore(spec: FormStoreSpec, deps?: FormStoreDeps)
   }
 
   for (const path of spec.uploadPaths) {
-    const name = path.split("/").pop() || "document.pdf"
+    const name = spec.fileNameOf?.(path) || path.split("/").pop() || "document.pdf"
     try {
       let got = null
       for (let attempt = 0; attempt < 3 && !got; attempt++) {

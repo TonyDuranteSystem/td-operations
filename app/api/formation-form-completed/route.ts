@@ -65,6 +65,7 @@ export async function POST(req: NextRequest) {
     let leadLanguage = "en"
     let referrerName = ""
     let contactId: string | null = null
+    let contactAmbiguous = false
 
     if (leadId) {
       const { data: lead } = await supabaseAdmin
@@ -80,16 +81,16 @@ export async function POST(req: NextRequest) {
         referrerName = lead.referrer_name || ""
       }
 
-      // Find the contact for this lead by EXACT email (case-insensitive, no wildcards). Several matches = nobody is guessed:
-      // nothing is updated or filed under any of them and staff get ONE alarm.
-      const { findContactByExactEmail } = await import("@/lib/crm-store/lead-form-store")
-      const match = await findContactByExactEmail(leadEmail)
-      if (match.status === "many") {
-        results.push({ step: "contact_lookup", status: "error", detail: `${match.ids.length} contacts share this email — none was used` })
-        const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
-        await raisePilotAlarm("lead_form_contact_ambiguous", { route: "formation-form-completed", leadId, token, contactIds: match.ids })
-      } else if (match.status === "one") {
-        contactId = match.id
+      // Find the contact for this lead by EXACT email AND matching name. Several matches, a different name on the same email (a
+      // couple sharing one address), or a failed lookup = nobody is guessed: nothing is updated, filed or created under any
+      // contact, staff get ONE alarm, and the rest of the chain (email, delivery, task) still runs.
+      const { lookupLeadContact } = await import("@/lib/crm-store/lead-form-store")
+      const found = await lookupLeadContact({ email: leadEmail, leadName, route: "formation-form-completed", leadId, token })
+      if (found.state === "ambiguous" || found.state === "error") {
+        contactAmbiguous = true
+        results.push({ step: "contact_lookup", status: "error", detail: found.detail })
+      } else if (found.state === "one") {
+        contactId = found.contactId
       } else if (lead) {
         // AUTO-CREATE contact from lead data
         try {
@@ -195,12 +196,22 @@ export async function POST(req: NextRequest) {
 
     // ─── STEP 3: File the data PDF + uploads in the client's storage ───
     // (Stop-Drive S1a: this used to build a Leads/{name} folder in Drive. The person's own storage is opened exactly as for any new client.)
-    {
-      const { fileFormPackage } = await import("@/lib/forms/file-form-package")
+    if (contactAmbiguous) {
+      results.push({ step: "storage_save", status: "error", detail: "The contact could not be decided safely (see contact_lookup) — nothing was filed; the uploads stay with the submission" })
+    } else {
+      const { fileFormPackage, memberAwareFileName } = await import("@/lib/forms/file-form-package")
       results.push(await fileFormPackage({
         route: "formation-form-completed", formType: "formation", submittedData, uploadPaths, contactId, personName: leadName,
+        fileNameOf: memberAwareFileName(submittedData),
         meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName },
       }))
+      // Retry path: the durable archive job (retries, then the sweep alerts) finishes anything the inline filing could not.
+      try {
+        const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
+        await enqueueFormArchiveJob({ formType: "formation", submissionId: submission_id, createdBy: "formation_form_completed" })
+      } catch (e) {
+        results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
     }
 
     // ─── STEP 4: Check passport uploaded ───

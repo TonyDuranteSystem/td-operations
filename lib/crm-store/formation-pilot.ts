@@ -493,6 +493,7 @@ export type PilotAlarmKind =
   | "lead_form_contact_ambiguous"  // a lead's email matches several CRM contacts: nothing was filed under a guessed person
   | "lead_form_person_on_drive"    // the person still lives on Drive (or in a hidden study copy): no storage was opened, nothing was filed
   | "storage_pointer_adopt_failed" // a client file parked in the older bucket (storage: pointer) could not be filed into the CRM storage
+  | "lead_form_contact_lookup_failed" // the CRM contact lookup for a lead-stage form failed: nothing was filed, the rest of the chain ran
   | "store_move_stale"             // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
 
 /**
@@ -546,7 +547,8 @@ export async function contactIsNewClient(contactId: string | null | undefined): 
 export async function ensureFormationStorageAtPayment(sd: { id: string; contact_id: string | null; account_id: string | null; service_type: string | null }): Promise<StoreOwnerRef | null> {
   if (!newClientsLive() || sd.service_type !== "Company Formation") return null
   try {
-    if (!(await contactIsNewClient(sd.contact_id))) return null // a returning client stays on Drive until their companies switch
+    // Stop-Drive S1a (Antonio 2026-10-18): EVERY new formation is built in the storage — a returning client too. Drive is archive only,
+    // so "a returning client stays on Drive until their companies switch" no longer holds (the companies have switched).
     return await ensureFormationOwner(sd, await formationRootName(sd.contact_id), { atCreation: true })
   } catch (e) {
     await raisePilotAlarm("formation_owner_failed", { caseId: sd.id, contactId: sd.contact_id, error: e instanceof Error ? e.message : String(e) })
