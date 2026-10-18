@@ -55,7 +55,6 @@ OUTPUT FORMAT:
 ✅ Account: {account_id}
 ✅ Contacts: {count} created ({names})
 ✅ Services: {count} ({types})
-✅ Drive folder: {folder_id} with {count} subfolders
 ✅ Offer: {offer_token} (status: {status})
 ✅ Welcome email: {sent/drafted}
 ❌ Failed: {step} — {error}

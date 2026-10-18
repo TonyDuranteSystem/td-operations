@@ -604,6 +604,16 @@ export async function onSecondInstallmentPaid(
     steps.push({ step: "tax_sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
+  // ─── 3. Tell staff in the Calendar (What's New) — replaces the retired "ready for accountant" email ───
+  // One staff-only note per company+year (idempotent), so a reversed-and-rematched payment never repeats it.
+  try {
+    const { emitSecondInstallmentPaidEvent } = await import("@/lib/portal/chat-events")
+    const r = await emitSecondInstallmentPaidEvent({ accountId, companyName: account.company_name, year })
+    steps.push({ step: "whats_new", status: r.emitted || r.reason === "already_emitted" ? "ok" : "error", detail: r.emitted ? undefined : r.reason ?? r.error })
+  } catch (e) {
+    steps.push({ step: "whats_new", status: "error", detail: e instanceof Error ? e.message : String(e) })
+  }
+
   // ─── Partner renewal payout — installment 2 share (recurring, USD) ───
   // The 2nd-installment trigger → installment-2 share of the annual renewal.
   try {

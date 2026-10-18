@@ -12,6 +12,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }))
 vi.mock("@/lib/gmail", () => ({ gmailPost: vi.fn(() => Promise.resolve({})) }))
+const whatsNew = vi.fn(async (..._a: unknown[]) => ({ emitted: true }))
+vi.mock("@/lib/portal/chat-events", () => ({ emitSecondInstallmentPaidEvent: (...a: unknown[]) => whatsNew(...a) }))
 vi.mock("@/lib/settings", () => ({ isTaxSeasonPaused: vi.fn(() => Promise.resolve(false)) }))
 vi.mock("@/lib/tax/reactivation", () => ({
   reactivateOnHoldTaxReturns: vi.fn(() => Promise.resolve({ reactivated: 0 })),
@@ -122,5 +124,12 @@ describe("onSecondInstallmentPaid — no accountant hand-off (retired 2026-10-18
     vi.mocked(gmailPost).mockClear()
     await onSecondInstallmentPaid("acct-1", 2026)
     expect(vi.mocked(gmailPost)).not.toHaveBeenCalled()
+  })
+
+  it("tells staff once in the Calendar (What's New) that the gate is lifted", async () => {
+    whatsNew.mockClear()
+    await onSecondInstallmentPaid("acct-1", 2026)
+    expect(whatsNew).toHaveBeenCalledTimes(1)
+    expect(whatsNew.mock.calls[0][0]).toMatchObject({ accountId: "acct-1", year: 2026 })
   })
 })

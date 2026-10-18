@@ -379,7 +379,7 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'update_contact_notes',
-    description: 'Append a note to a contact record. Notes-only — does not touch phone, language, citizenship, passport, or Drive fields. Use update_contact for those.',
+    description: 'Append a note to a contact record. Notes-only — does not touch phone, language, citizenship, or passport fields. Use update_contact for those.',
     parameters: {
       type: 'object',
       properties: {
@@ -487,13 +487,15 @@ export const AGENT_TOOLS: ToolDef[] = [
   // ── Gmail Attachment Tool ──
   {
     name: 'gmail_get_attachments',
-    description: 'List or save attachments from a Gmail message. Without save_to_storage: returns attachment list with IDs, filenames, sizes. With save_to_storage=true + account_id: saves all attachments in the company\'s CRM storage (5. Correspondence, internal).',
+    description: 'List or save attachments from a Gmail message. Without save_to_storage: returns attachment list with IDs, filenames, sizes. With save_to_storage=true + account_id: saves the real attachments (or just attachment_id) in the company\'s CRM storage (5. Correspondence, internal).',
     parameters: {
       type: 'object',
       properties: {
         message_id: { type: 'string', description: 'Gmail message ID (from gmail_search results)' },
         save_to_storage: { type: 'boolean', description: 'If true, download all attachments and save them in the company\'s storage (needs account_id)' },
         account_id: { type: 'string', description: 'CRM account UUID: with save_to_storage=true the attachments are saved in that company\'s storage (5. Correspondence, internal).' },
+        attachment_id: { type: 'string', description: 'Save only this attachment (from the listing). Without it every real file is saved; pictures embedded in the message body (logos, signatures) are skipped.' },
+        include_inline: { type: 'boolean', description: 'Also save the pictures embedded in the message body (default false)' },
       },
       required: ['message_id'],
     },
@@ -2078,7 +2080,8 @@ async function gmailGetAttachmentsTool(p: any) {
   const detail = await gmailGet(`/messages/${p.message_id}`, { format: 'full' }) as any
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const attachments: Array<{ filename: string; mimeType: string; attachmentId: string; size: number }> = []
+  const attachments: Array<{ filename: string; mimeType: string; attachmentId: string; size: number; inline: boolean }> = []
+  const { isInlineImagePart, selectAttachmentsToSave } = await import('./attachment-select')
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function findAttachments(part: any) {
@@ -2088,6 +2091,7 @@ async function gmailGetAttachmentsTool(p: any) {
         mimeType: part.mimeType || 'application/octet-stream',
         attachmentId: part.body.attachmentId,
         size: part.body.size || 0,
+        inline: isInlineImagePart(part),
       })
     }
     if (part.parts) {
@@ -2106,7 +2110,10 @@ async function gmailGetAttachmentsTool(p: any) {
     const { getGmailAttachment } = await import('@/lib/gmail')
     const uploaded: Array<{ filename: string; saved_as: string }> = []
     const failed: Array<{ filename: string; error: string }> = []
-    for (const att of attachments) {
+    const sel = selectAttachmentsToSave(attachments, { attachment_id: p.attachment_id, include_inline: !!p.include_inline })
+    if (sel.error) return JSON.stringify({ error: sel.error })
+    if (sel.picked.length === 0) return JSON.stringify({ error: 'Only embedded pictures (logos/signatures) were found, so nothing was saved. Pass attachment_id to save one, or include_inline=true to save them too.' })
+    for (const att of sel.picked) {
       try {
         const attData = await getGmailAttachment(p.message_id, att.attachmentId)
         const r = await saveAttachmentToStorage(p.account_id, att.filename, attData.data, att.mimeType, `${p.message_id}:${att.attachmentId}`)
@@ -2116,7 +2123,7 @@ async function gmailGetAttachmentsTool(p: any) {
       }
     }
     return JSON.stringify({
-      attachments: attachments.map(a => ({ filename: a.filename, mimeType: a.mimeType, size: a.size })),
+      attachments: attachments.map(a => ({ filename: a.filename, mimeType: a.mimeType, size: a.size, embedded_picture: a.inline || undefined })),
       total: attachments.length,
       uploaded,
       failed: failed.length > 0 ? failed : undefined,
@@ -2129,6 +2136,7 @@ async function gmailGetAttachmentsTool(p: any) {
       mimeType: a.mimeType,
       size: a.size,
       attachmentId: a.attachmentId,
+      embedded_picture: a.inline || undefined,
     })),
     total: attachments.length,
     hint: 'To keep them: call gmail_get_attachments again with save_to_storage=true and the company account_id.',
@@ -2200,6 +2208,9 @@ async function updateService(p: any) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function updateContact(p: any) {
+  if (p.gdrive_folder_url !== undefined) {
+    return JSON.stringify({ error: 'gdrive_folder_url was removed from update_contact. Nothing was changed - call again without it.' })
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updates: Record<string, any> = {}
   if (p.passport_on_file !== undefined) updates.passport_on_file = p.passport_on_file

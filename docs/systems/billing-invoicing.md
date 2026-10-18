@@ -1,4 +1,5 @@
 # Billing & Invoicing
+_Last verified against code: 2026-10-18 (round 3) — Claude (dev job `264bb882`, Stop Drive S1b). Round 3: when the 2nd installment is paid the handler now posts ONE staff-only What's New note (kind `installment_2_paid`, once per company+year) — it replaces the retired email; `emitSecondInstallmentPaidEvent` in `lib/portal/chat-events.ts`._
 _Last verified against code: 2026-10-18 (round 2) — Claude (dev job `264bb882`, Stop Drive S1b). Round 2: the first-installment team email is logged as `installment_1_email` (it was mislabeled `installment_2_email` / '2nd-installment hand-off email'); nothing read the old label after the 2nd-installment email was removed._
 _Last verified against code: 2026-10-18 (fix round) — Claude (dev job `264bb882`, Stop Drive S1b). `onSecondInstallmentPaid` no longer creates the '[READY] Send tax return to Accountant' task nor sends the '[PAID] … Tax ready for accountant' email (accountant hand-off retired). It still lifts the gate, advances the Tax Return SD and pays the partner share. `reversal-side-effects.ts` no longer warns about that email._
 

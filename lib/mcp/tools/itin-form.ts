@@ -533,7 +533,7 @@ export function registerITINFormTools(server: McpServer) {
   // ***************************************
   server.tool(
     "itin_prepare_documents",
-    `Generate W-7, 1040-NR, and Schedule OI PDFs from a completed ITIN form submission. Saves all 3 PDFs + passport copies in the person's CRM storage (ITIN folder) and lists them in the CRM. This tool does NOT show them to the client. Prerequisites: 1) ITIN form must be 'completed' or 'reviewed', 2) The applicant is taken from the form's own data (email, then name), never from the first linked member; if that cannot be told the tool refuses. Run itin_form_review first to verify data, then use this tool to generate documents. NOTE (2026-06-26): the ITIN is now managed from the /flows/[sd] WORKSPACE — staff review the docs there and click "Documents Reviewed — Send to Client" (Document Preparation → Client Signing), which auto-posts the client a bilingual portal chat message. The client is NEVER emailed the PDFs; the portal is the delivery mechanism. Do NOT use send_email.`,
+    `Generate W-7, 1040-NR, and Schedule OI PDFs from a completed ITIN form submission. Saves all 3 PDFs + passport copies in the person's CRM storage (ITIN folder) and lists them on the person's open ITIN case exactly like the automatic ITIN path does (visible in the workspace and the client's portal Documents). Needs an open ITIN case for the person. Prerequisites: 1) ITIN form must be 'completed' or 'reviewed', 2) The applicant is taken from the form's own data (email, then name), never from the first linked member; if that cannot be told the tool refuses. Run itin_form_review first to verify data, then use this tool to generate documents. NOTE (2026-06-26): the ITIN is now managed from the /flows/[sd] WORKSPACE — staff review the docs there and click "Documents Reviewed — Send to Client" (Document Preparation → Client Signing), which auto-posts the client a bilingual portal chat message. The client is NEVER emailed the PDFs; the portal is the delivery mechanism. Do NOT use send_email.`,
     {
       token: z.string().describe("ITIN form token"),
       send_email: z.boolean().optional().default(false).describe("DEPRECATED — do NOT use. The client gets the ITIN documents via the PORTAL/workspace, never by email. Leave false; advancing the workspace to Client Signing notifies the client."),
@@ -568,8 +568,28 @@ export function registerITINFormTools(server: McpServer) {
         const who = await resolveItinApplicant({ contact_id: sub.contact_id as string | null, account_id: sub.account_id as string | null, submitted_data: submitted }, await realItinApplicantDeps())
         if (!who.ok) return { content: [{ type: "text" as const, text: `⚠️ ${who.message}` }] }
         const applicantId = who.contactId as string
-        const place = await personStoragePlace(applicantId, clientName)
+        // The person's storage folder is named from the CRM record, not from what was typed in the form.
+        const personName = who.fullName || clientName
+        const place = await personStoragePlace(applicantId, personName)
         if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message}` }] }
+
+        // The documents are listed on the person's open ITIN case (so the workspace lists them and the portal card can show
+        // them) exactly like the automatic path does. No open case = nothing to attach them to: refuse before generating.
+        const sdFilters = [`notes.ilike.%${token}%`, `contact_id.eq.${applicantId}`]
+        if (sub.account_id) sdFilters.push(`account_id.eq.${sub.account_id}`)
+        const { data: itinCases, error: itinCaseErr } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id")
+          .eq("service_type", "ITIN")
+          .or(sdFilters.join(","))
+          .eq("status", "active")
+          .order("created_at", { ascending: true })
+          .limit(1)
+        if (itinCaseErr) throw new Error(`Could not look up the ITIN case — ${itinCaseErr.message}`)
+        const itinCaseId = (itinCases ?? [])[0]?.id as string | undefined
+        if (!itinCaseId) {
+          return { content: [{ type: "text" as const, text: "⚠️ There is no open ITIN case for this person, so the documents would not show in the workspace. Nothing was generated. Open the ITIN case first, then try again." }] }
+        }
 
         // 3. Generate W-7
         const { fillW7 } = await import("@/lib/pdf/w7-fill")
@@ -622,23 +642,27 @@ export function registerITINFormTools(server: McpServer) {
         {
           const { saveDocumentForContact } = await import("@/lib/crm-store/save-for-account")
           const { storeNameKey } = await import("@/lib/crm-store/rules")
-          const slug = clientName.replace(/\s+/g, "_")
-          const saveOne = async (label: string, fileName: string, bytes: Buffer, mime: string, documentType: string | null) => {
+          const slug = `${submitted.first_name ?? ""}_${submitted.last_name ?? ""}`.replace(/\s+/g, "_")
+          const saveOne = async (label: string, fileName: string, bytes: Buffer, mime: string, documentType: string | null, itinDoc = false) => {
             const routed = await saveDocumentForContact({
               // the generated ITIN papers go to the person's ITIN folder; a passport stays in Personal documents
               folderKind: documentType === "passport" ? "personal" : "itin",
               contactId: applicantId, accountId: (sub.account_id as string | null) ?? null, viaAccountId: (sub.account_id as string | null) ?? null,
-              contactName: clientName, name: fileName, bytes, mimeType: mime, documentType,
-              callerKey: `itin-docs:${sub.id}:${storeNameKey(fileName)}`,
-              row: { document_type_name: label, category: 1, status: "classified" },
+              contactName: personName, name: fileName, bytes, mimeType: mime, documentType,
+              // the three generated forms are registered EXACTLY like the automatic path does (same key, type, category, case, visibility)
+              callerKey: itinDoc ? `itin-form-doc:${applicantId}:${itinCaseId}:${fileName}` : `itin-docs:${sub.id}:${storeNameKey(fileName)}`,
+              ...(itinDoc ? { portalVisible: true } : {}),
+              row: itinDoc
+                ? { document_type_name: `ITIN ${label}`, category: 3, status: "classified", service_delivery_id: itinCaseId }
+                : { document_type_name: label, category: 1, status: "classified" },
             })
             if (routed.route !== "store") throw new Error("this person's storage was not available while saving — nothing more was saved")
             uploadedIds.push({ name: label, id: routed.pointer })
-            results.push(`📤 ${label} saved in ${clientName}'s new storage`)
+            results.push(`📤 ${label} saved in ${personName}'s new storage`)
           }
-          await saveOne("W-7", `W-7_${slug}.pdf`, Buffer.from(w7Pdf), "application/pdf", "form_w_7")
-          await saveOne("1040-NR", `1040-NR_${slug}.pdf`, Buffer.from(nrPdf), "application/pdf", "form_1040_nr")
-          await saveOne("Schedule OI", `Schedule_OI_${slug}.pdf`, Buffer.from(oiPdf), "application/pdf", "itin_schedule_oi")
+          await saveOne("W-7", `W-7_${slug}.pdf`, Buffer.from(w7Pdf), "application/pdf", "form_w_7", true)
+          await saveOne("1040-NR", `1040-NR_${slug}.pdf`, Buffer.from(nrPdf), "application/pdf", "form_1040_nr", true)
+          await saveOne("Schedule OI", `Schedule_OI_${slug}.pdf`, Buffer.from(oiPdf), "application/pdf", "itin_schedule_oi", true)
           const uploads = sub.upload_paths as string[] | null
           for (const path of uploads ?? []) {
             try {
@@ -758,7 +782,7 @@ support@tonydurante.us
         results.push("")
         results.push("---")
         if (!send_email) {
-          results.push("Documents generated and saved in the person's storage (this tool does not show them to the client). Manage the ITIN from the /flows/[sd] workspace: review the docs there, then advance Document Preparation → Client Signing to notify the client via the portal. Do NOT email the PDFs (send_email is deprecated — the portal is the delivery mechanism).")
+          results.push("Documents generated, saved in the person's storage and listed on the ITIN case like the automatic path does. Manage the ITIN from the /flows/[sd] workspace: review the docs there, then advance Document Preparation → Client Signing to notify the client via the portal. Do NOT email the PDFs (send_email is deprecated — the portal is the delivery mechanism).")
         }
 
         return { content: [{ type: "text" as const, text: results.join("\n") }] }

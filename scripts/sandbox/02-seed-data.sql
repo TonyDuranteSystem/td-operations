@@ -225,7 +225,7 @@ WORKFLOW:
 3. Client submits tax form
 4. Internal review (Antonio/Luca) validates completeness
 5. File extension by default as safety layer
-6. After 2nd installment paid: package data and handoff to India filing team
+6. After 2nd installment paid: the tax return gate is lifted
 7. India team prepares return: In Prep → In Review → Ready to File → Filed
 8. Antonio reviews completed return
 9. Send client copy for signature
@@ -234,7 +234,7 @@ WORKFLOW:
 IMPORTANT:
 - NEVER send tax data-collection link to non-paying clients
 - Extension is filed by default as a safety measure
-- Tax return NOT sent to India until 2nd payment confirmed
+- Tax return does not move on until the 2nd payment is confirmed
 - Antonio reviews the form AND the filed return
 - Forms must be updated/verified each year before sending', 'Business Rules', NULL, NULL, '[Migrated] Applies To: Tax Return | CRITICAL: Yes | Updated By: Claude | Last Updated: 2026-02-12', 'recM3SEhsbzmyO4fQ', '2026-03-03T18:49:32.212304+00:00', '2026-03-15T02:23:16.43588+00:00') ON CONFLICT (id) DO NOTHING;
 INSERT INTO knowledge_articles (id, title, content, category, tags, version, notes, airtable_id, created_at, updated_at) VALUES ('d83d36fd-ce0a-47bd-b5db-620e49bf351d', 'Annual Contract Terms (Jan-Dec)', 'ANNUAL CONTRACT TERMS
@@ -2076,7 +2076,7 @@ YEAR 2+ (Annual Management):
   - State Annual Report (file on state portal, NOT for NM)
   - CMRA Mailing Address (new lease agreement)
   - Tax Return (activate tax season pipeline)
-- June: 2nd installment = gate before tax return goes to India team
+- June: 2nd installment = gate before the tax return moves on
 - One-Time customers (account_type = "One-Time") do NOT get recurring services
 
 RENEWAL TRACKING DATES (on accounts table):
@@ -2233,7 +2233,7 @@ C2. account_type ''Client'' = 4 recurring services: RA Renewal, Annual Report, T
 C3. account_type ''One-Time'' = only purchased services. No recurring.
 C4. Year 1: setup fee covers all services through Dec 31.
 C5. Year 2+: 1st installment triggers 4 recurring SDs (CMRA, RA Renewal, Annual Report, Tax Return).
-C6. 2nd installment (June) = gate before tax return goes to India. No exceptions.
+C6. 2nd installment (June) = gate before the tax return moves on. No exceptions.
 
 =======================================
 SERVICE CATEGORIES (5)
@@ -3803,9 +3803,8 @@ Two scenarios with different entry points but same preparation/filing workflow.
 | **Invoicing** | Portal billing system (QB fallback) | Portal billing system (QB fallback) |
 | **Data Collection** | Portal wizard (tax type) | Portal wizard (tax type) |
 | **Extension** | India files in bulk | India files in bulk |
-| **2nd Payment Gate** | YES — blocks India until June paid | NO — already paid in full |
+| **2nd Payment Gate** | YES — blocks the return until June paid | NO — already paid in full |
 | **Post-September Rule** | Applies (skip 1st installment) | N/A |
-| **Send to India** | After 2nd payment confirmed | After data received (no gate) |
 | **Review + Filing** | Same | Same |
 
 **Lifecycle order:**
@@ -3813,7 +3812,6 @@ Two scenarios with different entry points but same preparation/filing workflow.
 2. Data Collection (portal wizard) — parallel with extension
 3. Extension (India bulk)
 4. Payment Gate (Scenario 1 only — wait for 2nd installment)
-5. Send to India for preparation
 6. Review (Antonio) + Contact signature + Filing
 
 ---
@@ -3948,9 +3946,9 @@ India team files extensions in bulk. Not per-client. This is a safety layer file
 |---|------|-----|------|--------|
 | 23 | Check 2nd installment | Claude | Portal billing / crm_search_payments | Due June 1 |
 | 24 | If not paid | Claude | -- | Follow-up: Day 15 reminder, Day 30 2nd reminder, Day 45 escalation to Antonio |
-| 25 | If paid | Claude | -- | Advance to Phase 4 |
+| 25 | If paid | Claude | -- | Advance to Phase 5 |
 
-**CRITICAL RULE**: Tax return is NOT sent to India until 2nd installment is paid. No exceptions.
+**CRITICAL RULE**: The tax return does not move on until the 2nd installment is paid. No exceptions.
 
 Post-September first year: this IS their first payment. Same gate applies.
 
@@ -3958,19 +3956,7 @@ If 2nd installment is already paid, skip this phase entirely.
 
 ### Scenario 2: One-Time Customer
 
-**SKIP this phase entirely.** Contact already paid in full upfront. Go directly to Phase 4.
-
----
-
-## PHASE 4: Send to India (SAME for both scenarios)
-
-Prerequisites: payment confirmed + data complete + Antonio review OK.
-
-| # | Step | Who | Tool | Detail |
-|---|------|-----|------|--------|
-
-
-India = "filing team" or "preparation team". Never call them CPA or accountant.
+**SKIP this phase entirely.** Contact already paid in full upfront. Go directly to Phase 5.
 
 ---
 
@@ -4007,7 +3993,7 @@ India = "filing team" or "preparation team". Never call them CPA or accountant.
 | February 1 | Send bulk extension list to India (ALL clients — MMLLC + SMLLC/Corp) |
 | March 15 | Original deadline MMLLC (extension already filed by India) |
 | April 15 | Original deadline SMLLC/Corp (extension already filed by India) |
-| June | Scenario 1: 2nd installment gate. Scenario 2: already sent to India |
+| June | Scenario 1: 2nd installment gate. Scenario 2: already paid in full |
 | September 15 | Extended deadline MMLLC |
 | October 15 | Extended deadline SMLLC/Corp |
 
@@ -4040,14 +4026,13 @@ India = "filing team" or "preparation team". Never call them CPA or accountant.
 | Portal = single interface | Contact fills wizard, reviews TR, signs — all inside portal |
 | Offer inside portal | Lead sees offer inside the portal after login. No offer email sent |
 | Portal billing = official | QuickBooks is fallback only |
-| No service until paid | Never send data to India without payment confirmed |
+| No service until paid | The tax return does not move on without payment confirmed |
 | 2nd payment = gate (Scenario 1) | India blocked until June installment paid |
 | No gate (Scenario 2) | Paid upfront, no gate |
 | Post-September | LLC formed after September 1: skip 1st installment, gate at 2nd |
 | Extension = India bulk | Claude sends list by February 1, India files, India sends back IDs |
 | Extension is parallel | Happens alongside data collection, not sequential |
 | India = filing team | Never call them CPA or accountant |
-| Email format to India | [Company] - [Contact] - [EIN] - [Type] to tax@adasglobus.com |
 | Antonio reviews twice | Data (Phase 1) and completed TR (Phase 5) |
 | Auto P&L | MMLLC + Corp only. SMLLC collects direct amounts, no auto P&L |
 | TR signed in portal | Contact e-signs inside portal, not via email |
@@ -4124,7 +4109,7 @@ Completion Criteria: - Extension filed and recorded
 ---
 Exceptions:
 - Late payment after tax deadline: Send IRS-penalty disclaimer; apply $500 assistance fee
-- Missing client data: Keep status ''Waiting on Client''; do not hand off to India until complete
+- Missing client data: Keep status ''Waiting on Client''; do not move the return on until complete
 - Form changes per year/company type: Workflow must NOT run until correct year forms are confirmed updated
 ---
 Antonio-Only: Review form (Antonio), Review filed return (Antonio)

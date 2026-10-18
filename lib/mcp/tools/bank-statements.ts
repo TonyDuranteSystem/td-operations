@@ -370,7 +370,7 @@ export function registerBankStatementTools(server: McpServer) {
         if (save_to_storage) {
           const { companyStoragePlace } = await import("@/lib/crm-store/storage-place")
           const place = await companyStoragePlace(account_id)
-          if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message}` }] }
+          if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message} To see the numbers without saving, call again with save_to_storage=false.` }] }
         }
         const ctx = await getAccountContext(account_id)
 
@@ -584,7 +584,7 @@ export function registerBankStatementTools(server: McpServer) {
           : ""
 
         const summary = [
-          `✅ P&L generated for ${ctx.companyName} (${tax_year})`,
+          save_to_storage ? `✅ P&L generated for ${ctx.companyName} (${tax_year})` : `📊 P&L numbers for ${ctx.companyName} (${tax_year}) — NOTHING WAS SAVED (save_to_storage=false)${notify_client ? "; the client was NOT notified (notify_client needs a saved P&L)" : ""}`,
           rateNote,
           "",
           `Revenue: $${totalIncome.toFixed(2)}`,
@@ -641,7 +641,7 @@ export function registerBankStatementTools(server: McpServer) {
           `Year-end cash: ${(engineView.draft.bank_balances?.banks ?? []).map(b =>
             `${b.bank_key}: ${b.closing_usd !== null ? b.closing_usd.toFixed(2) : "N/A (balance history incomplete)"}`
           ).join(", ") || "N/A"}`,
-          uncategorized.length > 0 ? `\n⚠️ ${uncategorized.length} uncategorized transactions — review before sending to India` : "",
+          uncategorized.length > 0 ? `\n⚠️ ${uncategorized.length} uncategorized transactions — review before the numbers are used` : "",
           driveLink ? `\n📎 Excel: ${driveLink}` : "",
           documentVisibleToClient && clientNotified ? "✅ Now visible in the client's portal Documents tab (client notified)." : "",
           documentVisibleToClient && !clientNotified ? "ℹ️ Saved to the client's portal Documents tab, but the client was NOT notified (notify_client was not set). Re-run with notify_client: true when this is the final version." : "",

@@ -219,14 +219,6 @@ export function registerTaxTools(server: McpServer) {
             for (const [s, c] of Object.entries(sub)) {
               lines.push(`     ${s} ${"·".repeat(Math.max(1, 35 - s.length))} ${c}`)
             }
-            // Accountant status sub-breakdown
-            const accountantStatuses: Record<string, number> = {}
-            for (const r of inProgress.filter(r => r.accountant_status)) {
-              accountantStatuses[r.accountant_status] = (accountantStatuses[r.accountant_status] || 0) + 1
-            }
-            if (Object.keys(accountantStatuses).length > 0) {
-              lines.push(`     Accountant: ${Object.entries(accountantStatuses).map(([s, c]) => `${s}: ${c}`).join(", ")}`)
-            }
           }
 
           if (extended.length > 0) {
@@ -279,7 +271,7 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_update",
-    "Update a tax return's workflow fields — status, dates, accountant_status, extension, notes. Use tax_search first to find the ID. Common updates: mark as paid, set link_sent_date, update accountant_status, mark as filed.",
+    "Update a tax return's workflow fields — status, dates, extension, notes. Use tax_search first to find the ID. Common updates: mark as paid, set link_sent_date, mark as filed.",
     {
       id: z.string().uuid().describe("Tax return UUID (from tax_search)"),
       updates: z.record(z.string(), z.any()).describe("Fields to update (e.g., {status: 'Data Received', data_received: true, data_received_date: '2026-03-09'})"),
@@ -713,7 +705,7 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_extension_list",
-    "Generate the list of ALL clients needing a tax extension for a given tax year. Returns CSV-ready data: company name, EIN, entity type, state, return type. Use this in February to prepare the bulk extension list for the accountant. Optionally sends the list via email to a specified address.",
+    "Generate the list of ALL clients needing a tax extension for a given tax year. Returns CSV-ready data: company name, EIN, entity type, state, return type. Use this in February to prepare the bulk extension list. Optionally sends the list via email to a specified address.",
     {
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
       send_to_email: z.string().optional().describe("If provided, sends the extension list to this email address"),
@@ -839,12 +831,12 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_extension_update",
-    "Bulk update extension filing status for tax returns. Use after receiving filing IDs from the accountant. Accepts an array of {tax_return_id, submission_id} pairs and marks each as extension_filed=true with the confirmation ID.",
+    "Bulk update extension filing status for tax returns. Use after receiving the extension filing IDs. Accepts an array of {tax_return_id, submission_id} pairs and marks each as extension_filed=true with the confirmation ID.",
     {
       tax_year: z.number().describe("Tax year"),
       extensions: z.array(z.object({
         tax_return_id: z.string().uuid().describe("Tax return UUID"),
-        submission_id: z.string().describe("Filing/Submission ID from the accountant"),
+        submission_id: z.string().describe("Filing/Submission ID of the extension"),
       })).describe("Array of {tax_return_id, submission_id} pairs"),
     },
     async ({ tax_year, extensions }) => {

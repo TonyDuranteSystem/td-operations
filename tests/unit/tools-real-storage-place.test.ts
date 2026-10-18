@@ -16,26 +16,32 @@ vi.mock('@/lib/crm-store/formation-pilot', () => ({ ensurePersonOwner: (...a: un
 
 let sub: Record<string, unknown> | null = null
 let acct: Record<string, unknown> | null = null
-function chain(result: () => unknown) {
+let cases: Array<{ id: string }> = [{ id: 'sd1' }]
+function chain(result: () => unknown, rows: () => unknown[] = () => []) {
   const c: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'is', 'order', 'limit', 'update', 'insert', 'not']) c[m] = () => c
+  for (const m of ['select', 'eq', 'in', 'is', 'or', 'order', 'limit', 'update', 'insert', 'not']) c[m] = () => c
   c.single = async () => ({ data: result(), error: null })
   c.maybeSingle = async () => ({ data: result(), error: null })
-  c.then = (res: (v: unknown) => unknown) => res({ data: [], error: null })
+  c.then = (res: (v: unknown) => unknown) => res({ data: rows(), error: null })
   return c
 }
 vi.mock('@/lib/supabase-admin', () => ({
-  supabaseAdmin: { from: (t: string) => chain(() => (t === 'itin_submissions' ? sub : t === 'accounts' ? acct : null)), storage: { from: vi.fn() } },
+  supabaseAdmin: { from: (t: string) => chain(() => (t === 'itin_submissions' ? sub : t === 'accounts' ? acct : null), () => (t === 'service_deliveries' ? cases : [])), storage: { from: vi.fn() } },
 }))
 vi.mock('@/lib/crm-store/itin-applicant', async (orig) => {
   const real = await orig<typeof import('@/lib/crm-store/itin-applicant')>()
   return { ...real, realItinApplicantDeps: async () => ({
-    linkedContacts: async () => [{ id: 'c-ann', full_name: 'Ann Lee', email: 'ann@x.com' }, { id: 'c-bob', full_name: 'Bob Roe', email: 'bob@x.com' }],
+    linkedContacts: async () => [{ id: 'c-ann', full_name: 'Ann Lee', email: 'ann@x.com' }, { id: 'c-bob', full_name: 'Robert Roe (CRM name)', email: 'bob@x.com' }],
     contact: async () => null,
   }) }
 })
-vi.mock('@/lib/pdf/w7-fill', () => ({ fillW7: () => { generated('w7'); throw new Error('STOP-after-place') } }))
-vi.mock('@/lib/pdf/1040nr-fill', () => ({ fill1040NR: vi.fn(), fillScheduleOI: vi.fn() }))
+let stopAfterPlace = true
+const saved: Array<Record<string, unknown>> = []
+vi.mock('@/lib/crm-store/save-for-account', () => ({
+  saveDocumentForContact: async (input: Record<string, unknown>) => { saved.push(input); return { route: 'store', pointer: `store:${saved.length}`, fileId: `f${saved.length}`, documentRowId: `r${saved.length}` } },
+}))
+vi.mock('@/lib/pdf/w7-fill', () => ({ fillW7: () => { generated('w7'); if (stopAfterPlace) throw new Error('STOP-after-place'); return new Uint8Array(3) } }))
+vi.mock('@/lib/pdf/1040nr-fill', () => ({ fill1040NR: () => new Uint8Array(3), fillScheduleOI: () => new Uint8Array(3) }))
 vi.mock('@/lib/tax/financials-orchestration', () => ({ buildFinancialsWorkbookForAccount: () => { generated('pnl'); return null }, getAccountOwnershipProblem: async () => null }))
 vi.mock('@/lib/harbor-compliance', () => ({ harborCompliance: { getDelivery: () => { generated('hc'); return { data: null } }, downloadDeliveryFile: vi.fn() } }))
 vi.mock('@/lib/google-drive', () => ({ downloadFileBinary: () => { generated('tpl'); throw new Error('no') }, listFolder: vi.fn(), findTaxFolder: vi.fn(), searchFiles: vi.fn(), getFileMetadata: vi.fn() }))
@@ -50,7 +56,7 @@ async function tools(file: string, fn: string) {
 const text = (r: { content: { text: string }[] }) => r.content.map((c) => c.text).join('\n')
 const ACC = '00000000-0000-0000-0000-000000000001'
 
-beforeEach(() => { generated.mockClear(); ensurePersonOwner.mockClear(); companyState = 'switched'; liveOwner = null; sub = null; acct = null })
+beforeEach(() => { saved.length = 0; stopAfterPlace = true; cases = [{ id: 'sd1' }]; generated.mockClear(); ensurePersonOwner.mockClear(); companyState = 'switched'; liveOwner = null; sub = null; acct = null })
 
 describe('Drive-only company (REBIS / YBR / Degasper / Fresh Legal shape): refused in plain words, nothing generated', () => {
   beforeEach(() => { companyState = 'drive' })
@@ -90,8 +96,37 @@ describe('itin_prepare_documents — MMLLC with two members', () => {
     expect(ensurePersonOwner.mock.calls[0][0]).toBe('c-bob')
     expect(out).toMatch(/STOP-after-place/) // it went on to generate only AFTER the place existed
   })
+  it('registers the three forms EXACTLY like the automatic path: on the open ITIN case, portal-visible, same key/type/category; folder named from the CRM name', async () => {
+    stopAfterPlace = false
+    sub = mmllc('bob@x.com', 'c-ann')
+    const out = text(await (await tools('itin-form', 'registerITINFormTools'))['itin_prepare_documents']({ token: 't', send_email: false } as never))
+    const forms = saved.filter((x) => (x.row as Record<string, unknown>).service_delivery_id)
+    expect(forms).toHaveLength(3)
+    for (const f of forms) {
+      expect(f.contactId).toBe('c-bob')
+      expect(f.portalVisible).toBe(true)
+      expect(f.contactName).toBe('Robert Roe (CRM name)')
+      expect(f.folderKind).toBe('itin')
+      expect((f.row as Record<string, unknown>).category).toBe(3)
+      expect(String(f.callerKey)).toMatch(/^itin-form-doc:c-bob:sd1:/)
+    }
+    expect(forms.map((f) => (f.row as Record<string, unknown>).document_type_name)).toEqual(['ITIN W-7', 'ITIN 1040-NR', 'ITIN Schedule OI'])
+    expect(forms.map((f) => f.documentType)).toEqual(['form_w_7', 'form_1040_nr', 'itin_schedule_oi'])
+    expect(out).not.toMatch(/Error/)
+  })
+
+  it('refuses before generating when the person has no open ITIN case', async () => {
+    cases = []
+    sub = mmllc('bob@x.com', 'c-ann')
+    const out = text(await (await tools('itin-form', 'registerITINFormTools'))['itin_prepare_documents']({ token: 't', send_email: false } as never))
+    expect(out).toMatch(/no open ITIN case/i)
+    expect(generated).not.toHaveBeenCalled()
+    expect(saved).toHaveLength(0)
+  })
+
   it('refuses when the applicant cannot be told, and creates no storage for anyone', async () => {
-    sub = mmllc('nobody@z.com', 'c-ann')
+    sub = mmllc('nobody@z.com', '')
+    sub.contact_id = null
     sub.submitted_data = { first_name: 'Cy', last_name: 'Dee', email: 'nobody@z.com' }
     const out = text(await (await tools('itin-form', 'registerITINFormTools'))['itin_prepare_documents']({ token: 't', send_email: false } as never))
     expect(out).toMatch(/which person/i)

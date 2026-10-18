@@ -11,9 +11,13 @@ export interface ItinApplicantDeps {
   contact: (contactId: string) => Promise<ItinContact | null>
 }
 
-export interface ItinApplicantResult { ok: boolean; contactId: string | null; message: string }
+export interface ItinApplicantResult { ok: boolean; contactId: string | null; fullName: string | null; message: string }
 
-const norm = (s: unknown) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ")
+/** Compare people without being fooled by case, accents, curly apostrophes or double spaces ("D’Angelo" = "D'Angelo"). */
+const norm = (s: unknown) => String(s ?? "")
+  .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+  .replace(/[\u2018\u2019\u02bc\u0060\u00b4]/g, "'")
+  .trim().toLowerCase().replace(/\s+/g, " ")
 
 const REFUSAL = "Could not tell with certainty which person this ITIN is for, so nothing was generated. Open the form, link it to the right person (same email as the person who filled it), and try again."
 
@@ -23,29 +27,38 @@ export async function resolveItinApplicant(
 ): Promise<ItinApplicantResult> {
   const data = sub.submitted_data ?? {}
   const email = norm(data.email)
-  const fullName = norm(`${data.first_name ?? ""} ${data.last_name ?? ""}`)
-  const refuse = (): ItinApplicantResult => ({ ok: false, contactId: null, message: REFUSAL })
+  const formName = norm(`${data.first_name ?? ""} ${data.last_name ?? ""}`)
+  const refuse = (): ItinApplicantResult => ({ ok: false, contactId: null, fullName: null, message: REFUSAL })
+  const pick = (c: ItinContact): ItinApplicantResult => ({ ok: true, contactId: c.id, fullName: c.full_name, message: "" })
 
   if (!sub.account_id) {
-    // A form started from a lead: the person was matched by the lead's email when the form was created.
+    // A form started from a lead: the person the form is linked to (matched by the lead's email, or written back by the form-completed step).
     if (!sub.contact_id) return refuse()
     const c = await deps.contact(sub.contact_id)
-    return c ? { ok: true, contactId: c.id, message: "" } : refuse()
+    return c ? pick(c) : refuse()
   }
 
   const linked = await deps.linkedContacts(sub.account_id)
+  // 1. the person's email, then 2. their exact name — each must name exactly ONE member; a shared email falls through to the name
+  let pool = linked
   if (email) {
     const byEmail = linked.filter((c) => norm(c.email) === email)
-    if (byEmail.length === 1) return { ok: true, contactId: byEmail[0].id, message: "" }
-    if (byEmail.length > 1) return refuse()
+    if (byEmail.length === 1) return pick(byEmail[0])
+    if (byEmail.length > 1) pool = byEmail
   }
-  if (fullName) {
-    const byName = linked.filter((c) => norm(c.full_name) === fullName)
-    if (byName.length === 1) return { ok: true, contactId: byName[0].id, message: "" }
-    if (byName.length > 1) return refuse()
+  if (formName) {
+    const byName = pool.filter((c) => norm(c.full_name) === formName)
+    if (byName.length === 1) return pick(byName[0])
+    if (pool !== linked) {
+      const byNameAll = linked.filter((c) => norm(c.full_name) === formName)
+      if (byNameAll.length === 1 && pool.some((c) => c.id === byNameAll[0].id)) return pick(byNameAll[0])
+    }
   }
-  // One member only, and the form is linked to exactly that member: nobody else it could be.
-  if (linked.length === 1 && sub.contact_id && linked[0].id === sub.contact_id) return { ok: true, contactId: sub.contact_id, message: "" }
+  // 3. nothing in the form identifies a member: honour the person staff linked the form to — but only a member of this company
+  if (sub.contact_id) {
+    const linkedTo = linked.find((c) => c.id === sub.contact_id)
+    if (linkedTo) return pick(linkedTo)
+  }
   return refuse()
 }
 
@@ -62,7 +75,8 @@ export async function realItinApplicantDeps(): Promise<ItinApplicantDeps> {
       return (data ?? []) as ItinContact[]
     },
     contact: async (id) => {
-      const { data } = await supabaseAdmin.from("contacts").select("id, full_name, email").eq("id", id).maybeSingle()
+      const { data, error } = await supabaseAdmin.from("contacts").select("id, full_name, email").eq("id", id).maybeSingle()
+      if (error) throw new Error(`Could not read the person — ${error.message}`)
       return (data as ItinContact | null) ?? null
     },
   }
