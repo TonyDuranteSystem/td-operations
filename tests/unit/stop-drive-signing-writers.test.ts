@@ -43,7 +43,8 @@ const post = (url: string, body: unknown) => new NextRequest(`http://localhost${
 
 function account(status: string, folder: string | null) { st.rows.accounts = { status, drive_folder_id: folder, company_name: "Acme LLC" } }
 
-beforeEach(() => {
+beforeEach(async () => {
+  ;(await import('@/lib/crm-store/legacy-drive')).forgetRecentAlarms()
   st.recorded.length = 0; st.driveWrites.length = 0; st.driveReads.length = 0; st.saves.length = 0; st.alarms.length = 0; st.autoSaved.length = 0
   st.companyState = "drive"
   for (const k of Object.keys(st.rows)) delete st.rows[k]
@@ -123,5 +124,19 @@ describe("/api/signature-request-signed", () => {
       expect(st.alarms.map((a) => a.kind)).toEqual(["drive_write_refused"])
       expect(st.autoSaved).toEqual([])
     }
+  })
+})
+
+describe('/api/signature-request-signed — person-level agreements and lookup failures', () => {
+  beforeEach(() => {
+    st.rows.signature_requests = { id: "s1", token: "t", document_name: "Personal Agreement", account_id: null, contact_id: "c1", signed_pdf_path: "s1/signed.pdf", service_delivery_id: null }
+    st.rows.contacts = { full_name: "A B", email: "a@b.co" }
+  })
+  it("no company: no alarm, no Drive call, the later steps still run (the response is a normal success)", async () => {
+    const { POST } = await import("@/app/api/signature-request-signed/route")
+    const res = await POST(post("/api/signature-request-signed", { signature_request_id: "s1", token: "t" }))
+    expect(res.status).toBe(200)
+    expect(st.alarms).toEqual([])
+    expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
   })
 })

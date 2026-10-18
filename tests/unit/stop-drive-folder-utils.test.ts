@@ -1,97 +1,121 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Stop Drive (dev job 264bb882, slice S1d): ensureCompanyFolder / ensureContactFolder NEVER create a Drive folder.
-// Drive is a SPY that fails on any write: the only allowed Drive traffic is listing the folder a legacy company already has.
-const driveWrites = vi.hoisted(() => ({ createFolder: vi.fn(), moveFile: vi.fn(), listFolderAnyDrive: vi.fn() }))
-vi.mock('@/lib/google-drive', () => ({
-  createFolder: (...a: unknown[]) => { driveWrites.createFolder(...a); throw new Error('DRIVE WRITE: createFolder') },
-  moveFile: (...a: unknown[]) => { driveWrites.moveFile(...a); throw new Error('DRIVE WRITE: moveFile') },
-  listFolderAnyDrive: (...a: unknown[]) => driveWrites.listFolderAnyDrive(...a),
+// Stop Drive S1d: ensureCompanyFolder / ensureContactFolder NEVER create a Drive folder or anything inside one.
+// The REAL decisions (legacy-drive.ts) run; only the database rows, the storage state and Drive are fakes. Drive fails on any write.
+const st = vi.hoisted(() => ({
+  rows: {} as Record<string, unknown>,
+  recorded: [] as Array<{ table: string; op: string; payload: unknown }>,
+  driveWrites: [] as string[],
+  driveReads: [] as string[],
+  companyState: 'drive' as 'drive' | 'store' | 'moving',
+  personOwner: false,
+  openedCompanyStorage: [] as string[],
+  openedPersonStorage: [] as string[],
+  alarms: [] as Array<{ kind: string; details: Record<string, unknown> }>,
 }))
-vi.mock('@/lib/supabase-admin', () => ({ supabaseAdmin: { from: vi.fn() } }))
-vi.mock('@/lib/crm-store/browse', () => ({ assertNotStoreOwnedAccount: vi.fn(async () => {}) }))
-vi.mock('@/lib/crm-store/person-drive-guard', () => ({ assertPersonFilesStillOnDrive: vi.fn(async () => {}) }))
-const verdicts = vi.hoisted(() => ({ account: null as unknown, contact: null as unknown, alarms: [] as unknown[] }))
-vi.mock('@/lib/crm-store/legacy-drive', async () => {
-  const real = await vi.importActual<typeof import('@/lib/crm-store/legacy-drive')>('@/lib/crm-store/legacy-drive')
-  return {
-    ...real,
-    legacyDriveForAccount: vi.fn(async () => verdicts.account),
-    legacyDriveForContact: vi.fn(async () => verdicts.contact),
-    raiseDriveWriteRefused: vi.fn(async (p: { reason: keyof typeof real.LEGACY_REFUSAL_SENTENCE }) => { verdicts.alarms.push(p); return real.LEGACY_REFUSAL_SENTENCE[p.reason] }),
-  }
+vi.mock('@/lib/supabase-admin', async () => ({ supabaseAdmin: (await import('./_legacy-drive-mocks')).makeSupabase(st.rows, st.recorded as never) }))
+vi.mock('@/lib/google-drive', async () => (await import('./_legacy-drive-mocks')).driveSpy(st.driveWrites, st.driveReads))
+vi.mock('@/lib/crm-store/switched-drive-guard', () => ({
+  companyDocState: async () => st.companyState,
+  liveOwnerOfContact: async () => (st.personOwner ? 'person-owner' : null),
+}))
+vi.mock('@/lib/crm-store/browse', () => ({
+  assertNotStoreOwnedAccount: async () => {
+    if (st.companyState === 'store') { const m = await import('@/lib/crm-store/account-uploads'); throw new m.StoreOwnedAccountError('in storage') }
+  },
+}))
+vi.mock('@/lib/crm-store/person-drive-guard', async () => {
+  const real = await vi.importActual<typeof import('@/lib/crm-store/person-drive-guard')>('@/lib/crm-store/person-drive-guard')
+  return { ...real, assertPersonFilesStillOnDrive: async () => { if (st.personOwner) throw new real.PersonFilesInStorageError() } }
 })
+vi.mock('@/lib/crm-store/company-storage', () => ({ ensureCompanyStorage: async (id: string) => { st.openedCompanyStorage.push(id); return 'owner-1' } }))
+vi.mock('@/lib/crm-store/formation-pilot', () => ({
+  raisePilotAlarm: async (kind: string, details: Record<string, unknown>) => { st.alarms.push({ kind, details }) },
+  ensurePersonOwner: async (id: string) => { st.openedPersonStorage.push(id); return 'p-owner' },
+}))
 
-import { supabaseAdmin } from '@/lib/supabase-admin'
+const acct = (status: string, folder: string | null) => { st.rows.accounts = { status, drive_folder_id: folder, gdrive_folder_url: null, company_name: 'Acme LLC' } }
+const FIVE = ['1. Company', '2. Contacts', '3. Tax', '4. Banking', '5. Correspondence']
 
-function chain(data: unknown) {
-  const r = { data, error: null }
-  const c: Record<string, unknown> = { then: (res: (v: typeof r) => unknown) => Promise.resolve(r).then(res) }
-  for (const m of ['select', 'eq', 'not', 'limit', 'update']) c[m] = vi.fn(() => c)
-  c.single = vi.fn(() => Promise.resolve(r))
-  c.maybeSingle = vi.fn(() => Promise.resolve(r))
-  return c
-}
-const refused = (reason: string) => ({ allowed: false as const, reason, sentence: 'x' })
-
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks()
-  verdicts.alarms.length = 0
-  vi.mocked(supabaseAdmin.from).mockImplementation(((table: string) => {
-    if (table === 'service_deliveries') return chain(null)
-    throw new Error(`unexpected table ${table}`)
-  }) as never)
+  for (const k of Object.keys(st.rows)) delete st.rows[k]
+  st.recorded.length = 0; st.driveWrites.length = 0; st.driveReads.length = 0; st.alarms.length = 0
+  st.openedCompanyStorage.length = 0; st.openedPersonStorage.length = 0
+  st.companyState = 'drive'; st.personOwner = false
+  const m = await import('@/lib/crm-store/legacy-drive')
+  m.forgetRecentAlarms()
+  st.rows.service_deliveries = null
 })
 
-describe('ensureCompanyFolder — never creates, only hands back a legacy company\'s existing folder', () => {
-  it.each(['has_storage', 'moving', 'archived', 'no_folder', 'no_company'])('refuses (%s) with an alarm and ZERO Drive calls', async (reason) => {
-    verdicts.account = refused(reason)
+describe('ensureCompanyFolder', () => {
+  it('a company in storage: refused by the storage guard, zero Drive calls', async () => {
+    st.companyState = 'store'; acct('Active', null)
     const { ensureCompanyFolder } = await import('@/lib/drive-folder-utils')
-    await expect(ensureCompanyFolder('acc-1', 'Acme LLC', 'Wyoming', 'Jo')).rejects.toMatchObject({ name: 'DriveWriteRefusedError', reason })
-    expect(driveWrites.createFolder).not.toHaveBeenCalled()
-    expect(driveWrites.moveFile).not.toHaveBeenCalled()
-    expect(driveWrites.listFolderAnyDrive).not.toHaveBeenCalled()
-    expect(verdicts.alarms).toHaveLength(1)
-    expect(verdicts.alarms[0]).toMatchObject({ flow: 'ensureCompanyFolder', accountId: 'acc-1', reason })
+    await expect(ensureCompanyFolder('a1', 'Acme LLC', 'Wyoming')).rejects.toMatchObject({ name: 'StoreOwnedAccountError' })
+    expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
   })
-
-  it('a legacy company (folder, no storage, not closed): returns its folder; nothing is created when all five subfolders exist', async () => {
-    verdicts.account = { allowed: true, folderId: 'legacy-folder' }
-    driveWrites.listFolderAnyDrive.mockResolvedValueOnce({ files: ['1. Company', '2. Contacts', '3. Tax', '4. Banking', '5. Correspondence'].map((n, i) => ({ id: `s${i}`, name: n, mimeType: 'application/vnd.google-apps.folder' })) })
+  it.each(['Closed', 'closed', 'Cancelled'])('%s company with an old folder: refused + ONE alarm, zero Drive calls', async (status) => {
+    acct(status, 'F-old')
     const { ensureCompanyFolder } = await import('@/lib/drive-folder-utils')
-    const r = await ensureCompanyFolder('acc-2', 'REBIS', 'Delaware')
-    expect(r).toMatchObject({ folderId: 'legacy-folder', created: false })
-    expect(driveWrites.createFolder).not.toHaveBeenCalled()
-    expect(verdicts.alarms).toHaveLength(0)
+    await expect(ensureCompanyFolder('a1', 'Acme LLC', 'Wyoming')).rejects.toMatchObject({ name: 'LegacyDriveRefusedError', reason: 'archived' })
+    expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
+    expect(st.alarms.map((a) => a.kind)).toEqual(['drive_write_refused'])
+    expect(st.openedCompanyStorage).toEqual([])
+  })
+  it('an open company with NO folder and NO storage (made by onboarding / place-client / tax intake): its storage is OPENED and the caller takes the storage branch — no Drive call', async () => {
+    acct('Active', null)
+    const { ensureCompanyFolder } = await import('@/lib/drive-folder-utils')
+    const { isStoreOwnedRefusal } = await import('@/lib/crm-store/account-uploads')
+    let err: unknown
+    try { await ensureCompanyFolder('a1', 'Acme LLC', 'Wyoming') } catch (e) { err = e }
+    expect(isStoreOwnedRefusal(err)).toBe(true)
+    expect(st.openedCompanyStorage).toEqual(['a1'])
+    expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
+    expect(st.alarms).toEqual([])
+  })
+  it('a company left on Drive: gets its folder back; a MISSING subfolder is not created', async () => {
+    acct('Offboarding', 'F-rebis')
+    const { ensureCompanyFolder } = await import('@/lib/drive-folder-utils')
+    const r = await ensureCompanyFolder('a1', 'REBIS', 'Delaware')
+    expect(r).toMatchObject({ folderId: 'F-rebis', created: false })
+    expect(st.driveWrites).toEqual([])
+    expect(r.subfolders).toEqual({}) // the (fake) folder is empty: nothing was made up
   })
 })
 
-describe('ensureContactFolder — never creates a Contacts/<name> folder', () => {
-  it.each(['has_storage', 'archived', 'no_folder', 'no_company'])('a person that is not a legacy one (%s): refused with an alarm, zero Drive calls', async (reason) => {
-    verdicts.contact = refused(reason)
+describe('ensureContactFolder', () => {
+  const links = (ids: string[]) => { st.rows.account_contacts = ids.map((id) => ({ account_id: id })) }
+  it('a person whose company is in storage: their OWN storage is opened, the caller takes the storage branch, zero Drive calls', async () => {
+    st.companyState = 'store'; acct('Active', null); st.rows.contacts = { drive_folder_id: null, gdrive_folder_url: null }; links(['a1'])
     const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
-    await expect(ensureContactFolder('c-1', 'Maria Verdi')).rejects.toMatchObject({ name: 'DriveWriteRefusedError', reason })
-    expect(driveWrites.createFolder).not.toHaveBeenCalled()
-    expect(driveWrites.listFolderAnyDrive).not.toHaveBeenCalled()
-    expect(verdicts.alarms[0]).toMatchObject({ flow: 'ensureContactFolder', contactId: 'c-1', reason })
+    await expect(ensureContactFolder('c1', 'Maria Verdi')).rejects.toMatchObject({ name: 'PersonFilesInStorageError' })
+    expect(st.openedPersonStorage).toEqual(['c1'])
+    expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
   })
-
-  it('a person whose materialized company is in storage/closed is refused too (the company folder is not handed back)', async () => {
-    vi.mocked(supabaseAdmin.from).mockImplementation(((table: string) => {
-      if (table === 'service_deliveries') return chain({ account_id: 'acc-9' })
-      throw new Error(`unexpected table ${table}`)
-    }) as never)
-    verdicts.account = refused('archived')
+  it('a lead with no company: own storage opened, never a Contacts/<name> folder', async () => {
+    st.rows.contacts = { drive_folder_id: null, gdrive_folder_url: null }; links([])
     const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
-    await expect(ensureContactFolder('c-2', 'Someone')).rejects.toMatchObject({ reason: 'archived' })
-    expect(driveWrites.listFolderAnyDrive).not.toHaveBeenCalled()
+    await expect(ensureContactFolder('c2', 'New Lead')).rejects.toMatchObject({ name: 'PersonFilesInStorageError' })
+    expect(st.openedPersonStorage).toEqual(['c2']); expect(st.driveWrites).toEqual([])
   })
-
-  it('a legacy person: returns the folder they already have', async () => {
-    verdicts.contact = { allowed: true, folderId: 'person-folder' }
-    driveWrites.listFolderAnyDrive.mockResolvedValueOnce({ files: ['1. Company', '2. Contacts', '3. Tax', '4. Banking', '5. Correspondence'].map((n, i) => ({ id: `s${i}`, name: n, mimeType: 'application/vnd.google-apps.folder' })) })
+  it('a person only of a CLOSED company: refused with an alarm (no storage is opened for them)', async () => {
+    acct('Closed', 'F-old'); st.rows.contacts = { drive_folder_id: 'P-old', gdrive_folder_url: null }; links(['a1'])
     const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
-    expect((await ensureContactFolder('c-3', 'Legacy Person')).folderId).toBe('person-folder')
-    expect(driveWrites.createFolder).not.toHaveBeenCalled()
+    await expect(ensureContactFolder('c3', 'Old Person')).rejects.toMatchObject({ name: 'LegacyDriveRefusedError', reason: 'archived' })
+    expect(st.openedPersonStorage).toEqual([]); expect(st.driveReads).toEqual([])
+    expect(st.alarms.map((a) => a.kind)).toEqual(['drive_write_refused'])
+  })
+  it('a person of a left-on-Drive company: their own folder back, nothing created', async () => {
+    acct('Offboarding', 'F-rebis'); st.rows.contacts = { drive_folder_id: 'P-folder', gdrive_folder_url: null }; links(['a1'])
+    const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
+    expect((await ensureContactFolder('c4', 'Legacy Person')).folderId).toBe('P-folder')
+    expect(st.driveWrites).toEqual([]); expect(st.openedPersonStorage).toEqual([])
+  })
+  it("the older link form is honoured: a person with only gdrive_folder_url still gets that folder", async () => {
+    acct('Offboarding', 'F-rebis'); st.rows.contacts = { drive_folder_id: null, gdrive_folder_url: 'https://drive.google.com/drive/folders/P-url' }; links(['a1'])
+    const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
+    expect((await ensureContactFolder('c5', 'Url Person')).folderId).toBe('P-url')
   })
 })
+void FIVE

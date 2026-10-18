@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Stop Drive S1d: a Closed / Cancelled company's Drive folder is a read-only archive — the central write guard refuses it,
 // for EVERY writer, while the one-way backup (runAsStoreBackup) is exempt.
@@ -15,22 +15,31 @@ vi.mock('@/lib/supabase-admin', () => {
     b.select = () => b
     b.eq = () => b
     b.order = () => b
-    b.in = (col: string, vals: string[]) => { if (col === 'status') statusFilter = vals; else if (col === 'id') idFilter = vals; return b }
+    let folderFilter: string[] | null = null
+    let notClosed = false
+    b.in = (col: string, vals: string[]) => { if (col === 'status') statusFilter = vals; else if (col === 'id') idFilter = vals; else if (col === 'drive_folder_id') folderFilter = vals; return b }
+    b.not = () => { notClosed = true; return b }
+    const answer = () => {
+      if (folderFilter) return rows.accounts.filter((a) => folderFilter!.includes(a.drive_folder_id ?? '') && (!notClosed || !['Closed', 'Cancelled'].includes(a.status)))
+      return null
+    }
     b.range = () => {
       let data: unknown[] = []
       if (table === 'store_owners') data = rows.owners
       else if (table === 'accounts') data = rows.accounts.filter((a) => (statusFilter ? statusFilter.includes(a.status) : idFilter ? idFilter.includes(a.id) : true))
       return Promise.resolve({ data, error: null })
     }
-    b.then = (res: (v: unknown) => unknown) => Promise.resolve({ data: table === 'accounts' ? rows.accounts.filter((a) => (idFilter ? idFilter.includes(a.id) : true)) : [], error: null }).then(res)
+    b.then = (res: (v: unknown) => unknown) => Promise.resolve({ data: table === 'accounts' ? (answer() ?? rows.accounts.filter((a) => (idFilter ? idFilter.includes(a.id) : true))) : [], error: null }).then(res)
     return b
   }
   return { supabaseAdmin: { from: (t: string) => builder(t) } }
 })
 
-import { readLockedFolderIds, assertTargetsNotSwitched, runAsStoreBackup } from '@/lib/crm-store/switched-drive-guard'
+import { readLockedFolderIds, assertTargetsNotSwitched, runAsStoreBackup, forgetArchivedFolderCache } from '@/lib/crm-store/switched-drive-guard'
 
 describe('readLockedFolderIds — closed companies are archive', () => {
+  beforeEach(() => forgetArchivedFolderCache())
+
   it('locks the folder of every Closed and Cancelled company (id and old link form), and no other', async () => {
     rows.owners = []
     rows.accounts = [
@@ -53,5 +62,29 @@ describe('readLockedFolderIds — closed companies are archive', () => {
     await expect(assertTargetsNotSwitched(['F-closed'], deps)).rejects.toThrow(/read-only/)
     await expect(assertTargetsNotSwitched(['F-rebis'], deps)).resolves.toBeUndefined()
     await expect(runAsStoreBackup(() => assertTargetsNotSwitched(['F-closed'], deps))).resolves.toBeUndefined()
+  })
+})
+
+describe('shared folders and the cache', () => {
+  beforeEach(() => forgetArchivedFolderCache())
+  it('a folder id that a company which is NOT closed also uses stays open (production has 3 such active companies)', async () => {
+    rows.owners = []
+    rows.accounts = [
+      { id: 'a1', status: 'Closed', drive_folder_id: 'F-shared', gdrive_folder_url: null },
+      { id: 'a2', status: 'Active', drive_folder_id: 'F-shared', gdrive_folder_url: null },
+      { id: 'a3', status: 'Cancelled', drive_folder_id: 'F-own-closed', gdrive_folder_url: null },
+    ]
+    const locked = await readLockedFolderIds()
+    expect(locked.has('F-shared')).toBe(false)
+    expect(locked.has('F-own-closed')).toBe(true)
+  })
+  it('the closed-company read is cached for a minute and re-read after it', async () => {
+    rows.owners = []
+    rows.accounts = [{ id: 'a1', status: 'Closed', drive_folder_id: 'F-1', gdrive_folder_url: null }]
+    expect((await readLockedFolderIds()).has('F-1')).toBe(true)
+    rows.accounts = [] // reopened / removed — still locked inside the minute
+    expect((await readLockedFolderIds()).has('F-1')).toBe(true)
+    forgetArchivedFolderCache()
+    expect((await readLockedFolderIds()).has('F-1')).toBe(false)
   })
 })

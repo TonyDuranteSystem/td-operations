@@ -96,11 +96,17 @@ export async function POST(req: NextRequest) {
     //    Stop Drive (dev job 264bb882, S1d): only for a company deliberately left on Drive (folder, no storage, not closed);
     //    any other state is an error line + a staff alarm, never a silent skip.
     let legacyFolderId: string | null = null
-    if (!switched && sigReq.signed_pdf_path) {
-      const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
-      const legacy = await legacyDriveForAccount(sigReq.account_id)
-      if (legacy.allowed) legacyFolderId = legacy.folderId
-      else results.push(`drive_upload: error - ${await raiseDriveWriteRefused({ flow: "signature-request-signed", accountId: sigReq.account_id, reason: legacy.reason, detail: sigReq.document_name })}`)
+    // (a person-level agreement has no company: nothing to file in a company folder and nothing to alarm about; a failed lookup
+    //  is reported on its own line and never stops the steps after it)
+    if (!switched && sigReq.signed_pdf_path && sigReq.account_id) {
+      try {
+        const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
+        const legacy = await legacyDriveForAccount(sigReq.account_id)
+        if (legacy.allowed) legacyFolderId = legacy.folderId
+        else results.push(`drive_upload: error - ${await raiseDriveWriteRefused({ flow: "signature-request-signed", accountId: sigReq.account_id, reason: legacy.reason, detail: sigReq.document_name })}`)
+      } catch (err) {
+        results.push(`drive_upload: error - ${err instanceof Error ? err.message : "could not check where this company's files live"}`)
+      }
     }
     if (!switched && sigReq.signed_pdf_path && legacyFolderId) {
       try {

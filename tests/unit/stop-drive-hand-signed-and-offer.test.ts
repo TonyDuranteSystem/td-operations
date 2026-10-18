@@ -34,7 +34,8 @@ vi.mock("@/lib/auth/staff-preview", () => ({ isStaffPreview: async () => false }
 vi.mock("@/lib/esign/access-guard", () => ({ accessCodeError: () => null }))
 vi.mock("@/lib/pdf/operating-agreement-pdf", () => ({ generateOperatingAgreementPDF: async () => new Uint8Array([37, 80, 68, 70]) }))
 
-beforeEach(() => {
+beforeEach(async () => {
+  ;(await import('@/lib/crm-store/legacy-drive')).forgetRecentAlarms()
   st.recorded.length = 0; st.driveWrites.length = 0; st.driveReads.length = 0; st.saves.length = 0; st.alarms.length = 0
   st.companyState = "drive"
   for (const k of Object.keys(st.rows)) delete st.rows[k]

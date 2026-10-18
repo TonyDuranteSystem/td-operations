@@ -3103,8 +3103,7 @@ function ContactDocumentsTab({
   const activeCompanyId = activeDocScope === 'personal' ? '' : activeDocScope
   const activeCompanyStore = useStoreOwnerForAccount(activeCompanyId, !!personStoreId && activeCompanyId !== '')
   const companyScopeInStore = !!personStoreId && activeCompanyId !== '' && !!activeCompanyStore.data?.ownerId
-  const [folderAction, setFolderAction] = useState<'idle' | 'linking' | 'validating'>('idle')
-  const [linkFolderId, setLinkFolderId] = useState('')
+  const [folderAction, setFolderAction] = useState<'idle' | 'validating'>('idle')
   const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
   const [resolvingDocId, setResolvingDocId] = useState<string | null>(null)
@@ -3376,25 +3375,6 @@ function ContactDocumentsTab({
     </div>
   )
 
-  const handleLinkFolder = async () => {
-    if (!linkFolderId.trim()) return
-    setFolderAction('linking')
-    try {
-      const { linkContactFolder } = await import('@/app/(dashboard)/contacts/folder-actions')
-      const result = await linkContactFolder(contactId, linkFolderId.trim())
-      if (result.success) {
-        toast.success('Drive folder linked')
-        window.location.reload()
-      } else {
-        toast.error(result.error ?? 'Failed to link folder')
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to link folder')
-    } finally {
-      setFolderAction('idle')
-    }
-  }
-
   const handleValidateFolder = async () => {
     setFolderAction('validating')
     try {
@@ -3412,32 +3392,8 @@ function ContactDocumentsTab({
     }
   }
 
-  // Folder management section — shown when no folder is linked
-  const folderCreateSection = !driveFolderId && (
-    <div className="bg-white rounded-lg border p-6 text-center space-y-3">
-      <FolderOpen className="h-7 w-7 mx-auto text-zinc-300" />
-      <p className="text-sm text-zinc-400">No Drive folder linked to this contact</p>
-      <div className="max-w-xs mx-auto">
-        <p className="text-xs text-zinc-400 mb-1.5">Or link an existing folder by ID:</p>
-        <div className="flex gap-1.5">
-          <input
-            type="text"
-            value={linkFolderId}
-            onChange={e => setLinkFolderId(e.target.value)}
-            placeholder="Drive folder ID"
-            className="flex-1 px-2 py-1 text-xs border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <button
-            onClick={handleLinkFolder}
-            disabled={folderAction !== 'idle' || !linkFolderId.trim()}
-            className="px-2 py-1 text-xs border rounded hover:bg-zinc-50 disabled:opacity-50"
-          >
-            Link
-          </button>
-        </div>
-      </div>
-    </div>
-  )
+  // (no folder is created or linked from here any more — Stop Drive S1d; a contact without a folder shows nothing in this section)
+  const folderCreateSection = null
 
   // File browser toggle — shown when folder IS linked
   const fileBrowserSection = driveFolderId && (

@@ -31,7 +31,8 @@ vi.mock("@/lib/server-action", () => ({
 vi.mock("@/lib/operations/service-delivery", () => ({ completeSD: async () => ({}), createSD: async () => ({ id: "sd-1" }) }))
 vi.mock("@/lib/portal/notifications", () => ({ createPortalNotification: async () => ({}) }))
 
-beforeEach(() => {
+beforeEach(async () => {
+  ;(await import('@/lib/crm-store/legacy-drive')).forgetRecentAlarms()
   st.recorded.length = 0; st.driveWrites.length = 0; st.driveReads.length = 0; st.alarms.length = 0
   st.companyState = "drive"
   for (const k of Object.keys(st.rows)) delete st.rows[k]

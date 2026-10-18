@@ -153,7 +153,7 @@ async function createDriveFolder(
   } catch (err) {
     const { isStoreOwnedRefusal } = await import("@/lib/crm-store/account-uploads")
     if (isStoreOwnedRefusal(err)) {
-      return { name: "drive_folder", status: "skipped", detail: "No Drive folder — this company's files live in the new CRM storage" }
+      return { name: "drive_folder", status: "skipped", detail: "No folder needed — this company's files live in the new CRM storage" }
     }
     return { name: "drive_folder", status: "error", detail: err instanceof Error ? err.message : "Unknown error" }
   }
@@ -855,7 +855,8 @@ export async function GET(request: Request) {
         email: (c.contact as any)?.email || null,
       })),
       existing: {
-        drive_folder: !!account.drive_folder_id,
+        // "the company has a place for its files": its CRM storage (or a left-on-Drive folder) — a company in storage is not "missing a folder"
+        drive_folder: !!account.drive_folder_id || !!(await (await import("@/lib/crm-store/switched-drive-guard")).liveOwnerOfAccount(accountId)),
         service_deliveries: (sdResult.data || []).map(sd => ({
           service_type: sd.service_type,
           stage: sd.stage,
