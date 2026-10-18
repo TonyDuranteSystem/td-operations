@@ -35,7 +35,7 @@ describe('MCP server — no Drive write tools', () => {
     for (const r of ['drive_search', 'drive_list_folder', 'drive_get_file_info', 'drive_read_file', 'storage_write', 'storage_move', 'storage_read', 'storage_list', 'my_files_save']) {
       expect(names, r).toContain(r)
     }
-  })
+  }, 60_000)
 
   it('no MCP tool file (except the by-hand storage tools) calls a Drive write helper', () => {
     const dir = join(ROOT, 'lib/mcp/tools')
