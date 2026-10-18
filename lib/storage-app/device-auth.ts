@@ -89,7 +89,7 @@ export async function createAuthCode(p: { userId: string; deviceName: unknown; c
   if (!isValidLoopbackRedirect(p.redirectUri)) throw new DeviceAuthError("invalid_request", "Bad redirect address.")
   const user = await liveUser(p.userId)
   const may = await mayUseAppNow(user)
-  if (!may.ok) {
+  if (may.ok === false) {
     await logAppEvent("app_signin_refused", p.userId, { step: "approve", reason: may.reason })
     throw new DeviceAuthError("access_denied", NOT_ALLOWED)
   }
@@ -132,7 +132,7 @@ export async function exchangeCode(p: { code: unknown; codeVerifier: unknown; re
   if (claimed.redirect_uri !== p.redirectUri) throw new DeviceAuthError("invalid_grant", "Redirect address does not match.")
   if (!verifyPkce(p.codeVerifier, claimed.code_challenge)) throw new DeviceAuthError("invalid_grant", "Verifier does not match.")
   const may = await mayUseAppNow(await liveUser(claimed.user_id))
-  if (!may.ok) {
+  if (may.ok === false) {
     await logAppEvent("app_signin_refused", claimed.user_id, { step: "exchange", reason: may.reason })
     throw new DeviceAuthError("access_denied", NOT_ALLOWED)
   }
@@ -187,7 +187,7 @@ export async function refreshTokens(p: { refreshToken: unknown; ip?: string | nu
     }
   }
   const may = await mayUseAppNow(await liveUser(dev.user_id))
-  if (!may.ok) {
+  if (may.ok === false) {
     await revokeDevice(row.device_id, `user_not_allowed: ${may.reason}`)
     throw new DeviceAuthError("access_denied", NOT_ALLOWED)
   }

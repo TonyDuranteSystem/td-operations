@@ -111,12 +111,12 @@ export async function createSaveSlot(p: { user: User; deviceId: string; ownerId:
   const earlier = await existingByKey(callerKey)
   if (earlier) { await ensureClientFileRecords(earlier.id, p.user.id); return { status: 200, body: { alreadySaved: true, fileId: earlier.id, ownerId: earlier.owner_id, name: earlier.name } } }
   const file = checkNewFile({ name: p.name, size: p.size }, settings.maxSaveMB * 1024 * 1024)
-  if (!file.ok) return refused(file.code, file.message, STATUS_OF[file.code] ?? 422)
+  if (file.ok === false) return refused(file.code, file.message, STATUS_OF[file.code] ?? 422)
   const mimeType = typeof p.mimeType === "string" && p.mimeType ? p.mimeType.slice(0, 200) : null
   const target = await checkTarget({ ownerId: p.ownerId, folderId: p.folderId }, p.user, settings)
-  if (!target.ok) return refused(target.code, target.message, STATUS_OF[target.code] ?? 422)
+  if (target.ok === false) return refused(target.code, target.message, STATUS_OF[target.code] ?? 422)
   const free = await checkNameFree(p.folderId, file.cleanName!, mimeType)
-  if (!free.ok) return refused(free.code, free.message, STATUS_OF[free.code] ?? 409)
+  if (free.ok === false) return refused(free.code, free.message, STATUS_OF[free.code] ?? 409)
   // the hourly upload limit: counted and audited in ONE database step; a database error = no slot (fail closed)
   const { data: reserve, error: rErr } = await db().rpc("storage_app_reserve_write", {
     p_device: p.deviceId, p_user: p.user.id, p_owner: p.ownerId, p_name: file.cleanName, p_caller_key: callerKey, p_size: p.size as number, p_limit: settings.writeLimitMB * 1024 * 1024,
@@ -147,9 +147,9 @@ async function createUpdateSlot(p: { settings: StorageAppSettings; user: User; d
     return refuse(status, code, message)
   }
   const file = checkNewFile({ name: own.name, size: p.size }, p.settings.maxSaveMB * 1024 * 1024)     // size cap and a usable size (the name is the file's own)
-  if (!file.ok) return refused(file.code, file.message, STATUS_OF[file.code] ?? 422)
+  if (file.ok === false) return refused(file.code, file.message, STATUS_OF[file.code] ?? 422)
   const target = await checkTarget({ ownerId: own.owner_id, folderId: own.folder_id }, p.user, p.settings)
-  if (!target.ok) return refused(target.code, target.message, STATUS_OF[target.code] ?? 422)
+  if (target.ok === false) return refused(target.code, target.message, STATUS_OF[target.code] ?? 422)
   const mimeType = typeof p.mimeType === "string" && p.mimeType ? p.mimeType.slice(0, 200) : null
   // this update is counted against the hourly upload limit under its own key (a retry of the same update is not counted twice)
   const updateKey = `${own.caller_key}:u:${(p.itemKey as string).toLowerCase()}`
@@ -197,7 +197,7 @@ async function saveUpdate(p: { settings: StorageAppSettings; user: User; deviceI
   const back = () => giveBackReservation({ user: p.user, deviceId: p.deviceId, callerKey: updateKey, size })
   if (size > p.settings.maxSaveMB * 1024 * 1024) { await back(); return refuse(413, "too_big", `This file is too big to save from the Mac for now (the limit is ${p.settings.maxSaveMB} MB). Add it in the CRM.`) }
   const target = await checkTarget({ ownerId: own.owner_id, folderId: own.folder_id }, p.user, p.settings)
-  if (!target.ok) { await back(); await logAppEvent("app_save_refused", p.user.id, { deviceId: p.deviceId, reason: target.code, update: true }, ids); return fromRefusal(target) }
+  if (target.ok === false) { await back(); await logAppEvent("app_save_refused", p.user.id, { deviceId: p.deviceId, reason: target.code, update: true }, ids); return fromRefusal(target) }
   let result
   try { result = await registerStagedUpload({ intentId: p.intentId, actor: p.user.id }) } catch (e) { await back(); throw e }
   if (result.status === "queued") throw new Error("A file this big should have been refused earlier.")
@@ -226,9 +226,9 @@ export async function saveFromSlot(p: { user: User; deviceId: string; intentId: 
   if (size > settings.maxSaveMB * 1024 * 1024) { await back({}); return refuse(413, "too_big", `This file is too big to save from the Mac for now (the limit is ${settings.maxSaveMB} MB). Add it in the CRM.`) }
   // everything is checked AGAIN now: the folder or the name may have changed since the slot was made
   const target = await checkTarget({ ownerId: slot.owner_id, folderId: slot.folder_id }, p.user, settings)
-  if (!target.ok) { await back({}); await logAppEvent("app_save_refused", p.user.id, { deviceId: p.deviceId, reason: target.code }, ids); return fromRefusal(target) }
+  if (target.ok === false) { await back({}); await logAppEvent("app_save_refused", p.user.id, { deviceId: p.deviceId, reason: target.code }, ids); return fromRefusal(target) }
   const free = await checkNameFree(slot.folder_id, slot.file_name as string, (slot.mime_type as string | null) ?? null)
-  if (!free.ok) { await back({}); await logAppEvent("app_save_refused", p.user.id, { deviceId: p.deviceId, reason: free.code, name: slot.file_name }, ids); return fromRefusal(free) }
+  if (free.ok === false) { await back({}); await logAppEvent("app_save_refused", p.user.id, { deviceId: p.deviceId, reason: free.code, name: slot.file_name }, ids); return fromRefusal(free) }
   let result
   try {
     // HIDDEN from clients (published:false) and no document type — Business and My files have no client and need none; a client storage gets
