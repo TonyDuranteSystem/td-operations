@@ -187,7 +187,7 @@ _Regenerated 2026-10-18. Every subsystem doc under `docs/systems/` (49 docs), wi
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-09-23)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-09-11)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
-- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-12)_
+- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-18)_
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-14)_
 - [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-10-16)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
@@ -199,11 +199,11 @@ _Regenerated 2026-10-18. Every subsystem doc under `docs/systems/` (49 docs), wi
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-15)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-16)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-17)_
-- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-14)_
+- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-18)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-17)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-16)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-16)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-16)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-18)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-14)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-16)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
@@ -217,7 +217,7 @@ _Regenerated 2026-10-18. Every subsystem doc under `docs/systems/` (49 docs), wi
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-10-13)_
-- [storage.md](storage.md) — CRM Storage _(verified 2026-10-17)_
+- [storage.md](storage.md) — CRM Storage _(verified 2026-10-18)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-10-13)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-12)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
