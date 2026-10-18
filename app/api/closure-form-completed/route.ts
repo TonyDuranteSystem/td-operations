@@ -5,7 +5,7 @@
  * Auto-chain per Company Closure SOP:
  *
  * 1. Validate submission
- * 2. Create Leads/{name}/ folder in Drive, upload data PDF + documents
+ * 2. File the data PDF + documents in the client's storage
  * 3. Send Luca detailed email with LLC details + specific next steps
  * 4. Create task for Luca: "Start closure compliance check" (linked to delivery_id)
  * 5. Ensure Service Delivery exists
@@ -17,7 +17,7 @@
  */
 
 // Added 2026-04-14 P0.7: protect the 7-step auto-chain from mid-execution
-// Vercel timeout (Drive folder + PDF + email + task + SD ensure + history + log).
+// Vercel timeout (storage filing + PDF + email + task + SD ensure + history + log).
 export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
@@ -124,40 +124,21 @@ export async function POST(req: NextRequest) {
     const taxYears = String(submittedData.tax_returns_years || "N/A")
     const registeredAgent = String(submittedData.registered_agent || "N/A")
 
-    // ---- STEP 2: Save to Drive ----
+    // ---- STEP 2: File the data PDF + uploads ----
     try {
-      const { listFolder, createFolder } = await import("@/lib/google-drive")
+      const { storageDestinationForForm } = await import("@/lib/crm-store/lead-form-store")
       const { saveFormToDrive } = await import("@/lib/form-to-drive")
 
-      const TD_CLIENTS_FOLDER = "1mbz_bUDwC4K259RcC-tDKihjlvdAVXno"
-      const clientsContents = await listFolder(TD_CLIENTS_FOLDER) as { files?: { id: string; name: string; mimeType: string }[] }
-      let leadsParent = clientsContents?.files?.find(
-        (f: { name: string; mimeType: string }) => f.name === "Leads" && f.mimeType === "application/vnd.google-apps.folder"
-      )
-
-      if (!leadsParent) {
-        const newFolder = await createFolder(TD_CLIENTS_FOLDER, "Leads")
-        leadsParent = { id: newFolder.id, name: "Leads", mimeType: "application/vnd.google-apps.folder" }
-      }
-
-      // Use LLC name as folder name for closure
-      const clientFolderName = `${clientName} - ${llcName} (Closure)`
-      const leadsContents = await listFolder(leadsParent.id) as { files?: { id: string; name: string; mimeType: string }[] }
-      let clientFolder = leadsContents?.files?.find(
-        (f: { name: string; mimeType: string }) => f.name === clientFolderName && f.mimeType === "application/vnd.google-apps.folder"
-      )
-
-      if (!clientFolder) {
-        const newFolder = await createFolder(leadsParent.id, clientFolderName)
-        clientFolder = { id: newFolder.id, name: clientFolderName, mimeType: "application/vnd.google-apps.folder" }
-      }
-
-      // If account has a Drive folder, use that instead
-      let targetFolderId = clientFolder.id
+      // Stop-Drive S1a: the "Leads/{client} - {llc} (Closure)" Drive folder is gone. A company that still has a Drive
+      // folder keeps filing there (the storage gate inside saveFormToDrive redirects a switched one); everyone else is
+      // filed in their storage — the company's if it has one, else the person's.
+      let targetFolderId: string | null = null
       if (accountId) {
         const { data: acc } = await supabaseAdmin.from("accounts").select("drive_folder_id").eq("id", accountId).single()
         if (acc?.drive_folder_id) targetFolderId = acc.drive_folder_id
       }
+      if (!targetFolderId) targetFolderId = await storageDestinationForForm({ accountId, contactId, personName: clientName })
+      if (!targetFolderId) throw new Error("No company storage or contact record to file this closure under — the uploads stay with the submission")
 
       const driveResult = await saveFormToDrive(
         "closure",
@@ -168,7 +149,7 @@ export async function POST(req: NextRequest) {
       )
 
       results.push({
-        step: "drive_save",
+        step: "storage_save",
         status: "ok",
         detail: `Summary: ${driveResult.summaryFileId ? "saved" : "failed"}. Files: ${driveResult.copied.length} copied.`,
       })
@@ -196,7 +177,7 @@ export async function POST(req: NextRequest) {
         results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
     } catch (e) {
-      results.push({ step: "drive_save", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      results.push({ step: "storage_save", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
     // ---- STEP 3: Ensure Service Delivery exists ----
@@ -547,7 +528,7 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
             supabaseAdmin
               .from("service_deliveries")
               .update({
-                notes: (sd.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Closure form completed. Data saved to Drive. Luca notified.`,
+                notes: (sd.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Closure form completed. Data filed. Luca notified.`,
                 updated_at: new Date().toISOString(),
               })
               .eq("id", sd.id),
@@ -567,7 +548,7 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
           action_type: "closure_form_completed",
           table_name: "closure_submissions",
           record_id: submission_id,
-          summary: `Closure form completed: ${llcName} (${clientName}). Drive saved, Luca notified.`,
+          summary: `Closure form completed: ${llcName} (${clientName}). Files saved, Luca notified.`,
           details: { token, lead_id: leadId, contact_id: contactId, account_id: accountId, results } as unknown as Json,
         }),
         "action_log.insert"

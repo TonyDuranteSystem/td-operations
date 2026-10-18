@@ -189,8 +189,8 @@ const itinRecipe: ArchiveRecipe = {
 /**
  * CLOSURE recipe. Files where the completion route files today, made reliable:
  * the company folder when an account is explicitly linked (never inferred from a
- * contact link — a person may own several companies), else a deterministic
- * "{client} - {llc} (Closure)" folder under Leads. The external closure form
+ * contact link — a person may own several companies), else the client's storage
+ * (no Drive "Leads" folder is created any more). The external closure form
  * uploads to the "closure-uploads" bucket. This durable path BACKSTOPS the
  * best-effort completion save (retry + marker); the separate review/MCP re-saves
  * to the company folder are unchanged.
@@ -222,8 +222,8 @@ const closureRecipe: ArchiveRecipe = {
     const llcName = String(submittedData.llc_name || "Unknown LLC")
     const folderId = await resolveClosureFolder({
       accountId: (row.account_id as string | null) ?? null,
+      contactId: (row.contact_id as string | null) ?? null,
       clientName,
-      llcName,
     })
     return {
       folderId,
