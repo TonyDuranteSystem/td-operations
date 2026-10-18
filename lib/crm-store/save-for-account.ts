@@ -147,6 +147,11 @@ export type ContactDeps = Pick<SaveDeps, "save" | "upsertRow" | "pointer"> & {
   liveOwnerOfContact: (contactId: string) => Promise<string | null>
   companyState?: (accountId: string) => Promise<CompanyDocState>
   ensurePerson?: (contactId: string, name: string) => Promise<string>
+  /**
+   * Stop Drive (dev job 264bb882, S1d): may this person still be saved in Drive? Only a person of a company deliberately left
+   * on Drive (their own folder, no storage of their own, a company that is not closed). Everyone else gets their own storage.
+   */
+  legacyDrive?: (contactId: string) => Promise<boolean>
 }
 
 export async function saveDocumentForContact(input: SaveForContactInput, deps?: ContactDeps): Promise<SaveForAccountResult> {
@@ -164,7 +169,13 @@ export async function saveDocumentForContact(input: SaveForContactInput, deps?: 
     if (viaState === "moving") throw new CompanyMovingError()
     if (viaState !== "drive") ownerId = await d.ensurePerson(input.contactId, input.contactName || "Member")
   }
-  if (!ownerId) return { route: "drive" }
+  if (!ownerId) {
+    const legacyDrive = d.legacyDrive ?? (async (id: string) => (await (await import("./legacy-drive")).legacyDriveForContact(id)).allowed)
+    if (await legacyDrive(input.contactId)) return { route: "drive" }
+    // Anyone else (a lead, a person of a company in storage or closed, a person with no folder) gets their OWN storage — never a Drive folder.
+    const ensure = d.ensurePerson ?? (await import("./formation-pilot")).ensurePersonOwner
+    ownerId = await ensure(input.contactId, input.contactName || "Member")
+  }
 
   const saveIn = (folderKind: string) => d.save({
     ownerId, folderKind, name: input.name, bytes: input.bytes, mimeType: input.mimeType,

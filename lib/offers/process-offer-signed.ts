@@ -475,6 +475,17 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
         const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
         inStorage = (await companyDocState(docAccountId)) !== "drive"
       }
+      // Stop Drive (dev job 264bb882, S1d): Drive is written only for a company deliberately left on it (folder, no storage,
+      // not closed). Any other state is an error result + a staff alarm, never "ok" and never a silent skip.
+      if (!inStorage) {
+        driveFolderId = null
+        if (docAccountId) {
+          const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
+          const legacy = await legacyDriveForAccount(docAccountId)
+          if (legacy.allowed) driveFolderId = legacy.folderId
+          else if (contract?.pdf_path) driveUploadResult = `error: ${await raiseDriveWriteRefused({ flow: "offer-signed", accountId: docAccountId, reason: legacy.reason, detail: `offer ${offer.id}` })}`
+        }
+      }
 
       if (contract?.pdf_path && (driveFolderId || inStorage)) {
         let targetFolderId = ""

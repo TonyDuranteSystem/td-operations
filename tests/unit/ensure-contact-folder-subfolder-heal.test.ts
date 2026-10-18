@@ -12,6 +12,18 @@ vi.mock('@/lib/crm-store/person-drive-guard', () => ({
   assertPersonFilesStillOnDrive: vi.fn(async () => undefined),
 }))
 
+// Stop Drive (dev job 264bb882, S1d): the "may this still be written in Drive" decision is tested on its own
+// (stop-drive-legacy-drive.test.ts); here the company / person is a legacy-Drive one with the folder each test names.
+const legacyFolder = vi.hoisted(() => ({ id: 'unset' }))
+vi.mock('@/lib/crm-store/legacy-drive', async () => {
+  const real = await vi.importActual<typeof import('@/lib/crm-store/legacy-drive')>('@/lib/crm-store/legacy-drive')
+  return {
+    ...real,
+    legacyDriveForAccount: vi.fn(async () => ({ allowed: true as const, folderId: legacyFolder.id })),
+    legacyDriveForContact: vi.fn(async () => ({ allowed: true as const, folderId: legacyFolder.id })),
+  }
+})
+
 const mockCreateFolder = vi.fn()
 const mockListFolderAnyDrive = vi.fn()
 vi.mock('@/lib/google-drive', () => ({
@@ -45,6 +57,7 @@ describe('ensureContactFolder — subfolder self-heal', () => {
   it('redirects to the company folder when the contact already has a materialized company, and heals its missing subfolders', async () => {
     const accountId = 'acct-automatiko'
     const companyRootFolderId = 'company-root-folder'
+    legacyFolder.id = companyRootFolderId
 
     vi.mocked(supabaseAdmin.from).mockImplementation((table: string) => {
       if (table === 'service_deliveries') return tableChain({ account_id: accountId }) as never
@@ -73,6 +86,7 @@ describe('ensureContactFolder — subfolder self-heal', () => {
 
   it('self-heals the contact\'s own linked folder when no company is materialized yet', async () => {
     const staleFolderId = 'old-flat-folder'
+    legacyFolder.id = staleFolderId
 
     vi.mocked(supabaseAdmin.from).mockImplementation((table: string) => {
       if (table === 'service_deliveries') return tableChain(null) as never // no linked account
@@ -97,6 +111,7 @@ describe('ensureContactFolder — subfolder self-heal', () => {
 
   it('does not touch Drive when the linked folder already has all 5 standard subfolders', async () => {
     const completeFolderId = 'already-complete'
+    legacyFolder.id = completeFolderId
 
     vi.mocked(supabaseAdmin.from).mockImplementation((table: string) => {
       if (table === 'service_deliveries') return tableChain(null) as never

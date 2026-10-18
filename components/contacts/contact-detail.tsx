@@ -3103,7 +3103,7 @@ function ContactDocumentsTab({
   const activeCompanyId = activeDocScope === 'personal' ? '' : activeDocScope
   const activeCompanyStore = useStoreOwnerForAccount(activeCompanyId, !!personStoreId && activeCompanyId !== '')
   const companyScopeInStore = !!personStoreId && activeCompanyId !== '' && !!activeCompanyStore.data?.ownerId
-  const [folderAction, setFolderAction] = useState<'idle' | 'creating' | 'linking' | 'validating'>('idle')
+  const [folderAction, setFolderAction] = useState<'idle' | 'linking' | 'validating'>('idle')
   const [linkFolderId, setLinkFolderId] = useState('')
   const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
@@ -3376,24 +3376,6 @@ function ContactDocumentsTab({
     </div>
   )
 
-  const handleCreateFolder = async () => {
-    setFolderAction('creating')
-    try {
-      const { createContactFolder } = await import('@/app/(dashboard)/contacts/folder-actions')
-      const result = await createContactFolder(contactId)
-      if (result.success) {
-        toast.success('Contact folder created')
-        window.location.reload()
-      } else {
-        toast.error(result.error ?? 'Failed to create folder')
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to create folder')
-    } finally {
-      setFolderAction('idle')
-    }
-  }
-
   const handleLinkFolder = async () => {
     if (!linkFolderId.trim()) return
     setFolderAction('linking')
@@ -3435,16 +3417,6 @@ function ContactDocumentsTab({
     <div className="bg-white rounded-lg border p-6 text-center space-y-3">
       <FolderOpen className="h-7 w-7 mx-auto text-zinc-300" />
       <p className="text-sm text-zinc-400">No Drive folder linked to this contact</p>
-      <div className="flex justify-center gap-2">
-        <button
-          onClick={handleCreateFolder}
-          disabled={folderAction !== 'idle'}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          {folderAction === 'creating' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="h-3.5 w-3.5" />}
-          Create Contact Folder
-        </button>
-      </div>
       <div className="max-w-xs mx-auto">
         <p className="text-xs text-zinc-400 mb-1.5">Or link an existing folder by ID:</p>
         <div className="flex gap-1.5">

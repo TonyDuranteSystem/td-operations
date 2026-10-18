@@ -393,12 +393,14 @@ export async function POST(req: NextRequest) {
         const wizData = wizard.data as Record<string, unknown>
         const contactName = [docContact.first_name, docContact.last_name].filter(Boolean).join(" ") || "Unknown"
 
-        // Drive cutover (dev job ad09ea91): this action rebuilds a person's DRIVE folder. A person whose files live in the
-        // new storage has none — the passport belongs in their storage (Documents tab upload), not here.
+        // Stop Drive (dev job 264bb882, S1d): this action rebuilds a person's DRIVE folder, so it only applies to a person of a
+        // company deliberately left on Drive. Anyone else has (or gets) their own storage — the passport belongs there
+        // (Documents tab upload), not here. Nothing is written in Drive.
         {
-          const { personHasFilesInStorage } = await import("@/lib/crm-store/person-drive-guard")
-          if (await personHasFilesInStorage(contact_id)) {
-            result = { success: false, detail: "This person's files live in the new storage, so there is no Drive folder to rebuild. Upload the passport from their Documents tab instead." }
+          const { legacyDriveForContact } = await import("@/lib/crm-store/legacy-drive")
+          const legacy = await legacyDriveForContact(contact_id)
+          if (!legacy.allowed) {
+            result = { success: false, detail: "This person's files live in the CRM storage, so there is no folder to rebuild. Upload the passport from their Documents tab instead." }
             break
           }
         }

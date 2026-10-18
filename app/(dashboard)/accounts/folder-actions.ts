@@ -4,69 +4,6 @@ import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
 
 /**
- * Create a company folder in Google Drive and link it to the account.
- * Uses ensureCompanyFolder() which includes Drive-side dedup.
- */
-export async function createCompanyFolder(accountId: string): Promise<ActionResult<{ folderId: string }>> {
-  return safeAction(async () => {
-    const { supabaseAdmin } = await import('@/lib/supabase-admin')
-    const { ensureCompanyFolder } = await import('@/lib/drive-folder-utils')
-    const { assertNotStoreOwnedAccount } = await import('@/lib/crm-store/browse')
-    await assertNotStoreOwnedAccount(accountId)
-
-    // Get account info for folder naming
-    const { data: account, error } = await supabaseAdmin
-      .from('accounts')
-      .select('company_name, state_of_formation, drive_folder_id')
-      .eq('id', accountId)
-      .single()
-
-    if (error || !account) throw new Error('Account not found')
-    if (account.drive_folder_id) throw new Error(`Account already has a Drive folder: ${account.drive_folder_id}`)
-    if (!account.company_name) throw new Error('Account has no company name')
-    if (!account.state_of_formation) throw new Error('Account has no state of formation')
-
-    // Primary contact, for naming the Drive folder. Resolved through `account_contacts`:
-    // `contacts` has NO `account_id` column, so filtering on one errored, the error was
-    // discarded with the row set, and the owner name silently came back empty — every
-    // folder was named without it. Third instance of the same defect found on 2026-07-20;
-    // a repo-wide test now blocks the shape.
-    const { data: link } = await supabaseAdmin
-      .from('account_contacts')
-      .select('contact_id')
-      .eq('account_id', accountId)
-      .limit(1)
-      .maybeSingle()
-
-    let ownerName: string | undefined
-    if (link?.contact_id) {
-      const { data: contact } = await supabaseAdmin
-        .from('contacts')
-        .select('first_name, last_name')
-        .eq('id', link.contact_id)
-        .maybeSingle()
-      const name = [contact?.first_name, contact?.last_name].filter(Boolean).join(' ')
-      ownerName = name || undefined
-    }
-
-    const result = await ensureCompanyFolder(
-      accountId,
-      account.company_name,
-      account.state_of_formation,
-      ownerName,
-    )
-
-    revalidatePath(`/accounts/${accountId}`)
-    return { folderId: result.folderId }
-  }, {
-    action_type: 'create',
-    table_name: 'accounts',
-    record_id: accountId,
-    summary: 'Created company Drive folder',
-  })
-}
-
-/**
  * Link an existing Google Drive folder to the account.
  */
 export async function linkDriveFolder(accountId: string, driveFolderId: string): Promise<ActionResult> {

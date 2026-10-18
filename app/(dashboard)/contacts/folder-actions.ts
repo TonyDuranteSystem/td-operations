@@ -5,42 +5,6 @@ import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
 
 /**
- * Create a contact folder in Google Drive and link it to the contact.
- * Uses ensureContactFolder() which includes Drive-side dedup.
- */
-export async function createContactFolder(contactId: string): Promise<ActionResult<{ folderId: string }>> {
-  return safeAction(async () => {
-    const { supabaseAdmin } = await import('@/lib/supabase-admin')
-    const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
-    // a person whose files live in the new storage gets no new Drive folder (Drive cutover Phase A2, dev job ad09ea91)
-    const { assertPersonFilesStillOnDrive } = await import('@/lib/crm-store/person-drive-guard')
-    await assertPersonFilesStillOnDrive(contactId)
-
-    const { data: contact, error } = await supabaseAdmin
-      .from('contacts')
-      .select('first_name, last_name, drive_folder_id')
-      .eq('id', contactId)
-      .single()
-
-    if (error || !contact) throw new Error('Contact not found')
-    if (contact.drive_folder_id) throw new Error(`Contact already has a Drive folder: ${contact.drive_folder_id}`)
-
-    const contactName = [contact.first_name, contact.last_name].filter(Boolean).join(' ')
-    if (!contactName) throw new Error('Contact has no name')
-
-    const result = await ensureContactFolder(contactId, contactName)
-
-    revalidatePath(`/contacts/${contactId}`)
-    return { folderId: result.folderId }
-  }, {
-    action_type: 'create',
-    table_name: 'contacts',
-    record_id: contactId,
-    summary: 'Created contact Drive folder',
-  })
-}
-
-/**
  * Link an existing Google Drive folder to the contact.
  */
 export async function linkContactFolder(contactId: string, driveFolderId: string): Promise<ActionResult> {

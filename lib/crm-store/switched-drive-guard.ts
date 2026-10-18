@@ -69,7 +69,7 @@ export async function assertTargetsNotSwitched(ids: string[], deps: GuardDeps): 
         seen.add(cur)
         if (locked.has(cur)) {
           throw new SwitchedCompanyDriveWriteError(
-            "This company's files live in the new CRM storage — nothing may be written to its Google Drive folder. Save the file through the storage instead.",
+            "This company's old Google Drive folder is read-only (its files live in the new CRM storage, or the company is closed) — nothing may be written to it. Save the file through the storage instead.",
           )
         }
         next.push(...(await deps.parentsOf(cur)))
@@ -146,6 +146,11 @@ export async function readLockedFolderIds(): Promise<Set<string>> {
     if (aErr) throw new Error(`store guard: could not read the company folders — ${aErr.message}`)
     for (const a of (data ?? []) as Array<{ drive_folder_id: string | null; gdrive_folder_url: string | null }>) for (const f of folderIdsOf(a)) folders.add(f)
   }
+  // Stop Drive (dev job 264bb882, S1d): a Closed / Cancelled company's Drive folder is a read-only archive — never written to,
+  // whatever code path asks (the one-way backup is exempt: it runs inside runAsStoreBackup).
+  const archived = await readAllPages("closed companies", (from, to) =>
+    d.from("accounts").select("drive_folder_id, gdrive_folder_url").in("status", ["Closed", "Cancelled"]).order("id").range(from, to))
+  for (const a of (archived ?? []) as Array<{ drive_folder_id: string | null; gdrive_folder_url: string | null }>) for (const f of folderIdsOf(a)) folders.add(f)
   const personFolders = new Set<string>()
   for (const part of chunks(Array.from(contactIds))) {
     const { data, error: cErr } = await d.from("contacts").select("drive_folder_id, gdrive_folder_url").in("id", part)

@@ -263,14 +263,16 @@ export async function fileRenewal(
         docRowId = routed.documentRowId
         driveLink = `/api/documents/${routed.documentRowId}/preview`
       } else {
-        if (!account.drive_folder_id) {
-          throw new Error(
-            `Account "${account.company_name}" has no Drive folder — cannot save receipt.`,
-          )
+        // Stop Drive (dev job 264bb882, S1d): only a company deliberately left on Drive (folder, no storage, not closed) is
+        // filed in Drive; any other state is an error for the caller plus a staff alarm — the receipt is not marked saved.
+        const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
+        const legacy = await legacyDriveForAccount(account.id)
+        if (!legacy.allowed) {
+          throw new Error(await raiseDriveWriteRefused({ flow: "file-renewal", accountId: account.id, reason: legacy.reason, detail: targetFilename }))
         }
 
         // 2. Ensure Compliance/ subfolder under the account folder (per SOP v7.0)
-        const complianceFolderId = await ensureDrivePath(account.drive_folder_id, [
+        const complianceFolderId = await ensureDrivePath(legacy.folderId, [
           "Compliance",
         ])
 

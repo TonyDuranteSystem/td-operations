@@ -6,7 +6,7 @@ import {
   ChevronRight, ChevronDown, FileText, Folder, FolderOpen,
   MoreVertical, Pencil, ArrowRight, ExternalLink, Eye, EyeOff, Trash2, Search,
   RefreshCw, Loader2, X, GripVertical, Image as ImageIcon, FileSpreadsheet, Globe,
-  FolderPlus, Link2, ShieldCheck, Upload, ScanText,
+  Link2, ShieldCheck, Upload, ScanText,
 } from 'lucide-react'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
 import { cn } from '@/lib/utils'
@@ -644,7 +644,7 @@ export function FileManager({ accountId, driveFolderId }: {
   const queryClient = useQueryClient()
   const [previewFile, setPreviewFile] = useState<DriveFile | null>(null)
   const [ocrDocId, setOcrDocId] = useState<string | null>(null)
-  const [folderAction, setFolderAction] = useState<'idle' | 'creating' | 'linking' | 'validating'>('idle')
+  const [folderAction, setFolderAction] = useState<'idle' | 'linking' | 'validating'>('idle')
   const [linkFolderId, setLinkFolderId] = useState('')
   const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
   const [showUpload, setShowUpload] = useState(false)
@@ -804,24 +804,6 @@ export function FileManager({ accountId, driveFolderId }: {
   }
 
   if (!driveFolderId) {
-    const handleCreate = async () => {
-      setFolderAction('creating')
-      try {
-        const { createCompanyFolder } = await import('@/app/(dashboard)/accounts/folder-actions')
-        const result = await createCompanyFolder(accountId)
-        if (result.success) {
-          toast.success('Company folder created')
-          window.location.reload()
-        } else {
-          toast.error(result.error ?? 'Failed to create folder')
-        }
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to create folder')
-      } finally {
-        setFolderAction('idle')
-      }
-    }
-
     const handleLink = async () => {
       if (!linkFolderId.trim()) return
       setFolderAction('linking')
@@ -845,16 +827,6 @@ export function FileManager({ accountId, driveFolderId }: {
       <div className="text-center py-12 space-y-4">
         <Folder className="h-8 w-8 mx-auto text-zinc-300" />
         <p className="text-sm text-zinc-400">No Google Drive folder linked to this account</p>
-        <div className="flex justify-center gap-3">
-          <button
-            onClick={handleCreate}
-            disabled={folderAction !== 'idle'}
-            className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
-          >
-            {folderAction === 'creating' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderPlus className="h-4 w-4" />}
-            Create Company Folder
-          </button>
-        </div>
         <div className="max-w-sm mx-auto">
           <p className="text-xs text-zinc-400 mb-2">Or link an existing Drive folder by ID:</p>
           <div className="flex gap-2">

@@ -251,13 +251,17 @@ export async function generateIntercompanyForAccount(
     }
   }
 
-  if (!account.drive_folder_id) {
-    return { error: `"${account.company_name}" has no Drive folder (drive_folder_id) — cannot file the PDF.` }
+  // Stop Drive (dev job 264bb882, S1d): the Drive path is only for a company deliberately left on Drive (folder, no storage,
+  // not closed). Any other state is an error for the caller plus a staff alarm — nothing is written.
+  const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
+  const legacy = await legacyDriveForAccount(accountId)
+  if (!legacy.allowed) {
+    return { error: await raiseDriveWriteRefused({ flow: "intercompany", accountId, reason: legacy.reason, detail: fileName }) }
   }
 
   let driveFileId: string | undefined
   try {
-    const uploaded = await uploadBinaryToDrive(fileName, Buffer.from(pdfBytes), "application/pdf", account.drive_folder_id)
+    const uploaded = await uploadBinaryToDrive(fileName, Buffer.from(pdfBytes), "application/pdf", legacy.folderId)
     driveFileId = uploaded?.id
   } catch (err) {
     return { error: `Drive upload failed: ${err instanceof Error ? err.message : String(err)}` }

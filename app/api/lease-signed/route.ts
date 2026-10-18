@@ -249,19 +249,18 @@ export async function POST(req: NextRequest) {
           if (routed.route === "store") {
             results.push({ step: "drive_upload", status: "ok", detail: `Saved to the new storage: ${routed.pointer}` })
           } else {
-            const { data: acct } = await supabaseAdmin
-              .from("accounts")
-              .select("drive_folder_id")
-              .eq("id", lease.account_id)
-              .single()
+            // Only a company deliberately left on Drive (folder, no storage, not closed) is still written to in Drive;
+            // any other state is an error step plus a staff alarm (Stop Drive S1d, dev job 264bb882).
+            const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
+            const legacy = await legacyDriveForAccount(lease.account_id)
 
-            if (acct?.drive_folder_id) {
+            if (legacy.allowed) {
               const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-              const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
+              const folderResult = await listFolder(legacy.folderId) as { files?: { id: string; name: string; mimeType: string }[] }
               const companyFolder = folderResult.files?.find(f =>
                 f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
               )
-              const targetFolderId = companyFolder?.id || acct.drive_folder_id
+              const targetFolderId = companyFolder?.id || legacy.folderId
 
               // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
               const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
@@ -277,7 +276,8 @@ export async function POST(req: NextRequest) {
                 portalVisible: true,
               })
             } else {
-              results.push({ step: "drive_upload", status: "skipped", detail: "No drive_folder_id on account" })
+              const sentence = await raiseDriveWriteRefused({ flow: "lease-signed", accountId: lease.account_id, reason: legacy.reason, detail: `lease ${lease.id}` })
+              results.push({ step: "drive_upload", status: "error", detail: sentence })
             }
           }
         }

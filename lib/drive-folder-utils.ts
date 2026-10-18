@@ -1,9 +1,8 @@
 /**
- * Shared Google Drive folder creation utilities.
+ * Shared Google Drive folder utilities for the companies deliberately LEFT on Drive.
  *
- * Two-phase approach for formation clients:
- * Phase 1: ensureContactFolder() → Contacts/{Name}/ (pre-company)
- * Phase 2: ensureCompanyFolder() + migrateContactToCompany() (post-company)
+ * Stop Drive (dev job 264bb882, S1d): ensureContactFolder() / ensureCompanyFolder() no longer CREATE folders. They return the
+ * folder a legacy company/person already has (see lib/crm-store/legacy-drive.ts) and refuse everyone else with a staff alarm.
  *
  * Used by:
  * - formation-setup.ts (Phase 1)
@@ -14,22 +13,6 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
-// ─── Drive folder IDs (Shared Drive: Tony Durante LLC) ────────────────────
-const TD_CLIENTS_ROOT = '1mbz_bUDwC4K259RcC-tDKihjlvdAVXno'
-const COMPANIES_ROOT = '1Z32I4pDzX4enwqJQzolbFw7fK94ISuCb'
-
-// State-specific parent folders under Companies/
-const STATE_FOLDER_MAP: Record<string, string> = {
-  'New Mexico': '1tkJjg0HKbIl0uFzvK4zW3rtU14sdCHo4',
-  'NM': '1tkJjg0HKbIl0uFzvK4zW3rtU14sdCHo4',
-  'Wyoming': '110NUZZJC1mf3vKB12bmxfRFIVZJ3SE5x',
-  'WY': '110NUZZJC1mf3vKB12bmxfRFIVZJ3SE5x',
-  'Delaware': '1QoF8WZsW_TT-cXM9NxLeTN1ng1jqbZM-',
-  'DE': '1QoF8WZsW_TT-cXM9NxLeTN1ng1jqbZM-',
-  'Florida': '1XToxqPl-t6z10raeal_frSpvBBBRY8nG',
-  'FL': '1XToxqPl-t6z10raeal_frSpvBBBRY8nG',
-}
-
 const STANDARD_SUBFOLDERS = [
   '1. Company',
   '2. Contacts',
@@ -37,9 +20,6 @@ const STANDARD_SUBFOLDERS = [
   '4. Banking',
   '5. Correspondence',
 ]
-
-// Contacts root folder under TD Clients/ (created on first use)
-let contactsRootId: string | null = null
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 interface DriveItem { id: string; name: string; mimeType: string }
@@ -85,29 +65,6 @@ async function ensureSubfoldersOn(folderId: string): Promise<Record<string, stri
   return subfolders
 }
 
-// ─── Ensure Contacts root folder exists ───────────────────────────────────
-async function ensureContactsRoot(): Promise<string> {
-  if (contactsRootId) return contactsRootId
-
-  const { listFiles, createFolder } = await getDriveHelpers()
-
-  // Check if Contacts folder already exists under TD Clients
-  const items = await listFiles(TD_CLIENTS_ROOT)
-  const existing = items.find(
-    f => f.name === 'Contacts' && f.mimeType === 'application/vnd.google-apps.folder',
-  )
-
-  if (existing) {
-    contactsRootId = existing.id
-    return existing.id
-  }
-
-  // Create it
-  const folder = await createFolder(TD_CLIENTS_ROOT, 'Contacts') as { id: string }
-  contactsRootId = folder.id
-  return folder.id
-}
-
 // ─── Phase 1: Contact folder (pre-company) ─────────────────────────────────
 
 export async function ensureContactFolder(
@@ -120,13 +77,19 @@ export async function ensureContactFolder(
     const { assertPersonFilesStillOnDrive } = await import('@/lib/crm-store/person-drive-guard')
     await assertPersonFilesStillOnDrive(contactId)
   }
+  // Stop Drive (dev job 264bb882, S1d): this function NEVER creates a Drive folder any more. It hands back the folder that
+  // already exists, and only for a person of a company that was deliberately left on Drive (folder, no storage, not closed).
+  const { legacyDriveForAccount, legacyDriveForContact, raiseDriveWriteRefused, DriveWriteRefusedError } = await import('@/lib/crm-store/legacy-drive')
+  const refuse = async (reason: Parameters<typeof raiseDriveWriteRefused>[0]['reason']): Promise<never> => {
+    await raiseDriveWriteRefused({ flow: 'ensureContactFolder', contactId, reason, detail: contactName })
+    throw new DriveWriteRefusedError(reason)
+  }
+
   // A contact who already has a materialized company may have had
   // drive_folder_id repointed at the COMPANY's own "2. Contacts" leaf by
   // migrateContactToCompany() — a leaf folder, not a root with its own
   // subfolder tree. Resolve through the company's real folder in that case
-  // instead of treating the leaf as a Phase-1 root and grafting a nested
-  // "2. Contacts" folder inside it. service_deliveries is the durable link
-  // (formation-materialize.ts writes account_id onto the contact's SD row).
+  // (service_deliveries is the durable link: formation-materialize.ts writes account_id onto the contact's SD row).
   const { data: linkedSd } = await supabaseAdmin
     .from('service_deliveries')
     .select('account_id')
@@ -136,97 +99,17 @@ export async function ensureContactFolder(
     .maybeSingle()
 
   if (linkedSd?.account_id) {
-    const { data: account } = await supabaseAdmin
-      .from('accounts')
-      .select('drive_folder_id')
-      .eq('id', linkedSd.account_id)
-      .single()
-
-    if (account?.drive_folder_id) {
-      const subfolders = await ensureSubfoldersOn(account.drive_folder_id)
-      return { folderId: account.drive_folder_id, created: false, subfolders }
-    }
+    const v = await legacyDriveForAccount(linkedSd.account_id)
+    if (!v.allowed) return refuse(v.reason)
+    const subfolders = await ensureSubfoldersOn(v.folderId)
+    return { folderId: v.folderId, created: false, subfolders }
   }
 
-  // Check if contact already has drive_folder_id or gdrive_folder_url
-  const { data: contact } = await supabaseAdmin
-    .from('contacts')
-    .select('drive_folder_id, gdrive_folder_url')
-    .eq('id', contactId)
-    .single()
-
-  // If contact already has a Drive folder ID, return it — self-healing any
-  // standard subfolder that's missing (folder may predate the standard
-  // structure, e.g. an old manually-created folder).
-  if (contact?.drive_folder_id) {
-    const subfolders = await ensureSubfoldersOn(contact.drive_folder_id)
-    return { folderId: contact.drive_folder_id, created: false, subfolders }
-  }
-
-  // Legacy fallback: extract from gdrive_folder_url if drive_folder_id not set
-  if (contact?.gdrive_folder_url) {
-    const idMatch = (contact.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
-    if (idMatch) {
-      const existingId = idMatch[1]
-      // Backfill drive_folder_id
-      // eslint-disable-next-line no-restricted-syntax -- Drive-folder-link bookkeeping, not client-facing CRM data; central path
-      await supabaseAdmin
-        .from('contacts')
-        .update({ drive_folder_id: existingId, updated_at: new Date().toISOString() })
-        .eq('id', contactId)
-      const subfolders = await ensureSubfoldersOn(existingId)
-      return { folderId: existingId, created: false, subfolders }
-    }
-  }
-
-  // Drive cutover (dev job ad09ea91): a person whose files live in the new storage never gets a NEW Drive folder.
-  // (An existing folder above is still returned: Drive stays visible and read-only.)
-  {
-    const { liveOwnerOfContact } = await import('@/lib/crm-store/switched-drive-guard')
-    if (await liveOwnerOfContact(contactId)) {
-      const { SwitchedCompanyDriveWriteError } = await import('@/lib/crm-store/switched-drive-guard')
-      throw new SwitchedCompanyDriveWriteError("This person's files live in the new storage - no Drive folder is created for them.")
-    }
-  }
-
-  // No folder linked — check Drive for existing folder with same name (dedup)
-  const rootId = await ensureContactsRoot()
-  const { createFolder, listFiles } = await getDriveHelpers()
-
-  const existingItems = await listFiles(rootId)
-  const matches = existingItems.filter(
-    f => f.name === contactName && f.mimeType === 'application/vnd.google-apps.folder',
-  )
-
-  let contactFolder: { id: string }
-  if (matches.length === 1) {
-    contactFolder = { id: matches[0].id }
-    console.warn(`[drive-folder-utils] Found existing contact folder "${contactName}" (${matches[0].id}) — linking instead of creating`)
-  } else if (matches.length > 1) {
-    const ids = matches.map(m => m.id).join(', ')
-    throw new Error(
-      `Multiple Drive folders named "${contactName}" found (${ids}). ` +
-      `Manual admin selection required — use "Link Existing Contact Folder" in the CRM.`
-    )
-  } else {
-    contactFolder = await createFolder(rootId, contactName) as { id: string }
-  }
-
-  // Ensure standard subfolders exist
-  const subfolders = await ensureSubfoldersOn(contactFolder.id)
-
-  // Save both drive_folder_id and gdrive_folder_url to contact record
-  // eslint-disable-next-line no-restricted-syntax -- Drive-folder-link bookkeeping, not client-facing CRM data; central path
-  await supabaseAdmin
-    .from('contacts')
-    .update({
-      drive_folder_id: contactFolder.id,
-      gdrive_folder_url: `https://drive.google.com/drive/folders/${contactFolder.id}`,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', contactId)
-
-  return { folderId: contactFolder.id, created: matches.length === 0, subfolders }
+  const v = await legacyDriveForContact(contactId)
+  if (!v.allowed) return refuse(v.reason)
+  // Self-heal any standard subfolder that is missing (the folder may predate the standard structure).
+  const subfolders = await ensureSubfoldersOn(v.folderId)
+  return { folderId: v.folderId, created: false, subfolders }
 }
 
 // ─── Phase 2: Company folder (post-company) ────────────────────────────────
@@ -237,13 +120,6 @@ export async function ensureCompanyFolder(
   stateOfFormation: string,
   ownerName?: string,
 ): Promise<{ folderId: string; created: boolean; subfolders: Record<string, string> }> {
-  // Check if account already has drive_folder_id
-  const { data: account } = await supabaseAdmin
-    .from('accounts')
-    .select('drive_folder_id')
-    .eq('id', accountId)
-    .single()
-
   // A company whose files live in the new store never gets a Drive folder — and never has Drive subfolders
   // made in an existing one — whichever flow asks (tax intake, onboarding, RA switch, place-client …).
   // Checked BEFORE the existing-folder shortcut: a switched company keeps its old folder id (Drive stays
@@ -251,61 +127,16 @@ export async function ensureCompanyFolder(
   const { assertNotStoreOwnedAccount } = await import('@/lib/crm-store/browse')
   await assertNotStoreOwnedAccount(accountId)
 
-  if (account?.drive_folder_id) {
-    const subfolders = await ensureSubfoldersOn(account.drive_folder_id)
-    return { folderId: account.drive_folder_id, created: false, subfolders }
+  // Stop Drive (dev job 264bb882, S1d): this function NEVER creates a Drive folder any more. It hands back the folder the
+  // company already has — and only a company deliberately left on Drive (folder, no storage, not Closed / Cancelled).
+  const { legacyDriveForAccount, raiseDriveWriteRefused, DriveWriteRefusedError } = await import('@/lib/crm-store/legacy-drive')
+  const v = await legacyDriveForAccount(accountId)
+  if (!v.allowed) {
+    await raiseDriveWriteRefused({ flow: 'ensureCompanyFolder', accountId, reason: v.reason, detail: [companyName, stateOfFormation, ownerName].filter(Boolean).join(' / ') })
+    throw new DriveWriteRefusedError(v.reason)
   }
-
-  // Determine parent folder by state
-  const { createFolder, listFiles } = await getDriveHelpers()
-  let parentId = STATE_FOLDER_MAP[stateOfFormation] || null
-
-  if (!parentId) {
-    // Create new state folder under Companies/
-    const stateFolder = await createFolder(COMPANIES_ROOT, stateOfFormation) as { id: string }
-    parentId = stateFolder.id
-  }
-
-  // Folder name: "{CompanyName} - {OwnerName}" or just "{CompanyName}"
-  const folderName = ownerName ? `${companyName} - ${ownerName}` : companyName
-
-  // Check Drive for existing folder with the same name (dedup)
-  const existingItems = await listFiles(parentId)
-  const matches = existingItems.filter(
-    f => f.name === folderName && f.mimeType === 'application/vnd.google-apps.folder',
-  )
-
-  let companyFolder: { id: string }
-  if (matches.length === 1) {
-    // Exact match — link to existing folder instead of creating duplicate
-    companyFolder = { id: matches[0].id }
-    console.warn(`[drive-folder-utils] Found existing folder "${folderName}" (${matches[0].id}) — linking instead of creating`)
-  } else if (matches.length > 1) {
-    // Multiple matches — cannot auto-link, require manual selection
-    const ids = matches.map(m => m.id).join(', ')
-    throw new Error(
-      `Multiple Drive folders named "${folderName}" found (${ids}). ` +
-      `Manual admin selection required — use "Link Existing Drive Folder" in the CRM.`
-    )
-  } else {
-    // No match — create new folder
-    companyFolder = await createFolder(parentId, folderName) as { id: string }
-  }
-
-  // Ensure standard subfolders exist (safe for both new and linked folders)
-  const subfolders = await ensureSubfoldersOn(companyFolder.id)
-
-  // Save to account
-  // eslint-disable-next-line no-restricted-syntax -- Drive-folder-link bookkeeping, not client-facing CRM data; central path
-  await supabaseAdmin
-    .from('accounts')
-    .update({
-      drive_folder_id: companyFolder.id,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', accountId)
-
-  return { folderId: companyFolder.id, created: true, subfolders }
+  const subfolders = await ensureSubfoldersOn(v.folderId)
+  return { folderId: v.folderId, created: false, subfolders }
 }
 
 // ─── Migration: Contact folder → Company folder ────────────────────────────
