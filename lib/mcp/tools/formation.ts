@@ -324,51 +324,35 @@ export function registerFormationTools(server: McpServer) {
           lines.push("APPLYING CHANGES...")
           lines.push("")
 
-          // Save form data + uploads to Drive
+          // File the package (Stop Drive S1d, dev job 264bb882). A formation LEAD has no company yet, so the only correct
+          // destination is the PERSON: their contact is the submission's own, else the lead's contact by EXACT email + matching
+          // name (never "the first company of whoever has this email"). Nobody certain = nothing is filed and staff are told once.
+          // The client's submission already filed this same package (same keys), so a second filing here is "unchanged".
           try {
-            const { saveFormToDrive } = await import("@/lib/form-to-drive")
-            const driveFolderId = sub.lead_id
-              ? await (async () => {
-                  // Try to find account via contact linked to lead
-                  const { data: contact } = await supabaseAdmin
-                    .from("contacts")
-                    .select("id")
-                    .eq("email", String(submitted.owner_email || ""))
-                    .maybeSingle()
-                  if (contact?.id) {
-                    const { data: ac } = await supabaseAdmin
-                      .from("account_contacts")
-                      .select("account_id")
-                      .eq("contact_id", contact.id)
-                      .limit(1)
-                      .maybeSingle()
-                    if (ac?.account_id) {
-                      // Stop Drive (dev job 264bb882, S1d): storage for a company in storage, Drive only for a company left on it.
-                      const { formDestinationForAccount } = await import("@/lib/crm-store/form-destination")
-                      const dest = await formDestinationForAccount(ac.account_id, "formation_form_review")
-                      return dest.ok ? dest.folderId : null
-                    }
-                  }
-                  return null
-                })()
-              : null
-            if (driveFolderId) {
+            const { contactForSubmissionRow, storageDestinationForForm } = await import("@/lib/crm-store/lead-form-store")
+            const contactId = await contactForSubmissionRow({ contact_id: sub.contact_id, lead_id: sub.lead_id, token }, "formation_form_review")
+            const dest = contactId ? await storageDestinationForForm({ contactId, personName: leadName || null }) : { marker: null as string | null, reason: "no_contact" as string | undefined }
+            if (dest.marker) {
+              const { saveFormToDrive } = await import("@/lib/form-to-drive")
               const driveResult = await saveFormToDrive(
                 "formation",
                 submitted,
                 (sub.upload_paths as string[]) || [],
-                driveFolderId,
-                { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName || token }
+                dest.marker,
+                { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName || token },
               )
-              if (driveResult.summaryFileId) lines.push(`✅ Data summary saved to Drive (${driveResult.summaryFileId})`)
-              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
-              if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy`)
-              if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
+              if (driveResult.summaryFileId) lines.push(`✅ Data summary filed (${driveResult.summaryFileId})`)
+              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) filed`)
+              if (driveResult.skipped.length > 0) lines.push(`ℹ️ ${driveResult.skipped.length} file(s) were already filed`)
+              if (driveResult.failed.length > 0) lines.push(`❌ ${driveResult.failed.length} file(s) NOT filed`)
+              if (driveResult.errors.length > 0) lines.push(`❌ Filing errors: ${driveResult.errors.join(", ")}`)
             } else {
-              lines.push("⚠️ No company storage found for this lead — nothing more was filed here")
+              lines.push(`❌ Nothing was filed: no person could be identified for this form with certainty (${dest.reason ?? "no match"}).`)
+              const { reportSystemError } = await import("@/lib/system-errors")
+              await reportSystemError({ source: "server", route: "mcp/formation_form_review", method: "INTERNAL", message: "Formation form review could not identify the person to file the package under", context: { token, reason: dest.reason ?? null } })
             }
           } catch (driveErr) {
-            lines.push(`⚠️ Drive save failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
+            lines.push(`❌ Filing failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
           }
 
           lines.push("")

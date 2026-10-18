@@ -358,13 +358,13 @@ export function registerBankingFormTools(server: McpServer) {
           })
           if (pkg.summaryFileId) lines.push(`✅ Data summary filed (${pkg.summaryFileId})`)
           if (pkg.copied.length > 0) lines.push(`✅ ${pkg.copied.length} file(s) filed`)
-          if (pkg.pinFolderId) {
+          if (pkg.pinFolderId || pkg.enqueueUnpinned) {
             try {
               const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
               await enqueueFormArchiveJob({
                 formType: "banking",
                 submissionId: sub.id,
-                pin: { folderId: pkg.pinFolderId, bucket: "banking-uploads", configKey: "banking", uploadPaths: (sub.upload_paths as string[]) || [], companyName: accountName || token },
+                pin: pkg.pinFolderId ? { folderId: pkg.pinFolderId, bucket: "banking-uploads", configKey: "banking", uploadPaths: (sub.upload_paths as string[]) || [], companyName: accountName || token } : undefined,
                 createdBy: "banking_form_review",
               })
             } catch (e) {

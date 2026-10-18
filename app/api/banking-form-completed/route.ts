@@ -277,20 +277,20 @@ export async function POST(req: NextRequest) {
               ? `PDF: ${pkg.summaryFileId || "none"}, filed: ${pkg.copied.length}`
               : `${pkg.sentence ?? pkg.errors.join("; ")} (filed: ${pkg.copied.length}, not filed: ${pkg.failed.length})${pkg.retryLater ? " — will be retried" : ""}`,
           })
-          if (pkg.pinFolderId) {
+          if (pkg.pinFolderId || pkg.enqueueUnpinned) {
             // Durable backstop: the reliable archive job with the plan PINNED, so a failed or postponed filing heals by retry.
             try {
               const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
               await enqueueFormArchiveJob({
                 formType: "banking",
                 submissionId: submission_id,
-                pin: {
+                pin: pkg.pinFolderId ? {
                   folderId: pkg.pinFolderId,
                   bucket: "banking-uploads",
                   configKey: "banking",
                   uploadPaths: (fullSub.upload_paths as string[]) || [],
                   companyName: companyName || undefined,
-                },
+                } : undefined,
                 createdBy: "banking_form_completed",
               })
             } catch (e) {

@@ -38,8 +38,10 @@ export interface BankingPackageResult {
   ok: boolean
   /** a retry later can succeed (the company is being moved) */
   retryLater: boolean
-  /** where the durable job should file it (null = nowhere) */
+  /** where the durable job should file it (null = nowhere known) */
   pinFolderId: string | null
+  /** the destination could not be worked out right now (a read failed): queue the durable job WITHOUT a pin so its own lookup retries */
+  enqueueUnpinned: boolean
   summaryFileId: string | null
   copied: string[]
   failed: string[]
@@ -73,7 +75,7 @@ export function stableSubmittedAt(now: Date = new Date()): string {
 
 export interface BankingPackageDeps {
   destination: (accountId: string | null | undefined, flow: string) => Promise<
-    { ok: true; folderId: string; via: "storage" | "legacy-drive" } | { ok: false; reason: string; sentence: string }>
+    { ok: boolean; folderId?: string; via?: "storage" | "legacy-drive"; reason?: string; sentence?: string }>
   saveCompany: (i: { formType: string; data: Record<string, unknown>; paths: string[]; folderId: string; token: string; submittedAt: string; companyName?: string; bucket: string }) =>
     Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; errors: string[] }>
   savePerson: (i: { contactId: string; formType: string; paths: string[]; token: string; bucket: string; name: string }) =>
@@ -110,23 +112,33 @@ async function defaultDeps(): Promise<BankingPackageDeps> {
 
 export async function fileBankingPackage(p: BankingPackageInput, deps?: BankingPackageDeps): Promise<BankingPackageResult> {
   const d = deps ?? (await defaultDeps())
-  const out: BankingPackageResult = { ok: false, retryLater: false, pinFolderId: null, summaryFileId: null, copied: [], failed: [], errors: [], sentence: null }
-  const dest = p.folderId
-    ? ({ ok: true, folderId: p.folderId, via: /^(account|person)-storage:/.test(p.folderId) ? "storage" : "legacy-drive" } as const)
-    : await d.destination(p.accountId, p.flow)
+  const out: BankingPackageResult = { ok: false, retryLater: false, pinFolderId: null, enqueueUnpinned: false, summaryFileId: null, copied: [], failed: [], errors: [], sentence: null }
+  let dest: { ok: boolean; folderId?: string; via?: "storage" | "legacy-drive"; reason?: string; sentence?: string }
+  try {
+    dest = p.folderId
+      ? { ok: true, folderId: p.folderId, via: /^(account|person)-storage:/.test(p.folderId) ? "storage" : "legacy-drive" }
+      : await d.destination(p.accountId, p.flow)
+  } catch (e) {
+    // a failed lookup is NOT "no folder": say so, and let the durable job look again later
+    out.retryLater = true
+    out.enqueueUnpinned = !!p.accountId
+    out.errors.push(`Could not work out where to file this: ${e instanceof Error ? e.message : String(e)}`)
+    await d.alarm("Banking package: destination lookup failed", { flow: p.flow, accountId: p.accountId, token: p.token })
+    return out
+  }
   if (!dest.ok) {
-    out.sentence = dest.sentence
+    out.sentence = dest.sentence ?? null
     out.retryLater = dest.reason === "moving"
     // a company that is only moving is retried by the durable job once it has a storage again
     if (out.retryLater && p.accountId) out.pinFolderId = `account-storage:${p.accountId}`
-    out.errors.push(dest.sentence)
+    out.errors.push(dest.sentence ?? "Nothing could be filed.")
     return out
   }
-  out.pinFolderId = dest.folderId
+  out.pinFolderId = dest.folderId ?? null
   const split = dest.via === "storage" ? splitUploads(p.uploadPaths) : { personal: [] as string[], business: p.uploadPaths }
   const when = p.submittedAt && !Number.isNaN(Date.parse(p.submittedAt)) ? new Date(p.submittedAt) : d.now()
   const submittedAt = stableSubmittedAt(when)
-  const company = await d.saveCompany({ formType: p.formType, data: p.submittedData, paths: split.business, folderId: dest.folderId, token: p.token, submittedAt, companyName: p.companyName, bucket: p.bucket })
+  const company = await d.saveCompany({ formType: p.formType, data: p.submittedData, paths: split.business, folderId: dest.folderId as string, token: p.token, submittedAt, companyName: p.companyName, bucket: p.bucket })
   out.summaryFileId = company.summaryFileId
   out.copied.push(...company.copied)
   out.failed.push(...company.failed)

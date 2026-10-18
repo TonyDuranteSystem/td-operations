@@ -962,19 +962,19 @@ export async function POST(req: NextRequest) {
 
             // Durable backstop: queue the reliable archive job with the plan PINNED. It is queued whenever there is a destination —
             // also when the first attempt failed or the company is moving — so the retry can heal it.
-            if (updatedRow?.id && pkg.pinFolderId) {
+            if (updatedRow?.id && (pkg.pinFolderId || pkg.enqueueUnpinned)) {
               try {
                 const { enqueueFormArchiveJob } = await import('@/lib/forms/archive-enqueue')
                 await enqueueFormArchiveJob({
                   formType: 'banking',
                   submissionId: updatedRow.id,
-                  pin: {
+                  pin: pkg.pinFolderId ? {
                     folderId: pkg.pinFolderId,
                     bucket: 'onboarding-uploads',
                     configKey: capturedWizardType,
                     uploadPaths: extractUploadPaths(capturedData),
                     companyName: compName || undefined,
-                  },
+                  } : undefined,
                   createdBy: 'banking_wizard_submit',
                 })
               } catch (e) {
