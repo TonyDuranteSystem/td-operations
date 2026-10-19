@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { interpretResendEvent, shouldApplyDelivery, verifySvixSignature } from '@/lib/portal/resend-webhook'
+import { notifyInvoiceNotDelivered } from '@/lib/portal/invoice-delivery-notice'
 import type { Json } from '@/lib/database.types'
 
 export async function POST(req: NextRequest) {
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
 
   const { data: row, error: findErr } = await supabaseAdmin
     .from('email_tracking')
-    .select('id, delivery_status')
+    .select('id, delivery_status, invoice_id, account_id, recipient')
     .eq('gmail_message_id', update.emailId) // for Resend sends this column holds Resend's email id
     .maybeSingle()
   if (findErr) return NextResponse.json({ error: findErr.message }, { status: 500 }) // Resend retries
@@ -61,6 +62,31 @@ export async function POST(req: NextRequest) {
     .update({ delivery_status: update.status, delivery_detail: update.detail, delivery_updated_at: new Date().toISOString() })
     .eq('id', row.id)
   if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 })
+
+  // The FIRST time this email is found not to have arrived, tell the client (chat message + email + bell, in their language).
+  // Resend retries and repeat events find it already marked, so they do not notify again. A failure here never fails the webhook.
+  if (update.status === 'not_delivered' && row.delivery_status !== 'not_delivered' && row.invoice_id && row.account_id) {
+    try {
+      const { data: invoice } = await supabaseAdmin
+        .from('client_invoices')
+        .select('invoice_number, client_customers(name)')
+        .eq('id', row.invoice_id)
+        .maybeSingle()
+      if (invoice) {
+        const customer = invoice.client_customers as { name: string | null } | null
+        await notifyInvoiceNotDelivered({
+          accountId: row.account_id,
+          invoiceId: row.invoice_id,
+          invoiceNumber: invoice.invoice_number,
+          customerName: customer?.name ?? null,
+          to: row.recipient ?? null,
+          detail: update.detail,
+        })
+      }
+    } catch (err) {
+      console.error('[resend-webhook] could not notify the client:', err)
+    }
+  }
 
   return NextResponse.json({ ok: true })
 }

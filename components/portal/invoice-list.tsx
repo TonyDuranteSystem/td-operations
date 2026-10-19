@@ -105,9 +105,13 @@ export function InvoiceList({ invoices }: { invoices: Invoice[] }) {
                   {inv.status}
                 </span>
                 {inv.delivery_problem && (
-                  <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700" data-testid="invoice-not-delivered">
+                  <Link
+                    href={`/portal/invoices/${inv.id}`}
+                    className="ml-1 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 hover:bg-red-200 underline-offset-2 hover:underline"
+                    data-testid="invoice-not-delivered"
+                  >
                     {t('invDelivery.badge')}
-                  </span>
+                  </Link>
                 )}
               </span>
               <div className="flex items-center justify-end gap-1">

@@ -2,17 +2,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createHmac } from 'node:crypto'
 
 // A tiny fake of the parts of the database client the route touches.
-const state: { rows: Array<{ id: string; gmail_message_id: string; delivery_status: string | null }>; updates: Array<Record<string, unknown>>; events: number } = { rows: [], updates: [], events: 0 }
+const state: { rows: Array<{ id: string; gmail_message_id: string; delivery_status: string | null; invoice_id?: string | null; account_id?: string | null; recipient?: string | null }>; updates: Array<Record<string, unknown>>; events: number; notices: Array<Record<string, unknown>> } = { rows: [], updates: [], events: 0, notices: [] }
 vi.mock('@/lib/supabase-admin', () => ({
   supabaseAdmin: {
     from: (table: string) => {
       if (table === 'webhook_events') return { insert: () => { state.events++; return Promise.resolve({ error: null }) } }
+      if (table === 'client_invoices') {
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { invoice_number: 'INV-1', client_customers: { name: 'K&A S.R.L.' } }, error: null }) }) }) }
+      }
       return {
         select: () => ({ eq: (_c: string, v: string) => ({ maybeSingle: () => Promise.resolve({ data: state.rows.find(r => r.gmail_message_id === v) ?? null, error: null }) }) }),
         update: (u: Record<string, unknown>) => ({ eq: () => { state.updates.push(u); return Promise.resolve({ error: null }) } }),
       }
     },
   },
+}))
+
+vi.mock('@/lib/portal/invoice-delivery-notice', () => ({
+  notifyInvoiceNotDelivered: (o: Record<string, unknown>) => { state.notices.push(o); return Promise.resolve() },
 }))
 
 import { POST } from '@/app/api/webhooks/resend/route'
@@ -31,6 +38,7 @@ beforeEach(() => {
   state.rows = [{ id: 'row1', gmail_message_id: 'em_1', delivery_status: null }]
   state.updates = []
   state.events = 0
+  state.notices = []
   process.env.RESEND_WEBHOOK_SECRET = secret
 })
 
@@ -65,5 +73,26 @@ describe('POST /api/webhooks/resend', () => {
     expect((await POST(request({ type: 'email.bounced', data: { email_id: 'someone_else' } }))).status).toBe(200)
     expect((await POST(request({ type: 'email.opened', data: { email_id: 'em_1' } }))).status).toBe(200)
     expect(state.updates).toHaveLength(0)
+  })
+
+  it('tells the client the FIRST time an invoice email is found not delivered, with the right details', async () => {
+    state.rows[0] = { ...state.rows[0], invoice_id: 'inv-9', account_id: 'acc-9', recipient: 'renato@example.it' }
+    const res = await POST(request({ type: 'email.suppressed', data: { email_id: 'em_1' } }))
+    expect(res.status).toBe(200)
+    expect(state.notices).toEqual([{
+      accountId: 'acc-9', invoiceId: 'inv-9', invoiceNumber: 'INV-1', customerName: 'K&A S.R.L.', to: 'renato@example.it', detail: 'suppressed',
+    }])
+  })
+  it('does not tell the client again when Resend repeats the event', async () => {
+    state.rows[0] = { ...state.rows[0], delivery_status: 'not_delivered', invoice_id: 'inv-9', account_id: 'acc-9', recipient: 'x@y.it' }
+    await POST(request({ type: 'email.bounced', data: { email_id: 'em_1' } }))
+    expect(state.notices).toHaveLength(0)
+  })
+  it('does not notify for a delay, a delivery, or an email that is not linked to an invoice', async () => {
+    state.rows[0] = { ...state.rows[0], invoice_id: 'inv-9', account_id: 'acc-9' }
+    await POST(request({ type: 'email.delivery_delayed', data: { email_id: 'em_1' } }))
+    state.rows[0] = { ...state.rows[0], delivery_status: null, invoice_id: null }
+    await POST(request({ type: 'email.bounced', data: { email_id: 'em_1' } }))
+    expect(state.notices).toHaveLength(0)
   })
 })
