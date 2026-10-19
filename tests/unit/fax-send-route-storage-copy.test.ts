@@ -14,7 +14,7 @@ vi.mock('@/lib/google-drive', () => ({ downloadFileBinary: async () => { throw n
 vi.mock('@/lib/fax/faxage', () => ({
   sendFax: async () => ({ ok: true, jobId: 'J1', raw: 'ok' }), isValidFaxNo: () => true, normalizeFaxNo: (x: string) => x, DEFAULT_IRS_FAX_NUMBER: '1', stripBase64Prefix: (x: string) => x,
 }))
-vi.mock('@/lib/fax/save-sent-upload', () => ({ fileSentUpload: async () => { if (st.throwOnFile) throw new Error('storage down'); return st.filed } }))
+vi.mock('@/lib/fax/save-sent-upload', async (orig) => ({ ...(await orig<typeof import('@/lib/fax/save-sent-upload')>()), fileSentUpload: async () => { if (st.throwOnFile) throw new Error('storage down'); return st.filed } }))
 vi.mock('@/lib/system-errors', () => ({ reportSystemError: async (e: { message: string }) => { st.errors.push(e.message) } }))
 vi.mock('@/lib/supabase-admin', () => {
   const b = (table: string) => {
@@ -65,5 +65,23 @@ describe('/api/tools/fax/send — the storage copy', () => {
     st.filed = { route: 'none', reason: 'personal_document' }
     await send({ account_id: 'acc-1' })
     expect(st.errors).toEqual([]); expect(st.bucketUploads).toHaveLength(1)
+  })
+  it('a company with NO storage (left on Drive / closed) is the expected case: the old copy, NO alarm', async () => {
+    st.filed = { route: 'none', reason: 'company_has_no_storage' }
+    await send({ account_id: 'acc-1' })
+    expect(st.errors).toEqual([]); expect(st.bucketUploads).toHaveLength(1)
+  })
+  it('a PERSONAL paper keeps the old copy but is attached to NO company; a company paper keeps its company', async () => {
+    st.filed = { route: 'none', reason: 'personal_document' }
+    await send({ account_id: 'acc-1', file_name: 'SS-4 Rossi.pdf' })
+    expect(st.docInserts[0].account_id).toBeNull()
+    st.docInserts.length = 0; st.filed = { route: 'none', reason: 'company_has_no_storage' }
+    await send({ account_id: 'acc-1', file_name: '2025 Tax Return.pdf' })
+    expect(st.docInserts[0].account_id).toBe('acc-1')
+  })
+  it('no company identified at all: the old copy, silently', async () => {
+    st.filed = { route: 'none', reason: 'no_company' }
+    await send()
+    expect(st.errors).toEqual([]); expect(st.docInserts[0].account_id).toBeNull()
   })
 })

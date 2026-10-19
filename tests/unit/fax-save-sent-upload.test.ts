@@ -42,8 +42,8 @@ describe("periodYearFromName — conservative", () => {
 
 describe("looksPersonal", () => {
   it("passports, IDs, W-7/ITIN papers, proofs of address are personal; a tax return is not", () => {
-    for (const n of ["Passport Mario Rossi.pdf", "W-7 Rossi.pdf", "ITIN package.pdf", "id card front.jpg", "Proof of address.pdf", "Driver license.png"]) expect(looksPersonal(n)).toBe(true)
-    for (const n of ["2025 Tax Return - Acme LLC_Signed_for_IRS.pdf", "Form 1120 2025.pdf"]) expect(looksPersonal(n)).toBe(false)
+    for (const n of ["Passport Mario Rossi.pdf", "W-7 Rossi.pdf", "ITIN package.pdf", "id card front.jpg", "Proof of address.pdf", "Driver license.png", "SS-4 Rossi.pdf", "Form 1040 2025 Rossi.pdf", "1040-NR Rossi.pdf", "W-8BEN.pdf"]) expect(looksPersonal(n)).toBe(true)
+    for (const n of ["2025 Tax Return - Acme LLC_Signed_for_IRS.pdf", "Form 1120 2025.pdf", "Form 1065 2025.pdf", "5472 Acme.pdf"]) expect(looksPersonal(n)).toBe(false)
   })
 })
 

@@ -235,9 +235,11 @@ export async function POST(req: NextRequest) {
         uploadFiledInStorage = { accountId: filed.accountId, inferred: filed.inferred }
         // only a CERTAIN company goes into the activity log: a company guessed from the file name must not land a wrong entry on a client's feed
         if (!accountId && !filed.inferred) accountId = filed.accountId
-      } else if (filed.reason === 'company_moving' || filed.reason === 'company_has_no_storage') {
+      } else if (filed.reason === 'company_moving') {
+        // a company in the middle of its move: rare and temporary — told once. (A company that simply has no storage — the few left on
+        // Drive, a closed one — is NOT a problem: the old copy is the expected result, so no alarm.)
         const { reportSystemError } = await import('@/lib/system-errors')
-        await reportSystemError({ source: 'server', route: '/api/tools/fax/send', method: 'POST', message: `A faxed file could not be kept in the company's storage (${filed.reason}) — the old copy was kept`, context: { fileName, accountId, serviceDeliveryId } })
+        await reportSystemError({ source: 'server', route: '/api/tools/fax/send', method: 'POST', message: "A faxed file could not be kept in the company's storage (the company is being moved) — the old copy was kept", context: { fileName, accountId, serviceDeliveryId } })
       }
     } catch (e) {
       try {
@@ -247,6 +249,7 @@ export async function POST(req: NextRequest) {
     }
   }
   if (!uploadFiledInStorage && !documentId && fileBase64) {
+    const personalPaper = (await import('@/lib/fax/save-sent-upload')).looksPersonal(fileName)
     try {
       const bytes = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
       const safeName = (fileName.replace(/[^\w.\-]+/g, '_').slice(0, 120)) || 'document.pdf'
@@ -268,7 +271,8 @@ export async function POST(req: NextRequest) {
             mime_type: mime,
             file_size: bytes.length,
             status: 'classified',
-            account_id: accountId,
+            // a personal paper (passport, ID, SS-4, 1040 …) is NEVER listed on a company's Documents tab
+            account_id: personalPaper ? null : accountId,
             portal_visible: false,
             notify_client: false,
           })

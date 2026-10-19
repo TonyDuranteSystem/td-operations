@@ -66,9 +66,13 @@ export function periodYearFromName(fileName: string, now: Date = new Date()): nu
   return ok.length === 1 ? ok[0] : null
 }
 
-/** A person's own paper: it must never sit in a company's storage. */
+/**
+ * A person's own paper: it must never sit in a company's storage — nor be listed on a company's Documents tab. CONSERVATIVE: the
+ * identity and residence papers, and the forms that carry a person's tax id (SS-4 names a responsible person; 1040 / 1040-NR are an
+ * individual's return; W-7 / ITIN; W-8BEN). A company return (1120, 1065, 5472 …) is not personal.
+ */
 export function looksPersonal(fileName: string): boolean {
-  return /(passport|passaporto|id[ _-]?card|identity|driver|licen[cs]e|carta d.identit|\bw-?7\b|\bitin\b|\bssn\b|social security|proof of address|utility bill)/i.test(fileName)
+  return /(passport|passaporto|id[ _-]?card|identity|driver|licen[cs]e|carta d.identit|birth cert|\bvisa\b|\bi-?94\b|\bw-?7\b|\bitin\b|\bssn\b|social security|proof of address|utility bill|\bss-?4\b|\b1040(?:-?(?:nr|sr|x))?\b|\bw-?8-?ben\b|\b8843\b)/i.test(fileName)
 }
 
 const PAGE = 1000
