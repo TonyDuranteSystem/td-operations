@@ -48,6 +48,7 @@ const PIPELINE_TO_WELCOME_SLUG: Record<string, string> = {
   "Banking Physical": "banking_physical",
   "Client Onboarding": "client_onboarding",
   "Company Closure": "closure",
+  "Company Change Name": "company_change_name",
 }
 
 /**
