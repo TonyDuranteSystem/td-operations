@@ -51,6 +51,8 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/hermes-bridge": "*/5 * * * *",
   "/api/cron/approval-executor": "*/5 * * * *",
   "/api/cron/hermes-health": "*/5 * * * *",
+  // TD Marketing lead intake safety net (dev job 9aec66fa): retries failed Meta lead fetches and re-reads recent leads. Does nothing until META_PAGE_ACCESS_TOKEN is set.
+  "/api/cron/marketing-lead-retry": "*/5 * * * *",
   // Self-hosted WhatsApp bridge watchdog (dev job 907b2535) — emails once when the bridge stops reporting.
   "/api/cron/wa-bridge-watch": "*/5 * * * *",
   // Links WhatsApp chats to their lead/contact by phone number every minute (dev job 907b2535).
