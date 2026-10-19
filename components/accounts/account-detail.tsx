@@ -15,6 +15,7 @@ import {
 import { ACCOUNT_TYPE } from '@/lib/constants'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
+import { FixSpellingButton } from './fix-spelling-button'
 import { SuiteAssignedField } from './suite-assigned-field'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { ReferralsGivenCard } from '@/components/referrals/referrals-given-card'
@@ -718,7 +719,15 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         </button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
-            <EditableField label="" value={account.company_name} onSave={async (v) => { const r = await updateAccountField(account.id, 'company_name', v, account.updated_at); if (r.success) toast.success('Saved'); else toast.error(r.error ?? 'Failed'); return r }} className="text-2xl font-semibold tracking-tight" />
+            <EditableField
+              label=""
+              value={account.company_name}
+              lockedMessage="Please use Fix spelling (next to the name). A real new name goes through the Change Name service."
+              onLockedClick={(m) => toast.info(m)}
+              onSave={async (v) => { const r = await updateAccountField(account.id, 'company_name', v, account.updated_at); if (r.success) toast.success('Saved'); else toast.error(r.error ?? 'Failed'); return r }}
+              className="text-2xl font-semibold tracking-tight"
+            />
+            <FixSpellingButton accountId={account.id} currentName={account.company_name} />
             {account.entity_type && (
               <span className="text-xs font-medium px-2 py-0.5 rounded bg-indigo-100 text-indigo-700">
                 {ENTITY_LABELS[account.entity_type] ?? account.entity_type}

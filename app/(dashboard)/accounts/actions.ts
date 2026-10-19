@@ -14,7 +14,7 @@ import { createAccount as createAccountOp, createAndLinkContact as createAndLink
 import { setAccountRenewalDate, type RenewalDateColumn } from '@/lib/operations/renewal-dates'
 import { handNameEditProblem } from '@/lib/operations/account-name-change'
 import { allocateCompanySuite, adminChangeCompanySuite, syncPhysicalAddressToSuite } from '@/lib/operations/suite'
-import { isOwnerOnly } from '@/lib/auth'
+import { isOwnerOnly, isStaffUser } from '@/lib/auth'
 import type { Json } from '@/lib/database.types'
 
 const RENEWAL_DATE_FIELDS = new Set<string>(['ra_renewal_date', 'annual_report_due_date'])
@@ -26,6 +26,21 @@ async function getDashboardActor(): Promise<string> {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   return `dashboard:${user?.email?.split('@')[0] ?? 'unknown'}`
+}
+
+/**
+ * "Fix spelling" next to a company's name: corrects a typo of at most two letters (or capitals / spacing), renames the storage top
+ * folder to match, and records no previous name. A real new name is refused here and goes through the Change Name service.
+ */
+export async function fixAccountNameSpelling(accountId: string, newName: string): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isStaffUser(user)) return { success: false, error: 'Not allowed.' }
+  const { fixCompanyNameSpelling } = await import('@/lib/operations/account-name-spelling')
+  const result = await fixCompanyNameSpelling({ accountId, newName, actor: await getDashboardActor() })
+  if (!result.ok) return { success: false, error: result.error }
+  revalidatePath(`/accounts/${accountId}`)
+  return { success: true }
 }
 
 export async function updateAccountField(
