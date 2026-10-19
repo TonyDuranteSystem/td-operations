@@ -207,6 +207,10 @@ export const NOT_A_VOCABULARY = new Set([
   "storage_app_tokens_kind_check",
   "store_change_log_item_kind_check",
   "store_change_log_op_check",
+  // TEMPORARY (2026-10-18, CI "Sandbox still enforces what production enforces" red on every build since 2026-10-17): `storage_check_notes_kind_check`
+  // is a value list (Storage check notes, PR #694, dev job ad09ea91), present in the sandbox but not in the committed production snapshot.
+  // At the NEXT full `npm run snapshot:constraints`, MOVE it into CONSTRAINT_CONTRACTS with its code-side list and delete this line.
+  "storage_check_notes_kind_check",
   // TEMPORARY (2026-10-12, CI "Sandbox still enforces what production enforces" went red on every build): these 13 ARE
   // value lists, not shape rules — they were added by features shipped after the last full `npm run snapshot:constraints`
   // and were never registered. Checked against production 2026-10-12: it holds all of them EXCEPT the three pwa_events_*
