@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail, listAllAuthUsers } from '@/lib/auth-admin-helpers'
 import { isAdmin } from '@/lib/auth'
+import { isMarketingRole } from '@/lib/auth/role-door'
 import { generateTempPassword, sendStaffCredentialsEmail } from '@/lib/auth/staff-credentials'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -18,7 +19,8 @@ export async function GET() {
 
   const allUsers = await listAllAuthUsers()
   const dashboardUsers = allUsers
-    .filter(u => u.app_metadata?.role !== 'client')
+    // A marketing login is not a staff member (TD Marketing P1): it is managed from the marketing team page, never here.
+    .filter(u => u.app_metadata?.role !== 'client' && !isMarketingRole(u.app_metadata?.role))
     .map(u => ({
       id: u.id,
       email: u.email,
@@ -120,6 +122,10 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'user_id required' }, { status: 400 })
   }
 
+  if (await isMarketingTarget(user_id)) {
+    return NextResponse.json({ error: MARKETING_TARGET_MESSAGE }, { status: 400 })
+  }
+
   // Self-protection: can't change own role or disable self. Renaming yourself is harmless, so a
   // name-only change is allowed on your own account.
   if (user_id === user.id && (role !== undefined || disabled !== undefined)) {
@@ -187,6 +193,9 @@ export async function DELETE(request: NextRequest) {
   if (user_id === user.id) {
     return NextResponse.json({ error: 'Cannot delete your own account' }, { status: 400 })
   }
+  if (await isMarketingTarget(user_id)) {
+    return NextResponse.json({ error: MARKETING_TARGET_MESSAGE }, { status: 400 })
+  }
 
   const { error } = await supabaseAdmin.auth.admin.deleteUser(user_id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -196,9 +205,17 @@ export async function DELETE(request: NextRequest) {
 
 // --- Helpers ---
 
+const MARKETING_TARGET_MESSAGE = 'This is a marketing login. Manage it from the marketing team page, not from staff management.'
+
+/** True when the target login belongs to the marketing workspace: staff tools must not change, disable or delete it. */
+async function isMarketingTarget(userId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin.auth.admin.getUserById(userId)
+  return isMarketingRole(data?.user?.app_metadata?.role)
+}
+
 const ADMIN_EMAILS = ['antonio.durante@tonydurante.us']
 
 function isAdminUser(u: { email?: string; app_metadata?: Record<string, unknown>; user_metadata?: Record<string, unknown> }): boolean {
   if (ADMIN_EMAILS.includes(u.email ?? '')) return true
-  return u.app_metadata?.role === 'admin' || u.user_metadata?.role === 'admin'
+  return u.app_metadata?.role === 'admin' // never user_metadata: self-writable
 }

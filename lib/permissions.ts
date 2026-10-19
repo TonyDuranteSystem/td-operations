@@ -9,7 +9,8 @@
  *   - UI: buttons only render if canPerform returns true
  *   - API: routes return 403 if canPerform returns false
  *
- * Role source: Supabase Auth user_metadata.role or email check (see lib/auth.ts)
+ * Role source: Supabase Auth app_metadata.role (service-role-writable only) or the
+ * admin email list (see lib/auth.ts) — never user_metadata, which users can edit.
  */
 
 import type { User } from "@supabase/supabase-js"

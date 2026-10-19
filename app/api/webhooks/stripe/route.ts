@@ -17,6 +17,7 @@ import { runActivation } from "@/lib/operations/activate-service"
 import { resolveExternalValue } from "@/lib/catalog/framework"
 import { handleChargeReversal } from "@/lib/operations/credit-reversal"
 import { saveAutopayCard } from "@/lib/operations/card-autopay"
+import { isNonClientPayment, readPaymentKind } from "@/lib/payments/payment-kind"
 
 type StripeClient = ReturnType<typeof StripeConstructor>
 
@@ -175,12 +176,33 @@ async function handleCheckoutCompleted(session: StripeSession) {
   }
 
   // 1. Log webhook event
-  await getSupabase().from("webhook_events").insert({
+  const { error: eventErr } = await getSupabase().from("webhook_events").insert({
     source: "stripe",
     event_type: "checkout.session.completed",
     external_id: sessionId,
     payload: session as unknown as Record<string, unknown>,
   })
+
+  // 1b. Non-client payment (e.g. a marketing payment link, tagged payment_kind):
+  //     it must not convert a CRM lead, upgrade a portal tier, consume a pending
+  //     activation (incl. the email fallback), reconcile to a client invoice, or
+  //     create a client payment row. The webhook_events row above is the record;
+  //     the marketing ledger reads it. Absent tag = normal client payment, unchanged.
+  if (isNonClientPayment(session.metadata)) {
+    if (eventErr) {
+      // A partial unique index (one row per Stripe session for tagged payments) makes a redelivery
+      // fail with 23505: that means the record already exists, so acknowledge it (no second row,
+      // no double count). ANY other failure means the record was NOT saved: answer 500 so Stripe
+      // sends the event again instead of the payment silently vanishing from the ledger.
+      if (eventErr.code === "23505") {
+        console.warn(`[stripe-webhook] ${sessionId}: tagged payment already recorded — redelivery acknowledged`)
+        return
+      }
+      throw new Error(`stripe webhook: could not record tagged payment ${sessionId}: ${eventErr.message}`)
+    }
+    console.warn(`[stripe-webhook] ${sessionId}: payment_kind=${readPaymentKind(session.metadata)} — non-client payment, client effects skipped`)
+    return
+  }
 
   // 2. Look up client by email in CRM
   let accountId: string | null = null

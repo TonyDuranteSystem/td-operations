@@ -139,8 +139,9 @@ describe('every route that takes a thread or message id from the browser checks 
   })
   it('the reaction route refuses a non-member', () => {
     const src = read('app/api/team/messages/[id]/react/route.ts')
-    expect(src).toContain('assertGroupAccess')
-    expect(src).toContain("access.kind === 'denied'")
+    // J-B: the shared check now covers groups AND direct messages
+    expect(src).toContain('assertThreadAccess')
+    expect(src).toContain('!access.allowed')
   })
   it('the two read functions only return a group to a member', () => {
     const sql = read('scripts/migrations/20261009-2100-team-groups.sql')

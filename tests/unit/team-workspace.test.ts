@@ -255,12 +255,18 @@ describe('isStaffAuthRole — who counts as TD staff', () => {
     expect(isStaffAuthRole('CLIENT')).toBe(false)
   })
 
-  it('treats an absent role as staff — legacy accounts predate the field', () => {
-    // Documents the deliberate deny-list trade-off: this preserves the old
-    // `role !== "client"` behaviour for accounts with no role set.
-    expect(isStaffAuthRole(null)).toBe(true)
-    expect(isStaffAuthRole(undefined)).toBe(true)
-    expect(isStaffAuthRole('')).toBe(true)
+  it('an absent, empty or unknown role is NOT staff (allow-list since TD Marketing P1, 2026-10-17)', () => {
+    expect(isStaffAuthRole(null)).toBe(false)
+    expect(isStaffAuthRole(undefined)).toBe(false)
+    expect(isStaffAuthRole('')).toBe(false)
+    expect(isStaffAuthRole('contractor')).toBe(false)
+    expect(isStaffAuthRole('staff')).toBe(false)
+  })
+  it('only admin and team are staff, in any letter case', () => {
+    expect(isStaffAuthRole('admin')).toBe(true)
+    expect(isStaffAuthRole('team')).toBe(true)
+    expect(isStaffAuthRole(' Team ')).toBe(true)
+    expect(isStaffAuthRole('marketing')).toBe(false)
   })
 
   it('every listed non-staff role is rejected', () => {

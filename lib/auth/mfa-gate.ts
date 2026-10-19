@@ -48,6 +48,12 @@ export interface MfaGateEnv {
   graceUntilRaw: string | undefined
   /** Injectable clock for tests. */
   now: number
+  /**
+   * STRICT subject: no grace period and no owner exemption, ever (TD Marketing, 2026-10-18). Marketing logins belong to outsiders who
+   * can create payment links and see customer data; the staff transition deadline and the owner's own-account exemption are not theirs.
+   * Absent = false = today's behaviour for every existing caller.
+   */
+  strict?: boolean
 }
 
 /** Exported for tests + the enroll page's own "can I still skip?" check. */
@@ -65,7 +71,7 @@ export function resolveMfaGate(env: MfaGateEnv): MfaVerdict {
   // when it has a factor — otherwise turning the exemption on would silently
   // weaken an account that is currently protected, and someone who exempted
   // themselves and forgot would believe they were covered.
-  if (env.exempt && !env.hasVerifiedFactor) return 'allow'
+  if (env.exempt && !env.strict && !env.hasVerifiedFactor) return 'allow'
 
   if (env.hasVerifiedFactor) {
     // Enrolled: the challenge is never grace-exempt — an enrolled user who
@@ -76,6 +82,6 @@ export function resolveMfaGate(env: MfaGateEnv): MfaVerdict {
   }
 
   // Not enrolled.
-  if (isWithinGrace(env.graceUntilRaw, env.now)) return 'allow'
+  if (!env.strict && isWithinGrace(env.graceUntilRaw, env.now)) return 'allow'
   return 'enroll'
 }
