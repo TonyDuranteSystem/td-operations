@@ -38,7 +38,8 @@ final class AppModel: ObservableObject {
     private lazy var api = StorageAPI(baseURL: baseURL, store: store, lease: lease)
     private var leaseTimer: Timer?
     private var wakeObserver: NSObjectProtocol?
-    private let domain = NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier(rawValue: "td-storage"), displayName: "TD Storage")
+    // the name Finder shows: "TD Storage" in the real app, "TD Storage (test)" / "(sandbox)" in the other builds so they can sit side by side
+    private let domain = NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier(rawValue: "td-storage"), displayName: (Bundle.main.infoDictionary?["TDDomainName"] as? String) ?? "TD Storage")
     private var flow: LoopbackSignIn?
 
     var deviceName: String { Host.current().localizedName ?? "This Mac" }

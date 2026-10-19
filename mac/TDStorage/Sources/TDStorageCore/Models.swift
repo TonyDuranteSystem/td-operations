@@ -33,8 +33,11 @@ public struct FileRef: Codable, Equatable, Hashable {
     public var mine: Bool?
 }
 public struct OwnerInfo: Codable, Equatable { public var kind: String; public var label: String; public var accountStatus: String?; public var closed: Bool }
+/// a person listed in a company's "2. Contacts": `ownerId` is that person's own storage (nil = none to open)
+public struct PersonRef: Codable, Equatable, Hashable { public var contactId: String; public var name: String; public var ownerId: String? }
 public struct FolderListing: Codable, Equatable {
     public var owner: OwnerInfo; public var folder: FolderRef?; public var folders: [FolderRef]; public var files: [FileRef]
+    public var people: [PersonRef]?
 }
 
 public enum ChangeKind: String, Codable { case file, folder, owner }
