@@ -9,6 +9,9 @@ const MIGRATION = readFileSync(
   join(process.cwd(), "scripts/migrations/20260924-2300-crm-store-foundation-s1.sql"),
   "utf8",
 )
+// The seeded client-safe-stage catalog = the S1 seed + the later migration that added Company Change Name's row
+// (20261019-1000, the state's stamped document). Only the twin check below reads both.
+const SEEDED_CLIENT_SAFE = MIGRATION + "\n" + readFileSync(join(process.cwd(), "scripts/migrations/20261019-1000-change-name-8-steps.sql"), "utf8")
 
 describe("store access allow-list", () => {
   it("allows admin and team, case/space-insensitive", () => {
@@ -61,7 +64,7 @@ describe("S1 migration invariants (static)", () => {
   })
   it("client-safe stages in the catalog match today's code, plus the signed SS-4 (Antonio #43)", () => {
     for (const [serviceType, stages] of Object.entries(CLIENT_SAFE_FLOW_DOC_STAGES)) {
-      const row = MIGRATION.match(new RegExp(`"service_type":"${serviceType}","stages":\\[([^\\]]*)\\]`))
+      const row = SEEDED_CLIENT_SAFE.match(new RegExp(`"service_type":"${serviceType}","stages":\\[([^\\]]*)\\]`))
       expect(row, serviceType).toBeTruthy()
       const seeded = JSON.parse(`[${row![1]}]`) as string[]
       const expected = serviceType === "Company Formation" ? [...Array.from(stages), "Signed"] : Array.from(stages)

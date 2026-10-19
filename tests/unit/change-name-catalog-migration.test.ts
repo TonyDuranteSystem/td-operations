@@ -106,6 +106,16 @@ describe('change-name 8-step migration ⇄ code constants', () => {
     expect(sql).toContain("('Form Change Name received from the SoS',  'Update our records',              6)")
   })
 
+  it("the state's stamped document is client-visible in the database too (twin of CLIENT_SAFE_FLOW_DOC_STAGES)", () => {
+    expect(sql).toContain(`'{"service_type":"Company Change Name","stages":["${CHANGE_NAME_STAGES.wait}"]}'`)
+    expect(undo).toContain("catalog_id = 'storage_client_safe_stages' AND slug = 'company_change_name'")
+  })
+
+  it('re-runs the marketing database lock for the backup table it creates, only where that lock exists', () => {
+    expect(sql).toMatch(/to_regprocedure\('public\.marketing_lock_all_tables\(\)'\) IS NOT NULL/)
+    expect(sql).toContain('PERFORM public.marketing_lock_all_tables();')
+  })
+
   it('is one transaction with a backup, refuses to commit a wrong result, and retires the old workflow card', () => {
     expect(sql).toMatch(/^BEGIN;/m)
     expect(sql).toMatch(/^COMMIT;/m)

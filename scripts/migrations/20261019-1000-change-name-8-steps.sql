@@ -21,7 +21,9 @@
 --      last step goes to "Completed"; an active one to "Update our records").
 --   3. Open to-do cards of the workflow company_change_name_workflow are cancelled (the Calendar is the to-do) and the workflow is
 --      set to draft (the dispatcher ignores drafts) — new jobs spawn no card; createSD no longer makes a plain fallback card for this service.
---   4. Everything touched is first copied into public.zz_change_name_8_steps_backup (the UNDO restores from it).
+--   4. The state's stamped document (uploaded at "Waiting for the state") is client-visible: one catalog row, storage_client_safe_stages
+--      / company_change_name, the database twin of CLIENT_SAFE_FLOW_DOC_STAGES in lib/flows/flow-doc-visibility.ts.
+--   5. Everything touched is first copied into public.zz_change_name_8_steps_backup (the UNDO restores from it).
 --   Not touched: stage_history of the jobs (history), anything of another service.
 -- ONE transaction; every part checks before it acts (re-runnable); the end refuses to commit anything that does not look exactly as intended.
 -- UNDO: 20261019-1000-change-name-8-steps.UNDO.sql (refuses unless every name-change job still sits on step 1 or 2).
@@ -41,6 +43,15 @@ CREATE TABLE IF NOT EXISTS public.zz_change_name_8_steps_backup (
 );
 ALTER TABLE public.zz_change_name_8_steps_backup ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.zz_change_name_8_steps_backup FROM PUBLIC, anon, authenticated;
+-- the marketing database lock must be run again by every migration that creates a table (it only exists where the marketing
+-- migration has been applied; the table above is already closed to every login role either way)
+DO $do$
+BEGIN
+  IF to_regprocedure('public.marketing_lock_all_tables()') IS NOT NULL THEN
+    PERFORM public.marketing_lock_all_tables();
+  END IF;
+END
+$do$;
 
 -- 1. Preflight: the five old steps, or the eight new ones already (then nothing below changes) ------------------------------
 DO $do$
@@ -212,6 +223,13 @@ BEGIN
 END
 $do$;
 
+-- 6b. The state's stamped document is client-visible (catalog twin of CLIENT_SAFE_FLOW_DOC_STAGES; skipped where that catalog is absent)
+INSERT INTO public.catalog_entries (catalog_id, slug, display_name, status, metadata)
+SELECT 'storage_client_safe_stages', 'company_change_name', 'Company Change Name', 'active',
+       '{"service_type":"Company Change Name","stages":["Waiting for the state"]}'::jsonb
+ WHERE EXISTS (SELECT 1 FROM public.catalog_definitions WHERE id = 'storage_client_safe_stages')
+   AND NOT EXISTS (SELECT 1 FROM public.catalog_entries WHERE catalog_id = 'storage_client_safe_stages' AND slug = 'company_change_name');
+
 -- 7. Check the result: refuse to commit anything that does not look exactly as intended -------------------------------------------
 DO $do$
 DECLARE
@@ -245,6 +263,11 @@ BEGIN
   END IF;
   IF EXISTS (SELECT 1 FROM public.catalog_entries WHERE catalog_id = 'task_workflows' AND slug = 'company_change_name_workflow' AND status <> 'draft') THEN
     RAISE EXCEPTION 'change-name-8-steps: the workflow is not a draft';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.catalog_definitions WHERE id = 'storage_client_safe_stages')
+     AND NOT EXISTS (SELECT 1 FROM public.catalog_entries WHERE catalog_id = 'storage_client_safe_stages' AND slug = 'company_change_name'
+                        AND status = 'active' AND metadata -> 'stages' = '["Waiting for the state"]'::jsonb) THEN
+    RAISE EXCEPTION 'change-name-8-steps: the client-visible-stage row is missing';
   END IF;
 END
 $do$;

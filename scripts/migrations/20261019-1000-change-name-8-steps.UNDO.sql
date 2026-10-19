@@ -55,6 +55,8 @@ BEGIN
 END
 $do$;
 
+DELETE FROM public.catalog_entries WHERE catalog_id = 'storage_client_safe_stages' AND slug = 'company_change_name';
+
 DROP TABLE public.zz_change_name_8_steps_backup;
 COMMIT;
 
