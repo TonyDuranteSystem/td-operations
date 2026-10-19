@@ -37,6 +37,7 @@ export const EVENT_KEY_LABELS: Record<string, string> = {
   members_updated: 'Members',
   person_left: 'Left',
   installment_2_paid: 'Tax gate',
+  account_status_changed: 'Status',
   contact_updated: 'Contact',
   offer_signed: 'Contract',
   workflow_spawned: 'Workflow',

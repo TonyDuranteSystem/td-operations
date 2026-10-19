@@ -3,6 +3,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { decideNotificationOwnership, splitReadable, type OwnershipCaller } from '@/lib/portal/notification-read'
+import { accountScopeWithHistory, historyKeepClauses } from '@/lib/documents/history-cutoff'
+import { getHistoryView } from '@/lib/portal/history-cutoff'
 import { NextRequest, NextResponse } from 'next/server'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -95,7 +97,11 @@ export async function GET(request: NextRequest) {
   // was re-scoped per-company in 2026-06-24. "Personal" means addressed to the
   // person and tied to no company.
   if (accountId && authContactId) {
-    const scope = `account_id.eq.${accountId},and(contact_id.eq.${authContactId},account_id.is.null)`
+    // A person who joined the company later sees the company's notices only from their start date; notices addressed to
+    // them personally (contact_id = them) and ones staff opened stay (dev job d14e823f). The personal half is never cut.
+    const hv = await getHistoryView(accountId, authContactId, 'notification')
+    const keep = historyKeepClauses(hv.cutoff, { viewerContactId: authContactId, ownerColumns: ['contact_id'], openedIds: Array.from(hv.opened) })
+    const scope = `${accountScopeWithHistory(accountId, keep)},and(contact_id.eq.${authContactId},account_id.is.null)`
     dataQuery = dataQuery.or(scope)
     countQuery = countQuery.or(scope)
   } else if (accountId) {

@@ -8,7 +8,7 @@ import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { listTeamMembers } from '@/lib/team/directory'
 import {
-  GROUP_THREAD_TYPE, isGroupMember, normalizeGroupName, validateAddMembers, validateNewGroup,
+  GROUP_THREAD_TYPE, isDmParticipant, isGroupMember, normalizeGroupName, validateAddMembers, validateNewGroup,
 } from '@/lib/team/groups-rules'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -45,6 +45,33 @@ export async function assertGroupAccess(threadId: string, userId: string): Promi
   const members = await listGroupMemberIds(threadId)
   return isGroupMember(members, userId) ? { kind: 'member', members } : { kind: 'denied', members: [] }
 }
+
+export interface ThreadAccess {
+  allowed: boolean
+  /** Why it was refused: a group the person is not in, or somebody else's direct message. */
+  reason: 'group' | 'dm' | null
+}
+
+/**
+ * For a thread id taken from the browser: may `userId` read or write it? Groups need membership, a direct message needs to
+ * be one of its two people; every other kind of thread is open to staff and keeps its own rules. A thread that does not
+ * exist is allowed here so the caller's own not-found handling runs. (TD Marketing job J-B: the by-id routes used to check
+ * only groups, so any staff member could read or write another pair's direct message by guessing its id.)
+ */
+export async function assertThreadAccess(threadId: string, userId: string): Promise<ThreadAccess> {
+  const { data: thread } = await db().from('internal_threads').select('thread_type, dm_key').eq('id', threadId).maybeSingle()
+  if (!thread) return { allowed: true, reason: null }
+  if (thread.thread_type === GROUP_THREAD_TYPE) {
+    const members = await listGroupMemberIds(threadId)
+    return isGroupMember(members, userId) ? { allowed: true, reason: null } : { allowed: false, reason: 'group' }
+  }
+  if (thread.thread_type === 'dm') {
+    return isDmParticipant(thread.dm_key, userId) ? { allowed: true, reason: null } : { allowed: false, reason: 'dm' }
+  }
+  return { allowed: true, reason: null }
+}
+
+export const THREAD_DENIED_MESSAGE = 'You are not part of this conversation.'
 
 // A plain shape (not a discriminated union): the project's non-strict tsc does not narrow unions on `ok`.
 export interface GroupResult<T> {

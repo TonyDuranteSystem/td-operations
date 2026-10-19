@@ -1,5 +1,6 @@
 import type { User } from "@supabase/supabase-js"
 import { isStaffAuthRole } from "@/lib/team/workspace"
+import { isMarketingRole } from "@/lib/auth/role-door"
 
 // The protected admin (MFA self-only, admin by email). Deliberately ONE login.
 const ADMIN_EMAILS = ["antonio.durante@tonydurante.us"]
@@ -34,9 +35,13 @@ export type CrmRole = 'admin' | 'team'
  * - Client: portal only (handled separately by isClient)
  */
 export function isAdmin(user: User | null): boolean {
+  // Reads ONLY app_metadata (service-role-writable) and the code email list. It must never consult user_metadata:
+  // the account holder can write that object themselves (supabase.auth.updateUser), so trusting its role let any
+  // logged-in client, partner or team user grant themselves admin (dev job f6ea4420, fixed again inside TD Marketing P1,
+  // 2026-10-17). Verified before the change: every production admin carries role 'admin' in app_metadata.
   if (!user) return false
   if (ADMIN_EMAILS.includes(user.email ?? "")) return true
-  return user.app_metadata?.role === "admin" || user.user_metadata?.role === "admin"
+  return user.app_metadata?.role === "admin"
 }
 
 /**
@@ -47,9 +52,9 @@ export function isAdmin(user: User | null): boolean {
  * trusting its role would let any logged-in user grant themselves admin.
  * app_metadata is service-role-writable only; ADMIN_EMAILS is code.
  *
- * NOTE: isAdmin() itself still trusts user_metadata — that is a known,
- * separately-tracked security fix, deliberately NOT bundled into the MFA
- * ship. Never gate anything security-sensitive on isAdmin until it lands.
+ * Since TD Marketing P1 (2026-10-17) isAdmin() applies the same rule (it no
+ * longer trusts user_metadata), so the two are equivalent; this name is kept for
+ * the call sites that rely on it.
  */
 export function isSecureAdmin(user: User | null): boolean {
   if (!user) return false
@@ -77,7 +82,13 @@ export function isOwnerOnly(user: User | null): boolean {
 
 export function isTeam(user: User | null): boolean {
   if (!user) return false
-  return !isClient(user) && !isAdmin(user)
+  return isStaffAuthRole(user.app_metadata?.role) && !isAdmin(user)
+}
+
+/** A login of Rocco's marketing team (owner or member: that is team data, not a different login type). */
+export function isMarketingUser(user: User | null): boolean {
+  if (!user) return false
+  return isMarketingRole(user.app_metadata?.role)
 }
 
 export function isClient(user: User | null): boolean {
@@ -88,7 +99,7 @@ export function isClient(user: User | null): boolean {
 export function getCrmRole(user: User | null): CrmRole | null {
   if (!user) return null
   if (isAdmin(user)) return 'admin'
-  if (!isClient(user)) return 'team'
+  if (isStaffAuthRole(user.app_metadata?.role)) return 'team'
   return null
 }
 
@@ -101,6 +112,9 @@ export function isDashboardUser(user: User | null): boolean {
   if (!user) return false
   return !isClient(user)
 }
+// NOTE (TD Marketing P1): isDashboardUser still means "not a client" — 225 call sites rely on it. A marketing login
+// satisfies it, but the middleware door rule (lib/auth/role-door.ts) refuses a marketing login on every page and API that
+// is not the marketing workspace, so those routes are unreachable. Data-bearing routes move to isStaffUser in a follow-up job.
 
 /**
  * Is this user TD STAFF? Stricter than `isDashboardUser`, which only excludes

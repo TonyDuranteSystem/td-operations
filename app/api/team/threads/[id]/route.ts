@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
-import { listGroupMemberIds } from '@/lib/team/groups'
-import { isGroupMember } from '@/lib/team/groups-rules'
+import { listGroupMemberIds, assertThreadAccess, THREAD_DENIED_MESSAGE } from '@/lib/team/groups'
+import { isDmParticipant, isGroupMember } from '@/lib/team/groups-rules'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
 import { isValidWorkStatus } from '@/lib/team/workspace'
@@ -50,6 +50,13 @@ export async function GET(
     if (!isGroupMember(groupMembers, user.id)) {
       return NextResponse.json({ error: 'You are not in this group.' }, { status: 403 })
     }
+  }
+
+  // A DIRECT MESSAGE is private to its two people (TD Marketing job J-B): the id comes from the browser and this route
+  // reads with the service role, so without this any staff member could open another pair's conversation.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((thread as any).thread_type === 'dm' && !isDmParticipant((thread as any).dm_key, user.id)) {
+    return NextResponse.json({ error: THREAD_DENIED_MESSAGE }, { status: 403 })
   }
 
   // Load the NEWEST 500 (desc + limit), then flip to oldest→newest for display.
@@ -378,6 +385,10 @@ export async function PATCH(
   }
   const { id: threadId } = await params
   const body = await request.json().catch(() => ({}))
+
+  // Rename / archive / move only a conversation you are part of (a group's members, a direct message's two people).
+  const access = await assertThreadAccess(threadId, user.id)
+  if (!access.allowed) return NextResponse.json({ error: THREAD_DENIED_MESSAGE }, { status: 403 })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const patch: Record<string, any> = {}

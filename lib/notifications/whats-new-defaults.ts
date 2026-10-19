@@ -23,6 +23,7 @@ export const WHATS_NEW_DEFAULT_STEPS: Record<string, string> = {
   members_updated: 'Review the updated member details and reconcile the account',
   installment_2_paid: 'The tax return gate is lifted; check the return and take its next step',
   person_left: 'Check the company still has the right people; if the person asks for their documents, send them by hand',
+  account_status_changed: 'Check the status change is what you meant and the company page still shows the right things',
   contact_updated: 'Review the contact details the client submitted',
   plan_referrer_ready_to_release: 'Open the account page and click "Release commission"',
   recurring_invoice_generated: 'Review the Draft invoice in Finance and send it to the client',
