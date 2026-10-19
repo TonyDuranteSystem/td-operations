@@ -21,6 +21,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { saveFormForAccount } from "@/lib/crm-store/save-account-form"
+import { mergeArchiveMeta } from "@/lib/archive/meta-merge"
 import { isWizardUploadPath } from "@/lib/portal/wizard-uploads"
 
 export interface ArchiveResult {
@@ -124,26 +125,23 @@ export async function archiveTaxSubmission(submissionId: string): Promise<Archiv
     throw new Error(`archive: ${submissionId} not fully archived (retryable) — ${detail}`)
   }
 
-  // Success — set the marker (this is what the sweep keys on) + clean meta.
+  // Success — set the marker (this is what the sweep keys on). The record of where it filed is MERGED into the meta (never a whole
+  // replacement), so a flag another writer set meanwhile (the sweep's "alerted") survives.
   const { error: markErr } = await supabaseAdmin
     .from("tax_return_submissions")
-    // as never: drive_archived_at / drive_archive_meta are new columns not yet
-    // in the generated types (migration 20260724-1900). Remove after gen:types.
-    .update({
-      drive_archived_at: nowIso,
-      drive_archive_meta: {
-        attempts: priorAttempts + 1,
-        last_attempt_at: nowIso,
-        last_error: null,
-        summary_file_id: result.summaryFileId,
-        copied: result.copied,
-        skipped: result.skipped,
-        drive_folder_id: acc.drive_folder_id ?? null,
-        filed_in: saved.route === "store" ? "storage" : "folder",
-      },
-    } as never)
+    .update({ drive_archived_at: nowIso } as never)
     .eq("id", submissionId)
   if (markErr) throw new Error(`archive: succeeded but failed to set marker (retryable): ${markErr.message}`)
+  await mergeArchiveMeta("tax_return_submissions", submissionId, {
+    attempts: priorAttempts + 1,
+    last_attempt_at: nowIso,
+    last_error: null,
+    summary_file_id: result.summaryFileId,
+    copied: result.copied,
+    skipped: result.skipped,
+    drive_folder_id: acc.drive_folder_id ?? null,
+    filed_in: saved.route === "store" ? "storage" : "folder",
+  }).catch((e) => console.error("[archive-submission] filed, but the meta record could not be merged (non-fatal):", e))
 
   return { status: "archived", submissionId, copied: result.copied.length, skipped: result.skipped.length }
 }
@@ -155,19 +153,14 @@ async function recordAttempt(
   result: { copied: string[]; failed: string[]; errors: string[] } | null,
 ): Promise<void> {
   try {
-    await supabaseAdmin
-      .from("tax_return_submissions")
-      .update({
-        drive_archive_meta: {
-          attempts,
-          last_attempt_at: new Date().toISOString(),
-          last_error: lastError,
-          copied: result?.copied ?? [],
-          failed: result?.failed ?? [],
-          errors: result?.errors ?? [],
-        },
-      } as never)
-      .eq("id", submissionId)
+    await mergeArchiveMeta("tax_return_submissions", submissionId, {
+      attempts,
+      last_attempt_at: new Date().toISOString(),
+      last_error: lastError,
+      copied: result?.copied ?? [],
+      failed: result?.failed ?? [],
+      errors: result?.errors ?? [],
+    })
   } catch (e) {
     console.error("[archive-submission] failed to record attempt meta (non-fatal):", e)
   }

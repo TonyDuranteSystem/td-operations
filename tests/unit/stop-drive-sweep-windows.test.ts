@@ -33,7 +33,7 @@ beforeEach(() => { state.queries.length = 0; state.answers.length = 0 })
 describe("readSweepWindow", () => {
   it("asks for REAL, not-yet-alerted rows of companies that are not finished — all in the query — oldest first, limited", async () => {
     state.answers.push({ data: [{ id: "r1" }], error: null }, { data: [{ id: "n1" }], error: null }, { data: null, count: 40, error: null })
-    const w = await readSweepWindow<{ id: string }>("tax_return_submissions", "id, account_id", "2026-01-01T00:00:00Z", REAL)
+    const w = await readSweepWindow<{ id: string }>("tax_return_submissions", "id, account_id", { cutoffIso: "2026-01-01T00:00:00Z", realFilter: REAL })
     expect(w.candidates.map((r) => r.id)).toEqual(["r1", "n1"])
     expect(w.skippedFinished).toBe(40)
     const [withCompany, noCompany, finished] = state.queries
@@ -51,18 +51,28 @@ describe("readSweepWindow", () => {
     expect(noCompany.calls).toContainEqual(["or", [REAL]])
     // the finished ones are only counted
     expect(finished.opts).toEqual({ count: "exact", head: true })
-    expect(finished.calls).toContainEqual(["in", ["accounts.status", ["Closed", "Cancelled"]]])
+    // ONE finished rule (the enum labels in no-storage.ts); ilike would fail on the enum column
+    expect(finished.calls).toContainEqual(["or", ["status.in.(Closed,Cancelled)", { referencedTable: "accounts" }]])
+  })
+
+  it("a table with no company column (a lead-stage form) gets one plain query: no join, no finished filter", async () => {
+    state.answers.push({ data: [{ id: "f1" }], error: null })
+    const w = await readSweepWindow<{ id: string }>("formation_submissions", "id", { cutoffIso: "2026-01-01", realFilter: "status.eq.completed", hasAccount: false })
+    expect(w.candidates).toEqual([{ id: "f1" }])
+    expect(state.queries).toHaveLength(1)
+    expect(state.queries[0].select).not.toContain("accounts")
+    expect(state.queries[0].calls).toContainEqual(["or", ["status.eq.completed"]])
   })
 
   it("a row that is in both result sets appears once", async () => {
     state.answers.push({ data: [{ id: "x" }], error: null }, { data: [{ id: "x" }], error: null }, { data: null, count: 0, error: null })
-    const w = await readSweepWindow<{ id: string }>("banking_submissions", "id", "2026-01-01", "status.in.(completed,reviewed)")
+    const w = await readSweepWindow<{ id: string }>("banking_submissions", "id", { cutoffIso: "2026-01-01", realFilter: "status.in.(completed,reviewed)" })
     expect(w.candidates).toEqual([{ id: "x" }])
   })
 
   it("a read error is returned, never turned into 'nothing to do'", async () => {
     state.answers.push({ data: null, error: { message: "db down" } })
-    const w = await readSweepWindow("banking_submissions", "id", "2026-01-01", "status.in.(completed,reviewed)")
+    const w = await readSweepWindow("banking_submissions", "id", { cutoffIso: "2026-01-01", realFilter: "status.in.(completed,reviewed)" })
     expect(w.readError).toBe("db down")
     expect(w.candidates).toEqual([])
   })

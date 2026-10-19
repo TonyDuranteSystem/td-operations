@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
         // eslint-disable-next-line no-restricted-syntax -- pre-existing SS-4 fax task insert; left in place
         await supabaseAdmin.from("tasks").insert({
           task_title: `Fax SS-4 to IRS: ${ss4.company_name}`,
-          description: `The SS-4 for ${ss4.company_name} has been signed. The signed SS-4 and the IRS package are attached to the notification email sent to support@ — fax them to the IRS at (855) 641-6935.`,
+          description: `The SS-4 for ${ss4.company_name} has been signed. Fax the signed SS-4 (with the Articles) to the IRS at (855) 641-6935. The signed package comes to support@ in the "SS-4 Signed — Ready to Fax" email.`,
           assigned_to: "Luca",
           priority: "High",
           category: "Filing",
@@ -588,7 +588,7 @@ export async function POST(req: NextRequest) {
         ``,
         `IRS Fax Number: (855) 641-6935`,
         ``,
-        ...(!signedDocLinked || (mergedPdfBytes && !packageFiled)
+        ...(ss4.account_id && (!signedDocLinked || (mergedPdfBytes && !packageFiled))
           ? [
               `⚠️ NOT FILED: ${[!signedDocLinked ? "the signed SS-4" : null, mergedPdfBytes && !packageFiled ? "the combined SS-4 + Articles package" : null].filter(Boolean).join(" and ")} could not be filed in the company's documents. ${attachmentBytes ? "The attachment on this email is the only copy outside the signing record." : "It is in the signing record only."}`,
               ``,
@@ -700,7 +700,10 @@ export async function POST(req: NextRequest) {
       })
     } catch { /* non-blocking */ }
 
-    return NextResponse.json({ ok: true, results })
+    // This route is PUBLIC (the signing page calls it): the staff-level reasons stay in the server log and the staff email, and the
+    // response carries only neutral wording for a step that did not succeed.
+    if (results.some((x) => x.status === "error")) console.error("[ss4-signed] steps with errors:", JSON.stringify(results.filter((x) => x.status === "error")))
+    return NextResponse.json({ ok: true, results: results.map((x) => (x.status === "error" ? { step: x.step, status: x.status, detail: "Not completed — staff have been notified." } : x)) })
   } catch (err) {
     console.error("[ss4-signed]", err)
     return NextResponse.json({ error: "Internal error" }, { status: 500 })

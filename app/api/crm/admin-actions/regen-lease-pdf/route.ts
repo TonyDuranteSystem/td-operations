@@ -86,6 +86,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Storage upload failed: ${uploadErr.message}` }, { status: 500 })
     }
 
+    // a refusal after the copy was uploaded must not leave the regenerated PDF behind in the bucket
+    const dropOrphan = () => { supabaseAdmin.storage.from('signed-leases').remove([storagePath]).catch(() => {}) }
+
     // The regenerated lease goes to the company's storage — the same file key as the original signing, so it is a new
     // VERSION of that file. A company with no storage gets one plain sentence back.
     {
@@ -99,7 +102,10 @@ export async function POST(req: NextRequest) {
       })
       } catch (e) {
         // the company started moving after the check: a clean "try again", never a 500 (the lease row is not touched)
-        if (e instanceof CompanyMovingError) return NextResponse.json({ error: e.message }, { status: 409 })
+        if (e instanceof CompanyMovingError) {
+          dropOrphan()
+          return NextResponse.json({ error: e.message }, { status: 409 })
+        }
         throw e
       }
       if (routed.route === 'store') {
@@ -114,7 +120,10 @@ export async function POST(req: NextRequest) {
     // No storage: a company left on its old folder carries on as before; everyone else gets one plain sentence
     // (and the lease row is left untouched).
     const decision = await noStorageDecisionFor(lease.account_id)
-    if (decision.route === 'refuse') return NextResponse.json({ error: decision.sentence }, { status: NO_STORAGE_STATUS })
+    if (decision.route === 'refuse') {
+      dropOrphan()
+      return NextResponse.json({ error: decision.sentence }, { status: NO_STORAGE_STATUS })
+    }
 
     // Find Company subfolder
     const folderResult = await listFolder(decision.folderId) as {

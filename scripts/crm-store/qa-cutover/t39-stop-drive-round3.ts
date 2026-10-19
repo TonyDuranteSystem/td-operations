@@ -44,7 +44,7 @@ async function main() {
   created.push(real.data.id)
   const realId = real.data.id as string
 
-  const w = await readSweepWindow<{ id: string; account_id: string }>("tax_return_submissions", "id, account_id, status, review_status, created_at, drive_archived_at, drive_archive_meta", CUTOFF, REAL)
+  const w = await readSweepWindow<{ id: string; account_id: string }>("tax_return_submissions", "id, account_id, status, review_status, created_at, drive_archived_at, drive_archive_meta", { cutoffIso: CUTOFF, realFilter: REAL })
   const ids = new Set(w.candidates.map((r) => r.id))
   check("W1 250 unfilled shells in front of 1 real row: the real row IS in the window (the window is 200)", !w.readError && ids.has(realId), JSON.stringify({ err: w.readError, n: w.candidates.length }))
   check("W2 not one shell is in the window", !created.slice(0, 250).some((id) => ids.has(id)))
@@ -54,7 +54,7 @@ async function main() {
   const a = await archiveTaxSubmission(realId)
   const { data: after } = await sb.from("tax_return_submissions").select("drive_archived_at, drive_archive_meta").eq("id", realId).maybeSingle()
   check("A1 the archive job files it into the company's storage and sets the marker", a.status === "archived" && !!after?.drive_archived_at && after.drive_archive_meta?.filed_in === "storage", JSON.stringify({ a, meta: after?.drive_archive_meta }))
-  const w2 = await readSweepWindow<{ id: string }>("tax_return_submissions", "id, account_id, status, review_status, created_at, drive_archived_at, drive_archive_meta", CUTOFF, REAL)
+  const w2 = await readSweepWindow<{ id: string }>("tax_return_submissions", "id, account_id, status, review_status, created_at, drive_archived_at, drive_archive_meta", { cutoffIso: CUTOFF, realFilter: REAL })
   check("A2 once filed, the row is OUT of the window for good (nothing to alarm about, nothing to re-run)", !w2.candidates.some((r) => r.id === realId))
   check("A3 filing it again is a no-op", (await archiveTaxSubmission(realId)).status === "already_archived")
 
@@ -93,6 +93,44 @@ async function main() {
   check("M2 the same company when idle (Active, no folder, no storage): refused with the true reason", idle.ok === false && idle.reason === "no_folder", JSON.stringify(idle))
   const cd = await noStorageDecisionForContact(ct.data.id)
   check("M3 the contact variant of the one rule: a person with their own storage is never given a Drive folder", cd.route === "refuse", JSON.stringify(cd))
+
+  // ── round 5 ──
+  // P: two near-simultaneous review clicks → exactly ONE apply job (the database refuses the second)
+  const pr = await sb.from("tax_return_submissions").insert({ account_id: UX, token: `qa-t39-${tag}-par`, tax_year: 2090, entity_type: "SMLLC", status: "completed", submitted_data: {}, upload_paths: [], created_at: "2026-09-03T00:00:00Z" }).select("id").single()
+  if (pr.error) throw new Error(`parallel insert: ${pr.error.message}`)
+  created.push(pr.data.id)
+  const par = await Promise.all([1, 2, 3].map(() => approveAndApplyTaxReview({ submission_id: pr.data.id, actor: "qa-t39-par", leaveUnreviewed: true })))
+  const { data: pjobs } = await sb.from("job_queue").select("id").eq("related_entity_id", pr.data.id).eq("job_type", "tax_form_setup")
+  await sb.from("job_queue").update({ status: "completed" }).eq("related_entity_id", pr.data.id)
+  check("P1 three simultaneous review clicks → exactly ONE apply job, every click answers ok with the same job", par.every((x) => x.ok) && (pjobs ?? []).length === 1 && new Set(par.map((x) => x.job_id)).size === 1, JSON.stringify({ n: (pjobs ?? []).length, res: par.map((x) => ({ ok: x.ok, job: x.job_id, again: x.correctionsAlreadyApplied })) }))
+
+  // MM: the alert flag survives an attempt record and vice versa (atomic merge)
+  const { mergeArchiveMeta } = await import("../../../lib/archive/meta-merge")
+  await sb.from("tax_return_submissions").update({ drive_archive_meta: { attempts: 5 } }).eq("id", pr.data.id)
+  await Promise.all([
+    mergeArchiveMeta("tax_return_submissions", pr.data.id, { sweep_alerted: true }),
+    mergeArchiveMeta("tax_return_submissions", pr.data.id, { last_error: "x", attempts: 6 }),
+    mergeArchiveMeta("tax_return_submissions", pr.data.id, { filed_in: "storage" }),
+  ])
+  const { data: mm } = await sb.from("tax_return_submissions").select("drive_archive_meta").eq("id", pr.data.id).maybeSingle()
+  check("MM1 three parallel meta writes keep ALL their keys (the sweep's alert flag is never dropped)", mm?.drive_archive_meta?.sweep_alerted === true && mm.drive_archive_meta.attempts === 6 && mm.drive_archive_meta.filed_in === "storage" && mm.drive_archive_meta.last_error === "x", JSON.stringify(mm))
+
+  // F: a Closed company's submission is not in the window but is counted as left alone (the PR2 QA company is Cancelled)
+  const { data: canc } = await sb.from("accounts").select("id").in("status", ["Closed", "Cancelled"]).limit(1).maybeSingle()
+  if (canc) {
+    const cs = await sb.from("tax_return_submissions").insert({ account_id: canc.id, token: `qa-t39-${tag}-fin`, tax_year: 2091, entity_type: "SMLLC", status: "completed", submitted_data: {}, upload_paths: [], created_at: "2026-09-04T00:00:00Z" }).select("id").single()
+    created.push(cs.data.id)
+    const wo = await readSweepWindow<{ id: string }>("tax_return_submissions", "id, account_id", { cutoffIso: CUTOFF, realFilter: REAL })
+    check("F1 a submission of a Closed / Cancelled company is not in the window, but is counted as left alone", !wo.readError && !wo.candidates.some((r) => r.id === cs.data.id) && wo.skippedFinished >= 1, JSON.stringify({ err: wo.readError, n: wo.candidates.length, skipped: wo.skippedFinished }))
+  } else console.log("   (skipped F1: no Closed/Cancelled company in the sandbox)")
+
+  // N: a real tax row with NO company stays in the window (it is loud, not silent)
+  const nc = await sb.from("tax_return_submissions").insert({ token: `qa-t39-${tag}-noco`, tax_year: 2092, entity_type: "SMLLC", status: "completed", submitted_data: {}, upload_paths: [], created_at: "2026-09-05T00:00:00Z" }).select("id").single()
+  if (!nc.error) {
+    created.push(nc.data.id)
+    const wn = await readSweepWindow<{ id: string }>("tax_return_submissions", "id, account_id", { cutoffIso: CUTOFF, realFilter: REAL })
+    check("N1 a completed tax row with NO company stays in the window (decided loudly by the sweep, never skipped quietly)", wn.candidates.some((r) => r.id === nc.data.id))
+  } else console.log("   (skipped N1:", nc.error.message, ")")
 
   // cleanup
   await sb.from("job_queue").delete().in("related_entity_id", created)

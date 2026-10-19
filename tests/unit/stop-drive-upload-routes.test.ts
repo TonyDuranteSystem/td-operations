@@ -378,6 +378,8 @@ describe("a company being MOVED on the lease routes: a clean 409 'try again', ne
     expect(res.status).toBe(409)
     expect((await res.json()).error).toContain("try again in a few minutes")
     expect(state.recorded.filter((r) => r.table === "lease_agreements")).toEqual([])
+    // the regenerated copy that was already uploaded to the lease bucket is removed, not left behind
+    expect(state.removed.some((x) => x.includes("lease-signed-regen-"))).toBe(true)
   })
   it("lease-regen-drive: a clean 409, never a 500", async () => {
     state.movingMidSave = true

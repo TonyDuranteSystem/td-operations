@@ -352,7 +352,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
           // nothing, a company being moved, or a failed save leaves the form exactly as it was (still waiting for review).
           const { fileClosureSubmission } = await import("@/lib/crm-store/save-account-form")
           const outcome = await fileClosureSubmission(
-            { token, account_id: sub.account_id, contact_id: (sub.contact_id as string | null) ?? null, upload_paths: (sub.upload_paths as string[] | null) ?? [], completed_at: sub.completed_at },
+            { id: sub.id as string, token, account_id: sub.account_id, contact_id: (sub.contact_id as string | null) ?? null, upload_paths: (sub.upload_paths as string[] | null) ?? [], completed_at: sub.completed_at },
             submitted,
             clientName || token,
             "mcp/closure_form_review",
