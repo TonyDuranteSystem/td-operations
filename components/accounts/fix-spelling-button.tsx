@@ -7,8 +7,8 @@ import { SpellCheck, Check, X, Loader2 } from 'lucide-react'
 import { fixAccountNameSpelling } from '@/app/(dashboard)/accounts/actions'
 
 /**
- * "Fix spelling" beside a company's name — the only way to edit the name by hand (the pen is locked). It corrects a typo of at most
- * two letters (or capitals / spacing) and renames the storage folder to match; a real new name goes through the Change Name service.
+ * "Fix spelling" beside a company's name — the only way to edit the name by hand (the pen is locked). Type the right name: the company
+ * AND its storage folder are renamed to match. No previous name is recorded.
  */
 export function FixSpellingButton({ accountId, currentName }: { accountId: string; currentName: string }) {
   const router = useRouter()
@@ -23,7 +23,7 @@ export function FixSpellingButton({ accountId, currentName }: { accountId: strin
     const result = await fixAccountNameSpelling(accountId, draft)
     setSaving(false)
     if (!result.success) {
-      setError(result.error ?? 'Could not fix the spelling.')
+      setError(result.error ?? 'Could not fix the name.')
       return
     }
     toast.success('Spelling corrected')
@@ -62,7 +62,7 @@ export function FixSpellingButton({ accountId, currentName }: { accountId: strin
           <X className="h-4 w-4" />
         </button>
       </div>
-      <p className="text-xs text-zinc-500">Typos only (up to two letters). A real new name goes through the Change Name service.</p>
+      <p className="text-xs text-zinc-500">Type the right name. The storage folder is renamed to match.</p>
       {error && <p className="text-xs text-red-600">{error}</p>}
     </div>
   )

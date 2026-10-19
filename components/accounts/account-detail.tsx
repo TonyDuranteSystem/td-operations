@@ -722,7 +722,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
             <EditableField
               label=""
               value={account.company_name}
-              lockedMessage="Please use Fix spelling (next to the name). A real new name goes through the Change Name service."
+              lockedMessage="Please use Fix spelling (next to the name)."
               onLockedClick={(m) => toast.info(m)}
               onSave={async (v) => { const r = await updateAccountField(account.id, 'company_name', v, account.updated_at); if (r.success) toast.success('Saved'); else toast.error(r.error ?? 'Failed'); return r }}
               className="text-2xl font-semibold tracking-tight"

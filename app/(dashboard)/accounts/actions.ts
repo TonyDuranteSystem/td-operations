@@ -29,8 +29,8 @@ async function getDashboardActor(): Promise<string> {
 }
 
 /**
- * "Fix spelling" next to a company's name: corrects a typo of at most two letters (or capitals / spacing), renames the storage top
- * folder to match, and records no previous name. A real new name is refused here and goes through the Change Name service.
+ * "Fix spelling" next to a company's name: the person types the right name; the company and its storage top folder are renamed to
+ * match, and no previous name is recorded. (A company that really changed its name goes through the Change Name workspace.)
  */
 export async function fixAccountNameSpelling(accountId: string, newName: string): Promise<{ success: boolean; error?: string }> {
   const supabase = createClient()
