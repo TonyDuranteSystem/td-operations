@@ -100,6 +100,8 @@ export interface Account {
   // the `?` keeps callers safe via `??` fallback.
   client_since?: string | null
   ra_switch_date?: string | null
+  /** The legal name before the most recent name change (Change Name). Absent in production until migration 20261019-1400 runs. */
+  previous_name?: string | null
   portal_account: boolean | null
   portal_created_date: string | null
   services_bundle: string[] | null

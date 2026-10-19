@@ -12,6 +12,7 @@ import { syncPortalLoginEmail } from '@/lib/operations/portal-login-email'
 import { createSD } from '@/lib/operations/service-delivery'
 import { createAccount as createAccountOp, createAndLinkContact as createAndLinkContactOp } from '@/lib/operations/account'
 import { setAccountRenewalDate, type RenewalDateColumn } from '@/lib/operations/renewal-dates'
+import { handNameEditProblem } from '@/lib/operations/account-name-change'
 import { allocateCompanySuite, adminChangeCompanySuite, syncPhysicalAddressToSuite } from '@/lib/operations/suite'
 import { isOwnerOnly } from '@/lib/auth'
 import type { Json } from '@/lib/database.types'
@@ -92,6 +93,13 @@ export async function updateAccountField(
     coercedValue = normalized
   } else {
     coercedValue = value || null
+  }
+
+  // A company's legal name changes ONLY through the Change Name service (previous name + storage archive in one step) — a hand
+  // edit of the name is refused, except a fix of capital letters / spacing (lib/operations/account-name-change.ts).
+  if (field === 'company_name') {
+    const problem = await handNameEditProblem(accountId, { company_name: coercedValue })
+    if (problem) return { success: false, error: problem }
   }
 
   // ra_renewal_date / annual_report_due_date go through setAccountRenewalDate

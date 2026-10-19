@@ -778,6 +778,11 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
               </button>
             )}
           </div>
+          {account.previous_name && (
+            <p className="text-sm text-zinc-500 mt-0.5" title="The company's legal name before its most recent name change">
+              Previously: {account.previous_name}
+            </p>
+          )}
           <p className="text-muted-foreground text-sm mt-1">
             {account.state_of_formation && `${account.state_of_formation} · `}
             {activeServices.length} active services · {overduePayments.length} overdue payments
