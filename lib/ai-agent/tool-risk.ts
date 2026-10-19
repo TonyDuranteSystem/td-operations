@@ -17,7 +17,7 @@
  *   · lead_search / lead_get  — return offer links that sign a contract
  *   · msg_list_channels       — returns messaging provider config (credentials)
  *   · bank_statement_pnl      — hand-curated as safe, yet overwrites the client's
- *                               filed P&L because upload_to_drive DEFAULTS TRUE
+ *                               filed P&L because save_to_storage DEFAULTS TRUE
  *
  * The naming heuristic is GONE. This is now a positive allow-list: a tool is
  * auto-runnable ONLY if a human read its handler and listed it below. Everything else
@@ -83,7 +83,7 @@ export const HARD_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
  *    by strangers.
  *
  * 2. IRREVERSIBLE CLIENT-FACING DOCUMENTS. Offers, leases, operating agreements,
- *    ITIN forms, invoices and the accountant hand-off all go to a real person and
+ *    ITIN forms and invoices all go to a real person and
  *    cannot be recalled. Firing one from a queue — where the payload was frozen
  *    minutes or hours earlier and nothing re-verifies the recipient — is the same
  *    risk in a different shape.
@@ -119,7 +119,6 @@ export const NO_APPROVAL_SEND_TOOLS: ReadonlySet<string> = new Set([
   "oa_send",
   "itin_form_send",
   "portal_invoice_send",
-  "tax_send_to_accountant",
 ])
 
 /**
@@ -134,8 +133,8 @@ export const EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
   "portal_invoice_create", "portal_invoice_send", "portal_create_user",
   "portal_chat_send", "portal_team_send",
   "sd_advance_stage", "service_deactivate", "service_reactivate",
-  "referral_payout", "tax_send_to_accountant", "formation_confirm",
-  "drive_delete", "storage_delete", "agent_msg_send",
+  "referral_payout", "formation_confirm",
+  "storage_delete", "agent_msg_send",
   "calendar_create_event", "calendar_update_event", "calendar_delete_event",
   "hc_submit_ra_change",
   "whop_create_product", "whop_update_product", "whop_delete_product",
@@ -153,7 +152,7 @@ export const EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
  * set requires approval — that is the fail-safe, and it is the whole design.
  *
  * NOTABLY ABSENT, and why — these were auto-run under the old name-guessing:
- *   bank_statement_pnl     upload_to_drive DEFAULTS TRUE → overwrites the client's P&L
+ *   bank_statement_pnl     save_to_storage DEFAULTS TRUE → overwrites the client's P&L
  *   sysdoc_read            no agent_readable gate, no redaction; reads credentials
  *   signature_request_get  returns a link that signs a legal document as the client
  *   docai_ocr_file         OCRs any Drive file by id → passports, tax returns
@@ -237,7 +236,7 @@ export const READ_TOOLS: ReadonlySet<string> = new Set([
  * or "…_status" that mutates on a flag is caught by default rather than by luck.
  */
 const ESCALATING_FLAGS = [
-  "apply_changes", "send_email", "save_to_drive", "send", "email_client", "notify_client",
+  "apply_changes", "send_email", "save_to_drive", "save_to_storage", "send", "email_client", "notify_client",
   "mark_reviewed", "mark_complete", "mark_sent", "mark_paid",
   "confirm", "confirm_resend", "approve", "execute", "apply", "publish", "finalize",
 ]

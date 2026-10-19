@@ -150,7 +150,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'tools', name: 'Tools', href: '/tools', icon: Wrench, tooltip: 'Operator tools hub — fax, e-sign, system health, exceptions, client health, config, dev tools, portal launch.' },
   { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet, tooltip: 'Invoices, payments, bank feed reconciliation, and financial overview. Includes the bank-feed review queue for uncertain auto-matches and crashed activations.' },
   { id: 'owner', name: 'My Finances', href: '/owner', icon: TrendingUp, ownerOnly: true, tooltip: 'Tony Durante LLC — P&L, cash position, transaction categorization, tax estimates. Owner only.' },
-  { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status, deadlines, and accountant assignments.' },
+  { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status and deadlines.' },
   // Calendar (dev job 40235e3c, Antonio 2026-10-16: "turn on the new calendar"): the ONE Calendar item. For people who may open the New Calendar
   // (the layout passes the 'new-calendar' flag from the same switch the page itself checks — see dashboard-navigation.md) it opens the new
   // day-by-day work list; for everyone else it keeps opening the existing /calendar, so nobody gets a 404 on a main menu item. The existing

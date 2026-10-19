@@ -1135,7 +1135,7 @@ Requires account_id or contact_id — whichever thread the file is headed to —
           mimeType = blob.type || guessMimeType(finalFilename)
         }
 
-        // 20MB, not drive_upload_file's 4MB or the client-upload path's
+        // 20MB, not the 4MB of the old upload tool or the client-upload path's
         // 100MB: this tool holds the whole file in memory for the copy
         // (unlike a browser's direct-to-storage PUT), so the real constraint
         // is memory/time for one buffer, not a platform upload ceiling — 20MB

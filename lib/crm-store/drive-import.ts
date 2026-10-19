@@ -183,8 +183,8 @@ export function cleanImportName(name: string): string {
 
 /** The parts of the CRM that still read files only from Drive (a moved company's files are no longer there for them). */
 export const STILL_READ_DRIVE = [
-  "the accountant hand-off (tax)", "the welcome package", "Generate Documents (Operating Agreement)",
-  "the AI/MCP document tools", "bank-statement processing", "portal Services and service-workspace pages", "portal correspondence",
+  "the welcome package", "Generate Documents (Operating Agreement)",
+  "the MCP document-processing tools (doc_process_*, doc_bulk_process)", "bank-statement processing", "portal Services and service-workspace pages", "portal correspondence",
 ]
 
 const md5Hex = (b: Buffer) => createHash("md5").update(b).digest("hex")

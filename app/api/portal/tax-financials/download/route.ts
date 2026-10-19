@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: ownershipProblem }, { status: 422 })
     }
 
-    // The SAME workbook the accountant hand-off archives — one engine, one
+    // The SAME workbook the post-confirmation archive keeps — one engine, one
     // filing artifact (buildFinancialsWorkbookForAccount).
     const result = await buildFinancialsWorkbookForAccount(accountId, taxYear)
     if (!result) {

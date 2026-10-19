@@ -89,24 +89,16 @@ async function main() {
   const bank = capture((s) => registerBankStatementTools(s as never))
   const { data: yrRow } = await sb.from("bank_transactions").select("tax_year").eq("account_id", UX).limit(1).maybeSingle()
   const pnlYear = Number(yrRow?.tax_year ?? 2025)
-  const pnl = await bank["bank_statement_pnl"]({ account_id: UX, tax_year: pnlYear, upload_to_drive: true, notify_client: false })
+  const pnl = await bank["bank_statement_pnl"]({ account_id: UX, tax_year: pnlYear, save_to_storage: true, notify_client: false })
   const pnlText = pnl.content.map((c) => c.text).join("\n")
   console.log(`      (info) ${pnlText.split("\n").slice(0, 3).join(" | ").slice(0, 240)}`)
   const allPnl = async () => ((await sb.from("documents").select("id, drive_file_id, portal_visible").eq("account_id", UX).eq("document_type_name", "Profit & Loss Statement").like("file_name", `%PnL ${pnlYear}%`)).data ?? []) as Array<{ id: string; drive_file_id: string; portal_visible: boolean }>
   const pnlRows = await allPnl()
   check("P1 the P&L workbook is saved in the company's storage and shown to the client", pnlRows.length === 1 && pnlRows[0].drive_file_id.startsWith("store:") && pnlRows[0].portal_visible === true, `${pnlText.slice(0, 160)} rows=${JSON.stringify(pnlRows)}`)
-  await bank["bank_statement_pnl"]({ account_id: UX, tax_year: pnlYear, upload_to_drive: true, notify_client: false })
+  await bank["bank_statement_pnl"]({ account_id: UX, tax_year: pnlYear, save_to_storage: true, notify_client: false })
   const pnlAgain = await allPnl()
   check("P2 regenerating it is a new version of the same file (one row, same pointer)", pnlAgain.length === 1 && pnlAgain[0].drive_file_id === pnlRows[0]?.drive_file_id, JSON.stringify(pnlAgain))
 
-  // ── the AI assistant's file tool ──────────────────────────────────────────────────────────────────────────
-  const { executeTool } = await import("../../../lib/ai-agent/tools")
-  const ai = JSON.parse(await executeTool("drive_upload_file", { file_name: `QA Test ai file ${Date.now()}.txt`, account_id: UX, source_url: "http://localhost:3100/robots.txt", mime_type: "text/plain" }))
-  check("A1 the assistant saves a file into a storage company's correspondence", ai.success === true && String(ai.file_id).startsWith("store:"), JSON.stringify(ai).slice(0, 200))
-  const { data: tc } = await sb.from("accounts").select("id").eq("company_name", "Test Company LLC").limit(1).maybeSingle()
-  let aiErr = ""
-  try { aiErr = JSON.stringify(JSON.parse(await executeTool("drive_upload_file", { file_name: "QA Test ai drive co.txt", account_id: tc.id, source_url: "http://localhost:3100/robots.txt", mime_type: "text/plain" }))) } catch (e) { aiErr = e instanceof Error ? e.message : String(e) }
-  check("A2 …and refuses a company still on Drive (asks for a Drive folder)", /still on Google Drive/i.test(aiErr), aiErr.slice(0, 200))
   summary()
 }
 main().catch((e) => { console.error(e); process.exit(1) })

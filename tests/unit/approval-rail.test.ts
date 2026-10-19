@@ -97,9 +97,9 @@ beforeEach(() => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("approvable-tools — allow-list", () => {
-  it("contains exactly the 14 expected action tools", () => {
-    // 12 original + update_deadline + send_team_message (2026-06-13).
-    expect(APPROVABLE_TOOL_NAMES.size).toBe(14)
+  it("contains exactly the 12 expected action tools", () => {
+    // 12 original + update_deadline + send_team_message (2026-06-13) - drive_move and drive_upload_file (removed 2026-10-18, Stop Drive).
+    expect(APPROVABLE_TOOL_NAMES.size).toBe(12)
   })
 
   it("every approvable name resolves to a real AGENT_TOOLS entry", () => {
