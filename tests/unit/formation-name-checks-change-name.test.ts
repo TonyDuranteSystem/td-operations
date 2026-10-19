@@ -382,3 +382,102 @@ describe('askFirstNamesAtCreation (the ask made when the service starts)', () =>
     expect((await askFirstNamesAtCreation(SD_ID)).ok).toBe(false)
   })
 })
+
+describe('the client\'s answer moves a waiting job on', () => {
+  const askReq = (marker: Record<string, unknown>) =>
+    ({ id: 'dr-n', service_delivery_id: SD_ID, account_id: 'acct-1', contact_id: 'contact-1', options: { name_check: marker } }) as never
+
+  it('moves a name change from "Collect three company names" to the check step once names arrive', async () => {
+    sdFixture = changeNameSd([], { stage: 'Collect three company names' })
+    await applyNameDecisionResponse(askReq({ kind: 'new_names', split: 'lines', max: 3 }), 'responded', { text: 'Acme Holdings LLC\nBeta LLC' })
+    expect(writes[0].checks).toHaveLength(2)
+    expect(advanceServiceDeliveryMock).toHaveBeenCalledTimes(1)
+    expect(advanceServiceDeliveryMock.mock.calls[0][0]).toMatchObject({
+      delivery_id: SD_ID,
+      target_stage: 'Check names and client confirms',
+      skip_tasks: true,
+      actor: 'client-answered-names',
+    })
+  })
+
+  it('does not move a job that is not waiting on the names (e.g. staff has not gone back yet)', async () => {
+    sdFixture = changeNameSd([nc('Old LLC', 'rejected_by_sos')], { stage: 'Waiting for the state' })
+    await applyNameDecisionResponse(askReq({ kind: 'new_names', split: 'lines', max: 1 }), 'responded', { text: 'Fresh Name LLC' })
+    expect(writes).toHaveLength(1)
+    expect(advanceServiceDeliveryMock).not.toHaveBeenCalled()
+  })
+
+  it('does not move the job when the answer adds nothing (only names already tried)', async () => {
+    sdFixture = changeNameSd([nc('Old LLC', 'not_available')], { stage: 'Collect three company names' })
+    await applyNameDecisionResponse(askReq({ kind: 'new_names', split: 'lines', max: 1 }), 'responded', { text: 'old llc' })
+    expect(advanceServiceDeliveryMock).not.toHaveBeenCalled()
+  })
+
+  it('Company Formation is never moved by a client answer (unchanged)', async () => {
+    sdFixture = changeNameSd([nc('Old LLC', 'not_available')], { service_type: 'Company Formation', stage: 'Collect three company names', account_id: null, contact_id: null })
+    await applyNameDecisionResponse(askReq({ kind: 'new_names' }), 'responded', { text: 'Fresh Name LLC' })
+    expect(advanceServiceDeliveryMock).not.toHaveBeenCalled()
+  })
+
+  it('a refused or failing move never fails the client\'s answer (the names are already saved)', async () => {
+    sdFixture = changeNameSd([], { stage: 'Collect three company names' })
+    advanceServiceDeliveryMock.mockRejectedValueOnce(new Error('db down'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await expect(applyNameDecisionResponse(askReq({ kind: 'new_names', split: 'lines', max: 3 }), 'responded', { text: 'Acme LLC' })).resolves.toBeUndefined()
+    expect(writes).toHaveLength(1)
+  })
+})
+
+describe('return_to_names (one press back to the names step)', () => {
+  const dead = (n: string) => nc(n, 'not_available')
+
+  it('moves a name change whose names are all used up back to step 1 with ONE move, documents kept, no generic notice', async () => {
+    sdFixture = changeNameSd([nc('A LLC', 'rejected_by_sos'), dead('B LLC')], { stage: 'Waiting for the state' })
+    const result = await handleNameAction({ sdId: SD_ID, action: 'return_to_names', nameIndex: 0, actor: 'Luca' })
+    expect(result.ok).toBe(true)
+    expect(advanceServiceDeliveryMock).toHaveBeenCalledTimes(1)
+    expect(advanceServiceDeliveryMock.mock.calls[0][0]).toMatchObject({
+      delivery_id: SD_ID,
+      target_stage: 'Collect three company names',
+      skip_tasks: true,
+      skip_notify: true,
+      actor: 'Luca',
+    })
+    expect(writes).toHaveLength(0)
+  })
+
+  it('refuses while a name is still alive (the same rule as asking the client for a new name)', async () => {
+    sdFixture = changeNameSd([nc('A LLC', 'rejected_by_sos'), nc('B LLC', 'available')], { stage: 'Waiting for the state' })
+    const result = await handleNameAction({ sdId: SD_ID, action: 'return_to_names', nameIndex: 0, actor: 'Luca' })
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/used up/i)
+    expect(advanceServiceDeliveryMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses on an empty list, a finished case and a service that has no return stage (Formation)', async () => {
+    sdFixture = changeNameSd([], { stage: 'Waiting for the state' })
+    expect((await handleNameAction({ sdId: SD_ID, action: 'return_to_names', nameIndex: 0, actor: 'Luca' })).ok).toBe(false)
+    sdFixture = changeNameSd([dead('A LLC')], { stage: 'Waiting for the state', status: 'completed' })
+    expect((await handleNameAction({ sdId: SD_ID, action: 'return_to_names', nameIndex: 0, actor: 'Luca' })).ok).toBe(false)
+    sdFixture = changeNameSd([dead('A LLC')], { service_type: 'Company Formation', account_id: null, contact_id: null })
+    const f = await handleNameAction({ sdId: SD_ID, action: 'return_to_names', nameIndex: 0, actor: 'Luca' })
+    expect(f.ok).toBe(false)
+    expect(f.error).toMatch(/does not send a case back/i)
+    expect(advanceServiceDeliveryMock).not.toHaveBeenCalled()
+  })
+
+  it('already at step 1: nothing to move', async () => {
+    sdFixture = changeNameSd([dead('A LLC')], { stage: 'Collect three company names' })
+    const result = await handleNameAction({ sdId: SD_ID, action: 'return_to_names', nameIndex: 0, actor: 'Luca' })
+    expect(result.ok).toBe(true)
+    expect(advanceServiceDeliveryMock).not.toHaveBeenCalled()
+  })
+
+  it('a refused move is shown to staff in plain words', async () => {
+    sdFixture = changeNameSd([dead('A LLC')], { stage: 'Waiting for the state' })
+    advanceServiceDeliveryMock.mockResolvedValueOnce({ success: false, error: 'This job is complete — reopen it (Go Back) before moving it forward.' })
+    const result = await handleNameAction({ sdId: SD_ID, action: 'return_to_names', nameIndex: 0, actor: 'Luca' })
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/reopen it/)
+  })
+})

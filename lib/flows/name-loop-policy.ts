@@ -21,6 +21,8 @@
  * read and approved as a page. The Company Change Name wording is a DRAFT until Antonio approves it.
  */
 
+import { CHANGE_NAME_STAGES } from '@/lib/flows/change-name-stages'
+
 export type NameLoopKey = 'formation' | 'change_name'
 
 export interface NameLoopPolicy {
@@ -43,8 +45,15 @@ export interface NameLoopPolicy {
    * 'account_required': the account's own state only; the action is refused when it is not on record.
    */
   stateRule: 'formation_chain' | 'account_required'
-  /** A state refusal moves the case back to this stage (Formation); null = leave the stage to staff (Go back). */
+  /** A state refusal moves the case back to this stage (Formation); null = leave the stage to staff. */
   revertStageOnSosRejected: string | null
+  /**
+   * The stage staff sends the case back to — with ONE press, documents kept — once every name is used up
+   * (the "return_to_names" action); null = the service has no such action. A name change leaves the move to
+   * staff (Antonio 2026-10-19) but must not make them press Go back four times, each deleting the documents
+   * of the step it returns to.
+   */
+  returnStage: string | null
   /** The panel shows the formation "Check/File on SOS" links and the "Name Confirmed & Filed" advance button. */
   formationPanelExtras: boolean
   /** Word used for the thing being named in staff-facing text. */
@@ -62,6 +71,7 @@ const FORMATION: NameLoopPolicy = {
   split: 'all',
   stateRule: 'formation_chain',
   revertStageOnSosRejected: 'Wizard Submitted',
+  returnStage: null,
   formationPanelExtras: true,
   noun: 'LLC name',
 }
@@ -77,6 +87,7 @@ const CHANGE_NAME: NameLoopPolicy = {
   split: 'lines',
   stateRule: 'account_required',
   revertStageOnSosRejected: null,
+  returnStage: CHANGE_NAME_STAGES.collect,
   formationPanelExtras: false,
   noun: 'company name',
 }
@@ -137,6 +148,7 @@ export function approvalCopy(
         reject_label: 'No, I prefer another name',
         approve_label_it: 'Sì, usa questo nome',
         reject_label_it: 'No, preferisco un altro nome',
+        title_it: displayName,
         name_check: marker,
       },
     }
@@ -185,6 +197,8 @@ export function newNamesCopy(
       options: {
         prompt: 'Please send us a new company name',
         placeholder: 'New Company Name LLC',
+        title_it: 'Serve un nuovo nome per la società',
+        placeholder_it: 'Nuovo Nome Società LLC',
         required: true,
         name_check: marker,
       },
@@ -222,6 +236,8 @@ export function firstNamesCopy(policy: NameLoopPolicy): DecisionCopy | null {
     options: {
       prompt: 'Your company names (one per line, in order of preference)',
       placeholder: 'First Choice LLC\nSecond Choice LLC\nThird Choice LLC',
+      title_it: 'Inviaci i nomi che vorresti per la tua società',
+      placeholder_it: 'Prima Scelta LLC\nSeconda Scelta LLC\nTerza Scelta LLC',
       required: true,
       name_check: { kind: 'new_names', split: 'lines', max: policy.firstNamesCount },
     },

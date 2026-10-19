@@ -18,7 +18,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getOrInitNameChecks, getNameLoopPolicyForSd, handleNameAction, type NameAction } from '@/lib/operations/formation-name-checks'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
-const ACTIONS: NameAction[] = ['mark_available', 'mark_not_available', 'send_to_client', 'mark_filed', 'mark_sos_rejected', 'request_new_names', 'add_name', 'ask_first_names', 'withdraw']
+const ACTIONS: NameAction[] = ['mark_available', 'mark_not_available', 'send_to_client', 'mark_filed', 'mark_sos_rejected', 'request_new_names', 'add_name', 'ask_first_names', 'return_to_names', 'withdraw']
 
 /** Same identity resolution requireStaffRoute() just validated — used here only to attribute the action (actor/actorId), not to gate access. */
 async function currentUser() {
@@ -56,7 +56,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (action === 'add_name' && typeof body.name !== 'string') {
     return NextResponse.json({ success: false, error: 'name must be text.' }, { status: 400 })
   }
-  if (action !== 'request_new_names' && action !== 'add_name' && action !== 'ask_first_names' && (!Number.isInteger(nameIndex) || nameIndex < 0)) {
+  if (action !== 'request_new_names' && action !== 'add_name' && action !== 'ask_first_names' && action !== 'return_to_names' && (!Number.isInteger(nameIndex) || nameIndex < 0)) {
     return NextResponse.json({ success: false, error: 'name_index must be a non-negative integer.' }, { status: 400 })
   }
   const idx = Number.isInteger(nameIndex) && nameIndex >= 0 ? nameIndex : 0

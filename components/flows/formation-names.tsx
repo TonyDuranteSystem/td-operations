@@ -46,6 +46,7 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage, ser
   const [requestingNames, setRequestingNames] = useState(false)
   const [requestSent, setRequestSent] = useState(false)
   const [askingFirst, setAskingFirst] = useState(false)
+  const [returning, setReturning] = useState(false)
   const [firstAskSent, setFirstAskSent] = useState(false)
   const [newName, setNewName] = useState('')
   const [addingName, setAddingName] = useState(false)
@@ -143,6 +144,24 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage, ser
       setError(err instanceof Error && err.message ? err.message : 'Could not add the name.')
     } finally {
       setAddingName(false)
+    }
+  }
+
+  async function returnToNames() {
+    setReturning(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/name-check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'return_to_names' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not move the job back.')
+      window.location.reload()
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not move the job back.')
+      setReturning(false)
     }
   }
 
@@ -395,10 +414,18 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage, ser
               <p className="mt-1.5 text-[11px] text-zinc-400">
                 None of the current names are viable — ask the client to propose {policy.newNamesCount === 1 ? 'a new name' : `${policy.newNamesCount} new LLC names`}.
               </p>
-              {!extras && policy.revertStageOnSosRejected === null && (
-                <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  Every name is used up. Once the client has answered, bring the job back to the names step with <strong>Go back</strong> so the Calendar shows whose turn it is.
-                </p>
+              {!extras && policy.returnStage && stage !== policy.returnStage && (
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <p>Every name is used up. Send the job back to the first step so the Calendar shows it is the client&apos;s turn (documents are kept).</p>
+                  <button
+                    onClick={returnToNames}
+                    disabled={returning}
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {returning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />}
+                    Back to step 1 (new name)
+                  </button>
+                </div>
               )}
             </>
           )}

@@ -44,8 +44,11 @@ describe('esignAdvanceTarget (pure)', () => {
   it('a name change waiting on the signing step goes to filing', () => {
     expect(esignAdvanceTarget('Company Change Name', CHANGE_NAME_STAGES.sign)).toBe(CHANGE_NAME_STAGES.file)
   })
+  it('a signature that arrives while the job is still on the check step also carries it to filing (never stranded)', () => {
+    expect(esignAdvanceTarget('Company Change Name', CHANGE_NAME_STAGES.check)).toBe(CHANGE_NAME_STAGES.file)
+  })
   it('a delivery at any other step, another service, or nothing is left alone', () => {
-    expect(esignAdvanceTarget('Company Change Name', CHANGE_NAME_STAGES.check)).toBeNull()
+    expect(esignAdvanceTarget('Company Change Name', CHANGE_NAME_STAGES.collect)).toBeNull()
     expect(esignAdvanceTarget('Company Change Name', CHANGE_NAME_STAGES.file)).toBeNull()
     expect(esignAdvanceTarget('Tax Return', CHANGE_NAME_STAGES.sign)).toBeNull()
     expect(esignAdvanceTarget(null, CHANGE_NAME_STAGES.sign)).toBeNull()

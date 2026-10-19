@@ -31,6 +31,7 @@ import {
   proposalChatNote,
   type NameLoopPolicy,
 } from '@/lib/flows/name-loop-policy'
+import { CHANGE_NAME_STAGES } from '@/lib/flows/change-name-stages'
 import { createDecisionRequest } from '@/lib/operations/decision-request'
 import { buildFlowTopic, deriveFlowYear } from '@/lib/flows/resolve-flows'
 import { notifyClientOfAdminMessage } from '@/lib/portal/notifications'
@@ -56,6 +57,9 @@ export type NameAction =
   // names (Company Change Name): only while the list is empty and no such ask is
   // open. Not tied to a candidate.
   | 'ask_first_names'
+  // Sends the case back to the names step with ONE press once every name is used up (a name change;
+  // a staff decision, never automatic). Documents are kept — unlike pressing Go back stage by stage.
+  | 'return_to_names'
   // Takes a name back from the client (waiting for an answer that is not coming,
   // or sent by mistake): sent_to_client → available, and the open approval
   // request is cancelled so a late answer can no longer flip it.
@@ -596,6 +600,34 @@ export async function handleNameAction(params: {
     return { ok: true, name_checks: checks }
   }
 
+  // return_to_names: not tied to a candidate. Only when every name is used up (the same rule as asking the
+  // client for a new one) and the service has a return stage. Moves with the canonical advance path — a
+  // backward move that keeps documents — skipping tasks and the generic client notice.
+  if (params.action === 'return_to_names') {
+    const target = policy.returnStage
+    if (!target) return { ok: false, error: 'This service does not send a case back to the names step.' }
+    if (isClosedCase(row)) return { ok: false, error: 'This case is already finished.' }
+    if (!allNamesDead(checks)) {
+      return { ok: false, error: 'Every name must be used up (not available, declined or refused by the state) before the job goes back to the names step.' }
+    }
+    if (fresh.stage === target) return { ok: true, name_checks: checks }
+    try {
+      const { advanceServiceDelivery } = await import('@/lib/service-delivery')
+      const adv = await advanceServiceDelivery({
+        delivery_id: params.sdId,
+        target_stage: target,
+        skip_tasks: true,
+        skip_notify: true,
+        actor: params.actor,
+        notes: 'Every name was used up — back to the names step for a new one',
+      })
+      if (adv && adv.success === false) return { ok: false, error: adv.error ?? 'The job could not be moved back.' }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error && err.message ? err.message : 'The job could not be moved back.' }
+    }
+    return { ok: true, name_checks: checks }
+  }
+
   const entry = checks[params.nameIndex]
   if (!entry) return { ok: false, error: 'Name not found at that index.' }
 
@@ -794,6 +826,9 @@ export async function applyNameDecisionResponse(
   let suggestedNewName: string | null = null
   let saved = false
   let ignored = false
+  // Set when a "propose names" answer ADDED names to a case that is still waiting on the client (the job then moves on).
+  let namesArrivedAtStage: string | null = null
+  let rowService: string | null = null
 
   for (let attempt = 0; attempt < 3 && !saved && !ignored; attempt++) {
     // ONE read: the list and the stamp the guarded save compares against.
@@ -851,7 +886,12 @@ export async function applyNameDecisionResponse(
         max: typeof marker.max === 'number' ? marker.max : undefined,
       })
       // A name already on the list — dead ones included — does not come back.
-      checks = addClientNames(checks, proposed, now).checks
+      const merged = addClientNames(checks, proposed, now)
+      checks = merged.checks
+      if (merged.added.length > 0) {
+        namesArrivedAtStage = fresh.stage
+        rowService = fresh.service_type
+      }
     }
 
     const w = await writeNameChecks(req.service_delivery_id, checks, fresh?.updated_at ?? null)
@@ -877,6 +917,28 @@ export async function applyNameDecisionResponse(
       }
     }
     return
+  }
+
+  // The client answered "send us your names" while the job was waiting on THEM (a name change at "Collect three company
+  // names"): move it to the step where staff checks them, so the Calendar shows whose turn it is — an answer to a text
+  // request is 'responded', which never triggers the request's own auto-advance. Idempotent (only from that step) and
+  // best-effort: the names are already saved, a refused move must never fail the client's answer.
+  if (namesArrivedAtStage !== null && nameLoopPolicyFor(rowService)?.key === 'change_name' && namesArrivedAtStage === CHANGE_NAME_STAGES.collect) {
+    try {
+      const { advanceServiceDelivery } = await import('@/lib/service-delivery')
+      const adv = await advanceServiceDelivery({
+        delivery_id: req.service_delivery_id,
+        target_stage: CHANGE_NAME_STAGES.check,
+        skip_tasks: true,
+        actor: 'client-answered-names',
+        notes: 'The client sent the names',
+      })
+      if (adv && adv.success === false) {
+        console.error(`applyNameDecisionResponse: move to the check step refused for SD ${req.service_delivery_id}:`, adv.error)
+      }
+    } catch (err) {
+      console.error(`applyNameDecisionResponse: move to the check step failed for SD ${req.service_delivery_id}:`, err)
+    }
   }
 
   // Post an SD-scoped flow-chat note when the client rejects a name, so staff see

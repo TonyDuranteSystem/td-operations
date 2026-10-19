@@ -33,6 +33,7 @@ describe('nameLoopPolicyFor', () => {
       split: 'all',
       stateRule: 'formation_chain',
       revertStageOnSosRejected: 'Wizard Submitted',
+      returnStage: null,
       formationPanelExtras: true,
     })
   })
@@ -47,6 +48,7 @@ describe('nameLoopPolicyFor', () => {
       split: 'lines',
       stateRule: 'account_required',
       revertStageOnSosRejected: null,
+      returnStage: 'Collect three company names',
       formationPanelExtras: false,
     })
   })

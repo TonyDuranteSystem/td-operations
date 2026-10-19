@@ -4,7 +4,9 @@
  * to act on it — only the legacy Tax Return signing route moved a delivery, and only from the hard-coded
  * "Tax Return Prepared" stage. Per service, ONE rule: the stage the delivery must be at, and where it goes.
  *
- * Company Change Name: "Client signs the name-change form" → "File the form with the state".
+ * Company Change Name: "Client signs the name-change form" → "File the form with the state". Staff can send the form
+ * from "Check names and client confirms" and press nothing else — the client's signature carries the job through
+ * from either step, so a signature is never left stranded just because the job was not moved by hand first.
  *
  * Idempotent (a delivery no longer at the "from" stage is left alone, so a repeated completion call or a
  * reminder-cron re-run does nothing) and best-effort (never throws — the signer's submit must not fail
@@ -15,15 +17,15 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { CHANGE_NAME_STAGES } from '@/lib/flows/change-name-stages'
 
-export const ESIGN_COMPLETION_ADVANCE: Readonly<Record<string, { fromStage: string; toStage: string }>> = {
-  'Company Change Name': { fromStage: CHANGE_NAME_STAGES.sign, toStage: CHANGE_NAME_STAGES.file },
+export const ESIGN_COMPLETION_ADVANCE: Readonly<Record<string, { fromStages: readonly string[]; toStage: string }>> = {
+  'Company Change Name': { fromStages: [CHANGE_NAME_STAGES.check, CHANGE_NAME_STAGES.sign], toStage: CHANGE_NAME_STAGES.file },
 }
 
 /** The stage a delivery moves to after its form is signed, or null when this delivery is not waiting on a signature. Pure. */
 export function esignAdvanceTarget(serviceType: string | null | undefined, currentStage: string | null | undefined): string | null {
   if (!serviceType || !currentStage) return null
   const rule = ESIGN_COMPLETION_ADVANCE[serviceType]
-  return rule && rule.fromStage === currentStage ? rule.toStage : null
+  return rule && rule.fromStages.includes(currentStage) ? rule.toStage : null
 }
 
 export interface DeliveryAdvanceResult {

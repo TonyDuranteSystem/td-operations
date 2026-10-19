@@ -458,7 +458,9 @@ export async function createSD(
   // per-thread Tasks panel + the Task Board. Fire-and-forget — task failure
   // does NOT roll back the SD insert. Title mirrors the workflow path so
   // both surfaces present the same name.
-  if (!workflowSpawned) {
+  // Company Change Name is the exception (Antonio 2026-10-19): it has its own 8 workspace steps and the Calendar is
+  // the to-do, so it gets NO plain card once its old workflow is retired (catalog migration 20261019-1000).
+  if (!workflowSpawned && row.service_type !== "Company Change Name") {
     try {
       const { dbWriteSafe } = await import("@/lib/db")
       // eslint-disable-next-line no-restricted-syntax -- universal-task fallback for SDs without workflow rows

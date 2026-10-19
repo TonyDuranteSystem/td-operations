@@ -24,10 +24,16 @@ describe('createSD first ask for a name change', () => {
   it('runs after the workflow dispatch and before the universal fallback task', () => {
     const dispatch = src.indexOf('dispatchWorkflowForSdCreated({')
     const ask = src.indexOf('askFirstNamesAtCreation(row.id)')
-    const fallback = src.indexOf('if (!workflowSpawned) {')
+    const fallback = src.indexOf('if (!workflowSpawned && row.service_type !== "Company Change Name") {')
     expect(dispatch).toBeGreaterThan(0)
     expect(ask).toBeGreaterThan(dispatch)
     expect(fallback).toBeGreaterThan(ask)
+  })
+
+  it('a name change never gets the plain fallback card (its workflow is retired; the Calendar is the to-do)', () => {
+    expect(src).toContain('if (!workflowSpawned && row.service_type !== "Company Change Name") {')
+    // every OTHER service keeps the fallback
+    expect(src).not.toContain('if (!workflowSpawned) {')
   })
 
   it('the helper it calls is idempotent per delivery and never throws (documented + exported)', () => {
