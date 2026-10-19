@@ -5,6 +5,8 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalExpenses, getPortalExpensesByContact } from '@/lib/portal/queries'
+import { filterByHistoryCutoff, isSettledPaymentStatus } from '@/lib/documents/history-cutoff'
+import { getHistoryView } from '@/lib/portal/history-cutoff'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
@@ -169,13 +171,22 @@ export default async function PortalInvoicesPage({
   const showAutopayCard = Boolean(autopay?.autopay_card_enabled) || (await isCardAutopayEnabled())
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const invoices: any[] = salesResult.data ?? []
+  // A person who joined the company later sees its invoices and expenses only from their start date (dev job d14e823f).
+  // Nothing to look up for everyone else: no start date = sees everything. TD invoices still owed stay visible.
+  const [invHistory, expHistory] = selectedAccountId
+    ? await Promise.all([getHistoryView(selectedAccountId, contactId, 'invoice'), getHistoryView(selectedAccountId, contactId, 'expense')])
+    : [{ cutoff: null, opened: new Set<string>() }, { cutoff: null, opened: new Set<string>() }]
+  const invoices: any[] = filterByHistoryCutoff((salesResult.data ?? []) as any[], invHistory.cutoff, contactId, inv => ({ created_at: inv.created_at, opened: invHistory.opened.has(inv.id) }))
+  const visibleAccountExpenses = filterByHistoryCutoff(accountExpenses, expHistory.cutoff, contactId, e => ({
+    created_at: e.created_at,
+    opened: expHistory.opened.has(e.id) || (e.source === 'td_invoice' && !isSettledPaymentStatus(e.status)),
+  }))
   // Merge company-scoped + personal expenses into one mixed list. Each row
   // gets a scope_label so the ExpenseList can render a small badge ("Personal"
   // or company name). Per Antonio's design decision 2026-05-05.
   const personalLabel = t('dashboard.personal', locale, translations)
   const expenses = [
-    ...accountExpenses.map(e => ({ ...e, scope_label: companyName ?? personalLabel })),
+    ...visibleAccountExpenses.map(e => ({ ...e, scope_label: companyName ?? personalLabel })),
     ...personalExpenses.map(e => ({ ...e, scope_label: personalLabel })),
   ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
@@ -192,12 +203,14 @@ export default async function PortalInvoicesPage({
   const statsRows = selectedAccountId
     ? ((await supabaseAdmin
         .from('client_invoices')
-        .select('status, currency, total, amount_paid, amount_due')
+        .select('id, created_at, status, currency, total, amount_paid, amount_due')
         .eq('account_id', selectedAccountId)
         .eq('source', 'client')
         .limit(5000)).data ?? [])
     : []
-  const sales = salesTotals(statsRows)
+  // The totals must follow the same start date as the list, or the numbers would reveal what the list hides.
+  const statsRowsVisible = filterByHistoryCutoff(statsRows, invHistory.cutoff, contactId, r => ({ created_at: r.created_at, opened: invHistory.opened.has(r.id) }))
+  const sales = salesTotals(statsRowsVisible)
   const salesStats = {
     total: invoices.length,
     totalAmount: formatMoneyMap(sales.invoiced, zeroCurrencyFor(sales.invoiced, sales.paid, sales.outstanding)),

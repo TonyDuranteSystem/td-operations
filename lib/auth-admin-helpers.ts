@@ -27,6 +27,16 @@
  */
 
 import type { User } from "@supabase/supabase-js"
+import { isMarketingRole } from "@/lib/auth/role-door"
+
+/**
+ * TD MARKETING (P1, dev job 9aec66fa): a marketing workspace login is NOT a client, staff or partner login, and the tools
+ * built on these finders (portal-login clean-up, delete contact/lead/portal user, tier sync, offers, activation, password
+ * reset, partner setup ...) mean exactly those. A person such as Rocco is a client AND a marketing member under two
+ * different logins; if any of those tools could "find" the marketing one by email they could rewrite its role, set its
+ * password or delete it. So these finders never return a marketing login. Marketing code that needs one reads it by id.
+ */
+const notMarketing = (u: User): boolean => !isMarketingRole(u.app_metadata?.role)
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
 const DEFAULT_PER_PAGE = 1000
@@ -58,7 +68,7 @@ export async function findAuthUserByEmail(
     }
     const users = (data?.users ?? []) as User[]
     const found = users.find(
-      (u) => (u.email ?? "").toLowerCase() === normalized,
+      (u) => (u.email ?? "").toLowerCase() === normalized && notMarketing(u),
     )
     if (found) return found
     // Pagination type is `nextPage: number | null`. Stop when it's null
@@ -69,6 +79,27 @@ export async function findAuthUserByEmail(
       pagination?.nextPage !== null &&
       users.length >= DEFAULT_PER_PAGE
     if (!hasMore) return null
+    page += 1
+  }
+  return null
+}
+
+/**
+ * TD MARKETING: find a MARKETING login by email (the normal finders hide them on purpose). Used only to finish an invitation whose
+ * earlier acceptance crashed after the login was created. Returns null for any other kind of login.
+ */
+export async function findMarketingAuthUserByEmail(email: string): Promise<User | null> {
+  if (!email) return null
+  const normalized = email.toLowerCase().trim()
+  let page = 1
+  while (page <= MAX_PAGES) {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: DEFAULT_PER_PAGE })
+    if (error) throw new Error(`findMarketingAuthUserByEmail: listUsers page=${page} failed: ${error.message}`)
+    const users = (data?.users ?? []) as User[]
+    const found = users.find((u) => (u.email ?? "").toLowerCase() === normalized && isMarketingRole(u.app_metadata?.role))
+    if (found) return found
+    const pagination = data as unknown as { nextPage?: number | null }
+    if (!(pagination?.nextPage !== null && users.length >= DEFAULT_PER_PAGE)) return null
     page += 1
   }
   return null
@@ -132,7 +163,7 @@ export async function findAuthUsersByContactId(contactId: string): Promise<User[
   if (!contactId) return []
   const all = await listAllAuthUsers()
   return all.filter(
-    (u) => (u.app_metadata as { contact_id?: string } | undefined)?.contact_id === contactId,
+    (u) => (u.app_metadata as { contact_id?: string } | undefined)?.contact_id === contactId && notMarketing(u),
   )
 }
 
@@ -164,7 +195,7 @@ export async function findAuthUsersByEmails(
   const found = new Map<string, User>()
   for (const u of all) {
     const email = (u.email ?? "").toLowerCase().trim()
-    if (email && targets.has(email)) found.set(email, u)
+    if (email && targets.has(email) && notMarketing(u)) found.set(email, u)
   }
   return found
 }

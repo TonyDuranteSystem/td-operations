@@ -6,6 +6,8 @@ import { isStaffAuthRole } from '@/lib/team/workspace'
 import { resolveMfaGate } from '@/lib/auth/mfa-gate'
 import { verifyMfaRememberDevice, MFA_RD_COOKIE } from '@/lib/auth/mfa-remember-device'
 import { isSandboxBlockedWebhook } from '@/lib/sandbox-webhook-guard'
+import { isClientAllowedApiPath } from '@/lib/auth/client-api-allowlist'
+import { isKnownAuthRole, isMarketingRole, isMarketingAllowedPath, MARKETING_HOME } from '@/lib/auth/role-door'
 import { STORAGE_APP_PUBLIC_PATHS } from '@/lib/storage-app/public-paths'
 
 // --- Public paths (no auth required) ---
@@ -109,6 +111,10 @@ const PUBLIC_PREFIXES = [
   // /api/bofa-intake-admin and stay behind the session gate.
   '/bank-application/',
   '/api/bank-application/',
+  // TD Marketing invitation (P1): the person has no login yet. The token is single-use, hashed in the database and expires;
+  // the accept route answers every failure with one generic message.
+  '/marketing/accept',
+  '/api/marketing/accept',
   // Client-facing forms (email-gated, no Supabase auth)
   '/offer',
   '/tax-form',
@@ -352,7 +358,8 @@ export async function middleware(request: NextRequest) {
       return res
     }
     const url = request.nextUrl.clone()
-    url.pathname = '/portal/login'
+    // A removed or paused marketing person goes to the dashboard login (TD Marketing P1); every other login keeps the portal login.
+    url.pathname = isMarketingRole(user.app_metadata?.role) ? '/login' : '/portal/login'
     url.search = 'reason=suspended'
     const res = NextResponse.redirect(url)
     for (const c of request.cookies.getAll()) {
@@ -361,7 +368,12 @@ export async function middleware(request: NextRequest) {
     return res
   }
 
-  const role = user.app_metadata?.role
+  // Normalised ONCE so every comparison below sees the same value: the role-door predicates already trim and lower-case, but the
+  // plain === checks further down did not, so a login whose role was stored as "Client " passed the known-role gate and then skipped
+  // the client bounce and reached dashboard pages (found by the real-login test, 2026-10-18). The admin-only check below stays on the
+  // RAW value on purpose: it must fail closed.
+  const rawRole = user.app_metadata?.role
+  const role = typeof rawRole === 'string' ? rawRole.trim().toLowerCase() : rawRole
 
   // --- Staff MFA gate (dev job de4564ee) ---
   // Runs for every STAFF session (deny-list predicate — same symbol the rest
@@ -371,7 +383,9 @@ export async function middleware(request: NextRequest) {
   // AFTER the public-path early return (Claude.ai OAuth + webhooks untouched)
   // and the ban check, BEFORE the partner/portal/dashboard branches.
   // Clients and partner are outside the predicate entirely.
-  if (isStaffAuthRole(role)) {
+  // Marketing logins (TD Marketing P1) are subject too: they handle money and customer data, and a gate keyed only on
+  // "is staff" would have waved them through with a password alone.
+  if (isStaffAuthRole(role) || isMarketingRole(role)) {
     // Recovery paths must be reachable at aal1 (session still required):
     // exact matches only — never PUBLIC_PREFIXES (that would strip auth).
     const mfaExempt =
@@ -412,6 +426,8 @@ export async function middleware(request: NextRequest) {
         rememberedDevice,
         graceUntilRaw: process.env.MFA_GRACE_UNTIL,
         now: Date.now(),
+        // Marketing logins never get the staff grace period or the owner exemption: second step from the first day.
+        strict: isMarketingRole(role),
       })
       if (verdict !== 'allow') {
         // Background fetches get machine-readable JSON, never redirect HTML
@@ -435,6 +451,47 @@ export async function middleware(request: NextRequest) {
     }
   }
 
+  // --- Unknown kind of login: DEFAULT-DENY (TD Marketing P1, 2026-10-17) ---
+  // Before this, any role that was not 'client' or 'partner' (an empty or misspelled one included) fell through to the
+  // staff area. Now only the five kinds in lib/auth/role-door.ts get any further. /login is public and returned earlier,
+  // so a refused person can still reach it (no redirect loop).
+  if (!isKnownAuthRole(role)) {
+    console.warn(`[role-door] refused ${request.method} ${pathname} for ${user.id}: unknown role "${String(role ?? '')}"`)
+    const isNavigation =
+      request.headers.get('sec-fetch-mode') === 'navigate' ||
+      (request.headers.get('accept') || '').includes('text/html')
+    if (pathname.startsWith('/api/') && !isNavigation) {
+      return NextResponse.json({ error: 'This login has no access.', code: 'ROLE_NOT_ALLOWED' }, { status: 403 })
+    }
+    const url = request.nextUrl.clone()
+    url.pathname = '/login'
+    url.search = '?reason=no_access'
+    return NextResponse.redirect(url)
+  }
+
+  // --- Marketing confinement (TD Marketing P1) ---
+  // A marketing login reaches the marketing workspace and the two-step pages, nothing else: not the CRM, not the
+  // portal, not any other API. The list lives in ONE pure function (isMarketingAllowedPath) so a test can walk every
+  // page and API route of the app against it.
+  if (isMarketingRole(role)) {
+    if (!isMarketingAllowedPath(pathname)) {
+      if (pathname.startsWith('/api/')) {
+        console.warn(`[role-door] refused ${request.method} ${pathname} for marketing login ${user.id}`)
+        const denied = NextResponse.json(
+          { error: 'This action is not available from the marketing workspace.', code: 'MARKETING_FORBIDDEN' },
+          { status: 403 },
+        )
+        for (const c of supabaseResponse.cookies.getAll()) denied.cookies.set(c)
+        return denied
+      }
+      const url = request.nextUrl.clone()
+      url.pathname = MARKETING_HOME
+      url.search = ''
+      return NextResponse.redirect(url)
+    }
+    return supabaseResponse
+  }
+
   // --- Partner confinement (external collaborators, e.g. Cris) ---
   // A partner authenticates as role='partner' (NOT 'client'), so without this
   // branch they would pass the dashboard guard below and reach the entire CRM.
@@ -454,6 +511,23 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(url)
     }
     return supabaseResponse
+  }
+
+  // --- Client API confinement (dev job f6ea4420, folded into TD Marketing P1) ---
+  // `isDashboardPath` excludes /api, so without this a portal client reached every staff API route that only checked
+  // "is logged in" (invoice send/remind/PDF, bank-feed matching, admin actions). Deny-by-default for clients: only the
+  // portal's own API surface is reachable. Public paths already returned above; partners and marketing returned in their
+  // own branches; unknown roles were refused above, so what is left here that is not staff is a client.
+  if (!isStaffAuthRole(role) && pathname.startsWith('/api/') && !isClientAllowedApiPath(pathname)) {
+    // Loud in logs (Vercel/Sentry), no DB write: a client can trigger this at will.
+    console.warn(`[client-api-guard] refused ${request.method} ${pathname} for client ${user.id}`)
+    const denied = NextResponse.json(
+      { error: 'This action is not available from the client portal.', code: 'CLIENT_FORBIDDEN' },
+      { status: 403 },
+    )
+    // Keep any session cookies getUser() refreshed on this request, or the browser is left holding a spent refresh token.
+    for (const c of supabaseResponse.cookies.getAll()) denied.cookies.set(c)
+    return denied
   }
 
   // --- Portal paths: require client role ---
@@ -480,7 +554,7 @@ export async function middleware(request: NextRequest) {
     // Admin-only paths: team users redirected to home
     const ADMIN_ONLY_PATHS = ['/dev-tools', '/team-management', '/research', '/bofa-intake', '/forms']
     const isAdminEmail = user.email && ['antonio.durante@tonydurante.us'].includes(user.email)
-    const isAdminRole = user.app_metadata?.role === 'admin' || user.user_metadata?.role === 'admin'
+    const isAdminRole = user.app_metadata?.role === 'admin' // never user_metadata: the account holder can write it
     if (ADMIN_ONLY_PATHS.some(p => pathname === p || pathname.startsWith(p + '/')) && !isAdminEmail && !isAdminRole) {
       const url = request.nextUrl.clone()
       url.pathname = '/'
@@ -508,5 +582,9 @@ export const config = {
     // and dev_task 208d20be). `templates/` is excluded for the same reason for
     // ss4-blank.pdf / 8832-blank.pdf.
     '/((?!_next/static|_next/image|favicon.ico|templates/|fonts/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf|webmanifest|ttf|otf|woff|woff2)$).*)',
+    // Every /api request runs the middleware, even one whose last segment ends in a static-looking extension
+    // (/api/x/<id>.pdf). Without this, the extension exclusion above was a side door past the auth, client and marketing
+    // confinement (dev job f6ea4420). Public /api paths still return early via PUBLIC_PREFIXES.
+    '/api/:path*',
   ],
 }

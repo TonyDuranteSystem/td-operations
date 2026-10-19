@@ -3,6 +3,8 @@ import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
 import { getPortalAccounts } from '@/lib/portal/queries'
+import { filterByHistoryCutoff, isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
+import { getHistoryView } from '@/lib/portal/history-cutoff'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { cn } from '@/lib/utils'
@@ -51,6 +53,11 @@ export default async function PortalActivityPage() {
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
 
   const locale = getLocale(user)
+  // A person who joined the company later sees its activity only from their start date (dev job d14e823f). Every feed item
+  // is compared on the day it was SAVED, never a later edit; things addressed to the person or opened by staff stay.
+  const [noticeHistory, invoiceHistory] = selectedAccountId
+    ? await Promise.all([getHistoryView(selectedAccountId, contactId, 'notification'), getHistoryView(selectedAccountId, contactId, 'invoice')])
+    : [{ cutoff: null, opened: new Set<string>() }, { cutoff: null, opened: new Set<string>() }]
   // Aggregate activity from multiple sources
   const activities: ActivityItem[] = []
 
@@ -58,11 +65,11 @@ export default async function PortalActivityPage() {
   if (selectedAccountId) {
     const { data: notifications } = await supabaseAdmin
       .from('portal_notifications')
-      .select('id, type, title, body, created_at')
+      .select('id, type, title, body, created_at, contact_id')
       .eq('account_id', selectedAccountId)
       .order('created_at', { ascending: false })
       .limit(20)
-    for (const n of notifications ?? []) {
+    for (const n of filterByHistoryCutoff(notifications ?? [], noticeHistory.cutoff, contactId, x => ({ created_at: x.created_at, ownerContactId: x.contact_id, opened: noticeHistory.opened.has(x.id) }))) {
       activities.push({ id: `notif-${n.id}`, type: n.type, title: n.title, body: n.body, created_at: n.created_at })
     }
   } else {
@@ -81,14 +88,14 @@ export default async function PortalActivityPage() {
   if (selectedAccountId) {
     const { data: documents } = await supabaseAdmin
       .from('documents')
-      .select('id, file_name, document_type_name, created_at, category, contact_id')
+      .select('id, file_name, document_type_name, created_at, category, contact_id, visible_to_new_owners')
       .eq('account_id', selectedAccountId)
       .eq('portal_visible', true)
       .or(`category.neq.2,category.is.null,contact_id.eq.${contactId}`)
       .order('created_at', { ascending: false })
       .limit(10)
     // Never show another member's personal document (passport/ID/ITIN…), not even by name.
-    for (const d of (documents ?? []).filter(doc => !isPersonalDocumentHiddenFrom(doc, contactId)).slice(0, 10)) {
+    for (const d of (documents ?? []).filter(doc => !isPersonalDocumentHiddenFrom(doc, contactId) && !isHiddenByHistoryCutoff(doc, noticeHistory.cutoff, contactId)).slice(0, 10)) {
       activities.push({
         id: `doc-${d.id}`, type: 'document',
         title: `${t('activity.docUploaded', locale)}: ${d.file_name}`,
@@ -122,7 +129,7 @@ export default async function PortalActivityPage() {
       .order('updated_at', { ascending: false })
       .limit(15)
 
-    for (const inv of invoices ?? []) {
+    for (const inv of filterByHistoryCutoff(invoices ?? [], invoiceHistory.cutoff, contactId, x => ({ created_at: x.created_at, opened: invoiceHistory.opened.has(x.id) }))) {
       const csym = inv.currency === 'EUR' ? '\u20AC' : '$'
       const amount = `${csym}${(inv.total ?? 0).toFixed(2)}`
       if (inv.status === 'Paid') {
@@ -149,7 +156,8 @@ export default async function PortalActivityPage() {
       .eq('account_id', selectedAccountId)
       .order('updated_at', { ascending: false })
       .limit(10)
-    for (const d of deliveries ?? []) {
+    // A service update is an event: it follows the day it happened (updated_at), not when the service was first created.
+    for (const d of filterByHistoryCutoff(deliveries ?? [], noticeHistory.cutoff, contactId, x => ({ created_at: x.updated_at }))) {
       activities.push({
         id: `svc-${d.id}`, type: 'service',
         title: `${d.service_name ?? t('services.title', locale)}: ${d.stage}`,

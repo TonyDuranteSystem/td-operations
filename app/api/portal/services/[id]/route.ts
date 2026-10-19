@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
+import { isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
+import { getHistoryCutoff } from '@/lib/portal/history-cutoff'
 import { NextRequest, NextResponse } from 'next/server'
 import { getPendingClosuresOrNull } from '@/lib/portal/pending-closures'
 
@@ -123,7 +125,7 @@ export async function GET(
   const { data: rawDocuments } = accountId
     ? await supabaseAdmin
         .from('documents')
-        .select('id, file_name, document_type_name, category, contact_id, drive_file_id, created_at, portal_visible, service_delivery_id, flow_stage')
+        .select('id, file_name, document_type_name, category, contact_id, drive_file_id, created_at, portal_visible, service_delivery_id, flow_stage, visible_to_new_owners')
         .eq('account_id', accountId)
         .or(`category.neq.2,category.is.null,contact_id.eq.${contactId}`)
         .order('created_at', { ascending: false })
@@ -133,7 +135,9 @@ export async function GET(
   // A document in the NEW storage is listed only when the client could open it (hidden / internal files are not named here);
   // Drive rows are untouched (lib/portal/client-store-docs.ts).
   const { dropStoreRowsClientCannotOpen } = await import('@/lib/portal/client-store-docs')
-  const openable = await dropStoreRowsClientCannotOpen((rawDocuments ?? []).filter(d => !isPersonalDocumentHiddenFrom(d, contactId)))
+  // A person who joined the company later does not see files saved before their start date (dev job d14e823f).
+  const svcCutoff = accountId ? await getHistoryCutoff(accountId, contactId) : null
+  const openable = await dropStoreRowsClientCannotOpen((rawDocuments ?? []).filter(d => !isPersonalDocumentHiddenFrom(d, contactId) && !isHiddenByHistoryCutoff(d, svcCutoff, contactId)))
   const documents = openable
     .slice(0, 20)
     .map(({ contact_id: _omit, portal_visible: _pv, service_delivery_id: _sd, flow_stage: _fs, ...d }) => d)

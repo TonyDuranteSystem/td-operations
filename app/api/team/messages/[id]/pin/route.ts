@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
+import { assertThreadAccess, THREAD_DENIED_MESSAGE } from '@/lib/team/groups'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -21,10 +22,14 @@ export async function POST(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: existing } = await (supabaseAdmin as any)
     .from('internal_messages')
-    .select('id, pinned_at, deleted_at')
+    .select('id, thread_id, pinned_at, deleted_at')
     .eq('id', msgId)
     .single()
   if (!existing) return NextResponse.json({ error: 'Message not found' }, { status: 404 })
+  if (existing.thread_id) {
+    const access = await assertThreadAccess(existing.thread_id, user.id)
+    if (!access.allowed) return NextResponse.json({ error: THREAD_DENIED_MESSAGE }, { status: 403 })
+  }
   if (existing.deleted_at) return NextResponse.json({ error: 'Cannot pin a deleted message' }, { status: 400 })
 
   const nowPinned = !existing.pinned_at

@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
+import { assertThreadAccess, THREAD_DENIED_MESSAGE } from '@/lib/team/groups'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -22,6 +23,9 @@ export async function GET(
   const { id: threadId } = await params
   const rootId = request.nextUrl.searchParams.get('root')
   if (!rootId) return NextResponse.json({ error: 'root required' }, { status: 400 })
+
+  const access = await assertThreadAccess(threadId, user.id)
+  if (!access.allowed) return NextResponse.json({ error: THREAD_DENIED_MESSAGE }, { status: 403 })
 
   // The root must belong to this thread.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

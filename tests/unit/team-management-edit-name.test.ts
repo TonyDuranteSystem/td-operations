@@ -89,3 +89,18 @@ describe("PATCH /api/team-management — full_name", () => {
     expect((await patch({ user_id: "admin-1", disabled: true })).status).toBe(400)
   })
 })
+
+describe("TD Marketing P1 — a marketing login is not managed from staff management", () => {
+  it("refuses to rename, re-role or disable a marketing login and writes nothing", async () => {
+    state.target = { id: "m-1", app_metadata: { role: "marketing" }, user_metadata: { full_name: "Rocco" } }
+    for (const body of [{ full_name: "Hacked" }, { role: "admin" }, { disabled: true }]) {
+      const res = await patch({ user_id: "m-1", ...body })
+      expect(res.status, JSON.stringify(body)).toBe(400)
+    }
+    expect(state.updateCalls).toHaveLength(0)
+  })
+  it("still works for an ordinary staff login", async () => {
+    state.target = { id: "u-3", app_metadata: { role: "team" }, user_metadata: { full_name: "Luca" } }
+    expect((await patch({ user_id: "u-3", full_name: "Luca D" })).status).toBe(200)
+  })
+})

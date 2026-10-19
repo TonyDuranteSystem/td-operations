@@ -73,6 +73,15 @@ export function isGroupMember(members: readonly string[] | null | undefined, use
   return !!userId && !!members && members.includes(userId)
 }
 
+/**
+ * True when `userId` is one of the two people in a direct message. A DM's `dm_key` is `<idA>:<idB>`; the match is on a whole
+ * id (never a substring), and a missing key or user is never a participant. (TD Marketing job J-B.)
+ */
+export function isDmParticipant(dmKey: string | null | undefined, userId: string | null | undefined): boolean {
+  if (!userId || !dmKey) return false
+  return dmKey.split(':').includes(userId)
+}
+
 /** The other people in a group, i.e. who a new message should notify. */
 export function otherMembers(members: readonly string[], senderId: string, exclude: readonly string[] = []): string[] {
   return members.filter(id => id && id !== senderId && !exclude.includes(id))

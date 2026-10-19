@@ -1,4 +1,5 @@
 # TD Communication
+_Last verified against code: 2026-10-18 — Claude (TD Marketing, dev job `9aec66fa`, SANDBOX). `middleware.ts` now trims and lower-cases the login's role ONCE before every comparison, so the partner confinement (`role === 'partner'`: a partner is limited to `/collab`, `/api/conversations` and `/api/td-communication`) also catches a role stored as "Partner " or "partner "; a correctly written partner role behaves exactly as before. The real-login test (`scripts/marketing/qa-p1-logins.ts`) confirms a partner is bounced from the dashboard, the staff APIs and the marketing API back to `/collab`.
 _Last verified against code: 2026-10-18 — Claude (dev job `1992a087`). Re-checked after `middleware.ts` gained the TD Storage Mac app's EXACT public paths (`STORAGE_APP_PUBLIC_PATHS`, token routes that authenticate themselves): nothing in TD Communication is affected. Details: `docs/systems/storage-app.md`._
 _Prior: Last verified against code: 2026-10-12 — Claude (dev job 11d484a4). Re-checked after `middleware.ts` gained the bank application public paths and the `/forms` + `/bofa-intake` admin-only paths: nothing in TD Communication is affected._
 
