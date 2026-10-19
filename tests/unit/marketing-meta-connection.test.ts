@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, afterEach } from "vitest"
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest"
 import { checkMetaConnection, explainGraphError, subscribePages, type ConnectionDeps } from "@/lib/marketing/meta-leads/connection"
-import { GraphError, fetchTokenIdentity, listPageSubscribedApps, subscribePageToLeads } from "@/lib/marketing/meta-leads/graph"
+import { GraphError, fetchTokenIdentity, listPageSubscribedApps, subscribePageToLeads, useEnvKeyOnly } from "@/lib/marketing/meta-leads/graph"
 
 const env = { appSecret: true, verifyToken: true, pageToken: true, pageIds: ["101"], appId: "999" }
 const deps = (over: Partial<ConnectionDeps> = {}): ConnectionDeps => ({
@@ -100,7 +100,8 @@ describe("subscribePages", () => {
 })
 
 describe("graph: identity, subscribed apps, subscribe", () => {
-  afterEach(() => { vi.unstubAllEnvs() })
+  beforeEach(() => { useEnvKeyOnly() })
+afterEach(() => { vi.unstubAllEnvs() })
   const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200 })
   it("identity and the list are GETs with the key in a header", async () => {
     vi.stubEnv("META_PAGE_ACCESS_TOKEN", "EAAB-secret")
@@ -134,7 +135,7 @@ describe("graph: identity, subscribed apps, subscribe", () => {
   it("keeps Meta's error code on the error", async () => {
     vi.stubEnv("META_PAGE_ACCESS_TOKEN", "t")
     const f = vi.fn(async () => new Response(JSON.stringify({ error: { message: "bad token", code: 190 } }), { status: 401 }))
-    const e = await fetchTokenIdentity(f as unknown as typeof fetch).catch(x => x as GraphError)
+    const e = (await fetchTokenIdentity(f as unknown as typeof fetch).catch(x => x)) as GraphError
     expect(e.code).toBe(190)
     expect(e.status).toBe(401)
   })

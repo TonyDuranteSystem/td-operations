@@ -8,10 +8,19 @@ export type CheckStatus = "ok" | "warn" | "fail" | "skip"
 export interface Check { key: string; label: string; status: CheckStatus; detail: string }
 export interface ConnectionReport { ok: boolean; checks: Check[] }
 
+export interface KeySource {
+  kind: "database" | "vercel" | "unreadable" | "none"
+  /** For the database: "Tony Durante LLC, connected 19 Oct, long-lasting". */
+  note?: string
+}
+
 export interface ConnectionEnv {
   appSecret: boolean
   verifyToken: boolean
+  /** Is ANY usable Page key available (stored, or on Vercel)? */
   pageToken: boolean
+  /** Where it comes from. Unset = just say it is set. */
+  keyFrom?: KeySource
   pageIds: string[]
   /** Our Meta app's id (public, not a secret). Unset = we cannot tell which listed app is ours. */
   appId: string | null
@@ -47,7 +56,10 @@ export async function checkMetaConnection(d: ConnectionDeps): Promise<Connection
 
   add("app_secret", "App secret", d.env.appSecret ? "ok" : "fail", d.env.appSecret ? "Set." : "Not set on Vercel. Without it every notification from Meta is refused.")
   add("verify_token", "Webhook verify password", d.env.verifyToken ? "ok" : "fail", d.env.verifyToken ? "Set." : "Not set on Vercel. Meta's handshake will be refused.")
-  add("page_token", "Page access key", d.env.pageToken ? "ok" : "fail", d.env.pageToken ? "Set." : "Not set on Vercel. We cannot read any lead without it.")
+  const kf = d.env.keyFrom
+  if (kf?.kind === "database") add("page_token", "Page access key", "ok", `Stored safely in our database${kf.note ? ` (${kf.note})` : ""}.`)
+  else if (kf?.kind === "unreadable") add("page_token", "Page access key", d.env.pageToken ? "warn" : "fail", `A key is stored in our database but can no longer be read (the Meta app secret was changed). ${d.env.pageToken ? "The key set on Vercel is being used instead. " : ""}Press "Connect Meta" again.`)
+  else add("page_token", "Page access key", d.env.pageToken ? "ok" : "fail", d.env.pageToken ? "Set on Vercel." : "Not set. Press \"Connect Meta\" on this page, or set a key on Vercel. We cannot read any lead without it.")
   add("page_ids", "Page ids", d.env.pageIds.length ? "ok" : "fail", d.env.pageIds.length ? `${d.env.pageIds.length} Page${d.env.pageIds.length === 1 ? "" : "s"} configured.` : "Not set on Vercel. The safety re-read has no Page to look at.")
   add("app_id", "Our Meta app id", d.env.appId ? "ok" : "warn", d.env.appId ? "Set." : "Not set. The check cannot tell which installed app is ours, so it cannot say whether the Page is subscribed.")
 
