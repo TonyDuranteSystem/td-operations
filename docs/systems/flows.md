@@ -244,6 +244,8 @@ The service a client buys to change his company's name. It is a workspace like F
 
 **Creation.** `createSD` calls `askFirstNamesAtCreation` for this service (idempotent, reports failures to the error dashboard, never throws), because stage notices only fire when a stage is advanced, never at creation. When the client's names arrive the job advances from step 1 to step 2 by itself. Push/e-mail notices use the client label (`clientStageLabelFor`) for this service only. After the catalog migration the job gets NO workflow card and NO plain fallback card; the Calendar is the to-do.
 
+**Welcome message.** `lib/portal/welcome-message.ts` maps the service to the `company_change_name` row of the `welcome_messages` catalog (migration `20261019-1100`, EN/IT, priority 45, editable in /catalog); wording is a DRAFT until Antonio approves it (page "Name Change Wording").
+
 **Not built yet (tracks S, B3, B4):** the storage rename + "Previous names" move, the `previous_name` field under the company name, the "Apply new name" panel, the OA new-version path, the welcome message. Do not tell anyone the service is complete.
 
 ## The Tax Return 15-stage flow (sandbox pipeline)
