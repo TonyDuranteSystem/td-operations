@@ -21,8 +21,16 @@
  * upsert lands on the same row.
  */
 
+import { createHash } from "node:crypto"
+
 export function slugifyClientName(clientName: string): string {
-  return clientName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").slice(0, 40)
+  const slug = clientName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").slice(0, 40)
+  // A name with no Latin letters or digits (李小龙) used to slug to "" and gave every such client the same token ("portal--2026"): two
+  // different people collided on one submission row. Build the slug from the name itself instead — the same name always gives the same
+  // slug (retry-safe), different names give different slugs.
+  const trimmed = clientName.normalize("NFC").trim().toLowerCase()
+  if (slug.replace(/-/g, "") === "" && trimmed) return `u${createHash("sha256").update(trimmed).digest("hex").slice(0, 12)}`
+  return slug
 }
 
 export interface BuildSubmissionTokenParams {
