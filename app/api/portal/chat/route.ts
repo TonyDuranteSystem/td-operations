@@ -11,6 +11,8 @@ import { isOfficeOpen } from '@/lib/portal/office-hours'
 import { sendOfficeClosedAutoReply } from '@/lib/portal/auto-reply'
 import { buildChatQueryPlan, messageVisibleInPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
 import { fetchClientUnreadRows, topicKey } from '@/lib/portal/client-chat-unread'
+import { accountScopeWithHistory, filterByHistoryCutoff, historyKeepClauses } from '@/lib/documents/history-cutoff'
+import { getHistoryCutoffs, getHistoryView, getOpenedItemIds } from '@/lib/portal/history-cutoff'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
 import { decideAdminSendScope, isContactLinkedToAccount, resolveAdminReplyContact } from '@/lib/portal/admin-send-scope'
 import { contactThreadOrFilter, multiMemberAccountIds } from '@/lib/portal/thread-scope'
@@ -138,11 +140,18 @@ export async function GET(request: NextRequest) {
   // Per-company scoped plan takes precedence (client switched to a company /
   // personal thread). Mirrors lib/portal/chat-scope.ts::messageVisibleInPlan.
   if (scopedPlan) {
+    // A person who joined the company later sees its conversation only from their start date (dev job d14e823f). Their own
+    // messages, ones sent to them by name, and ones staff opened stay. The personal (no company) half is never cut.
+    let historyKeep: string | null = null
+    if (isClientUser && authContactId && scopedPlan.mode !== 'personal_only') {
+      const hv = await getHistoryView(scopedPlan.accountId, authContactId, 'message')
+      historyKeep = historyKeepClauses(hv.cutoff, { viewerContactId: authContactId, ownerColumns: ['contact_id', 'addressed_to_contact_id'], openedIds: Array.from(hv.opened) })
+    }
     if (scopedPlan.mode === 'account') {
-      query = query.eq('account_id', scopedPlan.accountId)
+      query = historyKeep ? query.or(accountScopeWithHistory(scopedPlan.accountId, historyKeep)) : query.eq('account_id', scopedPlan.accountId)
     } else if (scopedPlan.mode === 'account_plus_personal') {
       query = query.or(
-        `account_id.eq.${scopedPlan.accountId},and(account_id.is.null,contact_id.eq.${scopedPlan.contactId})`
+        `${accountScopeWithHistory(scopedPlan.accountId, historyKeep)},and(account_id.is.null,contact_id.eq.${scopedPlan.contactId})`
       )
     } else {
       query = query.is('account_id', null).eq('contact_id', scopedPlan.contactId)
@@ -181,8 +190,28 @@ export async function GET(request: NextRequest) {
     query = query.lt('created_at', before)
   }
 
-  const { data, error } = await query
+  const { data: rawData, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  let data = rawData
+  // The older client paths (no per-company scope) get the same start-date rule after the read.
+  if (isClientUser && authContactId && !scopedPlan) {
+    const cutoffs = await getHistoryCutoffs(authContactId)
+    if (cutoffs.size > 0) {
+      const openedByAccount = new Map<string, Set<string>>()
+      for (const accId of Array.from(cutoffs.keys())) openedByAccount.set(accId, await getOpenedItemIds(accId, 'message'))
+      data = (rawData ?? []).filter(m => {
+        const accId = m.account_id as string | null
+        const cutoff = accId ? cutoffs.get(accId) : null
+        if (!accId || !cutoff) return true
+        return filterByHistoryCutoff([m], cutoff, authContactId, x => ({
+          created_at: x.created_at,
+          ownerContactId: x.contact_id,
+          addressedToContactId: (x as { addressed_to_contact_id?: string | null }).addressed_to_contact_id ?? null,
+          opened: openedByAccount.get(accId)?.has(x.id) ?? false,
+        })).length > 0
+      })
+    }
+  }
 
   // Flatten contact name into sender_name for display
   const messages = (data ?? []).map(msg => {

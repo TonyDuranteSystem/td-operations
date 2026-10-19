@@ -20,28 +20,23 @@
  * Kept here, pure and client-safe, so the server directory and any UI filter
  * apply the SAME rule instead of two lists that can drift.
  */
-export const NON_STAFF_AUTH_ROLES = ['client', 'partner'] as const
+export const NON_STAFF_AUTH_ROLES = ['client', 'partner', 'marketing'] as const
+
+/** The ONLY roles that are TD staff (TD Marketing P1, 2026-10-17: an allow-list, an unknown or empty role is NOT staff). */
+export const STAFF_AUTH_ROLES = ['admin', 'team'] as const
 
 /**
  * Is this auth role a TD staff member?
  *
- * This is a DENY-LIST, not an allow-list, and that is a deliberate trade-off:
- * an unknown or absent role counts as staff, which preserves the existing
- * behaviour for legacy accounts that predate the role being set (the previous
- * rule was simply `role !== 'client'`). So this fixes the partner hole and
- * changes nothing else.
- *
- * THE RISK IT LEAVES, stated plainly: a FUTURE outsider role — say 'contractor'
- * or 'auditor' — would again arrive as staff until it is added above. If a new
- * non-employee role is ever introduced, it must be added to NON_STAFF_AUTH_ROLES
- * in the same change. A strict allow-list would close that permanently, but it
- * would also silently lock out any account whose role is unset, which is a
- * different outage and a bigger behavioural change than this incident warrants.
+ * An ALLOW-LIST since TD Marketing P1 (2026-10-17, Antonio's go): only 'admin' and 'team' are staff. An unknown, empty or
+ * misspelled role is NOT staff. It used to be a deny-list (everything except client/partner was staff, an empty role
+ * too) — the weakness being that any new kind of login, like marketing, would have arrived as staff. Verified before the
+ * change: every production login has one of admin, team, client or partner; none has an empty role. If a new staff role is
+ * ever introduced it must be added to STAFF_AUTH_ROLES in the same change.
  */
 export function isStaffAuthRole(role: string | null | undefined): boolean {
-  const r = (role ?? '').toLowerCase()
-  if (!r) return true // legacy staff accounts predate the role being set
-  return !(NON_STAFF_AUTH_ROLES as readonly string[]).includes(r)
+  const r = (role ?? '').trim().toLowerCase()
+  return (STAFF_AUTH_ROLES as readonly string[]).includes(r)
 }
 
 /** Sentinel reactor/mention id for the AI worker. */

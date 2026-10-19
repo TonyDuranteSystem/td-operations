@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { ArrowLeft, ArrowRight, MessageSquare, Layers, PenSquare } from 'lucide-react'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
+import { isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
+import { getHistoryCutoff } from '@/lib/portal/history-cutoff'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { t, getLocale } from '@/lib/portal/i18n'
@@ -136,10 +138,11 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   const title = buildFlowTopic(sd.service_type, year) || sd.service_name || sd.service_type || 'Service'
 
   // ── Curated client-safe documents for this flow ──
+  const flowCutoff = sd.account_id ? await getHistoryCutoff(sd.account_id, contactId) : null
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: docData } = await (supabaseAdmin as any)
     .from('documents')
-    .select('id, file_name, document_type_name, category, contact_id, drive_file_id, processed_at, created_at, flow_stage, portal_visible')
+    .select('id, file_name, document_type_name, category, contact_id, drive_file_id, processed_at, created_at, flow_stage, portal_visible, visible_to_new_owners')
     .eq('service_delivery_id', sd.id)
     .order('created_at', { ascending: false })
     .limit(100)
@@ -147,10 +150,12 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     id: string; file_name: string; document_type_name: string | null; category: number | null
     contact_id: string | null
     drive_file_id: string | null; processed_at: string | null; created_at: string
-    flow_stage: string | null; portal_visible: boolean | null
+    flow_stage: string | null; portal_visible: boolean | null; visible_to_new_owners: boolean | null
   }>).filter(d => isClientSafeFlowDoc(sd.service_type, d.flow_stage, d.portal_visible))
     // never another member's personal document (passport/ID/ITIN…)
     .filter(d => !isPersonalDocumentHiddenFrom(d, contactId))
+    // a person who joined the company later does not see files saved before their start date (dev job d14e823f)
+    .filter(d => !isHiddenByHistoryCutoff(d, flowCutoff, contactId))
 
   // ITIN "Client Signing" card embeds the actual prepared documents (W-7 /
   // 1040-NR / Schedule OI) as download links — the SD-linked client-safe docs

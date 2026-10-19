@@ -40,6 +40,7 @@ import { reportSystemError } from "@/lib/system-errors"
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
 import { companyCmraAddressLine } from "@/lib/operations/suite"
 import { memberPassportPathFor } from "@/lib/crm-store/account-uploads"
+import { applyFilingOutcome } from "@/lib/jobs/handlers/onboarding-filing-outcome"
 
 interface OnboardingPayload {
   token: string
@@ -1838,5 +1839,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   const skipCount = result.steps.filter(s => s.status === "skipped").length
   result.summary = `${okCount} ok, ${errCount} errors, ${skipCount} skipped`
 
-  return result
+  // Stop Drive (dev job 264bb882, S1d): a setup whose papers were not filed is a FAILED job (terminal: staff decide about a re-run),
+  // never a "completed" one that hides it.
+  return applyFilingOutcome(result)
 }

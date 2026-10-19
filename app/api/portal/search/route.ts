@@ -1,4 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
+import { filterByHistoryCutoff, isHiddenByHistoryCutoff, isSettledPaymentStatus } from '@/lib/documents/history-cutoff'
+import { getHistoryCutoff, getHistoryView } from '@/lib/portal/history-cutoff'
 import { NextRequest, NextResponse } from 'next/server'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -34,11 +36,14 @@ export async function GET(request: NextRequest) {
 
   const pattern = `%${q}%`
   const limit = 6
+  // A person who joined the company later cannot find, by search, what the pages hide from them (dev job d14e823f).
+  const docCutoff = await getHistoryCutoff(accountId, contactId)
+  const payHistory = await getHistoryView(accountId, contactId, 'payment')
 
   async function searchDocuments(): Promise<EnhancedSearchResult[]> {
     const { data } = await supabaseAdmin
       .from('documents')
-      .select('id, file_name, document_type_name, category, contact_id, drive_file_id, portal_visible, service_delivery_id, flow_stage')
+      .select('id, file_name, document_type_name, category, contact_id, drive_file_id, portal_visible, service_delivery_id, flow_stage, created_at, visible_to_new_owners')
       .eq('account_id', accountId)
       .or(`file_name.ilike.${pattern},document_type_name.ilike.${pattern}`)
       .or(`category.neq.2,category.is.null,contact_id.eq.${contactId}`)
@@ -50,7 +55,7 @@ export async function GET(request: NextRequest) {
     // only when the client could open it (hidden / internal files are not named). Drive rows are untouched.
     const { dropStoreRowsClientCannotOpen } = await import('@/lib/portal/client-store-docs')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const visibleToThisClient = await dropStoreRowsClientCannotOpen(((data ?? []) as any[]).filter((d: any) => !isPersonalDocumentHiddenFrom(d, contactId)))
+    const visibleToThisClient = await dropStoreRowsClientCannotOpen(((data ?? []) as any[]).filter((d: any) => !isPersonalDocumentHiddenFrom(d, contactId) && !isHiddenByHistoryCutoff(d, docCutoff, contactId)))
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return visibleToThisClient.slice(0, limit).map((d: any) => ({
       id: d.id,
@@ -89,12 +94,13 @@ export async function GET(request: NextRequest) {
   async function searchInvoices(): Promise<EnhancedSearchResult[]> {
     const { data } = await supabaseAdmin
       .from('payments')
-      .select('id, description, amount, currency, status, due_date')
+      .select('id, description, amount, currency, status, due_date, created_at')
       .eq('account_id', accountId)
       .ilike('description', pattern)
       .order('created_at', { ascending: false })
       .limit(limit)
-    return (data ?? []).map((p: any) => ({
+    const shown = filterByHistoryCutoff((data ?? []) as any[], payHistory.cutoff, contactId, (p: any) => ({ created_at: p.created_at, opened: payHistory.opened.has(p.id) || !isSettledPaymentStatus(p.status) }))
+    return shown.map((p: any) => ({
       id: p.id,
       title: p.description ?? 'Payment',
       subtitle: `${p.currency ?? 'USD'} ${p.amount ?? 0} \u00b7 ${p.status ?? ''}`,

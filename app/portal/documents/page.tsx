@@ -8,8 +8,8 @@ import { cookies } from 'next/headers'
 import { DocumentList } from '@/components/portal/document-list'
 import { getNewDocumentIds } from '@/lib/portal/document-alerts'
 import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
-import { isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
-import { getHistoryCutoff } from '@/lib/portal/history-cutoff'
+import { filterByHistoryCutoff, isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
+import { filterCorrespondenceForViewer, getHistoryCutoff, getHistoryView } from '@/lib/portal/history-cutoff'
 import { DocumentUploadButton } from '@/components/portal/document-upload-button'
 import { CorrespondenceList } from '@/components/portal/correspondence-list'
 import { t, getLocale } from '@/lib/portal/i18n'
@@ -240,18 +240,29 @@ export default async function PortalDocumentsPage() {
     accountIds.length > 0 ? `account_id.in.(${accountIds.join(',')})` : null,
   ].filter(Boolean).join(',')
 
-  const { data: correspondence } = orFilter
+  const { data: correspondenceAll } = orFilter
     ? await supabaseAdmin
         .from('client_correspondence')
-        .select('id, file_name, description, drive_file_url, read_at, created_at, account_id')
+        .select('id, file_name, description, drive_file_url, read_at, created_at, account_id, contact_id')
         .or(orFilter)
         .order('created_at', { ascending: false })
     : { data: [] as { id: string; file_name: string; description: string | null; drive_file_url: string | null; read_at: string | null; created_at: string; account_id: string | null }[] }
 
-  const unreadCount = (correspondence ?? []).filter(c => !c.read_at).length
+  // A person who joined a company later does not see the letters it received before their start date, nor its old invoice
+  // PDFs (dev job d14e823f). Mail addressed to them personally (contact_id = them) stays.
+  const correspondence = await filterCorrespondenceForViewer(correspondenceAll ?? [], contactId)
+  const unreadCount = correspondence.filter(c => !c.read_at).length
 
   // Fetch invoice archive documents
-  const invoiceArchive = selectedAccountId ? await getInvoiceArchive(selectedAccountId) : []
+  const invoiceArchiveAll = selectedAccountId ? await getInvoiceArchive(selectedAccountId) : []
+  // An invoice PDF follows its invoice / expense: opened by staff together with it.
+  const [archSales, archExp] = selectedAccountId
+    ? await Promise.all([getHistoryView(selectedAccountId, contactId, 'invoice'), getHistoryView(selectedAccountId, contactId, 'expense')])
+    : [{ cutoff: null, opened: new Set<string>() }, { cutoff: null, opened: new Set<string>() }]
+  const invoiceArchive = filterByHistoryCutoff(invoiceArchiveAll, archSales.cutoff, contactId, a => ({
+    created_at: a.created_at,
+    opened: (!!a.sales_invoice_id && archSales.opened.has(a.sales_invoice_id)) || (!!a.expense_id && archExp.opened.has(a.expense_id)),
+  }))
 
   // Which documents are "new" (alert-eligible + unopened) for THIS contact —
   // drives the "New" pill + tinted row. Teammates have no per-person state.

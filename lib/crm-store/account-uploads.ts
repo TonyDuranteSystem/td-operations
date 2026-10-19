@@ -26,10 +26,25 @@ export interface FallbackResult {
   saved: number
   failed: { path: string; error: string }[]
   ownerId: string | null
+  /** member passports (passport_member_*) left for the step that files them in each member's own storage */
+  heldForMembers?: number
   /** the passport that went to the person's own storage — its bytes, for the passport-data read */
   passport?: { content: ArrayBuffer; mimeType: string; fileName: string } | null
   /** member passports held for the member's own storage (not filed here) */
   held?: number
+}
+
+/** Whose passport is this upload? By the wizard field name at the start of the stored file name ({field}_{unique}_{filename}). */
+export function passportKindOf(fileName: string): "none" | "owner" | "member" | "unknown" {
+  if (/^passport_owner/i.test(fileName)) return "owner"
+  // a member's passport: the portal wizard stores it as member_{i}_member_passport, the older standalone form as passport_member_{i}
+  if (/^passport_member/i.test(fileName) || /^member_\d+_member_passport/i.test(fileName)) return "member"
+  return /passport/i.test(fileName) ? "unknown" : "none"
+}
+
+/** The upload path of member #i's passport (0-based, both naming schemes), or undefined. */
+export function memberPassportPathFor(paths: readonly string[] | null | undefined, i: number): string | undefined {
+  return (paths ?? []).find((up) => up.includes(`member_${i}_member_passport`) || up.includes(`passport_member_${i}`))
 }
 
 /** Whose passport is this upload? By the wizard field name at the start of the stored file name ({field}_{unique}_{filename}). */
