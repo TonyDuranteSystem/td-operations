@@ -63,9 +63,12 @@ export async function GET(req: NextRequest) {
     // it. A company with no folder is archived into its storage by the job itself; a completed row with no company stays in (and
     // fails loudly). A form that joined the sweep later is not swept before its own start date (`sweepNotBefore`).
     const cutoffIso = recipe.sweepNotBefore && recipe.sweepNotBefore > FORM_ARCHIVE_SWEEP_CUTOFF_ISO ? recipe.sweepNotBefore : FORM_ARCHIVE_SWEEP_CUTOFF_ISO
+    // A form that only counts rows its completion route filed (they carry a pinned plan; older ones were filed the old way and are never
+    // re-filed): the condition is part of the SAME query, so unpinned history cannot fill the window.
+    const real = recipe.sweepRealFilter ?? "status.in.(completed,reviewed)"
     const win = await readSweepWindow<Record<string, unknown>>(recipe.table, recipe.selectColumns, {
       cutoffIso,
-      realFilter: recipe.sweepRealFilter ?? "status.in.(completed,reviewed)",
+      realFilter: recipe.sweepOnlyPinned ? `and(${real},drive_archive_meta->pinned_plan.not.is.null)` : real,
       hasAccount: recipe.sweepHasAccount,
     })
     if (win.readError) {

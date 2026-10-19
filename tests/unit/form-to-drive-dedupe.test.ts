@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/crm-store/save-form', () => ({
   switchedTargetForFolder: vi.fn(async () => null),
   saveFormToStore: vi.fn(),
+  parseStorageMarker: () => null,
 }))
 
 vi.mock('@/lib/supabase-admin', () => ({

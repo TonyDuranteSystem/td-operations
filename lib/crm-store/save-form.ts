@@ -31,7 +31,7 @@ export interface SwitchedFolderTarget {
  * it is simply a Drive folder.
  */
 export async function switchedTargetForFolder(driveFolderId: string): Promise<SwitchedFolderTarget | null> {
-  const { companyDocState, liveOwnerOfAccount, liveOwnerOfContact, lockedFolderIdsCached } = await import("./switched-drive-guard")
+  const { companyDocState, liveOwnerOfAccount, liveOwnerOfContact, lockedFolderIdsCached, contactSharesDriveCompany } = await import("./switched-drive-guard")
   const { CompanyMovingError } = await import("./save-for-account")
 
   // Nothing switched anywhere: no lookups, no Drive calls.
@@ -79,11 +79,27 @@ export async function switchedTargetForFolder(driveFolderId: string): Promise<Sw
   }
   for (const c of contacts) {
     const ownerId = await liveOwnerOfContact(c.id)
-    if (ownerId) switched.push({ kind: "contact", id: c.id, ownerId })
+    if (!ownerId) continue
+    // A person who belongs to a company still on Drive: this folder is that company's "2. Contacts" — a Drive folder, not theirs
+    // alone. A storage opened for them (a lead form does that) must not capture the company's saves nor make them fail.
+    if (await contactSharesDriveCompany(c.id)) continue
+    switched.push({ kind: "contact", id: c.id, ownerId })
   }
   if (switched.length === 0) return null
   if (accounts.length + contacts.length > 1) throw new Error("More than one record claims this Drive folder and one of them is in the new storage — nothing was filed (fix the folder link first).")
   return switched[0]
+}
+
+
+/**
+ * A form destination that is not a Drive folder at all: "person-storage:<contactId>" or "account-storage:<accountId>".
+ * Anyone whose files live in (or are being opened in) the new storage is addressed this way, so the form flows never need
+ * a Drive folder for them. Anything else is a Drive folder id and returns null.
+ */
+export function parseStorageMarker(folderId: string): { kind: "contact" | "account"; id: string } | null {
+  const m = /^(person|account)-storage:([0-9a-fA-F-]{36})$/.exec(folderId)
+  if (!m) return null
+  return { kind: m[1] === "person" ? "contact" : "account", id: m[2] }
 }
 
 /** The top folder of the storage that matches the Drive sub-folder a form type used. */
@@ -124,6 +140,8 @@ export interface FormStoreSpec {
   bucketOf: (path: string) => string
   /** unique per submission: the same key on a retry makes new VERSIONS, never copies */
   submissionKey: string
+  /** the stored file's name for an upload path (default: the path's last part). The idempotency key still uses the path. */
+  fileNameOf?: (path: string) => string
 }
 
 export interface FormStoreDeps {
@@ -136,7 +154,8 @@ export interface FormStoreDeps {
 async function defaultDeps(): Promise<FormStoreDeps> {
   const pilot = await import("./formation-pilot")
   return {
-    saveFile: (p) => pilot.savePilotFile({ ...p, published: false }),
+    // a person's papers (passports, IDs, ITIN) are never queued for the AI file reader
+    saveFile: (p) => pilot.savePilotFile({ ...p, published: false, skipAnalysis: p.folderKind === "personal" || p.folderKind === "itin" }),
     download: async (bucket, path) => {
       const { data, error } = await supabaseAdmin.storage.from(bucket).download(path)
       if (error || !data || data.size === 0) return null
@@ -185,7 +204,7 @@ export async function saveFormToStore(spec: FormStoreSpec, deps?: FormStoreDeps)
   }
 
   for (const path of spec.uploadPaths) {
-    const name = path.split("/").pop() || "document.pdf"
+    const name = spec.fileNameOf?.(path) || path.split("/").pop() || "document.pdf"
     try {
       let got = null
       for (let attempt = 0; attempt < 3 && !got; attempt++) {

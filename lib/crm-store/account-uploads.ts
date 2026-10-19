@@ -26,10 +26,10 @@ export interface FallbackResult {
   saved: number
   failed: { path: string; error: string }[]
   ownerId: string | null
-  /** member passports (passport_member_*) left for the step that files them in each member's own storage */
-  heldForMembers?: number
   /** the passport that went to the person's own storage — its bytes, for the passport-data read */
   passport?: { content: ArrayBuffer; mimeType: string; fileName: string } | null
+  /** member passports held for the member's own storage (not filed here) */
+  held?: number
 }
 
 /** Whose passport is this upload? By the wizard field name at the start of the stored file name ({field}_{unique}_{filename}). */
@@ -71,12 +71,13 @@ export async function saveUploadsToStoreForAccount(p: {
       if (error || !blob) throw new Error(error?.message ?? "no data")
       const bytes = Buffer.from(await blob.arrayBuffer())
       const name = path.split("/").pop() || "upload"
-      // ONLY the file the wizard marks as the OWNER's passport (field passport_owner*) is the owner's passport. A member's passport
-      // (passport_member_*) belongs to THAT member's own storage and is filed by the step that knows the member (never here, never in
-      // the owner's storage, never read onto the owner); any other file with "passport" in its name has an unknown owner: it is NOT filed
-      // (it stays where the client uploaded it) and the alarm below tells staff.
+      // A MEMBER's passport is never filed in the company's folders nor in the owner's storage: it is held for that member's own
+      // storage (filed when their contact exists — see held-member-passports.ts).
+      const { memberIndexOfUpload } = await import("./held-member-passports")
+      if (memberIndexOfUpload(path) !== null) { out.held = (out.held ?? 0) + 1; continue }
+      // ONLY the file the wizard marks as the OWNER's passport (field passport_owner*) is the owner's passport; any other file with
+      // "passport" in its name has an unknown owner: it is NOT filed (it stays where the client uploaded it) and the alarm below tells staff.
       const kind = passportKindOf(name)
-      if (kind === "member") { out.heldForMembers = (out.heldForMembers ?? 0) + 1; continue }
       if (kind === "unknown") throw new Error("whose passport this is cannot be told from its name — it was not filed")
       const isPassport = kind === "owner" && !!p.passportContact
       const target = isPassport ? await ensurePersonOwner(p.passportContact!.contactId, p.passportContact!.name) : ownerId

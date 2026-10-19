@@ -57,7 +57,7 @@ describe('passports in saveUploadsToStoreForAccount', () => {
     expect(byName(OWNER)).toMatchObject({ ownerId: 'person-owner-c1', folderKind: 'personal', documentType: 'passport' })
     expect(byName(M1)).toBeUndefined(); expect(byName(M2)).toBeUndefined()
     expect(byName(EIN)).toMatchObject({ ownerId: 'company-owner', folderKind: 'company' })
-    expect(r.heldForMembers).toBe(2)
+    expect(r.held).toBe(2)
     expect(r.passport?.fileName).toBe('passport_owner_ab_front.pdf') // first/owner, never the last member
     expect(r.failed).toEqual([])
   })

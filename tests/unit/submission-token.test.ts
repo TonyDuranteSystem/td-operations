@@ -95,3 +95,32 @@ describe("pickClosureSubmissionToken — closure re-send keeps the same saved su
   })
 })
 
+
+describe("slugifyClientName — non-Latin names (Stop-Drive S1a)", () => {
+  it("a name with no Latin letters no longer collapses to an empty slug: different people get different tokens, the same person the same token", () => {
+    const a = buildSubmissionToken({ clientName: "李小龙", wizardType: "formation", calendarYear: 2026 })
+    const b = buildSubmissionToken({ clientName: "王小明", wizardType: "formation", calendarYear: 2026 })
+    expect(a).not.toBe(b)
+    expect(a).not.toBe("portal--2026")
+    expect(a).toBe(buildSubmissionToken({ clientName: "李小龙", wizardType: "formation", calendarYear: 2026 }))
+    expect(a).toMatch(/^portal-u[0-9a-f]{12}-2026$/)
+  })
+  it("Latin names are unchanged", () => {
+    expect(buildSubmissionToken({ clientName: "Mario Rossi", wizardType: "formation", calendarYear: 2026 })).toBe("portal-mario-rossi-2026")
+  })
+})
+
+describe("legacyFormSlug — staff-made form tokens", () => {
+  it("is unchanged for Latin names and falls back to the form name for an empty one", async () => {
+    const { legacyFormSlug } = await import("@/lib/portal/submission-token")
+    expect(legacyFormSlug("Mario Rossi", "form")).toBe("mario-rossi")
+    expect(legacyFormSlug("", "itin-form")).toBe("itin-form")
+    expect(legacyFormSlug(null, "form")).toBe("form")
+  })
+  it("a non-Latin name gets a hash part, not an empty one", async () => {
+    const { legacyFormSlug } = await import("@/lib/portal/submission-token")
+    expect(legacyFormSlug("李小龙", "form")).toMatch(/^u[0-9a-f]{12}$/)
+    expect(legacyFormSlug("李小龙", "form")).not.toBe(legacyFormSlug("王小明", "form"))
+    expect(legacyFormSlug("李小龙", "form")).toBe(legacyFormSlug("李小龙", "form"))
+  })
+})

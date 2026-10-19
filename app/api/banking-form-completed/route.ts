@@ -252,62 +252,22 @@ export async function POST(req: NextRequest) {
     // ─── 4. SAVE FORM DATA TO DRIVE ───
     if (sub.account_id) {
       try {
-        const { data: acct } = await supabaseAdmin
-          .from("accounts")
-          .select("drive_folder_id")
-          .eq("id", sub.account_id)
-          .single()
-
-        if (acct?.drive_folder_id) {
-          const { data: fullSub } = await supabaseAdmin
-            .from("banking_submissions")
-            .select("submitted_data, upload_paths, completed_at")
-            .eq("id", submission_id)
-            .single()
-
-          if (fullSub?.submitted_data) {
-            const { saveFormToDrive } = await import("@/lib/form-to-drive")
-            const driveResult = await saveFormToDrive(
-              "banking",
-              fullSub.submitted_data as Record<string, unknown>,
-              (fullSub.upload_paths as string[]) || [],
-              acct.drive_folder_id,
-              { token: sub.token, submittedAt: fullSub.completed_at || new Date().toISOString(), companyName }
-            )
-            results.push({
-              step: "save_to_drive",
-              status: driveResult.errors.length ? "partial" : "ok",
-              detail: `PDF: ${driveResult.summaryFileId || "none"}, copied: ${driveResult.copied.length}, failed: ${driveResult.failed.length}`,
-            })
-
-            // Durable backstop (2026-07-24): the inline save above is best-effort.
-            // Enqueue the reliable archive job with the plan PINNED (folder +
-            // bucket + config + paths) so a slow/failed inline copy self-heals via
-            // retry, and the sweep can alert if it never lands. External banking
-            // form → bucket "banking-uploads", config "banking".
-            try {
-              const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
-              await enqueueFormArchiveJob({
-                formType: "banking",
-                submissionId: submission_id,
-                pin: {
-                  folderId: acct.drive_folder_id,
-                  bucket: "banking-uploads",
-                  configKey: "banking",
-                  uploadPaths: (fullSub.upload_paths as string[]) || [],
-                  companyName: companyName || undefined,
-                },
-                createdBy: "banking_form_completed",
-              })
-            } catch (e) {
-              results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
-            }
-          } else {
-            results.push({ step: "save_to_drive", status: "skipped", detail: "No submitted_data" })
-          }
-        } else {
-          results.push({ step: "save_to_drive", status: "skipped", detail: "No drive_folder_id on account" })
-        }
+        // Stop Drive (dev job 264bb882, S1d): ONE filer for every banking lane (lib/forms/file-banking-package.ts): the company's
+        // storage (or its Drive folder if it was left on Drive); the client's personal papers go to the PERSON's own storage; a
+        // failure is an ERROR step with ONE staff alarm; the durable job is queued whenever there is a destination.
+        const { setBankingOrigin } = await import("@/lib/forms/mark-banking-filed")
+        await setBankingOrigin(submission_id, "external")
+        const { fileBankingSubmission } = await import("@/lib/forms/file-banking-submission")
+        const filed = await fileBankingSubmission(submission_id, "banking-form-completed", { companyName: companyName || undefined })
+        const pkg = filed.pkg
+        results.push({
+          step: "save_to_drive",
+          status: pkg.ok ? "ok" : "error",
+          detail: pkg.ok
+            ? `PDF: ${pkg.summaryFileId || "none"}, filed: ${pkg.copied.length}`
+            : `${pkg.sentence ?? pkg.errors.join("; ")} (filed: ${pkg.copied.length}, not filed: ${pkg.failed.length})${pkg.retryLater ? " — will be retried" : ""}`,
+        })
+        if (filed.enqueueError) results.push({ step: "archive_enqueue", status: "error", detail: filed.enqueueError })
       } catch (e) {
         results.push({ step: "save_to_drive", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }

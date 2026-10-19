@@ -33,6 +33,8 @@ export interface ApproveBankingReviewParams {
   submission_id: string
   /** Actor identifier for the reviewed_by audit column. Examples: 'claude', 'workflow:banking.approve_payset', a user UUID. */
   actor: string
+  /** the caller has just filed the package itself (and stops if that failed): do not file it a second time */
+  filingDone?: boolean
 }
 
 export interface ApproveBankingReviewResult {
@@ -93,6 +95,23 @@ export async function approveAndApplyBankingReview(
   }
 
   const provider: BankingReviewProvider = sub.provider === "relay" ? "relay" : "payset"
+
+  // ── 1b. File the package FIRST (Stop Drive S1d, dev job 264bb882) ───────────────────────────────
+  // "Approve & Apply" must never mark an application reviewed while its package (summary + the client's papers) is not in the
+  // company's / person's storage. Filing is idempotent (same submission = same files, recorded "unchanged"), so a retry after a failure
+  // is safe; the application is marked reviewed only when everything was filed.
+  if (!params.filingDone) {
+    try {
+      const { fileBankingSubmission } = await import("@/lib/forms/file-banking-submission")
+      const filed = await fileBankingSubmission(sub.id, "banking-review-apply", { companyName })
+      if (!filed.pkg.ok) {
+        const why = filed.pkg.sentence ?? [...filed.pkg.errors, ...filed.pkg.failed].join("; ")
+        return { ok: false, error: `The application was NOT marked reviewed because its package could not be fully filed: ${why}. Fix that (or wait for the move to finish) and approve again.`, provider, account_id: sub.account_id, company_name: companyName }
+      }
+    } catch (e) {
+      return { ok: false, error: `The application was NOT marked reviewed because filing its package failed: ${e instanceof Error ? e.message : String(e)}`, provider, account_id: sub.account_id, company_name: companyName }
+    }
+  }
 
   if (sub.reviewed_at) {
     return {

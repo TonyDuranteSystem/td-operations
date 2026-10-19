@@ -4,7 +4,7 @@
  *    attempts are used up, ALERTED once — the alert flag is merged into the row (never a copy of a stale one).
  *  - A row whose one alert already fired, and an unfilled shell, are left alone.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { NextRequest } from "next/server"
 
 const state = vi.hoisted(() => ({
@@ -75,8 +75,10 @@ describe("tax-archive-sweep — the real decision", () => {
 })
 
 describe("forms-archive-sweep — the real decision", () => {
-  beforeEach(() => { state.windowTable = "banking_submissions" })
-  const bankRow = (o: Record<string, unknown>) => ({ id: "b", account_id: null, status: "completed", created_at: OLD, drive_archived_at: null, drive_archive_meta: null, ...o })
+  // the banking sweep starts 19 Oct 2026: the clock is set after it and the rows are younger than it is old
+  beforeEach(() => { state.windowTable = "banking_submissions"; vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-11-01T12:00:00Z")) })
+  afterEach(() => { vi.useRealTimers() })
+  const bankRow = (o: Record<string, unknown>) => ({ id: "b", account_id: null, status: "completed", created_at: "2026-10-25T00:00:00Z", drive_archived_at: null, drive_archive_meta: null, ...o })
 
   it("a completed banking row with no company is enqueued; one with used-up attempts is alerted once, flag merged into ITS table", async () => {
     state.window = [bankRow({ id: "b-new" }), bankRow({ id: "b-stuck", drive_archive_meta: { attempts: 5 } })]
