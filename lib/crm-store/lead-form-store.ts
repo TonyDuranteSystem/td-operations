@@ -231,3 +231,15 @@ export async function recordSubmissionContact(table: "formation_submissions" | "
   if (error) throw new Error(`Could not record the contact on the submission: ${error.message}`)
   return (data ?? []).length > 0
 }
+
+/**
+ * The ONE rule every staff/MCP form-creation tool uses to attach a CRM contact to a lead: the contact whose email is exactly the lead's
+ * AND whose full name is the same (see namesMatch). Anything else — no contact, several, a different name on a shared email, a failed
+ * lookup — returns null (the form is made without a contact; nobody else's data prefills it) and raises the ONE existing alarm when it
+ * was a doubt rather than a plain "no contact".
+ */
+export async function contactIdForLead(p: { email: string | null | undefined; fullName: string | null | undefined; route: string; leadId?: string | null }): Promise<string | null> {
+  if (!(p.email ?? "").trim()) return null
+  const found = await lookupLeadContact({ email: p.email, leadName: p.fullName, route: p.route, leadId: p.leadId ?? null })
+  return found.state === "one" ? found.contactId : null
+}

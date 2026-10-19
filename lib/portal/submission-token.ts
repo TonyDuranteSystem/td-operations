@@ -94,3 +94,15 @@ export function pickClosureSubmissionToken(p: {
   const match = p.existingTokens.find((t) => t.startsWith("portal-") && t.endsWith(suffix))
   return match ?? p.freshToken
 }
+
+/**
+ * The name part of the legacy staff-made form tokens (`<form>-<name>-<year>`): lower-case Latin letters/digits joined by dashes, 30 chars max
+ * (unchanged for Latin names). A name with no Latin letters or digits (李小龙) used to give an EMPTY part ("-2026"), so two such clients
+ * shared one token; it now becomes `u<hash of the name>` — the same name always gives the same part, different names differ.
+ */
+export function legacyFormSlug(fullName: string | null | undefined, fallback: string): string {
+  const name = (fullName ?? "").trim()
+  const slug = (name || fallback).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30)
+  if (slug) return slug
+  return `u${createHash("sha256").update(name.normalize("NFC").toLowerCase()).digest("hex").slice(0, 12)}`
+}
