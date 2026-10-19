@@ -62,3 +62,19 @@ export function uniqueOaToken(base: string, taken: ReadonlySet<string>): string 
   return `${base}-${Date.now().toString(36)}`
 }
 
+/**
+ * The name a NEW agreement says the company was "formerly known as": the company name frozen into the most recent FULLY SIGNED agreement
+ * when it differs from the company's name now (capitals/spacing do not count), else null. `existing` is newest first. Used both when the
+ * agreement is saved and for the portal preview, so what the client previews is what is saved. Pure.
+ */
+export function previousNameForNewOa(existing: ReadonlyArray<NewestOaForNameChange>, accountName: string | null | undefined): string | null {
+  const current = oaNameKey(accountName)
+  if (current === '') return null
+  for (const o of existing) {
+    if (o.status !== 'signed') continue
+    const frozen = (o.company_name ?? '').trim()
+    if (frozen !== '' && oaNameKey(frozen) !== current) return frozen
+  }
+  return null
+}
+

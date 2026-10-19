@@ -1219,9 +1219,10 @@ export default async function WizardPage({
     }
     if (sdOnHold) {
       // Look up the matching tax_returns row for banner props. We match on
-      // company_name the same way getPortalTaxReturns does — accountId here
-      // may be empty for pre-account tax leads, in which case we render with
-      // null fields and the banner's graceful fallbacks kick in.
+      // account_id the same way getPortalTaxReturns does (a renamed company keeps
+      // its old name on its returns) — accountId here may be empty for
+      // pre-account tax leads, which keep the old company_name match, and
+      // the banner's graceful fallbacks kick in when nothing matches.
       const firstName = (user.user_metadata?.full_name as string | undefined)?.split(' ')[0] ?? (contact.first_name as string | undefined) ?? null
       let confirmationId: string | null = null
       let deadlineIso: string | null = null
@@ -1229,10 +1230,10 @@ export default async function WizardPage({
       let taxYear: number | null = null
       let trStatus: string | null = null
       if (account.company_name) {
-        const { data: tr } = await supabaseAdmin
+        const trQuery = supabaseAdmin
           .from('tax_returns')
           .select('extension_submission_id, extension_deadline, tax_year, return_type, status')
-          .eq('company_name', account.company_name)
+        const { data: tr } = await (accountId ? trQuery.eq('account_id', accountId) : trQuery.eq('company_name', account.company_name))
           .order('tax_year', { ascending: false })
           .limit(1)
           .maybeSingle()

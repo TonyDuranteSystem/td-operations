@@ -204,6 +204,7 @@ export async function generateOperatingAgreementPDF(
 
   drawCentered("OPERATING AGREEMENT", 18, bold)
   drawCentered(data.company_name, 13, font, rgb(0.33, 0.33, 0.33))
+  if (data.previous_company_name) drawCentered(`(formerly known as ${data.previous_company_name})`, 9, font, rgb(0.53, 0.53, 0.53))
   drawCentered(`A ${data.state_of_formation} ${entityLabel} Limited Liability Company`, 10, font, rgb(0.53, 0.53, 0.53))
   drawCentered("Manager-Managed", 9, font, rgb(0.67, 0.67, 0.67))
   y -= 10

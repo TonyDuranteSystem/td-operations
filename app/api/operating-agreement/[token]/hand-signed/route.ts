@@ -314,6 +314,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       const members: OAMember[] = isMMLLC ? (toPublicMembers(agreement.members) ?? []) : []
       const data: OAData = {
         company_name: agreement.company_name,
+        previous_company_name: agreement.previous_company_name ?? undefined,
         state_of_formation: agreement.state_of_formation,
         formation_date: agreement.formation_date,
         ein_number: agreement.ein_number ?? undefined,

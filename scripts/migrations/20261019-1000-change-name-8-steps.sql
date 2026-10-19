@@ -162,7 +162,7 @@ UPDATE public.pipeline_stages ps
      'We update your records', 'Aggiorniamo i tuoi dati',
      'The state approved your new name. We update your company records and your document folder.',
      'Apply the new name to our records (company name, previous name, the document folder), then ask the client for the new Operating Agreement.',
-     $j${"description":"The state approved the new name. Update the company record and the document folder, then ask the client for the new Operating Agreement.","components":[{"type":"info_panel"},{"type":"document_viewer"},{"type":"chat"},{"type":"action_buttons","actions":[{"key":"advance_next","label":"Records updated: ask the client for the Operating Agreement","target":"Client updates the Operating Agreement"}]}]}$j$),
+     $j${"description":"The state approved the new name. Apply it: the company is renamed and its old folders move to \"Previous names\" in one step. Then ask the client for the new Operating Agreement.","components":[{"type":"apply_name_panel"},{"type":"info_panel"},{"type":"document_viewer"},{"type":"chat"},{"type":"action_buttons","actions":[{"key":"advance_next","label":"Records updated: ask the client for the Operating Agreement","target":"Client updates the Operating Agreement"}]}]}$j$),
     ('Client updates the Operating Agreement', 'client',
      'Update your Operating Agreement', 'Aggiorna il tuo Operating Agreement',
      'Generate the new version of your Operating Agreement in your portal so it carries your new company name.',

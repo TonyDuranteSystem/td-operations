@@ -7,6 +7,7 @@ import { cookies } from 'next/headers'
 import { GenerateDocumentsClient } from './generate-documents-client'
 import { formatMemberAddress } from '@/lib/members/member-address'
 import { pickDefaultSs4SignerLink } from '@/lib/operations/ss4-signer'
+import { previousNameForNewOa } from '@/lib/portal/oa-regenerate-guard'
 
 export const dynamic = 'force-dynamic'
 
@@ -126,11 +127,21 @@ export default async function GenerateDocumentsPage({ searchParams }: { searchPa
         }]
       : []
 
+  // A renamed company's new Operating Agreement says "formerly known as <the name on its signed one>" — the preview shows what will be saved.
+  const { data: signedOas } = await supabaseAdmin
+    .from('oa_agreements')
+    .select('status, company_name')
+    .eq('account_id', selectedAccountId)
+    .eq('status', 'signed')
+    .order('created_at', { ascending: false })
+  const previousCompanyName = previousNameForNewOa(signedOas ?? [], accountDetail.company_name)
+
   return (
     <GenerateDocumentsClient
       account={{
         id: selectedAccountId,
         companyName: accountDetail.company_name,
+        previousCompanyName,
         ein: accountDetail.ein_number,
         stateOfFormation: accountDetail.state_of_formation,
         formationDate: accountDetail.formation_date,

@@ -34,7 +34,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
-import { hasCollectedSignatures, isNameChangeNewVersion, uniqueOaToken } from '@/lib/portal/oa-regenerate-guard'
+import { hasCollectedSignatures, isNameChangeNewVersion, previousNameForNewOa, uniqueOaToken } from '@/lib/portal/oa-regenerate-guard'
 import { OA_SUPPORTED_STATES, normalizeOAState } from '@/lib/types/oa-templates'
 import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
@@ -399,11 +399,16 @@ export async function POST(request: NextRequest) {
   const { data: takenTokens } = await supabaseAdmin.from('oa_agreements').select('token').like('token', `${token}%`)
   const oaToken = uniqueOaToken(token, new Set((takenTokens ?? []).map(r => r.token as string)))
 
+  // A renamed company's new agreement says "formerly known as <the name on its signed one>" (frozen on the row; null for every other company).
+  const previousCompanyName = previousNameForNewOa(existingOAs ?? [], account.company_name as string)
+
   // ── 7. INSERT OA_AGREEMENTS ──
   const { data: oa, error: insertErr } = await supabaseAdmin
     .from('oa_agreements')
     .insert({
       token: oaToken,
+      // not in the generated types until the column reaches production (migration 20261019-1600)
+      ...(previousCompanyName ? { previous_company_name: previousCompanyName } : {}),
       account_id,
       contact_id: signerContactId,
       company_name: account.company_name,

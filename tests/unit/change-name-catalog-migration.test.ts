@@ -77,6 +77,7 @@ describe('change-name 8-step migration ⇄ code constants', () => {
     expect(typesOf(CHANGE_NAME_STAGES.sign)).toContain('esign_panel')
     expect(typesOf(CHANGE_NAME_STAGES.file)).toContain('document_upload')
     expect(typesOf(CHANGE_NAME_STAGES.wait)).toContain('document_upload')
+    expect(typesOf(CHANGE_NAME_STAGES.records)).toContain('apply_name_panel')
   })
 
   it('an upload on these steps never moves the job by itself (staff presses the button after checking)', () => {

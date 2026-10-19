@@ -5,7 +5,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { isNameChangeNewVersion, oaNameKey, uniqueOaToken, hasCollectedSignatures } from '@/lib/portal/oa-regenerate-guard'
+import { isNameChangeNewVersion, oaNameKey, uniqueOaToken, hasCollectedSignatures, previousNameForNewOa } from '@/lib/portal/oa-regenerate-guard'
+import { generateOASections, type OAData } from '@/lib/types/oa-templates'
 import { signedOaClosesNameChange, advanceNameChangeAfterOaSigned } from '@/lib/oa/name-change-advance'
 import { actionStageConfigFor, resolveActionLink } from '@/lib/portal/action-stage-registry'
 import { CHANGE_NAME_STAGES } from '@/lib/flows/change-name-stages'
@@ -36,6 +37,39 @@ describe('isNameChangeNewVersion — a fully signed agreement under the OLD name
   it('oaNameKey', () => {
     expect(oaNameKey('  Acme   Holdings LLC ')).toBe('acme holdings llc')
     expect(oaNameKey(null)).toBe('')
+  })
+})
+
+describe('previousNameForNewOa — "formerly known as"', () => {
+  it('is the name on the most recent FULLY SIGNED agreement when the company has a different name now', () => {
+    expect(previousNameForNewOa([{ status: 'signed', company_name: 'Old Name LLC' }], 'New Name LLC')).toBe('Old Name LLC')
+    // newest first: the more recent signed name wins over an older one
+    expect(previousNameForNewOa([{ status: 'signed', company_name: 'Second LLC' }, { status: 'signed', company_name: 'First LLC' }], 'Third LLC')).toBe('Second LLC')
+  })
+  it('survives a regenerate: the new unsigned agreement in the list does not hide it', () => {
+    expect(previousNameForNewOa([{ status: 'sent', company_name: 'New Name LLC' }, { status: 'signed', company_name: 'Old Name LLC' }], 'New Name LLC')).toBe('Old Name LLC')
+  })
+  it('is null for an ordinary company, for capitals-only differences and for unsigned agreements', () => {
+    expect(previousNameForNewOa([], 'Acme LLC')).toBeNull()
+    expect(previousNameForNewOa([{ status: 'signed', company_name: 'ACME  llc' }], 'Acme LLC')).toBeNull()
+    expect(previousNameForNewOa([{ status: 'sent', company_name: 'Other LLC' }, { status: 'voided', company_name: 'Another LLC' }], 'Acme LLC')).toBeNull()
+    expect(previousNameForNewOa([{ status: 'signed', company_name: 'Old LLC' }], '')).toBeNull()
+  })
+})
+
+describe('the agreement text', () => {
+  const base: OAData = {
+    company_name: 'New Name LLC', state_of_formation: 'Wyoming', formation_date: '2024-03-01', entity_type: 'SMLLC', member_name: 'Pat Doe',
+    manager_name: 'Pat Doe', effective_date: '2026-10-19', business_purpose: 'any lawful business', initial_contribution: '$1,000 USD',
+    fiscal_year_end: 'December 31', accounting_method: 'Cash', duration: 'Perpetual', principal_address: '1 Main St',
+  }
+  const text = (d: OAData) => generateOASections(d).map((x) => x.content).join('\n')
+  it('says the company was formerly known as the old name — single-member and multi-member — only when a previous name is set', () => {
+    for (const entity_type of ['SMLLC', 'MMLLC'] as const) {
+      const d = { ...base, entity_type, members: [{ name: 'Pat Doe', ownership_pct: 100, initial_contribution: '$1,000 USD' }] }
+      expect(text(d)).not.toContain('formerly known as')
+      expect(text({ ...d, previous_company_name: 'Old Name LLC' })).toContain('The name of the Company is New Name LLC. The Company was formerly known as Old Name LLC.')
+    }
   })
 })
 
@@ -112,6 +146,17 @@ describe('wiring', () => {
     expect(fully).toBeGreaterThan(0)
     expect(hook).toBeGreaterThan(fully)
     expect(src.slice(hook - 200, hook)).toContain('try {')
+  })
+  it('every place that builds the agreement from its saved row prints the previous name, and the create route saves it', () => {
+    for (const f of ['lib/oa/finalize-signing.ts', 'app/api/operating-agreement/[token]/pdf/route.ts', 'app/api/operating-agreement/[token]/hand-signed/route.ts']) {
+      expect(read(f), f).toContain('previous_company_name: agreement.previous_company_name ?? undefined')
+    }
+    expect(read('app/operating-agreement/[token]/[code]/page.tsx')).toContain('previous_company_name: oa.previous_company_name || undefined')
+    expect(read('lib/oa/public-view.ts')).toContain('"previous_company_name",')
+    expect(read('lib/oa/public-view.ts')).toContain('previous_company_name: row.previous_company_name ?? null')
+    expect(read('app/api/portal/operating-agreement/create/route.ts')).toContain('previous_company_name: previousCompanyName')
+    expect(read('lib/pdf/operating-agreement-pdf.ts')).toContain('(formerly known as $' + '{data.previous_company_name})')
+    expect(read('scripts/migrations/20261019-1600-oa-previous-company-name.sql')).toContain('ADD COLUMN IF NOT EXISTS previous_company_name text')
   })
   it('the Generate Documents page honours ?account= only for the client\'s own companies', () => {
     const src = read('app/portal/documents/generate/page.tsx')

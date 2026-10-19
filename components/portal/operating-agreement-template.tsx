@@ -21,6 +21,8 @@ interface OAMember {
 
 interface OAAccount {
   companyName: string
+  /** Company Change Name: the name before the rename, printed as "formerly known as …" (same rule as the saved agreement). */
+  previousCompanyName?: string | null
   ein: string | null
   stateOfFormation: string | null
   formationDate: string | null
@@ -46,6 +48,7 @@ const OperatingAgreementTemplate = forwardRef<HTMLDivElement, Props>(
 
     const oaData: OAData = useMemo(() => ({
       company_name: account.companyName,
+      previous_company_name: account.previousCompanyName || undefined,
       state_of_formation: account.stateOfFormation || 'Florida',
       formation_date: account.formationDate || effectiveDate,
       ein_number: account.ein ?? undefined,

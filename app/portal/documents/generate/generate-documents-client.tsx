@@ -47,6 +47,8 @@ interface Props {
   account: {
     id: string
     companyName: string
+    /** Company Change Name: printed in the new Operating Agreement as "formerly known as …" */
+    previousCompanyName?: string | null
     ein: string | null
     stateOfFormation: string | null
     formationDate: string | null
@@ -813,6 +815,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 ref={documentRef}
                 account={{
                   companyName: account.companyName,
+                  previousCompanyName: account.previousCompanyName ?? null,
                   ein: account.ein,
                   stateOfFormation: account.stateOfFormation,
                   formationDate: account.formationDate,

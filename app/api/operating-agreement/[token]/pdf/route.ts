@@ -192,6 +192,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
 
   const data: OAData = {
     company_name: agreement.company_name,
+    previous_company_name: agreement.previous_company_name ?? undefined,
     state_of_formation: agreement.state_of_formation,
     formation_date: agreement.formation_date,
     ein_number: agreement.ein_number ?? undefined,

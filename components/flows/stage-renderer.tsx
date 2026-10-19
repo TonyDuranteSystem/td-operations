@@ -22,6 +22,7 @@ import { SuitePanel } from './suite-panel'
 import { IrsTrackingEntry } from './irs-tracking-entry'
 import { ClosureWrapupPanel } from './closure-wrapup-panel'
 import { EsignPanel } from './esign-panel'
+import { ApplyNamePanel } from './apply-name-panel'
 
 interface StageRendererProps {
   layout: StageLayout | null
@@ -157,6 +158,8 @@ function renderComponent(
           label={component.label}
         />
       )
+    case 'apply_name_panel':
+      return <ApplyNamePanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'closure_wrapup':
       return <ClosureWrapupPanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'chat':
