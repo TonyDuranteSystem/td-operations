@@ -8,7 +8,8 @@
 -- Read-only check to run FIRST (expect exactly these two next_step values):
 --   SELECT slug, metadata->>'next_step' AS next_step FROM catalog_entries
 --    WHERE catalog_id = 'action_events' AND slug IN ('financials_confirmed','tax_return_signed');
--- Expected report: both rows, rows_updated = 1 each.
+-- Production read on 2026-10-18: tax_return_signed = 'Send to India to file' (will update, rows_updated = 1); financials_confirmed is NOT in
+-- production at all (the 2026-08-26 seed was never run there) so it reports 0 - harmless; the wording is fixed for whenever it is seeded.
 
 WITH a AS (
   UPDATE catalog_entries
