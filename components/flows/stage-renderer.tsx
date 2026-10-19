@@ -21,6 +21,7 @@ import { MembersPanel } from './members-panel'
 import { SuitePanel } from './suite-panel'
 import { IrsTrackingEntry } from './irs-tracking-entry'
 import { ClosureWrapupPanel } from './closure-wrapup-panel'
+import { EsignPanel } from './esign-panel'
 
 interface StageRendererProps {
   layout: StageLayout | null
@@ -145,6 +146,17 @@ function renderComponent(
       return <IrsTrackingEntry key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'suite_panel':
       return <SuitePanel key={key} serviceDeliveryId={serviceDelivery.id} />
+    case 'esign_panel':
+      return (
+        <EsignPanel
+          key={key}
+          serviceDeliveryId={serviceDelivery.id}
+          accountId={serviceDelivery.account_id || null}
+          contactId={serviceDelivery.contact_id ?? null}
+          companyName={account.company_name}
+          label={component.label}
+        />
+      )
     case 'closure_wrapup':
       return <ClosureWrapupPanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'chat':

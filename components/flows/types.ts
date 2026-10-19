@@ -14,6 +14,8 @@ export interface WorkspaceServiceDelivery {
   due_date: string | null
   stage_entered_at: string | null
   account_id: string
+  /** The client contact of the delivery (the default signer of an e-sign form). */
+  contact_id?: string | null
   /** Client full_name for contact-scoped SDs (in-flight Company Formation, ITIN
    *  — no account yet). Null when the SD has an account. Surfaced as a "Contact"
    *  row in the Overview info panel. */
