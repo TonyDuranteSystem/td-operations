@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { Eye, Search } from 'lucide-react'
 import { InvoiceRowActions } from '@/components/portal/invoice-row-actions'
+import { useLocale } from '@/lib/portal/use-locale'
 
 interface Invoice {
   id: string
@@ -17,6 +18,7 @@ interface Invoice {
   issue_date: string
   due_date: string | null
   paid_date: string | null
+  delivery_problem?: boolean
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -30,6 +32,7 @@ const STATUS_COLORS: Record<string, string> = {
 const STATUS_TABS = ['All', 'Draft', 'Sent', 'Paid', 'Overdue']
 
 export function InvoiceList({ invoices }: { invoices: Invoice[] }) {
+  const { t } = useLocale()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('All')
 
@@ -101,6 +104,11 @@ export function InvoiceList({ invoices }: { invoices: Invoice[] }) {
                 <span className={cn('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[inv.status] ?? 'bg-zinc-100')}>
                   {inv.status}
                 </span>
+                {inv.delivery_problem && (
+                  <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700" data-testid="invoice-not-delivered">
+                    {t('invDelivery.badge')}
+                  </span>
+                )}
               </span>
               <div className="flex items-center justify-end gap-1">
                 <Link
