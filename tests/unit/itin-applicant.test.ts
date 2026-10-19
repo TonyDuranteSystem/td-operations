@@ -62,13 +62,15 @@ describe('resolveItinApplicant — shared email, spelling, other shapes', () => 
   it('shared email and a name nobody has: refused', async () => {
     expect((await resolveItinApplicant(form({ email: 'family@x.com', first_name: 'Cy', last_name: 'Dee' }), deps([sharedAnn, sharedBob]))).ok).toBe(false)
   })
-  it("accents, curly apostrophes, name order and a left-out middle name do not matter", async () => {
+  it("STRICT rule (#732): the same full name matches whatever the case, accents, apostrophe style or word order; a left-out middle name does NOT", async () => {
     const dan: ItinContact = { id: 'c-dan', full_name: "Luca D'Angelo", email: null }
     const jose: ItinContact = { id: 'c-jose', full_name: 'José Pérez', email: null }
     const mid: ItinContact = { id: 'c-mid', full_name: 'Maria Teresa Bianchi', email: null }
     expect(await resolveItinApplicant(form({ email: '', first_name: 'Luca', last_name: 'D’Angelo' }), deps([ann, dan]))).toMatchObject({ ok: true, contactId: 'c-dan' })
     expect(await resolveItinApplicant(form({ email: '', first_name: 'Jose', last_name: 'Perez' }), deps([ann, jose]))).toMatchObject({ ok: true, contactId: 'c-jose' })
-    expect(await resolveItinApplicant(form({ email: '', first_name: 'Maria', last_name: 'Bianchi' }), deps([ann, mid]))).toMatchObject({ ok: true, contactId: 'c-mid' })
+    expect(await resolveItinApplicant(form({ email: '', first_name: 'Pérez', last_name: 'JOSÉ' }), deps([ann, jose]))).toMatchObject({ ok: true, contactId: 'c-jose' }) // swapped order
+    // a left-out middle name is not "the same full name": nobody is picked (and nobody was linked)
+    expect((await resolveItinApplicant(form({ email: '', first_name: 'Maria', last_name: 'Bianchi' }), deps([ann, mid]))).ok).toBe(false)
   })
   it('a single-member company linked to that member, form with a typo name and email: that member', async () => {
     expect(await resolveItinApplicant(form({ email: 'typo@x.com', first_name: 'Zed', last_name: 'Q' }, 'c-ann'), deps([ann]))).toMatchObject({ ok: true, contactId: 'c-ann' })
