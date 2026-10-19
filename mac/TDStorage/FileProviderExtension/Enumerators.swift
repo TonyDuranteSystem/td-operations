@@ -59,9 +59,14 @@ final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
                 if page.resync { clock.set(Date(), forKey: key); observer.finishEnumeratingWithError(NSFileProviderError(.syncAnchorExpired)); return }
                 if ResyncClock.due(last: last, minutes: page.resyncMinutes) {
                     clock.set(Date(), forKey: key)
-                    for group in (try? await catalog.children(of: .root)) ?? [] {
-                        refreshed.append(group)
-                        if let gid = ItemID(raw: group.itemIdentifier.rawValue) { refreshed.append(contentsOf: (try? await catalog.children(of: gid)) ?? []) }
+                    // the top levels (Clients, its groups, the storages) are re-read: a company / person rename has no change-feed row
+                    var queue: [ItemID] = [.root]
+                    while let next = queue.first {
+                        queue.removeFirst()
+                        for it in (try? await catalog.children(of: next)) ?? [] {
+                            refreshed.append(it)
+                            if let cid = ItemID(raw: it.itemIdentifier.rawValue) { switch cid { case .section, .group: queue.append(cid); default: break } }
+                        }
                     }
                 }
                 if last == nil { clock.set(Date(), forKey: key) }
