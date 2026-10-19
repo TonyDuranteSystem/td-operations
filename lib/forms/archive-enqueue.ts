@@ -43,7 +43,7 @@ export async function enqueueFormArchiveJob(params: {
   const tbl = recipe.table as "banking_submissions"
   const { data: sub } = await supabaseAdmin
     .from(tbl)
-    .select("id, account_id, drive_archived_at, drive_archive_meta")
+    .select("*")
     .eq("id", submissionId)
     .maybeSingle()
   if (!sub) return { status: "no_submission" }
@@ -91,6 +91,8 @@ export async function enqueueFormArchiveJob(params: {
     job_type: "archive_submission",
     payload: { form_type: formType, table: recipe.table, submission_id: submissionId },
     priority: 5,
+    // banking: a company that is being moved to the new storage is retried for ~an hour before the job gives up (the sweep then takes over)
+    ...(formType === "banking" ? { max_attempts: 12 } : {}),
     account_id: accountId,
     created_by: createdBy,
     related_entity_type: recipe.table,

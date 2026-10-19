@@ -7,6 +7,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { legacyFormSlug } from "@/lib/portal/submission-token"
+import { contactIdForLead } from "@/lib/crm-store/lead-form-store"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 
@@ -36,15 +38,8 @@ export function registerOnboardingTools(server: McpServer) {
         if (leadErr || !lead) throw new Error(`Lead not found: ${leadErr?.message || lead_id}`)
 
         // 2. Check if contact already exists
-        let contactId: string | null = null
-        if (lead.email) {
-          const { data: contact } = await supabaseAdmin
-            .from("contacts")
-            .select("id")
-            .eq("email", lead.email)
-            .maybeSingle()
-          contactId = contact?.id || null
-        }
+        // by exact email AND the same full name — a shared email alone must never attach someone else's contact
+        const contactId: string | null = await contactIdForLead({ email: lead.email, fullName: lead.full_name, route: "mcp:onboarding_form_create", leadId: lead.id })
 
         // 3. Build prefilled data from lead
         const nameParts = (lead.full_name || "").trim().split(/\s+/)
@@ -89,11 +84,7 @@ export function registerOnboardingTools(server: McpServer) {
         }
 
         // 6. Generate token
-        const slug = (lead.full_name || "form")
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-|-$/g, "")
-          .slice(0, 30)
+        const slug = legacyFormSlug(lead.full_name, "form")
         const year = new Date().getFullYear()
         const token = `onb-${slug}-${year}`
 
@@ -243,7 +234,7 @@ export function registerOnboardingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "onboarding_form_review",
-    "Review a completed onboarding form submission. Shows submitted data + diff of changed fields. If apply_changes=true, performs FULL post-onboarding CRM setup: creates/updates Contact and Account, links them, creates Drive folder (Companies/{State}/{Company}/), copies uploaded documents from Supabase Storage to Drive, sets drive_folder_id on account, creates follow-up tasks (WhatsApp group, lease agreement, RA change), checks tax return status and creates tax_returns records if needed, sets portal fields, marks lead as Converted, and marks form as reviewed. Always run without apply_changes first to review.",
+    "Review a completed onboarding form submission. Shows submitted data + diff of changed fields. If apply_changes=true, performs FULL post-onboarding CRM setup: creates/updates Contact and Account, links them, files the uploaded documents, creates follow-up tasks (WhatsApp group, lease agreement, RA change), checks tax return status and creates tax_returns records if needed, sets portal fields, marks lead as Converted, and marks form as reviewed. Always run without apply_changes first to review.",
     {
       token: z.string().describe("Form token to review"),
       apply_changes: z.boolean().optional().default(false).describe("If true, apply changes to CRM"),

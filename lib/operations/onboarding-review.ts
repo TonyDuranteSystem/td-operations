@@ -115,16 +115,13 @@ export async function applyOnboardingReview(
 
   // ─── 1. CONTACT: find/create/update ───
   try {
-    if (!contactId && submitted.owner_email) {
-      const { data: existingContact } = await supabaseAdmin
-        .from("contacts")
-        .select("id")
-        .eq("email", String(submitted.owner_email))
-        .maybeSingle()
-      if (existingContact) contactId = existingContact.id
-    }
-
     const ownerFullName = [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ").trim()
+    if (!contactId && submitted.owner_email) {
+      // exact email AND the same full name: a shared email alone (a couple, a family) must never hand this form's data to someone else's
+      // contact — it is overwritten below. A doubt = no contact picked (a distinct new one is created) + one alarm.
+      const { contactIdForLead } = await import("@/lib/crm-store/lead-form-store")
+      contactId = await contactIdForLead({ email: String(submitted.owner_email), fullName: ownerFullName, route: "onboarding-review", leadId: sub.lead_id ?? null })
+    }
     const contactFields: Record<string, unknown> = {}
     if (submitted.owner_first_name) contactFields.first_name = submitted.owner_first_name
     if (submitted.owner_last_name) contactFields.last_name = submitted.owner_last_name

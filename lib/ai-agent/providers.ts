@@ -140,17 +140,18 @@ export const LEGACY_AGENT_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
   'update_service',
   'update_deadline',
   'advance_service_stage',
-  // writes into the shared document store
-  'drive_move',
-  'drive_upload_file',
 ])
 
-async function getTools() {
+export async function getTools() {
   const { AGENT_TOOLS, executeTool, loadGlobalMemories } = await import('./tools')
   // The model is never shown an action it is not allowed to take — offering a tool
   // and then refusing it produces confident-sounding claims about work never done.
   const readOnlyTools = AGENT_TOOLS.filter(t => !LEGACY_AGENT_BLOCKED_TOOLS.has(t.name))
   const guardedExecuteTool = async (name: string, params: Record<string, unknown>) => {
+    // Listing attachments is a lookup and stays; SAVING them writes into a company's storage, so it needs the panels that ask first.
+    if (name === 'gmail_get_attachments' && params && params.save_to_storage) {
+      return `❌ Saving attachments cannot be done from this panel — it would act without asking you first. Listing them works here; to save them use the Inbox or Portal Chats panel, which show you the exact action and wait for your go.`
+    }
     if (LEGACY_AGENT_BLOCKED_TOOLS.has(name)) {
       return `❌ "${name}" cannot be run from this panel — it would act without asking you first. Say what you want done and it can be carried out from the Inbox or Portal Chats panel, which show you the exact action and wait for your go.`
     }

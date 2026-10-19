@@ -86,7 +86,7 @@ describe("the specific tools that were auto-running and should not have been", (
     ["sysdoc_read", "reads system docs including platform credentials"],
     ["signature_request_get", "returns a link that signs a legal document as the client"],
     ["gmail_read_attachment", "opens an attachment in any mailbox and writes to Drive"],
-    ["bank_statement_pnl", "overwrites the client's filed P&L (upload_to_drive defaults true)"],
+    ["bank_statement_pnl", "overwrites the client's filed P&L (save_to_storage defaults true)"],
     ["lead_search", "returns offer_link, a contract-signing bearer URL"],
     ["lead_get", "returns offer_link, a contract-signing bearer URL"],
     ["msg_list_channels", "returns messaging provider config"],

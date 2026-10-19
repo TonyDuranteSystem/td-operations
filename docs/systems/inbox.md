@@ -1,4 +1,5 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
+_Last verified against code: 2026-10-18 (round 2) — Claude (dev job `264bb882`, Stop Drive S1b). Round 2: the email-monitor cron's suggested action reads 'Save the attachments in the company's storage.' (wording only)._
 
 _2026-10-07d note (WhatsApp sound, dev job c84dfb4d): the WhatsApp search bar of the Inbox gained a speaker button (`components/inbox/whatsapp-sound-picker.tsx`) — pick the tone played for a new customer WhatsApp message, or Off; per person, per browser. The sound itself is played by the dashboard's UiEventListener; rules and verification in `docs/systems/messaging.md` ("Notification sound")._
 

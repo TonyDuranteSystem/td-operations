@@ -4,7 +4,7 @@
  * ⛔ THE CASE THIS EXISTS FOR (2026-07-22, production).
  * The instant a $1,000 wire was auto-credited to the wrong company, two other things happened:
  * a database trigger lifted that client's tax-return payment gate, and the CRM emailed the team
- * "second installment paid — tax ready for accountant". The correction two minutes later
+ * a "second installment paid" note (that email is retired). The correction two minutes later
  * reversed neither. It was harmless only by luck (the client genuinely paid four hours later).
  *
  * DESIGN — derived at read time, never stored.
@@ -87,15 +87,6 @@ export function describeReversalSideEffects(
         `The ${tr.tax_year} tax return's payment gate stays OPEN — ${why}. It is NOT rolled back by this reversal; check whether that return should still be treated as paid.`,
       )
     }
-  }
-
-  // The internal hand-off email goes out when an installment is marked paid, and it has no
-  // recall. Say so rather than implying the reversal cleaned up after itself.
-  if (input.installment && /^Installment/i.test(input.installment)) {
-    needsAttention = true
-    statements.push(
-      `An internal "installment paid — tax ready for the accountant" email was sent when this payment landed. It cannot be unsent.`,
-    )
   }
 
   return { statements, needsAttention, targetTaxYear }

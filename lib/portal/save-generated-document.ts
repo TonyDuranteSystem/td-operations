@@ -25,6 +25,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 import { uploadBinaryToDrive } from '@/lib/google-drive'
 import { autoSaveDocument } from '@/lib/portal/auto-save-document'
 import { createPortalNotification } from '@/lib/portal/notifications'
@@ -56,6 +57,10 @@ export interface SaveGeneratedDocumentResult {
   success: boolean
   documentId?: string
   driveFileId?: string
+  /** true = a plain refusal (the company can receive no file): not a failure to alarm about */
+  refused?: boolean
+  /** true = the company's files are being moved right now: try again in a few minutes (not a failure, no alarm) */
+  moving?: boolean
   coOwnersAlerted?: number
   error?: string
 }
@@ -67,9 +72,8 @@ export async function saveSignedGeneratedDocument(
   const mimeType = params.mimeType || 'application/pdf'
   const category = params.category ?? 1 // Company
 
-  // 0. Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company switched to the new storage
-  //    saves HERE (the file AND its portal-visible CRM record) and never touches Drive; a company still on Drive
-  //    carries on exactly as before, below.
+  // 0. The file AND its portal-visible CRM record are saved in the company's storage. A company with no storage gets
+  //    one plain sentence back.
   let driveFileId: string
   let documentId: string
   try {
@@ -85,26 +89,19 @@ export async function saveSignedGeneratedDocument(
       driveFileId = routed.pointer
       documentId = routed.documentRowId
     } else {
-      const { data: account } = await db
-        .from('accounts')
-        .select('drive_folder_id, company_name')
-        .eq('id', accountId)
-        .single()
+      // No storage: a company left on its old folder carries on there; everyone else is refused with one plain sentence.
+      const decision = await noStorageDecisionFor(accountId)
+      if (decision.route === 'refuse') return { success: false, error: decision.sentence, refused: true }
 
-      if (!account?.drive_folder_id) {
-        return { success: false, error: 'Account has no Drive folder' }
-      }
-
-      // 1. Drive
+      // 1. Old folder
       try {
-        const driveFile = await uploadBinaryToDrive(fileName, fileBuffer, mimeType, account.drive_folder_id)
+        const driveFile = await uploadBinaryToDrive(fileName, fileBuffer, mimeType, decision.folderId)
         driveFileId = driveFile.id as string
       } catch (err) {
-        return { success: false, error: `Drive upload failed: ${err instanceof Error ? err.message : String(err)}` }
+        return { success: false, error: `Upload failed: ${err instanceof Error ? err.message : String(err)}` }
       }
 
-      // 2. Portal-visible document record via the canonical path (sets drive_link,
-      //    confidence, and dedups on drive_file_id).
+      // 2. Portal-visible document record via the canonical path (sets drive_link, confidence, dedups on drive_file_id).
       const saved = await autoSaveDocument({
         accountId,
         contactId,
@@ -115,14 +112,15 @@ export async function saveSignedGeneratedDocument(
         portalVisible: true,
       })
       if (saved.error || !saved.id) {
-        // The Drive file may be orphaned (upload succeeded, record didn't) — the
-        // caller surfaces this so ops can see it; per-file dedup means a retry with
-        // the same id won't double-insert.
+        // The file may be orphaned (upload succeeded, record didn't) — the caller surfaces this so ops can see it; per-file
+        // dedup means a retry with the same id won't double-insert.
         return { success: false, error: `Document record failed: ${saved.error || 'no id'}`, driveFileId }
       }
       documentId = saved.id
     }
   } catch (err) {
+    // a company that is being moved is a plain "try again", not a failure
+    if (err instanceof Error && err.name === 'CompanyMovingError') return { success: false, error: err.message, moving: true }
     return { success: false, error: `Save failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 

@@ -11,8 +11,12 @@ import { createClient } from "@/lib/supabase/server"
 import { manualMatch } from "@/lib/bank-feed-matcher"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { readContestedCandidates } from "@/lib/finance/feed-vocabulary"
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function POST(req: NextRequest) {
+  // STAFF ONLY: /api/* inherits only "is logged in" from the middleware, and a portal client has a login.
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) {

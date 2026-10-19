@@ -5,16 +5,15 @@
  *   1.3 — the Tax Return SD advances to "Wizard Available" from ANY of the
  *         bundle pre-wizard stages (1st Installment Paid / Extension Filed /
  *         Awaiting 2nd Payment), not just "Awaiting 2nd Payment".
- *   1.1 — the "[READY] Send tax return to Accountant" task is idempotent: a second
- *         run with the same account/year does not insert a duplicate. The dedup
- *         lookup also matches the legacy "...to India" title during the rename
- *         transition (two-phase Slice 0, 2026-06-09).
+ *   The accountant hand-off is retired (Antonio, 2026-10-18): no task, no email.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }))
 vi.mock("@/lib/gmail", () => ({ gmailPost: vi.fn(() => Promise.resolve({})) }))
+const whatsNew = vi.fn(async (..._a: unknown[]) => ({ emitted: true }))
+vi.mock("@/lib/portal/chat-events", () => ({ emitSecondInstallmentPaidEvent: (...a: unknown[]) => whatsNew(...a) }))
 vi.mock("@/lib/settings", () => ({ isTaxSeasonPaused: vi.fn(() => Promise.resolve(false)) }))
 vi.mock("@/lib/tax/reactivation", () => ({
   reactivateOnHoldTaxReturns: vi.fn(() => Promise.resolve({ reactivated: 0 })),
@@ -112,20 +111,25 @@ describe("onSecondInstallmentPaid — stage gate (1.3, data-driven)", () => {
   })
 })
 
-describe("onSecondInstallmentPaid — accountant task idempotency (1.1)", () => {
-  it("inserts the accountant task when none exists and data is received", async () => {
+describe("onSecondInstallmentPaid — no accountant hand-off (retired 2026-10-18)", () => {
+  it("creates no accountant task, even when data is received", async () => {
     existingTaskFixture = null
     await onSecondInstallmentPaid("acct-1", 2026)
-    const accountantInserts = taskInserts.filter(t =>
-      String(t.task_title).startsWith("[READY] Send tax return to Accountant"))
-    expect(accountantInserts).toHaveLength(1)
+    const accountantInserts = taskInserts.filter(t => /accountant|india/i.test(String(t.task_title)))
+    expect(accountantInserts).toHaveLength(0)
   })
 
-  it("does NOT insert a duplicate accountant task when one already exists", async () => {
-    existingTaskFixture = { id: "task-existing" }
+  it("sends no 'ready for accountant' email", async () => {
+    const { gmailPost } = await import("@/lib/gmail")
+    vi.mocked(gmailPost).mockClear()
     await onSecondInstallmentPaid("acct-1", 2026)
-    const accountantInserts = taskInserts.filter(t =>
-      String(t.task_title).startsWith("[READY] Send tax return to Accountant"))
-    expect(accountantInserts).toHaveLength(0)
+    expect(vi.mocked(gmailPost)).not.toHaveBeenCalled()
+  })
+
+  it("tells staff once in the Calendar (What's New) that the gate is lifted", async () => {
+    whatsNew.mockClear()
+    await onSecondInstallmentPaid("acct-1", 2026)
+    expect(whatsNew).toHaveBeenCalledTimes(1)
+    expect(whatsNew.mock.calls[0][0]).toMatchObject({ accountId: "acct-1", year: 2026 })
   })
 })

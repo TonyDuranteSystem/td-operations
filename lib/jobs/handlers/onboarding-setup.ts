@@ -39,6 +39,8 @@ import { offerCountsAsPaid } from "@/lib/offers/offer-paid"
 import { reportSystemError } from "@/lib/system-errors"
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
 import { companyCmraAddressLine } from "@/lib/operations/suite"
+import { memberPassportPathFor } from "@/lib/crm-store/account-uploads"
+import { applyFilingOutcome } from "@/lib/jobs/handlers/onboarding-filing-outcome"
 
 interface OnboardingPayload {
   token: string
@@ -549,7 +551,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           const config = FORM_CONFIGS["onboarding"]
           const summaryPdf = await generateFormSummaryPDF(config, submitted, {
             token,
-            submittedAt: now,
+            submittedAt: job.created_at || now,
             companyName: company_name,
             uploadCount: (p.upload_paths || []).length,
           })
@@ -581,6 +583,25 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         })
         result.steps.push(step("store_uploads", r.failed.length === 0 ? "ok" : "error",
           `CRM Store company — ${r.saved} upload(s) saved to the new store${r.failed.length ? `, ${r.failed.length} not saved (${r.failed.map((f) => f.error).join("; ")})` : ""}`))
+        // The data-summary PDF the Drive path would have written beside the uploads: filed in the company's storage (hidden),
+        // one file per submission (a re-run is a new version). A failure is an error step, never silent.
+        if (submitted && Object.keys(submitted).length > 0) {
+          try {
+            const { generateFormSummaryPDF, FORM_CONFIGS } = await import("@/lib/form-to-drive")
+            const summaryPdf = await generateFormSummaryPDF(FORM_CONFIGS["onboarding"], submitted, {
+              // the submission's own date (the job row's creation), not "now": a re-run of this setup makes the very same PDF
+              token, submittedAt: job.created_at || now, companyName: company_name, uploadCount: (p.upload_paths || []).length,
+            })
+            const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
+            const routed = await saveDocumentForAccount({
+              accountId: account_id, name: `Onboarding_Data_${(company_name || "company").replace(/\s+/g, "_")}.pdf`, bytes: Buffer.from(summaryPdf), mimeType: "application/pdf",
+              folder: "company", documentType: null, callerKey: `onboarding-summary:${account_id}:${token}`, portalVisible: false,
+            })
+            result.steps.push(step("data_summary_pdf", routed.route === "store" ? "ok" : "error", routed.route === "store" ? `Saved to the new storage: ${routed.pointer}` : "The company's storage could not be found — the summary was not saved"))
+          } catch (sumErr) {
+            result.steps.push(step("data_summary_pdf", "error", sumErr instanceof Error ? sumErr.message : String(sumErr)))
+          }
+        }
         // the same passport-data read as the Drive path, from the stored bytes
         if (r.passport && contact_id) {
           const { extractAndStorePassportData } = await import("@/lib/jobs/passport-writeback")
@@ -770,7 +791,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             }
 
             // Passport: find in upload_paths by key pattern passport_member_${i}
-            const memberPassportPath = (p.upload_paths ?? []).find(up => up.includes(`passport_member_${i}`))
+            const memberPassportPath = memberPassportPathFor(p.upload_paths, i)
             if (memberPassportPath && driveFolderId) {
               try {
                 const cleanPath = memberPassportPath.replace(/^\/+/, '')
@@ -809,8 +830,52 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
                 result.steps.push(step(`member_${i + 1}_passport`, 'error', passErr instanceof Error ? passErr.message : String(passErr)))
               }
             }
+
+            // Stop Drive (dev job 264bb882, S1d): a company with no Drive folder (its files live in the CRM storage) — the member's
+            // passport goes to THEIR OWN storage and the passport data is read from the saved bytes. Never skipped silently.
+            if (memberPassportPath && !driveFolderId) {
+              try {
+                const cleanPath = memberPassportPath.replace(/^\/+/, '')
+                const { data: blob, error: dlErr } = await supabaseAdmin.storage.from('onboarding-uploads').download(cleanPath)
+                if (dlErr || !blob) {
+                  result.steps.push(step(`member_${i + 1}_passport`, 'error', dlErr?.message || 'Download failed'))
+                } else {
+                  const fileName = cleanPath.split('/').pop() || `passport_member_${i + 1}.pdf`
+                  const bytes = Buffer.from(await blob.arrayBuffer())
+                  const mimeType = blob.type || 'application/octet-stream'
+                  // the SAME writer (and caller key) the held-passport hand-off uses, so the passport exists once in the member's storage
+                  const { pilotSavePassport } = await import('@/lib/crm-store/formation-pilot')
+                  const saved = await pilotSavePassport({
+                    contactId: membContactId, personName: memberName, fileName, bytes, mimeType,
+                    row: { document_type_name: 'Passport', category: 2, category_name: 'Contacts', contact_id: membContactId, account_id, portal_visible: true },
+                  })
+                  if (saved.status !== 'saved') throw new Error("This person's storage could not be found — the passport was not saved")
+                  const routed = { pointer: saved.pointer }
+                  result.steps.push(step(`member_${i + 1}_passport`, 'ok', `Saved to the new storage: ${routed.pointer}`))
+                  const { extractAndStorePassportData } = await import('@/lib/jobs/passport-writeback')
+                  const passRes = await extractAndStorePassportData({
+                    contact_id: membContactId, content: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, file_name: fileName, mime_type: mimeType,
+                    skip_dob: !!m.member_dob, contact_name: memberName, account_id,
+                  })
+                  result.steps.push(step(`member_${i + 1}_passport_ocr`, passRes.status, passRes.detail))
+                }
+              } catch (passErr) {
+                result.steps.push(step(`member_${i + 1}_passport`, 'error', passErr instanceof Error ? passErr.message : String(passErr)))
+              }
+            }
           } else {
             result.steps.push(step(`member_${i + 1}_link`, 'skipped', 'No email — cannot create/find contact'))
+            // The member's passport has no person to be filed under yet: it STAYS where the client uploaded it (never in the owner's
+            // storage) and staff are told once; it is filed when the member has a contact (re-run this setup then).
+            const heldPassport = memberPassportPathFor(p.upload_paths, i)
+            if (heldPassport) {
+              result.steps.push(step(`member_${i + 1}_passport`, 'error', 'Kept on the submission: this member has no contact yet, so the passport has no person to be filed under'))
+              await reportSystemError({
+                source: 'server', route: 'jobs/onboarding-setup', method: 'INTERNAL',
+                message: `Member passport not filed (member has no contact yet) — ${company_name}`,
+                context: { account_id, member: i + 1, path: heldPassport },
+              }).catch(() => {})
+            }
           }
         }
       } catch (membErr) {
@@ -1774,5 +1839,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   const skipCount = result.steps.filter(s => s.status === "skipped").length
   result.summary = `${okCount} ok, ${errCount} errors, ${skipCount} skipped`
 
-  return result
+  // Stop Drive (dev job 264bb882, S1d): a setup whose papers were not filed is a FAILED job (terminal: staff decide about a re-run),
+  // never a "completed" one that hides it.
+  return applyFilingOutcome(result)
 }

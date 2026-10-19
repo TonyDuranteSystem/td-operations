@@ -28,6 +28,7 @@ import { classifyAccount } from "@/lib/account-classification"
 import { createSD } from "@/lib/operations/service-delivery"
 import { runActivation } from "@/lib/operations/activate-service"
 import type { Json } from "@/lib/database.types"
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 // ─── Types ───
 
@@ -107,6 +108,9 @@ function labelPaymentMethod(method: string | null | undefined): string {
 // ─── GET: Run Chain Audit ───
 
 export async function GET(req: NextRequest) {
+  // STAFF ONLY: /api/* inherits only "is logged in" from the middleware, and a portal client has a login.
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   const contactId = req.nextUrl.searchParams.get("contact_id")
   if (!contactId) {
     return NextResponse.json({ error: "Missing contact_id" }, { status: 400 })
@@ -1224,6 +1228,9 @@ export async function GET(req: NextRequest) {
 // ─── POST: Execute Fix ───
 
 export async function POST(req: NextRequest) {
+  // STAFF ONLY: /api/* inherits only "is logged in" from the middleware, and a portal client has a login.
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const { contact_id, action, params } = await req.json()
     if (!contact_id || !action) {

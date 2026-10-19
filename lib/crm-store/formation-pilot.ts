@@ -155,6 +155,8 @@ export interface PilotSave {
   links?: StoreLink[]
   subjects?: StoreSubject[]
   actor?: string | null
+  /** never queue the AI file reader for this file (personal documents: passports, IDs) */
+  skipAnalysis?: boolean
 }
 
 /**
@@ -170,7 +172,7 @@ export async function savePilotFile(p: PilotSave): Promise<WriteResult> {
     ownerId: p.ownerId, folderId, name: storeSafeFileName(p.name), mimeType: p.mimeType, bytes: p.bytes,
     callerKey, contentChanged: p.contentChanged ?? true, documentType: p.documentType,
     periodYear: p.periodYear ?? null, published: p.published ?? null, actor: p.actor ?? null,
-    links: p.links, subjects: p.subjects,
+    links: p.links, subjects: p.subjects, skipAnalysis: p.skipAnalysis,
   })
   let w = await save(p.callerKey)
   // keyed on the trashed file: the next same-name upload becomes a VERSION of this new file, not a third
@@ -397,7 +399,7 @@ export async function pilotSavePassport(p: {
     const ownerId = await ensurePersonOwner(p.contactId, p.personName)
     const w = await savePilotFile({
       ownerId, folderKind: "personal", name: p.fileName, bytes: p.bytes, mimeType: p.mimeType,
-      documentType: "passport", callerKey: `person-passport:${p.contactId}`,
+      documentType: "passport", callerKey: `person-passport:${p.contactId}`, skipAnalysis: true,
       links: p.buyerCaseId ? [{ kind: "service_case", recordId: p.buyerCaseId }] : [],
       subjects: p.companyAccountId ? [{ kind: "company", accountId: p.companyAccountId, role: "owner_member" }] : [],
     })
@@ -454,7 +456,21 @@ export async function pilotCaseForCompanyCreation(contactId: string): Promise<{ 
       .eq("contact_id", contactId).eq("service_type", "Company Formation").eq("status", "active").is("account_id", null)
     const rows = (data ?? []) as { id: string }[]
     if (rows.length !== 1) return null
-    const owner = await storeOwnerForCase(rows[0].id)
+    let owner = await storeOwnerForCase(rows[0].id)
+    if (!owner) {
+      // A case created before the storage-first rail existed (or for a returning client) has no in-formation storage yet. Open it NOW so
+      // the company is built in the storage — Articles and every later file land there, never on Drive (Stop-Drive S1a). Only while the
+      // new-clients switch is on; any failure is an alarm and the caller falls back to today's path.
+      if (newClientsLive()) {
+        try {
+          const { data: sdRow } = await supabaseAdmin.from("service_deliveries").select("id, contact_id, account_id, service_type").eq("id", rows[0].id).maybeSingle()
+          if (sdRow) owner = await ensureFormationOwner(sdRow as FormationCase, await formationRootName(contactId), { atCreation: true })
+        } catch (e) {
+          await raisePilotAlarm("formation_owner_failed", { caseId: rows[0].id, contactId, error: e instanceof Error ? e.message : String(e) })
+          owner = null
+        }
+      }
+    }
     return owner ? { caseId: rows[0].id, owner } : null
   } catch {
     return null
@@ -489,7 +505,15 @@ export type PilotAlarmKind =
   | "formation_owner_failed"       // a pilot formation's store owner could not be set up
   | "store_unmapped_upload"        // an upload on a pilot formation at a stage with no document type
   | "formation_pilot_undecided"    // several open formations: Drive steps ran, the store files were handed over after
+  | "lead_form_filing_failed"      // a lead-stage form (formation/onboarding/closure) package could not be fully filed in storage
+  | "lead_form_contact_ambiguous"  // a lead's email matches several CRM contacts: nothing was filed under a guessed person
+  | "lead_form_person_on_drive"    // the person still lives on Drive (or in a hidden study copy): no storage was opened, nothing was filed
+  | "storage_pointer_adopt_failed" // a client file parked in the older bucket (storage: pointer) could not be filed into the CRM storage
+  | "lead_form_contact_lookup_failed" // the CRM contact lookup for a lead-stage form failed: nothing was filed, the rest of the chain ran
+  | "lead_form_member_passport_held" // an LLC member with no email has a passport on a form: no contact can be made automatically, the file waits on the submission
   | "store_move_stale"             // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
+  | "drive_write_refused"          // a flow needed to write in Google Drive for a company/person that may not be written to there (Stop Drive S1d)
+  | "banking_package_problem"      // a banking application package could not be (fully) filed: lookup failed, personal papers held, hidden study copy (Stop Drive S1d)
 
 /**
  * An alarm: an event in the store's history (owner-scoped when known) + the system error log.
@@ -542,7 +566,8 @@ export async function contactIsNewClient(contactId: string | null | undefined): 
 export async function ensureFormationStorageAtPayment(sd: { id: string; contact_id: string | null; account_id: string | null; service_type: string | null }): Promise<StoreOwnerRef | null> {
   if (!newClientsLive() || sd.service_type !== "Company Formation") return null
   try {
-    if (!(await contactIsNewClient(sd.contact_id))) return null // a returning client stays on Drive until their companies switch
+    // Stop-Drive S1a (Antonio 2026-10-18): EVERY new formation is built in the storage — a returning client too. Drive is archive only,
+    // so "a returning client stays on Drive until their companies switch" no longer holds (the companies have switched).
     return await ensureFormationOwner(sd, await formationRootName(sd.contact_id), { atCreation: true })
   } catch (e) {
     await raisePilotAlarm("formation_owner_failed", { caseId: sd.id, contactId: sd.contact_id, error: e instanceof Error ? e.message : String(e) })

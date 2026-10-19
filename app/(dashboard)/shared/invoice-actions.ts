@@ -187,7 +187,7 @@ export async function createInvoice(
             tranche_offer_token: invoiceData.tranche.offer_token,
             tranche_seq: invoiceData.tranche.seq,
             // Its own category, never an instalment one: paying an instalment lifts the
-            // accountant hand-off gate and feeds the June cron. A split setup fee must touch
+            // tax-return payment gate and feeds the June cron. A split setup fee must touch
             // neither.
             payment_category: 'setup_tranche',
             ...(inheritedCardFeeRate !== undefined ? { card_fee_rate: inheritedCardFeeRate } : {}),

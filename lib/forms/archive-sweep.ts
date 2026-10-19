@@ -73,10 +73,12 @@ export function decideFormArchiveSweep(
 ): FormArchiveSweepAction {
   if (row.drive_archived_at) return "skip"
   if (!recipe.isReal(row)) return "skip"
+  if (recipe.sweepOnlyPinned && !((row.drive_archive_meta as Record<string, unknown> | null) ?? {})["pinned_plan"]) return "skip" // filed before this form had a retry path
 
   const created = Date.parse(String(row.created_at ?? ""))
   if (Number.isNaN(created)) return "skip"
   if (created < Date.parse(FORM_ARCHIVE_SWEEP_CUTOFF_ISO)) return "skip" // forward-only
+  if (recipe.sweepNotBefore && created < Date.parse(recipe.sweepNotBefore)) return "skip" // this form's own start date
   if (created > now.getTime() - FORM_ARCHIVE_SWEEP_GRACE_MINUTES * 60_000) return "skip" // still in grace
 
   const attempts = attemptsOf(row.drive_archive_meta as Record<string, unknown> | null)

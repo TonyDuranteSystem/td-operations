@@ -12,8 +12,12 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { runActivation } from "@/lib/operations/activate-service"
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function POST(req: NextRequest) {
+  // STAFF ONLY: /api/* inherits only "is logged in" from the middleware, and a portal client has a login.
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   // Require authenticated admin session
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()

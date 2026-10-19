@@ -20,7 +20,8 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { saveFormToDrive } from "@/lib/form-to-drive"
+import { saveFormForAccount } from "@/lib/crm-store/save-account-form"
+import { mergeArchiveMeta } from "@/lib/archive/meta-merge"
 import { isWizardUploadPath } from "@/lib/portal/wizard-uploads"
 
 export interface ArchiveResult {
@@ -49,7 +50,9 @@ interface SubmissionRow {
 }
 
 /**
- * Archive one submission's package to the account's Drive folder. THROWS on any
+ * Archive one submission's package for its company: into the company's CRM storage (a company with storage, or a new
+ * client with no folder), into its old folder (a company left on it), and to nowhere else. A company that can receive nothing
+ * fails the job (loudly, retried, then ONE alert). THROWS on any
  * unrecovered failure (folder read error, absent folder, partial copy, misfile)
  * so the enclosing job_queue job retries and, on final failure, alerts. Records
  * the attempt in drive_archive_meta either way.
@@ -67,7 +70,7 @@ export async function archiveTaxSubmission(submissionId: string): Promise<Archiv
   if (s.drive_archived_at) return { status: "already_archived", submissionId }
   if (!s.account_id) throw new Error(`archive: submission ${submissionId} has no account_id (contact-scoped) — cannot resolve a Drive folder`)
 
-  // ── Folder resolution: a READ ERROR must NEVER be read as "no folder". ──
+  // ── Company read: a READ ERROR must NEVER be read as "no destination". ──
   const { data: acc, error: accErr } = await supabaseAdmin
     .from("accounts")
     .select("drive_folder_id, company_name")
@@ -75,7 +78,6 @@ export async function archiveTaxSubmission(submissionId: string): Promise<Archiv
     .maybeSingle()
   if (accErr) throw new Error(`archive: account read failed (retryable): ${accErr.message}`)
   if (!acc) throw new Error(`archive: account ${s.account_id} not found`)
-  if (!acc.drive_folder_id) throw new Error(`archive: account ${s.account_id} (${acc.company_name ?? "?"}) has NO drive_folder_id — needs a Drive folder before its tax package can be archived`)
 
   const uploadPaths = Array.isArray(s.upload_paths)
     ? (s.upload_paths as unknown[]).filter((p): p is string => typeof p === "string")
@@ -83,25 +85,31 @@ export async function archiveTaxSubmission(submissionId: string): Promise<Archiv
   const nowIso = new Date().toISOString()
   const priorAttempts = Number((s.drive_archive_meta ?? {})["attempts"]) || 0
 
-  let result: Awaited<ReturnType<typeof saveFormToDrive>>
+  let saved: Awaited<ReturnType<typeof saveFormForAccount>>
   try {
-    result = await saveFormToDrive(
-      "tax_return",
-      (s.submitted_data ?? {}) as Record<string, unknown>,
+    saved = await saveFormForAccount({
+      accountId: s.account_id,
+      formType: "tax_return",
+      submittedData: (s.submitted_data ?? {}) as Record<string, unknown>,
       uploadPaths,
-      acc.drive_folder_id,
-      {
+      meta: {
         token: s.token,
         submittedAt: nowIso,
         companyName: acc.company_name ?? undefined,
         year: s.tax_year ?? undefined, // pinned — never a calendar guess
       },
-      { resolveBucket: bucketForTaxUploadPath },
-    )
+      resolveBucket: bucketForTaxUploadPath,
+    })
   } catch (e) {
     await recordAttempt(submissionId, priorAttempts + 1, `save threw: ${e instanceof Error ? e.message : String(e)}`, null)
     throw e
   }
+  if (saved.route === "none") {
+    const why = `company ${s.account_id} (${acc.company_name ?? "?"}) has no storage and no folder — there is nowhere to archive its tax package`
+    await recordAttempt(submissionId, priorAttempts + 1, why, null)
+    throw new Error(`archive: ${why}`)
+  }
+  const result = saved.result
 
   // ── FULL success only: summary saved AND every file copied AND no errors. ──
   const fullSuccess =
@@ -117,25 +125,23 @@ export async function archiveTaxSubmission(submissionId: string): Promise<Archiv
     throw new Error(`archive: ${submissionId} not fully archived (retryable) — ${detail}`)
   }
 
-  // Success — set the marker (this is what the sweep keys on) + clean meta.
+  // Success — set the marker (this is what the sweep keys on). The record of where it filed is MERGED into the meta (never a whole
+  // replacement), so a flag another writer set meanwhile (the sweep's "alerted") survives.
   const { error: markErr } = await supabaseAdmin
     .from("tax_return_submissions")
-    // as never: drive_archived_at / drive_archive_meta are new columns not yet
-    // in the generated types (migration 20260724-1900). Remove after gen:types.
-    .update({
-      drive_archived_at: nowIso,
-      drive_archive_meta: {
-        attempts: priorAttempts + 1,
-        last_attempt_at: nowIso,
-        last_error: null,
-        summary_file_id: result.summaryFileId,
-        copied: result.copied,
-        skipped: result.skipped,
-        drive_folder_id: acc.drive_folder_id,
-      },
-    } as never)
+    .update({ drive_archived_at: nowIso } as never)
     .eq("id", submissionId)
   if (markErr) throw new Error(`archive: succeeded but failed to set marker (retryable): ${markErr.message}`)
+  await mergeArchiveMeta("tax_return_submissions", submissionId, {
+    attempts: priorAttempts + 1,
+    last_attempt_at: nowIso,
+    last_error: null,
+    summary_file_id: result.summaryFileId,
+    copied: result.copied,
+    skipped: result.skipped,
+    drive_folder_id: acc.drive_folder_id ?? null,
+    filed_in: saved.route === "store" ? "storage" : "folder",
+  }).catch((e) => console.error("[archive-submission] filed, but the meta record could not be merged (non-fatal):", e))
 
   return { status: "archived", submissionId, copied: result.copied.length, skipped: result.skipped.length }
 }
@@ -144,22 +150,17 @@ async function recordAttempt(
   submissionId: string,
   attempts: number,
   lastError: string,
-  result: Awaited<ReturnType<typeof saveFormToDrive>> | null,
+  result: { copied: string[]; failed: string[]; errors: string[] } | null,
 ): Promise<void> {
   try {
-    await supabaseAdmin
-      .from("tax_return_submissions")
-      .update({
-        drive_archive_meta: {
-          attempts,
-          last_attempt_at: new Date().toISOString(),
-          last_error: lastError,
-          copied: result?.copied ?? [],
-          failed: result?.failed ?? [],
-          errors: result?.errors ?? [],
-        },
-      } as never)
-      .eq("id", submissionId)
+    await mergeArchiveMeta("tax_return_submissions", submissionId, {
+      attempts,
+      last_attempt_at: new Date().toISOString(),
+      last_error: lastError,
+      copied: result?.copied ?? [],
+      failed: result?.failed ?? [],
+      errors: result?.errors ?? [],
+    })
   } catch (e) {
     console.error("[archive-submission] failed to record attempt meta (non-fatal):", e)
   }

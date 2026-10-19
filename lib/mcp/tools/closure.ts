@@ -12,6 +12,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { legacyFormSlug } from "@/lib/portal/submission-token"
+import { contactIdForLead } from "@/lib/crm-store/lead-form-store"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 
@@ -77,12 +79,8 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         // 2. Also try to link contact if we only have lead
         let resolvedContactId = contact_id || null
         if (!resolvedContactId && email) {
-          const { data: contact } = await supabaseAdmin
-            .from("contacts")
-            .select("id")
-            .eq("email", email)
-            .maybeSingle()
-          resolvedContactId = contact?.id || null
+          // exact email AND the same full name — a shared email alone must never attach someone else's contact
+          resolvedContactId = await contactIdForLead({ email, fullName, route: "mcp:closure_form_create", leadId: lead_id ?? null })
         }
 
         // 3. If account_id provided, get LLC info for prefill
@@ -118,11 +116,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         if (llcState) prefilled.llc_state = llcState
 
         // 5. Generate token
-        const slug = (fullName || "form")
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-|-$/g, "")
-          .slice(0, 30)
+        const slug = legacyFormSlug(fullName, "form")
         const year = new Date().getFullYear()
         const token = `closure-${slug}-${year}`
 
@@ -348,29 +342,22 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         lines.push(`Submitted: ${sub.completed_at}`)
 
         if (mark_reviewed) {
-          // Save form data + uploads to Drive
-          try {
-            const { saveFormToDrive } = await import("@/lib/form-to-drive")
-            const driveFolderId = sub.account_id
-              ? (await supabaseAdmin.from("accounts").select("drive_folder_id").eq("id", sub.account_id).single()).data?.drive_folder_id
-              : null
-            if (driveFolderId) {
-              const driveResult = await saveFormToDrive(
-                "closure",
-                submitted,
-                (sub.upload_paths as string[]) || [],
-                driveFolderId,
-                { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: clientName || token }
-              )
-              if (driveResult.summaryFileId) lines.push(`✅ Data summary saved to Drive (${driveResult.summaryFileId})`)
-              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
-              if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy`)
-              if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
-            } else {
-              lines.push("⚠️ No Drive folder found — data not saved to Drive")
-            }
-          } catch (driveErr) {
-            lines.push(`⚠️ Drive save failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
+          // File the form data + uploads FIRST. The form is marked "reviewed" only when it was filed: a company that can receive
+          // nothing, a company being moved, or a failed save leaves the form exactly as it was (still waiting for review).
+          const { fileClosureSubmission } = await import("@/lib/crm-store/save-account-form")
+          const outcome = await fileClosureSubmission(
+            { id: sub.id as string, token, account_id: sub.account_id, contact_id: (sub.contact_id as string | null) ?? null, upload_paths: (sub.upload_paths as string[] | null) ?? [], completed_at: sub.completed_at },
+            submitted,
+            clientName || token,
+            "mcp/closure_form_review",
+          )
+          const filed = outcome.ok
+          lines.push(...outcome.lines)
+
+          if (!filed) {
+            lines.push("")
+            lines.push("❌ The form was NOT marked as reviewed — nothing was changed. Fix the problem above and run the review again.")
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] }
           }
 
           await supabaseAdmin
@@ -398,7 +385,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
   // ═══════════════════════════════════════
   server.tool(
     "closure_prepare_documents",
-    "Generate pre-filled dissolution documents for an LLC closure. Supports: Wyoming (Articles of Dissolution), Delaware (Certificate of Cancellation), and IRS EIN Closure Letter (all states). Downloads blank forms from Drive Templates, fills fields with CRM data, uploads to client's Drive folder, and optionally emails to Luca for printing/mailing. Prerequisites: account must exist with company_name, state_of_formation, and at least one linked contact.",
+    "Generate pre-filled dissolution documents for an LLC closure. Supports: Wyoming (Articles of Dissolution), Delaware (Certificate of Cancellation), and IRS EIN Closure Letter (all states). Takes the blank forms from the Templates folder, fills fields with CRM data, saves the result in the company's CRM storage, and optionally emails to Luca for printing/mailing. Prerequisites: account must exist with company_name, state_of_formation, and at least one linked contact.",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       send_email: z.boolean().optional().describe("If true, emails filled documents to support@ for printing"),
@@ -406,7 +393,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
     async ({ account_id, send_email }) => {
       try {
         const { PDFDocument } = await import("pdf-lib")
-        const { downloadFileBinary, uploadBinaryToDriveUpsert, folderFileNameMap, listFolder, createFolder: _createFolder } = await import("@/lib/google-drive")
+        const { downloadFileBinary } = await import("@/lib/google-drive")
 
         // Get account + contact data
         const { data: acc } = await supabaseAdmin
@@ -415,6 +402,11 @@ Use gmail_send to send the link to the client after Antonio approves.`,
           .eq("id", account_id)
           .single()
         if (!acc) return { content: [{ type: "text" as const, text: "Account not found" }] }
+
+        // Decide where the documents will be saved BEFORE generating anything (never make documents that cannot be kept).
+        const { companyStoragePlace } = await import("@/lib/crm-store/storage-place")
+        const place = await companyStoragePlace(account_id)
+        if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message}` }] }
 
         const { data: links } = await supabaseAdmin
           .from("account_contacts")
@@ -549,11 +541,8 @@ Use gmail_send to send the link to the client after Antonio approves.`,
           lines.push("⚠️ No EIN on file — cannot generate IRS closure letter")
         }
 
-        // ── Save the documents ── (Drive cutover, dev job ad09ea91: a company whose files live in the new storage gets them
-        // there, internal, one version per file name; a company on Drive carries on exactly as before)
-        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
-        const closureInStorage = generatedFiles.length > 0 && (await companyDocState(account_id)) !== "drive"
-        if (closureInStorage) {
+        // ── Save the documents ── (the company's storage, internal, one version per file name)
+        if (generatedFiles.length > 0) {
           try {
             const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
             const { storeNameKey } = await import("@/lib/crm-store/rules")
@@ -563,32 +552,11 @@ Use gmail_send to send the link to the client after Antonio approves.`,
                 folder: "company", documentType: null, callerKey: `closure-doc:${account_id}:${storeNameKey(file.name)}`, portalVisible: false,
                 row: { document_type_name: "Closure document", category: 1, status: "classified" },
               })
-              if (routed.route !== "store") throw new Error("this company's files moved back to Drive while saving — nothing more was saved")
+              if (routed.route !== "store") throw new Error("this company's storage was not available while saving — nothing more was saved")
               lines.push(`📁 Saved in the new storage: ${file.name}`)
             }
           } catch (e) {
-            lines.push(`⚠️ Storage save error: ${e instanceof Error ? e.message : String(e)}`)
-          }
-        }
-
-        // ── Upload to Drive ──
-        if (!closureInStorage && acc.drive_folder_id && generatedFiles.length > 0) {
-          try {
-            const contents = await listFolder(acc.drive_folder_id)
-            const companyFolder = contents?.files?.find(
-              (f: { name: string; mimeType: string }) =>
-                f.name === "1. Company" && f.mimeType === "application/vnd.google-apps.folder"
-            )
-            const targetFolder = companyFolder?.id || acc.drive_folder_id
-
-            // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
-            const closureNames = await folderFileNameMap(targetFolder)
-            for (const file of generatedFiles) {
-              const result = await uploadBinaryToDriveUpsert(file.name, Buffer.from(file.bytes), "application/pdf", targetFolder, closureNames)
-              lines.push(`📁 Uploaded: ${file.name} (${result.id})`)
-            }
-          } catch (e) {
-            lines.push(`⚠️ Drive upload error: ${e instanceof Error ? e.message : String(e)}`)
+            lines.push(`❌ NOT saved: ${e instanceof Error ? e.message : String(e)}`)
           }
         }
 
@@ -605,7 +573,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
               "Please print, prepare shipping labels, and mail:",
               ...lines.filter(l => l.includes("Mail to:")),
               "",
-              "Documents are attached to this email and saved to Drive.",
+              "Documents are attached to this email.",
             ].join("\n")
 
             const parts = [

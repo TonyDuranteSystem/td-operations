@@ -16,7 +16,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { listFolder, uploadBinaryToDriveUpsert, findTaxFolder } from "@/lib/google-drive"
+import { listFolder, findTaxFolder } from "@/lib/google-drive"
 import { parseBankStatement, categorizeTransaction, type CategorizedTransaction } from "@/lib/bank-statement-parser"
 import { logAction } from "@/lib/mcp/action-log"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
@@ -353,15 +353,25 @@ export function registerBankStatementTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "bank_statement_pnl",
-    "Generate Profit & Loss statement + Balance Sheet from parsed bank transactions. Outputs Excel with dual currency (original + USD at IRS rate). Uploads to client's Drive '3. Tax' folder and refreshes the client's portal Documents tab. IRS RULE: All US tax returns must be in USD — the tool automatically converts using the IRS yearly average exchange rate. Includes K-1 allocation per member based on ownership %. Prerequisite: run bank_statement_process first. SILENT BY DEFAULT: re-running this while fixing categorization/ownership/data issues never pings the client — only pass notify_client=true on the run you intend the client to actually see and act on (their 'please review and confirm' message + document alert fire ONLY then, not on every regeneration).",
+    "Generate Profit & Loss statement + Balance Sheet from parsed bank transactions. Outputs Excel with dual currency (original + USD at IRS rate). Saves it in the company's CRM storage (Tax folder) and refreshes the client's portal Documents tab. IRS RULE: All US tax returns must be in USD — the tool automatically converts using the IRS yearly average exchange rate. Includes K-1 allocation per member based on ownership %. Prerequisite: run bank_statement_process first. SILENT BY DEFAULT: re-running this while fixing categorization/ownership/data issues never pings the client — only pass notify_client=true on the run you intend the client to actually see and act on (their 'please review and confirm' message + document alert fire ONLY then, not on every regeneration).",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
-      upload_to_drive: z.boolean().optional().default(true).describe("Upload Excel to Drive (default: true)"),
+      upload_to_drive: z.boolean().optional().describe("Removed - use save_to_storage."),
+      save_to_storage: z.boolean().optional().default(true).describe("Save the Excel in the company's storage (default: true)"),
       notify_client: z.boolean().optional().default(false).describe("Notify the client this P&L is ready to review/confirm (default: false — use ONLY on the genuinely final run; every other regeneration during staff review stays silent)"),
     },
-    async ({ account_id, tax_year, upload_to_drive, notify_client }) => {
+    async ({ account_id, tax_year, upload_to_drive, save_to_storage, notify_client }) => {
       try {
+        if (upload_to_drive !== undefined) {
+          return { content: [{ type: "text" as const, text: "❌ upload_to_drive was removed. Use save_to_storage (true saves the P&L in the company's storage, false only returns the numbers). Nothing was generated." }] }
+        }
+        // Decide where the workbook will be saved BEFORE building it (never make a file that cannot be kept).
+        if (save_to_storage) {
+          const { companyStoragePlace } = await import("@/lib/crm-store/storage-place")
+          const place = await companyStoragePlace(account_id)
+          if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message.replace(/\.$/, "")}; to see the numbers without saving, call again with save_to_storage=false.` }] }
+        }
         const ctx = await getAccountContext(account_id)
 
         // Get transactions — PAGINATED (card 4a39e0fd): the unpaginated
@@ -398,7 +408,7 @@ export function registerBankStatementTools(server: McpServer) {
 
         // Totals + the workbook now BOTH come from the ONE financials engine
         // (getFinancialsView), so this tool reports and files exactly the same
-        // numbers as the client's portal screen and the accountant hand-off —
+        // numbers as the client's portal screen and the filed workbook —
         // corrected beginning balances, refund-netted expenses, and the FX
         // translation adjustment included.
         const { getFinancialsView } = await import("@/lib/tax/financials-orchestration")
@@ -429,7 +439,7 @@ export function registerBankStatementTools(server: McpServer) {
 
         // ── SINGLE ENGINE ── build the 5-sheet P&L / Balance Sheet workbook from
         // the financials engine draft (buildFinancialsWorkbookForAccount) — the
-        // SAME artifact the client downloads and the accountant hand-off archives.
+        // SAME artifact the client downloads and the confirmation archive keeps.
         // This tool previously used the legacy transaction-based generator, which
         // had drifted from the engine (raw last balance for assets, no name-drift
         // identity healing, single-rate multi-currency). One engine, one file.
@@ -443,47 +453,30 @@ export function registerBankStatementTools(server: McpServer) {
         if (!built) throw new Error("No transactions available to build the P&L for this account and year")
         const { buffer, fileName } = built
 
-        // Upload to Drive
+        // Save the workbook in the company's storage
         let driveLink = ""
         let documentVisibleToClient = false
         let clientNotified = false
         // A company whose files live in the new storage (Drive cutover, dev job ad09ea91) gets the workbook there — the same
-        // file (a new version) on every re-run; a company on Drive carries on exactly as before.
-        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
-        const pnlInStorage = upload_to_drive && (await companyDocState(account_id)) !== "drive"
-        if (upload_to_drive && (ctx.driveFolderId || pnlInStorage)) {
-          let uploaded: { id: string; name: string }
-          let storeRowId: string | null = null
-          if (pnlInStorage) {
-            const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
-            const routed = await saveDocumentForAccount({
-              accountId: account_id, name: fileName, bytes: buffer,
-              mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-              folder: "tax", documentType: "profit_loss_statement", callerKey: `pnl:${account_id}:${tax_year}`, portalVisible: true, periodYear: tax_year,
-              row: { document_type_name: "Profit & Loss Statement", category: 3, status: "classified" },
-            })
-            if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the P&L was being saved — nothing was saved.")
-            uploaded = { id: routed.pointer, name: fileName }
-            storeRowId = routed.documentRowId
-            driveLink = "saved in the company's new storage"
-          } else {
-            const taxFolderId = await findTaxFolder(ctx.driveFolderId)
-            const targetFolder = taxFolderId || ctx.driveFolderId
-
-            // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
-            uploaded = (await uploadBinaryToDriveUpsert(
-              fileName, buffer,
-              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-              targetFolder,
-            )) as { id: string; name: string }
-            driveLink = `https://drive.google.com/file/d/${uploaded.id}/view`
-          }
+        // file (a new version) on every re-run; a company with no storage place yet is not saved.
+        if (save_to_storage) {
+          const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
+          const routed = await saveDocumentForAccount({
+            accountId: account_id, name: fileName, bytes: buffer,
+            mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            folder: "tax", documentType: "profit_loss_statement", callerKey: `pnl:${account_id}:${tax_year}`, portalVisible: true, periodYear: tax_year,
+            row: { document_type_name: "Profit & Loss Statement", category: 3, status: "classified" },
+          })
+          if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the P&L was being saved — nothing was saved.")
+          const uploaded = { id: routed.pointer, name: fileName }
+          const storeRowId: string | null = routed.documentRowId
+          driveLink = "saved in the company's new storage"
 
           logAction({
             action_type: "bank_statement_pnl",
             table_name: "bank_transactions",
             record_id: account_id,
-            summary: `Generated P&L for ${ctx.companyName} (${tax_year}), uploaded to ${pnlInStorage ? "the new storage" : "Drive"}`,
+            summary: `Generated P&L for ${ctx.companyName} (${tax_year}), saved in the new storage`,
             details: { drive_file_id: uploaded.id, net_income: netIncome },
           })
 
@@ -591,7 +584,7 @@ export function registerBankStatementTools(server: McpServer) {
           : ""
 
         const summary = [
-          `✅ P&L generated for ${ctx.companyName} (${tax_year})`,
+          save_to_storage ? `✅ P&L generated for ${ctx.companyName} (${tax_year})` : `📊 P&L numbers for ${ctx.companyName} (${tax_year}) — NOTHING WAS SAVED (save_to_storage=false)${notify_client ? "; the client was NOT notified (notify_client needs a saved P&L)" : ""}`,
           rateNote,
           "",
           `Revenue: $${totalIncome.toFixed(2)}`,
@@ -648,7 +641,7 @@ export function registerBankStatementTools(server: McpServer) {
           `Year-end cash: ${(engineView.draft.bank_balances?.banks ?? []).map(b =>
             `${b.bank_key}: ${b.closing_usd !== null ? b.closing_usd.toFixed(2) : "N/A (balance history incomplete)"}`
           ).join(", ") || "N/A"}`,
-          uncategorized.length > 0 ? `\n⚠️ ${uncategorized.length} uncategorized transactions — review before sending to India` : "",
+          uncategorized.length > 0 ? `\n⚠️ ${uncategorized.length} uncategorized transactions — review before the numbers are used` : "",
           driveLink ? `\n📎 Excel: ${driveLink}` : "",
           documentVisibleToClient && clientNotified ? "✅ Now visible in the client's portal Documents tab (client notified)." : "",
           documentVisibleToClient && !clientNotified ? "ℹ️ Saved to the client's portal Documents tab, but the client was NOT notified (notify_client was not set). Re-run with notify_client: true when this is the final version." : "",

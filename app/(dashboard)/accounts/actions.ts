@@ -1035,7 +1035,7 @@ export async function changeAccountStatus(
       const { error } = await supabaseAdmin.from('tasks').insert({
         account_id: accountId,
         task_title: `Generate closure documents — ${account.company_name}`,
-        description: `Account was Closed. Run closure_prepare_documents via MCP to generate Articles of Dissolution, EIN closure letter, and upload to the client's Drive folder.`,
+        description: `Account was Closed. Run closure_prepare_documents via MCP to generate Articles of Dissolution, EIN closure letter, and save them in the company's storage.`,
         category: 'Document',
         priority: 'High',
         status: 'To Do',

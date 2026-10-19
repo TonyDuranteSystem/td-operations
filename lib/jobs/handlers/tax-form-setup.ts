@@ -45,6 +45,10 @@ interface TaxFormPayload {
   entity_type?: string
   company_name?: string
   source?: "portal_wizard" | string
+  /** the form could not be filed: apply the corrections but do NOT mark the form reviewed */
+  leave_unreviewed?: boolean
+  /** enqueued by a staff/workflow REVIEW (not by the wizard): the review runs this once per submission */
+  review_apply?: boolean
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -503,8 +507,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
 <li>If complete, apply changes: <code>tax_form_review(token="${p.token}", apply_changes=true)</code></li>
 ${(entityType === "MMLLC" || entityType === "Corp") ? `<li>Bank statements auto-parsed. Review: <code>bank_statement_review(account_id="${p.account_id}")</code></li>
 <li>Generate P&L: <code>bank_statement_pnl(account_id="${p.account_id}", tax_year=${taxYear})</code></li>` : ""}
-<li>Check if 2nd installment is paid (Stage 6 gate)</li>
-<li>When ready: <code>tax_send_to_accountant(account_id="${p.account_id}", tax_year=${taxYear})</code></li>
+<li>Check if 2nd installment is paid (Stage 6 gate) — the return stays gated until it is</li>
 </ol>
 
 <p style="font-size:12px;color:#6b7280">Token: ${p.token} | Admin: ${APP_BASE_URL}/tax-form/${p.token}?preview=td</p>
@@ -837,6 +840,8 @@ async function handleMcpApplyChanges(job: Job, p: TaxFormPayload): Promise<JobRe
   // ─── 6. MARK FORM AS REVIEWED ───
   if (!p.submission_id) {
     result.steps.push(step("form_reviewed", "skipped", "No submission_id"))
+  } else if (p.leave_unreviewed) {
+    result.steps.push(step("form_reviewed", "skipped", "Left unreviewed — the form was not filed"))
   } else {
     try {
       const { error: formErr } = await supabaseAdmin

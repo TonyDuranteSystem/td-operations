@@ -9,7 +9,7 @@
  * With equal scores that comparator preserves input order, and the input order came from a
  * database query with NO `ORDER BY` — so **which client got credited $1,000 was decided by
  * physical row order**. The wrong one won, the invoice was marked Paid, the client's
- * tax-return payment gate was lifted and an internal "ready for accountant" email went out,
+ * tax-return payment gate was lifted and an internal "installment paid" email went out,
  * all with no human involved.
  *
  * TWO THINGS THIS MODULE FIXES:

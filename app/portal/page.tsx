@@ -3,6 +3,8 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
+import { filterByHistoryCutoff, isSettledPaymentStatus } from '@/lib/documents/history-cutoff'
+import { getHistoryView } from '@/lib/portal/history-cutoff'
 import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getFormationTracker, getInProgressFormations, getInProgressOnboardings, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
 import { buildFormationTrackerSteps } from '@/lib/portal/formation-progress'
 import { buildTrackerSteps } from '@/lib/tax/progress-tracker'
@@ -927,8 +929,14 @@ export default async function PortalDashboardPage() {
   // home-page PaymentHistory widget for active-tier clients.
   const personalPaymentLabel = t('dashboard.personal', locale, translations)
   const companyPaymentLabel = account.company_name ?? t('dashboard.company', locale, translations)
+  // A person who joined later sees SETTLED company payments only from their start date; what is still owed stays visible.
+  const payHistory = await getHistoryView(selectedAccountId, contactId, 'payment')
+  const visibleAccountPayments = filterByHistoryCutoff(accountPayments, payHistory.cutoff, contactId, p => ({
+    created_at: p.created_at,
+    opened: payHistory.opened.has(p.id) || !isSettledPaymentStatus(p.status),
+  }))
   const payments = [
-    ...accountPayments.map(p => ({ ...p, scope_label: companyPaymentLabel })),
+    ...visibleAccountPayments.map(p => ({ ...p, scope_label: companyPaymentLabel })),
     ...contactPayments.map(p => ({ ...p, scope_label: personalPaymentLabel })),
   ].sort((a, b) => {
     const ad = a.due_date ?? ''
