@@ -12,6 +12,7 @@
  * A needed answer comes back as a question (SetTypeQuestionError) — nothing has changed when it is asked.
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { pickKindFolder, pickYearFolder, type LookupFolder } from "./folder-lookup"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
@@ -175,15 +176,26 @@ async function moveContext(fileId: string): Promise<{ items: Array<{ id: string;
 
 const YEAR_KINDS = new Set(["tax_year", "person_tax_year"])
 
-/** A folder of this kind in this storage — a year folder only for THAT year; null when there is none (a read error
- *  stops, never a silent fallback). */
+/** Every live folder of a storage, read in pages (a storage holds a few dozen; the page size is the database's limit, not ours). */
+async function liveFoldersOf(ownerId: string): Promise<LookupFolder[]> {
+  const out: LookupFolder[] = []
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db().from("store_folders").select("id, name, parent_id, kind, created_at")
+      .eq("owner_id", ownerId).is("trashed_at", null).order("id").range(from, from + 999)
+    if (error) throw new Error(`Could not read the folders — please try again (${error.message}).`)
+    const page = (data ?? []) as LookupFolder[]
+    out.push(...page)
+    if (page.length < 1000) return out
+  }
+}
+
+/** A folder of this kind in this storage — a fixed folder only directly under the storage's top folder, a year folder only
+ *  for THAT year inside the live Tax folder (never under "Previous names"); null when there is none (a read error stops,
+ *  never a silent fallback). */
 async function folderOf(ownerId: string, kind: string, year: number | null): Promise<string | null> {
   if (YEAR_KINDS.has(kind) && !year) return null
-  const { data, error } = await db().from("store_folders").select("id, name, parent_id").eq("owner_id", ownerId).eq("kind", kind).is("trashed_at", null)
-  if (error) throw new Error(`Could not read the folders — please try again (${error.message}).`)
-  const rows = ((data ?? []) as { id: string; name: string; parent_id: string | null }[]).filter((r) => r.parent_id !== null)
-  const hit = YEAR_KINDS.has(kind) ? rows.find((r) => r.name.trim() === String(year)) : rows[0]
-  return hit?.id ?? null
+  const rows = await liveFoldersOf(ownerId)
+  return (YEAR_KINDS.has(kind) ? pickYearFolder(rows, kind, year as number) : pickKindFolder(rows, kind, { includeRoot: false })) ?? null
 }
 async function firstFolder(ownerId: string, kinds: Array<string | null>, year: number | null): Promise<{ id: string; kind: string }> {
   for (const k of kinds.filter((x): x is string => !!x)) {

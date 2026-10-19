@@ -32,6 +32,7 @@ import { labelKey, queueTypeName, typeNameAnswers } from "./type-names"
 import { IMPORT_ITEM_STATUSES, IMPORT_RUN_MODES } from "./vocabularies"
 import { createHash } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { topFolderIdsByKind, type LookupFolder } from "./folder-lookup"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
@@ -436,14 +437,14 @@ async function loadCtx(runId: string, accountId: string, ownerId: string, actorI
   const [{ data: links, error: lErr }, { data: types, error: tErr }, { data: folders, error: fErr }] = await Promise.all([
     db().from("account_contacts").select("contact_id, contacts(full_name)").eq("account_id", accountId),
     db().from("catalog_entries").select("slug, display_name, metadata").eq("catalog_id", "storage_document_types"),
-    db().from("store_folders").select("id, kind, parent_id").eq("owner_id", ownerId).is("trashed_at", null),
+    db().from("store_folders").select("id, kind, parent_id, created_at").eq("owner_id", ownerId).is("trashed_at", null),
   ])
   if (lErr || tErr || fErr) throw new Error(`Could not read the company's set-up (${(lErr ?? tErr ?? fErr).message}).`)
   const members = ((links ?? []) as { contact_id: string; contacts: { full_name: string | null } | null }[])
     .map((l) => ({ contactId: l.contact_id, name: l.contacts?.full_name ?? "" }))
   const typeMap = await loadTypeMap(types ?? [])
-  const folderByKind = new Map<string, string>()
-  for (const f of (folders ?? []) as { id: string; kind: string; parent_id: string | null }[]) if (f.parent_id && !folderByKind.has(f.kind)) folderByKind.set(f.kind, f.id)
+  // the fixed folders directly under the top folder only (folder-lookup.ts) — never one moved into "Previous names"
+  const folderByKind = topFolderIdsByKind((folders ?? []) as LookupFolder[])
   return { runId, accountId, companyOwner: ownerId, actorId, mode, members, types: typeMap, folderByKind }
 }
 

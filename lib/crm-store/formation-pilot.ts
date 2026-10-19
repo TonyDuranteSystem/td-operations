@@ -22,6 +22,7 @@ import { isProductionDatabase } from "@/lib/google-drive-guard"
 import { saveBytesToStore, type StoreLink, type StoreSubject, type WriteResult } from "./writer"
 import { storePointer, storeDocumentLink } from "./document-pointer"
 import { storeNameKey } from "./rules"
+import { pickKindFolder, isPlainKind, type LookupFolder } from "./folder-lookup"
 import { randomUUID } from "crypto"
 
 export const PILOT_SETTINGS_KEY = "crm_store_pilot"
@@ -127,15 +128,20 @@ export async function ensurePersonOwner(contactId: string, rootName: string): Pr
   return ownerId as string
 }
 
-/** The live folder of a given kind directly under the owner's root (template folders). */
+/**
+ * The live folder of a given kind directly under the owner's root (template folders). ONLY the root's direct children
+ * count (lib/crm-store/folder-lookup.ts): after a name change the previous fixed folders sit under "Previous names",
+ * and a new document must never land in them. Several candidates → the oldest.
+ */
 export async function folderOfKind(ownerId: string, kind: string): Promise<string> {
-  const { data, error } = await db().from("store_folders").select("id, parent_id")
-    .eq("owner_id", ownerId).eq("kind", kind).is("trashed_at", null)
+  if (!isPlainKind(kind)) throw new Error(`store pilot: owner ${ownerId} has no "${kind}" folder`) // never a real kind; keeps the filter below safe
+  // the root plus every live folder of this kind: a handful of rows, the same amount the old query read
+  const { data, error } = await db().from("store_folders").select("id, parent_id, kind, created_at")
+    .eq("owner_id", ownerId).is("trashed_at", null).or(`parent_id.is.null,kind.eq.${kind}`)
   if (error) throw new Error(`store pilot: could not read folders — ${error.message}`)
-  const rows = (data ?? []) as { id: string; parent_id: string | null }[]
-  const hit = rows.find((r) => r.parent_id !== null) ?? rows[0]
-  if (!hit) throw new Error(`store pilot: owner ${ownerId} has no "${kind}" folder`)
-  return hit.id
+  const id = pickKindFolder((data ?? []) as LookupFolder[], kind)
+  if (!id) throw new Error(`store pilot: owner ${ownerId} has no "${kind}" folder`)
+  return id
 }
 
 export interface PilotSave {

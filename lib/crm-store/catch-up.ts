@@ -18,6 +18,7 @@
  */
 import { createHash } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { topFolderIdsByKind, type LookupFolder } from "./folder-lookup"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* tables are not in the generated types
 const db = () => supabaseAdmin as any
@@ -376,9 +377,9 @@ export async function runCatchUp(accountId: string, actorId: string | null, opts
     if (hashNow !== before) { await close("failed", "the company changed while the catch-up was starting — nothing was done"); return { ok: false, message: "The company changed while the catch-up was starting — nothing was done. Run the preview again.", runId, items, plan } }
 
     const { types, suggested, display } = await loadTypes()
-    const folders = await must<Array<{ id: string; kind: string; parent_id: string | null }>>(d.from("store_folders").select("id, kind, parent_id").eq("owner_id", plan.ownerId).is("trashed_at", null), "the company's folders")
-    const folderByKind = new Map<string, string>()
-    for (const f of folders) if (f.parent_id && !folderByKind.has(f.kind)) folderByKind.set(f.kind, f.id)
+    const folders = await must<LookupFolder[]>(d.from("store_folders").select("id, kind, parent_id, created_at").eq("owner_id", plan.ownerId).is("trashed_at", null), "the company's folders")
+    // the fixed folders directly under the top folder only (folder-lookup.ts) — never one moved into "Previous names"
+    const folderByKind = topFolderIdsByKind(folders)
     const ctx: RunCtx = { runId, accountId, ownerId: plan.ownerId as string, actorId, types, suggested, display, folderByKind }
     const deadline = Date.now() + CATCH_UP_BUDGET_MS
     for (const e of plan.eligible) {
