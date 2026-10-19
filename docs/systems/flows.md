@@ -235,7 +235,7 @@ The service a client buys to change his company's name. It is a workspace like F
 | 4 | File the form with the state | us | Staff files the signed form, marks the name `filed`, uploads the proof. |
 | 5 | Waiting for the state | outside | The state's stamped document must be uploaded before the job can move (database rule `requires_document_to_advance`). If the state refuses the name: mark it `rejected_by_sos`, then "Back to step 1 (new name)" (`return_to_names`) — the client is asked for ONE new name. There is no automatic stage revert. |
 | 6 | Update our records | us | (Track B3, not built yet) apply the new name to the account + move the old storage folder tree into "Previous names". |
-| 7 | Client updates the Operating Agreement | client | (Track B4, not built yet) the client generates a NEW OA version in the portal; the old signed OA is kept. |
+| 7 | Client updates the Operating Agreement | client | The client is messaged (action-required rail, link `/portal/documents/generate?account=…`), generates a NEW OA version with the new name and signs it; the old signed OA is kept. Signing closes the job (see lease-oa.md). |
 | 8 | Completed | nobody | The ONLY done step (closes the job); not shown to the client. |
 
 **One policy file.** `lib/flows/name-loop-policy.ts` holds every difference between Formation and a name change in the shared names loop — and ALL client wording of the loop (EN/IT; the name-change copy is a DRAFT until Antonio approves it). Name-change policy: no seeding from a wizard, names can be added at any step, `oneAtATime`, 1 new name / 3 first names, one name per line (a comma stays inside a name), the state is the ACCOUNT's state (refuse when it has none — never defaults to New Mexico), no automatic stage revert, `returnStage` = step 1. An unknown service type is refused by the names-loop route (404/"not available").
@@ -246,7 +246,7 @@ The service a client buys to change his company's name. It is a workspace like F
 
 **Welcome message.** `lib/portal/welcome-message.ts` maps the service to the `company_change_name` row of the `welcome_messages` catalog (migration `20261019-1100`, EN/IT, priority 45, editable in /catalog); wording is a DRAFT until Antonio approves it (page "Name Change Wording").
 
-**Not built yet (tracks S, B3, B4):** the storage rename + "Previous names" move, the `previous_name` field under the company name, the "Apply new name" panel, the OA new-version path, the welcome message. Do not tell anyone the service is complete.
+**Not built yet (tracks S, B3):** the storage rename + "Previous names" move and the `previous_name` field under the company name (built in a separate session, not merged here), and the "Apply new name" panel. Do not tell anyone the service is complete.
 
 ## The Tax Return 15-stage flow (sandbox pipeline)
 `Extension Due (10)` → `Extension Filed (20)` → `Awaiting 2nd Payment (30)` → `2nd Installment Paid (40)` → `Wizard Available (50)` → `Data Submitted (60)` → `Under Review (65)` → `Revision Requested (67)` → `Review Completed (70)` → `Tax Return Prepared (80)` → `Sent for Signature (85)` → `Signed (90)` → `Filed with IRS (95)` → `IRS Receipt Uploaded (98)` → `Completed (100)`.

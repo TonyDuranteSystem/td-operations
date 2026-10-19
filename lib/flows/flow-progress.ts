@@ -18,7 +18,7 @@
  * tracker's defensive "don't guess" stance without hiding the whole flow.
  */
 
-import { actionStageConfigFor } from '@/lib/portal/action-stage-registry'
+import { actionStageConfigFor, resolveActionLink } from '@/lib/portal/action-stage-registry'
 
 export interface FlowStageRow {
   stage_name: string
@@ -71,7 +71,7 @@ export interface FlowStep {
    *  flow-detail link. */
   isActionRequired: boolean
   /** Where the action-required glow links to (action-stage-registry.ts's
-   *  link, with {sd_id} interpolated), or null when not applicable. */
+   *  link, with {sd_id} / {account_id} interpolated), or null when not applicable. */
   actionHref: string | null
 }
 
@@ -217,6 +217,7 @@ export function buildFlowSteps(
   locale: 'en' | 'it',
   serviceType: string,
   sdId: string,
+  accountId?: string | null,
 ): FlowStep[] | null {
   const labelled = stages
     .filter(s => s.client_label !== null && s.client_visible !== false)
@@ -254,7 +255,7 @@ export function buildFlowSteps(
       icon: s.icon ?? null,
       state,
       isActionRequired: actionConfig !== null,
-      actionHref: actionConfig ? actionConfig.link.replace('{sd_id}', sdId) : null,
+      actionHref: actionConfig ? resolveActionLink(actionConfig.link, { sdId, accountId }) : null,
     }
   })
 }

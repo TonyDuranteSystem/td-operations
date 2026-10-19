@@ -27,3 +27,38 @@ export function hasCollectedSignatures(existing: ExistingOaForGuard): boolean {
   if (existing.status === 'partially_signed') return true
   return (existing.signed_count ?? 0) > 0
 }
+
+/** Capital letters, runs of spaces and edge spaces do not make a different company name. */
+export function oaNameKey(name: string | null | undefined): string {
+  return (name ?? '').normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+export interface NewestOaForNameChange {
+  status: string | null
+  company_name?: string | null
+}
+
+/**
+ * Company Change Name, step 7: the company was RENAMED after its Operating Agreement was fully signed, so the client may
+ * generate a NEW agreement that carries the new name. The signed one is never touched — no signature row and no agreement
+ * row is deleted, voided or edited — it simply stops being the newest (the convention everywhere is "newest by created_at
+ * is the current OA"). Derived from the data on the server (a fully signed newest agreement whose frozen name differs from
+ * the account's name now); a request can never ask for it. A partly signed agreement is NOT covered: it keeps the refusal.
+ */
+export function isNameChangeNewVersion(newest: NewestOaForNameChange, accountName: string | null | undefined): boolean {
+  if (newest.status !== 'signed') return false
+  const frozen = oaNameKey(newest.company_name)
+  const current = oaNameKey(accountName)
+  return frozen !== '' && current !== '' && frozen !== current
+}
+
+/** The agreement token, made unique: `acme-oa-2026`, then `acme-oa-2026-2`, `-3` … when the plain one is taken (it is also the storage folder name). */
+export function uniqueOaToken(base: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(base)) return base
+  for (let n = 2; n < 1000; n++) {
+    const candidate = `${base}-${n}`
+    if (!taken.has(candidate)) return candidate
+  }
+  return `${base}-${Date.now().toString(36)}`
+}
+

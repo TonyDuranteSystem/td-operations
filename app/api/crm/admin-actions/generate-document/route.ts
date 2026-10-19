@@ -706,7 +706,7 @@ async function fetchDocumentStatuses(accountId: string) {
   const year = new Date().getFullYear()
 
   const [oaResult, leaseResult, ss4Result, relayResult, paysetResult] = await Promise.all([
-    supabaseAdmin.from("oa_agreements").select("id, token, status, access_code, signed_at, created_at").eq("account_id", accountId).limit(1),
+    supabaseAdmin.from("oa_agreements").select("id, token, status, access_code, signed_at, created_at").eq("account_id", accountId).order("created_at", { ascending: false }).limit(1),
     supabaseAdmin.from("lease_agreements").select("id, token, status, access_code, suite_number, signed_at, created_at, contract_year, term_start_date, term_end_date").eq("account_id", accountId).eq("contract_year", year).limit(1),
     supabaseAdmin.from("ss4_applications").select("id, token, status, access_code, signed_at, created_at").eq("account_id", accountId).limit(1),
     supabaseAdmin.from("banking_submissions").select("id, token, status, created_at").eq("account_id", accountId).eq("provider", "relay").limit(1),

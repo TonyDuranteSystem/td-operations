@@ -664,7 +664,7 @@ export async function advanceServiceDelivery(
   // notifyClientActionRequired dispatch (clickable chat + immediate email +
   // bell/push) REPLACES the generic notification (8), the raw stage push (8a)
   // and the notify_client_email stage email (8b) — one message, never doubles.
-  const { actionStageConfigFor } = await import("@/lib/portal/action-stage-registry")
+  const { actionStageConfigFor, resolveActionLink } = await import("@/lib/portal/action-stage-registry")
   const actionStageCfg = actionStageConfigFor(delivery.service_type, targetStage.stage_name)
   if (!skip_notify && actionStageCfg && (delivery.account_id || delivery.contact_id)) {
     try {
@@ -678,7 +678,7 @@ export async function advanceServiceDelivery(
         topic,
         title: actionStageCfg.title,
         message: actionStageCfg.message,
-        link: actionStageCfg.link.replace("{sd_id}", delivery.id),
+        link: resolveActionLink(actionStageCfg.link, { sdId: delivery.id, accountId: delivery.account_id ?? null }),
       })
       autoTriggers.push(
         `Action-required dispatched (${targetStage.stage_name}): chat=${dispatch.chat}, email=${dispatch.email}, portal=${dispatch.notification}`,

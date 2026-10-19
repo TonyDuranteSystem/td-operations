@@ -960,7 +960,7 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it', con
     const serviceType = sd.service_type ?? ''
     const stages = stagesByType.get(serviceType) ?? []
     const progress = computeFlowProgress(stages, sd.stage ?? null, locale)
-    const steps = buildFlowSteps(stages, sd.stage ?? null, locale, serviceType, sd.id as string)
+    const steps = buildFlowSteps(stages, sd.stage ?? null, locale, serviceType, sd.id as string, accountId || null)
     const year = deriveFlowYear(sd)
     const title = buildFlowTopic(serviceType, year) || sd.service_name || serviceType || 'Service'
     return {
