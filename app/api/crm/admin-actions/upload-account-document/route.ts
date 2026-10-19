@@ -125,78 +125,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // No storage: a company left on its old folder carries on as before; everyone else gets one plain sentence.
+    // No storage: Stop Drive S2 — nothing is ever written to Drive, so the company gets ONE plain sentence with the true reason.
     const decision = await noStorageDecisionFor(accountId)
-    if (decision.route === 'refuse') {
-      discardStaged()
-      return NextResponse.json({ success: false, detail: decision.sentence }, { status: NO_STORAGE_STATUS })
-    }
-
-    // Find target subfolder
-    const { listFolderAnyDrive, uploadBinaryToDrive } = await import('@/lib/google-drive')
-    const foldersRes = await listFolderAnyDrive(decision.folderId)
-    const folders = (foldersRes as { files?: Array<{ id: string; name: string; mimeType: string }> }).files ?? []
-    const targetFolder = folders.find(
-      (f: { name: string; mimeType: string }) => f.name === catInfo.subfolder && f.mimeType === 'application/vnd.google-apps.folder',
-    )
-    const uploadFolderId = targetFolder?.id || decision.folderId
-
-    // Upload to Drive
-    const driveFile = await uploadBinaryToDrive(finalFileName, buffer, fileMime, uploadFolderId) as { id: string; name: string }
-
-    const sideEffects: string[] = [`Uploaded to Drive: ${finalFileName}`]
-
-    // Create document record (idempotent on drive_file_id)
-    const { data: existingDoc } = await supabaseAdmin
-      .from('documents')
-      .select('id')
-      .eq('drive_file_id', driveFile.id)
-      .limit(1)
-
-    if (!existingDoc?.length) {
-      const { data: newDoc } = await supabaseAdmin.from('documents').insert({
-        file_name: finalFileName,
-        drive_file_id: driveFile.id,
-        drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
-        document_type_name: documentType,
-        category: catInfo.num,
-        category_name: category,
-        status: 'classified',
-        account_id: accountId,
-        contact_id: null,
-        portal_visible: true,
-      }).select('id').single()
-      sideEffects.push('Document record created')
-
-      // Alert the client of the new document (in-portal + push; digest email for
-      // non-push users). Fire-and-forget — never block the upload response.
-      if (newDoc?.id) {
-        const { notifyClientsOfNewDocument } = await import('@/lib/portal/document-alerts')
-        notifyClientsOfNewDocument(newDoc.id as string).catch((e) =>
-          console.warn('[upload-account-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
-      }
-    }
-
-    // Log action
-    await supabaseAdmin.from('action_log').insert({
-      actor: 'crm-admin',
-      action_type: 'upload_account_document',
-      table_name: 'documents',
-      record_id: driveFile.id,
-      account_id: accountId,
-      summary: `Account document uploaded: ${finalFileName} (${documentType})`,
-      details: { file_name: finalFileName, document_type: documentType, category, account_id: accountId },
-    })
-
-    // Clean up storage file (best-effort)
-    supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
-
-    return NextResponse.json({
-      success: true,
-      detail: `${finalFileName} uploaded to ${catInfo.subfolder}`,
-      driveFileId: driveFile.id,
-      side_effects: sideEffects,
-    })
+    discardStaged()
+    return NextResponse.json({ success: false, detail: decision.sentence }, { status: NO_STORAGE_STATUS })
   } catch (e) {
     console.error('[upload-account-document] Error:', e)
     return NextResponse.json({ success: false, detail: e instanceof Error ? e.message : String(e) }, { status: 500 })

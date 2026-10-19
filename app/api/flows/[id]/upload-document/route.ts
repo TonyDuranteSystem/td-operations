@@ -32,7 +32,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { advanceServiceDelivery } from '@/lib/service-delivery'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
-import { NO_STORAGE_REASON_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor, noStorageDecisionForContact } from '@/lib/crm-store/no-storage'
+import { NO_STORAGE_REASON_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 import { parsePrincipalOfficeDecision, applyPrincipalOfficeDecision, type PrincipalOfficeDecision } from '@/lib/operations/principal-office'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
@@ -149,7 +149,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const buffer = Buffer.from(rawContent)
     const fileMime = mimeType || blob.type || 'application/pdf'
 
-    const { deriveEffectiveFileName, resolveSubfolderId, resolveContactLinkedDriveFolder } = await import('@/lib/flows/flow-drive-folder')
+    const { deriveEffectiveFileName } = await import('@/lib/flows/flow-drive-folder')
 
     // A refused upload must not leave the staged object behind in the upload bucket.
     const discardStaged = () => { supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {}) }
@@ -228,18 +228,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
     }
 
-    // 3-cutover-person. A contact-scoped flow (no company yet):
-    //   - a person whose files live in the storage (their own, or through a company of theirs that is in storage or mid-move) → the
-    //     file is saved through the PERSON's storage, whatever the flow (an ITIN, or a formation that started before the company was
-    //     switched): a Drive write there would be refused;
-    //   - an ITIN for a person with no storage who is NOT a member of a company left on its old folder → the person's storage is
-    //     opened now (as the new-client flow does) — never kept only in the upload bucket behind an expiring link;
-    //   - a member of a company left on its old folder, or a formation that started on its old folder with no storage anywhere
-    //     near it → the legacy path below, exactly as before (no new person storage: it would lock their folder).
+    // 3-cutover-person. A contact-scoped flow (no company yet): the file is saved through the PERSON's storage, whatever the flow
+    //   (an ITIN, or a formation that started before the company was switched). A person with no storage of their own gets one
+    //   opened now (as the new-client flow does) — Stop Drive S2: nothing is ever kept in Drive, nor only in the upload bucket.
     if (!routed && pilot.status !== 'saved' && !accountId && contactId) {
       const { companyDocState, liveOwnerOfContact } = await import('@/lib/crm-store/switched-drive-guard')
       const { ensurePersonOwner } = await import('@/lib/crm-store/formation-pilot')
-      const isItin = sd.service_type === 'ITIN'
       const { data: links } = await supabaseAdmin
         .from('account_contacts')
         .select('account_id, is_primary')
@@ -248,139 +242,67 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         .order('account_id', { ascending: true })
       let viaAccountId: string | null = null
       let hasOwner = false
-      let useLegacy = true
       try {
         for (const l of links ?? []) {
           const accId = (l as { account_id: string }).account_id
           if ((await companyDocState(accId)) !== 'drive') { viaAccountId = accId; break }
         }
         hasOwner = !!(await liveOwnerOfContact(contactId))
-        // the ONE rule for a person (lib/crm-store/no-storage.ts): legacy Drive only for a member of a company left on its folder
-        useLegacy = !viaAccountId && !hasOwner && (!isItin || (await noStorageDecisionForContact(contactId)).route === 'drive')
       } catch {
         // a read error here must not become a bare 500 — and must not guess where the file belongs
         return NextResponse.json({ success: false, detail: "Could not check where this person's files live — please try again." }, { status: 500 })
       }
-      if (!useLegacy) {
-        const { saveDocumentForContact, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
-        const { storeNameKey } = await import('@/lib/crm-store/rules')
-        const { data: contactRow } = await supabaseAdmin.from('contacts').select('full_name').eq('id', contactId).maybeSingle()
-        const contactName = (contactRow as { full_name?: string | null } | null)?.full_name ?? null
-        try {
-          // no storage of their own and no switched company to open it through: open it now
-          if (!viaAccountId && !hasOwner) await ensurePersonOwner(contactId, contactName || 'Member')
-          const r = await saveDocumentForContact({
-            contactId,
-            name: effectiveName,
-            bytes: buffer,
-            mimeType: fileMime,
-            documentType: null,
-            callerKey: `flow-upload:${serviceDeliveryId}:${flowStage ?? ''}:${storeNameKey(effectiveName)}`,
-            viaAccountId,
-            contactName,
-            portalVisible: isItinApprovalUpload,
-            row: { service_delivery_id: serviceDeliveryId, flow_stage: flowStage, status: 'classified' },
-          })
-          if (r.route === 'store') routed = { pointer: r.pointer }
-        } catch (e) {
-          if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 }) // transient: the staged file is kept so "try again" works
-          return NextResponse.json({ success: false, detail: `Could not save the file in the person's storage: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 })
-        }
+      const { saveDocumentForContact, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+      const { storeNameKey } = await import('@/lib/crm-store/rules')
+      const { data: contactRow } = await supabaseAdmin.from('contacts').select('full_name').eq('id', contactId).maybeSingle()
+      const contactName = (contactRow as { full_name?: string | null } | null)?.full_name ?? null
+      try {
+        // no storage of their own and no switched company to open it through: open it now
+        if (!viaAccountId && !hasOwner) await ensurePersonOwner(contactId, contactName || 'Member')
+        const r = await saveDocumentForContact({
+          contactId,
+          name: effectiveName,
+          bytes: buffer,
+          mimeType: fileMime,
+          documentType: null,
+          callerKey: `flow-upload:${serviceDeliveryId}:${flowStage ?? ''}:${storeNameKey(effectiveName)}`,
+          viaAccountId,
+          contactName,
+          portalVisible: isItinApprovalUpload,
+          row: { service_delivery_id: serviceDeliveryId, flow_stage: flowStage, status: 'classified' },
+        })
+        if (r.route === 'store') routed = { pointer: r.pointer }
+      } catch (e) {
+        if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 }) // transient: the staged file is kept so "try again" works
+        return NextResponse.json({ success: false, detail: `Could not save the file in the person's storage: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 })
       }
     }
 
-    // 3b. A flow that did not land in any storage.
-    //     - a company: one left on its old folder carries on there (as before); a company with nothing (no storage, finished or
-    //       no folder) gets one plain sentence — nothing saved, the stage not advanced;
-    //     - no company yet (contact-scoped, not the ITIN person-storage case above): the legacy path, exactly as before — the
-    //       contact's linked company folder when there is one, else the upload bucket (sandbox: always the bucket);
+    // 3b. A flow that did not land in any storage (Stop Drive S2: nothing is ever written to Drive or kept only in the upload bucket).
+    //     - a company with nothing (no storage — finished, frozen on its old Drive folder, or no folder) gets one plain sentence —
+    //       nothing saved, the stage not advanced;
     //     - neither company nor person: the same plain sentence.
-    let driveFolderId: string | null = null
     if (!routed && pilot.status !== 'saved') {
+      discardStaged()
       if (accountId) {
         const decision = await noStorageDecisionFor(accountId)
-        if (decision.route === 'refuse') {
-          discardStaged()
-          return NextResponse.json({ success: false, detail: decision.sentence }, { status: NO_STORAGE_STATUS })
-        }
-        // a company left on its old folder: its file goes to ITS folder, exactly as the other routes do. Only an environment whose
-        // Drive is faked (the sandbox without live Drive) keeps the file in the upload bucket instead.
-        if (!(await import('@/lib/google-drive')).driveIsMocked()) driveFolderId = decision.folderId
-      } else if (contactId) {
-        if (!(await import('@/lib/google-drive')).driveIsMocked()) driveFolderId = await resolveContactLinkedDriveFolder(contactId)
-      } else {
-        discardStaged()
-        return NextResponse.json({ success: false, detail: NO_STORAGE_REASON_SENTENCE.no_company }, { status: NO_STORAGE_STATUS })
+        return NextResponse.json({ success: false, detail: decision.sentence }, { status: NO_STORAGE_STATUS })
       }
-    }
-    let useBucketCopy = !routed && pilot.status !== 'saved' && !driveFolderId
-
-    // 3c. When the stage requests a named subfolder (e.g. "1. Company"), resolve it within the old folder. Not found /
-    //     listing failure → file into the root (never block the upload) but LOG it so a misfiled document is visible.
-    let uploadTargetFolderId = driveFolderId
-    if (driveFolderId && targetSubfolder) {
-      const { id: subId, matched } = await resolveSubfolderId(driveFolderId, targetSubfolder)
-      if (matched && subId) {
-        uploadTargetFolderId = subId
-      } else {
-        console.warn(`[flow-upload-document] subfolder "${targetSubfolder}" not found under ${driveFolderId} — filing into the root instead (SD ${serviceDeliveryId})`)
-      }
+      return NextResponse.json({ success: false, detail: NO_STORAGE_REASON_SENTENCE.no_company }, { status: NO_STORAGE_STATUS })
     }
 
     let docFileId: string
     let docLink: string
 
     if (routed) {
-      // Saved in the company's new storage (3-cutover above); its documents row is written, the insert below adds nothing.
+      // Saved in the company's / person's storage (3-cutover above); its documents row is written, the insert below adds nothing.
       docFileId = routed.pointer
       docLink = ''
-    } else if (pilot.status === 'saved') {
-      // Saved in the CRM Store; its documents row is already written (deduplicated on the pointer),
-      // so the insert below finds it and adds nothing.
-      docFileId = pilot.pointer
-      docLink = pilot.link
-    } else if (driveFolderId) {
-      // A company left on its old folder (or, for a flow with no company yet, the contact's linked company folder): copy the file
-      // there. A canonical, deterministic name OVERWRITES any same-named file (upsert) so a re-upload replaces it; un-renamed
-      // uploads keep the historical blind-create behaviour. The folder may be one the storage has since locked: that is NOT an
-      // error for staff (no raw Drive text) — the file simply stays in the upload bucket as its copy.
-      const targetFolderId = uploadTargetFolderId as string
-      let driveFile: { id: string; name: string } | null = null
-      try {
-        if (renameTemplate) {
-          const { uploadBinaryToDriveUpsert } = await import('@/lib/google-drive')
-          driveFile = await uploadBinaryToDriveUpsert(effectiveName, buffer, fileMime, targetFolderId)
-        } else {
-          const { uploadBinaryToDrive } = await import('@/lib/google-drive')
-          driveFile = (await uploadBinaryToDrive(effectiveName, buffer, fileMime, targetFolderId)) as { id: string; name: string }
-        }
-      } catch (e) {
-        if (e instanceof Error && e.name === 'SwitchedCompanyDriveWriteError') {
-          driveFile = null // locked folder: keep the bucket copy below
-        } else {
-          console.error('[flow-upload-document] old-folder upload failed:', e)
-          return NextResponse.json({ success: false, detail: 'The file could not be saved. Please try again.' }, { status: 500 })
-        }
-      }
-      if (driveFile) {
-        docFileId = driveFile.id
-        docLink = `https://drive.google.com/file/d/${driveFile.id}/view`
-      } else {
-        useBucketCopy = true
-        docFileId = `storage:${storagePath}`
-        const { data: signed } = await supabaseAdmin.storage
-          .from('onboarding-uploads')
-          .createSignedUrl(storagePath, 60 * 60 * 24 * 365)
-        docLink = signed?.signedUrl ?? `onboarding-uploads/${storagePath}`
-      }
     } else {
-      // Sandbox only (no live Drive): the file already lives in onboarding-uploads from the signed-URL PUT — keep it (do NOT
-      // delete it in step 8) behind a per-upload-unique synthetic id that doubles as the idempotency key.
-      docFileId = `storage:${storagePath}`
-      const { data: signed } = await supabaseAdmin.storage
-        .from('onboarding-uploads')
-        .createSignedUrl(storagePath, 60 * 60 * 24 * 365) // 1 year
-      docLink = signed?.signedUrl ?? `onboarding-uploads/${storagePath}`
+      // Saved in the CRM Store pilot; its documents row is already written (deduplicated on the pointer),
+      // so the insert below finds it and adds nothing.
+      docFileId = (pilot as { pointer: string }).pointer
+      docLink = (pilot as { link: string }).link
     }
 
     // 5. Insert documents row (idempotent on drive_file_id), stamped with the flow.
@@ -549,12 +471,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
     }
 
-    // 8. Best-effort staged-file cleanup — only once the file is saved elsewhere (CRM storage or the old folder), here at the
-    //    very end of the request (after the advance / company creation), never before that copy is the one that counts.
-    //    In the sandbox-only bucket path the bucket object IS the document, so it must be kept.
-    if (!useBucketCopy) {
-      supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
-    }
+    // 8. Best-effort staged-file cleanup — only once the file is saved in the CRM storage, here at the very end of the request
+    //    (after the advance / company creation), never before that copy is the one that counts.
+    supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
 
     // Staff-facing summary: what the ITIN finalize actually did (or why not).
     let detail = `${effectiveName} uploaded`

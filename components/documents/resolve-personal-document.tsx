@@ -25,42 +25,27 @@ import { toggleDocumentPortalVisibility, listAccountContactsForDocumentResolutio
  * could then be shared normally by an unrelated later click with the
  * intended follow-through silently dropped.
  *
- * Folder-filing is a SEPARATE, later, non-blocking step (see
- * FileIntoFolderPrompt below) — never a precondition for sharing. An earlier
- * draft bundled "move to folder" into the same confirm as the share itself,
- * reusing the account's Drive move endpoint; that endpoint's side effect of
- * re-syncing the document's category to match the destination folder would
- * have silently turned OFF the very guard this whole feature exists to
- * satisfy (the guard checks category === 2 — moving to any other folder, or
- * to no folder because no exact match existed, would flip that check to
- * "not personal" regardless of whether an owner was actually confirmed).
- * Closed by never letting this flow's folder step touch category at all
- * (see the `preserveCategory` flag on the move route).
+ * Stop Drive S2: the old "file it in the right Drive folder" step that followed a share is gone (Google Drive is read-only; the
+ * Drive move route was removed). Sharing never changes the document's category.
  */
 
 interface Props {
   documentId: string
-  driveFileId: string
   accountId: string
   confidence: string | null
   updatedAt: string | null
-  /** The account's real top-level Drive folders, already fetched by the caller. */
-  folders: { id: string; name: string }[]
   onResolved: () => void
   onCancel: () => void
 }
 
-const PERSONAL_FOLDER_NAME = '2. Contacts'
-
 export function ResolvePersonalDocument({
-  documentId, driveFileId, accountId, confidence, updatedAt, folders, onResolved, onCancel,
+  documentId, accountId, confidence, updatedAt, onResolved, onCancel,
 }: Props) {
   const [contacts, setContacts] = useState<{ id: string; full_name: string }[]>([])
   const [loadingContacts, setLoadingContacts] = useState(true)
   const [contactsError, setContactsError] = useState(false)
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [justShared, setJustShared] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -82,7 +67,7 @@ export function ResolvePersonalDocument({
       })
       if (result.success) {
         toast.success('Shared with the client')
-        setJustShared(true)
+        onResolved()
       } else {
         toast.error(result.error || 'Failed to share the document')
         onResolved() // refetch — state may have changed under us
@@ -90,17 +75,6 @@ export function ResolvePersonalDocument({
     } finally {
       setSubmitting(false)
     }
-  }
-
-  if (justShared) {
-    return (
-      <FileIntoFolderPrompt
-        driveFileId={driveFileId}
-        accountId={accountId}
-        folders={folders}
-        onDone={onResolved}
-      />
-    )
   }
 
   const confidenceIsLow = confidence === 'low'
@@ -162,79 +136,6 @@ export function ResolvePersonalDocument({
         </button>
         <button type="button" onClick={onCancel} className="text-zinc-400 hover:text-zinc-600" aria-label="Cancel">
           <X className="h-4 w-4" />
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function FileIntoFolderPrompt({
-  driveFileId, accountId, folders, onDone,
-}: {
-  driveFileId: string
-  accountId: string
-  folders: { id: string; name: string }[]
-  onDone: () => void
-}) {
-  const suggested = folders.find((f) => f.name === PERSONAL_FOLDER_NAME) ?? null
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(suggested?.id ?? null)
-  const [moving, setMoving] = useState(false)
-
-  const move = async () => {
-    if (!selectedFolderId) return
-    const folder = folders.find((f) => f.id === selectedFolderId)
-    setMoving(true)
-    try {
-      const res = await fetch(`/api/accounts/${accountId}/files/move`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileId: driveFileId,
-          targetFolderId: selectedFolderId,
-          targetFolderName: folder?.name,
-          preserveCategory: true,
-        }),
-      })
-      const data = await res.json().catch(() => ({}) as { error?: string })
-      if (res.ok && data && (data as { success?: boolean }).success) {
-        toast.success('Filed in the right folder')
-      } else {
-        toast.error((data as { error?: string }).error || `Couldn't move the file (server error ${res.status})`)
-      }
-    } finally {
-      setMoving(false)
-      onDone()
-    }
-  }
-
-  return (
-    <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm space-y-2">
-      <p className="font-medium text-zinc-800">Shared. File it in the right folder?</p>
-      {folders.length === 0 ? (
-        <p className="text-zinc-500">Couldn&apos;t load this account&apos;s folders — you can file it later from the file list.</p>
-      ) : (
-        <select
-          className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm"
-          value={selectedFolderId ?? ''}
-          onChange={(e) => setSelectedFolderId(e.target.value || null)}
-        >
-          <option value="">Choose a folder…</option>
-          {folders.map((f) => (
-            <option key={f.id} value={f.id}>{f.name}</option>
-          ))}
-        </select>
-      )}
-      <div className="flex items-center justify-between pt-1">
-        <button
-          type="button"
-          disabled={!selectedFolderId || moving}
-          onClick={move}
-          className="rounded-md bg-green-600 px-3 py-1 text-white disabled:opacity-50"
-        >
-          {moving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'File it'}
-        </button>
-        <button type="button" onClick={onDone} className="text-xs text-zinc-400 underline hover:text-zinc-600">
-          Skip for now
         </button>
       </div>
     </div>

@@ -1,6 +1,6 @@
 /**
  * Stop Drive S1d: processOfferSigned — the signed contract's Drive branch, one real run per company state.
- * storage = storage (zero Drive calls) · left-on-Drive company = Drive as before · Closed / no folder = "error: …" + ONE alarm
+ * storage = storage (zero Drive calls) · left-on-Drive company = FROZEN (Stop Drive S2) · Closed / no folder = "error: …" + ONE alarm
  * (the result must stay an error — it used to be overwritten by a later "skipped").
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -49,13 +49,13 @@ describe('processOfferSigned — the signed contract', () => {
     expect(String(r.body.drive_upload)).toMatch(/^ok: store:/)
     expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
   })
-  it('left-on-Drive company (Offboarding, folder, no storage): still filed in Drive', async () => {
+  it('left-on-Drive company (Offboarding, folder, no storage) is frozen (Stop Drive S2): an error result + ONE alarm, nothing written in Drive', async () => {
     acct('Offboarding', 'F-rebis')
     const { processOfferSigned } = await import('@/lib/offers/process-offer-signed')
     const r = await processOfferSigned('tok')
-    expect(String(r.body.drive_upload)).toMatch(/^ok:/)
-    expect(st.driveWrites.join(' ')).toContain('F-rebis')
-    expect(st.alarms).toEqual([])
+    expect(String(r.body.drive_upload)).toMatch(/^error: .*read-only/)
+    expect(st.driveWrites).toEqual([])
+    expect(st.alarms.map((a) => a.kind)).toEqual(['drive_write_refused'])
   })
   it.each([['Closed', 'F-old', /company is closed/], ['Cancelled', 'F-old', /company is closed/], ['Active', null, /no document storage/]] as const)('%s company (folder %s): "error: …" stays an error, nothing written in Drive, ONE alarm', async (status, folder, msg) => {
     acct(status, folder as string | null)

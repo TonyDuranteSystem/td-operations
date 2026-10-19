@@ -124,17 +124,16 @@ describe("portal documents upload", () => {
     expect(state.removed).toContain("portal-uploads/p/x.pdf")
   })
 
-  it("a company left on its old folder (Active, folder, no storage) carries on exactly as before: uploaded there, record written", async () => {
+  it("a company left on its old folder (Active, folder, no storage) is FROZEN (Stop Drive S2): refused, no Drive call, no record written", async () => {
     state.route = "drive"
-    state.driveMode = "record"
     state.rows.accounts = ACCOUNT_OLD_FOLDER
-    state.rows.documents = { id: "doc-drive-1" }
     const { POST } = await import("@/app/api/portal/documents/upload/route")
     const res = await POST(json(body))
-    expect(res.status).toBe(200)
-    expect(state.driveCalls).toEqual(["uploadBinaryToDrive"])
-    const ins = state.recorded.find((r) => r.table === "documents" && r.op === "insert")
-    expect(ins?.payload).toMatchObject({ account_id: "acct-1", drive_file_id: "drive-file-1", status: "classified" })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: CLIENT_NO_STORAGE_SENTENCE })
+    expect(state.driveCalls).toEqual([])
+    expect(state.recorded.filter((r) => r.table === "documents")).toEqual([])
+    expect(state.removed).toContain("portal-uploads/p/x.pdf")
   })
 })
 
@@ -170,15 +169,14 @@ describe("workflow task file upload", () => {
     expect(state.driveCalls).toEqual([])
   })
 
-  it("a company left on its old folder: uploaded there under the sub-folder chain, the old link shape returned", async () => {
+  it("a company left on its old folder is frozen (Stop Drive S2): the true sentence, zero Drive calls", async () => {
     state.route = "drive"
-    state.driveMode = "record"
     state.rows.accounts = { id: "acct-1", company_name: "Acme LLC", ...ACCOUNT_OLD_FOLDER }
     const { POST } = await import("@/app/api/workflows/upload-task-file/route")
     const res = await POST(form())
-    expect(res.status).toBe(200)
-    expect(await res.json()).toMatchObject({ file_id: "drive-file-1", drive_url: "https://drive.google.com/file/d/drive-file-1/view" })
-    expect(state.driveCalls).toContain("uploadBinaryToDrive")
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: NO_STORAGE_REASON_SENTENCE.frozen })
+    expect(state.driveCalls).toEqual([])
   })
 
   it("the stored-file answer (drive_url null) is what the workflow upload field handles: it only reads file_id / file_name", async () => {
@@ -216,15 +214,16 @@ describe("lease regeneration routes", () => {
     expect(state.recorded.filter((r) => r.table === "lease_agreements")).toEqual([])
   })
 
-  it("regen-lease-pdf, company left on its old folder: re-uploaded there as before", async () => {
+  it("regen-lease-pdf, company left on its old folder is frozen (Stop Drive S2): refused, lease row untouched, zero Drive calls", async () => {
     state.route = "drive"
-    state.driveMode = "record"
     state.rows.accounts = ACCOUNT_OLD_FOLDER
     state.rows.documents = null
     const { POST } = await import("@/app/api/crm/admin-actions/regen-lease-pdf/route")
     const res = await POST(json({ lease_id: "lease-1" }))
-    expect(res.status).toBe(200)
-    expect(state.driveCalls).toContain("uploadBinaryToDriveUpsert")
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: NO_STORAGE_REASON_SENTENCE.frozen })
+    expect(state.driveCalls).toEqual([])
+    expect(state.recorded.filter((r) => r.table === "lease_agreements")).toEqual([])
   })
 
   it("lease-regen-drive, storage company: filed, zero Drive calls", async () => {
@@ -246,14 +245,14 @@ describe("lease regeneration routes", () => {
     expect(state.driveCalls).toEqual([])
   })
 
-  it("lease-regen-drive, company left on its old folder: carries on there", async () => {
+  it("lease-regen-drive, company left on its old folder is frozen (Stop Drive S2): the true sentence, zero Drive calls", async () => {
     state.route = "drive"
-    state.driveMode = "record"
     state.rows.accounts = ACCOUNT_OLD_FOLDER
     const { POST } = await import("@/app/api/lease-regen-drive/route")
     const res = await POST(json({ lease_id: "lease-1", token: "tok" }))
-    expect(res.status).toBe(200)
-    expect(state.driveCalls).toContain("uploadBinaryToDriveUpsert")
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: NO_STORAGE_REASON_SENTENCE.frozen })
+    expect(state.driveCalls).toEqual([])
   })
 })
 
@@ -280,15 +279,16 @@ describe("staff account document upload", () => {
     expect(state.removed).toContain("onboarding-uploads/p/x.pdf")
   })
 
-  it("company left on its old folder: uploaded there as before", async () => {
+  it("company left on its old folder is frozen (Stop Drive S2): the true sentence (409), zero Drive calls, staged file removed", async () => {
     state.route = "drive"
-    state.driveMode = "record"
     state.rows.accounts = { company_name: "Acme LLC", ...ACCOUNT_OLD_FOLDER }
     state.rows.documents = []
     const { POST } = await import("@/app/api/crm/admin-actions/upload-account-document/route")
     const res = await POST(json(body))
-    expect((await res.json()).success).toBe(true)
-    expect(state.driveCalls).toContain("uploadBinaryToDrive")
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, detail: NO_STORAGE_REASON_SENTENCE.frozen })
+    expect(state.driveCalls).toEqual([])
+    expect(state.removed).toContain("onboarding-uploads/p/x.pdf")
   })
 })
 
@@ -321,13 +321,13 @@ describe("DBA document upload", () => {
     expect(state.removed).toContain("onboarding-uploads/p/dba.pdf")
   })
 
-  it("company left on its old folder: uploaded there as before", async () => {
+  it("company left on its old folder is frozen (Stop Drive S2): the true sentence (409), zero Drive calls", async () => {
     state.route = "drive"
-    state.driveMode = "record"
     state.rows.accounts = ACCOUNT_OLD_FOLDER
     const res = await call()
-    expect(res.status).toBe(200)
-    expect(state.driveCalls).toContain("uploadBinaryToDrive")
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, detail: NO_STORAGE_REASON_SENTENCE.frozen })
+    expect(state.driveCalls).toEqual([])
   })
 })
 
@@ -391,9 +391,9 @@ describe("a company being MOVED on the lease routes: a clean 409 'try again', ne
 })
 
 describe("flow upload for a company left on its old folder (folder, no storage) — consistent with the other routes", () => {
-  it("the decision helper is the single rule: Active + folder → its folder; Closed/Cancelled/no folder → refused", async () => {
+  it("the decision helper is the single rule (Stop Drive S2): everything is refused, with the true reason — Active + folder is 'frozen'", async () => {
     const { decideNoStorage } = await import("@/lib/crm-store/no-storage")
-    expect(decideNoStorage(ACCOUNT_OLD_FOLDER).route).toBe("drive")
+    expect(decideNoStorage(ACCOUNT_OLD_FOLDER)).toMatchObject({ route: "refuse", reason: "frozen" })
     expect(decideNoStorage(ACCOUNT_CLOSED_WITH_FOLDER).route).toBe("refuse")
     expect(decideNoStorage(ACCOUNT_REFUSED).route).toBe("refuse")
   })

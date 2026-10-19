@@ -32,7 +32,7 @@ async function main() {
   process.env.GOOGLE_SHARED_DRIVE_ID = TEST_DRIVE
   delete process.env.STORE_BACKUP_ENABLED
   const { supabaseAdmin } = await import("@/lib/supabase-admin")
-  const drive = await import("@/lib/google-drive")
+  const drive = await (await import("./_drive-fixture")).driveFixture()
   const { saveBytesToStore } = await import("@/lib/crm-store/writer")
   const { trashFile: storeTrash, restoreBatch, purgeExpiredStore, purgeIO } = await import("@/lib/crm-store/folders")
   const { backupOwner, backupIO, sweepBackups } = await import("@/lib/crm-store/backup")

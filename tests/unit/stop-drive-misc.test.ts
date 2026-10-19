@@ -1,7 +1,7 @@
 /**
  * Stop Drive, slice S1c fix round:
- *  - Calendar "Mark filed" (fileRenewal) and the flow upload agree: storage company → storage; company left on its old folder →
- *    its folder; anything else → the one sentence, before anything is written;
+ *  - Calendar "Mark filed" (fileRenewal) and the flow upload agree: storage company → storage; anything else (including a company
+ *    frozen on its old Drive folder, Stop Drive S2) → the one sentence, before anything is written;
  *  - save-signed: a plain refusal is a 409 and raises NO system error; a real failure still does;
  *  - the lease page's regenerate: the refusal comes BEFORE the lease row is changed;
  *  - the e-sign reconciliation cron re-files completed envelopes that were not filed.
@@ -78,12 +78,13 @@ describe("fileRenewal (Calendar 'Mark filed') — same rule as the flow upload",
     expect((await fileRenewal(params())).error).toBe("This company is closed, so nothing new can be saved for it.")
     expect(state.driveCalls).toEqual([])
   })
-  it("a company left on its old folder: the receipt goes to its folder (Compliance), as before", async () => {
+  it("a company left on its old folder is frozen (Stop Drive S2): the filing fails with the true sentence, zero Drive calls", async () => {
     state.rows.accounts = account(ACCOUNT_OLD_FOLDER)
     const { fileRenewal } = await import("@/lib/operations/file-renewal")
-    await fileRenewal(params())
-    expect(state.driveCalls).toContain("ensureDrivePath")
-    expect(state.driveCalls).toContain("uploadBinaryToDriveUpsert")
+    const r = await fileRenewal(params())
+    expect(r.success).toBe(false)
+    expect(r.error).toMatch(/read-only/)
+    expect(state.driveCalls).toEqual([])
   })
 })
 
@@ -139,10 +140,12 @@ describe("lease regenerate (page) — refusal before the lease row changes", () 
     expect(res.status).toBe(200)
     expect(state.recorded.find((r) => r.table === "lease_agreements" && r.op === "update")?.payload).toEqual({ pdf_storage_path: "tok/new.pdf" })
   })
-  it("a company left on its old folder: the lease row is updated (its folder takes the copy)", async () => {
+  it("a company left on its old folder is frozen (Stop Drive S2): refused BEFORE the lease row changes (409, the true sentence)", async () => {
     state.rows.accounts = ACCOUNT_OLD_FOLDER
     const res = await regen()
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/read-only/)
+    expect(state.recorded.filter((r) => r.table === "lease_agreements")).toEqual([])
   })
 
   it("a company being MOVED: refused BEFORE the lease row changes (409 'try again')", async () => {

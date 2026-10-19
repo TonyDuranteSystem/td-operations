@@ -20,7 +20,6 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { ensureDrivePath, uploadBinaryToDriveUpsert } from "@/lib/google-drive"
 import { completeSD, createSD } from "@/lib/operations/service-delivery"
 import { anniversaryForYear } from "@/lib/operations/renewal-dates"
 import { createPortalNotification } from "@/lib/portal/notifications"
@@ -244,8 +243,8 @@ export async function fileRenewal(
       const cycleDueDate = storedDate ? anniversaryForYear(storedDate, year) : params.filed_date
       const targetFilename = buildRenewalFilename(params.kind, year)
 
-      // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has the receipt saved
-      // in the new storage (listed in its documents) and needs no Drive folder; a company still on Drive carries on below.
+      // Where do this company's files live? (Drive cutover, dev job ad09ea91.) The receipt is saved in the
+      // company's storage (listed in its documents).
       const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
       const routed = await saveDocumentForAccount({
         accountId: account.id, name: targetFilename, bytes: Buffer.from(params.receipt.data), mimeType: params.receipt.mime_type || "application/pdf",
@@ -255,79 +254,15 @@ export async function fileRenewal(
         portalVisible: true,
         row: { document_type_name: DOC_TYPE_NAME_BY_KIND[params.kind], category_name: "Compliance", status: "processed" },
       })
-      let receiptFileId: string
-      let driveLink: string
-      let docRowId: string
-      if (routed.route === "store") {
-        receiptFileId = routed.pointer
-        docRowId = routed.documentRowId
-        driveLink = `/api/documents/${routed.documentRowId}/preview`
-      } else {
-        // No storage: a company left on its old folder (not finished, has a folder) carries on there, exactly as the flow
-        // upload does; everyone else gets the one plain sentence — before anything is written.
+      if (routed.route !== "store") {
+        // No storage: Stop Drive S2 — nothing is ever written to Drive, so the company gets the one plain sentence with the true
+        // reason, before anything is changed (the receipt stays with the caller; filing it again works once the company has storage).
         const { decideNoStorage } = await import("@/lib/crm-store/no-storage")
-        const decision = decideNoStorage(account as { status?: string | null; drive_folder_id?: string | null; gdrive_folder_url?: string | null })
-        if (decision.route === "refuse") throw new Error(decision.sentence)
-        const oldFolderId = decision.folderId
-
-        // 2. Ensure Compliance/ subfolder under the account folder (per SOP v7.0)
-        const complianceFolderId = await ensureDrivePath(oldFolderId, [
-          "Compliance",
-        ])
-
-        // 3. Upload receipt with SOP filename
-        // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
-        const upload = (await uploadBinaryToDriveUpsert(
-          targetFilename,
-          params.receipt.data,
-          params.receipt.mime_type || "application/pdf",
-          complianceFolderId,
-        )) as { id: string; name: string }
-        receiptFileId = upload.id
-        driveLink = `https://drive.google.com/file/d/${upload.id}/view`
-
-        // 4. Record the documents row — UPSERT by drive_file_id. The Drive
-        // upload upserts by filename and returns the SAME file id when the
-        // receipt was stored by an earlier filing, so a plain insert hit the
-        // unique constraint and failed the whole action AFTER the upload
-        // (prod error on DeP Consulting, 2026-08-07). Refresh the existing
-        // row instead.
-        const docFields = {
-          file_name: targetFilename,
-          mime_type: params.receipt.mime_type || "application/pdf",
-          drive_link: driveLink,
-          drive_parent_folder_id: complianceFolderId,
-          document_type_name: DOC_TYPE_NAME_BY_KIND[params.kind],
-          category_name: "Compliance",
-          account_id: account.id,
-          portal_visible: true,
-          status: "processed",
-          processed_at: new Date().toISOString(),
-        }
-        const { data: existingDoc } = await supabaseAdmin
-          .from("documents")
-          .select("id")
-          .eq("drive_file_id", upload.id)
-          .maybeSingle()
-        if (existingDoc) {
-          const { error: updErr } = await supabaseAdmin
-            .from("documents")
-            .update(docFields)
-            .eq("id", existingDoc.id)
-          if (updErr) throw new Error(`Failed to update documents row: ${updErr.message}`)
-          docRowId = existingDoc.id
-        } else {
-          const { data: docRow, error: docErr } = await supabaseAdmin
-            .from("documents")
-            .insert({ drive_file_id: upload.id, ...docFields })
-            .select("id")
-            .single()
-          if (docErr || !docRow) {
-            throw new Error(`Failed to insert documents row: ${docErr?.message ?? "unknown"}`)
-          }
-          docRowId = docRow.id
-        }
+        throw new Error(decideNoStorage(account as { status?: string | null; drive_folder_id?: string | null; gdrive_folder_url?: string | null }).sentence)
       }
+      const receiptFileId = routed.pointer
+      const docRowId = routed.documentRowId
+      const driveLink = `/api/documents/${routed.documentRowId}/preview`
 
       // 5. Resolve / create the SD, then complete it.
       // completeSD → advanceServiceDelivery → triggers +1y rollover on

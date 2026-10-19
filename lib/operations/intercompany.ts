@@ -24,8 +24,6 @@ import {
   generateIntercompanyAgreementPDF,
   type IntercompanyAgreementInput,
 } from "@/lib/pdf/intercompany-agreement-pdf"
-import { uploadBinaryToDrive } from "@/lib/google-drive"
-import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { logAction } from "@/lib/mcp/action-log"
 
 // ─── Types ───
@@ -217,7 +215,7 @@ export async function generateIntercompanyForAccount(
   const fileName = `Intercompany Transfer Agreement - ${account.company_name} - ${assembled.input.treasuryCompanyName}.pdf`
 
   // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its agreement saved
-  // in the new storage (and listed in its documents) and needs no Drive folder; a company still on Drive carries on below.
+  // in the storage (and listed in its documents); a company with no storage is refused below.
   {
     const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
     let routed
@@ -251,51 +249,8 @@ export async function generateIntercompanyForAccount(
     }
   }
 
-  // Stop Drive (dev job 264bb882, S1d): the Drive path is only for a company deliberately left on Drive (folder, no storage,
-  // not closed). Any other state is an error for the caller plus a staff alarm — nothing is written.
+  // Stop Drive S2: nothing is ever written to Drive. A company with no storage is an error for the caller plus a staff alarm.
   const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
   const legacy = await legacyDriveForAccount(accountId)
-  if (!legacy.allowed) {
-    return { error: await raiseDriveWriteRefused({ flow: "intercompany", accountId, reason: legacy.reason, detail: fileName }) }
-  }
-
-  let driveFileId: string | undefined
-  try {
-    const uploaded = await uploadBinaryToDrive(fileName, Buffer.from(pdfBytes), "application/pdf", legacy.folderId)
-    driveFileId = uploaded?.id
-  } catch (err) {
-    return { error: `Drive upload failed: ${err instanceof Error ? err.message : String(err)}` }
-  }
-
-  const docResult = await autoSaveDocument({
-    accountId,
-    fileName,
-    documentType: "Intercompany Transfer Agreement",
-    category: 1, // Company
-    driveFileId,
-    portalVisible: true,
-  })
-  if (docResult.error) {
-    // Drive upload succeeded — surface the partial failure rather than a rollback.
-    return { error: `PDF uploaded to Drive (${driveFileId}) but registering the document failed: ${docResult.error}` }
-  }
-
-  logAction({
-    actor: opts.actor ?? "crm-admin",
-    action_type: "create",
-    table_name: "documents",
-    record_id: docResult.id,
-    account_id: accountId,
-    summary: `Generated Intercompany Transfer Agreement for ${account.company_name} ↔ ${assembled.input.treasuryCompanyName} (${assembled.input.treasuryOwnershipPct}%) from CRM data`,
-    details: { drive_file_id: driveFileId, effective_date: effectiveDate, source: "crm-button" },
-  })
-
-  return {
-    success: true,
-    file_name: fileName,
-    drive_file_id: driveFileId,
-    document_id: docResult.id,
-    treasury_company: assembled.input.treasuryCompanyName,
-    ownership_pct: assembled.input.treasuryOwnershipPct,
-  }
+  return { error: await raiseDriveWriteRefused({ flow: "intercompany", accountId, reason: legacy.reason, detail: fileName }) }
 }

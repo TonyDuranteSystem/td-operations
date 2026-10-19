@@ -6,7 +6,7 @@
  *
  * Flow:
  * 1. Download from Supabase Storage
- * 2. Upload to contact's Drive folder (correct subfolder by category)
+ * 2. Save into the CRM storage (the person's own, or the linked company's, by category) — Stop Drive S2: never Google Drive
  * 3. If passport: OCR → parse MRZ → update contact record
  * 4. Create document record in DB
  */
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
     // Get contact info
     const { data: contact } = await supabaseAdmin
       .from('contacts')
-      .select('full_name, gdrive_folder_url')
+      .select('full_name')
       .eq('id', contactId)
       .single()
 
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
 
     // Where do these files live? (Drive cutover, dev job ad09ea91.) A person's OWN documents (category Contacts) go to
     // their personal storage when it is live; a company document goes to the linked company's storage when that company
-    // is switched. Anything else carries on with Drive exactly as before, below.
+    // is in storage. Anything else is refused with one plain sentence below (nothing is written to Drive).
     let stored: { pointer: string; documentRowId: string } | null = null
     {
       const { saveDocumentForContact, saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
@@ -117,68 +117,26 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    let driveFile: { id: string; name: string }
-    if (stored) {
-      driveFile = { id: stored.pointer, name: fileName }
-      // the client is told about the new document exactly as for a Drive upload (the record already exists, so the
-      // Drive-path insert below is skipped)
-      const { notifyClientsOfNewDocument } = await import('@/lib/portal/document-alerts')
-      notifyClientsOfNewDocument(stored.documentRowId).catch((e) =>
-        console.warn('[upload-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
-    } else {
-    // Stop Drive (dev job 264bb882, S1d): a Drive upload is only for a person / company deliberately left on Drive (folder, no
-    // storage, company not closed). Anyone else is refused with one plain sentence — nothing is written.
-    {
+    if (!stored) {
+      // Stop Drive S2: nothing is ever written to Drive. Anyone without a storage to receive the file is refused with one plain
+      // sentence — nothing is written. (A staff action: the person who clicked is told right here, so no separate alarm.)
       const { legacyDriveForContact, legacyDriveForAccount, LEGACY_REFUSAL_SENTENCE } = await import('@/lib/crm-store/legacy-drive')
       const { data: links } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId).limit(30)
       const verdicts = [await legacyDriveForContact(contactId)]
       for (const l of (links ?? []) as Array<{ account_id: string }>) verdicts.push(await legacyDriveForAccount(l.account_id))
-      if (!verdicts.some((v) => v.allowed)) {
-        const reason = verdicts.find((v) => !v.allowed && v.reason !== 'no_folder' && v.reason !== 'no_company')
-        const why: keyof typeof LEGACY_REFUSAL_SENTENCE = reason && !reason.allowed ? reason.reason : (links ?? []).length === 0 ? 'no_company' : 'no_folder'
-        // a staff action: the person who clicked is told right here, so no separate alarm
-        return NextResponse.json({ success: false, detail: LEGACY_REFUSAL_SENTENCE[why] }, { status: 409 })
-      }
+      const reason = verdicts.find((v) => v.reason !== 'no_folder' && v.reason !== 'no_company')
+      const why: keyof typeof LEGACY_REFUSAL_SENTENCE = reason ? reason.reason : (links ?? []).length === 0 ? 'no_company' : 'no_folder'
+      return NextResponse.json({ success: false, detail: LEGACY_REFUSAL_SENTENCE[why] }, { status: 409 })
     }
-    // Resolve Drive folder
-    let driveFolderId: string | null = null
-
-    if (contact.gdrive_folder_url) {
-      const match = (contact.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
-      if (match) driveFolderId = match[1]
+    const driveFile: { id: string; name: string } = { id: stored.pointer, name: fileName }
+    {
+      // the client is told about the new document exactly as for any upload (the record already exists, so the insert below is skipped)
+      const { notifyClientsOfNewDocument } = await import('@/lib/portal/document-alerts')
+      notifyClientsOfNewDocument(stored.documentRowId).catch((e) =>
+        console.warn('[upload-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
     }
 
-    if (!driveFolderId) {
-      const { data: acLinks } = await supabaseAdmin
-        .from('account_contacts')
-        .select('account_id, accounts:account_id(drive_folder_id)')
-        .eq('contact_id', contactId)
-        .limit(1)
-
-      const acct = acLinks?.[0]?.accounts as unknown as { drive_folder_id: string | null } | null
-      if (acct?.drive_folder_id) driveFolderId = acct.drive_folder_id
-    }
-
-    if (!driveFolderId) {
-      const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
-      const folderResult = await ensureContactFolder(contactId, contact.full_name || 'Unknown')
-      driveFolderId = folderResult.folderId
-    }
-
-    // Find target subfolder
-    const { listFolderAnyDrive, uploadBinaryToDrive } = await import('@/lib/google-drive')
-    const foldersRes = await listFolderAnyDrive(driveFolderId)
-    const folders = (foldersRes as { files?: Array<{ id: string; name: string; mimeType: string }> }).files ?? []
-    const targetFolder = folders.find(
-      (f: { name: string; mimeType: string }) => f.name === catInfo.subfolder && f.mimeType === 'application/vnd.google-apps.folder',
-    )
-    const uploadFolderId = targetFolder?.id || driveFolderId
-
-    // Upload to Drive
-    driveFile = await uploadBinaryToDrive(fileName, buffer, fileMime, uploadFolderId) as { id: string; name: string }
-    }
-
-    const sideEffects: string[] = [stored ? `Saved to the new storage: ${fileName}` : `Uploaded to Drive: ${fileName}`]
+    const sideEffects: string[] = [`Saved to the new storage: ${fileName}`]
 
     // Get linked account
     const { data: acLink } = await supabaseAdmin

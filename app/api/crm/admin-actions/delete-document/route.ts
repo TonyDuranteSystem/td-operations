@@ -1,9 +1,8 @@
 /**
  * POST /api/crm/admin-actions/delete-document
  *
- * Admin-only. Deletes a document: removes from documents table + trashes on
- * Google Drive. Soft delete — file recoverable from Drive trash within 30
- * days. The DB row is hard-deleted.
+ * Admin-only. Deletes a document: a CRM Storage file goes to the storage trash; a raw Google Drive record only loses its CRM
+ * listing (Stop Drive S2: Drive is a read-only archive, the Drive file is never trashed). The DB row is hard-deleted.
  *
  * Body: { document_id }
  *
@@ -66,19 +65,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, detail: `Moved to the trash (recoverable for 90 days): ${doc.file_name}` })
     }
 
-    let driveTrashed = false
-
-    // Trash on Google Drive (soft delete — recoverable from trash)
-    if (doc.drive_file_id) {
-      try {
-        const { trashFile } = await import('@/lib/google-drive')
-        await trashFile(doc.drive_file_id)
-        driveTrashed = true
-      } catch (driveErr) {
-        // Drive deletion is best-effort — continue with DB deletion
-        console.warn(`[delete-document] Drive trash failed for ${doc.drive_file_id}:`, driveErr)
-      }
-    }
+    // Stop Drive S2: the Google Drive file (a raw archive record) is NEVER touched — only the CRM listing is removed.
 
     // Delete from documents table
     await supabaseAdmin
@@ -97,7 +84,6 @@ export async function POST(req: NextRequest) {
       details: {
         file_name: doc.file_name,
         drive_file_id: doc.drive_file_id,
-        drive_trashed: driveTrashed,
         document_type: doc.document_type_name,
       },
     })

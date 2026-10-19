@@ -13,7 +13,7 @@ async function main() {
   let pass = 0, fail = 0
   const ck = (id: string, ok: boolean, note?: unknown) => { if (ok) pass++; else fail++; console.log(ok ? "PASS" : "FAIL", id, ok ? "" : JSON.stringify(note)) }
   const q = async (sql: string, p: unknown[] = []) => (await db.query(sql, p)).rows
-  const drive = await import("@/lib/google-drive")
+  const drive = await (await import("../_drive-fixture")).driveFixture()
   const { backupOwner } = await import("@/lib/crm-store/backup")
 
   // an "old" folder (stands for the client's old Drive folder) and the NEW roots

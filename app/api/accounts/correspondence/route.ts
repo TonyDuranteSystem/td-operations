@@ -1,7 +1,7 @@
 /**
  * POST /api/accounts/correspondence
  * Upload a correspondence document for a client (account or contact).
- * - Uploads file to Drive → {account_folder}/Correspondence/
+ * - Saves the file in the company's CRM storage (Correspondence) — never Google Drive (Stop Drive S2)
  * - Saves record in client_correspondence table (unread)
  * - Sends portal chat message to notify client
  *
@@ -13,7 +13,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isAdmin } from '@/lib/auth'
-import { uploadBinaryToDrive, createFolder, listFolder } from '@/lib/google-drive'
 import { createPortalNotification } from '@/lib/portal/notifications'
 import { isContactLinkedToAccount } from '@/lib/portal/admin-send-scope'
 
@@ -57,11 +56,11 @@ export async function POST(req: NextRequest) {
   let driveFileUrl: string | null = null
   let resolvedContactId = contactId
 
-  // Upload to Drive if account has a folder
+  // Save the file in the company's storage
   if (accountId) {
     // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company switched to the new storage keeps
     // its correspondence there: the file is stored, and the client opens it through the portal's own download route
-    // (the portal checks the client's access) — never a Drive link. A company still on Drive carries on as before.
+    // (the portal checks the client's access) — never a Drive link. A company with no storage is refused with one plain sentence (Stop Drive S2).
     let savedInStorage = false
     try {
       const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
@@ -89,27 +88,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: e instanceof Error ? e.message : 'Could not save the file — please try again.' }, { status: 500 })
     }
 
-    const { data: account } = savedInStorage
-      ? { data: null }
-      : await supabaseAdmin
-          .from('accounts')
-          .select('drive_folder_id, company_name')
-          .eq('id', accountId)
-          .single()
-
-    if (account?.drive_folder_id) {
-      // Get or create Correspondence subfolder
-      const folderContents = await listFolder(account.drive_folder_id) as { files: Array<{ id: string; name: string; mimeType: string }> }
-      let correspondenceFolderId = folderContents.files?.find(
-        (f) => f.name === 'Correspondence' && f.mimeType === 'application/vnd.google-apps.folder'
-      )?.id
-      if (!correspondenceFolderId) {
-        const newFolder = await createFolder(account.drive_folder_id, 'Correspondence') as { id: string }
-        correspondenceFolderId = newFolder.id
-      }
-      const uploaded = await uploadBinaryToDrive(fileName, buffer, mimeType, correspondenceFolderId) as { id: string; webViewLink?: string }
-      driveFileId = uploaded.id
-      driveFileUrl = uploaded.webViewLink || `https://drive.google.com/file/d/${uploaded.id}/view`
+    if (!savedInStorage) {
+      // Stop Drive S2: nothing is ever written to Drive. A company with no storage gets one plain sentence with the true reason —
+      // nothing saved, no letter recorded.
+      const { noStorageDecisionFor, NO_STORAGE_STATUS } = await import('@/lib/crm-store/no-storage')
+      const decision = await noStorageDecisionFor(accountId)
+      return NextResponse.json({ error: decision.sentence }, { status: NO_STORAGE_STATUS })
     }
 
     // Resolve contact_id from account if not provided
