@@ -194,7 +194,7 @@ _Regenerated 2026-10-19. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-10-18)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-18)_
-- [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
+- [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-18)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-18)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-18)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-18)_

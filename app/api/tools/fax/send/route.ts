@@ -217,7 +217,39 @@ export async function POST(req: NextRequest) {
   // attachment. Best-effort + AFTER a successful send (so a rejected fax never
   // leaves an orphan file/row — Fax History only lists sent faxes anyway).
   let uploadedDocId: string | null = null
+  let uploadFiledInStorage: { accountId: string; inferred: boolean } | null = null
   if (!documentId && fileBase64) {
+    // Stop Drive (dev job 264bb882, S1d): when the company is known the copy goes into ITS storage (Tax › year, type IRS Fax,
+    // hidden from the client) instead of a company-less bucket copy. See lib/fax/save-sent-upload.ts. A failure is never silent:
+    // ONE alarm, the fax has already gone out, and the old bucket copy below still runs.
+    try {
+      const { createHash } = await import('crypto')
+      const bytes0 = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
+      const { fileSentUpload } = await import('@/lib/fax/save-sent-upload')
+      const filed = await fileSentUpload({
+        accountId, serviceDeliveryId, fileName, bytes: bytes0, mimeType: mimeFromName(fileName), actor: user?.id ?? null,
+        contentHash: createHash('sha256').update(bytes0).digest('hex'),
+      })
+      if (filed.route === 'store') {
+        uploadedDocId = filed.documentRowId
+        uploadFiledInStorage = { accountId: filed.accountId, inferred: filed.inferred }
+        // only a CERTAIN company goes into the activity log: a company guessed from the file name must not land a wrong entry on a client's feed
+        if (!accountId && !filed.inferred) accountId = filed.accountId
+      } else if (filed.reason === 'company_moving') {
+        // a company in the middle of its move: rare and temporary — told once. (A company that simply has no storage — the few left on
+        // Drive, a closed one — is NOT a problem: the old copy is the expected result, so no alarm.)
+        const { reportSystemError } = await import('@/lib/system-errors')
+        await reportSystemError({ source: 'server', route: '/api/tools/fax/send', method: 'POST', message: "A faxed file could not be kept in the company's storage (the company is being moved) — the old copy was kept", context: { fileName, accountId, serviceDeliveryId } })
+      }
+    } catch (e) {
+      try {
+        const { reportSystemError } = await import('@/lib/system-errors')
+        await reportSystemError({ source: 'server', route: '/api/tools/fax/send', method: 'POST', message: `A faxed file could not be kept in the company's storage — ${e instanceof Error ? e.message : String(e)}`, context: { fileName, accountId, serviceDeliveryId } })
+      } catch { /* an alarm never fails a sent fax */ }
+    }
+  }
+  if (!uploadFiledInStorage && !documentId && fileBase64) {
+    const personalPaper = (await import('@/lib/fax/save-sent-upload')).looksPersonal(fileName)
     try {
       const bytes = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
       const safeName = (fileName.replace(/[^\w.\-]+/g, '_').slice(0, 120)) || 'document.pdf'
@@ -239,7 +271,8 @@ export async function POST(req: NextRequest) {
             mime_type: mime,
             file_size: bytes.length,
             status: 'classified',
-            account_id: accountId,
+            // a personal paper (passport, ID, SS-4, 1040 …) is NEVER listed on a company's Documents tab
+            account_id: personalPaper ? null : accountId,
             portal_visible: false,
             notify_client: false,
           })
@@ -273,6 +306,8 @@ export async function POST(req: NextRequest) {
         job_id: result.jobId,
         cover_message: coverMessage || null,
         source: documentId ? 'document' : 'upload',
+        filed_in_storage_of: uploadFiledInStorage?.accountId ?? null,
+        company_inferred_from_file_name: uploadFiledInStorage?.inferred ?? false,
         document_id: documentId ?? uploadedDocId,
         faxage_response: result.raw.slice(0, 500),
       },
