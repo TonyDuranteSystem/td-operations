@@ -21,6 +21,16 @@ import {
   type NameCheck,
   type NameCheckStatus,
 } from '@/lib/flows/name-checks'
+import {
+  approvalCopy,
+  canAddNameAtStage,
+  displayNameFor,
+  firstNamesCopy,
+  nameLoopPolicyFor,
+  newNamesCopy,
+  proposalChatNote,
+  type NameLoopPolicy,
+} from '@/lib/flows/name-loop-policy'
 import { createDecisionRequest } from '@/lib/operations/decision-request'
 import { buildFlowTopic, deriveFlowYear } from '@/lib/flows/resolve-flows'
 import { notifyClientOfAdminMessage } from '@/lib/portal/notifications'
@@ -42,6 +52,10 @@ export type NameAction =
   // Staff types a candidate name directly (client sent one by email/chat).
   // Not tied to an existing row; carries `name` instead of an index.
   | 'add_name'
+  // The very first "send us your names" ask, for services that start with no
+  // names (Company Change Name): only while the list is empty and no such ask is
+  // open. Not tied to a candidate.
+  | 'ask_first_names'
   // Takes a name back from the client (waiting for an answer that is not coming,
   // or sent by mistake): sent_to_client → available, and the open approval
   // request is cancelled so a late answer can no longer flip it.
@@ -114,7 +128,7 @@ async function writeNameChecks(sdId: string, checks: NameCheck[], expectedUpdate
  * told the client "available in New Mexico" here), else "New Mexico".
  * Returns the display NAME ("Wyoming"), normalizing code-shaped values.
  */
-async function resolveState(row: SdRow): Promise<string> {
+async function resolveFormationState(row: SdRow): Promise<string> {
   if (row.account_id) {
     const { data: acct } = await supabaseAdmin
       .from('accounts')
@@ -154,6 +168,34 @@ async function resolveState(row: SdRow): Promise<string> {
   return 'New Mexico'
 }
 
+type StateResult = { ok: true; state: string } | { ok: false; error: string }
+
+/**
+ * The state named in the client-facing message, by the service's rule: Formation uses the
+ * chain above (with its New Mexico fallback, unchanged); a name change uses the company's OWN
+ * state and is REFUSED when it is not on record — a wrong state in a message about a legal
+ * filing is worse than no message.
+ */
+async function resolveStateFor(policy: NameLoopPolicy, row: SdRow): Promise<StateResult> {
+  if (policy.stateRule === 'formation_chain') return { ok: true, state: await resolveFormationState(row) }
+  if (row.account_id) {
+    const { data: acct } = await supabaseAdmin
+      .from('accounts')
+      .select('state_of_formation')
+      .eq('id', row.account_id)
+      .maybeSingle()
+    const raw = typeof acct?.state_of_formation === 'string' ? acct.state_of_formation.trim() : ''
+    if (raw) {
+      const code = normalizeFormationState(raw)
+      return { ok: true, state: code ? FORMATION_STATE_NAMES[code] : raw }
+    }
+  }
+  return {
+    ok: false,
+    error: 'This company has no state of formation on record, so the message to the client cannot name the state. Set the state on the company first.',
+  }
+}
+
 /**
  * Post a heads-up message to the flow chat when a name is sent to the client for
  * approval, so the client sees it in their portal chat alongside the decision
@@ -161,7 +203,7 @@ async function resolveState(row: SdRow): Promise<string> {
  * Best-effort: the decision request is already created — a chat failure here must
  * NOT fail the staff action.
  */
-async function sendNameProposalChatMessage(row: SdRow, displayName: string, state: string, senderId: string | null): Promise<void> {
+async function sendNameProposalChatMessage(policy: NameLoopPolicy, row: SdRow, displayName: string, state: string, senderId: string | null): Promise<void> {
   // portal_messages.sender_id is NOT NULL — without a real sender the insert
   // throws and the best-effort catch below silently drops the message (the bug
   // that left the name-proposal chat note never posting). Skip rather than null.
@@ -178,10 +220,7 @@ async function sendNameProposalChatMessage(row: SdRow, displayName: string, stat
       if (isItalian(contact?.language)) language = 'it'
     }
 
-    const message =
-      language === 'it'
-        ? `Abbiamo verificato i nomi della tua LLC e ${displayName} è disponibile in ${state}. Ti abbiamo inviato una richiesta di conferma — controlla il tuo portale.`
-        : `We checked your LLC names and ${displayName} is available in ${state}. We've sent you a request to confirm — please check your portal.`
+    const message = proposalChatNote(policy, { displayName, state, language })
 
     const topic = buildFlowTopic(row.service_type, deriveFlowYear(row)) || null
 
@@ -235,6 +274,10 @@ async function loadWithChecks(sdId: string): Promise<{ row: SdRow; checks: NameC
 
 /** First-time candidates from the contact's formation wizard (falling back to the formation form submission). */
 async function seedChecksFor(row: SdRow): Promise<NameCheck[]> {
+  // Only a service that starts from a formation wizard seeds from it. A name change must NOT:
+  // the client's old formation names (or the company's current name) would become candidates
+  // that staff could send back to the client.
+  if (!nameLoopPolicyFor(row.service_type)?.seedFromFormationWizard) return []
   let checks: NameCheck[] = []
   if (row.contact_id) {
     const { data: wp } = await supabaseAdmin
@@ -266,6 +309,12 @@ async function seedChecksFor(row: SdRow): Promise<NameCheck[]> {
     checks = initNameChecksFromWizard(wizardData)
   }
   return checks
+}
+
+/** The names-loop rules of an SD's service, or null when the SD (or its service) has no names loop. */
+export async function getNameLoopPolicyForSd(sdId: string): Promise<NameLoopPolicy | null> {
+  const row = await loadSd(sdId)
+  return row ? nameLoopPolicyFor(row.service_type) : null
 }
 
 export interface NameActionResult {
@@ -363,6 +412,22 @@ async function cancelDecisionRequestById(requestId: string, sdId: string): Promi
   }
 }
 
+/** True when a "propose names" (text_input) request for this SD is still pending — the client has not answered the ask yet. */
+async function hasPendingNewNamesRequest(sdId: string): Promise<boolean> {
+  const { data } = await (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_decision_requests not in generated types
+    supabaseAdmin as any
+  )
+    .from('client_decision_requests')
+    .select('id')
+    .eq('service_delivery_id', sdId)
+    .eq('status', 'pending')
+    .eq('request_type', 'text_input')
+    .eq('options->name_check->>kind', 'new_names')
+    .limit(1)
+  return Array.isArray(data) && data.length > 0
+}
+
 /** Apply a staff name action; creates decision requests for send/sos-reject. */
 export async function handleNameAction(params: {
   sdId: string
@@ -384,13 +449,17 @@ export async function handleNameAction(params: {
   const { row, checks } = loaded
   const fresh = row
   const expectedUpdatedAt = fresh.updated_at ?? null
+  // The loop's rules for THIS service (Formation = today's behaviour exactly). A
+  // service with no policy has no names loop at all.
+  const policy = nameLoopPolicyFor(row.service_type)
+  if (!policy) return { ok: false, error: 'Name checks are not available for this service.' }
 
   // add_name: staff types a candidate directly. Only while names are being
   // selected (the server enforces it — the panel hiding the box is not enough),
   // and it retracts any open "propose new names" ask, because that ask is moot
   // the moment staff supply a name (same rule send_to_client already follows).
   if (params.action === 'add_name') {
-    if (fresh.stage !== 'Wizard Submitted') {
+    if (!canAddNameAtStage(policy, fresh.stage)) {
       return { ok: false, error: 'Names can only be added while the case is at the name-selection step (Wizard Submitted).' }
     }
     const added = addStaffName(checks, params.name, new Date().toISOString())
@@ -415,18 +484,41 @@ export async function handleNameAction(params: {
       return { ok: false, error: 'Not every name has been checked yet — mark the rest available or not available before asking the client for new names.' }
     }
     await cancelPendingNewNamesRequests(params.sdId)
+    const copy = newNamesCopy(policy, { reason: 'none_available' })
     const created = await createDecisionRequest({
       service_delivery_id: params.sdId,
       request_type: 'text_input',
-      title: 'New LLC Names Needed',
-      message: `Unfortunately none of your proposed LLC names are available. Please propose 3 new LLC names so we can check their availability.`,
-      message_it: `Purtroppo nessuno dei nomi proposti per la tua LLC è disponibile. Proponi 3 nuovi nomi così possiamo verificarne la disponibilità.`,
-      options: {
-        prompt: 'Please propose 3 new LLC names',
-        placeholder: 'NameOne LLC, NameTwo LLC, NameThree LLC',
-        required: true,
-        name_check: { kind: 'new_names' },
-      },
+      title: copy.title,
+      message: copy.message,
+      message_it: copy.message_it,
+      options: copy.options,
+      created_by: params.actor,
+    })
+    if (!created.ok) return { ok: false, error: created.error }
+    return { ok: true, name_checks: checks }
+  }
+
+  // ask_first_names: the very first "send us your names" ask of a service that starts with
+  // none (Company Change Name). Only while the list is empty and no such ask is already open —
+  // the "new names" ask above needs a list whose names are all dead, so an empty list can
+  // never use it (and must not, see allNamesDead).
+  if (params.action === 'ask_first_names') {
+    const copy = firstNamesCopy(policy)
+    if (!copy) return { ok: false, error: 'This service does not ask the client for names.' }
+    if (isClosedCase(row)) return { ok: false, error: 'This case is already finished — nothing can be asked of the client.' }
+    if (checks.length > 0) {
+      return { ok: false, error: 'Names are already on the list. Once every name is used up, ask the client for a new one instead.' }
+    }
+    if (await hasPendingNewNamesRequest(params.sdId)) {
+      return { ok: false, error: 'The client has already been asked for names and has not answered yet.' }
+    }
+    const created = await createDecisionRequest({
+      service_delivery_id: params.sdId,
+      request_type: 'text_input',
+      title: copy.title,
+      message: copy.message,
+      message_it: copy.message_it,
+      options: copy.options,
       created_by: params.actor,
     })
     if (!created.ok) return { ok: false, error: created.error }
@@ -456,9 +548,20 @@ export async function handleNameAction(params: {
     entry.status = simple
     entry.updated_at = now
   } else if (params.action === 'send_to_client') {
-    const state = await resolveState(row)
-    // Hero title = the LLC name (append "LLC" if not already in the name).
-    const displayName = /llc\b/i.test(entry.name) ? entry.name : `${entry.name} LLC`
+    // One name at a time (the service's rule): another name is already with the client,
+    // accepted by them or filed. Formation does not enforce this (policy.oneAtATime is false).
+    if (
+      policy.oneAtATime &&
+      checks.some((c, i) => i !== params.nameIndex && (c.status === 'sent_to_client' || c.status === 'accepted' || c.status === 'filed'))
+    ) {
+      return { ok: false, error: 'Another name is already with the client, accepted or filed. Withdraw it or finish it before sending a different one.' }
+    }
+    const stateResult = await resolveStateFor(policy, row)
+    if (!stateResult.ok) return { ok: false, error: stateResult.error }
+    const state = stateResult.state
+    // Hero title = the name (append "LLC" if not already in the name).
+    const displayName = displayNameFor(entry.name)
+    const copy = approvalCopy(policy, { name: entry.name, state, nameIndex: params.nameIndex })
     // 1. RESERVE the name first (guarded save: status → sent_to_client). If the save
     // conflicts (someone else just acted) nothing has been sent to the client yet.
     // The old order created the client's card, chat note and bell BEFORE this save,
@@ -471,16 +574,10 @@ export async function handleNameAction(params: {
     const created = await createDecisionRequest({
       service_delivery_id: params.sdId,
       request_type: 'approval',
-      title: displayName,
-      message: `We checked your first choice and this name is currently available in ${state}.\n\nWe'd like to proceed with filing this name with the Secretary of State.\n\nPlease note: the final approval is up to the Secretary of State. If they reject this name, we'll try your other choices or you can propose new ones.\n\nDo you approve filing with this name?`,
-      message_it: `Abbiamo verificato la tua prima scelta e questo nome è attualmente disponibile in ${state}.\n\nVorremmo procedere con la registrazione di questo nome presso il Secretary of State.\n\nNota bene: l'approvazione finale spetta al Secretary of State. Se il nome venisse rifiutato, proveremo con le altre opzioni oppure potrai proporne di nuove.\n\nApprovi la registrazione con questo nome?`,
-      options: {
-        approve_label: 'Yes, proceed',
-        reject_label: 'No, use a different name',
-        approve_label_it: 'Sì, procedi',
-        reject_label_it: 'No, usa un altro nome',
-        name_check: { kind: 'approval', name_index: params.nameIndex, name: entry.name },
-      },
+      title: copy.title,
+      message: copy.message,
+      message_it: copy.message_it,
+      options: copy.options,
       created_by: params.actor,
     })
     if (!created.ok) {
@@ -517,7 +614,7 @@ export async function handleNameAction(params: {
     // the client is never shown both at once, and (unlike gating this on the
     // earlier mark_available step) never shown neither in between.
     await cancelPendingNewNamesRequests(params.sdId)
-    await sendNameProposalChatMessage(row, displayName, state, params.actorId ?? null)
+    await sendNameProposalChatMessage(policy, row, displayName, state, params.actorId ?? null)
   } else if (params.action === 'mark_sos_rejected') {
     // Only a name the client accepted or staff filed can be "refused by the
     // state" (enforced above by nameActionProblem). A name still waiting on the
@@ -537,18 +634,14 @@ export async function handleNameAction(params: {
     // time) must send staff back to that sibling first, not the client.
     if (allNamesDead(checks)) {
       await cancelPendingNewNamesRequests(params.sdId)
+      const copy = newNamesCopy(policy, { reason: 'sos_rejected', rejectedName: entry.name })
       const created = await createDecisionRequest({
         service_delivery_id: params.sdId,
         request_type: 'text_input',
-        title: 'New LLC Names Needed',
-        message: `Unfortunately "${entry.name}" was rejected by the Secretary of State. Please propose 3 new LLC names so we can check their availability.`,
-        message_it: `Purtroppo "${entry.name}" è stato rifiutato dal Secretary of State. Proponi 3 nuovi nomi per la tua LLC così possiamo verificarne la disponibilità.`,
-        options: {
-          prompt: 'Please propose 3 new LLC names',
-          placeholder: 'NameOne LLC, NameTwo LLC, NameThree LLC',
-          required: true,
-          name_check: { kind: 'new_names' },
-        },
+        title: copy.title,
+        message: copy.message,
+        message_it: copy.message_it,
+        options: copy.options,
         created_by: params.actor,
       })
       if (!created.ok) return { ok: false, error: `The refusal was recorded, but the request to the client could not be created: ${created.error}. Use "Request New Names from Client".` }
@@ -584,16 +677,19 @@ export async function handleNameAction(params: {
   // is already rejected and the new-names request already created.
   // Skipped when the case is already there: re-"advancing" to the same step
   // would reset its timers and add a bogus history entry.
-  if (params.action === 'mark_sos_rejected' && fresh.stage !== 'Wizard Submitted') {
+  // (Only for a service whose policy says so — Formation. A name change leaves the stage to
+  // staff: "Go back", Antonio's decision 2026-10-19.)
+  const revertTo = policy.revertStageOnSosRejected
+  if (params.action === 'mark_sos_rejected' && revertTo && fresh.stage !== revertTo) {
     try {
       const { advanceServiceDelivery } = await import('@/lib/service-delivery')
       const adv = await advanceServiceDelivery({
         delivery_id: params.sdId,
-        target_stage: 'Wizard Submitted',
+        target_stage: revertTo,
         skip_tasks: true,
         skip_notify: true,
         actor: 'name-sos-rejected',
-        notes: `SOS rejected "${entry.name}" — reverted to Wizard Submitted for name re-selection`,
+        notes: `SOS rejected "${entry.name}" — reverted to ${revertTo} for name re-selection`,
       })
       if (adv && adv.success === false) {
         console.error(`mark_sos_rejected: stage revert refused for SD ${params.sdId}:`, adv.error)

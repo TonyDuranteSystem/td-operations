@@ -134,6 +134,7 @@ function renderComponent(
           serviceDeliveryId={serviceDelivery.id}
           stateOfFormation={account.state_of_formation}
           stage={serviceDelivery.stage}
+          serviceType={serviceDelivery.service_type}
         />
       )
     case 'shipping_info':

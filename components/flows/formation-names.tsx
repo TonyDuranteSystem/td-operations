@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Loader2, ExternalLink, Building2, ArrowRight } from 'lucide-react'
 import { NAME_STATUS_META, hasFiledName, allNamesDead, type NameCheck, type NameCheckStatus } from '@/lib/flows/name-checks'
 import { resolveFormationFilingLink } from '@/lib/flows/state-links'
+import { canAddNameAtStage, nameLoopPolicyFor } from '@/lib/flows/name-loop-policy'
 import type { NameAction } from '@/lib/operations/formation-name-checks'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
@@ -11,6 +12,8 @@ interface FormationNamesProps {
   serviceDeliveryId: string
   stateOfFormation?: string | null
   stage: string | null
+  /** Which service's rules to follow (lib/flows/name-loop-policy.ts). Defaults to Company Formation. */
+  serviceType?: string | null
 }
 
 const BADGE_CLS: Record<NameCheckStatus, string> = {
@@ -31,7 +34,9 @@ const BADGE_CLS: Record<NameCheckStatus, string> = {
  * scenes; the client's answer flips the badge to Accepted/Client rejected. The
  * gated advance unlocks once a name is Filed. Optimistic UI.
  */
-export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: FormationNamesProps) {
+export function FormationNames({ serviceDeliveryId, stateOfFormation, stage, serviceType }: FormationNamesProps) {
+  const policy = nameLoopPolicyFor(serviceType ?? 'Company Formation') ?? nameLoopPolicyFor('Company Formation')!
+  const extras = policy.formationPanelExtras
   const [checks, setChecks] = useState<NameCheck[]>([])
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -40,6 +45,8 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
   const [advancing, setAdvancing] = useState(false)
   const [requestingNames, setRequestingNames] = useState(false)
   const [requestSent, setRequestSent] = useState(false)
+  const [askingFirst, setAskingFirst] = useState(false)
+  const [firstAskSent, setFirstAskSent] = useState(false)
   const [newName, setNewName] = useState('')
   const [addingName, setAddingName] = useState(false)
 
@@ -49,7 +56,7 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
   // State" the selection is DONE: the panel is read-mostly — it shows the filed
   // name with its status and the only corrective action (report a SOS rejection);
   // the other candidates are shown dimmed for reference, with no action buttons.
-  const selectionStage = stage === 'Wizard Submitted'
+  const selectionStage = canAddNameAtStage(policy, stage)
 
   const load = useCallback(async () => {
     setError(null)
@@ -139,6 +146,25 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
     }
   }
 
+  async function askFirstNames() {
+    setAskingFirst(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/name-check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'ask_first_names' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not send the request to the client.')
+      setFirstAskSent(true)
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not send the request to the client.')
+    } finally {
+      setAskingFirst(false)
+    }
+  }
+
   async function requestNewNames() {
     setRequestingNames(true)
     setError(null)
@@ -204,9 +230,11 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
       case 'pending':
         return (
           <>
-            <a href={sos.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
-              <ExternalLink className="h-3 w-3" /> Check on SOS ({sos.stateCode})
-            </a>
+            {extras && (
+              <a href={sos.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+                <ExternalLink className="h-3 w-3" /> Check on SOS ({sos.stateCode})
+              </a>
+            )}
             <Btn onClick={() => act(i, 'mark_available', 'available')} variant="primary">Mark Available</Btn>
             <Btn onClick={() => act(i, 'mark_not_available', 'not_available')}>Mark Not Available</Btn>
           </>
@@ -221,9 +249,11 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
       case 'accepted':
         return (
           <>
-            <a href={sos.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700">
-              <ExternalLink className="h-3 w-3" /> File on SOS ({sos.stateCode}) →
-            </a>
+            {extras && (
+              <a href={sos.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700">
+                <ExternalLink className="h-3 w-3" /> File on SOS ({sos.stateCode}) →
+              </a>
+            )}
             <Btn onClick={() => act(i, 'mark_filed', 'filed')} variant="primary">Mark as Filed</Btn>
             <Btn onClick={() => refuseByState(c, i)} variant="danger">State Refused This Name</Btn>
           </>
@@ -246,8 +276,8 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
     <div className="rounded-xl border border-zinc-200 bg-white p-4">
       <div className="mb-3 flex items-center gap-2">
         <Building2 className="h-4 w-4 text-zinc-400" />
-        <h3 className="text-sm font-semibold text-zinc-900">LLC Name Approval</h3>
-        {sos.defaulted && <span className="text-[11px] text-zinc-400">· defaulted to New Mexico</span>}
+        <h3 className="text-sm font-semibold text-zinc-900">{extras ? 'LLC Name Approval' : 'Company Name Approval'}</h3>
+        {extras && sos.defaulted && <span className="text-[11px] text-zinc-400">· defaulted to New Mexico</span>}
       </div>
 
       {authError ? (
@@ -264,7 +294,25 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
             <p className="flex items-center gap-1.5 text-sm text-zinc-400"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</p>
           )}
           {!error && loaded && checks.length === 0 && (
-            <p className="text-sm text-zinc-500">No names submitted by the client yet.</p>
+            <div className="space-y-2">
+              <p className="text-sm text-zinc-500">No names submitted by the client yet.</p>
+              {policy.firstNamesCount > 0 && !extras && (
+                firstAskSent ? (
+                  <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                    Request sent. The client&apos;s names will appear here as soon as they answer.
+                  </p>
+                ) : (
+                  <button
+                    onClick={askFirstNames}
+                    disabled={askingFirst}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {askingFirst ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+                    Ask the client for names
+                  </button>
+                )
+              )}
+            </div>
           )}
         </>
       )}
@@ -332,7 +380,7 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
         <div className="mt-4 border-t border-zinc-100 pt-3">
           {requestSent ? (
             <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-              Request sent — waiting for the client to propose new names. They&apos;ll appear here once submitted.
+              Request sent — waiting for the client to propose {policy.newNamesCount === 1 ? 'a new name' : 'new names'}. {policy.newNamesCount === 1 ? "It'll" : "They'll"} appear here once submitted.
             </p>
           ) : (
             <>
@@ -342,15 +390,22 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
                 className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {requestingNames ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-                Request New Names from Client
+                {policy.newNamesCount === 1 ? 'Request a New Name from Client' : 'Request New Names from Client'}
               </button>
-              <p className="mt-1.5 text-[11px] text-zinc-400">None of the current names are viable — ask the client to propose 3 new LLC names.</p>
+              <p className="mt-1.5 text-[11px] text-zinc-400">
+                None of the current names are viable — ask the client to propose {policy.newNamesCount === 1 ? 'a new name' : `${policy.newNamesCount} new LLC names`}.
+              </p>
+              {!extras && policy.revertStageOnSosRejected === null && (
+                <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Every name is used up. Once the client has answered, bring the job back to the names step with <strong>Go back</strong> so the Calendar shows whose turn it is.
+                </p>
+              )}
             </>
           )}
         </div>
       )}
 
-      {stage === 'Wizard Submitted' && (
+      {extras && stage === 'Wizard Submitted' && (
         <div className="mt-4 border-t border-zinc-100 pt-3">
           {canAdvance ? (
             <button
