@@ -193,6 +193,7 @@ export async function POST(
       from_email: fromAddressFor(sender),
       account_id: invoice.account_id || null,
       contact_id: invoice.contact_id || null,
+      invoice_id: invoice.id,
     })
     if (!claimErr) claimedTrackingId = trackingId
 
