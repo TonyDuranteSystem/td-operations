@@ -6794,6 +6794,10 @@ export type Database = {
           account_id: string | null
           contact_id: string | null
           created_at: string | null
+          delivery_detail: string | null
+          delivery_status: string | null
+          delivery_updated_at: string | null
+          invoice_id: string | null
           first_opened_at: string | null
           from_email: string | null
           gmail_message_id: string | null
@@ -6812,6 +6816,10 @@ export type Database = {
           account_id?: string | null
           contact_id?: string | null
           created_at?: string | null
+          delivery_detail?: string | null
+          delivery_status?: string | null
+          delivery_updated_at?: string | null
+          invoice_id?: string | null
           first_opened_at?: string | null
           from_email?: string | null
           gmail_message_id?: string | null
@@ -6830,6 +6838,10 @@ export type Database = {
           account_id?: string | null
           contact_id?: string | null
           created_at?: string | null
+          delivery_detail?: string | null
+          delivery_status?: string | null
+          delivery_updated_at?: string | null
+          invoice_id?: string | null
           first_opened_at?: string | null
           from_email?: string | null
           gmail_message_id?: string | null

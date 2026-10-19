@@ -36,6 +36,7 @@ import Link from 'next/link'
 import { listTemplates } from './actions'
 import { listVendors } from './vendor-actions'
 import { isCardAutopayEnabled } from '@/lib/payments/card-autopay-config'
+import { latestDeliveryProblems } from '@/lib/portal/invoice-delivery'
 
 export default async function PortalInvoicesPage({
   searchParams,
@@ -228,9 +229,13 @@ export default async function PortalInvoicesPage({
 
   // Map customer names for sales invoices
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const deliveryProblems = selectedAccountId
+    ? await latestDeliveryProblems(selectedAccountId, invoices.map((inv: any) => inv.id as string))
+    : new Map()
   const mapped = invoices.map((inv: any) => ({
     ...inv,
     customer_name: inv.client_customers?.name ?? 'Unknown',
+    delivery_problem: deliveryProblems.has(inv.id),
   }))
 
   return (
