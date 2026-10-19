@@ -8,7 +8,8 @@ import type { GraphLead } from "@/lib/marketing/meta-leads/map-lead"
 const LEAD_FIELDS = "id,created_time,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,form_id,is_organic,platform,field_data"
 
 export class GraphError extends Error {
-  constructor(message: string, readonly status: number | null) { super(message) }
+  /** `status` = the HTTP status (null when we never reached Meta); `code` = Meta's own error code (190 = bad/expired token, 200/10 = missing permission ...). */
+  constructor(message: string, readonly status: number | null, readonly code: number | null = null) { super(message) }
 }
 
 /** Meta's host. The only other accepted value is a loopback address, so the end-to-end test can stand in a fake Meta; nothing else can redirect our token. */
@@ -22,12 +23,15 @@ function base(): string {
   return `${origin()}/${/^v\d+\.\d+$/.test(v) ? v : "v25.0"}`
 }
 
-async function graphGet<T>(path: string, params: Record<string, string> = {}, fetchImpl: typeof fetch = fetch): Promise<T> {
+async function graphCall<T>(method: "GET" | "POST", path: string, params: Record<string, string>, fetchImpl: typeof fetch): Promise<T> {
   const token = process.env.META_PAGE_ACCESS_TOKEN
   if (!token) throw new GraphError("META_PAGE_ACCESS_TOKEN is not set", null)
   const qs = new URLSearchParams(params).toString()
-  const res = await fetchImpl(`${base()}${path}${qs ? `?${qs}` : ""}`, {
-    headers: { Authorization: `Bearer ${token}` },
+  const post = method === "POST"
+  const res = await fetchImpl(`${base()}${path}${!post && qs ? `?${qs}` : ""}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, ...(post ? { "Content-Type": "application/x-www-form-urlencoded" } : {}) },
+    ...(post ? { body: qs } : {}),
     signal: AbortSignal.timeout(8000),
     cache: "no-store",
   })
@@ -35,11 +39,14 @@ async function graphGet<T>(path: string, params: Record<string, string> = {}, fe
   if (!res.ok) {
     // Meta's error body names the problem (expired token, missing permission); it never echoes our token.
     let detail = ""
-    try { detail = JSON.parse(text)?.error?.message ?? "" } catch { /* not JSON */ }
-    throw new GraphError(`Graph ${res.status}${detail ? `: ${String(detail).slice(0, 300)}` : ""}`, res.status)
+    let code: number | null = null
+    try { const e = JSON.parse(text)?.error; detail = e?.message ?? ""; code = typeof e?.code === "number" ? e.code : null } catch { /* not JSON */ }
+    throw new GraphError(`Graph ${res.status}${detail ? `: ${String(detail).slice(0, 300)}` : ""}`, res.status, code)
   }
   return JSON.parse(text) as T
 }
+
+const graphGet = <T>(path: string, params: Record<string, string> = {}, fetchImpl: typeof fetch = fetch) => graphCall<T>("GET", path, params, fetchImpl)
 
 export function fetchLead(leadgenId: string, fetchImpl?: typeof fetch): Promise<GraphLead> {
   if (!/^\d{1,30}$/.test(leadgenId)) throw new GraphError("bad leadgen id", null)
@@ -59,4 +66,28 @@ export async function listFormLeads(formId: string, fetchImpl?: typeof fetch): P
 
 export function configuredPageIds(): string[] {
   return (process.env.META_PAGE_IDS || "").split(",").map(s => s.trim()).filter(s => /^\d{1,30}$/.test(s))
+}
+
+// ── the connection check and the one-time "subscribe the Page" action (admin screen) ──
+const PAGE_ID = /^\d{1,30}$/
+
+/** Who the configured access key belongs to. For a Page access key this is the Page itself. */
+export function fetchTokenIdentity(fetchImpl?: typeof fetch): Promise<{ id: string; name?: string }> {
+  return graphGet<{ id: string; name?: string }>("/me", { fields: "id,name" }, fetchImpl)
+}
+
+export interface SubscribedApp { id: string; name?: string; subscribed_fields?: string[] }
+
+/** Which apps the Page has installed, and which fields each one receives (we need ours to receive `leadgen`). */
+export async function listPageSubscribedApps(pageId: string, fetchImpl?: typeof fetch): Promise<SubscribedApp[]> {
+  if (!PAGE_ID.test(pageId)) throw new GraphError("bad page id", null)
+  const r = await graphGet<{ data?: SubscribedApp[] }>(`/${pageId}/subscribed_apps`, {}, fetchImpl)
+  return r.data ?? []
+}
+
+/** Install our app on the Page so Meta sends us its new leads. Needs a Page access key allowed to advertise/manage that Page. */
+export async function subscribePageToLeads(pageId: string, fetchImpl?: typeof fetch): Promise<boolean> {
+  if (!PAGE_ID.test(pageId)) throw new GraphError("bad page id", null)
+  const r = await graphCall<{ success?: boolean }>("POST", `/${pageId}/subscribed_apps`, { subscribed_fields: "leadgen" }, fetchImpl ?? fetch)
+  return r.success === true
 }
