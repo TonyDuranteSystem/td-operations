@@ -6,6 +6,7 @@ import { listAllLeads } from "@/lib/marketing/leads-read"
 import { leadDb } from "@/lib/marketing/meta-leads/service"
 import { clientFlagText, formatWhen } from "@/lib/marketing/lead-view"
 import { listTeams } from "@/lib/marketing/settings"
+import { listConnections } from "@/lib/marketing/meta-leads/key-store"
 import { MetaConnectionPanel } from "./meta-connection-panel"
 
 export const dynamic = "force-dynamic"
@@ -20,10 +21,11 @@ export default async function MarketingLeadsAdminPage() {
   if (!user || !isSecureAdmin(user)) redirect("/")
 
   const db = leadDb()
-  const [leads, teams, evts] = await Promise.all([
+  const [leads, teams, evts, connections] = await Promise.all([
     listAllLeads(db),
     listTeams(),
     db.from("marketing_leadgen_events").select("status, last_error, updated_at").in("status", ["pending", "failed", "gave_up"]).order("updated_at", { ascending: false }).limit(50),
+    listConnections(db, process.env.META_APP_SECRET),
   ])
   const teamName = new Map(teams.map(t => [t.id, t.name]))
   const open = (evts.data ?? []) as Array<{ status: string; last_error: string | null; updated_at: string }>
@@ -32,7 +34,7 @@ export default async function MarketingLeadsAdminPage() {
   const connection = [
     { label: "App secret", ok: !!process.env.META_APP_SECRET },
     { label: "Webhook verify token", ok: !!process.env.META_WEBHOOK_VERIFY_TOKEN },
-    { label: "Page access token", ok: !!process.env.META_PAGE_ACCESS_TOKEN },
+    { label: "Page access key", ok: !!process.env.META_PAGE_ACCESS_TOKEN || connections.some(c => c.readable) },
     { label: "Page ids for the safety re-read", ok: !!process.env.META_PAGE_IDS },
   ]
 

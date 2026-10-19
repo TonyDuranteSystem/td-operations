@@ -22,7 +22,7 @@ export async function resolveIntakeTeam(db: Db = leadDb()): Promise<string | nul
 }
 
 export function liveDeps(): IngestDeps {
-  return { db: leadDb(), fetchLead: id => fetchLead(id), resolveTeam: () => resolveIntakeTeam() }
+  return { db: leadDb(), fetchLead: (id, pageId) => fetchLead(id, undefined, pageId), resolveTeam: () => resolveIntakeTeam() }
 }
 
 const RECONCILE_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
@@ -39,7 +39,7 @@ export async function reconcileRecentLeads(deps: IngestDeps = liveDeps(), pageId
       for (const form of forms) {
         out.forms++
         let leads: GraphLead[] = []
-        try { leads = await listFormLeads(form.id) } catch (e) { out.errors.push(`form ${form.id}: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300)); continue }
+        try { leads = await listFormLeads(form.id, undefined, pageId) } catch (e) { out.errors.push(`form ${form.id}: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300)); continue }
         for (const lead of leads) {
           const created = lead.created_time ? Date.parse(lead.created_time) : NaN
           if (Number.isFinite(created) && created < since) continue
