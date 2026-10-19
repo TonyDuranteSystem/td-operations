@@ -16,7 +16,7 @@ import { DecisionCard } from '@/components/portal/decision-card'
 import { DocumentList } from '@/components/portal/document-list'
 import type { DecisionRequest } from '@/lib/decisions'
 import { buildFlowSteps, buildJourneySteps, type FlowStageRow } from '@/lib/flows/flow-progress'
-import { deriveFlowYear, buildFlowTopic, ALL_FLOW_TYPES, CONTACT_FLOW_TYPES } from '@/lib/flows/resolve-flows'
+import { deriveFlowYear, buildFlowTopic, ALL_FLOW_TYPES, JOURNEY_FLOW_TYPES } from '@/lib/flows/resolve-flows'
 import { isClientSafeFlowDoc } from '@/lib/flows/flow-doc-visibility'
 import { MAILING_DESTINATION_LINES } from '@/lib/td-address'
 import { isWithinNewBadgeWindow } from '@/lib/portal/queries'
@@ -131,7 +131,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
 
   // Contact-scoped flows (ITIN) get the rich, clickable per-stage journey driven
   // by client_description; account flows keep the compact horizontal stepper.
-  const isContactFlow = (CONTACT_FLOW_TYPES as readonly string[]).includes(sd.service_type)
+  const isContactFlow = (JOURNEY_FLOW_TYPES as readonly string[]).includes(sd.service_type)
   const steps = isContactFlow ? null : buildFlowSteps(stages, sd.stage ?? null, locale, sd.service_type, sd.id)
   const journey = isContactFlow ? buildJourneySteps(stages, sd.stage ?? null, locale) : null
   const year = deriveFlowYear(sd)

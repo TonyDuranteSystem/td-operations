@@ -18,6 +18,8 @@
  * (an admin explicitly published it) regardless of stage.
  */
 
+import { CHANGE_NAME_STAGES } from '@/lib/flows/change-name-stages'
+
 /** Per service_type, the flow_stage values whose documents are client-facing. */
 export const CLIENT_SAFE_FLOW_DOC_STAGES: Record<string, ReadonlySet<string>> = {
   'Company Formation': new Set([
@@ -71,6 +73,13 @@ export const CLIENT_SAFE_FLOW_DOC_STAGES: Record<string, ReadonlySet<string>> = 
   'CMRA Mailing Address': new Set([
     'Lease Signed',
     'CMRA Active',
+  ]),
+  'Company Change Name': new Set([
+    // The state's stamped answer is uploaded while the job waits for the state; the client is
+    // promised that document. The filed form's proof and everything else staff upload stays
+    // internal until published (the signed name-change form reaches the client through the
+    // e-sign filing, not through here).
+    CHANGE_NAME_STAGES.wait,
   ]),
 }
 

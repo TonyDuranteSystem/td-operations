@@ -121,6 +121,43 @@ export interface AdvanceStageResult {
   }
 }
 
+// ─── Client-facing stage wording ──────────────────────────
+
+/** Services whose push and stage email name the stage by its CLIENT label (the portal notification always does). */
+const CLIENT_STAGE_WORDING_SERVICES: ReadonlySet<string> = new Set(["Company Change Name"])
+
+/** True when this service's push / stage email must read the client label, not the internal stage name. */
+export function usesClientStageWording(serviceType: string | null | undefined): boolean {
+  return !!serviceType && CLIENT_STAGE_WORDING_SERVICES.has(serviceType)
+}
+
+/**
+ * The stage name the CLIENT reads: `client_label` (or the Italian one for an Italian contact), else the
+ * internal name. Best-effort — a failed language lookup keeps the English / internal label.
+ */
+export async function clientStageLabelFor(
+  stage: { stage_name: string; client_label?: string | null; client_label_it?: string | null },
+  contactId: string | null,
+): Promise<{ label: string; hasClientLabel: boolean }> {
+  let label = stage.client_label || stage.stage_name
+  if (stage.client_label_it && contactId) {
+    try {
+      const { data: labelContact } = await supabaseAdmin
+        .from("contacts")
+        .select("language")
+        .eq("id", contactId)
+        .maybeSingle()
+      const { localeFromLanguage } = await import("@/lib/locale")
+      if (localeFromLanguage(labelContact?.language) === "it") {
+        label = stage.client_label_it
+      }
+    } catch {
+      /* label localization is best-effort — keep the English/internal label */
+    }
+  }
+  return { label, hasClientLabel: !!stage.client_label }
+}
+
 // ─── Main function ────────────────────────────────────────
 
 export async function advanceServiceDelivery(
@@ -412,6 +449,49 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // 4h. Company Change Name (dev job bb64c417): a forward move needs the right name state — a name the client
+  // confirmed before the signing step, a name marked filed before "waiting for the state" — and a second press on
+  // the stage the job is ALREADY at (a double click) does nothing: no second bell, chat message or stage record.
+  // Going back is never refused. Lives here (not in the button / the route) so the stepper, the CRM tools and a stale
+  // tab all get the same answer.
+  if (delivery.service_type === "Company Change Name") {
+    const fromOrder = stages.find(s => s.stage_name === delivery.stage)?.stage_order ?? currentOrder
+    if (target_stage && delivery.stage && targetStage.stage_name === delivery.stage && targetStage.stage_order === fromOrder) {
+      return {
+        success: true,
+        from_stage: delivery.stage,
+        to_stage: targetStage.stage_name,
+        to_order: targetStage.stage_order,
+        total_stages: stages.length,
+        is_completed: false,
+        created_tasks: [],
+        failed_tasks: [],
+        auto_triggers: [`Already at "${targetStage.stage_name}" — nothing to do.`],
+      }
+    }
+    const { changeNameAdvanceProblem } = await import("@/lib/flows/change-name-gates")
+    const problem = changeNameAdvanceProblem({
+      checks: (delivery as { name_checks?: unknown }).name_checks as never,
+      stages: stages as Array<{ stage_name: string; stage_order: number }>,
+      fromOrder,
+      targetOrder: targetStage.stage_order,
+    })
+    if (problem) {
+      return {
+        success: false,
+        error: problem,
+        from_stage: delivery.stage || "New",
+        to_stage: targetStage.stage_name,
+        to_order: targetStage.stage_order,
+        total_stages: stages.length,
+        is_completed: false,
+        created_tasks: [],
+        failed_tasks: [],
+        auto_triggers: [],
+      }
+    }
+  }
+
   // 4f. Needs a document (N1a C2) — a forward move that leaves or jumps over a step marked "needs a document before
   // moving on" is refused unless a document was uploaded on that step for this job. The database rule
   // (trg_delivery_document_to_advance, migration 20261005-0100) enforces it for every writer; this gives the same
@@ -621,31 +701,12 @@ export async function advanceServiceDelivery(
       // ("Sign your SS-4", not "SS-4 Prepared"). Localized to the SD's contact
       // when one is linked; account-scoped SDs without a contact fall back to
       // the English label. Internal name remains the last-resort fallback.
-      const stageForLabel = targetStage as typeof targetStage & {
-        client_label?: string | null
-        client_label_it?: string | null
-      }
-      let stageLabel = stageForLabel.client_label || targetStage.stage_name
-      if (stageForLabel.client_label_it && delivery.contact_id) {
-        try {
-          const { data: labelContact } = await supabaseAdmin
-            .from("contacts")
-            .select("language")
-            .eq("id", delivery.contact_id)
-            .maybeSingle()
-          const { localeFromLanguage } = await import("@/lib/locale")
-          if (localeFromLanguage(labelContact?.language) === "it") {
-            stageLabel = stageForLabel.client_label_it
-          }
-        } catch {
-          /* label localization is best-effort — keep the English/internal label */
-        }
-      }
+      const { label: stageLabel, hasClientLabel } = await clientStageLabelFor(targetStage, delivery.contact_id ?? null)
       const { title, body } = stageNotificationText({
         serviceName: delivery.service_name || delivery.service_type,
         isCompleted,
         stageLabel,
-        hasClientLabel: !!stageForLabel.client_label,
+        hasClientLabel,
       })
       await createPortalNotification({
         account_id: delivery.account_id ?? undefined,
@@ -670,9 +731,14 @@ export async function advanceServiceDelivery(
     try {
       const { sendPushToAccount, sendPushToContact } = await import("@/lib/portal/web-push")
       const serviceLabel = delivery.service_name || delivery.service_type
+      // A name change shows the CLIENT's label (its internal step names are for staff and one carries a typo);
+      // every other service keeps today's wording.
+      const pushStageName = usesClientStageWording(delivery.service_type)
+        ? (await clientStageLabelFor(targetStage, delivery.contact_id ?? null)).label
+        : targetStage.stage_name
       const pushPayload = {
         title: "Service Update",
-        body: `${serviceLabel} moved to ${targetStage.stage_name}`,
+        body: `${serviceLabel} moved to ${pushStageName}`,
         url: "/portal/services",
         tag: `sd-advance-${delivery_id}`,
       }
@@ -709,7 +775,9 @@ export async function advanceServiceDelivery(
         account_id: delivery.account_id ?? undefined,
         contact_id: delivery.contact_id ?? undefined,
         service_name: delivery.service_name || delivery.service_type,
-        stage_name: targetStage.stage_name,
+        stage_name: usesClientStageWording(delivery.service_type)
+          ? (await clientStageLabelFor(targetStage, delivery.contact_id ?? null)).label
+          : targetStage.stage_name,
         custom_message: targetStageWithNotify.client_notification_message ?? null,
       })
       autoTriggers.push(`Stage-change email sent: ${result.sent} delivered, ${result.failed} failed`)
