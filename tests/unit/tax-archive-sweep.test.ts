@@ -35,8 +35,10 @@ describe("decideArchiveSweep", () => {
     expect(decideArchiveSweep(row({ drive_archived_at: "2026-07-30T00:00:00Z" }), NOW)).toBe("skip")
   })
 
-  it("skips a contact-scoped submission with no account", () => {
-    expect(decideArchiveSweep(row({ account_id: null }), NOW)).toBe("skip")
+  it("a real submission with NO company is NOT skipped quietly: it is enqueued, fails in the job, and ends in the ONE alert (the same loud path banking has)", () => {
+    expect(decideArchiveSweep(row({ account_id: null }), NOW)).toBe("enqueue")
+    expect(decideArchiveSweep(row({ account_id: null, drive_archive_meta: { attempts: 5 } }), NOW)).toBe("alert")
+    expect(decideArchiveSweep(row({ account_id: null, drive_archive_meta: { attempts: 5, sweep_alerted: true } }), NOW)).toBe("skip")
   })
 
   it("skips an empty pending shell (not a real submission)", () => {

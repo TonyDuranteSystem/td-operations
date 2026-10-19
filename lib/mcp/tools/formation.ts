@@ -324,53 +324,28 @@ export function registerFormationTools(server: McpServer) {
           lines.push("APPLYING CHANGES...")
           lines.push("")
 
-          // Save form data + uploads to Drive
+          // File the package (Stop Drive S1d, dev job 264bb882). A formation LEAD has no company yet, so the only correct
+          // destination is the PERSON: their contact is the submission's own, else the lead's contact by EXACT email + matching
+          // name (never "the first company of whoever has this email"). Nobody certain = nothing is filed and staff are told once.
+          // The client's submission already filed this same package (same keys), so a second filing here is "unchanged".
           try {
-            const { saveFormToDrive } = await import("@/lib/form-to-drive")
-            const driveFolderId = sub.lead_id
-              ? await (async () => {
-                  // Try to find account via contact linked to lead
-                  const { data: contact } = await supabaseAdmin
-                    .from("contacts")
-                    .select("id")
-                    .eq("email", String(submitted.owner_email || ""))
-                    .maybeSingle()
-                  if (contact?.id) {
-                    const { data: ac } = await supabaseAdmin
-                      .from("account_contacts")
-                      .select("account_id")
-                      .eq("contact_id", contact.id)
-                      .limit(1)
-                      .maybeSingle()
-                    if (ac?.account_id) {
-                      const { data: acct } = await supabaseAdmin
-                        .from("accounts")
-                        .select("drive_folder_id")
-                        .eq("id", ac.account_id)
-                        .single()
-                      return acct?.drive_folder_id || null
-                    }
-                  }
-                  return null
-                })()
-              : null
-            if (driveFolderId) {
-              const driveResult = await saveFormToDrive(
-                "formation",
-                submitted,
-                (sub.upload_paths as string[]) || [],
-                driveFolderId,
-                { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName || token }
-              )
-              if (driveResult.summaryFileId) lines.push(`✅ Data summary saved to Drive (${driveResult.summaryFileId})`)
-              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
-              if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy`)
-              if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
-            } else {
-              lines.push("⚠️ No Drive folder found — data not saved to Drive")
-            }
+            // ONE implementation with the completion route and the retry recipe (lib/forms/file-form-package.ts): the same destination rule
+            // (a hidden study copy = nothing filed + one alarm), the same split (a member's passport is NEVER filed under the primary
+            // contact), the same member-aware file names, the same date and name on the summary.
+            const { contactForSubmissionRow } = await import("@/lib/crm-store/lead-form-store")
+            const { fileFormPackage, memberAwareFileName } = await import("@/lib/forms/file-form-package")
+            const contactId = await contactForSubmissionRow({ contact_id: sub.contact_id, lead_id: sub.lead_id, token }, "formation_form_review")
+            const filing = await fileFormPackage({
+              route: "mcp/formation_form_review", formType: "formation", submittedData: submitted, uploadPaths: (sub.upload_paths as string[]) || [],
+              contactId, personName: leadName || null, fileNameOf: memberAwareFileName(submitted),
+              meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName },
+              deadlineMs: 50_000,
+            })
+            if (filing.status === "ok") lines.push(`✅ Package filed in the client's storage: ${filing.detail}`)
+            else if (filing.status === "pending") lines.push(`⏳ ${filing.detail}`)
+            else lines.push(`❌ Nothing (or not everything) was filed: ${filing.detail}`)
           } catch (driveErr) {
-            lines.push(`⚠️ Drive save failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
+            lines.push(`❌ Filing failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
           }
 
           lines.push("")

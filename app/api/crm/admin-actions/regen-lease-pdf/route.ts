@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { generateLeasePDF } from '@/lib/lease-pdf'
+import { NO_STORAGE_STATUS, noStorageDecisionFor, receiveVerdictFor } from '@/lib/crm-store/no-storage'
 import { listFolder, uploadBinaryToDriveUpsert } from '@/lib/google-drive'
 
 export async function POST(req: NextRequest) {
@@ -43,6 +44,10 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Decide before building or storing anything: a company that cannot receive the copy is told so and nothing is changed.
+    const verdict = await receiveVerdictFor(lease.account_id)
+    if (!verdict.ok) return NextResponse.json({ error: verdict.sentence }, { status: NO_STORAGE_STATUS })
+
     const signedDate = (lease.signed_at as string).split('T')[0]
     const isV2 = (lease.template_version ?? 1) === 2
 
@@ -81,15 +86,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Storage upload failed: ${uploadErr.message}` }, { status: 500 })
     }
 
-    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company gets the regenerated
-    // lease in the new storage — the same file key as the original signing, so it is a new VERSION of that file.
+    // a refusal after the copy was uploaded must not leave the regenerated PDF behind in the bucket
+    const dropOrphan = () => { supabaseAdmin.storage.from('signed-leases').remove([storagePath]).catch(() => {}) }
+
+    // The regenerated lease goes to the company's storage — the same file key as the original signing, so it is a new
+    // VERSION of that file. A company with no storage gets one plain sentence back.
     {
-      const { saveSignedPdfForAccount } = await import('@/lib/crm-store/save-for-account')
-      const routed = await saveSignedPdfForAccount({
+      const { saveSignedPdfForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+      let routed
+      try {
+      routed = await saveSignedPdfForAccount({
         accountId: lease.account_id,
         fileName: `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`,
         bytes: Buffer.from(pdfBytes), label: 'Lease Agreement', category: 1, callerKey: `lease-signed:${lease.id}`, documentType: 'office_lease',
       })
+      } catch (e) {
+        // the company started moving after the check: a clean "try again", never a 500 (the lease row is not touched)
+        if (e instanceof CompanyMovingError) {
+          dropOrphan()
+          return NextResponse.json({ error: e.message }, { status: 409 })
+        }
+        throw e
+      }
       if (routed.route === 'store') {
         await supabaseAdmin
           .from('lease_agreements')
@@ -99,25 +117,22 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Get account Drive folder
-    const { data: acct } = await supabaseAdmin
-      .from('accounts')
-      .select('drive_folder_id, company_name')
-      .eq('id', lease.account_id)
-      .single()
-
-    if (!acct?.drive_folder_id) {
-      return NextResponse.json({ error: 'Account has no Drive folder' }, { status: 400 })
+    // No storage: a company left on its old folder carries on as before; everyone else gets one plain sentence
+    // (and the lease row is left untouched).
+    const decision = await noStorageDecisionFor(lease.account_id)
+    if (decision.route === 'refuse') {
+      dropOrphan()
+      return NextResponse.json({ error: decision.sentence }, { status: NO_STORAGE_STATUS })
     }
 
     // Find Company subfolder
-    const folderResult = await listFolder(acct.drive_folder_id) as {
+    const folderResult = await listFolder(decision.folderId) as {
       files?: { id: string; name: string; mimeType: string }[]
     }
     const companyFolder = folderResult.files?.find(
       f => f.name.includes('Company') && f.mimeType === 'application/vnd.google-apps.folder'
     )
-    const targetFolderId = companyFolder?.id || acct.drive_folder_id
+    const targetFolderId = companyFolder?.id || decision.folderId
 
     // Upload to Drive
     const fileName = `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`

@@ -30,6 +30,18 @@ const OCR_SUPPORTED_MIMES = new Set([
   "image/heif",
 ])
 
+const norm = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z]+/g, " ").trim()
+
+/** Does the name read from a passport belong to this person? Order-free, accent-free; two shared name parts (or the only part there is). */
+export function passportNameMatchesPerson(passportName: string | null | undefined, personName: string | null | undefined): boolean {
+  const a = new Set(norm(passportName ?? "").split(" ").filter((t) => t.length >= 2))
+  const b = new Set(norm(personName ?? "").split(" ").filter((t) => t.length >= 2))
+  if (a.size === 0 || b.size === 0) return false
+  let shared = 0
+  a.forEach((t) => { if (b.has(t)) shared++ })
+  return shared >= Math.min(2, a.size, b.size)
+}
+
 export interface PassportWritebackResult {
   status: "ok" | "skipped" | "error"
   detail: string
@@ -99,10 +111,26 @@ export async function extractAndStorePassportData(
 
     const passportData = parsePassportFromOcr(ocrResult.fullText)
 
+    // WHO is this passport? When the name on it is read and the person's name is known, they must match — a passport of another
+    // person must never overwrite this person's number / expiry / birth date. A name that cannot be read leaves what is already on
+    // the record alone (it only fills fields that are still empty).
+    const verified = !!(contact_name && passportData.fullName)
+    if (verified && !passportNameMatchesPerson(passportData.fullName, contact_name)) {
+      return {
+        status: "skipped",
+        detail: `The name on the passport (${passportData.fullName}) does not match ${contact_name} — nothing was written to the record`,
+        extracted_fields: [],
+      }
+    }
+    let current: { passport_number?: string | null; passport_expiry_date?: string | null; date_of_birth?: string | null } = {}
+    if (!verified) {
+      const { data: cur } = await supabaseAdmin.from("contacts").select("passport_number, passport_expiry_date, date_of_birth").eq("id", contact_id).maybeSingle()
+      current = (cur ?? {}) as typeof current
+    }
     const updates: Record<string, unknown> = {}
-    if (passportData.passportNumber) updates.passport_number = passportData.passportNumber
-    if (passportData.expiryDate) updates.passport_expiry_date = passportData.expiryDate
-    if (passportData.dateOfBirth && !skip_dob) updates.date_of_birth = passportData.dateOfBirth
+    if (passportData.passportNumber && (verified || !current.passport_number)) updates.passport_number = passportData.passportNumber
+    if (passportData.expiryDate && (verified || !current.passport_expiry_date)) updates.passport_expiry_date = passportData.expiryDate
+    if (passportData.dateOfBirth && !skip_dob && (verified || !current.date_of_birth)) updates.date_of_birth = passportData.dateOfBirth
 
     if (Object.keys(updates).length === 0) {
       return { status: "ok", detail: "OCR ran but no MRZ / visual patterns matched", extracted_fields: [] }

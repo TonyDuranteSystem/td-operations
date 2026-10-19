@@ -65,26 +65,26 @@ export async function POST(req: NextRequest) {
 
     if (form.account_id) {
       try {
-        const { data: acct } = await supabaseAdmin
-          .from("accounts")
-          .select("drive_folder_id")
-          .eq("id", form.account_id)
-          .single()
-
         // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its signed 8832
         // saved in the new storage and needs no Drive folder; a company still on Drive carries on exactly as before.
         const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
         const inStorage = (await companyDocState(form.account_id)) !== "drive"
 
-        if (acct?.drive_folder_id || inStorage) {
+        // Stop Drive (dev job 264bb882, S1d): Drive is written only for a company deliberately left on it (folder, no storage,
+        // not closed). Any other state is an error step + a staff alarm — never "ok", never a silent skip.
+        const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
+        const legacy = inStorage ? null : await legacyDriveForAccount(form.account_id)
+        const legacyFolderId = legacy && legacy.allowed ? legacy.folderId : null
+
+        if (legacyFolderId || inStorage) {
           let targetFolderId = ""
-          if (!inStorage && acct?.drive_folder_id) {
+          if (!inStorage && legacyFolderId) {
             const { listFolder } = await import("@/lib/google-drive")
-            const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
+            const folderResult = await listFolder(legacyFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
             const companyFolder = folderResult.files?.find(f =>
               f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
             )
-            targetFolderId = companyFolder?.id || acct.drive_folder_id
+            targetFolderId = companyFolder?.id || legacyFolderId
           }
 
           // Download signed PDF from Storage
@@ -142,6 +142,9 @@ export async function POST(req: NextRequest) {
           } else {
             results.push({ step: "drive_upload", status: "error", detail: "The signed Form 8832 PDF was not found in Storage — nothing was filed" })
           }
+        } else {
+          const sentence = await raiseDriveWriteRefused({ flow: "8832-signed", accountId: form.account_id, reason: legacy && !legacy.allowed ? legacy.reason : "no_folder", detail: "Form 8832" })
+          results.push({ step: "drive_upload", status: "error", detail: sentence })
         }
       } catch (e) {
         results.push({ step: "drive_upload", status: "error", detail: e instanceof Error ? e.message : String(e) })

@@ -105,34 +105,34 @@ export async function approveAndApplyClosureReview(
     }
   }
 
-  // ── 2. Save form data + uploads to Drive (best-effort) ──────────────
-  let drive_save: "ok" | "skipped" | "error" = "skipped"
-  let drive_save_error: string | undefined
-  if (sub.account_id) {
-    try {
-      const { data: acct } = await supabaseAdmin
-        .from("accounts")
-        .select("drive_folder_id")
-        .eq("id", sub.account_id)
-        .maybeSingle()
-      if (acct?.drive_folder_id) {
-        const { saveFormToDrive } = await import("@/lib/form-to-drive")
-        await saveFormToDrive(
-          "closure",
-          submitted,
-          (sub.upload_paths as string[]) || [],
-          acct.drive_folder_id,
-          {
-            token: sub.token,
-            submittedAt: sub.completed_at || new Date().toISOString(),
-            companyName,
-          },
-        )
-        drive_save = "ok"
-      }
-    } catch (err) {
-      drive_save = "error"
-      drive_save_error = err instanceof Error ? err.message : String(err)
+  // ── 2. File the form data + uploads FIRST ───────────────────────────
+  // The same rule as the MCP closure_form_review (fileClosureSubmission): the form is marked reviewed only when it was filed.
+  // Nothing filed → the submission is left exactly as it was (still waiting) and the caller is told why.
+  const { fileClosureSubmission } = await import("@/lib/crm-store/save-account-form")
+  const outcome = await fileClosureSubmission(
+    {
+      id: sub.id,
+      token: sub.token,
+      account_id: sub.account_id,
+      contact_id: sub.contact_id ?? null,
+      upload_paths: (sub.upload_paths as string[] | null) ?? [],
+      completed_at: sub.completed_at,
+    },
+    submitted,
+    companyName,
+    "lib/operations/closure-review",
+  )
+  const drive_save: "ok" | "skipped" | "error" = outcome.ok ? "ok" : "error"
+  const drive_save_error: string | undefined = outcome.ok ? undefined : outcome.lines.join(" ")
+  if (!outcome.ok) {
+    return {
+      ok: false,
+      error: `The form could not be filed, so it was NOT marked as reviewed: ${outcome.lines.join(" ")}`,
+      token: sub.token,
+      account_id: sub.account_id,
+      company_name: companyName,
+      drive_save,
+      drive_save_error,
     }
   }
 

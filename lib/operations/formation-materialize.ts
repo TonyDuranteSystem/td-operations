@@ -977,10 +977,6 @@ export async function materializeFormationCompany(
     const ownerName = ownerContact ? [ownerContact.first_name, ownerContact.last_name].filter(Boolean).join(" ") : ""
 
     let companyContactsSubfolderId: string | null = null
-    // "1. Company" subfolder — where the Articles of Organization + EIN letter
-    // belong. Captured so step 10a-bis can relocate flow-uploaded Articles that
-    // are still parked in Supabase Storage into Drive.
-    let companyDocsSubfolderId: string | null = null
 
     // CRM Store pilot (sandbox only, job 685467b5 — lib/crm-store/formation-pilot.ts): a formation
     // whose files already live in the new store gets NO Drive company folder, NO Drive migration and
@@ -993,10 +989,13 @@ export async function materializeFormationCompany(
       const acc = l.accounts as unknown as { status: string } | null
       return acc && acc.status !== "Cancelled" && acc.status !== "Closed"
     })
+    // Stop Drive (dev job 264bb882, S1d): a company that is NOT a pilot case but has no Drive folder gets its own storage opened by
+    // ensureCompanyFolder (which then refuses with StoreOwnedAccountError) — the member passports then go to the members' storage
+    // exactly like a pilot case, and nothing is skipped silently.
+    let companyOpenedInStorage = false
     const ensureDriveFolder = async () => {
       const folderResult = await ensureCompanyFolder(accountId, chosenName, stateName, ownerName)
       companyContactsSubfolderId = folderResult.subfolders["2. Contacts"] ?? null
-      companyDocsSubfolderId = folderResult.subfolders["1. Company"] ?? null
       return folderResult
     }
 
@@ -1110,7 +1109,20 @@ export async function materializeFormationCompany(
         }
       }
     } catch (driveErr) {
-      steps.push({ step: "drive_folder", status: "error", detail: driveErr instanceof Error ? driveErr.message : String(driveErr) })
+      if (driveErr instanceof Error && driveErr.name === "StoreOwnedAccountError") {
+        companyOpenedInStorage = true
+        steps.push({ step: "drive_folder", status: "skipped", detail: "The company's files live in the new CRM storage (opened now) — no Drive folder" })
+        // the owner's staging passport record belongs to this company too (the file itself stays in the owner's own storage)
+        await supabaseAdmin
+          .from("documents")
+          .update({ account_id: accountId, updated_at: new Date().toISOString() })
+          .eq("contact_id", params.contact_id)
+          .eq("document_type_name", "Passport")
+          .eq("category", 2)
+          .is("account_id", null)
+      } else {
+        steps.push({ step: "drive_folder", status: "error", detail: driveErr instanceof Error ? driveErr.message : String(driveErr) })
+      }
     }
 
     // 9b. Member passports (after company folder exists).
@@ -1118,7 +1130,7 @@ export async function materializeFormationCompany(
     // the ones the store could not take continue to today's Drive copy (the Drive company folder is then
     // created for them — a file never ends up nowhere).
     let drivePassports = pendingMemberPassports
-    if (pilotCase && pendingMemberPassports.length > 0) {
+    if ((pilotCase || companyOpenedInStorage) && pendingMemberPassports.length > 0) {
       const failed: typeof pendingMemberPassports = []
       for (const mp of pendingMemberPassports) {
         try {
@@ -1128,7 +1140,7 @@ export async function materializeFormationCompany(
             // nothing to save anywhere (today's Drive copy reports the same) — never list a missing file
             const reason = dlErr?.message || "Passport file not found in its upload location"
             steps.push({ step: `member_${mp.index}_passport`, status: "error", detail: reason })
-            await raisePilotAlarm("store_save_failed", { ownerId: pilotCase.owner.id, what: "member passport", member: mp.contact_id, error: reason })
+            await raisePilotAlarm("store_save_failed", { ownerId: pilotCase?.owner.id ?? null, what: "member passport", member: mp.contact_id, error: reason })
             continue
           }
           const saved = await pilotSavePassport({
@@ -1581,33 +1593,22 @@ export async function materializeFormationCompany(
       }
     }
 
-    // 10a-bis. Relocate flow-uploaded Articles that are still parked in Supabase
-    // Storage into the company's Drive "1. Company" folder. The workspace
-    // "Filed with State" upload happens BEFORE the company exists, so the binary
-    // can't reach Drive at upload time — only a `storage:` documents pointer is
-    // written (step 10a above just backfilled its account_id). Without this the
-    // Articles never land in Drive AND the signed-SS-4 IRS merge (which scans
-    // the Drive "1. Company" folder) can't find them, producing an SS-4-only fax
-    // package (Art of Profit Academy / Numero Uno Social / Automatiko,
-    // 2026-07-08). Best-effort + idempotent — never fails materialization.
-    if (companyDocsSubfolderId && linkedSdIds.length > 0) {
+    // 10a-bis. (Stop-Drive S1a) Flow uploads made BEFORE the company existed (the Articles at "Filed with State") are kept in the
+    // older bucket under a `storage:` pointer. There used to be a step here that copied them into a Drive "1. Company" folder; it
+    // is gone. Now, once the company has its own storage, those files are filed into it (1. Company, right type, same record
+    // re-pointed — adoptStoragePointerRow). A company with no storage yet leaves them as they are; they are adopted when its
+    // storage opens (or by the backfill script). Best-effort: a failure raises a staff alarm and never fails the materialization.
+    if (linkedSdIds.length > 0) {
       try {
-        const { relocateFormationFlowDocs } = await import("@/lib/flows/relocate-flow-storage-docs")
-        const rel = await relocateFormationFlowDocs({
-          companySubfolderId: companyDocsSubfolderId,
-          serviceDeliveryIds: linkedSdIds,
-        })
+        const { adoptStoragePointersForAccount } = await import("@/lib/crm-store/adopt-storage-pointer")
+        const adopted = await adoptStoragePointersForAccount(accountId)
         steps.push({
-          step: "flow_docs_to_drive",
-          status: rel.errors.length > 0 ? "error" : "ok",
-          detail: `${rel.relocated} relocated, ${rel.skipped} skipped${rel.errors.length > 0 ? ` — errors: ${rel.errors.join("; ")}` : ""}`,
+          step: "flow_docs_to_storage",
+          status: adopted.failed.length > 0 ? "error" : "ok",
+          detail: `${adopted.adopted} filed in the company storage, ${adopted.already} already there, ${adopted.skipped.length} left (no storage yet)${adopted.failed.length > 0 ? ` — FAILED: ${adopted.failed.map(f => f.reason).join("; ")}` : ""}`,
         })
-      } catch (relErr) {
-        steps.push({
-          step: "flow_docs_to_drive",
-          status: "error",
-          detail: relErr instanceof Error ? relErr.message : String(relErr),
-        })
+      } catch (adoptErr) {
+        steps.push({ step: "flow_docs_to_storage", status: "error", detail: adoptErr instanceof Error ? adoptErr.message : String(adoptErr) })
       }
     }
 

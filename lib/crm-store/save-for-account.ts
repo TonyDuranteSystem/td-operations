@@ -66,6 +66,8 @@ export interface SaveDeps {
   save: (p: PilotSave) => Promise<WriteResult>
   upsertRow: (fileId: string, row: DocumentsRow, status?: WriteResult["status"]) => Promise<{ id: string; inserted: boolean }>
   pointer: (fileId: string) => string
+  /** an OPEN company with no folder and no storage gets its storage opened (see openStorageForOpenCompany); absent = never */
+  openStorage?: (accountId: string) => Promise<boolean>
 }
 
 async function defaultDeps(): Promise<SaveDeps> {
@@ -79,12 +81,15 @@ async function defaultDeps(): Promise<SaveDeps> {
     save: pilot.savePilotFile,
     upsertRow: pilot.upsertStoreDocumentRow,
     pointer: ptr.storePointer,
+    openStorage: async (accountId) => (await import("./no-storage")).openStorageForOpenCompany(accountId),
   }
 }
 
 export async function saveDocumentForAccount(input: SaveForAccountInput, deps?: SaveDeps): Promise<SaveForAccountResult> {
   const d = deps ?? (await defaultDeps())
-  const state = await d.state(input.accountId)
+  let state = await d.state(input.accountId)
+  // Stop Drive S1d: an open company with no folder and no storage is not a dead end — its storage is opened and the file lands in it
+  if (state === "drive" && d.openStorage && (await d.openStorage(input.accountId))) state = await d.state(input.accountId)
   if (state === "drive") return { route: "drive" }
   if (state === "moving") throw new CompanyMovingError()
 
@@ -147,6 +152,11 @@ export type ContactDeps = Pick<SaveDeps, "save" | "upsertRow" | "pointer"> & {
   liveOwnerOfContact: (contactId: string) => Promise<string | null>
   companyState?: (accountId: string) => Promise<CompanyDocState>
   ensurePerson?: (contactId: string, name: string) => Promise<string>
+  /**
+   * Stop Drive (dev job 264bb882, S1d): may this person still be saved in Drive? Only a person of a company deliberately left
+   * on Drive (their own folder, no storage of their own, a company that is not closed). Everyone else gets their own storage.
+   */
+  legacyDrive?: (contactId: string) => Promise<boolean>
 }
 
 export async function saveDocumentForContact(input: SaveForContactInput, deps?: ContactDeps): Promise<SaveForAccountResult> {
@@ -164,11 +174,18 @@ export async function saveDocumentForContact(input: SaveForContactInput, deps?: 
     if (viaState === "moving") throw new CompanyMovingError()
     if (viaState !== "drive") ownerId = await d.ensurePerson(input.contactId, input.contactName || "Member")
   }
-  if (!ownerId) return { route: "drive" }
+  if (!ownerId) {
+    const legacyDrive = d.legacyDrive ?? (async (id: string) => (await (await import("./legacy-drive")).legacyDriveForContact(id)).allowed)
+    if (await legacyDrive(input.contactId)) return { route: "drive" }
+    // Anyone else (a lead, a person of a company in storage or closed, a person with no folder) gets their OWN storage — never a Drive folder.
+    const ensure = d.ensurePerson ?? (await import("./formation-pilot")).ensurePersonOwner
+    ownerId = await ensure(input.contactId, input.contactName || "Member")
+  }
 
   const saveIn = (folderKind: string) => d.save({
     ownerId, folderKind, name: input.name, bytes: input.bytes, mimeType: input.mimeType,
     documentType: typeFor(input.documentType, input.portalVisible), callerKey: input.callerKey, published: input.portalVisible ?? false, actor: input.actor ?? null,
+    skipAnalysis: true, // a person's own documents are never queued for the AI file reader
   })
   let w
   try {

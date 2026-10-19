@@ -4,7 +4,7 @@
  * Called by the SS-4 frontend after the client signs.
  * 1. Creates task for Luca
  * 2. Updates service delivery stage_history
- * 3. Uploads signed PDF to Google Drive
+ * 3. Files the signed PDF in the company storage
  * 4. Merges signed SS-4 + Articles of Organization into IRS package
  * 5. Sends email to support@ with merged PDF attached
  *
@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
+import { NO_STORAGE_SENTENCE, noStorageDecisionFor } from "@/lib/crm-store/no-storage"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { PDFDocument } from "pdf-lib"
 
@@ -51,6 +52,10 @@ export async function POST(req: NextRequest) {
     // no-Drive) so the signed SS-4 always lands in the flow Documents section.
     let formationSdId: string | null = null
     let signedDocLinked = false
+    // Set in step 3: does the company have storage? (null = not asked / not known)
+    let companyHasStorage: boolean | null = null
+    // Set in step 3: the company is one left on its old folder, so an upload to that folder was attempted
+    let triedOldFolder = false
 
     // Track the merged PDF bytes for email attachment
     let mergedPdfBytes: Uint8Array | null = null
@@ -60,6 +65,8 @@ export async function POST(req: NextRequest) {
     // a LOUD staff warning in the email below + an error-audit report — the fax
     // package must NEVER go out silently incomplete (2026-07-08 Slack report).
     let articlesMissing = false
+    // Set when the combined IRS package was filed (storage, the company's old folder, or the formation's storage)
+    let packageFiled = false
 
     // ─── 1. CREATE TASK FOR LUCA ───
     if (ss4.account_id) {
@@ -67,7 +74,7 @@ export async function POST(req: NextRequest) {
         // eslint-disable-next-line no-restricted-syntax -- pre-existing SS-4 fax task insert; left in place
         await supabaseAdmin.from("tasks").insert({
           task_title: `Fax SS-4 to IRS: ${ss4.company_name}`,
-          description: `The SS-4 for ${ss4.company_name} has been signed. Download from Drive and fax to IRS at (855) 641-6935.`,
+          description: `The SS-4 for ${ss4.company_name} has been signed. Fax the signed SS-4 (with the Articles) to the IRS at (855) 641-6935. The signed package comes to support@ in the "SS-4 Signed — Ready to Fax" email.`,
           assigned_to: "Luca",
           priority: "High",
           category: "Filing",
@@ -156,31 +163,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── 3. AUTO-UPLOAD SIGNED PDF TO DRIVE ───
+    // ─── 3. FILE THE SIGNED PDF IN THE COMPANY'S STORAGE ───
     if (ss4.account_id) {
       try {
-        const { data: acct } = await supabaseAdmin
-          .from("accounts")
-          .select("drive_folder_id")
-          .eq("id", ss4.account_id)
-          .single()
-
-        // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its signed SS-4
-        // saved in the new storage (still internal, never shown to the client) and needs no Drive folder at all.
+        // The signed SS-4 goes to the company's storage (internal, never shown to the client). A company with no storage
+        // has nowhere to file it: that is reported at the end of step 3b, never skipped quietly.
         const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
         const inStorage = (await companyDocState(ss4.account_id)) !== "drive"
+        companyHasStorage = inStorage
+        // a company left on its old folder (no storage, a folder, not finished) carries on there, as before
+        const decision = inStorage ? null : await noStorageDecisionFor(ss4.account_id)
+        const oldFolderId = decision && decision.route === "drive" ? decision.folderId : null
+        triedOldFolder = !!oldFolderId
 
-        if (acct?.drive_folder_id || inStorage) {
-          let targetFolderId = ""
-          if (!inStorage && acct?.drive_folder_id) {
-            const { listFolder } = await import("@/lib/google-drive")
-            const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
-            const companyFolder = folderResult.files?.find(f =>
-              f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
-            )
-            targetFolderId = companyFolder?.id || acct.drive_folder_id
-          }
-
+        if (inStorage || oldFolderId) {
           // Find the signed PDF in Storage
           const { data: files } = await supabaseAdmin.storage
             .from("signed-ss4")
@@ -205,33 +201,34 @@ export async function POST(req: NextRequest) {
                   accountId: ss4.account_id, fileName, bytes: fileData, label: "Form SS-4 (Signed)", category: 1,
                   callerKey: `ss4-signed-company:${ss4.id}`, portalVisible: false, documentType: "form_ss_4", serviceDeliveryId: formationSdId,
                 })
-                if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its SS-4 was being saved — nothing was saved.")
+                if (routed.route !== "store") throw new Error("This company's storage was not available while its SS-4 was being saved — nothing was saved.")
                 signedDocLinked = true // saved: never save it again through the fallback below, whatever happens next
                 await supabaseAdmin
                   .from("ss4_applications")
                   .update({ pdf_signed_drive_id: routed.pointer, updated_at: new Date().toISOString() })
                   .eq("id", ss4.id)
                 results.push({ step: "drive_upload", status: "ok", detail: `Saved to the new storage: ${routed.pointer}` })
-                signedDocLinked = true
               } else {
-                const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+                const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+                const folderResult = await listFolder(oldFolderId as string) as { files?: { id: string; name: string; mimeType: string }[] }
+                const companyFolder = folderResult.files?.find(f =>
+                  f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
+                )
+                const targetFolderId = companyFolder?.id || (oldFolderId as string)
                 // Stable name -> UPSERT: webhook retry refreshes in place, no copies.
                 const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
 
-                // Update ss4_applications with Drive file ID
+                // Update ss4_applications with the file ID
                 await supabaseAdmin
                   .from("ss4_applications")
                   .update({ pdf_signed_drive_id: driveResult.id, updated_at: new Date().toISOString() })
                   .eq("id", ss4.id)
 
-                results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
+                results.push({ step: "drive_upload", status: "ok", detail: `Uploaded: ${driveResult.id}` })
 
-                // Auto-save to documents table — stamped with the formation SD so
-                // the signed SS-4 shows in the flow workspace Documents section
-                // (which queries by service_delivery_id). portalVisible:false —
-                // the signed SS-4 is an INTERNAL tax document (responsible party's
-                // tax ID) and must NEVER be shared with the client per Antonio.
-                // The client opens a bank account with the EIN + Articles only.
+                // Auto-save to documents table — stamped with the formation SD so the signed SS-4 shows in the flow workspace
+                // Documents section. portalVisible:false — the signed SS-4 is an INTERNAL tax document (responsible party's
+                // tax ID) and must NEVER be shared with the client.
                 const saved = await autoSaveDocument({
                   accountId: ss4.account_id,
                   fileName,
@@ -249,8 +246,6 @@ export async function POST(req: NextRequest) {
           } else {
             results.push({ step: "drive_upload", status: "skipped", detail: "No PDF found in Storage" })
           }
-        } else {
-          results.push({ step: "drive_upload", status: "skipped", detail: "No drive_folder_id on account" })
         }
       } catch (e) {
         results.push({ step: "drive_upload", status: "error", detail: e instanceof Error ? e.message : String(e) })
@@ -310,7 +305,10 @@ export async function POST(req: NextRequest) {
     // Supabase Storage (signed-ss4). Register an SD-stamped documents row backed
     // by a long-lived signed URL so the workspace + portal "View" works in every
     // environment. Idempotent + non-fatal.
-    if (!signedDocLinked && formationSdId) {
+    // Only an environment whose Drive is faked (the sandbox) uses this holding-area row; a real environment never records a holding-area
+    // pointer as if the file were filed — what was not filed is reported plainly (below) and in the email.
+    const { driveIsMocked } = await import("@/lib/google-drive")
+    if (!signedDocLinked && formationSdId && driveIsMocked()) {
       try {
         const { data: files } = await supabaseAdmin.storage
           .from("signed-ss4")
@@ -348,6 +346,8 @@ export async function POST(req: NextRequest) {
             signedDocLinked = true
             results.push({ step: "signed_doc_storage", status: "ok", detail: "Signed SS-4 linked to flow from Storage" })
           } else {
+            // a webhook retry: the row from the first run is there — the signed copy IS filed
+            signedDocLinked = true
             results.push({ step: "signed_doc_storage", status: "skipped", detail: "Signed doc already linked" })
           }
         } else {
@@ -356,6 +356,19 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         results.push({ step: "signed_doc_storage", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
+    }
+
+    // The signed SS-4 was filed nowhere: say so, truthfully. A company with no storage gets the one plain sentence; a company
+    // that HAS storage but whose save did not happen gets a different, accurate message (never "no storage"). The signed PDF
+    // itself stays with the signing record, and the notification email below carries it.
+    if (!signedDocLinked && ss4.account_id) {
+      results.push({
+        step: "signed_doc",
+        status: "error",
+        detail: companyHasStorage === false
+          ? (triedOldFolder ? "The signed SS-4 could not be uploaded to the company's folder — see the earlier steps." : NO_STORAGE_SENTENCE)
+          : "The signed SS-4 could not be filed in the company's storage — see the earlier steps.",
+      })
     }
 
     // ─── 4. COMBINE SIGNED SS-4 + ARTICLES OF ORGANIZATION (IRS Package) ───
@@ -387,18 +400,19 @@ export async function POST(req: NextRequest) {
         // new storage (found through the documents list below) and gets the IRS package saved there; Drive is not touched.
         const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
         const pkgInStorage = (await companyDocState(ss4.account_id)) !== "drive"
+        // a company left on its old folder (no storage, a folder, not finished) carries on there, as before
+        const pkgDecision = pkgInStorage ? null : await noStorageDecisionFor(ss4.account_id)
+        const pkgOldFolderId = pkgDecision && pkgDecision.route === "drive" ? pkgDecision.folderId : null
 
         // Resolve the Articles PDF — Drive folder scan first, then documents table.
         let articlesBuffer: Buffer | null = null
         let articlesSource = ""
-        let companyFolderId: string | null = null
         if (!pkgInStorage && acct?.drive_folder_id) {
           const { listFolder, downloadFileBinary } = await import("@/lib/google-drive")
           const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
           const companyFolder = folderResult.files?.find(f =>
             f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
           )
-          companyFolderId = companyFolder?.id ?? null
           if (companyFolder?.id) {
             const companyFiles = await listFolder(companyFolder.id) as { files?: { id: string; name: string; mimeType: string }[] }
             const articlesFile = companyFiles.files?.find(f =>
@@ -436,10 +450,9 @@ export async function POST(req: NextRequest) {
           mergedPdfBytes = await mergedPdf.save()
           mergedFileName = `Form SS-4 - ${ss4.company_name} - For IRS.pdf`
 
-          // Upload combined PDF to Drive when the account has a folder. Stable
-          // name -> UPSERT: webhook retry refreshes in place, no copies. When
-          // there is no Drive folder we still produced the merged bytes for the
-          // email attachment, so staff get the complete package regardless.
+          // File the combined PDF in the company's storage. When the company has none we still produced the merged
+          // bytes for the email attachment, so staff get the complete package regardless — and the result says it was
+          // not filed (below).
           if (pkgInStorage) {
             // INTERNAL workspace document (SD-scoped), never client-visible. The same key on a re-sign is a new VERSION of
             // the same file, so the fax panel always reflects the latest signed package.
@@ -450,24 +463,27 @@ export async function POST(req: NextRequest) {
                 callerKey: `ss4-irs-package:${ss4.id}`, portalVisible: false, serviceDeliveryId: formationSdId, documentType: "irs_fax",
               })
               if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the IRS package was being saved — nothing was saved.")
+              packageFiled = true
               results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles saved to the new storage (${articlesSource}): ${routed.pointer} (${ss4Pages.length + articlesPages.length} pages)` })
               results.push({ step: "irs_package_doc", status: "ok", detail: "Combined package registered in workspace" })
             } catch (e) {
               results.push({ step: "irs_package", status: "error", detail: e instanceof Error ? e.message : String(e) })
             }
-          } else if (acct?.drive_folder_id) {
-            const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-            const targetFolderId = companyFolderId || acct.drive_folder_id
+          } else if (pkgOldFolderId) {
+            const { uploadBinaryToDriveUpsert, listFolder } = await import("@/lib/google-drive")
+            let targetFolderId = pkgOldFolderId
+            try {
+              const folderResult = await listFolder(pkgOldFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
+              const companyFolder = folderResult.files?.find(f => f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder")
+              if (companyFolder?.id) targetFolderId = companyFolder.id
+            } catch { /* keep the folder root */ }
+            // Stable name -> UPSERT: webhook retry refreshes in place, no copies.
             const driveResult = await uploadBinaryToDriveUpsert(mergedFileName, Buffer.from(mergedPdfBytes), "application/pdf", targetFolderId) as { id: string }
+            packageFiled = true
             results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles uploaded (${articlesSource}): ${driveResult.id} (${ss4Pages.length + articlesPages.length} pages)` })
 
-            // Register the combined package as an INTERNAL workspace document
-            // (SD-scoped) so it appears in the formation workspace and is the
-            // file the SS-4 fax panel faxes to the IRS. NEVER client-visible
-            // (portal_visible:false — it carries the SS-4 = responsible party's
-            // tax ID). Idempotent by drive_file_id: a re-sign upserts the SAME
-            // Drive file in place, so this returns the existing row and the fax
-            // panel always reflects the latest signed package (no duplicate row).
+            // Register the combined package as an INTERNAL workspace document (SD-scoped), NEVER client-visible
+            // (portal_visible:false — it carries the SS-4 = responsible party's tax ID). Idempotent by file id.
             try {
               await autoSaveDocument({
                 accountId: ss4.account_id,
@@ -507,6 +523,7 @@ export async function POST(req: NextRequest) {
                 })
                 if (saved.status === "saved") {
                   storedInStore = true
+                  packageFiled = true
                   results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles (${articlesSource}) saved in the CRM Store (${saved.write}, ${ss4Pages.length + articlesPages.length} pages)` })
                 }
               } catch (e) {
@@ -514,7 +531,7 @@ export async function POST(req: NextRequest) {
               }
             }
             if (!storedInStore) {
-              results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles built (${articlesSource}), not uploaded — account has no Drive folder` })
+              results.push({ step: "irs_package", status: "error", detail: `${NO_STORAGE_SENTENCE} The combined SS-4 + Articles package (${articlesSource}) was built and is attached to the notification email only.` })
             }
           }
         } else if (!ss4Bytes) {
@@ -571,11 +588,17 @@ export async function POST(req: NextRequest) {
         ``,
         `IRS Fax Number: (855) 641-6935`,
         ``,
+        ...(ss4.account_id && (!signedDocLinked || (mergedPdfBytes && !packageFiled))
+          ? [
+              `⚠️ NOT FILED: ${[!signedDocLinked ? "the signed SS-4" : null, mergedPdfBytes && !packageFiled ? "the combined SS-4 + Articles package" : null].filter(Boolean).join(" and ")} could not be filed in the company's documents. ${attachmentBytes ? "The attachment on this email is the only copy outside the signing record." : "It is in the signing record only."}`,
+              ``,
+            ]
+          : []),
         attachmentBytes
           ? articlesMissing
             ? `The signed SS-4 is attached (SS-4 ONLY — add the Articles before faxing).`
             : `The combined SS-4 + Articles package is attached. Print and fax to the IRS.`
-          : `ACTION REQUIRED: Download the signed SS-4 PDF from the client's Drive folder and fax it to the IRS.`,
+          : `ACTION REQUIRED: Download the signed SS-4 PDF from the signing record and fax it to the IRS.`,
         ``,
         `Admin Preview: ${APP_BASE_URL}/ss4/${ss4.token}/${ss4.access_code}?preview=td`,
       ].join("\n")
@@ -677,7 +700,10 @@ export async function POST(req: NextRequest) {
       })
     } catch { /* non-blocking */ }
 
-    return NextResponse.json({ ok: true, results })
+    // This route is PUBLIC (the signing page calls it): the staff-level reasons stay in the server log and the staff email, and the
+    // response carries only neutral wording for a step that did not succeed.
+    if (results.some((x) => x.status === "error")) console.error("[ss4-signed] steps with errors:", JSON.stringify(results.filter((x) => x.status === "error")))
+    return NextResponse.json({ ok: true, results: results.map((x) => (x.status === "error" ? { step: x.step, status: x.status, detail: "Not completed — staff have been notified." } : x)) })
   } catch (err) {
     console.error("[ss4-signed]", err)
     return NextResponse.json({ error: "Internal error" }, { status: 500 })

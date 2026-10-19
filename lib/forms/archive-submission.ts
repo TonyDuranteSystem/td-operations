@@ -22,7 +22,12 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { saveFormToDrive } from "@/lib/form-to-drive"
+import { saveFormForAccount } from "@/lib/crm-store/save-account-form"
+import { mergeArchiveMeta } from "@/lib/archive/meta-merge"
 import { getArchiveRecipe, type ArchivePlan } from "@/lib/forms/archive-registry"
+
+/** How long a company's move may keep a package waiting before the wait counts as failed attempts (the move itself alarms after 30 min). */
+export const MOVE_WAIT_BUDGET_MS = 6 * 60 * 60 * 1000
 
 export interface FormArchiveResult {
   status: "archived" | "already_archived" | "no_submission" | "not_real"
@@ -88,31 +93,73 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
   const nowIso = new Date().toISOString()
 
   // Prefer the plan pinned at submission; else derive it fresh (sweep path).
-  const plan = pinnedPlan(priorMeta) ?? (await recipe.resolvePlan(r))
+  // A destination that cannot be resolved is an ATTEMPT like any other failure: it is counted, so the sweep stops re-enqueuing at
+  // the limit and raises its ONE staff alert instead of retrying forever with attempts stuck at 0.
+  let plan: ArchivePlan
+  try {
+    // banking never trusts an older pin (it may hold a Drive folder id): the filer works the destination out again, now
+    plan = (formType === "banking" ? null : pinnedPlan(priorMeta)) ?? (await recipe.resolvePlan(r))
+  } catch (e) {
+    await recordAttempt(recipe.table, submissionId, priorMeta, priorAttempts + 1, `destination unresolved: ${e instanceof Error ? e.message : String(e)}`, null)
+    throw e
+  }
 
   let result: Awaited<ReturnType<typeof saveFormToDrive>>
+  let filedIn: "storage" | "folder" = "folder"
+  let waitingForMove = false
   try {
-    result = await saveFormToDrive(
-      plan.configKey,
-      (r.submitted_data ?? {}) as Record<string, unknown>,
-      plan.uploadPaths,
-      plan.folderId,
-      {
-        token: r.token ?? plan.configKey,
-        submittedAt: r.completed_at ?? nowIso,
-        companyName: plan.companyName,
-      },
-      // A form with MORE THAN ONE upload origin (e.g. closure: external form →
-      // closure-uploads, portal wizard → onboarding-uploads) supplies a per-path
-      // bucket resolver so BOTH origins download from the right bucket. plan.bucket
-      // is the default for forms with a single origin.
-      {
+    if (formType === "banking") {
+      // Stop Drive (dev job 264bb882, S1d): the banking package goes through the ONE banking filer, built from the STORED ROW exactly like
+      // every inline lane (same summary key, same uploads, the person the row records) — company storage (or its Drive folder if left on
+      // Drive), the client's personal papers to the PERSON's own storage. The destination is worked out now, not read from an old pin.
+      const { buildBankingInput } = await import("@/lib/forms/file-banking-submission")
+      const { fileBankingPackage } = await import("@/lib/forms/file-banking-package")
+      const pkg = await fileBankingPackage(await buildBankingInput(r as unknown as import("@/lib/forms/file-banking-submission").BankingRow, "banking-archive", { companyName: plan.companyName }))
+      result = { summaryFileId: pkg.summaryFileId, copied: pkg.copied, failed: pkg.failed, skipped: [], errors: pkg.errors }
+      filedIn = pkg.pinFolderId && /^(account|person)-storage:/.test(pkg.pinFolderId) ? "storage" : "folder"
+      waitingForMove = !pkg.ok && pkg.retryLater
+    } else if (plan.folderId === null) {
+      // No folder: file the package by company (its storage, or its old folder if it has one) — never skipped.
+      const accountId = typeof r["account_id"] === "string" ? (r["account_id"] as string) : null
+      if (!accountId) throw new Error(`archive: ${formType} ${submissionId} has no company to file it against`)
+      const saved = await saveFormForAccount({
+        accountId,
+        formType: plan.configKey,
+        submittedData: (r.submitted_data ?? {}) as Record<string, unknown>,
+        uploadPaths: plan.uploadPaths,
+        meta: { token: r.token ?? plan.configKey, submittedAt: r.completed_at ?? nowIso, companyName: plan.companyName },
         bucket: plan.bucket,
         resolveBucket: recipe.resolveBucket,
-        // ITIN is person-keyed: a person whose files live in the new storage gets the package there (no Drive folder)
-        person: formType === "itin" && typeof r["contact_id"] === "string" ? { contactId: r["contact_id"] as string, viaAccountId: (r["account_id"] as string | null) ?? null, name: plan.companyName } : undefined,
-      },
-    )
+      })
+      if (saved.route === "none") {
+        throw new Error(`archive: company ${accountId} (${plan.companyName ?? "?"}) has no storage and no folder — there is nowhere to archive its ${formType} package`)
+      }
+      result = saved.result
+      filedIn = saved.route === "store" ? "storage" : "folder"
+    } else {
+      result = await saveFormToDrive(
+        plan.configKey,
+        (r.submitted_data ?? {}) as Record<string, unknown>,
+        plan.uploadPaths,
+        plan.folderId,
+        {
+          token: r.token ?? plan.configKey,
+          submittedAt: r.completed_at ?? nowIso,
+          companyName: plan.companyName,
+        },
+        // A form with MORE THAN ONE upload origin (e.g. closure: external form →
+        // closure-uploads, portal wizard → onboarding-uploads) supplies a per-path
+        // bucket resolver so BOTH origins download from the right bucket. plan.bucket
+        // is the default for forms with a single origin.
+        {
+          bucket: plan.bucket,
+          resolveBucket: recipe.resolveBucket,
+          fileNameOf: recipe.fileNameOf?.(r),
+          // ITIN is person-keyed: a person whose files live in the new storage gets the package there (no Drive folder)
+          person: formType === "itin" && typeof r["contact_id"] === "string" ? { contactId: r["contact_id"] as string, viaAccountId: (r["account_id"] as string | null) ?? null, name: plan.companyName } : undefined,
+        },
+      )
+    }
   } catch (e) {
     await recordAttempt(recipe.table, submissionId, priorMeta, priorAttempts + 1, `save threw: ${e instanceof Error ? e.message : String(e)}`, null)
     throw e
@@ -125,31 +172,34 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
       result.failed.length ? `${result.failed.length} file(s) failed: ${result.failed.join("; ")}` : null,
       result.errors.length ? `errors: ${result.errors.join("; ")}` : null,
     ].filter(Boolean).join(" | ")
-    await recordAttempt(recipe.table, submissionId, priorMeta, priorAttempts + 1, detail || "unknown partial failure", result)
+    // A company that is being moved to the new storage is WAITING, not failing: the wait does not use up attempts (the move has its own
+    // alarm), until it has lasted longer than MOVE_WAIT_BUDGET_MS — then it counts like any other failure so the sweep alerts once.
+    const waitingSince = typeof priorMeta["waiting_since"] === "string" ? (priorMeta["waiting_since"] as string) : nowIso
+    const waitedTooLong = waitingForMove && Date.now() - Date.parse(waitingSince) > MOVE_WAIT_BUDGET_MS
+    const countIt = !waitingForMove || waitedTooLong
+    await recordAttempt(recipe.table, submissionId, priorMeta, countIt ? priorAttempts + 1 : priorAttempts, detail || "unknown partial failure", result, { waiting_since: waitingForMove ? waitingSince : null })
     throw new Error(`archive: ${formType} ${submissionId} not fully archived (retryable) — ${detail}`)
   }
 
-  // FULL success — set the marker (what the sweep keys on), MERGING meta so a
-  // pinned plan / prior detail is preserved for inspection.
+  // FULL success — set the marker (what the sweep keys on); the record of where it filed is MERGED into the meta (atomically), so a
+  // pinned plan / the sweep's alerted flag written by someone else meanwhile is preserved for inspection.
   const { error: markErr } = await supabaseAdmin
     .from(tbl)
-    // as never: drive_archived_at / drive_archive_meta are new columns not yet in
-    // the generated types (per-form marker migrations). Remove after gen:types.
-    .update({
-      drive_archived_at: nowIso,
-      drive_archive_meta: {
-        ...priorMeta,
-        attempts: priorAttempts + 1,
-        last_attempt_at: nowIso,
-        last_error: null,
-        summary_file_id: result.summaryFileId,
-        copied: result.copied,
-        skipped: result.skipped,
-        drive_folder_id: plan.folderId,
-      },
-    } as never)
+    // as never: drive_archived_at is a new column not yet in the generated types (per-form marker migrations).
+    .update({ drive_archived_at: nowIso } as never)
     .eq("id", submissionId)
   if (markErr) throw new Error(`archive: succeeded but failed to set marker (retryable): ${markErr.message}`)
+  await mergeArchiveMeta(recipe.table, submissionId, {
+    attempts: priorAttempts + 1,
+    waiting_since: null, // filed: no longer waiting for a move
+    last_attempt_at: nowIso,
+    last_error: null,
+    summary_file_id: result.summaryFileId,
+    copied: result.copied,
+    skipped: result.skipped,
+    drive_folder_id: plan.folderId,
+    filed_in: filedIn,
+  }).catch((e) => console.error("[forms/archive-submission] filed, but the meta record could not be merged (non-fatal):", e))
 
   return { status: "archived", formType, submissionId, copied: result.copied.length, skipped: result.skipped.length }
 }
@@ -157,26 +207,23 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
 async function recordAttempt(
   table: string,
   submissionId: string,
-  priorMeta: Record<string, unknown>,
+  _priorMeta: Record<string, unknown>,
   attempts: number,
   lastError: string,
   result: Awaited<ReturnType<typeof saveFormToDrive>> | null,
+  extra?: Record<string, unknown>,
 ): Promise<void> {
   try {
-    await supabaseAdmin
-      .from(table as "banking_submissions")
-      .update({
-        drive_archive_meta: {
-          ...priorMeta, // MERGE — never drop the pinned plan or the alerted flag
-          attempts,
-          last_attempt_at: new Date().toISOString(),
-          last_error: lastError,
-          copied: result?.copied ?? [],
-          failed: result?.failed ?? [],
-          errors: result?.errors ?? [],
-        },
-      } as never)
-      .eq("id", submissionId)
+    // MERGED atomically — never drop the pinned plan or the sweep's alerted flag
+    await mergeArchiveMeta(table, submissionId, {
+      attempts,
+      last_attempt_at: new Date().toISOString(),
+      last_error: lastError,
+      copied: result?.copied ?? [],
+      failed: result?.failed ?? [],
+      errors: result?.errors ?? [],
+      ...(extra ?? {}),
+    })
   } catch (e) {
     console.error("[forms/archive-submission] failed to record attempt meta (non-fatal):", e)
   }

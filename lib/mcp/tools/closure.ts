@@ -348,29 +348,22 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         lines.push(`Submitted: ${sub.completed_at}`)
 
         if (mark_reviewed) {
-          // Save form data + uploads to Drive
-          try {
-            const { saveFormToDrive } = await import("@/lib/form-to-drive")
-            const driveFolderId = sub.account_id
-              ? (await supabaseAdmin.from("accounts").select("drive_folder_id").eq("id", sub.account_id).single()).data?.drive_folder_id
-              : null
-            if (driveFolderId) {
-              const driveResult = await saveFormToDrive(
-                "closure",
-                submitted,
-                (sub.upload_paths as string[]) || [],
-                driveFolderId,
-                { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: clientName || token }
-              )
-              if (driveResult.summaryFileId) lines.push(`✅ Data summary saved to Drive (${driveResult.summaryFileId})`)
-              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
-              if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy`)
-              if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
-            } else {
-              lines.push("⚠️ No Drive folder found — data not saved to Drive")
-            }
-          } catch (driveErr) {
-            lines.push(`⚠️ Drive save failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
+          // File the form data + uploads FIRST. The form is marked "reviewed" only when it was filed: a company that can receive
+          // nothing, a company being moved, or a failed save leaves the form exactly as it was (still waiting for review).
+          const { fileClosureSubmission } = await import("@/lib/crm-store/save-account-form")
+          const outcome = await fileClosureSubmission(
+            { id: sub.id as string, token, account_id: sub.account_id, contact_id: (sub.contact_id as string | null) ?? null, upload_paths: (sub.upload_paths as string[] | null) ?? [], completed_at: sub.completed_at },
+            submitted,
+            clientName || token,
+            "mcp/closure_form_review",
+          )
+          const filed = outcome.ok
+          lines.push(...outcome.lines)
+
+          if (!filed) {
+            lines.push("")
+            lines.push("❌ The form was NOT marked as reviewed — nothing was changed. Fix the problem above and run the review again.")
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] }
           }
 
           await supabaseAdmin

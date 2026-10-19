@@ -17,6 +17,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { normalizePersonName } from "@/lib/members/member-identity"
 
 export type FormDestination =
   | { marker: string; reason?: undefined }
@@ -106,18 +107,26 @@ export async function findContactByExactEmail(email: string | null | undefined):
   const wanted = (email ?? "").trim().toLowerCase()
   if (!wanted) return { status: "none" }
   const pattern = `%${escapeLikeExact(wanted)}%`
-  const hits: Array<{ id: string; full_name: string | null }> = []
-  // Pages in a fixed order until the list is exhausted (bounded): a short address contained in many longer ones cannot push the real
-  // match out of view, and an address stored with stray spaces is still found. Equality is decided here, in code.
-  for (let page = 0; page < 20; page++) {
-    const { data, error } = await supabaseAdmin.from("contacts").select("id, email, full_name").ilike("email", pattern).order("id").range(page * 200, page * 200 + 199)
-    if (error) throw new Error(`Could not look up the contact: ${error.message}`)
-    for (const r of data ?? []) if ((r.email ?? "").trim().toLowerCase() === wanted) hits.push({ id: r.id as string, full_name: (r.full_name as string | null) ?? null })
-    if (!data || data.length < 200) break
+  const found = new Map<string, string | null>()
+  // Same identity rules as the rest of the CRM (lib/operations/find-contact-by-email.ts): a MERGED-AWAY contact (merged_into set) is never a
+  // candidate, and an old address folded into a survivor (alt_emails) or a second address (email_2) counts as that person's email.
+  // Pages in a fixed order until the list is exhausted (bounded), equality decided here in code, so a short address contained in many longer
+  // ones cannot push the real match out of view and an address stored with stray spaces is still found.
+  for (const column of ["email", "email_2"] as const) {
+    for (let page = 0; page < 20; page++) {
+      const { data, error } = await supabaseAdmin.from("contacts").select(`id, ${column}, full_name`).is("merged_into", null).ilike(column, pattern).order("id").range(page * 200, page * 200 + 199)
+      if (error) throw new Error(`Could not look up the contact: ${error.message}`)
+      for (const r of (data ?? []) as unknown as Array<Record<string, string | null>>) if ((r[column] ?? "").trim().toLowerCase() === wanted) found.set(r.id as string, r.full_name ?? null)
+      if (!data || data.length < 200) break
+    }
   }
-  if (hits.length === 0) return { status: "none" }
-  if (hits.length === 1) return { status: "one", id: hits[0].id, fullName: hits[0].full_name }
-  return { status: "many", ids: hits.map((h) => h.id) }
+  const { data: alias, error: aErr } = await supabaseAdmin.from("contacts").select("id, full_name").is("merged_into", null).contains("alt_emails", [wanted]).order("id").limit(50)
+  if (aErr) throw new Error(`Could not look up the contact: ${aErr.message}`)
+  for (const r of alias ?? []) found.set(r.id as string, (r.full_name as string | null) ?? null)
+  const ids = Array.from(found.keys())
+  if (ids.length === 0) return { status: "none" }
+  if (ids.length === 1) return { status: "one", id: ids[0], fullName: found.get(ids[0]) ?? null }
+  return { status: "many", ids }
 }
 
 // letters that do not decompose into base letter + accent
@@ -135,29 +144,36 @@ function nameTokens(raw: string, german: boolean): string[] {
   return v.split(/\s+/).filter((t) => t && !SUFFIXES.has(t))
 }
 
-function sameOrderSubsequence(short: string[], long: string[]): boolean {
-  let i = 0
-  for (const t of long) if (t === short[i]) i++
-  return i === short.length
-}
-
+/** Same words, in any order — NOTHING else (no subset, no "shared last name", no left-out middle name). */
 function tokenListsMatch(a: string[], b: string[]): boolean {
   if (a.length === 0 || b.length === 0) return false
-  if (a.slice().sort().join(" ") === b.slice().sort().join(" ")) return true // same words, any order (first/last swapped)
-  const [short, long] = a.length <= b.length ? [a, b] : [b, a]
-  // a middle name left out on one side: at least two words, all of them present on the other side in the same order
-  return short.length >= 2 && sameOrderSubsequence(short, long)
+  return a.length === b.length && a.slice().sort().join(" ") === b.slice().sort().join(" ")
 }
 
 /**
- * Do two person names mean the same person? Case, accents, punctuation, hyphens, name suffixes (Jr, III), German spellings and
- * the order of first/last name are ignored; a left-out middle name is allowed. CONSERVATIVE: a name that is empty (or has no
- * comparable letters) on either side, or a single word against a full name, is NOT a match — the caller then treats it as ambiguous.
+ * Do two person names mean the same person? ONLY when the full names are the same words: first AND last (and any other word), in any
+ * order, ignoring case, accents, punctuation, hyphens and German spellings (Müller = Mueller). A shared last name alone is never
+ * enough; a left-out middle name, a single word against a full name, or a generational suffix on one side only (Jr, III) is NOT a
+ * match. Non-Latin names (李小龙) are compared as written, word for word — never reduced to nothing. A name with no comparable
+ * letters on either side matches nothing. The caller treats every "no" as ambiguous: nothing filed, one alarm.
  */
 export function namesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
   const x = (a ?? "").trim(), y = (b ?? "").trim()
   if (!x || !y) return false
+  // A name with no comparable letters or digits ("!!!") matches nothing — not even itself.
+  if (nameTokens(x, false).length === 0 || nameTokens(y, false).length === 0) return false
+  // Generational suffixes (Sr / Jr / II / III / IV) separate DIFFERENT people who may share one address (father and son): a suffix on one side
+  // only, or two different suffixes, is never a match.
+  if (suffixesOf(x) !== suffixesOf(y)) return false
+  // 1. The CRM's own member rule first (lib/members/member-identity.ts: NFC, trimmed, lower-cased, spaces collapsed) — the strict base.
+  if (normalizePersonName(x) === normalizePersonName(y)) return true
+  // 2. Lenient extras (lead forms only: both sides already share the SAME exact email, and a doubt only ever ends in "ambiguous").
   return tokenListsMatch(nameTokens(x, false), nameTokens(y, false)) || tokenListsMatch(nameTokens(x, true), nameTokens(y, true))
+}
+
+/** The generational suffixes present in a name, as one comparable string ("" = none). */
+function suffixesOf(raw: string): string {
+  return raw.toLowerCase().replace(/[.,]/g, " ").split(/\s+/).filter((t) => SUFFIXES.has(t)).sort().join(",")
 }
 
 export type LeadContact =

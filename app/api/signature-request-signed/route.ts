@@ -92,8 +92,23 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 1. Upload signed PDF to Google Drive + register in documents table
-    if (!switched && sigReq.signed_pdf_path && account?.drive_folder_id) {
+    // 1. Upload signed PDF to Google Drive + register in documents table.
+    //    Stop Drive (dev job 264bb882, S1d): only for a company deliberately left on Drive (folder, no storage, not closed);
+    //    any other state is an error line + a staff alarm, never a silent skip.
+    let legacyFolderId: string | null = null
+    // (a person-level agreement has no company: nothing to file in a company folder and nothing to alarm about; a failed lookup
+    //  is reported on its own line and never stops the steps after it)
+    if (!switched && sigReq.signed_pdf_path && sigReq.account_id) {
+      try {
+        const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
+        const legacy = await legacyDriveForAccount(sigReq.account_id)
+        if (legacy.allowed) legacyFolderId = legacy.folderId
+        else results.push(`drive_upload: error - ${await raiseDriveWriteRefused({ flow: "signature-request-signed", accountId: sigReq.account_id, reason: legacy.reason, detail: sigReq.document_name })}`)
+      } catch (err) {
+        results.push(`drive_upload: error - ${err instanceof Error ? err.message : "could not check where this company's files live"}`)
+      }
+    }
+    if (!switched && sigReq.signed_pdf_path && legacyFolderId) {
       try {
         const { data: pdfData } = await supabaseAdmin.storage
           .from("signed-documents")
@@ -107,9 +122,9 @@ export async function POST(req: NextRequest) {
           const { uploadBinaryToDriveUpsert, listFolder } = await import("@/lib/google-drive")
 
           // Find 5. Correspondence subfolder or use root
-          let targetFolderId = account.drive_folder_id
+          let targetFolderId = legacyFolderId
           try {
-            const folderContents = await listFolder(account.drive_folder_id)
+            const folderContents = await listFolder(legacyFolderId)
             const corrFolder = folderContents.find((f: { name: string; id: string }) => f.name.startsWith("5"))
             if (corrFolder) targetFolderId = corrFolder.id
           } catch { /* use root folder */ }
