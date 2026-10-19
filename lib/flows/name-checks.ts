@@ -325,3 +325,12 @@ export function confirmedClientFacingName(checks: NameCheck[] | null | undefined
   // same trap team-workspace's 2026-09-05 entry already hit once).
   return namesAtMaxRank.size === 1 ? Array.from(namesAtMaxRank)[0] : null
 }
+
+/**
+ * One name at a time (a service's `oneAtATime` rule, lib/flows/name-loop-policy.ts): true when a DIFFERENT name is already
+ * with the client, accepted by them, or filed — so a second one must not be sent. The server refuses with this, and the
+ * staff panel hides its "Send to Client" button with the same test, so the two can never disagree. Pure.
+ */
+export function anotherNameInProgress(checks: ReadonlyArray<Pick<NameCheck, 'status'>>, index: number): boolean {
+  return checks.some((c, i) => i !== index && (c.status === 'sent_to_client' || c.status === 'accepted' || c.status === 'filed'))
+}

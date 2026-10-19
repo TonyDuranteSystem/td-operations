@@ -15,6 +15,7 @@ import {
   allNamesDead,
   addStaffName,
   addClientNames,
+  anotherNameInProgress,
   nameActionProblem,
   nameDedupeKey,
   type GuardedNameAction,
@@ -653,10 +654,7 @@ export async function handleNameAction(params: {
   } else if (params.action === 'send_to_client') {
     // One name at a time (the service's rule): another name is already with the client,
     // accepted by them or filed. Formation does not enforce this (policy.oneAtATime is false).
-    if (
-      policy.oneAtATime &&
-      checks.some((c, i) => i !== params.nameIndex && (c.status === 'sent_to_client' || c.status === 'accepted' || c.status === 'filed'))
-    ) {
+    if (policy.oneAtATime && anotherNameInProgress(checks, params.nameIndex)) {
       return { ok: false, error: 'Another name is already with the client, accepted or filed. Withdraw it or finish it before sending a different one.' }
     }
     const stateResult = await resolveStateFor(policy, row)

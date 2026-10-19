@@ -886,7 +886,7 @@ export function isWithinNewBadgeWindow(createdAt: string): boolean {
 
 export async function getPortalFlows(accountId: string, locale: 'en' | 'it', contactId?: string | null): Promise<PortalFlow[]> {
   const { FLOW_TYPES, CONTACT_FLOW_TYPES, deriveFlowYear, buildFlowTopic } = await import('@/lib/flows/resolve-flows')
-  const { computeFlowProgress, buildFlowSteps } = await import('@/lib/flows/flow-progress')
+  const { computeFlowProgress, buildFlowSteps, stageClientVisibleFlag } = await import('@/lib/flows/flow-progress')
 
   // Account-scoped flows (Tax Return, State Annual Report, State RA Renewal, CMRA).
   // Skipped when there's no account (accountId === '' for no-account/ITIN-only
@@ -938,7 +938,7 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it', con
   const serviceTypes = Array.from(new Set(sds.map(s => s.service_type).filter((t): t is string => !!t)))
   const { data: stageRows } = await supabaseAdmin
     .from('pipeline_stages')
-    .select('service_type, stage_name, stage_order, client_label, client_label_it, icon')
+    .select('service_type, stage_name, stage_order, client_label, client_label_it, icon, client_visible')
     .in('service_type', serviceTypes)
 
   const stagesByType = new Map<string, FlowStageRow[]>()
@@ -951,6 +951,7 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it', con
       client_label: (r.client_label as string | null) ?? null,
       client_label_it: (r.client_label_it as string | null) ?? null,
       icon: (r.icon as string | null) ?? null,
+      client_visible: stageClientVisibleFlag(r.service_type, r.client_visible),
     })
     stagesByType.set(r.service_type, list)
   }

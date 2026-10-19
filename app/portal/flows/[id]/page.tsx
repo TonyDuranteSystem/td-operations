@@ -15,7 +15,7 @@ import { FlowStageJourney, type ShippingCard } from '@/components/portal/flow-st
 import { DecisionCard } from '@/components/portal/decision-card'
 import { DocumentList } from '@/components/portal/document-list'
 import type { DecisionRequest } from '@/lib/decisions'
-import { buildFlowSteps, buildJourneySteps, type FlowStageRow } from '@/lib/flows/flow-progress'
+import { buildFlowSteps, buildJourneySteps, stageClientVisibleFlag, type FlowStageRow } from '@/lib/flows/flow-progress'
 import { deriveFlowYear, buildFlowTopic, ALL_FLOW_TYPES, JOURNEY_FLOW_TYPES } from '@/lib/flows/resolve-flows'
 import { isClientSafeFlowDoc } from '@/lib/flows/flow-doc-visibility'
 import { MAILING_DESTINATION_LINES } from '@/lib/td-address'
@@ -117,7 +117,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: stageRows } = await (supabaseAdmin as any)
     .from('pipeline_stages')
-    .select('stage_name, stage_order, client_label, client_label_it, client_description, icon')
+    .select('stage_name, stage_order, client_label, client_label_it, client_description, icon, client_visible')
     .eq('service_type', sd.service_type)
 
   const stages: FlowStageRow[] = ((stageRows ?? []) as Array<Record<string, unknown>>).map(r => ({
@@ -127,6 +127,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     client_label_it: (r.client_label_it as string | null) ?? null,
     client_description: (r.client_description as string | null) ?? null,
     icon: (r.icon as string | null) ?? null,
+    client_visible: stageClientVisibleFlag(sd.service_type, r.client_visible),
   }))
 
   // Contact-scoped flows (ITIN) get the rich, clickable per-stage journey driven

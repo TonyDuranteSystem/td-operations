@@ -12,6 +12,7 @@ import {
   proposalChatNote,
   displayNameFor,
 } from '@/lib/flows/name-loop-policy'
+import { anotherNameInProgress } from '@/lib/flows/name-checks'
 
 const formation = nameLoopPolicyFor('Company Formation')!
 const change = nameLoopPolicyFor('Company Change Name')!
@@ -118,5 +119,20 @@ describe('client wording', () => {
     expect(proposalChatNote(change, { ...base, language: 'en' })).toContain('We checked Acme LLC')
     expect(proposalChatNote(change, { ...base, language: 'it' })).toContain('Abbiamo verificato Acme LLC')
     expect(proposalChatNote(formation, { ...base, language: 'en' })).toContain('We checked your LLC names and Acme LLC is available in Florida')
+  })
+})
+
+
+describe('anotherNameInProgress (one name at a time — the server refuses with it, the panel hides the button with it)', () => {
+  const s = (...statuses: string[]) => statuses.map((status) => ({ status })) as never[]
+  it('true when a DIFFERENT name is with the client, accepted or filed', () => {
+    expect(anotherNameInProgress(s('available', 'sent_to_client'), 0)).toBe(true)
+    expect(anotherNameInProgress(s('available', 'accepted'), 0)).toBe(true)
+    expect(anotherNameInProgress(s('available', 'filed'), 0)).toBe(true)
+  })
+  it('false for the name itself, dead names, and names still being checked', () => {
+    expect(anotherNameInProgress(s('sent_to_client', 'available'), 0)).toBe(false)
+    expect(anotherNameInProgress(s('available', 'not_available', 'rejected_by_client', 'rejected_by_sos', 'pending'), 0)).toBe(false)
+    expect(anotherNameInProgress([], 0)).toBe(false)
   })
 })

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Loader2, ExternalLink, Building2, ArrowRight } from 'lucide-react'
-import { NAME_STATUS_META, hasFiledName, allNamesDead, type NameCheck, type NameCheckStatus } from '@/lib/flows/name-checks'
+import { NAME_STATUS_META, hasFiledName, allNamesDead, anotherNameInProgress, type NameCheck, type NameCheckStatus } from '@/lib/flows/name-checks'
 import { resolveFormationFilingLink } from '@/lib/flows/state-links'
 import { canAddNameAtStage, nameLoopPolicyFor } from '@/lib/flows/name-loop-policy'
 import type { NameAction } from '@/lib/operations/formation-name-checks'
@@ -259,6 +259,10 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage, ser
           </>
         )
       case 'available':
+        // One name at a time (a name change): while another name is with the client / accepted / filed there is nothing to send.
+        if (policy.oneAtATime && anotherNameInProgress(checks, i)) {
+          return <span className="text-xs text-zinc-500">Another name is already with the client</span>
+        }
         return <Btn onClick={() => act(i, 'send_to_client', 'sent_to_client')} variant="primary">Send to Client →</Btn>
       case 'sent_to_client':
         // The way out when the client never answers (or it was sent by mistake).
