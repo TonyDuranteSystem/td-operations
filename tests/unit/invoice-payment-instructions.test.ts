@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import { sanitizeInvoiceMessage } from '@/lib/portal/pay-token'
 
 // Next's real revalidatePath needs a request context; the per-test doMock below can lose the race when the suite is
-// under load (intermittent "static generation store missing"). A file-level mock makes it deterministic.
+// under load (intermittent "static generation store missing"). A file-level mock makes it deterministic —
+// and callWithMockedDeps must never doMock/doUnmock next/cache, or the first call strips this mock for later tests.
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 
 describe('sanitizeInvoiceMessage', () => {
@@ -112,7 +113,6 @@ describe('createUnifiedInvoiceDraft — no longer bakes payment instructions int
       fetchSettingsBanks: vi.fn(async () => []),
       selectSettingsBank: vi.fn(() => null),
     }))
-    vi.doMock('next/cache', () => ({ revalidatePath: vi.fn() }))
     vi.doMock('@/lib/server-action', () => ({
       safeAction: vi.fn(async (fn: () => Promise<unknown>) => {
         const data = await fn()
@@ -125,7 +125,6 @@ describe('createUnifiedInvoiceDraft — no longer bakes payment instructions int
 
     vi.doUnmock('@/lib/portal/td-invoice')
     vi.doUnmock('@/lib/invoice-auto-send')
-    vi.doUnmock('next/cache')
     vi.doUnmock('@/lib/server-action')
 
     return mockCreateTDInvoice
