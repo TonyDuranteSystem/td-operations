@@ -65,7 +65,5 @@ export function shouldApplyDelivery(current: string | null, next: DeliveryStatus
   return current === null || current === 'delayed' // delayed
 }
 
-/** The plain-language reason key shown to a client (see invDelivery.* in lib/portal/i18n.ts). */
-export function deliveryReasonKey(detail: string | null): 'suppressed' | 'bounced' | 'failed' {
-  return detail === 'suppressed' ? 'suppressed' : detail === 'bounced' ? 'bounced' : 'failed'
-}
+// Kept here for callers/tests; the browser banner imports it from './delivery-reason' (this file uses server-only crypto).
+export { deliveryReasonKey } from './delivery-reason'

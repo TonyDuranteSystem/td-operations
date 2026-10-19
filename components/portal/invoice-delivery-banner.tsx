@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { AlertTriangle, Download } from 'lucide-react'
 import { interpolateString } from '@/lib/template-interpolation'
-import { deliveryReasonKey } from '@/lib/portal/resend-webhook'
+import { deliveryReasonKey } from '@/lib/portal/delivery-reason'
 
 /**
  * Shown on an invoice whose LAST email did not reach the customer (Resend reported a bounce, a block or a failure).
