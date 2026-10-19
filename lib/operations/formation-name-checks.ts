@@ -173,7 +173,9 @@ async function resolveFormationState(row: SdRow): Promise<string> {
   return 'New Mexico'
 }
 
-type StateResult = { ok: true; state: string } | { ok: false; error: string }
+// One flat shape on purpose: this project compiles without strictNullChecks, where a `{ok:true}|{ok:false}` union is NOT narrowed
+// by `if (!r.ok)` (the Vercel build failed on exactly that). `state` is set when ok, `error` when not.
+type StateResult = { ok: boolean; state?: string; error?: string }
 
 /**
  * The state named in the client-facing message, by the service's rule: Formation uses the
