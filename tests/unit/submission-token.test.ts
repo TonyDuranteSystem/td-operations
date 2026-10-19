@@ -95,3 +95,17 @@ describe("pickClosureSubmissionToken — closure re-send keeps the same saved su
   })
 })
 
+
+describe("slugifyClientName — non-Latin names (Stop-Drive S1a)", () => {
+  it("a name with no Latin letters no longer collapses to an empty slug: different people get different tokens, the same person the same token", () => {
+    const a = buildSubmissionToken({ clientName: "李小龙", wizardType: "formation", calendarYear: 2026 })
+    const b = buildSubmissionToken({ clientName: "王小明", wizardType: "formation", calendarYear: 2026 })
+    expect(a).not.toBe(b)
+    expect(a).not.toBe("portal--2026")
+    expect(a).toBe(buildSubmissionToken({ clientName: "李小龙", wizardType: "formation", calendarYear: 2026 }))
+    expect(a).toMatch(/^portal-u[0-9a-f]{12}-2026$/)
+  })
+  it("Latin names are unchanged", () => {
+    expect(buildSubmissionToken({ clientName: "Mario Rossi", wizardType: "formation", calendarYear: 2026 })).toBe("portal-mario-rossi-2026")
+  })
+})

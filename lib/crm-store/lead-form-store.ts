@@ -144,28 +144,24 @@ function nameTokens(raw: string, german: boolean): string[] {
   return v.split(/\s+/).filter((t) => t && !SUFFIXES.has(t))
 }
 
-function sameOrderSubsequence(short: string[], long: string[]): boolean {
-  let i = 0
-  for (const t of long) if (t === short[i]) i++
-  return i === short.length
-}
-
+/** Same words, in any order — NOTHING else (no subset, no "shared last name", no left-out middle name). */
 function tokenListsMatch(a: string[], b: string[]): boolean {
   if (a.length === 0 || b.length === 0) return false
-  if (a.slice().sort().join(" ") === b.slice().sort().join(" ")) return true // same words, any order (first/last swapped)
-  const [short, long] = a.length <= b.length ? [a, b] : [b, a]
-  // a middle name left out on one side: at least two words, all of them present on the other side in the same order
-  return short.length >= 2 && sameOrderSubsequence(short, long)
+  return a.length === b.length && a.slice().sort().join(" ") === b.slice().sort().join(" ")
 }
 
 /**
- * Do two person names mean the same person? Case, accents, punctuation, hyphens, name suffixes (Jr, III), German spellings and
- * the order of first/last name are ignored; a left-out middle name is allowed. CONSERVATIVE: a name that is empty (or has no
- * comparable letters) on either side, or a single word against a full name, is NOT a match — the caller then treats it as ambiguous.
+ * Do two person names mean the same person? ONLY when the full names are the same words: first AND last (and any other word), in any
+ * order, ignoring case, accents, punctuation, hyphens and German spellings (Müller = Mueller). A shared last name alone is never
+ * enough; a left-out middle name, a single word against a full name, or a generational suffix on one side only (Jr, III) is NOT a
+ * match. Non-Latin names (李小龙) are compared as written, word for word — never reduced to nothing. A name with no comparable
+ * letters on either side matches nothing. The caller treats every "no" as ambiguous: nothing filed, one alarm.
  */
 export function namesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
   const x = (a ?? "").trim(), y = (b ?? "").trim()
   if (!x || !y) return false
+  // A name with no comparable letters or digits ("!!!") matches nothing — not even itself.
+  if (nameTokens(x, false).length === 0 || nameTokens(y, false).length === 0) return false
   // Generational suffixes (Sr / Jr / II / III / IV) separate DIFFERENT people who may share one address (father and son): a suffix on one side
   // only, or two different suffixes, is never a match.
   if (suffixesOf(x) !== suffixesOf(y)) return false
