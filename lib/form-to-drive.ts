@@ -1183,7 +1183,7 @@ export async function saveFormToDrive(
       const storeErrors: string[] = []
       let summaryBytes: Buffer | null = null
       try {
-        summaryBytes = Buffer.from(await generateFormSummaryPDF(config, submittedData, { ...meta, uploadCount: uploadPaths.length }))
+        summaryBytes = Buffer.from(await generateFormSummaryPDF(config, submittedData, { ...meta, uploadCount: uploadPaths.length, deterministic: true }))
       } catch (e) {
         storeErrors.push(`Summary PDF error: ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -1277,6 +1277,7 @@ export async function saveFormToDrive(
     const summaryPdf = await generateFormSummaryPDF(config, submittedData, {
       ...meta,
       uploadCount: uploadPaths.length,
+      deterministic: true,
     })
     const slug = (meta.companyName || meta.token).replace(/\s+/g, "_")
     const result = await uploadBinaryToDriveUpsert(

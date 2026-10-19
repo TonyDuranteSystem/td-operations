@@ -255,55 +255,19 @@ export async function POST(req: NextRequest) {
         // Stop Drive (dev job 264bb882, S1d): ONE filer for every banking lane (lib/forms/file-banking-package.ts): the company's
         // storage (or its Drive folder if it was left on Drive); the client's personal papers go to the PERSON's own storage; a
         // failure is an ERROR step with ONE staff alarm; the durable job is queued whenever there is a destination.
-        const { data: fullSub } = await supabaseAdmin
-          .from("banking_submissions")
-          .select("submitted_data, upload_paths, completed_at")
-          .eq("id", submission_id)
-          .single()
-
-        if (!fullSub?.submitted_data) {
-          results.push({ step: "save_to_drive", status: "skipped", detail: "No submitted_data" })
-        } else {
-          const { fileBankingPackage } = await import("@/lib/forms/file-banking-package")
-          const pkg = await fileBankingPackage({
-            flow: "banking-form-completed", formType: "banking", accountId: sub.account_id, contactId: sub.contact_id ?? null,
-            submittedData: fullSub.submitted_data as Record<string, unknown>, uploadPaths: (fullSub.upload_paths as string[]) || [],
-            bucket: "banking-uploads", token: sub.token, submittedAt: fullSub.completed_at, companyName: companyName || undefined,
-          })
-          results.push({
-            step: "save_to_drive",
-            status: pkg.ok ? "ok" : "error",
-            detail: pkg.ok
-              ? `PDF: ${pkg.summaryFileId || "none"}, filed: ${pkg.copied.length}`
-              : `${pkg.sentence ?? pkg.errors.join("; ")} (filed: ${pkg.copied.length}, not filed: ${pkg.failed.length})${pkg.retryLater ? " — will be retried" : ""}`,
-          })
-          let markedFiled = false
-          if (pkg.ok) {
-            // fully filed: the very marker the archive job sets, so the sweep leaves this row alone
-            const { markBankingSubmissionFiled } = await import("@/lib/forms/mark-banking-filed")
-            markedFiled = await markBankingSubmissionFiled(submission_id, { flow: "banking-form-completed", summaryFileId: pkg.summaryFileId, copied: pkg.copied, folderId: pkg.pinFolderId })
-          }
-          if (!markedFiled && (pkg.pinFolderId || pkg.enqueueUnpinned)) {
-            // Durable backstop: the reliable archive job with the plan PINNED, so a failed or postponed filing heals by retry.
-            try {
-              const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
-              await enqueueFormArchiveJob({
-                formType: "banking",
-                submissionId: submission_id,
-                pin: pkg.pinFolderId ? {
-                  folderId: pkg.pinFolderId,
-                  bucket: "banking-uploads",
-                  configKey: "banking",
-                  uploadPaths: (fullSub.upload_paths as string[]) || [],
-                  companyName: companyName || undefined,
-                } : undefined,
-                createdBy: "banking_form_completed",
-              })
-            } catch (e) {
-              results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
-            }
-          }
-        }
+        const { setBankingOrigin } = await import("@/lib/forms/mark-banking-filed")
+        await setBankingOrigin(submission_id, "external")
+        const { fileBankingSubmission } = await import("@/lib/forms/file-banking-submission")
+        const filed = await fileBankingSubmission(submission_id, "banking-form-completed", { companyName: companyName || undefined })
+        const pkg = filed.pkg
+        results.push({
+          step: "save_to_drive",
+          status: pkg.ok ? "ok" : "error",
+          detail: pkg.ok
+            ? `PDF: ${pkg.summaryFileId || "none"}, filed: ${pkg.copied.length}`
+            : `${pkg.sentence ?? pkg.errors.join("; ")} (filed: ${pkg.copied.length}, not filed: ${pkg.failed.length})${pkg.retryLater ? " — will be retried" : ""}`,
+        })
+        if (filed.enqueueError) results.push({ step: "archive_enqueue", status: "error", detail: filed.enqueueError })
       } catch (e) {
         results.push({ step: "save_to_drive", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }

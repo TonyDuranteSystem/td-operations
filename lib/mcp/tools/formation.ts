@@ -329,28 +329,21 @@ export function registerFormationTools(server: McpServer) {
           // name (never "the first company of whoever has this email"). Nobody certain = nothing is filed and staff are told once.
           // The client's submission already filed this same package (same keys), so a second filing here is "unchanged".
           try {
-            const { contactForSubmissionRow, storageDestinationForForm } = await import("@/lib/crm-store/lead-form-store")
+            // ONE implementation with the completion route and the retry recipe (lib/forms/file-form-package.ts): the same destination rule
+            // (a hidden study copy = nothing filed + one alarm), the same split (a member's passport is NEVER filed under the primary
+            // contact), the same member-aware file names, the same date and name on the summary.
+            const { contactForSubmissionRow } = await import("@/lib/crm-store/lead-form-store")
+            const { fileFormPackage, memberAwareFileName } = await import("@/lib/forms/file-form-package")
             const contactId = await contactForSubmissionRow({ contact_id: sub.contact_id, lead_id: sub.lead_id, token }, "formation_form_review")
-            const dest = contactId ? await storageDestinationForForm({ contactId, personName: leadName || null }) : { marker: null as string | null, reason: "no_contact" as string | undefined }
-            if (dest.marker) {
-              const { saveFormToDrive } = await import("@/lib/form-to-drive")
-              const driveResult = await saveFormToDrive(
-                "formation",
-                submitted,
-                (sub.upload_paths as string[]) || [],
-                dest.marker,
-                { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName || token },
-              )
-              if (driveResult.summaryFileId) lines.push(`✅ Data summary filed (${driveResult.summaryFileId})`)
-              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) filed`)
-              if (driveResult.skipped.length > 0) lines.push(`ℹ️ ${driveResult.skipped.length} file(s) were already filed`)
-              if (driveResult.failed.length > 0) lines.push(`❌ ${driveResult.failed.length} file(s) NOT filed`)
-              if (driveResult.errors.length > 0) lines.push(`❌ Filing errors: ${driveResult.errors.join(", ")}`)
-            } else {
-              lines.push(`❌ Nothing was filed: no person could be identified for this form with certainty (${dest.reason ?? "no match"}).`)
-              const { reportSystemError } = await import("@/lib/system-errors")
-              await reportSystemError({ source: "server", route: "mcp/formation_form_review", method: "INTERNAL", message: "Formation form review could not identify the person to file the package under", context: { token, reason: dest.reason ?? null } })
-            }
+            const filing = await fileFormPackage({
+              route: "mcp/formation_form_review", formType: "formation", submittedData: submitted, uploadPaths: (sub.upload_paths as string[]) || [],
+              contactId, personName: leadName || null, fileNameOf: memberAwareFileName(submitted),
+              meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName },
+              deadlineMs: 50_000,
+            })
+            if (filing.status === "ok") lines.push(`✅ Package filed in the client's storage: ${filing.detail}`)
+            else if (filing.status === "pending") lines.push(`⏳ ${filing.detail}`)
+            else lines.push(`❌ Nothing (or not everything) was filed: ${filing.detail}`)
           } catch (driveErr) {
             lines.push(`❌ Filing failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
           }

@@ -10,8 +10,10 @@
  *     business papers go to the company. A company left on Drive keeps everything in its Drive folder, as before.
  *   - If a personal paper has no person to be filed under, it is NOT filed (it stays where the client uploaded it) and ONE alarm
  *     is raised.
- *   - Stable: the same submission always uses the same key, and the PDF carries the day (not the minute), so a replay or a retry
- *     files the same files (unchanged) instead of piling up versions.
+ *   - Stable: the same submission always uses the same key, and the PDF carries the day (not the minute) and is made without a
+ *     creation/modification stamp, so a replay or a retry files the same bytes (recorded "unchanged") instead of piling up versions.
+ *   - FAIL CLOSED: only a paper on the short allow-list of BUSINESS documents goes to the company; every other paper (a new field,
+ *     an unknown name) is treated as personal. A person with only a hidden study-copy storage gets nothing filed and ONE alarm.
  */
 
 export interface BankingPackageInput {
@@ -28,9 +30,11 @@ export interface BankingPackageInput {
   token: string
   /** when it was submitted (the row's completed_at); only the DAY is used, so a retry makes the same PDF */
   submittedAt?: string | null
-  /** an already-decided destination (the durable job's pinned plan): skips the lookup */
+  /** a destination decided earlier: honoured ONLY when it is this company's storage marker (a move in progress); anything else is looked up again now */
   folderId?: string | null
   companyName?: string
+  /** the person's own name, used only when the CRM contact's name cannot be read (the folder is named from the CRM contact) */
+  personName?: string | null
 }
 
 export interface BankingPackageResult {
@@ -47,14 +51,22 @@ export interface BankingPackageResult {
   failed: string[]
   errors: string[]
   sentence: string | null
+  /** personal papers that were deliberately NOT filed (no certain person / hidden study copy) */
+  heldPersonal: string[]
 }
 
-const PERSONAL_NAME = /^(passport|id[_-]|identity|national[_-]?id|driver|licen[cs]e|proof[_-]?of[_-]?address|utility|residence|ssn|selfie)/i
+/** The only papers that belong to the COMPANY (allow-list). Anything else is personal or unknown and never goes to the company. */
+const BUSINESS_NAME = /^(business[_-]|articles|ein[_-]|ss-?4|operating[_-]?agreement|certificate|company[_-]|llc[_-])/i
 
-/** A client's personal paper, by the wizard field name at the start of the stored file name ({field}_{unique}_{filename}). */
-export function isPersonalUpload(path: string): boolean {
+/** A business paper, by the wizard field name at the start of the stored file name ({field}_{unique}_{filename}). */
+export function isBusinessUpload(path: string): boolean {
   const name = path.split("/").pop() || ""
-  return PERSONAL_NAME.test(name)
+  return BUSINESS_NAME.test(name)
+}
+
+/** Everything that is not a known business paper is treated as the client's personal paper (fail closed). */
+export function isPersonalUpload(path: string): boolean {
+  return !isBusinessUpload(path)
 }
 
 /** A wizard upload lives in the shared wizard bucket, an external-form upload in the banking bucket: decided per file. */
@@ -79,7 +91,7 @@ export interface BankingPackageDeps {
   saveCompany: (i: { formType: string; data: Record<string, unknown>; paths: string[]; folderId: string; token: string; submittedAt: string; companyName?: string; bucket: string }) =>
     Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; errors: string[] }>
   savePerson: (i: { contactId: string; formType: string; paths: string[]; token: string; bucket: string; name: string }) =>
-    Promise<{ copied: string[]; failed: string[]; errors: string[] }>
+    Promise<{ copied: string[]; failed: string[]; errors: string[]; blocked?: "no_contact" | "study_only_owner" }>
   alarm: (message: string, context: Record<string, unknown>) => Promise<void>
   now: () => Date
 }
@@ -92,9 +104,14 @@ async function defaultDeps(): Promise<BankingPackageDeps> {
       return saveFormToDrive(i.formType, i.data, i.paths, i.folderId, { token: i.token, submittedAt: i.submittedAt, companyName: i.companyName }, { bucket: i.bucket, resolveBucket: (path) => bucketForUpload(path, i.bucket) })
     },
     savePerson: async (i) => {
+      // the SAME destination rule as every lead-stage form (lead-form-store): the person's live storage (opened on first use, root named
+      // from the CRM contact's own name); a person who only has a hidden study copy gets NOTHING filed
+      const { storageDestinationForForm } = await import("@/lib/crm-store/lead-form-store")
+      const dest = await storageDestinationForForm({ contactId: i.contactId, personName: i.name || null })
+      if (!dest.marker) return { copied: [], failed: [], errors: [], blocked: dest.reason }
       const { liveOwnerOfContact } = await import("@/lib/crm-store/switched-drive-guard")
-      const { ensurePersonOwner } = await import("@/lib/crm-store/formation-pilot")
-      const ownerId = (await liveOwnerOfContact(i.contactId)) ?? (await ensurePersonOwner(i.contactId, i.name || "Member"))
+      const ownerId = await liveOwnerOfContact(i.contactId)
+      if (!ownerId) throw new Error("This person's storage could not be found — nothing was filed.")
       const { saveFormToStore } = await import("@/lib/crm-store/save-form")
       const r = await saveFormToStore({
         target: { kind: "contact", id: i.contactId, ownerId }, subfolder: "2. Contacts", year: null, summary: null,
@@ -102,9 +119,10 @@ async function defaultDeps(): Promise<BankingPackageDeps> {
       })
       return { copied: [...r.copied, ...r.skipped], failed: r.failed, errors: r.errors }
     },
+    // ONE alarm per identical problem per hour (a retrying job or a sweep must not repeat it)
     alarm: async (message, context) => {
-      const { reportSystemError } = await import("@/lib/system-errors")
-      await reportSystemError({ source: "server", route: "forms/file-banking-package", method: "INTERNAL", message, context })
+      const { raiseThrottledAlarm } = await import("@/lib/crm-store/throttled-alarm")
+      await raiseThrottledAlarm("banking_package_problem", { message, ...context })
     },
     now: () => new Date(),
   }
@@ -112,11 +130,13 @@ async function defaultDeps(): Promise<BankingPackageDeps> {
 
 export async function fileBankingPackage(p: BankingPackageInput, deps?: BankingPackageDeps): Promise<BankingPackageResult> {
   const d = deps ?? (await defaultDeps())
-  const out: BankingPackageResult = { ok: false, retryLater: false, pinFolderId: null, enqueueUnpinned: false, summaryFileId: null, copied: [], failed: [], errors: [], sentence: null }
+  const out: BankingPackageResult = { ok: false, retryLater: false, pinFolderId: null, enqueueUnpinned: false, summaryFileId: null, copied: [], failed: [], errors: [], sentence: null, heldPersonal: [] }
   let dest: { ok: boolean; folderId?: string; via?: "storage" | "legacy-drive"; reason?: string; sentence?: string }
   try {
-    dest = p.folderId
-      ? { ok: true, folderId: p.folderId, via: /^(account|person)-storage:/.test(p.folderId) ? "storage" : "legacy-drive" }
+    // a pinned destination counts only when it is THIS company's storage marker; a Drive folder id (a plan pinned before the move to
+    // storage, or for a company that has moved since) is ignored and the destination is worked out again now
+    dest = p.folderId && p.accountId && p.folderId === `account-storage:${p.accountId}`
+      ? { ok: true, folderId: p.folderId, via: "storage" }
       : await d.destination(p.accountId, p.flow)
   } catch (e) {
     // a failed lookup is NOT "no folder": say so, and let the durable job look again later
@@ -144,17 +164,25 @@ export async function fileBankingPackage(p: BankingPackageInput, deps?: BankingP
   out.failed.push(...company.failed)
   out.errors.push(...company.errors)
   if (split.personal.length > 0) {
+    const hold = async (why: string, detail: string) => {
+      out.heldPersonal.push(...split.personal)
+      out.failed.push(...split.personal.map((x) => `${x.split("/").pop()} (${detail} — left where it was uploaded)`))
+      out.errors.push(`The client's personal papers were not filed: ${detail}.`)
+      await d.alarm(`Banking package: personal papers could not be filed (${why})`, { flow: p.flow, accountId: p.accountId, contactId: p.contactId, token: p.token, files: split.personal.length })
+    }
     if (!p.contactId) {
-      // nobody to file the personal papers under: they stay where the client uploaded them, and staff are told ONCE
-      out.failed.push(...split.personal.map((x) => `${x.split("/").pop()} (no person to file it under — left where it was uploaded)`))
-      out.errors.push("The client's personal papers were not filed: no person is linked to this submission.")
-      await d.alarm("Banking package: personal papers could not be filed (no person linked)", { flow: p.flow, accountId: p.accountId, token: p.token, files: split.personal.length })
+      // nobody certain to file the personal papers under: they stay where the client uploaded them, and staff are told ONCE
+      await hold("no person linked", "no person is linked to this submission")
     } else {
       try {
-        const r = await d.savePerson({ contactId: p.contactId, formType: p.formType, paths: split.personal, token: p.token, bucket: p.bucket, name: p.companyName ?? "" })
-        out.copied.push(...r.copied)
-        out.failed.push(...r.failed)
-        out.errors.push(...r.errors)
+        const r = await d.savePerson({ contactId: p.contactId, formType: p.formType, paths: split.personal, token: p.token, bucket: p.bucket, name: p.personName ?? "" })
+        if (r.blocked) {
+          await hold(r.blocked, r.blocked === "study_only_owner" ? "this person only has a hidden study copy of their storage" : "no person is linked to this submission")
+        } else {
+          out.copied.push(...r.copied)
+          out.failed.push(...r.failed)
+          out.errors.push(...r.errors)
+        }
       } catch (e) {
         out.failed.push(...split.personal.map((x) => x.split("/").pop() || x))
         out.errors.push(`Personal papers: ${e instanceof Error ? e.message : String(e)}`)

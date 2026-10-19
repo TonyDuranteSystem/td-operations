@@ -38,11 +38,25 @@ async function main() {
       for (const x of o ?? []) { const { data: f } = await sb.from("store_files").select("name").eq("owner_id", x.id).is("trashed_at", null); out.push(...(f ?? []).map((y: { name: string }) => y.name)) }
       return out
     }
+    // the number of VERSIONS stored (not files): a replay must not add one
+    const versions = async (where: { account_id?: string; contact_id?: string }) => {
+      const { data: o } = await sb.from("store_owners").select("id").match(where).eq("study_only", false)
+      let n = 0
+      for (const x of o ?? []) {
+        const { data: f } = await sb.from("store_files").select("id").eq("owner_id", x.id)
+        for (const y of f ?? []) { const { count } = await sb.from("store_file_versions").select("id", { count: "exact", head: true }).eq("file_id", y.id); n += count ?? 0 }
+      }
+      return n
+    }
+    const v1 = (await versions({ account_id: acc.id })) + (await versions({ contact_id: contact.id }))
     const company = await names({ account_id: acc.id }), person = await names({ contact_id: contact.id })
     check("B2 the passport and the proof of address are in the PERSON's storage", person.some((n) => /passport_image/.test(n)) && person.some((n) => /proof_of_address/.test(n)), JSON.stringify(person))
     check("B3 NO personal paper is in the company's storage", !company.some((n) => /passport|proof_of_address/.test(n)), JSON.stringify(company))
     check("B4 the business statement and the summary PDF are in the company's storage", company.some((n) => /business_bank_statement/.test(n)) && company.some((n) => /^Banking_/.test(n)), JSON.stringify(company))
+    await new Promise((r) => setTimeout(r, 1500)) // a different clock second: the old PDF would have carried a new stamp
     const r2 = await run()
+    const v2 = (await versions({ account_id: acc.id })) + (await versions({ contact_id: contact.id }))
+    check("B5v running it again stores NO new VERSION of anything (two runs, same answers -> the same versions)", r2.ok && v2 === v1 && v1 > 0, `versions ${v1} -> ${v2}`)
     const company2 = await names({ account_id: acc.id }), person2 = await names({ contact_id: contact.id })
     check("B5 running it again files the SAME files (no second copies)", r2.ok && company2.length === company.length && person2.length === person.length, `${company.length}->${company2.length}, ${person.length}->${person2.length}`)
     const r3 = await fileBankingPackage({ flow: "qa", formType: "banking_relay", accountId: acc.id, contactId: null, submittedData: {}, uploadPaths: paths, bucket: "onboarding-uploads", token: `qa-bank-${stamp}`, companyName: acc.company_name })
@@ -59,6 +73,33 @@ async function main() {
     const { data: after } = await sb.from("banking_submissions").select("id, token, status, created_at, drive_archived_at, drive_archive_meta").eq("id", bs.id).single()
     check("B7 before the marker the sweep would queue the row; after it the sweep skips it (the alarm clears)", before === "enqueue" && marked && decideFormArchiveSweep(after, getArchiveRecipe("banking")!, later) === "skip", `before=${before} marked=${marked} after=${decideFormArchiveSweep(after, getArchiveRecipe("banking")!, later)}`)
     await sb.from("banking_submissions").update({ status: "cancelled" }).eq("id", bs.id)
+
+    // B8: a person with only a hidden STUDY copy of their storage: nothing is filed into it, the papers are held, ONE alarm
+    const { data: study } = await sb.from("contacts").insert({ first_name: "Qa", last_name: `Study${stamp}`, full_name: `Qa Study${stamp}`, email: `qa-study-${stamp}@example.invalid`, language: "English" }).select("id").single()
+    const { data: so, error: soErr } = await sb.rpc("store_ensure_owner", { p_kind: "person", p_ref: study.id })
+    if (soErr) throw new Error(`study owner: ${soErr.message}`)
+    await sb.from("store_owners").update({ study_only: true }).eq("id", so)
+    const r8 = await fileBankingPackage({ flow: "qa", formType: "banking_relay", accountId: acc.id, contactId: study.id, submittedData: {}, uploadPaths: paths, bucket: "onboarding-uploads", token: `qa-bank8-${stamp}`, companyName: acc.company_name })
+    const { data: studyFiles } = await sb.from("store_files").select("name").eq("owner_id", so)
+    check("B8 a person with only a hidden study copy: nothing filed into it, the papers are held (error), not reported filed", !r8.ok && r8.heldPersonal.length >= 2 && (studyFiles ?? []).length === 0, JSON.stringify({ held: r8.heldPersonal.length, files: (studyFiles ?? []).length }))
+    // B9: WRONG MEMBER — the row was seeded with member A, member B submitted (the row records B): the papers go to B only
+    const { data: memberB } = await sb.from("contacts").insert({ first_name: "Qa", last_name: `MemberB${stamp}`, full_name: `Qa MemberB${stamp}`, email: `qa-b-${stamp}@example.invalid`, language: "English" }).select("id").single()
+    await sb.from("account_contacts").insert([{ account_id: acc.id, contact_id: contact.id }, { account_id: acc.id, contact_id: memberB.id }])
+    const { fileBankingSubmission } = await import("../../../lib/forms/file-banking-submission")
+    const pathsB = [`banking_relay/${memberB.id}/passport_image_${stamp}_b.pdf`, `banking_relay/${memberB.id}/proof_of_address_${stamp}_b.pdf`]
+    for (const p of pathsB) await sb.storage.from("onboarding-uploads").upload(p, bytes, { contentType: "application/pdf", upsert: true })
+    const data9 = { business_name: acc.company_name, passport_image: [pathsB[0]], proof_of_address: [pathsB[1]] }
+    const { data: row9, error: r9err } = await sb.from("banking_submissions").insert({ token: `qa-bank9-${stamp}`, account_id: acc.id, contact_id: contact.id, provider: "payset", status: "completed", completed_at: new Date().toISOString(), submitted_data: data9, drive_archive_meta: { origin: "wizard" } }).select("id").single()
+    if (r9err) throw new Error(`row9: ${r9err.message}`)
+    const held = await fileBankingSubmission(row9.id, "qa-wrong-member")
+    check("B9a seeded with member A, submitter unknown, TWO people in the company: B's papers are NOT filed under A (held, error)", !held.pkg.ok && held.pkg.heldPersonal.length === 2 && (await names({ contact_id: contact.id })).every((n) => !/_b\./.test(n)), JSON.stringify(held.pkg.failed).slice(0, 200))
+    await sb.from("banking_submissions").update({ contact_id: memberB.id, drive_archive_meta: { origin: "wizard", applicant: "submitter" } }).eq("id", row9.id)
+    const healed = await fileBankingSubmission(row9.id, "qa-wrong-member")
+    const bNames = await names({ contact_id: memberB.id }), aNames = await names({ contact_id: contact.id })
+    check("B9b once the row records B as the submitter the retry files B's papers in B's storage only", healed.pkg.ok && bNames.some((n) => /passport_image/.test(n)) && aNames.every((n) => !/_b\./.test(n)), JSON.stringify({ ok: healed.pkg.ok, bNames, errors: healed.pkg.errors }).slice(0, 300))
+    await sb.from("banking_submissions").update({ status: "cancelled" }).eq("id", row9.id)
+    for (const x of [study.id, memberB.id]) { const { data: o } = await sb.from("store_owners").select("id").eq("contact_id", x); for (const y of o ?? []) await sb.from("store_owners").update({ study_only: true }).eq("id", y.id) }
+    await sb.storage.from("onboarding-uploads").remove(pathsB)
   } finally {
     const { data: o } = await sb.from("store_owners").select("id").or(`account_id.eq.${acc.id},contact_id.eq.${contact.id}`)
     for (const x of o ?? []) await sb.from("store_owners").update({ study_only: true }).eq("id", x.id)

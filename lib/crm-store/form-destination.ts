@@ -7,7 +7,7 @@
  *   - a company left on Drive   → its own Drive folder (folder, no storage, not Closed / Cancelled)
  *   - anyone else                → no destination: the caller reports the plain sentence as an ERROR and a staff alarm is raised
  */
-import { legacyDriveForAccount, raiseDriveWriteRefused, type LegacyRefusalReason } from "./legacy-drive"
+import { legacyDriveForAccount, raiseDriveWriteRefused, LEGACY_REFUSAL_SENTENCE, type LegacyRefusalReason } from "./legacy-drive"
 
 // (the optional `undefined` members let callers read `.sentence` / `.folderId` without narrowing: tsconfig is not strict)
 export type FormDestination =
@@ -16,6 +16,8 @@ export type FormDestination =
 
 export interface FormDestinationDeps {
   storageMarker: (accountId: string) => Promise<string | null>
+  /** "drive" | "moving" | "store": a company in the middle of its move takes nothing yet (the caller retries) */
+  state: (accountId: string) => Promise<"drive" | "moving" | "store">
   legacy: typeof legacyDriveForAccount
   alarm: typeof raiseDriveWriteRefused
 }
@@ -23,6 +25,7 @@ export interface FormDestinationDeps {
 export async function formDestinationForAccount(accountId: string | null | undefined, flow: string, deps?: FormDestinationDeps): Promise<FormDestination> {
   const d: FormDestinationDeps = deps ?? {
     storageMarker: async (id: string): Promise<string | null> => (await (await import("./lead-form-store")).storageDestinationForForm({ accountId: id })).marker,
+    state: async (id: string) => (await import("./switched-drive-guard")).companyDocState(id) as Promise<"drive" | "moving" | "store">,
     legacy: legacyDriveForAccount,
     alarm: raiseDriveWriteRefused,
   }
@@ -30,6 +33,8 @@ export async function formDestinationForAccount(accountId: string | null | undef
     const sentence = await d.alarm({ flow, reason: "no_company" })
     return { ok: false, reason: "no_company", sentence }
   }
+  // a company in the middle of its move: no lookup that could throw, no alarm — a plain "try again", which the caller retries
+  if ((await d.state(accountId)) === "moving") return { ok: false, reason: "moving", sentence: LEGACY_REFUSAL_SENTENCE.moving }
   const marker = await d.storageMarker(accountId)
   if (marker) return { ok: true, folderId: marker, via: "storage" }
   const v = await d.legacy(accountId)

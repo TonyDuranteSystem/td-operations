@@ -58,6 +58,8 @@ export interface ArchiveRecipe {
   /** OPTIONAL: the sweep only considers rows that carry a PINNED plan (written when the completion route filed them). Rows made before the form had this
    *  retry path have none — they were filed the old way and are never re-filed, whatever their date. */
   sweepOnlyPinned?: boolean
+  /** OPTIONAL: the sweep ignores rows created before this moment (later than the global cutoff): history filed the old way is never mass-filed by the new rules. */
+  sweepNotBefore?: string
   /** OPTIONAL: statuses that count as a real submission — filtered IN the sweep query so shells never fill its window. */
   sweepStatuses?: string[]
   /** OPTIONAL: the name each stored upload gets (formation: the member's name on each passport). */
@@ -71,6 +73,9 @@ export interface ArchiveRecipe {
    */
   resolveBucket?: (path: string) => string
 }
+
+/** Banking rows created before this are never swept by the new filing rules (bump to the day the change goes live). */
+export const BANKING_SWEEP_NOT_BEFORE_ISO = "2026-10-19T00:00:00Z"
 
 function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? (v as unknown[]).filter((p): p is string => typeof p === "string") : []
@@ -115,6 +120,9 @@ export function deriveUploadPaths(columnPaths: unknown, submittedData: Record<st
 const bankingRecipe: ArchiveRecipe = {
   formType: "banking",
   table: "banking_submissions",
+  // Stop Drive S1d: the new filing rules apply from the day they ship — the sweep must not file the whole backlog of older rows at once.
+  // (Set to the deploy date when this ships; production holds 0 unmarked completed rows without a Drive folder and 10 with one, all older.)
+  sweepNotBefore: BANKING_SWEEP_NOT_BEFORE_ISO,
   selectColumns:
     "id, account_id, contact_id, token, provider, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
   isReal(row) {

@@ -350,32 +350,12 @@ export function registerBankingFormTools(server: McpServer) {
           // storage. Filing is idempotent (same submission key = same files), so this tool can simply be run again after a failure —
           // the form is marked reviewed ONLY when everything was filed, and a re-run on an already-reviewed form still files
           // whatever is missing.
-          const { fileBankingPackage } = await import("@/lib/forms/file-banking-package")
-          const pkg = await fileBankingPackage({
-            flow: "banking_form_review", formType: "banking", accountId: sub.account_id, contactId: sub.contact_id ?? null,
-            submittedData: submitted, uploadPaths: (sub.upload_paths as string[]) || [], bucket: "banking-uploads",
-            token: sub.token, submittedAt: sub.completed_at, companyName: accountName || token,
-          })
+          const { fileBankingSubmission } = await import("@/lib/forms/file-banking-submission")
+          const filed = await fileBankingSubmission(sub.id, "banking_form_review", { companyName: accountName || token })
+          const pkg = filed.pkg
           if (pkg.summaryFileId) lines.push(`✅ Data summary filed (${pkg.summaryFileId})`)
           if (pkg.copied.length > 0) lines.push(`✅ ${pkg.copied.length} file(s) filed`)
-          let markedFiled = false
-          if (pkg.ok) {
-            const { markBankingSubmissionFiled } = await import("@/lib/forms/mark-banking-filed")
-            markedFiled = await markBankingSubmissionFiled(sub.id, { flow: "banking_form_review", summaryFileId: pkg.summaryFileId, copied: pkg.copied, folderId: pkg.pinFolderId })
-          }
-          if (!markedFiled && (pkg.pinFolderId || pkg.enqueueUnpinned)) {
-            try {
-              const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
-              await enqueueFormArchiveJob({
-                formType: "banking",
-                submissionId: sub.id,
-                pin: pkg.pinFolderId ? { folderId: pkg.pinFolderId, bucket: "banking-uploads", configKey: "banking", uploadPaths: (sub.upload_paths as string[]) || [], companyName: accountName || token } : undefined,
-                createdBy: "banking_form_review",
-              })
-            } catch (e) {
-              lines.push(`⚠️ Archive enqueue failed: ${e instanceof Error ? e.message : String(e)}`)
-            }
-          }
+          if (filed.enqueueError) lines.push(`⚠️ Archive enqueue failed: ${filed.enqueueError}`)
           if (!pkg.ok) {
             if (pkg.sentence) lines.push(`❌ Form data NOT filed: ${pkg.sentence}`)
             for (const f of pkg.failed) lines.push(`❌ Not filed: ${f}`)
@@ -393,6 +373,7 @@ export function registerBankingFormTools(server: McpServer) {
           const apply = await approveAndApplyBankingReview({
             submission_id: sub.id,
             actor: "claude",
+            filingDone: true, // filed just above (and the form is only reviewed when that fully worked)
           })
 
           if (!apply.ok) {

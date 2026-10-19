@@ -78,6 +78,7 @@ export function decideFormArchiveSweep(
   const created = Date.parse(String(row.created_at ?? ""))
   if (Number.isNaN(created)) return "skip"
   if (created < Date.parse(FORM_ARCHIVE_SWEEP_CUTOFF_ISO)) return "skip" // forward-only
+  if (recipe.sweepNotBefore && created < Date.parse(recipe.sweepNotBefore)) return "skip" // this form's own start date
   if (created > now.getTime() - FORM_ARCHIVE_SWEEP_GRACE_MINUTES * 60_000) return "skip" // still in grace
 
   const attempts = attemptsOf(row.drive_archive_meta as Record<string, unknown> | null)

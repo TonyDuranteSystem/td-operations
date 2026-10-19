@@ -513,6 +513,7 @@ export type PilotAlarmKind =
   | "lead_form_member_passport_held" // an LLC member with no email has a passport on a form: no contact can be made automatically, the file waits on the submission
   | "store_move_stale"             // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
   | "drive_write_refused"          // a flow needed to write in Google Drive for a company/person that may not be written to there (Stop Drive S1d)
+  | "banking_package_problem"      // a banking application package could not be (fully) filed: lookup failed, personal papers held, hidden study copy (Stop Drive S1d)
 
 /**
  * An alarm: an event in the store's history (owner-scoped when known) + the system error log.

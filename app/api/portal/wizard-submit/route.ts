@@ -95,6 +95,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
+  // A teammate login belongs to no person: if it names a contact, that contact must be one of THIS company's people (otherwise the
+  // submission could be filed under — and write personal data onto — someone else's record).
+  if (identity.kind === 'teammate' && contact_id) {
+    const { data: link, error: linkErr } = await supabaseAdmin
+      .from('account_contacts').select('contact_id').eq('account_id', identity.accountId).eq('contact_id', contact_id).limit(1).maybeSingle()
+    if (linkErr || !link) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+
   // ─── 0b. FORMATION LEAD OWNERSHIP (default-deny) ───
   // A formation submit is lead-scoped (account_id null). Re-prove the lead
   // belongs to the logged-in person — same check the wizard page uses to gate
@@ -747,24 +755,6 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // Portal chat notification — message to the account. Left exactly as-is:
-        // this is client-visible (no chat-event marker), and any marker-carrying
-        // message is hidden from the client's own chat view (app/api/portal/chat/
-        // route.ts) — converting this into a marked note would silently remove
-        // a confirmation the client can see today.
-        if (capturedAccountId) {
-          try {
-            await supabaseAdmin.from('portal_messages').insert({
-              account_id: capturedAccountId,
-              sender_type: 'system',
-              sender_id: '00000000-0000-0000-0000-000000000000',
-              message: `Banking application submitted: ${provider}. Our team will review and submit it on your behalf.`,
-            })
-          } catch (e) {
-            console.error('[wizard-submit] Chat notification error:', e)
-          }
-        }
-
         // Staff-only notifications (dev job fb527ac8): What's New chat note +
         // Notification Center card. A SEPARATE write from the client-visible
         // note above, on purpose (see comment above). Looks up the existing
@@ -813,6 +803,115 @@ export async function POST(req: NextRequest) {
             }
           } catch (e) {
             console.error('[wizard-submit] banking_submissions lookup error (staff notifications):', e)
+          }
+        }
+
+        // File the package — the DURABLE core runs FIRST (Stop Drive S1d, dev job 264bb882). A function that is frozen or fails part-way
+        // through the chat note, staff alerts, task and delivery steps below must never be the reason a client's papers are not filed:
+        //  1. the row is saved (the submitter's own contact id is written when it is certain, an earlier "filed" mark and the old failed
+        //     attempts are cleared — this is a NEW submission) and its error is checked;
+        //  2. the durable retry job is queued BEFORE the long filing starts (it does nothing if the filing then succeeds);
+        //  3. the package is filed from the row: the company's storage (or its Drive folder if it was left on Drive); the client's PERSONAL
+        //     papers go to the PERSON's own storage, never the company's folder. A failure is an ERROR with ONE staff alarm.
+        let updatedRowId: string | null = null
+        if (capturedAccountId) {
+          try {
+            // certain only for a logged-in company member (a teammate login belongs to no person)
+            const submitterId = identity.kind === 'contact' ? identity.contactId : null
+            let prior: Record<string, unknown> | null = null
+            if (bankingSubmissionId) {
+              const { data: pr } = await supabaseAdmin.from('banking_submissions').select('drive_archive_meta').eq('id', bankingSubmissionId).maybeSingle()
+              prior = ((pr as { drive_archive_meta?: Record<string, unknown> | null } | null)?.drive_archive_meta) ?? null
+            }
+            const { freshSubmissionMeta } = await import('@/lib/forms/mark-banking-filed')
+            const updateQuery = supabaseAdmin
+              .from('banking_submissions')
+              .update({
+                submitted_data: capturedData,
+                status: 'completed',
+                completed_at: submissionTime,
+                updated_at: new Date().toISOString(),
+                ...(submitterId ? { contact_id: submitterId } : {}),
+                drive_archived_at: null,
+                drive_archive_meta: freshSubmissionMeta(prior, { origin: 'wizard', ...(submitterId ? { applicant: 'submitter' } : {}) }),
+              } as never)
+            const { data: updatedRow, error: updErr } = await (
+              bankingSubmissionId
+                ? updateQuery.eq('id', bankingSubmissionId)
+                : updateQuery.eq('account_id', capturedAccountId).eq('provider', providerSlug)
+            )
+              .select('id, token')
+              .maybeSingle()
+            if (updErr || !updatedRow?.id) {
+              console.error(`[wizard-submit] banking_submissions update failed for account ${capturedAccountId} provider ${providerSlug}:`, updErr?.message ?? 'no row')
+              const { reportSystemError } = await import('@/lib/system-errors')
+              await reportSystemError({ source: 'server', route: 'portal/wizard-submit:banking', method: 'INTERNAL', message: 'Banking application: the submission row could not be saved — the package was filed from the answers only and no retry job exists', context: { accountId: capturedAccountId, provider: providerSlug, error: updErr?.message ?? 'no row' } })
+            } else {
+              updatedRowId = updatedRow.id
+              bankingSubmissionId = updatedRow.id
+              if (updatedRow.token) bankingSubmissionToken = updatedRow.token
+              try {
+                const { enqueueFormArchiveJob } = await import('@/lib/forms/archive-enqueue')
+                await enqueueFormArchiveJob({ formType: 'banking', submissionId: updatedRow.id, createdBy: 'banking_wizard_submit' })
+              } catch (e) {
+                console.error('[wizard-submit] banking archive enqueue error:', e)
+              }
+            }
+
+            let pkg
+            if (updatedRowId) {
+              const { fileBankingSubmission } = await import('@/lib/forms/file-banking-submission')
+              pkg = (await fileBankingSubmission(updatedRowId, 'wizard-submit:banking', { companyName: compName || undefined })).pkg
+            } else {
+              // no saved row to file from: file from the answers, under the submitter only when certain
+              const { fileBankingPackage } = await import('@/lib/forms/file-banking-package')
+              pkg = await fileBankingPackage({
+                flow: 'wizard-submit:banking', formType: capturedWizardType, accountId: capturedAccountId, contactId: submitterId,
+                submittedData: capturedData, uploadPaths: extractUploadPaths(capturedData), bucket: 'onboarding-uploads',
+                token: bankingSubmissionToken || `wizard:${capturedProgressId || capturedWizardType}`, submittedAt: submissionTime, companyName: compName || undefined,
+              })
+            }
+            if (pkg.summaryFileId) {
+              try {
+                const slug = compName.replace(/\s+/g, '_')
+                const { autoSaveDocument } = await import('@/lib/portal/auto-save-document')
+                const saved = await autoSaveDocument({
+                  accountId: capturedAccountId || undefined,
+                  contactId: capturedContactId || undefined,
+                  fileName: `Banking_${capturedWizardType === 'banking_relay' ? 'Relay' : 'Payset'}_${slug}.pdf`,
+                  documentType: 'Banking Application',
+                  category: 4, // Banking
+                  driveFileId: pkg.summaryFileId,
+                  portalVisible: false,
+                })
+                if (saved.error) console.error('[wizard-submit] Banking document record error:', saved.error)
+              } catch (e) {
+                console.error('[wizard-submit] Banking document record error:', e)
+              }
+            }
+            if (!pkg.ok) {
+              console.error('[wizard-submit] Banking package NOT fully filed:', pkg.errors.join(' | '), pkg.failed.join(', '))
+            }
+          } catch (e) {
+            console.error('[wizard-submit] banking_submissions update error:', e)
+          }
+        }
+
+        // Portal chat notification — message to the account. Left exactly as-is:
+        // this is client-visible (no chat-event marker), and any marker-carrying
+        // message is hidden from the client's own chat view (app/api/portal/chat/
+        // route.ts) — converting this into a marked note would silently remove
+        // a confirmation the client can see today.
+        if (capturedAccountId) {
+          try {
+            await supabaseAdmin.from('portal_messages').insert({
+              account_id: capturedAccountId,
+              sender_type: 'system',
+              sender_id: '00000000-0000-0000-0000-000000000000',
+              message: `Banking application submitted: ${provider}. Our team will review and submit it on your behalf.`,
+            })
+          } catch (e) {
+            console.error('[wizard-submit] Chat notification error:', e)
           }
         }
 
@@ -899,98 +998,6 @@ export async function POST(req: NextRequest) {
             }
           } catch (e) {
             console.error('[wizard-submit] SD advance error:', e)
-          }
-        }
-
-        // Update banking_submissions record so MCP tools see current data.
-        // Updates BY PRIMARY KEY when the id is already known from the staff-
-        // notification lookup above (unconditionally single-row regardless of
-        // duplicate account+provider rows); falls back to the original
-        // account_id+provider match only when that lookup didn't find a row —
-        // i.e. today's exact prior behavior for that rare edge case.
-        if (capturedAccountId) {
-          try {
-            const updateQuery = supabaseAdmin
-              .from('banking_submissions')
-              .update({
-                submitted_data: capturedData,
-                status: 'completed',
-                completed_at: submissionTime,
-                updated_at: new Date().toISOString(),
-              })
-            const { data: updatedRow } = await (
-              bankingSubmissionId
-                ? updateQuery.eq('id', bankingSubmissionId)
-                : updateQuery.eq('account_id', capturedAccountId).eq('provider', providerSlug)
-            )
-              .select('id, token')
-              .maybeSingle()
-            if (updatedRow?.token) bankingSubmissionToken = updatedRow.token
-            if (updatedRow?.id) bankingSubmissionId = updatedRow.id
-
-            // File the package (summary PDF + the client's uploads) — Stop Drive S1d, dev job 264bb882: the company's storage (or its
-            // Drive folder if it was left on Drive); the client's PERSONAL papers (passport, ID, proof of address) go to the PERSON's own
-            // storage, never the company's folder. A failure is an ERROR with ONE staff alarm and is retried by the durable job below,
-            // which is queued whenever there is somewhere to file (also while the company is merely moving).
-            const { fileBankingPackage } = await import('@/lib/forms/file-banking-package')
-            const pkg = await fileBankingPackage({
-              flow: 'wizard-submit:banking', formType: capturedWizardType, accountId: capturedAccountId, contactId: capturedContactId ?? null,
-              submittedData: capturedData, uploadPaths: extractUploadPaths(capturedData), bucket: 'onboarding-uploads',
-              token: bankingSubmissionToken || `wizard:${capturedProgressId || capturedWizardType}`, submittedAt: submissionTime, companyName: compName || undefined,
-            })
-            if (pkg.summaryFileId) {
-              try {
-                const slug = compName.replace(/\s+/g, '_')
-                const { autoSaveDocument } = await import('@/lib/portal/auto-save-document')
-                const saved = await autoSaveDocument({
-                  accountId: capturedAccountId || undefined,
-                  contactId: capturedContactId || undefined,
-                  fileName: `Banking_${capturedWizardType === 'banking_relay' ? 'Relay' : 'Payset'}_${slug}.pdf`,
-                  documentType: 'Banking Application',
-                  category: 4, // Banking
-                  driveFileId: pkg.summaryFileId,
-                  portalVisible: false,
-                })
-                if (saved.error) console.error('[wizard-submit] Banking document record error:', saved.error)
-              } catch (e) {
-                console.error('[wizard-submit] Banking document record error:', e)
-              }
-            }
-            if (!pkg.ok) {
-              console.error('[wizard-submit] Banking package NOT fully filed:', pkg.errors.join(' | '), pkg.failed.join(', '))
-            }
-
-            // Durable backstop: queue the reliable archive job with the plan PINNED. It is queued whenever there is a destination —
-            // also when the first attempt failed or the company is moving — so the retry can heal it.
-            // Fully filed: set the same marker the archive job sets (the sweep then leaves this row alone). Not fully filed: queue the job.
-            let markedFiled = false
-            if (pkg.ok && updatedRow?.id) {
-              const { markBankingSubmissionFiled } = await import('@/lib/forms/mark-banking-filed')
-              markedFiled = await markBankingSubmissionFiled(updatedRow.id, { flow: 'wizard-submit:banking', summaryFileId: pkg.summaryFileId, copied: pkg.copied, folderId: pkg.pinFolderId })
-            }
-            if (updatedRow?.id && !markedFiled && (pkg.pinFolderId || pkg.enqueueUnpinned)) {
-              try {
-                const { enqueueFormArchiveJob } = await import('@/lib/forms/archive-enqueue')
-                await enqueueFormArchiveJob({
-                  formType: 'banking',
-                  submissionId: updatedRow.id,
-                  pin: pkg.pinFolderId ? {
-                    folderId: pkg.pinFolderId,
-                    bucket: 'onboarding-uploads',
-                    configKey: capturedWizardType,
-                    uploadPaths: extractUploadPaths(capturedData),
-                    companyName: compName || undefined,
-                  } : undefined,
-                  createdBy: 'banking_wizard_submit',
-                })
-              } catch (e) {
-                console.error('[wizard-submit] banking archive enqueue error:', e)
-              }
-            } else if (!updatedRow?.id) {
-              console.error(`[wizard-submit] no banking_submissions row for account ${capturedAccountId} provider ${providerSlug} — durable archival NOT enqueued`)
-            }
-          } catch (e) {
-            console.error('[wizard-submit] banking_submissions update error:', e)
           }
         }
 

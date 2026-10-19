@@ -15,6 +15,9 @@ const st = vi.hoisted(() => ({
   rows: {} as Record<string, unknown>,
   recorded: [] as Array<{ table: string; op: string; payload: unknown }>,
   companyState: 'store' as 'store' | 'drive' | 'moving',
+  /** the person's storage: a live one, only a hidden study copy, or none yet */
+  personOwner: 'live' as 'live' | 'study' | 'none',
+  ensureNames: [] as string[],
   companyCalls: [] as Array<{ folderId: string; paths: string[]; token: string; submittedAt: string }>,
   personCalls: [] as Array<{ target: { kind: string; id: string }; uploadPaths: string[] }>,
   enqueued: [] as Array<Record<string, unknown>>,
@@ -26,13 +29,14 @@ vi.mock('@/lib/supabase-admin', async () => ({ supabaseAdmin: (await import('./_
 vi.mock('@/lib/crm-store/switched-drive-guard', () => ({
   companyDocState: async () => st.companyState,
   liveOwnerOfAccount: async () => (st.companyState === 'drive' ? null : 'company-owner'),
-  liveOwnerOfContact: async () => 'person-owner',
+  // the REAL meaning: a hidden study copy is NOT a live owner
+  liveOwnerOfContact: async () => (st.personOwner === 'live' ? 'person-owner' : null),
 }))
 vi.mock('@/lib/crm-store/formation-pilot', () => ({
   raisePilotAlarm: async (kind: string) => { st.pilotAlarms.push(kind) },
-  ensurePersonOwner: async () => 'person-owner',
+  // like the real store_ensure_owner: it hands back the EXISTING owner (even a study copy) or opens one
+  ensurePersonOwner: async (_id: string, name: string) => { st.ensureNames.push(name); if (st.personOwner === 'none') st.personOwner = 'live'; return 'person-owner' },
 }))
-vi.mock('@/lib/crm-store/lead-form-store', () => ({ storageDestinationForForm: async (i: { accountId: string }) => ({ marker: st.companyState === 'store' ? `account-storage:${i.accountId}` : null }) }))
 vi.mock('@/lib/form-to-drive', () => ({
   saveFormToDrive: async (_t: string, _d: unknown, paths: string[], folderId: string, meta: { token: string; submittedAt: string }) => {
     st.companyCalls.push({ folderId, paths, token: meta.token, submittedAt: meta.submittedAt })
@@ -58,6 +62,8 @@ const STATEMENT = 'banking_relay/c1/business_bank_statement_abc.pdf'
 
 beforeEach(async () => {
   ;(await import('@/lib/crm-store/legacy-drive')).forgetRecentAlarms()
+  ;(await import('@/lib/crm-store/throttled-alarm')).forgetThrottledAlarms()
+  st.personOwner = 'live'; st.ensureNames.length = 0
   st.companyCalls.length = 0; st.personCalls.length = 0; st.enqueued.length = 0; st.alarms.length = 0; st.pilotAlarms.length = 0
   for (const k of Object.keys(st.rows)) delete st.rows[k]
   st.companyState = 'store'
@@ -66,6 +72,8 @@ beforeEach(async () => {
     submitted_data: { business_name: 'Acme LLC' }, upload_paths: [PASSPORT, PROOF, STATEMENT], completed_at: '2026-10-18T14:30:00.000Z',
   }
   st.rows.accounts = { status: 'Active', drive_folder_id: null, gdrive_folder_url: null, company_name: 'Acme LLC' }
+  st.rows.contacts = { full_name: 'Maria Rossi' }
+  st.rows.store_owners = []
 })
 
 const post = async () => {
@@ -99,15 +107,39 @@ describe('/api/banking-form-completed', () => {
     expect(step?.status).toBe('error')
     expect(st.personCalls).toEqual([])
     expect(st.companyCalls[0].paths).toEqual([STATEMENT])
-    expect(st.alarms).toHaveLength(1)
+    expect(st.pilotAlarms).toEqual(['banking_package_problem'])
   })
-  it('company moving: error, and the durable job is STILL queued (pinned to the storage) so it can heal', async () => {
+  it('company moving (the REAL decision, not a mock): error, nothing filed, no alarm, and the durable job is queued (no pin: it works the destination out again when it runs)', async () => {
     st.companyState = 'moving'
     const step = await post()
     expect(step?.status).toBe('error')
     expect(step?.detail).toMatch(/retried/)
-    expect(st.companyCalls).toEqual([])
-    expect(st.enqueued[0]).toMatchObject({ pin: { folderId: 'account-storage:acc-1' } })
+    expect(st.companyCalls).toEqual([]); expect(st.pilotAlarms).toEqual([])
+    expect(st.enqueued[0]).toMatchObject({ formType: 'banking', submissionId: 's1' })
+    expect(st.enqueued[0].pin).toBeUndefined()
+  })
+  it('PRIVACY: the person has only a hidden STUDY copy of their storage -> the personal papers are NOT filed (not into the study copy), ONE alarm, the company still gets its own files', async () => {
+    st.personOwner = 'study'; st.rows.store_owners = [{ id: 'study-owner' }]
+    const step = await post()
+    expect(step?.status).toBe('error')
+    expect(st.personCalls).toEqual([])
+    expect(st.ensureNames).toEqual([])
+    expect(st.companyCalls[0].paths).toEqual([STATEMENT])
+    expect(st.pilotAlarms).toEqual(['banking_package_problem'])
+    await post() // replayed: still told only once
+    expect(st.pilotAlarms).toEqual(['banking_package_problem'])
+  })
+  it("a person with no storage yet gets one, named from the CRM contact's own name (never the company's)", async () => {
+    st.personOwner = 'none'
+    expect((await post())?.status).toBe('ok')
+    expect(st.ensureNames).toEqual(['Maria Rossi'])
+  })
+  it('FAIL CLOSED: a new kind of KYC paper the code has never heard of goes to the person, never the company', async () => {
+    const SELFIE = 'banking_relay/c1/selfie_with_id_abc.jpg', CERT = 'banking_relay/c1/tax_residency_certificate_abc.pdf'
+    ;(st.rows.banking_submissions as Record<string, unknown>).upload_paths = [SELFIE, CERT, STATEMENT]
+    await post()
+    expect(st.companyCalls[0].paths).toEqual([STATEMENT])
+    expect(st.personCalls[0].uploadPaths).toEqual([SELFIE, CERT])
   })
   it('a Closed company: error + ONE alarm even when the public endpoint is replayed many times; nothing filed, nothing queued', async () => {
     st.companyState = 'drive'; st.rows.accounts = { status: 'Closed', drive_folder_id: 'F-old', gdrive_folder_url: null, company_name: 'Acme LLC' }
