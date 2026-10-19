@@ -172,17 +172,19 @@ async function defaultAlarmDeps(): Promise<AlarmDeps> {
 
 export async function raiseDriveWriteRefused(p: { flow: string; accountId?: string | null; contactId?: string | null; reason: LegacyRefusalReason; detail?: string }, now: number = Date.now(), deps?: AlarmDeps): Promise<string> {
   const sentence = LEGACY_REFUSAL_SENTENCE[p.reason]
-  const key = [p.flow, p.accountId ?? "", p.contactId ?? "", p.reason].join("|")
+  // one alarm per flow + company + person + reason + file/step: a retrying job cannot spam staff, but a refusal for a DIFFERENT file of
+  // the same company is a different problem and is not silenced
+  const key = [p.flow, p.accountId ?? "", p.contactId ?? "", p.reason, p.detail ?? ""].join("|")
   const last = recentAlarms.get(key)
   if (last !== undefined && now - last < ALARM_THROTTLE_MS) return sentence
-  recentAlarms.set(key, now)
   const d = deps ?? (await defaultAlarmDeps())
-  const identity = { flow: p.flow, accountId: p.accountId ?? null, contactId: p.contactId ?? null, reason: p.reason }
+  const identity = { flow: p.flow, accountId: p.accountId ?? null, contactId: p.contactId ?? null, reason: p.reason, detail: p.detail ?? null }
   try {
-    if (await d.alreadyAlarmed(identity, new Date(now - ALARM_THROTTLE_MS).toISOString())) return sentence
+    if (await d.alreadyAlarmed(identity, new Date(now - ALARM_THROTTLE_MS).toISOString())) { recentAlarms.set(key, now); return sentence }
   } catch { /* cannot tell: alarm anyway */ }
   try {
-    await d.raise({ ...identity, detail: p.detail ?? null })
+    await d.raise(identity)
+    recentAlarms.set(key, now) // remembered only once the alarm really went out: a failed raise is tried again by the next refusal
   } catch { /* an alarm never breaks the caller */ }
   return sentence
 }

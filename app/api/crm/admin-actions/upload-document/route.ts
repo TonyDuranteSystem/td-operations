@@ -131,7 +131,7 @@ export async function POST(req: NextRequest) {
       for (const l of (links ?? []) as Array<{ account_id: string }>) verdicts.push(await legacyDriveForAccount(l.account_id))
       if (!verdicts.some((v) => v.allowed)) {
         const reason = verdicts.find((v) => !v.allowed && v.reason !== 'no_folder' && v.reason !== 'no_company')
-        const why: keyof typeof LEGACY_REFUSAL_SENTENCE = reason && !reason.allowed ? reason.reason : 'no_folder'
+        const why: keyof typeof LEGACY_REFUSAL_SENTENCE = reason && !reason.allowed ? reason.reason : (links ?? []).length === 0 ? 'no_company' : 'no_folder'
         // a staff action: the person who clicked is told right here, so no separate alarm
         return NextResponse.json({ success: false, detail: LEGACY_REFUSAL_SENTENCE[why] }, { status: 409 })
       }

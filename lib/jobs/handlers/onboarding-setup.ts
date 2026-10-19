@@ -39,6 +39,7 @@ import { offerCountsAsPaid } from "@/lib/offers/offer-paid"
 import { reportSystemError } from "@/lib/system-errors"
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
 import { companyCmraAddressLine } from "@/lib/operations/suite"
+import { memberPassportPathFor } from "@/lib/crm-store/account-uploads"
 
 interface OnboardingPayload {
   token: string
@@ -549,7 +550,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           const config = FORM_CONFIGS["onboarding"]
           const summaryPdf = await generateFormSummaryPDF(config, submitted, {
             token,
-            submittedAt: now,
+            submittedAt: job.created_at || now,
             companyName: company_name,
             uploadCount: (p.upload_paths || []).length,
           })
@@ -587,7 +588,8 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           try {
             const { generateFormSummaryPDF, FORM_CONFIGS } = await import("@/lib/form-to-drive")
             const summaryPdf = await generateFormSummaryPDF(FORM_CONFIGS["onboarding"], submitted, {
-              token, submittedAt: now, companyName: company_name, uploadCount: (p.upload_paths || []).length,
+              // the submission's own date (the job row's creation), not "now": a re-run of this setup makes the very same PDF
+              token, submittedAt: job.created_at || now, companyName: company_name, uploadCount: (p.upload_paths || []).length,
             })
             const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
             const routed = await saveDocumentForAccount({
@@ -788,7 +790,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             }
 
             // Passport: find in upload_paths by key pattern passport_member_${i}
-            const memberPassportPath = (p.upload_paths ?? []).find(up => up.includes(`passport_member_${i}`))
+            const memberPassportPath = memberPassportPathFor(p.upload_paths, i)
             if (memberPassportPath && driveFolderId) {
               try {
                 const cleanPath = memberPassportPath.replace(/^\/+/, '')
@@ -860,6 +862,17 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             }
           } else {
             result.steps.push(step(`member_${i + 1}_link`, 'skipped', 'No email — cannot create/find contact'))
+            // The member's passport has no person to be filed under yet: it STAYS where the client uploaded it (never in the owner's
+            // storage) and staff are told once; it is filed when the member has a contact (re-run this setup then).
+            const heldPassport = memberPassportPathFor(p.upload_paths, i)
+            if (heldPassport) {
+              result.steps.push(step(`member_${i + 1}_passport`, 'error', 'Kept on the submission: this member has no contact yet, so the passport has no person to be filed under'))
+              await reportSystemError({
+                source: 'server', route: 'jobs/onboarding-setup', method: 'INTERNAL',
+                message: `Member passport not filed (member has no contact yet) — ${company_name}`,
+                context: { account_id, member: i + 1, path: heldPassport },
+              }).catch(() => {})
+            }
           }
         }
       } catch (membErr) {

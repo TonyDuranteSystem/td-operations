@@ -19,6 +19,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks"
+import { driveIdFromUrl } from "./no-storage"
 
 export type CompanyDocState = "drive" | "moving" | "store"
 
@@ -126,7 +127,11 @@ async function archivedFolderIds(
     const { data, error } = await d.from("accounts").select("drive_folder_id").in("drive_folder_id", part).not("status", "in", "(Closed,Cancelled)")
     if (error) throw new Error(`store guard: could not read the shared company folders — ${error.message}`)
     for (const o of (data ?? []) as Array<{ drive_folder_id: string | null }>) if (o.drive_folder_id) ids.delete(o.drive_folder_id)
-  }
+  }  // an open company that knows its folder ONLY through the older link also keeps a shared folder open (no open company has a NULL status:
+  // a NULL status is not "open" — the query below excludes it, so such a company stays locked: fail closed)
+  const { data: linkOnly, error: lErr } = await d.from("accounts").select("drive_folder_id, gdrive_folder_url").is("drive_folder_id", null).not("gdrive_folder_url", "is", null).not("status", "in", "(Closed,Cancelled)")
+  if (lErr) throw new Error(`store guard: could not read the link-only company folders — ${lErr.message}`)
+  for (const o of (linkOnly ?? []) as Array<{ drive_folder_id: string | null; gdrive_folder_url: string | null }>) for (const f of folderIdsOf(o)) ids.delete(f)
   archivedCache = { at: now, ids }
   return ids
 }
@@ -179,8 +184,8 @@ export async function readLockedFolderIds(): Promise<Set<string>> {
   const folderIdsOf = (r: { drive_folder_id?: string | null; gdrive_folder_url?: string | null }): string[] => {
     const out: string[] = []
     if (r.drive_folder_id) out.push(r.drive_folder_id)
-    const m = /\/folders\/([A-Za-z0-9_-]+)/.exec(r.gdrive_folder_url ?? "")
-    if (m) out.push(m[1])
+    const fromUrl = driveIdFromUrl(r.gdrive_folder_url)
+    if (fromUrl) out.push(fromUrl)
     return out
   }
   for (const part of chunks(Array.from(accountIds))) {

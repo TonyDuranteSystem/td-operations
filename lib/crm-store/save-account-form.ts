@@ -38,6 +38,8 @@ export interface SaveAccountFormDeps {
   /** the old folder of a company with no storage that is still being worked in its folder; null = none */
   oldFolder: (accountId: string) => Promise<string | null>
   toFolder: (i: SaveAccountFormInput, folderId: string) => Promise<FormStoreResult>
+  /** an OPEN company with no folder and no storage gets its storage opened (see openStorageForOpenCompany); absent = never */
+  openStorage?: (accountId: string) => Promise<boolean>
 }
 
 async function defaultDeps(): Promise<SaveAccountFormDeps> {
@@ -47,6 +49,7 @@ async function defaultDeps(): Promise<SaveAccountFormDeps> {
     state: guard.companyDocState,
     liveOwner: guard.liveOwnerOfAccount,
     store: saveForm.saveFormToStore,
+    openStorage: async (accountId) => (await import("./no-storage")).openStorageForOpenCompany(accountId),
     oldFolder: async (accountId) => {
       const { noStorageDecisionFor } = await import("./no-storage")
       const d = await noStorageDecisionFor(accountId)
@@ -73,11 +76,12 @@ async function defaultDeps(): Promise<SaveAccountFormDeps> {
 
 export async function saveFormForAccount(input: SaveAccountFormInput, deps?: SaveAccountFormDeps): Promise<SaveAccountFormResult> {
   const d = deps ?? (await defaultDeps())
-  const state = await d.state(input.accountId)
+  let state = await d.state(input.accountId)
   if (state === "moving") {
     const { CompanyMovingError } = await import("./save-for-account")
     throw new CompanyMovingError()
   }
+  if (state === "drive" && d.openStorage && (await d.openStorage(input.accountId))) state = await d.state(input.accountId)
   if (state !== "store") {
     const folderId = await d.oldFolder(input.accountId)
     if (!folderId) return { route: "none" }

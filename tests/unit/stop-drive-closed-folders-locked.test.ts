@@ -18,9 +18,12 @@ vi.mock('@/lib/supabase-admin', () => {
     let folderFilter: string[] | null = null
     let notClosed = false
     b.in = (col: string, vals: string[]) => { if (col === 'status') statusFilter = vals; else if (col === 'id') idFilter = vals; else if (col === 'drive_folder_id') folderFilter = vals; return b }
+    let linkOnly = false
+    b.is = () => { linkOnly = true; return b }
     b.not = () => { notClosed = true; return b }
     const answer = () => {
-      if (folderFilter) return rows.accounts.filter((a) => folderFilter!.includes(a.drive_folder_id ?? '') && (!notClosed || !['Closed', 'Cancelled'].includes(a.status)))
+      if (linkOnly) return rows.accounts.filter((a) => !a.drive_folder_id && a.gdrive_folder_url && !['Closed', 'Cancelled'].includes(a.status))
+      if (folderFilter) return rows.accounts.filter((a) => folderFilter!.includes(a.drive_folder_id ?? '') && (!notClosed || (a.status != null && !['Closed', 'Cancelled'].includes(a.status))))
       return null
     }
     b.range = () => {
@@ -86,5 +89,25 @@ describe('shared folders and the cache', () => {
     expect((await readLockedFolderIds()).has('F-1')).toBe(true)
     forgetArchivedFolderCache()
     expect((await readLockedFolderIds()).has('F-1')).toBe(false)
+  })
+})
+
+describe('open companies that know their folder only by the older link', () => {
+  beforeEach(() => forgetArchivedFolderCache())
+  it('a closed folder an open company holds only through its older link (any URL form) stays open', async () => {
+    rows.owners = []
+    rows.accounts = [
+      { id: 'a1', status: 'Closed', drive_folder_id: 'F-x', gdrive_folder_url: null },
+      { id: 'a2', status: 'Active', drive_folder_id: null, gdrive_folder_url: 'https://drive.google.com/open?id=F-x' },
+    ]
+    expect((await readLockedFolderIds()).has('F-x')).toBe(false)
+  })
+  it('a NULL status is not "open": it never unlocks a closed company\'s folder (fails closed)', async () => {
+    rows.owners = []
+    rows.accounts = [
+      { id: 'a1', status: 'Closed', drive_folder_id: 'F-y', gdrive_folder_url: null },
+      { id: 'a2', status: null as unknown as string, drive_folder_id: 'F-y', gdrive_folder_url: null },
+    ]
+    expect((await readLockedFolderIds()).has('F-y')).toBe(true)
   })
 })

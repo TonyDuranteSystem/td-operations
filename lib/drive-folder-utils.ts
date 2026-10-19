@@ -55,11 +55,13 @@ export async function ensureContactFolder(
   // Stop Drive (dev job 264bb882, S1d): this function NEVER creates a Drive folder (or anything inside one). It hands back the
   // folder that already exists, and only for a person of a company deliberately left on Drive (folder, no storage, not closed).
   // Anyone else gets their OWN storage opened and the caller's storage branch takes over (PersonFilesInStorageError) — except a
-  // person of a closed company or of a company being moved, who is refused with a staff alarm.
+  // person of a company being moved right now, who is refused with a staff alarm (a closed company does not stop a person from getting their own storage).
   const { legacyDriveForContact, raiseDriveWriteRefused, LegacyDriveRefusedError } = await import('@/lib/crm-store/legacy-drive')
   const v = await legacyDriveForContact(contactId)
   if (!v.allowed) {
-    if (v.reason === 'archived' || v.reason === 'moving') {
+    // A closed company is a property of the COMPANY, not of the person: a person whose companies are all closed (a returning client
+    // starting a new formation) gets their own storage like anyone else. Only a company being moved right now is refused.
+    if (v.reason === 'moving') {
       await raiseDriveWriteRefused({ flow: 'ensureContactFolder', contactId, reason: v.reason, detail: contactName })
       throw new LegacyDriveRefusedError(v.reason)
     }
@@ -93,8 +95,14 @@ export async function ensureCompanyFolder(
   if (!v.allowed) {
     if (v.reason === 'no_folder') {
       const { ensureCompanyStorage } = await import('@/lib/crm-store/company-storage')
-      await ensureCompanyStorage(accountId, companyName)
       const { StoreOwnedAccountError } = await import('@/lib/crm-store/account-uploads')
+      try {
+        await ensureCompanyStorage(accountId, companyName)
+      } catch (e) {
+        // the buyer's formation already owns a storage: no second one is opened — the company gets THAT one when it is attached
+        if (e instanceof Error && e.name === 'FormationOwnerPendingError') throw new StoreOwnedAccountError("This company's files go to its formation's storage (attached to the company) — it does not get a Google Drive folder.")
+        throw e
+      }
       throw new StoreOwnedAccountError("This company's files now live in the new CRM storage (opened just now) — it does not get a Google Drive folder.")
     }
     await raiseDriveWriteRefused({ flow: 'ensureCompanyFolder', accountId, reason: v.reason, detail: [companyName, stateOfFormation, ownerName].filter(Boolean).join(' / ') })
