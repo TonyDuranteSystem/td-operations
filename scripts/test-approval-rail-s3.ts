@@ -387,38 +387,10 @@ async function main() {
     },
   })
 
-  // ── 8. drive_move (SANDBOX mock → executed) ──
-  await runCase({
-    tool: "drive_move",
-    params: { file_id: `qa-fake-file-${RUN}`, target_folder_id: `qa-fake-folder-${RUN}` },
-    expected: "executed",
-    verify: async (result) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const file = (result as any)?.file
-      return file?.id === `qa-fake-file-${RUN}` ? [] : [`unexpected mock result: ${JSON.stringify(result).slice(0, 120)}`]
-    },
-  })
-
-  // ── 9. drive_upload_file (SANDBOX mock; real source fetch via data: URL) ──
-  await runCase({
-    tool: "drive_upload_file",
-    params: {
-      file_name: `[QA S3] upload ${RUN}.txt`,
-      folder_id: `qa-fake-folder-${RUN}`,
-      source_url: "data:text/plain;base64,UUEgUzMgdGVzdA==", // "QA S3 test"
-    },
-    expected: "executed",
-    verify: async (result) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const fid = (result as any)?.file_id
-      return fid === "sandbox-mock" ? [] : [`unexpected upload result: ${JSON.stringify(result).slice(0, 120)}`]
-    },
-  })
-
-  // ── 10. gmail_get_attachments save_to_drive (gmailGet NOT mocked → fake id → controlled failure) ──
+  // ── 10. gmail_get_attachments save_to_storage (gmailGet NOT mocked → fake id → controlled failure) ──
   await runCase({
     tool: "gmail_get_attachments",
-    params: { message_id: `qa-fake-msg-${RUN}`, save_to_drive: true, drive_folder_id: `qa-fake-folder-${RUN}` },
+    params: { message_id: `qa-fake-msg-${RUN}`, save_to_storage: true, account_id: ACCT },
     expected: "failed",
     verify: async () => [],
   })

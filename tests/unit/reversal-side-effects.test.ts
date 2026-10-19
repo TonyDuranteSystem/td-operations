@@ -2,7 +2,7 @@
  * What un-matching a payment does NOT undo — and whether we say so.
  *
  * Modelled on the real 2026-07-22 case: the mis-match lifted the client's 2025 tax-return
- * payment gate and sent an internal hand-off email, and the correction reversed neither.
+ * payment gate and sent an internal note, and the correction reversed neither.
  */
 
 import { describe, it, expect } from "vitest"
@@ -47,9 +47,9 @@ describe("describeReversalSideEffects — the Aces case", () => {
     expect(out.statements.some((s) => s.includes("stays OPEN"))).toBe(true)
   })
 
-  it("says the internal hand-off email cannot be unsent", () => {
+  it("no longer mentions an accountant hand-off email (retired)", () => {
     const out = describeReversalSideEffects(acesLike)
-    expect(out.statements.some((s) => s.includes("cannot be unsent"))).toBe(true)
+    expect(out.statements.join(" ")).not.toMatch(/accountant|unsent/i)
   })
 
   it("names WHY the gate will not roll back", () => {
@@ -72,8 +72,8 @@ describe("describeReversalSideEffects — the cases that ARE self-cleaning", () 
       otherPaidPaymentExists: false,
     })
     expect(out.statements.some((s) => s.includes("close again automatically"))).toBe(true)
-    // Still flagged, because the hand-off email went out regardless.
-    expect(out.needsAttention).toBe(true)
+    // Nothing else was set in motion (the hand-off email is retired), so nothing needs a human.
+    expect(out.needsAttention).toBe(false)
   })
 
   it("a non-tax invoice sets nothing in motion", () => {

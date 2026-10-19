@@ -7,7 +7,7 @@
  *   hc_submit_ra_change     — Submit Change of Registered Agent order
  *   hc_get_order            — Check order status by ID
  *   hc_list_deliveries      — List RA mail/documents received
- *   hc_download_delivery    — Download delivery PDF to client's Google Drive
+ *   hc_download_delivery    — Download delivery PDF into the company's CRM storage
  *   hc_list_licenses        — List licenses/registrations with expirations
  *   hc_sync_license_deadlines — Pull HC license expirations into deadlines table
  */
@@ -17,7 +17,6 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { harborCompliance } from "@/lib/harbor-compliance"
 import { logAction } from "@/lib/mcp/action-log"
-import { uploadBinaryToDriveUpsert } from "@/lib/google-drive"
 import { setAccountRenewalDate } from "@/lib/operations/renewal-dates"
 
 export function registerHarborComplianceTools(server: McpServer) {
@@ -323,7 +322,7 @@ Checks for duplicate orders to prevent double-submission.`,
   // ═══════════════════════════════════════
   server.tool(
     "hc_list_deliveries",
-    `List Registered Agent deliveries (mail, packages, documents) received by Harbor Compliance. Shows document name, date, download status, and linked company. Use hc_download_delivery to save a document to the client's Google Drive.`,
+    `List Registered Agent deliveries (mail, packages, documents) received by Harbor Compliance. Shows document name, date, download status, and linked company. Use hc_download_delivery to save a document into the company's storage.`,
     {
       limit: z.number().optional().default(20).describe("Results per page (1-100, default 20)"),
       page: z.number().optional().default(1).describe("Page number (default 1)"),
@@ -370,23 +369,23 @@ Checks for duplicate orders to prevent double-submission.`,
   // ═══════════════════════════════════════
   server.tool(
     "hc_download_delivery",
-    `Download an RA delivery document (PDF) from Harbor Compliance and upload it to the client's Google Drive folder. Requires the delivery ID (from hc_list_deliveries) and the CRM account ID (to find the Drive folder).
+    `Download an RA delivery document (PDF) from Harbor Compliance and save it in the company's CRM storage. Requires the delivery ID (from hc_list_deliveries) and the CRM account ID.
 
 Prerequisites:
-- Account must have drive_folder_id set
+- Company must have a CRM storage place
 - Delivery must be downloadable (is_downloadable = true)
 
-The file is saved to the client's "5. Correspondence" subfolder on Drive.`,
+The file is saved in the company's "5. Correspondence" folder (internal).`,
     {
       delivery_id: z.string().describe("HC delivery UUID (from hc_list_deliveries)"),
-      account_id: z.string().uuid().describe("CRM account UUID (to find Drive folder)"),
+      account_id: z.string().uuid().describe("CRM account UUID"),
     },
     async (params) => {
       try {
-        // Get account's Drive folder
+        // Get the account
         const { data: account, error: accErr } = await supabaseAdmin
           .from("accounts")
-          .select("id, company_name, drive_folder_id")
+          .select("id, company_name")
           .eq("id", params.account_id)
           .single()
 
@@ -394,13 +393,9 @@ The file is saved to the client's "5. Correspondence" subfolder on Drive.`,
           return { content: [{ type: "text" as const, text: `Account not found: ${accErr?.message || "no data"}` }] }
         }
 
-        // A company whose files live in the new storage (Drive cutover, dev job ad09ea91) has no Drive folder to write to.
-        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
-        const inStorage = (await companyDocState(params.account_id)) !== "drive"
-
-        if (!account.drive_folder_id && !inStorage) {
-          return { content: [{ type: "text" as const, text: `Account "${account.company_name}" has no Drive folder. Set drive_folder_id first.` }] }
-        }
+        const { companyStoragePlace } = await import("@/lib/crm-store/storage-place")
+        const place = await companyStoragePlace(params.account_id)
+        if (!place.ok) return { content: [{ type: "text" as const, text: `Not saved: ${place.message.replace("nothing was made", "nothing was saved")}` }] }
 
         // Get delivery metadata
         const deliveryInfo = await harborCompliance.getDelivery(params.delivery_id, {
@@ -415,69 +410,22 @@ The file is saved to the client's "5. Correspondence" subfolder on Drive.`,
         // Download PDF
         const pdfBuffer = await harborCompliance.downloadDeliveryFile(params.delivery_id)
 
-        if (inStorage) {
-          const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
-          const storeName = `HC_${delivery.document_type?.name || "Document"}_${delivery.name || params.delivery_id}.pdf`
-          // the same delivery again is a new version of the same file, never a second copy
-          const routed = await saveDocumentForAccount({
-            accountId: params.account_id, name: storeName, bytes: pdfBuffer, mimeType: "application/pdf",
-            folder: "correspondence", documentType: "registered_agent", callerKey: `hc-delivery:${params.delivery_id}`, portalVisible: false,
-            row: { document_type_name: "Registered Agent document", category: 5, status: "classified" },
-          })
-          if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the document was being saved — nothing was saved.")
-          await logAction({
-            action_type: "process", table_name: "hc_deliveries", record_id: params.delivery_id, account_id: params.account_id,
-            summary: `Downloaded HC delivery "${delivery.name}" to the new storage for ${account.company_name}`,
-            details: { delivery_id: params.delivery_id, file_name: storeName, pointer: routed.pointer },
-          })
-          return { content: [{ type: "text" as const, text: [`Document downloaded and saved in the company's new storage`, `  Delivery: ${delivery.name}`, `  Company: ${account.company_name}`, `  File: ${storeName}`, `  Folder: 5. Correspondence (internal)`].join("\n") }] }
-        }
-
-        // Find "5. Correspondence" subfolder
-        const { listFolder } = await import("@/lib/google-drive")
-        const folderResult = await listFolder(account.drive_folder_id)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const files = (folderResult as any)?.files || []
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const correspondenceFolder = files.find((f: any) =>
-          f.name?.startsWith("5") && f.mimeType === "application/vnd.google-apps.folder"
-        )
-
-        const targetFolder = correspondenceFolder?.id || account.drive_folder_id
-
-        // Upload to Drive
-        const fileName = `HC_${delivery.document_type?.name || "Document"}_${delivery.name || params.delivery_id}.pdf`
-        // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
-        const driveFile = await uploadBinaryToDriveUpsert(
-          fileName,
-          pdfBuffer,
-          "application/pdf",
-          targetFolder,
-        )
-
-        await logAction({
-          action_type: "process",
-          table_name: "hc_deliveries",
-          record_id: params.delivery_id,
-          account_id: params.account_id,
-          summary: `Downloaded HC delivery "${delivery.name}" to Drive for ${account.company_name}`,
-          details: {
-            delivery_id: params.delivery_id,
-            drive_file_id: driveFile?.id,
-            file_name: fileName,
-          },
+        const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
+        const storeName = `HC_${delivery.document_type?.name || "Document"}_${delivery.name || params.delivery_id}.pdf`
+        // the same delivery again is a new version of the same file, never a second copy
+        const routed = await saveDocumentForAccount({
+          accountId: params.account_id, name: storeName, bytes: pdfBuffer, mimeType: "application/pdf",
+          folder: "correspondence", documentType: "registered_agent", callerKey: `hc-delivery:${params.delivery_id}`, portalVisible: false,
+          row: { document_type_name: "Registered Agent document", category: 5, status: "classified" },
         })
+        if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the document was being saved — nothing was saved.")
+        await logAction({
+          action_type: "process", table_name: "hc_deliveries", record_id: params.delivery_id, account_id: params.account_id,
+          summary: `Downloaded HC delivery "${delivery.name}" to the new storage for ${account.company_name}`,
+          details: { delivery_id: params.delivery_id, file_name: storeName, pointer: routed.pointer },
+        })
+        return { content: [{ type: "text" as const, text: [`Document downloaded and saved in the company's new storage`, `  Delivery: ${delivery.name}`, `  Company: ${account.company_name}`, `  File: ${storeName}`, `  Folder: 5. Correspondence (internal)`].join("\n") }] }
 
-        const lines = [
-          `Document downloaded and uploaded to Drive`,
-          `  Delivery: ${delivery.name}`,
-          `  Type: ${delivery.document_type?.name || "?"}`,
-          `  Company: ${account.company_name}`,
-          `  Drive file: ${fileName}`,
-          `  Folder: ${correspondenceFolder ? "5. Correspondence" : "root"}`,
-        ]
-
-        return { content: [{ type: "text" as const, text: lines.join("\n") }] }
       } catch (err) {
         return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] }
       }

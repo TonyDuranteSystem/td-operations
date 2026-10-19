@@ -208,7 +208,7 @@ export async function GET(request: NextRequest) {
             }
 
             if (attachmentCount > 0) {
-              actionParts.push('Download attachments and save to client Drive folder.')
+              actionParts.push("Save the attachments in the company's storage.")
             }
 
             await createDecision({

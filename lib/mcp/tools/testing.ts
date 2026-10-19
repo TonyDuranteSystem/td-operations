@@ -479,7 +479,7 @@ async function scenarioTaxAnnual(): Promise<TestScenarioResult> {
       `Tax return: ${new Date().getFullYear() - 1}, type 5472, Paid - Not Started`,
       `Tax return ID: ${tr.id}`,
       'SD: Tax Return - Data Collection',
-      'Ready to test: Tax wizard, send to India',
+      'Ready to test: Tax wizard',
     ],
   }
 }
@@ -683,7 +683,7 @@ Available scenarios:
 - formation_completed: Everything done (test portal as active client)
 - onboarding_paid: Lead+Contact, no account (test onboarding wizard)
 - onboarding_completed: Contact+Account+services done (test document signing)
-- tax_annual: Contact+Account+tax_return (test tax wizard, send to India)
+- tax_annual: Contact+Account+tax_return (test tax wizard)
 - itin_individual: Contact only, no account (test ITIN wizard without LLC)`,
     {
       scenario: z.enum(SCENARIOS).describe("Test scenario to create"),

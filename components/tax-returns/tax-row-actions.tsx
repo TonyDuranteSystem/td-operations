@@ -170,7 +170,7 @@ export function TaxRowActions({ taxReturn: tr }: Props) {
           <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400 bg-zinc-50 border-b sticky top-0">
             Set status
           </div>
-          {TAX_STATUSES.map((s) => (
+          {TAX_STATUSES.filter((s) => s !== 'Sent to Accountant' || s === tr.status).map((s) => (
             <button
               key={s}
               type="button"

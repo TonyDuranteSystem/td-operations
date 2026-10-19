@@ -23,7 +23,7 @@ export function registerITINFormTools(server: McpServer) {
     {
       lead_id: z.string().uuid().optional().describe("Lead UUID (use for new clients)"),
       account_id: z.string().uuid().optional().describe("Account UUID (use for existing clients)"),
-      contact_id: z.string().uuid().optional().describe("Contact UUID (auto-detects primary contact if omitted)"),
+      contact_id: z.string().uuid().optional().describe("Contact UUID of the applicant (taken from the company only when it has a single member)"),
       language: z.enum(["en", "it"]).optional().describe("Form language (auto-detected from lead/contact language if omitted)"),
     },
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -59,13 +59,16 @@ export function registerITINFormTools(server: McpServer) {
             resolvedContactId = await contactIdForLead({ email: lead.email, fullName: lead.full_name, route: "mcp:itin_form_create", leadId: lead.id })
           }
         } else if (account_id) {
-          // Get primary contact for account
+          // The applicant: the one linked member, or the contact_id you pass. With several members we never guess.
           if (!resolvedContactId) {
             const { data: links } = await supabaseAdmin
               .from("account_contacts")
               .select("contact_id")
               .eq("account_id", account_id)
-              .limit(1)
+              .limit(2)
+            if ((links ?? []).length > 1) {
+              return { content: [{ type: "text" as const, text: "This company has several members, so I can't tell who the ITIN is for. Call itin_form_create again with contact_id set to the applicant." }] }
+            }
             resolvedContactId = links?.[0]?.contact_id || null
           }
 
@@ -524,14 +527,17 @@ export function registerITINFormTools(server: McpServer) {
   // ***************************************
   server.tool(
     "itin_prepare_documents",
-    `Generate W-7, 1040-NR, and Schedule OI PDFs from a completed ITIN form submission. Uploads all 3 PDFs + passport copies to the client's Google Drive folder (ITIN subfolder) and registers them as portal-visible documents (the client sees/downloads them in the portal). Prerequisites: 1) ITIN form must be 'completed' or 'reviewed', 2) Client must have an account with drive_folder_id (for LLC clients) OR a contact record (for individual clients). Run itin_form_review first to verify data, then use this tool to generate documents. NOTE (2026-06-26): the ITIN is now managed from the /flows/[sd] WORKSPACE — staff review the docs there and click "Documents Reviewed — Send to Client" (Document Preparation → Client Signing), which auto-posts the client a bilingual portal chat message. The client is NEVER emailed the PDFs; the portal is the delivery mechanism. Do NOT use send_email.`,
+    `Generate W-7, 1040-NR, and Schedule OI PDFs from a completed ITIN form submission. Saves all 3 PDFs + passport copies in the person's CRM storage (ITIN folder) and lists them on the person's open ITIN case exactly like the automatic ITIN path does (visible in the workspace and the client's portal Documents). Needs an open ITIN case for the person. Prerequisites: 1) ITIN form must be 'completed' or 'reviewed', 2) The applicant is taken from the form's own data (email, then name), never from the first linked member; if that cannot be told the tool refuses. Run itin_form_review first to verify data, then use this tool to generate documents. NOTE (2026-06-26): the ITIN is now managed from the /flows/[sd] WORKSPACE — staff review the docs there and click "Documents Reviewed — Send to Client" (Document Preparation → Client Signing), which auto-posts the client a bilingual portal chat message. The client is NEVER emailed the PDFs; the portal is the delivery mechanism. Do NOT use send_email.`,
     {
       token: z.string().describe("ITIN form token"),
       send_email: z.boolean().optional().default(false).describe("DEPRECATED — do NOT use. The client gets the ITIN documents via the PORTAL/workspace, never by email. Leave false; advancing the workspace to Client Signing notifies the client."),
-      drive_folder_id: z.string().optional().describe("Override Drive folder ID (auto-detected from account if omitted)"),
+      drive_folder_id: z.string().optional().describe("Removed - the documents are saved in the person's storage."),
     },
     async ({ token, send_email, drive_folder_id }) => {
       try {
+        if (drive_folder_id) {
+          return { content: [{ type: "text" as const, text: "❌ drive_folder_id was removed. The documents are saved in the person's storage automatically - call again without it. Nothing was generated." }] }
+        }
         // 1. Load submission
         const { data: sub, error } = await supabaseAdmin
           .from("itin_submissions")
@@ -548,43 +554,36 @@ export function registerITINFormTools(server: McpServer) {
 
         const results: string[] = [`📋 ITIN Document Preparation: ${clientName}`, ""]
 
-        // 2. Resolve Drive folder
-        let folderId = drive_folder_id
-        if (!folderId && sub.account_id) {
-          const { data: acc } = await supabaseAdmin
-            .from("accounts")
-            .select("drive_folder_id, company_name")
-            .eq("id", sub.account_id)
-            .single()
-          folderId = acc?.drive_folder_id || undefined
+        // The ITIN belongs to the PERSON: decide where it will be saved BEFORE anything is generated. A person with no
+        // storage gets one now; a form not linked to a person is refused (nothing is made, nothing is claimed).
+        const { personStoragePlace } = await import("@/lib/crm-store/storage-place")
+        // WHO is the applicant: from the form's own data, never "the first linked contact".
+        const { resolveItinApplicant, realItinApplicantDeps } = await import("@/lib/crm-store/itin-applicant")
+        const who = await resolveItinApplicant({ contact_id: sub.contact_id as string | null, account_id: sub.account_id as string | null, submitted_data: submitted }, await realItinApplicantDeps())
+        if (!who.ok) return { content: [{ type: "text" as const, text: `⚠️ ${who.message}` }] }
+        const applicantId = who.contactId as string
+        // The person's storage folder is named from the CRM record, not from what was typed in the form.
+        const personName = who.fullName || clientName
+        // The documents are listed on the person's open ITIN case (so the workspace lists them and the portal card can show
+        // them) exactly like the automatic path does. No open case = nothing to attach them to: refuse before generating.
+        const sdFilters = [`notes.ilike.%${token}%`, `contact_id.eq.${applicantId}`]
+        if (sub.account_id) sdFilters.push(`account_id.eq.${sub.account_id}`)
+        const { data: itinCases, error: itinCaseErr } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id")
+          .eq("service_type", "ITIN")
+          .or(sdFilters.join(","))
+          .eq("status", "active")
+          .order("created_at", { ascending: true })
+          .limit(1)
+        if (itinCaseErr) throw new Error(`Could not look up the ITIN case — ${itinCaseErr.message}`)
+        const itinCaseId = (itinCases ?? [])[0]?.id as string | undefined
+        if (!itinCaseId) {
+          return { content: [{ type: "text" as const, text: "⚠️ There is no open ITIN case for this person, so nothing was made - open the ITIN case first and try again." }] }
         }
-
-        // Drive cutover (dev job ad09ea91): the ITIN belongs to the PERSON. A person whose storage is live — or who belongs to a
-        // switched company — keeps these documents in their own storage; nothing is written to Drive for them.
-        const { liveOwnerOfContact, companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
-        const personInStorage = !!sub.contact_id && (
-          !!(await liveOwnerOfContact(sub.contact_id as string)) ||
-          (!!sub.account_id && (await companyDocState(sub.account_id as string)) !== "drive")
-        )
-
-        // Create ITIN subfolder
-        let itinFolderId: string | undefined
-        if (folderId && !personInStorage) {
-          const { listFolder, createFolder } = await import("@/lib/google-drive")
-          const contents = await listFolder(folderId)
-          const existing = contents?.files?.find(
-            (f: { name: string; mimeType: string }) => f.name === "ITIN" && f.mimeType === "application/vnd.google-apps.folder"
-          )
-          if (existing) {
-            itinFolderId = existing.id
-          } else {
-            const newFolder = await createFolder(folderId, "ITIN")
-            itinFolderId = newFolder.id
-          }
-          results.push(`📁 Drive folder: ITIN/ (${itinFolderId})`)
-        } else {
-          results.push("⚠️ No Drive folder found - PDFs will be generated but not uploaded")
-        }
+        // Storage is created LAST, only once everything else says go (a refusal above must leave no empty storage behind).
+        const place = await personStoragePlace(applicantId, personName, undefined, sub.account_id as string | null)
+        if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message}` }] }
 
         // 3. Generate W-7
         const { fillW7 } = await import("@/lib/pdf/w7-fill")
@@ -634,26 +633,30 @@ export function registerITINFormTools(server: McpServer) {
 
         // 6. Save the documents
         const uploadedIds: { name: string; id: string }[] = []
-        if (personInStorage) {
+        {
           const { saveDocumentForContact } = await import("@/lib/crm-store/save-for-account")
           const { storeNameKey } = await import("@/lib/crm-store/rules")
-          const slug = clientName.replace(/\s+/g, "_")
-          const saveOne = async (label: string, fileName: string, bytes: Buffer, mime: string, documentType: string | null) => {
+          const slug = `${submitted.first_name ?? ""}_${submitted.last_name ?? ""}`.replace(/\s+/g, "_")
+          const saveOne = async (label: string, fileName: string, bytes: Buffer, mime: string, documentType: string | null, itinDoc = false) => {
             const routed = await saveDocumentForContact({
               // the generated ITIN papers go to the person's ITIN folder; a passport stays in Personal documents
               folderKind: documentType === "passport" ? "personal" : "itin",
-              contactId: sub.contact_id as string, accountId: (sub.account_id as string | null) ?? null, viaAccountId: (sub.account_id as string | null) ?? null,
-              contactName: clientName, name: fileName, bytes, mimeType: mime, documentType,
-              callerKey: `itin-docs:${sub.id}:${storeNameKey(fileName)}`,
-              row: { document_type_name: label, category: 1, status: "classified" },
+              contactId: applicantId, accountId: (sub.account_id as string | null) ?? null, viaAccountId: (sub.account_id as string | null) ?? null,
+              contactName: personName, name: fileName, bytes, mimeType: mime, documentType,
+              // the three generated forms are registered EXACTLY like the automatic path does (same key, type, category, case, visibility)
+              callerKey: itinDoc ? `itin-form-doc:${applicantId}:${itinCaseId}:${fileName}` : `itin-docs:${sub.id}:${storeNameKey(fileName)}`,
+              ...(itinDoc ? { portalVisible: true } : {}),
+              row: itinDoc
+                ? { document_type_name: `ITIN ${label}`, category: 3, status: "classified", service_delivery_id: itinCaseId }
+                : { document_type_name: label, category: 1, status: "classified" },
             })
-            if (routed.route !== "store") throw new Error("this person's files moved back to Drive while saving — nothing more was saved")
+            if (routed.route !== "store") throw new Error("this person's storage was not available while saving — nothing more was saved")
             uploadedIds.push({ name: label, id: routed.pointer })
-            results.push(`📤 ${label} saved in ${clientName}'s new storage`)
+            results.push(`📤 ${label} saved in ${personName}'s new storage`)
           }
-          await saveOne("W-7", `W-7_${slug}.pdf`, Buffer.from(w7Pdf), "application/pdf", "form_w_7")
-          await saveOne("1040-NR", `1040-NR_${slug}.pdf`, Buffer.from(nrPdf), "application/pdf", "form_1040_nr")
-          await saveOne("Schedule OI", `Schedule_OI_${slug}.pdf`, Buffer.from(oiPdf), "application/pdf", "itin_schedule_oi")
+          await saveOne("W-7", `W-7_${slug}.pdf`, Buffer.from(w7Pdf), "application/pdf", "form_w_7", true)
+          await saveOne("1040-NR", `1040-NR_${slug}.pdf`, Buffer.from(nrPdf), "application/pdf", "form_1040_nr", true)
+          await saveOne("Schedule OI", `Schedule_OI_${slug}.pdf`, Buffer.from(oiPdf), "application/pdf", "itin_schedule_oi", true)
           const uploads = sub.upload_paths as string[] | null
           for (const path of uploads ?? []) {
             try {
@@ -661,59 +664,6 @@ export function registerITINFormTools(server: McpServer) {
               if (fileData) await saveOne(path.split("/").pop() || "passport.pdf", path.split("/").pop() || "passport.pdf", Buffer.from(await fileData.arrayBuffer()), fileData.type || "application/octet-stream", "passport")
             } catch (e) {
               results.push(`⚠️ Failed to copy ${path}: ${e instanceof Error ? e.message : String(e)}`)
-            }
-          }
-        } else if (itinFolderId) {
-          const { uploadBinaryToDrive, uploadBinaryToDriveUpsert, folderFileNameMap } = await import("@/lib/google-drive")
-          const slug = clientName.replace(/\s+/g, "_")
-
-          // Duplicate-upload guard (LT Program incident class): generated PDFs
-          // have stable names → UPSERT in place; passport copies are verbatim
-          // uploads → skip when the name already exists. One listing feeds all.
-          const itinNames = await folderFileNameMap(itinFolderId)
-
-          const w7Upload = await uploadBinaryToDriveUpsert(
-            `W-7_${slug}.pdf`, Buffer.from(w7Pdf), "application/pdf", itinFolderId, itinNames
-          )
-          uploadedIds.push({ name: "W-7", id: w7Upload.id })
-          results.push(`📤 W-7 uploaded to Drive (${w7Upload.id})`)
-
-          const nrUpload = await uploadBinaryToDriveUpsert(
-            `1040-NR_${slug}.pdf`, Buffer.from(nrPdf), "application/pdf", itinFolderId, itinNames
-          )
-          uploadedIds.push({ name: "1040-NR", id: nrUpload.id })
-          results.push(`📤 1040-NR uploaded to Drive (${nrUpload.id})`)
-
-          const oiUpload = await uploadBinaryToDriveUpsert(
-            `Schedule_OI_${slug}.pdf`, Buffer.from(oiPdf), "application/pdf", itinFolderId, itinNames
-          )
-          uploadedIds.push({ name: "Schedule OI", id: oiUpload.id })
-          results.push(`📤 Schedule OI uploaded to Drive (${oiUpload.id})`)
-
-          // Copy passport scans from Supabase Storage to Drive
-          const uploads = sub.upload_paths as string[] | null
-          if (uploads && uploads.length > 0) {
-            for (const path of uploads) {
-              try {
-                const fileName = path.split("/").pop() || "passport.pdf"
-                if (itinNames?.has(fileName)) {
-                  results.push(`⏭️ ${fileName} already on Drive (${itinNames.get(fileName)}) — skipped`)
-                  continue
-                }
-                const { data: fileData } = await supabaseAdmin.storage
-                  .from("onboarding-uploads")
-                  .download(path)
-                if (fileData) {
-                  const buf = Buffer.from(await fileData.arrayBuffer())
-                  const passUpload = await uploadBinaryToDrive(
-                    fileName, buf, fileData.type || "application/octet-stream", itinFolderId
-                  )
-                  uploadedIds.push({ name: fileName, id: passUpload.id })
-                  results.push(`📤 Passport copy uploaded (${passUpload.id})`)
-                }
-              } catch (e) {
-                results.push(`⚠️ Failed to copy ${path}: ${e instanceof Error ? e.message : String(e)}`)
-              }
             }
           }
         }
@@ -724,7 +674,7 @@ export function registerITINFormTools(server: McpServer) {
           if (!clientEmail) {
             results.push("⚠️ Cannot send email: no client email address")
           } else if (uploadedIds.length < 3) {
-            results.push("⚠️ Cannot send email: PDFs not uploaded to Drive")
+            results.push("⚠️ Cannot send email: PDFs not saved")
           } else {
             try {
               const w7FileId = uploadedIds.find(u => u.name === "W-7")?.id
@@ -766,7 +716,6 @@ Tony Durante LLC
 support@tonydurante.us
 `.trim()
 
-                // Use gmail_send with Drive attachments
                 const { gmailPost } = await import("@/lib/gmail")
 
                 // Download PDFs from Drive for attachment
@@ -827,7 +776,7 @@ support@tonydurante.us
         results.push("")
         results.push("---")
         if (!send_email) {
-          results.push("Documents generated, uploaded to Drive, and registered as portal-visible. Manage the ITIN from the /flows/[sd] workspace: review the docs there, then advance Document Preparation → Client Signing to notify the client via the portal. Do NOT email the PDFs (send_email is deprecated — the portal is the delivery mechanism).")
+          results.push("Documents generated, saved in the person's storage and listed on the ITIN case like the automatic path does. Manage the ITIN from the /flows/[sd] workspace: review the docs there, then advance Document Preparation → Client Signing to notify the client via the portal. Do NOT email the PDFs (send_email is deprecated — the portal is the delivery mechanism).")
         }
 
         return { content: [{ type: "text" as const, text: results.join("\n") }] }

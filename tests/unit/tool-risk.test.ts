@@ -23,7 +23,7 @@ describe('classifyTool', () => {
   it('curated external tools are EXTERNAL', () => {
     expect(classifyTool('gmail_send').tier).toBe('EXTERNAL')
     expect(classifyTool('referral_payout').tier).toBe('EXTERNAL')
-    expect(classifyTool('drive_delete').tier).toBe('EXTERNAL')
+    expect(classifyTool('storage_delete').tier).toBe('EXTERNAL')
     expect(classifyTool('sd_advance_stage').tier).toBe('EXTERNAL')
   })
 

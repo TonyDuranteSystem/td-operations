@@ -147,12 +147,6 @@ export function TaxCard({
           onToggle={() => handleToggle('data_received', tr.data_received)}
           disabled={isPending}
         />
-        <ToggleChip
-          label="Accountant"
-          checked={tr.sent_to_accountant ?? false}
-          onToggle={() => handleToggle('sent_to_accountant', tr.sent_to_accountant)}
-          disabled={isPending}
-        />
         <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
           <TaxRowActions taxReturn={tr} />
         </div>

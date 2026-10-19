@@ -29,11 +29,8 @@ ONBOARDING STEPS (execute in order):
    - Check kb_search('pricing') for current rates
    - Required: account_id, service_type, status, year, price
 
-4. SETUP DRIVE FOLDER
-   - drive_create_folder under TD Clients (parent: 1mbz_bUDwC4K259RcC-tDKihjlvdAVXno)
-   - Folder name: "{company_name}"
-   - Create subfolders: "Tax Returns", "Documents", "Correspondence"
-   - Update accounts.drive_folder_id with the new folder ID
+4. FILES
+   - New files go to the CRM Storage (the Storage page). This agent does not create folders or upload files.
 
 5. CREATE OFFER (if not already created)
    - offer_create with services and pricing from step 3
@@ -58,7 +55,6 @@ OUTPUT FORMAT:
 ✅ Account: {account_id}
 ✅ Contacts: {count} created ({names})
 ✅ Services: {count} ({types})
-✅ Drive folder: {folder_id} with {count} subfolders
 ✅ Offer: {offer_token} (status: {status})
 ✅ Welcome email: {sent/drafted}
 ❌ Failed: {step} — {error}

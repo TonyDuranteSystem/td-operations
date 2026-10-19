@@ -322,10 +322,9 @@ export async function getFinancialsView(
 /**
  * Build the P&L + Balance Sheet Excel workbook for an account-year FROM THE
  * ENGINE DRAFT — the single filing artifact. Every surface that hands a client
- * or accountant an Excel (the portal download AND the post-attestation Drive
- * archive the accountant files from) MUST go through here, so the accountant
- * never receives numbers that differ from the client's screen (Phase 4 fix:
- * the accountant hand-off used to build from the legacy transaction-based
+ * an Excel (the portal download AND the post-attestation archive) MUST go
+ * through here, so nobody receives numbers that differ from the client's screen
+ * (Phase 4 fix: the old hand-off built from the legacy transaction-based
  * generator, which diverged from the corrected engine). Returns null when the
  * account has no transactions yet. Pure rendering lives in buildFinancialsWorkbook.
  */

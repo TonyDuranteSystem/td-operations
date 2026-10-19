@@ -14,8 +14,8 @@
  * this change, this handoff ALSO raised a plain `tasks` row for the same
  * event, which — once the route grew a real notification — became a second,
  * duplicate staff signal for one event (AI architect finding). Removed here,
- * not deduped, since the new signal already carries the "do the final pass,
- * then send to the accountant" instruction.
+ * not deduped, since the new signal already carries the "do the final pass"
+ * instruction.
  *
  * Re-ingestion safety (W3): the archived Excel is NOT a statement and the
  * raw CSVs already live in Supabase storage with content-hash sources — even
@@ -32,8 +32,7 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
     .eq("id", accountId)
     .single()
   // Never put the account UUID in the filename: a uuid segment like "…-2025-…"
-  // reads as a year to the accountant file picker, which would then refuse the
-  // workbook as ambiguous (lib/tax/pick-tax-file.ts). It is also meaningless to
+  // reads as a year to a file-name year check. It is also meaningless to
   // a human reading the folder.
   const companyName = acct?.company_name?.trim() || "Company"
   // What actually happened to the archive — the staff task must not claim a file
@@ -52,8 +51,8 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
   //    (findTaxFolder) despite the comments claiming 3.Tax/{year}, and used a
   //    plain create. For a multi-year client that piled every year's workbook
   //    into ONE flat folder under near-identical names, and re-confirming left a
-  //    stale same-named twin — from which tax_send_to_accountant could pick the
-  //    WRONG YEAR'S or a superseded P&L and email it to the accountant. Now: the
+  //    stale same-named twin — where a later step could pick the
+  //    WRONG YEAR'S or a superseded P&L. Now: the
   //    year subfolder is the target, and the upsert REPLACES the year's file in
   //    place so exactly one client-confirmed workbook exists per year.
   try {
@@ -112,7 +111,7 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
   try {
     const detail = {
       archived: `Confirmed Excel archived in the company storage, 3. Tax › ${taxYear}.`,
-      nothing_to_archive: `No transactions for ${taxYear} — nothing to archive. Confirm this is genuinely a dormant/first year before sending to the accountant.`,
+      nothing_to_archive: `No transactions for ${taxYear} — nothing to archive. Confirm this is genuinely a dormant/first year.`,
       no_storage: `This company has no document storage in the CRM, so the confirmed Excel could not be archived. Regenerate the workbook from the tax financials page before the final pass.`,
       failed: `ARCHIVING THE EXCEL FAILED — there is no confirmed workbook in 3. Tax › ${taxYear} to send. Regenerate it from the tax financials page before the final pass.`,
     }[outcome]

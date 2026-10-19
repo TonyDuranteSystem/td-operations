@@ -9,13 +9,13 @@
  * - Email team with confirmation
  *
  * 2nd Installment Paid:
- * - Lift tax return gate (ready to send to accountant)
+ * - Lift tax return gate
  * - Update tax_returns status
  * - Email team
  *
  * Rules (from MASTER RULES):
  * - C5: 1st installment triggers 4 recurring SDs
- * - C6: 2nd installment = gate before tax return -> accountant
+ * - C6: 2nd installment = gate before the tax return
  * - P1: No service until paid
  */
 
@@ -379,11 +379,11 @@ export async function onFirstInstallmentPaid(
     // Record the send so a later reverse-and-rematch cycle does not repeat it.
     await supabaseAdmin.from("action_log").insert({
       actor: "installment-handler",
-      action_type: "installment_2_email",
+      action_type: "installment_1_email",
       table_name: "accounts",
       record_id: String(year),
       account_id: account.id,
-      summary: `2nd-installment hand-off email sent for ${year} (${account.company_name})`,
+      summary: `1st-installment team email sent for ${year} (${account.company_name})`,
     })
   } catch (e) {
     steps.push({ step: "email", status: "error", detail: e instanceof Error ? e.message : String(e) })
@@ -452,11 +452,11 @@ export async function onSecondInstallmentPaid(
 
     if (tr) {
       if (tr.sent_to_accountant) {
-        steps.push({ step: "tax_gate", status: "skipped", detail: "Already sent to accountant" })
+        steps.push({ step: "tax_gate", status: "skipped", detail: "Already marked as sent" })
       } else {
-        // Gate lifted — ready to send to accountant. Notes APPEND (council:
+        // Gate lifted. Notes APPEND (council:
         // the old wholesale replace erased staff notes on the record).
-        const gateLine = `2nd installment paid ${new Date().toISOString().split("T")[0]}. Gate lifted — ready for accountant.`
+        const gateLine = `2nd installment paid ${new Date().toISOString().split("T")[0]}. Gate lifted.`
         await dbWrite(
           supabaseAdmin
             .from("tax_returns")
@@ -604,119 +604,14 @@ export async function onSecondInstallmentPaid(
     steps.push({ step: "tax_sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
-  // ─── 3. Email team ───
-  //
-  // ⛔ SEND IT ONCE PER CLIENT-YEAR (2026-07-29). This had no idempotency check, unlike the
-  // accountant TASK below. It became a real duplicate the moment un-matching started reversing
-  // payments properly: a mis-matched payment is now reversed and re-matched to the right
-  // invoice, and every pass through here fired the same "[PAID] … ready for accountant" email
-  // again. An email cannot be unsent, so the guard belongs on the send.
-  //
-  // A failed CHECK does not suppress the email: a possible duplicate is visible and annoying,
-  // a hand-off nobody is told about is not.
-  let alreadyEmailed = false
+  // ─── 3. Tell staff in the Calendar (What's New) — replaces the retired "ready for accountant" email ───
+  // One staff-only note per company+year (idempotent), so a reversed-and-rematched payment never repeats it.
   try {
-    const { data: priorSend } = await supabaseAdmin
-      .from("action_log")
-      .select("id")
-      .eq("action_type", "installment_2_email")
-      .eq("account_id", account.id)
-      .eq("record_id", String(year))
-      .limit(1)
-      .maybeSingle()
-    alreadyEmailed = !!priorSend
+    const { emitSecondInstallmentPaidEvent } = await import("@/lib/portal/chat-events")
+    const r = await emitSecondInstallmentPaidEvent({ accountId, companyName: account.company_name, year })
+    steps.push({ step: "whats_new", status: r.emitted || r.reason === "already_emitted" ? "ok" : "error", detail: r.emitted ? undefined : r.reason ?? r.error })
   } catch (e) {
-    console.warn(
-      `[installment-handler] could not check whether the ${year} 2nd-installment email was already sent: ${e instanceof Error ? e.message : String(e)}`,
-    )
-  }
-
-  if (alreadyEmailed) {
-    steps.push({ step: "email", status: "ok", detail: `Already sent for ${year} — not sending again` })
-  } else {
-    try {
-      const { gmailPost } = await import("@/lib/gmail")
-      const installment2Subject = `[PAID] 2nd Installment ${year} -- ${account.company_name} -- Tax ready for accountant`
-      const encodedSubject2 = `=?utf-8?B?${Buffer.from(installment2Subject).toString("base64")}?=`
-      const raw = Buffer.from(
-        `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
-        `To: support@tonydurante.us\r\n` +
-        `Subject: ${encodedSubject2}\r\n` +
-        `MIME-Version: 1.0\r\n` +
-        `Content-Type: text/html; charset=utf-8\r\n\r\n` +
-        `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6">` +
-        `<h2>[PAID] 2nd Installment ${year} -- ${account.company_name}</h2>` +
-        `<p>2nd installment confirmed. Tax return gate lifted.</p>` +
-        `<p>If data is received and reviewed, this client's tax return can now be sent to the accountant.</p>` +
-        `</div>`
-      ).toString("base64url")
-      await gmailPost("/messages/send", { raw })
-      steps.push({ step: "email", status: "ok" })
-      // Record the send so a later reverse-and-rematch cycle does not repeat it.
-      await supabaseAdmin.from("action_log").insert({
-        actor: "installment-handler",
-        action_type: "installment_2_email",
-        table_name: "accounts",
-        record_id: String(year),
-        account_id: account.id,
-        summary: `2nd-installment hand-off email sent for ${year} (${account.company_name})`,
-      })
-    } catch (e) {
-      steps.push({ step: "email", status: "error", detail: e instanceof Error ? e.message : String(e) })
-    }
-  }
-
-  // ─── 4. Create task if tax data ready ───
-  try {
-    const { data: tr } = await supabaseAdmin
-      .from("tax_returns")
-      .select("id, data_received")
-      .eq("account_id", accountId)
-      .eq("tax_year", taxYear)
-      .maybeSingle()
-
-    if (tr?.data_received) {
-      // Idempotent: year-scoped title, skip if it already exists so a second
-      // handler run (matcher + cron/manual) does not duplicate the task.
-      // Renamed "India" -> "Accountant" 2026-06-09; the dedup match ALSO checks the
-      // legacy title so a task created before the rename is not duplicated during
-      // the transition window.
-      const accountantTitle = `[READY] Send tax return to Accountant -- ${account.company_name} (${taxYear})`
-      const legacyIndiaTitle = `[READY] Send tax return to India -- ${account.company_name} (${taxYear})`
-      const { data: existingAccountantTask } = await supabaseAdmin
-        .from("tasks")
-        .select("id")
-        .eq("account_id", accountId)
-        .in("task_title", [accountantTitle, legacyIndiaTitle])
-        .limit(1)
-        .maybeSingle()
-
-      if (existingAccountantTask) {
-        steps.push({ step: "accountant_task", status: "skipped", detail: "Accountant task already exists for this account/year" })
-      } else {
-        await dbWriteSafe(
-          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-          supabaseAdmin.from("tasks").insert({
-            task_title: accountantTitle,
-            description: `2nd installment PAID + data RECEIVED.\nThis client is ready to send to the accountant for tax return preparation.\n\nSend to: tax@adasglobus.com\nSubject format: [Company] - [Client] - [EIN] - [Type]`,
-            assigned_to: "Luca",
-            priority: "High",
-            // 'Filing' — 'Tax' is NOT a task_category enum value; this insert
-            // (via dbWriteSafe) had been failing SILENTLY, so the "[READY]
-            // Send to Accountant" task never actually existed. Same silent-
-            // failure class as the record insert this fix closes. 2026-07-17.
-            category: "Filing" as never,
-            status: "To Do",
-            account_id: accountId,
-            created_by: "System",
-          }),
-          "tasks.insert"
-        )
-        steps.push({ step: "accountant_task", status: "ok", detail: "Data ready + paid — task created to send to accountant" })
-      }
-    }
-  } catch (e) {
-    steps.push({ step: "accountant_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    steps.push({ step: "whats_new", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
   // ─── Partner renewal payout — installment 2 share (recurring, USD) ───
