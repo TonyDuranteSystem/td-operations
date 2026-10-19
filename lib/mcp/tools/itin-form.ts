@@ -7,6 +7,8 @@ import { MAILING_DESTINATION_HTML, MAILING_DESTINATION_TEXT } from "@/lib/td-add
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { legacyFormSlug } from "@/lib/portal/submission-token"
+import { contactIdForLead } from "@/lib/crm-store/lead-form-store"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 
@@ -53,12 +55,8 @@ export function registerITINFormTools(server: McpServer) {
 
           // Check if contact already exists
           if (!resolvedContactId && lead.email) {
-            const { data: contact } = await supabaseAdmin
-              .from("contacts")
-              .select("id")
-              .eq("email", lead.email)
-              .maybeSingle()
-            resolvedContactId = contact?.id || null
+            // exact email AND the same full name — a shared email alone must never attach someone else's contact
+            resolvedContactId = await contactIdForLead({ email: lead.email, fullName: lead.full_name, route: "mcp:itin_form_create", leadId: lead.id })
           }
         } else if (account_id) {
           // The applicant: the one linked member, or the contact_id you pass. With several members we never guess.
@@ -115,11 +113,7 @@ export function registerITINFormTools(server: McpServer) {
         }
 
         // Generate token
-        const slug = (fullName || "itin-form")
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-|-$/g, "")
-          .slice(0, 30)
+        const slug = legacyFormSlug(fullName, "itin-form")
         const year = new Date().getFullYear()
         const token = `itin-${slug}-${year}`
 
