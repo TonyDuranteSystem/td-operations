@@ -12,6 +12,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { legacyFormSlug } from "@/lib/portal/submission-token"
+import { contactIdForLead } from "@/lib/crm-store/lead-form-store"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 
@@ -77,12 +79,8 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         // 2. Also try to link contact if we only have lead
         let resolvedContactId = contact_id || null
         if (!resolvedContactId && email) {
-          const { data: contact } = await supabaseAdmin
-            .from("contacts")
-            .select("id")
-            .eq("email", email)
-            .maybeSingle()
-          resolvedContactId = contact?.id || null
+          // exact email AND the same full name — a shared email alone must never attach someone else's contact
+          resolvedContactId = await contactIdForLead({ email, fullName, route: "mcp:closure_form_create", leadId: lead_id ?? null })
         }
 
         // 3. If account_id provided, get LLC info for prefill
@@ -118,11 +116,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         if (llcState) prefilled.llc_state = llcState
 
         // 5. Generate token
-        const slug = (fullName || "form")
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-|-$/g, "")
-          .slice(0, 30)
+        const slug = legacyFormSlug(fullName, "form")
         const year = new Date().getFullYear()
         const token = `closure-${slug}-${year}`
 

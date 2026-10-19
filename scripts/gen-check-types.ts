@@ -31,15 +31,18 @@ interface CheckRow {
   check_def: string
 }
 
-function parseCheckValues(checkDef: string): string[] | null {
-  // Match ARRAY['val1'::text, 'val2'::text, ...] pattern
-  const arrayMatch = checkDef.match(/ARRAY\[([^\]]+)\]/)
-  if (!arrayMatch) return null
+function parseCheckValues(columnName: string, checkDef: string): string[] | null {
+  // Only a simple single-column membership check becomes a union type:
+  //   CHECK ((col = ANY (ARRAY['a'::text, 'b'::text])))
+  // Compound checks (several columns, CASE, AND/OR) mention other columns' values
+  // and would emit a wrong type (and duplicate type names), so they are skipped.
+  const simple = checkDef.match(/^CHECK \(\((\w+) = ANY \(ARRAY\[([^\]]+)\]\)\)\)$/)
+  if (!simple || simple[1] !== columnName) return null
 
   const values: string[] = []
   const valuePattern = /'([^']+)'::/g
   let match
-  while ((match = valuePattern.exec(arrayMatch[1])) !== null) {
+  while ((match = valuePattern.exec(simple[2])) !== null) {
     values.push(match[1])
   }
   return values.length > 0 ? values : null
@@ -68,7 +71,7 @@ async function main() {
       WHERE c.contype = 'c'
         AND ic.table_schema = 'public'
         AND ic.data_type IN ('text', 'character varying')
-      ORDER BY c.conrelid::regclass::text, a.attname
+      ORDER BY c.conrelid::regclass::text, a.attname, c.conname
     `,
   })
 
@@ -92,11 +95,17 @@ async function main() {
   ]
 
   let count = 0
+  const seen = new Set<string>()
   for (const row of rows) {
-    const values = parseCheckValues(row.check_def)
+    const values = parseCheckValues(row.column_name, row.check_def)
     if (!values) continue
 
     const typeName = toTypeName(row.table_name, row.column_name)
+    if (seen.has(typeName)) {
+      console.warn(`Skipping second simple CHECK on ${row.table_name}.${row.column_name} (type ${typeName} already emitted)`)
+      continue
+    }
+    seen.add(typeName)
     const unionType = values.map(v => `"${v}"`).join(" | ")
     lines.push(`/** ${row.table_name}.${row.column_name} — CHECK constraint */`)
     lines.push(`export type ${typeName} = ${unionType}`)

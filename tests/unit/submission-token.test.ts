@@ -109,3 +109,18 @@ describe("slugifyClientName — non-Latin names (Stop-Drive S1a)", () => {
     expect(buildSubmissionToken({ clientName: "Mario Rossi", wizardType: "formation", calendarYear: 2026 })).toBe("portal-mario-rossi-2026")
   })
 })
+
+describe("legacyFormSlug — staff-made form tokens", () => {
+  it("is unchanged for Latin names and falls back to the form name for an empty one", async () => {
+    const { legacyFormSlug } = await import("@/lib/portal/submission-token")
+    expect(legacyFormSlug("Mario Rossi", "form")).toBe("mario-rossi")
+    expect(legacyFormSlug("", "itin-form")).toBe("itin-form")
+    expect(legacyFormSlug(null, "form")).toBe("form")
+  })
+  it("a non-Latin name gets a hash part, not an empty one", async () => {
+    const { legacyFormSlug } = await import("@/lib/portal/submission-token")
+    expect(legacyFormSlug("李小龙", "form")).toMatch(/^u[0-9a-f]{12}$/)
+    expect(legacyFormSlug("李小龙", "form")).not.toBe(legacyFormSlug("王小明", "form"))
+    expect(legacyFormSlug("李小龙", "form")).toBe(legacyFormSlug("李小龙", "form"))
+  })
+})
