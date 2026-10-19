@@ -575,13 +575,8 @@ export async function staffUploadToStore(p: {
   // Who the CRM row belongs to: the company, the person, or — for a company still being formed — the
   // client (and account, once linked) of the formation case, exactly as the Formation pilot links its rows.
   // a person's document uploaded from a company keeps BOTH links, as today's passports do
-  let rowAccount: string | null = owner.kind === "company" ? owner.account_id : companyAccount
-  let rowContact: string | null = owner.kind === "person" ? owner.contact_id : null
-  if (owner.kind === "formation" && owner.service_delivery_id) {
-    const { data: sd } = await db().from("service_deliveries").select("account_id, contact_id").eq("id", owner.service_delivery_id).maybeSingle()
-    rowAccount = (sd?.account_id as string | null) ?? null
-    rowContact = (sd?.contact_id as string | null) ?? null
-  }
+  const { rowLinksForOwner } = await import("./owner-links")
+  const { account: rowAccount, contact: rowContact } = await rowLinksForOwner(owner, companyAccount)
   if (!rowAccount && !rowContact) throw new Error("This storage owner is not linked to a company or a client — files cannot be added here.")
   const { data: blob, error: dlErr } = await supabaseAdmin.storage.from("onboarding-uploads").download(p.storagePath)
   if (dlErr || !blob) throw new Error(`The uploaded file could not be read (${dlErr?.message ?? "no data"}) — please try again.`)
