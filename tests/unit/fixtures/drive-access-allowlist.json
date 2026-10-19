@@ -1,8 +1,6 @@
 {
  "_why": "Every file that reads or writes a company document in Google Drive directly. The cutover moves each into the storage-aware path (saveDocumentForAccount / openDocument); this list may only SHRINK. A new file here fails the ratchet test: use openDocument / the storage path instead, or get the addition reviewed (dev job ad09ea91).",
  "files": [
-  "app/(dashboard)/accounts/folder-actions.ts",
-  "app/(dashboard)/contacts/folder-actions.ts",
   "app/api/8832-signed/route.ts",
   "app/api/accounts/[id]/dba/[dbaId]/upload-document/route.ts",
   "app/api/accounts/correspondence/route.ts",

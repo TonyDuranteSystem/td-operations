@@ -490,6 +490,7 @@ export type PilotAlarmKind =
   | "store_unmapped_upload"        // an upload on a pilot formation at a stage with no document type
   | "formation_pilot_undecided"    // several open formations: Drive steps ran, the store files were handed over after
   | "store_move_stale"             // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
+  | "drive_write_refused"          // a flow needed to write in Google Drive for a company/person that may not be written to there (Stop Drive S1d)
 
 /**
  * An alarm: an event in the store's history (owner-scoped when known) + the system error log.

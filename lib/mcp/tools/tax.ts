@@ -639,6 +639,50 @@ export function registerTaxTools(server: McpServer) {
           lines.push("APPLYING CHANGES...")
           lines.push("")
 
+          // ── File the form data + uploads FIRST ─────────────────────────
+          // The review is applied (job enqueued, submission marked reviewed) only when the form was filed: a company that can
+          // receive nothing, a company being moved, or a failed save leaves the submission exactly as it was. An already
+          // reviewed submission was filed by its first review, so it is not filed again.
+          let filedNote: string | null = null
+          if (sub.account_id && !sub.reviewed_at) {
+            let filed = true
+            try {
+              const taxUploadPaths = (sub.upload_paths as string[]) || []
+              // The submission's files live in whichever bucket they were
+              // uploaded to: the PORTAL wizard uses "onboarding-uploads" with a
+              // "tax/{id}/..." path scheme; the EXTERNAL public tax form uses
+              // the "tax-form-uploads" config default with a "{slug}-{year}/..."
+              // scheme. Pick by path prefix so staff review copies from the
+              // right bucket for either source.
+              const portalUpload = taxUploadPaths.some(p => p.startsWith("tax/"))
+              const { saveFormForAccount, describeFiling } = await import("@/lib/crm-store/save-account-form")
+              const saved = await saveFormForAccount({
+                accountId: sub.account_id,
+                formType: "tax_return",
+                submittedData: (sub.submitted_data as Record<string, unknown>) || {},
+                uploadPaths: taxUploadPaths,
+                meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year },
+                bucket: portalUpload ? "onboarding-uploads" : undefined,
+              })
+              const d = describeFiling(saved)
+              filed = d.ok
+              lines.push(...d.lines)
+              if (filed && saved.route !== "none") {
+                // the durable "filed" marker the archive sweep keys on: this submission never needs archiving again
+                await supabaseAdmin
+                  .from("tax_return_submissions")
+                  .update({ drive_archived_at: new Date().toISOString(), drive_archive_meta: { filed_in: saved.route === "store" ? "storage" : "folder", via: "tax_form_review" } } as never)
+                  .eq("id", sub.id)
+                  .is("drive_archived_at", null)
+              }
+            } catch (e) {
+              filed = false
+              lines.push(`⚠️ Saving the form data failed: ${e instanceof Error ? e.message : String(e)}`)
+            }
+            if (!filed) filedNote = "The form data was NOT filed anywhere, so the form is NOT marked as reviewed."
+            lines.push("")
+          }
+
           // ── Apply via shared helper (Slice 8) ──────────────────────────
           // Helper handles: enqueue tax_form_setup job + reviewed_at flip with
           // a reviewed_at IS NOT NULL short-circuit. Same code path used by
@@ -648,6 +692,8 @@ export function registerTaxTools(server: McpServer) {
           const apply = await approveAndApplyTaxReview({
             submission_id: sub.id,
             actor: "claude",
+            // The client's corrections are ALWAYS applied. A form that could not be filed is left unreviewed (and says so).
+            leaveUnreviewed: filedNote !== null,
           })
 
           if (!apply.ok) {
@@ -656,52 +702,21 @@ export function registerTaxTools(server: McpServer) {
           }
 
           if (apply.alreadyApplied) {
-            lines.push(`ℹ️ Submission already reviewed (reviewed_at was set). Skipping job enqueue + Drive save to avoid duplicates.`)
+            lines.push(`ℹ️ Submission already reviewed (reviewed_at was set). Skipping job enqueue + filing to avoid duplicates.`)
             return { content: [{ type: "text" as const, text: lines.join("\n") }] }
           }
 
-          lines.push(`✅ Background job enqueued: ${apply.job_id}`)
-          lines.push(`   Steps: Contact update → Account update → Tax return → Data Received → Form → reviewed`)
+          if (apply.correctionsAlreadyApplied) {
+            lines.push(`ℹ️ The client's corrections were already applied by an earlier review (job ${apply.job_id}) — they were NOT applied again, and no email was re-sent.`)
+          } else {
+            lines.push(`✅ Background job enqueued: ${apply.job_id}`)
+            lines.push(`   Steps: Contact update → Account update → Tax return → Data Received → Form → reviewed`)
+          }
           lines.push("")
           lines.push(`➡️ Check progress: job_status('${apply.job_id}')`)
-
-          // Save form data + uploads to Drive
-          if (sub.account_id) {
-            try {
-              const { data: acc } = await supabaseAdmin
-                .from("accounts")
-                .select("drive_folder_id")
-                .eq("id", sub.account_id)
-                .single()
-              if (acc?.drive_folder_id) {
-                const { saveFormToDrive } = await import("@/lib/form-to-drive")
-                const submitted = sub.submitted_data as Record<string, unknown> || {}
-                const taxUploadPaths = (sub.upload_paths as string[]) || []
-                // The submission's files live in whichever bucket they were
-                // uploaded to: the PORTAL wizard uses "onboarding-uploads" with a
-                // "tax/{id}/..." path scheme; the EXTERNAL public tax form uses
-                // the "tax-form-uploads" config default with a "{slug}-{year}/..."
-                // scheme. Pick by path prefix so staff review copies from the
-                // right bucket for either source.
-                const portalUpload = taxUploadPaths.some(p => p.startsWith("tax/"))
-                const driveResult = await saveFormToDrive(
-                  "tax_return",
-                  submitted,
-                  taxUploadPaths,
-                  acc.drive_folder_id,
-                  { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year },
-                  portalUpload ? { bucket: "onboarding-uploads" } : undefined,
-                )
-                if (driveResult.summaryFileId) lines.push(`✅ Tax data summary saved to Drive (${driveResult.summaryFileId})`)
-                if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
-                if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy`)
-                if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
-              } else {
-                lines.push("⚠️ No Drive folder — data not saved to Drive")
-              }
-            } catch (e) {
-              lines.push(`⚠️ Drive save failed: ${e instanceof Error ? e.message : String(e)}`)
-            }
+          if (filedNote) {
+            lines.push("")
+            lines.push(`⚠️ The client's corrections are applied. ${filedNote} Once the problem above is fixed, run this review again: it will only retry the filing and mark the form reviewed — nothing will be applied twice.`)
           }
         }
 

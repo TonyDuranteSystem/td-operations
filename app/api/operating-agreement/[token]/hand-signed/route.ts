@@ -279,31 +279,33 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   // error audit instead of surfacing as a scary message on a completed action.
   const filed: string[] = []
   try {
-    const { data: acct } = await supabaseAdmin
-      .from("accounts")
-      .select("drive_folder_id")
-      .eq("id", agreement.account_id)
-      .maybeSingle()
-
     // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has both documents
-    // saved in the new storage and needs no Drive folder; a company still on Drive carries on exactly as before.
+    // saved in the new storage and needs no Drive folder. Stop Drive (dev job 264bb882, S1d): Drive is written only for a
+    // company deliberately left on it (folder, no storage, not closed); any other state is an alarm, never a silent skip.
     let inStorage = false
+    let legacyFolderId: string | null = null
     if (agreement.account_id) {
       const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
       inStorage = (await companyDocState(agreement.account_id)) !== "drive"
+      if (!inStorage) {
+        const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
+        const legacy = await legacyDriveForAccount(agreement.account_id)
+        if (legacy.allowed) legacyFolderId = legacy.folderId
+        else await raiseDriveWriteRefused({ flow: "oa-hand-signed", accountId: agreement.account_id, reason: legacy.reason, detail: "Operating Agreement draft/scan not filed" })
+      }
     }
 
-    if (agreement.account_id && (acct?.drive_folder_id || inStorage)) {
+    if (agreement.account_id && (legacyFolderId || inStorage)) {
       let targetFolderId = ""
-      if (!inStorage && acct?.drive_folder_id) {
+      if (!inStorage && legacyFolderId) {
         const { listFolder } = await import("@/lib/google-drive")
-        const folderResult = (await listFolder(acct.drive_folder_id)) as {
+        const folderResult = (await listFolder(legacyFolderId)) as {
           files?: { id: string; name: string; mimeType: string }[]
         }
         const companyFolder = folderResult.files?.find(
           f => f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder",
         )
-        targetFolderId = companyFolder?.id || acct.drive_folder_id
+        targetFolderId = companyFolder?.id || legacyFolderId
       }
 
       // 1. The draft the client printed. Named so nobody mistakes it for an

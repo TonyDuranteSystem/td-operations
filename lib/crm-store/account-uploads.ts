@@ -26,8 +26,23 @@ export interface FallbackResult {
   saved: number
   failed: { path: string; error: string }[]
   ownerId: string | null
+  /** member passports (passport_member_*) left for the step that files them in each member's own storage */
+  heldForMembers?: number
   /** the passport that went to the person's own storage — its bytes, for the passport-data read */
   passport?: { content: ArrayBuffer; mimeType: string; fileName: string } | null
+}
+
+/** Whose passport is this upload? By the wizard field name at the start of the stored file name ({field}_{unique}_{filename}). */
+export function passportKindOf(fileName: string): "none" | "owner" | "member" | "unknown" {
+  if (/^passport_owner/i.test(fileName)) return "owner"
+  // a member's passport: the portal wizard stores it as member_{i}_member_passport, the older standalone form as passport_member_{i}
+  if (/^passport_member/i.test(fileName) || /^member_\d+_member_passport/i.test(fileName)) return "member"
+  return /passport/i.test(fileName) ? "unknown" : "none"
+}
+
+/** The upload path of member #i's passport (0-based, both naming schemes), or undefined. */
+export function memberPassportPathFor(paths: readonly string[] | null | undefined, i: number): string | undefined {
+  return (paths ?? []).find((up) => up.includes(`member_${i}_member_passport`) || up.includes(`passport_member_${i}`))
 }
 
 export async function saveUploadsToStoreForAccount(p: {
@@ -56,9 +71,16 @@ export async function saveUploadsToStoreForAccount(p: {
       if (error || !blob) throw new Error(error?.message ?? "no data")
       const bytes = Buffer.from(await blob.arrayBuffer())
       const name = path.split("/").pop() || "upload"
-      const isPassport = !!p.passportContact && /passport/i.test(name)
+      // ONLY the file the wizard marks as the OWNER's passport (field passport_owner*) is the owner's passport. A member's passport
+      // (passport_member_*) belongs to THAT member's own storage and is filed by the step that knows the member (never here, never in
+      // the owner's storage, never read onto the owner); any other file with "passport" in its name has an unknown owner: it is NOT filed
+      // (it stays where the client uploaded it) and the alarm below tells staff.
+      const kind = passportKindOf(name)
+      if (kind === "member") { out.heldForMembers = (out.heldForMembers ?? 0) + 1; continue }
+      if (kind === "unknown") throw new Error("whose passport this is cannot be told from its name — it was not filed")
+      const isPassport = kind === "owner" && !!p.passportContact
       const target = isPassport ? await ensurePersonOwner(p.passportContact!.contactId, p.passportContact!.name) : ownerId
-      if (isPassport) {
+      if (isPassport && !out.passport) {
         out.passport = { content: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, mimeType: blob.type || "application/pdf", fileName: name }
       }
       const w = await savePilotFile({
