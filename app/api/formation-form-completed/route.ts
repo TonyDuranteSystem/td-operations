@@ -6,7 +6,7 @@
  *
  * 1. Validate submission
  * 2. Apply form data to CRM (update contact: DOB, nationality, address)
- * 3. Create Leads/{name}/ folder in Drive, upload data PDF + passport
+ * 3. File the data PDF + uploads in the client's storage
  * 4. Check passport uploaded, flag if missing
  * 5. Check referral on lead -> create QB credit note task for Antonio
  * 6. Send Luca detailed email with all data + specific next steps
@@ -19,7 +19,7 @@
  */
 
 // Added 2026-04-14 P0.7: protect the 9-step auto-chain from mid-execution
-// Vercel timeout (CRM update + Drive folder + PDF + email + task + SD history + log).
+// Vercel timeout (CRM update + storage filing + PDF + email + task + SD history + log).
 export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
@@ -64,7 +64,9 @@ export async function POST(req: NextRequest) {
     let leadEmail = ""
     let leadLanguage = "en"
     let referrerName = ""
-    let contactId: string | null = null
+    // the submission's own contact wins (the retry recipe resolves the SAME way: contactForSubmissionRow)
+    let contactId: string | null = (sub.contact_id as string | null) ?? null
+    let contactAmbiguous = false
 
     if (leadId) {
       const { data: lead } = await supabaseAdmin
@@ -80,41 +82,49 @@ export async function POST(req: NextRequest) {
         referrerName = lead.referrer_name || ""
       }
 
-      // Find contact linked to this lead
-      const { data: contacts } = await supabaseAdmin
-        .from("contacts")
-        .select("id")
-        .ilike("email", leadEmail || "noemail")
-        .limit(1)
+      if (!contactId) {
+        // Find the contact for this lead by EXACT email AND matching name. Several matches, a different name on the same email (a
+        // couple sharing one address), or a failed lookup = nobody is guessed: nothing is updated, filed or created under any
+        // contact, staff get ONE alarm, and the rest of the chain (email, delivery, task) still runs.
+        const { lookupLeadContact } = await import("@/lib/crm-store/lead-form-store")
+        const found = await lookupLeadContact({ email: leadEmail, leadName, route: "formation-form-completed", leadId, token })
+        if (found.state === "ambiguous" || found.state === "error") {
+          contactAmbiguous = true
+          results.push({ step: "contact_lookup", status: "error", detail: found.detail })
+        } else if (found.state === "one") {
+          contactId = found.contactId
+        } else if (lead) {
+          // AUTO-CREATE contact from lead data
+          try {
+            const newContact = await dbWrite(
+              // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, predates WS-B; extract to lib/operations/ per dev_task 98484283
+              supabaseAdmin
+                .from("contacts")
+                .insert({
+                  full_name: lead.full_name,
+                  email: lead.email,
+                  phone: lead.phone,
+                  language: leadLanguage,
+                })
+                .select("id")
+                .single(),
+              "contacts.insert"
+            )
 
-      if (contacts?.length) {
-        contactId = contacts[0].id
-      } else if (lead) {
-        // AUTO-CREATE contact from lead data
-        try {
-          const newContact = await dbWrite(
-            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, predates WS-B; extract to lib/operations/ per dev_task 98484283
-            supabaseAdmin
-              .from("contacts")
-              .insert({
-                full_name: lead.full_name,
-                email: lead.email,
-                phone: lead.phone,
-                language: leadLanguage,
-              })
-              .select("id")
-              .single(),
-            "contacts.insert"
-          )
-
-          if (newContact) {
-            contactId = newContact.id
-            results.push({ step: "contact_created", status: "ok", detail: `Contact auto-created: ${contactId}` })
+            if (newContact) {
+              contactId = newContact.id
+              results.push({ step: "contact_created", status: "ok", detail: `Contact auto-created: ${contactId}` })
+            }
+          } catch (e) {
+            results.push({ step: "contact_created", status: "error", detail: e instanceof Error ? e.message : String(e) })
           }
-        } catch (e) {
-          results.push({ step: "contact_created", status: "error", detail: e instanceof Error ? e.message : String(e) })
         }
       }
+    }
+
+    // Record the decided contact on the submission, so the retry job and this route agree on who the person is.
+    if (contactId && !sub.contact_id) {
+      await supabaseAdmin.from("formation_submissions").update({ contact_id: contactId }).eq("id", submission_id).is("contact_id", null)
     }
 
     // ─── STEP 1B: Ensure Service Delivery exists ───
@@ -192,54 +202,32 @@ export async function POST(req: NextRequest) {
       results.push({ step: "crm_update", status: "skipped", detail: "No contact found for lead" })
     }
 
-    // ─── STEP 3: Create Leads/{name}/ folder in Drive + save data PDF ───
-    let leadsFolderId = ""
-    try {
-      const { listFolder, createFolder } = await import("@/lib/google-drive")
-      const { saveFormToDrive } = await import("@/lib/form-to-drive")
-
-      // Find or create Leads/ folder in Shared Drive root
-      const TD_CLIENTS_FOLDER = "1mbz_bUDwC4K259RcC-tDKihjlvdAVXno" // TD Clients folder on Shared Drive
-      const clientsContents = await listFolder(TD_CLIENTS_FOLDER) as { files?: { id: string; name: string; mimeType: string }[] }
-      let leadsParent = clientsContents?.files?.find(
-        (f: { name: string; mimeType: string }) => f.name === "Leads" && f.mimeType === "application/vnd.google-apps.folder"
-      )
-
-      if (!leadsParent) {
-        const newFolder = await createFolder(TD_CLIENTS_FOLDER, "Leads")
-        leadsParent = { id: newFolder.id, name: "Leads", mimeType: "application/vnd.google-apps.folder" }
-      }
-
-      // Create client folder: Leads/{Client Name}/
-      const clientFolderName = leadName || token
-      const leadsContents = await listFolder(leadsParent.id) as { files?: { id: string; name: string; mimeType: string }[] }
-      let clientFolder = leadsContents?.files?.find(
-        (f: { name: string; mimeType: string }) => f.name === clientFolderName && f.mimeType === "application/vnd.google-apps.folder"
-      )
-
-      if (!clientFolder) {
-        const newFolder = await createFolder(leadsParent.id, clientFolderName)
-        clientFolder = { id: newFolder.id, name: clientFolderName, mimeType: "application/vnd.google-apps.folder" }
-      }
-
-      leadsFolderId = clientFolder.id
-
-      // Save data summary PDF + copy uploads to Leads folder
-      const driveResult = await saveFormToDrive(
-        "formation",
-        submittedData,
-        uploadPaths,
-        leadsFolderId,
-        { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName }
-      )
-
-      results.push({
-        step: "drive_save",
-        status: "ok",
-        detail: `Folder: Leads/${clientFolderName}/. Summary: ${driveResult.summaryFileId ? "saved" : "failed"}. Files: ${driveResult.copied.length} copied.`,
+    // ─── STEP 3: File the data PDF + uploads in the client's storage ───
+    // (Stop-Drive S1a: this used to build a Leads/{name} folder in Drive. The person's own storage is opened exactly as for any new client.)
+    if (contactAmbiguous) {
+      results.push({ step: "storage_save", status: "error", detail: "The contact could not be decided safely (see contact_lookup) — nothing was filed; the uploads stay with the submission" })
+    } else {
+      const { fileFormPackage, memberAwareFileName, splitMemberPassports } = await import("@/lib/forms/file-form-package")
+      const filing = await fileFormPackage({
+        route: "formation-form-completed", formType: "formation", submittedData, uploadPaths, contactId, personName: leadName,
+        fileNameOf: memberAwareFileName(submittedData),
+        meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName },
       })
-    } catch (e) {
-      results.push({ step: "drive_save", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      results.push(filing)
+      // Retry path: the durable archive job (retries, then the sweep alerts) finishes anything the inline filing could not. The plan is
+      // PINNED (the destination just decided) — and only pinned rows are ever swept, so submissions made before this existed are never re-filed.
+      if (filing.folder) {
+        try {
+          const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
+          const { deriveUploadPaths } = await import("@/lib/forms/archive-registry")
+          await enqueueFormArchiveJob({
+            formType: "formation", submissionId: submission_id, createdBy: "formation_form_completed",
+            pin: { folderId: filing.folder, bucket: "onboarding-uploads", configKey: "formation", uploadPaths: splitMemberPassports(deriveUploadPaths(uploadPaths, submittedData)).forPrimary, companyName: leadName },
+          })
+        } catch (e) {
+          results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        }
+      }
     }
 
     // ─── STEP 4: Check passport uploaded ───
@@ -502,7 +490,7 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
           action_type: "formation_form_completed",
           table_name: "formation_submissions",
           record_id: submission_id,
-          summary: `Formation form completed: ${leadName}. CRM updated, Drive saved, Luca notified.`,
+          summary: `Formation form completed: ${leadName}. CRM updated, files saved, Luca notified.`,
           details: { token, lead_id: leadId, contact_id: contactId, results } as unknown as Json,
         }),
         "action_log.insert"

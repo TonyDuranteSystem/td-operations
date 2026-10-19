@@ -843,12 +843,14 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
                   const fileName = cleanPath.split('/').pop() || `passport_member_${i + 1}.pdf`
                   const bytes = Buffer.from(await blob.arrayBuffer())
                   const mimeType = blob.type || 'application/octet-stream'
-                  const { saveDocumentForContact } = await import('@/lib/crm-store/save-for-account')
-                  const routed = await saveDocumentForContact({
-                    contactId: membContactId, name: fileName, bytes, mimeType, documentType: 'passport',
-                    callerKey: `onboarding-member-passport:${account_id}:${cleanPath}`, accountId: account_id, viaAccountId: account_id, contactName: memberName, portalVisible: false,
+                  // the SAME writer (and caller key) the held-passport hand-off uses, so the passport exists once in the member's storage
+                  const { pilotSavePassport } = await import('@/lib/crm-store/formation-pilot')
+                  const saved = await pilotSavePassport({
+                    contactId: membContactId, personName: memberName, fileName, bytes, mimeType,
+                    row: { document_type_name: 'Passport', category: 2, category_name: 'Contacts', contact_id: membContactId, account_id, portal_visible: true },
                   })
-                  if (routed.route !== 'store') throw new Error("This person's storage could not be found — the passport was not saved")
+                  if (saved.status !== 'saved') throw new Error("This person's storage could not be found — the passport was not saved")
+                  const routed = { pointer: saved.pointer }
                   result.steps.push(step(`member_${i + 1}_passport`, 'ok', `Saved to the new storage: ${routed.pointer}`))
                   const { extractAndStorePassportData } = await import('@/lib/jobs/passport-writeback')
                   const passRes = await extractAndStorePassportData({

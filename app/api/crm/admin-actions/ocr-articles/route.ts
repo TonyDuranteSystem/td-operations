@@ -18,6 +18,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { ocrRawContent } from "@/lib/docai"
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 // ─── Parsing Logic ───
 
@@ -215,6 +216,9 @@ function tryParseDate(raw: string): string | null {
 // ─── POST Handler ───
 
 export async function POST(req: NextRequest) {
+  // STAFF ONLY: /api/* inherits only "is logged in" from the middleware, and a portal client has a login.
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const { storage_path, file_name, mime_type } = await req.json()
 

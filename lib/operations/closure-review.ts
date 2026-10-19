@@ -111,6 +111,7 @@ export async function approveAndApplyClosureReview(
   const { fileClosureSubmission } = await import("@/lib/crm-store/save-account-form")
   const outcome = await fileClosureSubmission(
     {
+      id: sub.id,
       token: sub.token,
       account_id: sub.account_id,
       contact_id: sub.contact_id ?? null,

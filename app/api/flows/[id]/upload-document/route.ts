@@ -32,7 +32,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { advanceServiceDelivery } from '@/lib/service-delivery'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
-import { NO_STORAGE_REASON_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
+import { NO_STORAGE_REASON_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor, noStorageDecisionForContact } from '@/lib/crm-store/no-storage'
 import { parsePrincipalOfficeDecision, applyPrincipalOfficeDecision, type PrincipalOfficeDecision } from '@/lib/operations/principal-office'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
@@ -228,15 +228,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
     }
 
-    // 3-cutover-person. A contact-scoped ITIN flow (no company yet): the file is saved through the PERSON's own storage — their
-    //    live storage, a switched company of theirs, or, when they have neither, a storage opened for them now (the same as the
-    //    new-client flow does), never kept only in the upload bucket behind an expiring link. EXCEPT a member of a company that is
-    //    deliberately left on its old folder (no storage, a live folder): that person is NOT given a storage (it would lock their
-    //    folder) — the legacy path below carries on exactly as before. Other contact-scoped flows (a formation that started on its
-    //    old folder) stay on the legacy path too.
-    if (!routed && pilot.status !== 'saved' && !accountId && contactId && sd.service_type === 'ITIN') {
+    // 3-cutover-person. A contact-scoped flow (no company yet):
+    //   - a person whose files live in the storage (their own, or through a company of theirs that is in storage or mid-move) → the
+    //     file is saved through the PERSON's storage, whatever the flow (an ITIN, or a formation that started before the company was
+    //     switched): a Drive write there would be refused;
+    //   - an ITIN for a person with no storage who is NOT a member of a company left on its old folder → the person's storage is
+    //     opened now (as the new-client flow does) — never kept only in the upload bucket behind an expiring link;
+    //   - a member of a company left on its old folder, or a formation that started on its old folder with no storage anywhere
+    //     near it → the legacy path below, exactly as before (no new person storage: it would lock their folder).
+    if (!routed && pilot.status !== 'saved' && !accountId && contactId) {
       const { companyDocState, liveOwnerOfContact } = await import('@/lib/crm-store/switched-drive-guard')
       const { ensurePersonOwner } = await import('@/lib/crm-store/formation-pilot')
+      const isItin = sd.service_type === 'ITIN'
       const { data: links } = await supabaseAdmin
         .from('account_contacts')
         .select('account_id, is_primary')
@@ -244,20 +247,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         .order('is_primary', { ascending: false })
         .order('account_id', { ascending: true })
       let viaAccountId: string | null = null
-      let memberOfOldFolderCompany = false
       let hasOwner = false
+      let useLegacy = true
       try {
         for (const l of links ?? []) {
           const accId = (l as { account_id: string }).account_id
           if ((await companyDocState(accId)) !== 'drive') { viaAccountId = accId; break }
-          if (!memberOfOldFolderCompany && (await noStorageDecisionFor(accId)).route === 'drive') memberOfOldFolderCompany = true
         }
         hasOwner = !!(await liveOwnerOfContact(contactId))
+        // the ONE rule for a person (lib/crm-store/no-storage.ts): legacy Drive only for a member of a company left on its folder
+        useLegacy = !viaAccountId && !hasOwner && (!isItin || (await noStorageDecisionForContact(contactId)).route === 'drive')
       } catch {
         // a read error here must not become a bare 500 — and must not guess where the file belongs
         return NextResponse.json({ success: false, detail: "Could not check where this person's files live — please try again." }, { status: 500 })
       }
-      if (viaAccountId || hasOwner || !memberOfOldFolderCompany) {
+      if (!useLegacy) {
         const { saveDocumentForContact, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
         const { storeNameKey } = await import('@/lib/crm-store/rules')
         const { data: contactRow } = await supabaseAdmin.from('contacts').select('full_name').eq('id', contactId).maybeSingle()

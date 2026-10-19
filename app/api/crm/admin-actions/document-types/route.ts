@@ -11,8 +11,12 @@ export const dynamic = 'force-dynamic'
 
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function GET() {
+  // STAFF ONLY: /api/* inherits only "is logged in" from the middleware, and a portal client has a login.
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   // Use the DB function so DISTINCT is computed server-side — the documents
   // table has thousands of rows and client-side deduplication would miss
   // custom types beyond the PostgREST row cap.

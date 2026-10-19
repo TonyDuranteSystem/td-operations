@@ -19,6 +19,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { collectUploadPaths, isWizardUploadPath } from "@/lib/portal/wizard-uploads"
 import { resolveItinContactFolder, resolveItinClientName } from "@/lib/forms/itin-contact-folder"
 import { resolveClosureFolder, resolveClosureClientName } from "@/lib/forms/closure-folder"
+import { memberAwareFileName, splitMemberPassports } from "@/lib/forms/file-form-package"
 
 /** Everything the archival engine needs to write ONE submission's package. Either
  *  derived fresh by a recipe's resolvePlan(), or read back from the values PINNED
@@ -54,6 +55,20 @@ export interface ArchiveRecipe {
    * plan at submission and the engine skips this.
    */
   resolvePlan(row: Record<string, unknown>): Promise<ArchivePlan>
+  /** OPTIONAL: the sweep never touches rows created before this (a form that joined the sweep later: older rows were filed the old way). */
+  sweepNotBefore?: string
+  /**
+   * OPTIONAL: the PostgREST `or` expression that keeps only REAL submissions IN the sweep's query (so unfilled shells never fill its
+   * window). Must agree with `isReal`. Default: completed or reviewed.
+   */
+  sweepRealFilter?: string
+  /** OPTIONAL: false for a table with no account_id (a lead-stage form): the sweep then does no company join. Default true. */
+  sweepHasAccount?: boolean
+  /** OPTIONAL: the sweep only considers rows that carry a PINNED plan (written when the completion route filed them). Rows made before the form had this
+   *  retry path have none — they were filed the old way and are never re-filed, whatever their date. Applied IN the sweep query and again in the pure decision. */
+  sweepOnlyPinned?: boolean
+  /** OPTIONAL: the name each stored upload gets (formation: the member's name on each passport). */
+  fileNameOf?(row: Record<string, unknown>): ((path: string) => string) | undefined
   /**
    * OPTIONAL per-file bucket resolver, for a form whose files can live in MORE
    * THAN ONE storage bucket (e.g. closure: external form → closure-uploads, portal
@@ -64,21 +79,9 @@ export interface ArchiveRecipe {
   resolveBucket?: (path: string) => string
 }
 
-/** Read an account's stable Drive folder id. Throws retryable on a read error,
- *  loud on a genuinely-absent folder — the exact distinction the Carasso incident
- *  turned on (a swallowed read error read as "no folder" → silent skip). */
-async function resolveAccountFolder(accountId: string): Promise<{ folderId: string | null; companyName?: string }> {
-  const { data: acc, error } = await supabaseAdmin
-    .from("accounts")
-    .select("drive_folder_id, company_name")
-    .eq("id", accountId)
-    .maybeSingle()
-  if (error) throw new Error(`archive: account read failed (retryable): ${error.message}`)
-  if (!acc) throw new Error(`archive: account ${accountId} not found`)
-  // No folder is no longer an error here: a new (storage-first) client is archived into its storage by company. A company that
-  // can receive nothing fails in the archive engine (loudly) — never silently.
-  return { folderId: acc.drive_folder_id ?? null, companyName: acc.company_name ?? undefined }
-}
+/** Rows created before this are never swept by the new filing rules (bump to the day the change goes live). */
+export const BANKING_SWEEP_NOT_BEFORE_ISO = "2026-10-19T00:00:00Z"
+export const FORM_SWEEP_NOT_BEFORE_ISO = "2026-10-19T00:00:00Z"
 
 function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? (v as unknown[]).filter((p): p is string => typeof p === "string") : []
@@ -123,8 +126,11 @@ export function deriveUploadPaths(columnPaths: unknown, submittedData: Record<st
 const bankingRecipe: ArchiveRecipe = {
   formType: "banking",
   table: "banking_submissions",
+  // Stop Drive S1d: the new filing rules apply from the day they ship — the sweep must not file the whole backlog of older rows at once.
+  // (Set to the deploy date when this ships; production holds 0 unmarked completed rows without a Drive folder and 10 with one, all older.)
+  sweepNotBefore: BANKING_SWEEP_NOT_BEFORE_ISO,
   selectColumns:
-    "id, account_id, token, provider, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
+    "id, account_id, contact_id, token, provider, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
   isReal(row) {
     const status = row.status as string | null
     return status === "completed" || status === "reviewed"
@@ -134,7 +140,13 @@ const bankingRecipe: ArchiveRecipe = {
     if (!accountId) {
       throw new Error(`archive: banking submission ${row.id} is completed but has no account_id — cannot resolve a company Drive folder`)
     }
-    const { folderId, companyName } = await resolveAccountFolder(accountId)
+    // Stop Drive (dev job 264bb882, S1d): no destination is worked out here — the banking filer (lib/forms/file-banking-package.ts) decides
+    // it when the job runs (the company's storage, or its Drive folder if it was left on Drive; personal papers to the person), so a
+    // company in storage with no Drive folder no longer makes this throw "NO drive_folder_id" and a row whose pin was never written heals.
+    const folderId = null
+    const { data: acctRow, error: acctErr } = await supabaseAdmin.from("accounts").select("company_name").eq("id", accountId).maybeSingle()
+    if (acctErr) throw new Error(`archive: account read failed (retryable): ${acctErr.message}`)
+    const companyName = (acctRow?.company_name as string | null | undefined) ?? undefined
     const { configKey, bucket } = bankingConfigAndBucket(row.provider as string | null)
     // CRITICAL (bug-hunter blocker, 2026-07-24): the portal-wizard banking rows
     // (payset/relay) NEVER persist the upload_paths COLUMN — the client's file
@@ -157,6 +169,7 @@ const bankingRecipe: ArchiveRecipe = {
  */
 const itinRecipe: ArchiveRecipe = {
   formType: "itin",
+  sweepRealFilter: "status.eq.completed",
   table: "itin_submissions",
   selectColumns:
     "id, token, lead_id, account_id, contact_id, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
@@ -168,9 +181,10 @@ const itinRecipe: ArchiveRecipe = {
     const contactId = (row.contact_id as string | null) ?? null
     const token = (row.token as string | null) ?? null
     const clientName = await resolveItinClientName({ leadId, contactId, token })
+    const { contactForSubmissionRow } = await import("@/lib/crm-store/lead-form-store")
     const folderId = await resolveItinContactFolder({
       accountId: (row.account_id as string | null) ?? null,
-      contactId,
+      contactId: await contactForSubmissionRow(row, "archive:itin"),
       leadId,
       token,
       clientName,
@@ -188,8 +202,8 @@ const itinRecipe: ArchiveRecipe = {
 /**
  * CLOSURE recipe. Files where the completion route files today, made reliable:
  * the company folder when an account is explicitly linked (never inferred from a
- * contact link — a person may own several companies), else a deterministic
- * "{client} - {llc} (Closure)" folder under Leads. The external closure form
+ * contact link — a person may own several companies), else the client's storage
+ * (no Drive "Leads" folder is created any more). The external closure form
  * uploads to the "closure-uploads" bucket. This durable path BACKSTOPS the
  * best-effort completion save (retry + marker); the separate review/MCP re-saves
  * to the company folder are unchanged.
@@ -221,8 +235,8 @@ const closureRecipe: ArchiveRecipe = {
     const llcName = String(submittedData.llc_name || "Unknown LLC")
     const folderId = await resolveClosureFolder({
       accountId: (row.account_id as string | null) ?? null,
+      contactId: (row.contact_id as string | null) ?? null,
       clientName,
-      llcName,
     })
     return {
       folderId,
@@ -234,12 +248,44 @@ const closureRecipe: ArchiveRecipe = {
   },
 }
 
+/**
+ * FORMATION recipe (Stop-Drive S1a). The lead-stage formation form files its summary + uploads in the person's storage
+ * (person-storage:<contactId>, opened on first use). The contact is the submission's own, else the lead's by exact email + name;
+ * undecided = a loud, counted failure (the sweep alerts at the limit) — never a Drive folder, never a guessed person.
+ */
+const formationRecipe: ArchiveRecipe = {
+  formType: "formation",
+  sweepOnlyPinned: true,
+  sweepRealFilter: "status.eq.completed",
+  sweepHasAccount: false, // a lead-stage form: no company yet
+  sweepNotBefore: FORM_SWEEP_NOT_BEFORE_ISO,
+  table: "formation_submissions",
+  selectColumns: "id, token, lead_id, contact_id, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
+  isReal(row) {
+    return (row.status as string | null) === "completed"
+  },
+  async resolvePlan(row) {
+    const { contactForSubmissionRow, storageDestinationForForm } = await import("@/lib/crm-store/lead-form-store")
+    const contactId = await contactForSubmissionRow(row, "archive:formation")
+    if (!contactId) throw new Error(`archive: formation ${row.id} — no single contact could be decided for this lead; nothing was filed`)
+    const dest = await storageDestinationForForm({ contactId })
+    if (!dest.marker) throw new Error(`archive: formation ${row.id} — this person only has a hidden study-copy storage; staff decide where it goes`)
+    const data = (row.submitted_data ?? {}) as Record<string, unknown>
+    const { data: lead } = row.lead_id ? await supabaseAdmin.from("leads").select("full_name").eq("id", row.lead_id as string).maybeSingle() : { data: null }
+    return { folderId: dest.marker, bucket: "onboarding-uploads", configKey: "formation", uploadPaths: splitMemberPassports(deriveUploadPaths(row.upload_paths, data)).forPrimary, companyName: lead?.full_name || undefined }
+  },
+  fileNameOf(row) {
+    return memberAwareFileName((row.submitted_data ?? {}) as Record<string, unknown>)
+  },
+}
+
 /** All registered form recipes, keyed by formType. Add a form here (+ its marker
  *  columns migration + enqueue wiring) when it adopts the durable archival. */
 export const ARCHIVE_RECIPES: Record<string, ArchiveRecipe> = {
   banking: bankingRecipe,
   itin: itinRecipe,
   closure: closureRecipe,
+  formation: formationRecipe,
 }
 
 export function getArchiveRecipe(formType: string): ArchiveRecipe | null {

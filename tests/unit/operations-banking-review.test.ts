@@ -91,6 +91,12 @@ vi.mock("@/lib/supabase-admin", () => ({
   },
 }))
 
+// Stop Drive S1d: "Approve & Apply" files the package first (the real filer is covered by its own tests)
+const filing = vi.hoisted(() => ({ result: { pkg: { ok: true, errors: [] as string[], failed: [] as string[], sentence: null as string | null } } as { pkg: { ok: boolean; errors: string[]; failed: string[]; sentence: string | null } }, throws: null as string | null, calls: 0 }))
+vi.mock("@/lib/forms/file-banking-submission", () => ({
+  fileBankingSubmission: async () => { filing.calls++; if (filing.throws) throw new Error(filing.throws); return filing.result },
+}))
+
 import { approveAndApplyBankingReview } from "@/lib/operations/banking-review"
 
 beforeEach(() => {
@@ -100,6 +106,7 @@ beforeEach(() => {
   servicesUpdateError = null
   markReviewedError = null
   updateCalls.length = 0
+  filing.result = { pkg: { ok: true, errors: [], failed: [], sentence: null } }; filing.throws = null; filing.calls = 0
 })
 
 describe("approveAndApplyBankingReview", () => {
@@ -217,5 +224,29 @@ describe("approveAndApplyBankingReview", () => {
     accountRow = { company_name: "ACME" }
     const result = await approveAndApplyBankingReview({ submission_id: "s1", actor: "test" })
     expect(result.provider).toBe("payset")
+  })
+
+  describe("files the package first (Stop Drive S1d)", () => {
+    const completed = () => { submissionRow = { id: "s1", token: "t1", provider: "relay", account_id: "a1", contact_id: null, reviewed_at: null, status: "completed" } }
+    it("a package that could not be filed: NOT marked reviewed, a plain error, nothing written", async () => {
+      completed()
+      filing.result = { pkg: { ok: false, errors: ["x"], failed: ["passport_image_front.jpg (no person)"], sentence: null } }
+      const r = await approveAndApplyBankingReview({ submission_id: "s1", actor: "luca" })
+      expect(r.ok).toBe(false); expect(r.error).toMatch(/NOT marked reviewed/)
+      expect(updateCalls).toEqual([])
+    })
+    it("filing throws: NOT marked reviewed", async () => {
+      completed(); filing.throws = "storage down"
+      const r = await approveAndApplyBankingReview({ submission_id: "s1", actor: "luca" })
+      expect(r.ok).toBe(false); expect(r.error).toMatch(/storage down/); expect(updateCalls).toEqual([])
+    })
+    it("filed: marked reviewed; the MCP tool (already filed) is not filed twice", async () => {
+      completed()
+      expect((await approveAndApplyBankingReview({ submission_id: "s1", actor: "luca" })).ok).toBe(true)
+      expect(filing.calls).toBe(1)
+      completed()
+      await approveAndApplyBankingReview({ submission_id: "s1", actor: "claude", filingDone: true })
+      expect(filing.calls).toBe(1)
+    })
   })
 })

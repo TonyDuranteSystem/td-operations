@@ -28,8 +28,12 @@ import { createPortalNotification } from "@/lib/portal/notifications"
 import { parseItinIssueDateFromOcr } from "@/lib/ocr-helpers"
 import { buildFormUrl } from "@/lib/forms/smart-url"
 import { enqueueJob } from "@/lib/jobs/queue"
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function POST(req: NextRequest) {
+  // STAFF ONLY: /api/* inherits only "is logged in" from the middleware, and a portal client has a login.
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const body = await req.json()
     const { contact_id, action, params } = body

@@ -95,6 +95,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
+  // A teammate login belongs to no person: if it names a contact, that contact must be one of THIS company's people (otherwise the
+  // submission could be filed under — and write personal data onto — someone else's record).
+  if (identity.kind === 'teammate' && contact_id) {
+    const { data: link, error: linkErr } = await supabaseAdmin
+      .from('account_contacts').select('contact_id').eq('account_id', identity.accountId).eq('contact_id', contact_id).limit(1).maybeSingle()
+    if (linkErr || !link) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+
   // ─── 0b. FORMATION LEAD OWNERSHIP (default-deny) ───
   // A formation submit is lead-scoped (account_id null). Re-prove the lead
   // belongs to the logged-in person — same check the wizard page uses to gate
@@ -734,58 +742,158 @@ export async function POST(req: NextRequest) {
 
       // Fire-and-forget: Drive PDF, portal chat, CRM task, SD advance, action_log
       ;(async () => {
-        // Get account Drive folder — wrapped so any throw stays in background
-        let driveFolderId: string | null = null
+        // The moment of this submission: ONE value for the banking row's completed_at AND the filed PDF, so a retry or a sweep
+        // (which reads completed_at) files the very same package instead of piling up versions.
+        const submissionTime = new Date().toISOString()
         let compName = capturedCompanyName
-        if (capturedAccountId) {
+        if (capturedAccountId && !compName) {
           try {
-            const { data: acct } = await supabaseAdmin
-              .from('accounts')
-              .select('drive_folder_id, company_name')
-              .eq('id', capturedAccountId)
-              .single()
-            driveFolderId = acct?.drive_folder_id ?? null
-            if (!compName) compName = acct?.company_name ?? ''
+            const { data: acct } = await supabaseAdmin.from('accounts').select('company_name').eq('id', capturedAccountId).single()
+            compName = acct?.company_name ?? ''
           } catch (e) {
             console.error('[wizard-submit] Banking accounts query error:', e)
           }
         }
 
-        // Generate PDF + save to Drive
-        if (driveFolderId) {
+        // Staff-only notifications (dev job fb527ac8): What's New chat note +
+        // Notification Center card. A SEPARATE write from the client-visible
+        // note above, on purpose (see comment above). Looks up the existing
+        // banking_submissions row (normally pre-seeded at onboarding, but not
+        // guaranteed — see the "no row found" case a few blocks below) so both
+        // notifications carry a stable source id. Hardened against duplicate
+        // rows for the same account+provider (no unique constraint on that
+        // pair) via order+limit before maybeSingle. If the row was ALREADY
+        // 'completed' before this submission, this is a resubmission — retire
+        // the old chat-event note first so the dedup marker doesn't swallow
+        // the new one.
+        let bankingSubmissionId: string | null = null
+        let bankingSubmissionWasAlreadyCompleted = false
+        let bankingSubmissionToken: string | null = null
+        if (capturedAccountId) {
           try {
-            const { saveFormToDrive } = await import('@/lib/form-to-drive')
-            const uploadPaths = extractUploadPaths(capturedData)
-            const result = await saveFormToDrive(capturedWizardType, capturedData, uploadPaths, driveFolderId, {
-              token: submissionToken || capturedWizardType,
-              submittedAt: new Date().toISOString(),
-              companyName: compName,
-            })
-
-            // Create document record for the summary PDF. Routed through
-            // autoSaveDocument (2026-07-07) so the row gets a drive_link
-            // (the raw insert here produced "No link" rows in the CRM
-            // Documents tab) and so a resubmit can't insert a second row
-            // for the same Drive file (the upsert save keeps the id stable;
-            // autoSaveDocument dedupes on drive_file_id).
-            if (result.summaryFileId) {
-              const slug = compName.replace(/\s+/g, '_')
-              const { autoSaveDocument } = await import('@/lib/portal/auto-save-document')
-              const saved = await autoSaveDocument({
-                accountId: capturedAccountId || undefined,
-                contactId: capturedContactId || undefined,
-                fileName: `Banking_${capturedWizardType === 'banking_relay' ? 'Relay' : 'Payset'}_${slug}.pdf`,
-                documentType: 'Banking Application',
-                category: 4, // Banking
-                driveFileId: result.summaryFileId,
-                portalVisible: false,
-              })
-              if (saved.error) {
-                console.error('[wizard-submit] Banking document record error:', saved.error)
+            const { data: subRow } = await supabaseAdmin
+              .from('banking_submissions')
+              .select('id, status, token')
+              .eq('account_id', capturedAccountId)
+              .eq('provider', providerSlug)
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+            if (subRow) {
+              bankingSubmissionId = subRow.id
+              bankingSubmissionToken = (subRow as { token?: string | null }).token ?? null
+              bankingSubmissionWasAlreadyCompleted = subRow.status === 'completed'
+            } else {
+              // Safety net (dev job c3efa6cb): the row is normally pre-seeded
+              // when the EIN is recorded, but at least 3 distinct upstream
+              // causes can skip that — create it now via the SAME shared
+              // helper the seeding job uses (lib/operations/banking-submission.ts),
+              // rather than the notification code silently giving up. This
+              // never sends anything client-facing; it only creates the
+              // record the alerts below key off of.
+              const { getOrCreateBankingSubmission } = await import('@/lib/operations/banking-submission')
+              const created = await getOrCreateBankingSubmission({ accountId: capturedAccountId, provider: providerSlug, contactId: capturedContactId ?? null })
+              if (created.outcome === 'ok') {
+                bankingSubmissionId = created.record.id
+                bankingSubmissionToken = (created.record as { token?: string | null }).token ?? null
+                bankingSubmissionWasAlreadyCompleted = created.record.status === 'completed'
+              } else {
+                console.error(`[wizard-submit] could not create banking_submissions row for account ${capturedAccountId} provider ${providerSlug}: ${created.message} — staff notifications NOT sent (client confirmation above still sent)`)
               }
             }
           } catch (e) {
-            console.error('[wizard-submit] Banking PDF/Drive error:', e)
+            console.error('[wizard-submit] banking_submissions lookup error (staff notifications):', e)
+          }
+        }
+
+        // File the package — the DURABLE core runs FIRST (Stop Drive S1d, dev job 264bb882). A function that is frozen or fails part-way
+        // through the chat note, staff alerts, task and delivery steps below must never be the reason a client's papers are not filed:
+        //  1. the row is saved (the submitter's own contact id is written when it is certain, an earlier "filed" mark and the old failed
+        //     attempts are cleared — this is a NEW submission) and its error is checked;
+        //  2. the durable retry job is queued BEFORE the long filing starts (it does nothing if the filing then succeeds);
+        //  3. the package is filed from the row: the company's storage (or its Drive folder if it was left on Drive); the client's PERSONAL
+        //     papers go to the PERSON's own storage, never the company's folder. A failure is an ERROR with ONE staff alarm.
+        let updatedRowId: string | null = null
+        if (capturedAccountId) {
+          try {
+            // certain only for a logged-in company member (a teammate login belongs to no person)
+            const submitterId = identity.kind === 'contact' ? identity.contactId : null
+            let prior: Record<string, unknown> | null = null
+            if (bankingSubmissionId) {
+              const { data: pr } = await supabaseAdmin.from('banking_submissions').select('drive_archive_meta').eq('id', bankingSubmissionId).maybeSingle()
+              prior = ((pr as { drive_archive_meta?: Record<string, unknown> | null } | null)?.drive_archive_meta) ?? null
+            }
+            const { freshSubmissionMeta } = await import('@/lib/forms/mark-banking-filed')
+            const updateQuery = supabaseAdmin
+              .from('banking_submissions')
+              .update({
+                submitted_data: capturedData,
+                status: 'completed',
+                completed_at: submissionTime,
+                updated_at: new Date().toISOString(),
+                ...(submitterId ? { contact_id: submitterId } : {}),
+                drive_archived_at: null,
+                drive_archive_meta: freshSubmissionMeta(prior, { origin: 'wizard', ...(submitterId ? { applicant: 'submitter' } : {}) }),
+              } as never)
+            const { data: updatedRow, error: updErr } = await (
+              bankingSubmissionId
+                ? updateQuery.eq('id', bankingSubmissionId)
+                : updateQuery.eq('account_id', capturedAccountId).eq('provider', providerSlug)
+            )
+              .select('id, token')
+              .maybeSingle()
+            if (updErr || !updatedRow?.id) {
+              console.error(`[wizard-submit] banking_submissions update failed for account ${capturedAccountId} provider ${providerSlug}:`, updErr?.message ?? 'no row')
+              const { reportSystemError } = await import('@/lib/system-errors')
+              await reportSystemError({ source: 'server', route: 'portal/wizard-submit:banking', method: 'INTERNAL', message: 'Banking application: the submission row could not be saved — the package was filed from the answers only and no retry job exists', context: { accountId: capturedAccountId, provider: providerSlug, error: updErr?.message ?? 'no row' } })
+            } else {
+              updatedRowId = updatedRow.id
+              bankingSubmissionId = updatedRow.id
+              if (updatedRow.token) bankingSubmissionToken = updatedRow.token
+              try {
+                const { enqueueFormArchiveJob } = await import('@/lib/forms/archive-enqueue')
+                await enqueueFormArchiveJob({ formType: 'banking', submissionId: updatedRow.id, createdBy: 'banking_wizard_submit' })
+              } catch (e) {
+                console.error('[wizard-submit] banking archive enqueue error:', e)
+              }
+            }
+
+            let pkg
+            if (updatedRowId) {
+              const { fileBankingSubmission } = await import('@/lib/forms/file-banking-submission')
+              pkg = (await fileBankingSubmission(updatedRowId, 'wizard-submit:banking', { companyName: compName || undefined })).pkg
+            } else {
+              // no saved row to file from: file from the answers, under the submitter only when certain
+              const { fileBankingPackage } = await import('@/lib/forms/file-banking-package')
+              pkg = await fileBankingPackage({
+                flow: 'wizard-submit:banking', formType: capturedWizardType, accountId: capturedAccountId, contactId: submitterId,
+                submittedData: capturedData, uploadPaths: extractUploadPaths(capturedData), bucket: 'onboarding-uploads',
+                token: bankingSubmissionToken || `wizard:${capturedProgressId || capturedWizardType}`, submittedAt: submissionTime, companyName: compName || undefined,
+              })
+            }
+            if (pkg.summaryFileId) {
+              try {
+                const slug = compName.replace(/\s+/g, '_')
+                const { autoSaveDocument } = await import('@/lib/portal/auto-save-document')
+                const saved = await autoSaveDocument({
+                  accountId: capturedAccountId || undefined,
+                  contactId: capturedContactId || undefined,
+                  fileName: `Banking_${capturedWizardType === 'banking_relay' ? 'Relay' : 'Payset'}_${slug}.pdf`,
+                  documentType: 'Banking Application',
+                  category: 4, // Banking
+                  driveFileId: pkg.summaryFileId,
+                  portalVisible: false,
+                })
+                if (saved.error) console.error('[wizard-submit] Banking document record error:', saved.error)
+              } catch (e) {
+                console.error('[wizard-submit] Banking document record error:', e)
+              }
+            }
+            if (!pkg.ok) {
+              console.error('[wizard-submit] Banking package NOT fully filed:', pkg.errors.join(' | '), pkg.failed.join(', '))
+            }
+          } catch (e) {
+            console.error('[wizard-submit] banking_submissions update error:', e)
           }
         }
 
@@ -804,54 +912,6 @@ export async function POST(req: NextRequest) {
             })
           } catch (e) {
             console.error('[wizard-submit] Chat notification error:', e)
-          }
-        }
-
-        // Staff-only notifications (dev job fb527ac8): What's New chat note +
-        // Notification Center card. A SEPARATE write from the client-visible
-        // note above, on purpose (see comment above). Looks up the existing
-        // banking_submissions row (normally pre-seeded at onboarding, but not
-        // guaranteed — see the "no row found" case a few blocks below) so both
-        // notifications carry a stable source id. Hardened against duplicate
-        // rows for the same account+provider (no unique constraint on that
-        // pair) via order+limit before maybeSingle. If the row was ALREADY
-        // 'completed' before this submission, this is a resubmission — retire
-        // the old chat-event note first so the dedup marker doesn't swallow
-        // the new one.
-        let bankingSubmissionId: string | null = null
-        let bankingSubmissionWasAlreadyCompleted = false
-        if (capturedAccountId) {
-          try {
-            const { data: subRow } = await supabaseAdmin
-              .from('banking_submissions')
-              .select('id, status')
-              .eq('account_id', capturedAccountId)
-              .eq('provider', providerSlug)
-              .order('created_at', { ascending: false })
-              .limit(1)
-              .maybeSingle()
-            if (subRow) {
-              bankingSubmissionId = subRow.id
-              bankingSubmissionWasAlreadyCompleted = subRow.status === 'completed'
-            } else {
-              // Safety net (dev job c3efa6cb): the row is normally pre-seeded
-              // when the EIN is recorded, but at least 3 distinct upstream
-              // causes can skip that — create it now via the SAME shared
-              // helper the seeding job uses (lib/operations/banking-submission.ts),
-              // rather than the notification code silently giving up. This
-              // never sends anything client-facing; it only creates the
-              // record the alerts below key off of.
-              const { getOrCreateBankingSubmission } = await import('@/lib/operations/banking-submission')
-              const created = await getOrCreateBankingSubmission({ accountId: capturedAccountId, provider: providerSlug, contactId: capturedContactId ?? null })
-              if (created.outcome === 'ok') {
-                bankingSubmissionId = created.record.id
-                bankingSubmissionWasAlreadyCompleted = created.record.status === 'completed'
-              } else {
-                console.error(`[wizard-submit] could not create banking_submissions row for account ${capturedAccountId} provider ${providerSlug}: ${created.message} — staff notifications NOT sent (client confirmation above still sent)`)
-              }
-            }
-          } catch (e) {
-            console.error('[wizard-submit] banking_submissions lookup error (staff notifications):', e)
           }
         }
 
@@ -938,65 +998,6 @@ export async function POST(req: NextRequest) {
             }
           } catch (e) {
             console.error('[wizard-submit] SD advance error:', e)
-          }
-        }
-
-        // Update banking_submissions record so MCP tools see current data.
-        // Updates BY PRIMARY KEY when the id is already known from the staff-
-        // notification lookup above (unconditionally single-row regardless of
-        // duplicate account+provider rows); falls back to the original
-        // account_id+provider match only when that lookup didn't find a row —
-        // i.e. today's exact prior behavior for that rare edge case.
-        if (capturedAccountId) {
-          try {
-            const updateQuery = supabaseAdmin
-              .from('banking_submissions')
-              .update({
-                submitted_data: capturedData,
-                status: 'completed',
-                updated_at: new Date().toISOString(),
-              })
-            const { data: updatedRow } = await (
-              bankingSubmissionId
-                ? updateQuery.eq('id', bankingSubmissionId)
-                : updateQuery.eq('account_id', capturedAccountId).eq('provider', providerSlug)
-            )
-              .select('id')
-              .maybeSingle()
-
-            // Durable backstop (2026-07-24): the inline Drive save above is
-            // best-effort. Enqueue the reliable archive job with the plan PINNED
-            // — the wizard uploads to "onboarding-uploads" and this update does
-            // NOT persist upload_paths on the row, so we pin the paths (from the
-            // submitted data) + folder + config here so the durable job never
-            // re-guesses. config = the wizard type (banking_payset|banking_relay).
-            if (updatedRow?.id && driveFolderId) {
-              try {
-                const { enqueueFormArchiveJob } = await import('@/lib/forms/archive-enqueue')
-                await enqueueFormArchiveJob({
-                  formType: 'banking',
-                  submissionId: updatedRow.id,
-                  pin: {
-                    folderId: driveFolderId,
-                    bucket: 'onboarding-uploads',
-                    configKey: capturedWizardType,
-                    uploadPaths: extractUploadPaths(capturedData),
-                    companyName: compName || undefined,
-                  },
-                  createdBy: 'banking_wizard_submit',
-                })
-              } catch (e) {
-                console.error('[wizard-submit] banking archive enqueue error:', e)
-              }
-            } else if (!updatedRow?.id) {
-              // No banking_submissions row for this account+provider — the durable
-              // archival layer has nothing to attach to (only the inline best-
-              // effort save above covers it). Rare (the row is normally seeded at
-              // onboarding), but log it loudly rather than drop silently.
-              console.error(`[wizard-submit] no banking_submissions row for account ${capturedAccountId} provider ${providerSlug} — durable archival NOT enqueued (inline save only)`)
-            }
-          } catch (e) {
-            console.error('[wizard-submit] banking_submissions update error:', e)
           }
         }
 

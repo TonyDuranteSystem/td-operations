@@ -70,7 +70,7 @@ async function main() {
   // ── round 2/3: the sweep window is filtered in the query ──
   const { readSweepWindow } = await import("../../../lib/archive/skip-no-drive-folder")
   for (const [table, cols, real] of [["tax_return_submissions", "id, account_id, status, review_status, created_at, drive_archived_at, drive_archive_meta", "status.in.(completed,reviewed),review_status.not.is.null"], ["banking_submissions", "id, account_id, status, created_at, drive_archived_at, drive_archive_meta", "status.in.(completed,reviewed)"]] as const) {
-    const w = await readSweepWindow<{ id: string; account_id: string | null; status: string | null }>(table, cols, "2020-01-01T00:00:00Z", real)
+    const w = await readSweepWindow<{ id: string; account_id: string | null; status: string | null }>(table, cols, { cutoffIso: "2020-01-01T00:00:00Z", realFilter: real })
     const ids = Array.from(new Set(w.candidates.map((r) => r.account_id).filter((x): x is string => !!x)))
     const { data: accs } = ids.length ? await sb.from("accounts").select("id, status").in("id", ids) : { data: [] }
     const bad = (accs ?? []).filter((a: { status: string }) => a.status === "Closed" || a.status === "Cancelled")

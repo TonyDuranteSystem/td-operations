@@ -61,7 +61,7 @@ export function alreadyAlerted(meta: Record<string, unknown> | null | undefined)
  * Decide what to do with one candidate row. Pure — the cron loads rows and
  * performs the IO.
  *  - already archived                         → skip (shouldn't be selected)
- *  - draft/empty shell or no account          → skip (nothing to archive)
+ *  - draft/empty shell                        → skip (nothing to archive)
  *  - before cutoff / inside grace window      → skip (forward-only / racing)
  *  - attempts exhausted, not yet alerted      → alert
  *  - attempts exhausted, already alerted      → skip
@@ -69,7 +69,8 @@ export function alreadyAlerted(meta: Record<string, unknown> | null | undefined)
  */
 export function decideArchiveSweep(row: ArchiveSweepRow, now: Date): ArchiveSweepAction {
   if (row.drive_archived_at) return "skip"
-  if (!row.account_id) return "skip"
+  // A real submission with NO company is NOT skipped quietly: the archive job fails on it (nothing to file it against), its attempts
+  // climb and the ONE stuck-row alert fires — the same loud path banking has.
   // Only real submissions (not the empty pending shells) get archived.
   const isReal = row.status === "completed" || row.status === "reviewed" || row.review_status !== null
   if (!isReal) return "skip"

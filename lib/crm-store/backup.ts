@@ -185,6 +185,12 @@ export const backupIO: BackupIO = {
       const { data: c, error: cErr } = await db().from("contacts").select("drive_folder_id").eq("id", o.contact_id).maybeSingle()
       if (cErr) throw new Error(`store backup: could not read the contact: ${cErr.message}`)
       accountFolderId = c?.drive_folder_id ?? null
+      // A person who belongs to a company still on Drive has that company's "2. Contacts" as their folder: it is the company's, never adopted
+      // as this person's backup root (non-fresh mode would otherwise write their files into the live Drive company folder).
+      if (accountFolderId) {
+        const { contactSharesDriveCompany } = await import("./switched-drive-guard")
+        if (await contactSharesDriveCompany(o.contact_id)) accountFolderId = null
+      }
     }
     const folders = await allRows<OwnerSnap["folders"][number]>(
       () => db().from("store_folders").select("id, parent_id, name, trashed_at, kind").eq("owner_id", ownerId).order("id"), "folders")
