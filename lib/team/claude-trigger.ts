@@ -798,6 +798,12 @@ export async function rescueStuckClaudeReplies(): Promise<{ scanned: number; res
   return { scanned: (stuck ?? []).length, rescued }
 }
 
+/** Antonio's email or the admin role in app_metadata (server-written). NEVER user_metadata: the account holder can write it to
+ *  their own login, so reading it would let any staff member make themselves "Antonio" for the @claude command (council fix 2026-10-18). */
+export function isAntonioIdentity(u: { email?: string | null; app_metadata?: Record<string, unknown> | null }): boolean {
+  return u.email === 'antonio.durante@tonydurante.us' || u.app_metadata?.role === 'admin'
+}
+
 /** Mirror of lib/auth isAdmin, usable from a cron (no session): admin role or
  *  Antonio's email. Default-safe: unknown/missing user → false. */
 async function isAntonioUser(userId: string): Promise<boolean> {
@@ -805,11 +811,7 @@ async function isAntonioUser(userId: string): Promise<boolean> {
     const { data } = await supabaseAdmin.auth.admin.getUserById(userId)
     const u = data?.user
     if (!u) return false
-    return (
-      u.email === 'antonio.durante@tonydurante.us' ||
-      u.app_metadata?.role === 'admin' ||
-      (u.user_metadata as Record<string, unknown> | undefined)?.role === 'admin'
-    )
+    return isAntonioIdentity(u)
   } catch {
     return false
   }

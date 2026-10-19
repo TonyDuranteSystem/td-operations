@@ -69,7 +69,7 @@ vi.mock("@/lib/crm-store/save-form", () => ({
   }),
 }))
 
-import { NO_STORAGE_SENTENCE, CLIENT_NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
+import { NO_STORAGE_SENTENCE, CLIENT_NO_STORAGE_SENTENCE, NO_STORAGE_REASON_SENTENCE } from "@/lib/crm-store/no-storage"
 import { ACCOUNT_REFUSED, ACCOUNT_CLOSED_WITH_FOLDER, ACCOUNT_OLD_FOLDER } from "./_stop-drive-mocks"
 
 const json = (body: unknown) => new NextRequest("http://localhost/x", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
@@ -206,11 +206,11 @@ describe("lease regeneration routes", () => {
 
   it("regen-lease-pdf, no-storage company: one plain sentence (409), zero Drive calls", async () => {
     state.route = "drive"
-    state.rows.accounts = ACCOUNT_REFUSED
+    state.rows.accounts = { status: "Closed", drive_folder_id: "F-old", gdrive_folder_url: null }
     const { POST } = await import("@/app/api/crm/admin-actions/regen-lease-pdf/route")
     const res = await POST(json({ lease_id: "lease-1" }))
     expect(res.status).toBe(409)
-    expect(await res.json()).toEqual({ error: NO_STORAGE_SENTENCE })
+    expect(await res.json()).toEqual({ error: NO_STORAGE_REASON_SENTENCE.archived })
     expect(state.driveCalls).toEqual([])
     // decided before anything is built or stored: the lease row is untouched
     expect(state.recorded.filter((r) => r.table === "lease_agreements")).toEqual([])

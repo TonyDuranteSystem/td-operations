@@ -4,6 +4,7 @@
  * Contact-centric: returns correspondence for their contact + all linked accounts.
  */
 
+import { filterCorrespondenceForViewer } from '@/lib/portal/history-cutoff'
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -31,5 +32,5 @@ export async function GET() {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  return NextResponse.json({ correspondence: data ?? [] })
+  return NextResponse.json({ correspondence: await filterCorrespondenceForViewer(data ?? [], contactId) })
 }

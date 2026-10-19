@@ -68,6 +68,7 @@ import { TaxRowActions } from '@/components/tax-returns/tax-row-actions'
 import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/shared/invoice-dialog'
 import { createInvoice } from '@/app/(dashboard)/shared/invoice-actions'
 import { differenceInDays, parseISO, format } from 'date-fns'
+import { HistoryOpeningsPanel } from '@/components/accounts/history-openings-panel'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import { resolveExtensionDeadline, type TaxReturnType } from '@/lib/tax/extension-deadline'
 import { isInstallment } from '@/lib/billing/payment-classification'
@@ -593,17 +594,17 @@ function ContactsSection({
               <div className="pl-9 grid gap-1.5">
                 {c.history_visible_from ? (
                   <div className="flex flex-wrap items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
-                    <span>In the portal this person sees documents only from {new Date(c.history_visible_from).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.</span>
+                    <span>In the portal this person sees the company&apos;s documents, invoices, messages and other history only from {new Date(c.history_visible_from).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.</span>
                     <button
                       onClick={async () => {
                         const { showEarlierHistoryToPerson } = await import('@/app/(dashboard)/accounts/actions')
                         const r = await showEarlierHistoryToPerson(account.id, c.id)
-                        if (r.success) { toast.success('They now see the earlier documents too'); window.location.reload() }
+                        if (r.success) { toast.success('They now see everything earlier too'); window.location.reload() }
                         else toast.error(r.error ?? 'Failed')
                       }}
                       className="underline font-medium hover:text-amber-900"
                     >
-                      Show them the earlier documents
+                      Show them everything earlier
                     </button>
                   </div>
                 ) : null}
@@ -616,6 +617,7 @@ function ContactsSection({
           ))}
         </div>
       )}
+      {contacts.some(c => c.history_visible_from) && <HistoryOpeningsPanel accountId={account.id} />}
       <ConfirmDestructiveDialog
         open={!!unlinkTarget}
         onClose={() => setUnlinkTarget(null)}

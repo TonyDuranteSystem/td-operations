@@ -64,10 +64,11 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // isAdmin (not isSecureAdmin) on purpose HERE: for the TARGET we want the
-  // broad reading — anyone the dashboard treats as an admin, by either role
-  // field, is protected from a non-owner.
-  if ((isAdmin(target) || isOwnerEmail(target.email)) && !isOwnerOnly(caller)) {
+  // For the TARGET we deliberately want the BROAD reading: anyone carrying an admin role in EITHER field is protected
+  // from a non-owner. isAdmin() no longer reads user_metadata (it is self-writable), so that field is checked here
+  // explicitly — reading it to PROTECT someone is safe; reading it to GRANT is not.
+  const targetLooksAdmin = isAdmin(target) || target.user_metadata?.role === 'admin'
+  if ((targetLooksAdmin || isOwnerEmail(target.email)) && !isOwnerOnly(caller)) {
     return NextResponse.json(
       { error: 'Only an owner can reset an administrator’s password.' },
       { status: 403, headers: NO_STORE },

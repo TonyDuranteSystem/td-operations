@@ -19,6 +19,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks"
+import { driveIdFromUrl } from "./no-storage"
 
 export type CompanyDocState = "drive" | "moving" | "store"
 
@@ -69,7 +70,7 @@ export async function assertTargetsNotSwitched(ids: string[], deps: GuardDeps): 
         seen.add(cur)
         if (locked.has(cur)) {
           throw new SwitchedCompanyDriveWriteError(
-            "This company's files live in the new CRM storage — nothing may be written to its Google Drive folder. Save the file through the storage instead.",
+            "This company's old Google Drive folder is read-only (its files live in the new CRM storage, or the company is closed) — nothing may be written to it. Save the file through the storage instead.",
           )
         }
         next.push(...(await deps.parentsOf(cur)))
@@ -106,6 +107,35 @@ function chunks<T>(items: T[]): T[][] {
   return out
 }
 
+let archivedCache: { at: number; ids: Set<string> } | null = null
+export const ARCHIVED_FOLDER_TTL_MS = 60_000
+export function forgetArchivedFolderCache(): void { archivedCache = null }
+
+/** Drive folders of Closed / Cancelled companies that no open company shares. Strict; cached for ARCHIVED_FOLDER_TTL_MS. */
+async function archivedFolderIds(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the untyped store client
+  d: any,
+  folderIdsOf: (r: { drive_folder_id?: string | null; gdrive_folder_url?: string | null }) => string[],
+  now: number = Date.now(),
+): Promise<Set<string>> {
+  if (archivedCache && now - archivedCache.at < ARCHIVED_FOLDER_TTL_MS) return archivedCache.ids
+  const archived = await readAllPages("closed companies", (from, to) =>
+    d.from("accounts").select("drive_folder_id, gdrive_folder_url").in("status", ["Closed", "Cancelled"]).order("id").range(from, to))
+  const ids = new Set<string>()
+  for (const a of (archived ?? []) as Array<{ drive_folder_id: string | null; gdrive_folder_url: string | null }>) for (const f of folderIdsOf(a)) ids.add(f)
+  for (const part of chunks(Array.from(ids))) {
+    const { data, error } = await d.from("accounts").select("drive_folder_id").in("drive_folder_id", part).not("status", "in", "(Closed,Cancelled)")
+    if (error) throw new Error(`store guard: could not read the shared company folders — ${error.message}`)
+    for (const o of (data ?? []) as Array<{ drive_folder_id: string | null }>) if (o.drive_folder_id) ids.delete(o.drive_folder_id)
+  }  // an open company that knows its folder ONLY through the older link also keeps a shared folder open (no open company has a NULL status:
+  // a NULL status is not "open" — the query below excludes it, so such a company stays locked: fail closed)
+  const { data: linkOnly, error: lErr } = await d.from("accounts").select("drive_folder_id, gdrive_folder_url").is("drive_folder_id", null).not("gdrive_folder_url", "is", null).not("status", "in", "(Closed,Cancelled)")
+  if (lErr) throw new Error(`store guard: could not read the link-only company folders — ${lErr.message}`)
+  for (const o of (linkOnly ?? []) as Array<{ drive_folder_id: string | null; gdrive_folder_url: string | null }>) for (const f of folderIdsOf(o)) ids.delete(f)
+  archivedCache = { at: now, ids }
+  return ids
+}
+
 /** One read of the live state for every company/person; strict (throws on any read error). */
 export async function readLockedFolderIds(): Promise<Set<string>> {
   const d = await db()
@@ -137,8 +167,8 @@ export async function readLockedFolderIds(): Promise<Set<string>> {
   const folderIdsOf = (r: { drive_folder_id?: string | null; gdrive_folder_url?: string | null }): string[] => {
     const out: string[] = []
     if (r.drive_folder_id) out.push(r.drive_folder_id)
-    const m = /\/folders\/([A-Za-z0-9_-]+)/.exec(r.gdrive_folder_url ?? "")
-    if (m) out.push(m[1])
+    const fromUrl = driveIdFromUrl(r.gdrive_folder_url)
+    if (fromUrl) out.push(fromUrl)
     return out
   }
   for (const part of chunks(Array.from(accountIds))) {
@@ -146,6 +176,11 @@ export async function readLockedFolderIds(): Promise<Set<string>> {
     if (aErr) throw new Error(`store guard: could not read the company folders — ${aErr.message}`)
     for (const a of (data ?? []) as Array<{ drive_folder_id: string | null; gdrive_folder_url: string | null }>) for (const f of folderIdsOf(a)) folders.add(f)
   }
+  // Stop Drive (dev job 264bb882, S1d): a Closed / Cancelled company's Drive folder is a read-only archive — never written to,
+  // whatever code path asks (the one-way backup is exempt: it runs inside runAsStoreBackup). A folder id that a company which is NOT
+  // closed also uses is left open (production has 3 active companies sharing a folder with a closed one). The answer changes only
+  // when a company is closed / reopened, so it is read at most once a minute per server instance.
+  ;(await archivedFolderIds(d, folderIdsOf)).forEach((f) => folders.add(f))
   const personFolders = new Set<string>()
   for (const part of chunks(Array.from(contactIds))) {
     const { data, error: cErr } = await d.from("contacts").select("drive_folder_id, gdrive_folder_url").in("id", part)

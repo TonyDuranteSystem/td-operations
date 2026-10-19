@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { assertGroupAccess } from '@/lib/team/groups'
+import { assertThreadAccess, THREAD_DENIED_MESSAGE } from '@/lib/team/groups'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, getUserDisplayName } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
@@ -30,8 +30,8 @@ export async function POST(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: target } = await (supabaseAdmin as any).from('internal_messages').select('thread_id').eq('id', msgId).maybeSingle()
     if (target?.thread_id) {
-      const access = await assertGroupAccess(target.thread_id, user.id)
-      if (access.kind === 'denied') return NextResponse.json({ error: 'You are not in this group.' }, { status: 403 })
+      const access = await assertThreadAccess(target.thread_id, user.id)
+      if (!access.allowed) return NextResponse.json({ error: THREAD_DENIED_MESSAGE }, { status: 403 })
     }
   }
 

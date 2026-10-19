@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { listGroupMemberIds } from '@/lib/team/groups'
-import { isGroupMember, otherMembers } from '@/lib/team/groups-rules'
+import { isDmParticipant, isGroupMember, otherMembers } from '@/lib/team/groups-rules'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
 import { validateTeamCard } from '@/lib/team/workspace'
@@ -92,6 +92,10 @@ export async function POST(
     if (!isGroupMember(groupMembers, user.id)) {
       return NextResponse.json({ error: 'You are not in this group.' }, { status: 403 })
     }
+  }
+  // A DIRECT MESSAGE only accepts messages from its two people (TD Marketing job J-B).
+  if (thread.thread_type === 'dm' && !isDmParticipant(thread.dm_key, user.id)) {
+    return NextResponse.json({ error: 'You are not part of this conversation.' }, { status: 403 })
   }
   // Same signal the Conversations sidebar buckets on (client_bucket ===
   // 'internal' in get_team_threads) — a discussion thread anchored to no

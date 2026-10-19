@@ -419,6 +419,9 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
       const r = await saveUploadsToStoreForAccount({ accountId: accountId!, flow: "tax-intake", paths: p.upload_paths || [] })
       result.steps.push(step("store_uploads", r.failed.length === 0 ? "ok" : "error",
         `CRM Store company — ${r.saved} upload(s) saved to the new store${r.failed.length ? `, ${r.failed.length} not saved (${r.failed.map((f) => f.error).join("; ")})` : ""}`))
+    } else if (e instanceof Error && e.name === "LegacyDriveRefusedError") {
+      // Stop Drive (dev job 264bb882, S1d): the wizard files could not be saved anywhere — an error step (the alarm was raised), never "skipped".
+      result.steps.push(step("drive_folder", "error", e.message))
     } else {
       result.steps.push(step("drive_folder", "skipped", `Non-critical: ${e instanceof Error ? e.message : String(e)}`))
     }

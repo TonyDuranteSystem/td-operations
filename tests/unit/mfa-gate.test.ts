@@ -14,6 +14,24 @@ import {
 
 const NOW = 1_800_000_000_000
 
+describe('resolveMfaGate — strict subjects (TD Marketing logins): no grace, no exemption', () => {
+  const FUTURE = new Date(NOW + 86_400_000).toISOString()
+  const strict = { subject: true, strict: true, exempt: false, hasVerifiedFactor: false, aal: 'aal1' as const, rememberedDevice: false, graceUntilRaw: FUTURE, now: NOW }
+  it('a strict subject with no authenticator is sent to enroll even while the staff grace period is running', () => {
+    expect(resolveMfaGate(strict)).toBe('enroll')
+    // the same session as a normal (staff) subject is still waved through during grace: today's behaviour is unchanged
+    expect(resolveMfaGate({ ...strict, strict: false })).toBe('allow')
+  })
+  it('the owner exemption does not apply to a strict subject', () => {
+    expect(resolveMfaGate({ ...strict, exempt: true })).toBe('enroll')
+    expect(resolveMfaGate({ ...strict, strict: false, exempt: true })).toBe('allow')
+  })
+  it('an enrolled strict subject is challenged as usual and passes with aal2', () => {
+    expect(resolveMfaGate({ ...strict, hasVerifiedFactor: true })).toBe('verify')
+    expect(resolveMfaGate({ ...strict, hasVerifiedFactor: true, aal: 'aal2' })).toBe('allow')
+  })
+})
+
 describe('resolveMfaGate — the six session states (council-enumerated)', () => {
   const base = {
     subject: true,

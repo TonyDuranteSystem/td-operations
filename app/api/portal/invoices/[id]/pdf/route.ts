@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
+import { getClientContactId } from '@/lib/portal-auth'
+import { isItemHiddenFromViewer } from '@/lib/portal/history-cutoff'
 import { NextRequest, NextResponse } from 'next/server'
 import { resolvePdfStatus } from '@/lib/portal/invoice-status'
 import { renderInvoicePdf } from '@/lib/portal/invoice-pdf'
@@ -35,6 +37,10 @@ export async function GET(
   // Access control — default-deny (contacts AND teammates; never skipped).
   if (!(await canAccessAccount(user, invoice.account_id, 'invoices_billing'))) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+  // A person who joined the company later cannot open an invoice saved before their start date (404, like a missing one).
+  if (await isItemHiddenFromViewer({ accountId: invoice.account_id, contactId: getClientContactId(user), kind: 'invoice', itemId: id, item: { created_at: invoice.created_at } })) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
   const pdfBytes = await renderInvoicePdf({

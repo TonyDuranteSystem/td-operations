@@ -126,6 +126,20 @@ export async function POST(req: NextRequest) {
       notifyClientsOfNewDocument(stored.documentRowId).catch((e) =>
         console.warn('[upload-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
     } else {
+    // Stop Drive (dev job 264bb882, S1d): a Drive upload is only for a person / company deliberately left on Drive (folder, no
+    // storage, company not closed). Anyone else is refused with one plain sentence — nothing is written.
+    {
+      const { legacyDriveForContact, legacyDriveForAccount, LEGACY_REFUSAL_SENTENCE } = await import('@/lib/crm-store/legacy-drive')
+      const { data: links } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId).limit(30)
+      const verdicts = [await legacyDriveForContact(contactId)]
+      for (const l of (links ?? []) as Array<{ account_id: string }>) verdicts.push(await legacyDriveForAccount(l.account_id))
+      if (!verdicts.some((v) => v.allowed)) {
+        const reason = verdicts.find((v) => !v.allowed && v.reason !== 'no_folder' && v.reason !== 'no_company')
+        const why: keyof typeof LEGACY_REFUSAL_SENTENCE = reason && !reason.allowed ? reason.reason : (links ?? []).length === 0 ? 'no_company' : 'no_folder'
+        // a staff action: the person who clicked is told right here, so no separate alarm
+        return NextResponse.json({ success: false, detail: LEGACY_REFUSAL_SENTENCE[why] }, { status: 409 })
+      }
+    }
     // Resolve Drive folder
     let driveFolderId: string | null = null
 

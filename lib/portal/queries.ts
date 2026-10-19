@@ -994,7 +994,7 @@ export async function getPortalDeadlines(accountId: string) {
 export async function getPortalPayments(accountId: string) {
   const { data } = await supabaseAdmin
     .from('payments')
-    .select('id, description, amount, amount_currency, period, year, due_date, paid_date, status, installment, invoice_number, invoice_status')
+    .select('id, description, amount, amount_currency, period, year, due_date, paid_date, status, installment, invoice_number, invoice_status, created_at')
     .eq('account_id', accountId)
     .order('due_date', { ascending: false })
     .limit(20)
@@ -1167,7 +1167,7 @@ export async function getPortalExpensesByContact(contactId: string) {
 export async function getInvoiceArchive(accountId: string) {
   const { data } = await supabaseAdmin
     .from('client_invoice_documents')
-    .select('id, direction, invoice_number, counterparty_name, amount, currency, issue_date, file_url, file_name, year, month, sales_invoice_id, expense_id')
+    .select('id, direction, invoice_number, counterparty_name, amount, currency, issue_date, file_url, file_name, year, month, sales_invoice_id, expense_id, created_at')
     .eq('account_id', accountId)
     .order('year', { ascending: false })
     .order('month', { ascending: false })

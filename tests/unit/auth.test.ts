@@ -20,8 +20,10 @@ describe('isAdmin', () => {
     expect(isAdmin(makeUser({ app_metadata: { role: 'admin' } }))).toBe(true)
   })
 
-  it('returns true for user_metadata role=admin', () => {
-    expect(isAdmin(makeUser({ user_metadata: { role: 'admin' } }))).toBe(true)
+  it('IGNORES a self-written user_metadata role=admin (TD Marketing P1: that field is editable by the account holder)', () => {
+    expect(isAdmin(makeUser({ user_metadata: { role: 'admin' } }))).toBe(false)
+    expect(isAdmin(makeUser({ app_metadata: { role: 'client' }, user_metadata: { role: 'admin' } }))).toBe(false)
+    expect(isAdmin(makeUser({ app_metadata: { role: 'marketing' }, user_metadata: { role: 'admin' } }))).toBe(false)
   })
 
   it('returns false for team user', () => {
@@ -38,8 +40,11 @@ describe('isAdmin', () => {
 })
 
 describe('isTeam', () => {
-  it('returns true for non-admin non-client user', () => {
-    expect(isTeam(makeUser({ email: 'support@tonydurante.us' }))).toBe(true)
+  it('returns true for a team user, false for a login with no role or an unknown role', () => {
+    expect(isTeam(makeUser({ email: 'support@tonydurante.us', app_metadata: { role: 'team' } }))).toBe(true)
+    expect(isTeam(makeUser({ email: 'support@tonydurante.us' }))).toBe(false) // no role is no longer staff
+    expect(isTeam(makeUser({ app_metadata: { role: 'marketing' } }))).toBe(false)
+    expect(isTeam(makeUser({ app_metadata: { role: 'contractor' } }))).toBe(false)
   })
 
   it('returns false for admin', () => {
@@ -74,8 +79,10 @@ describe('getCrmRole', () => {
     expect(getCrmRole(makeUser({ email: 'antonio.durante@tonydurante.us' }))).toBe('admin')
   })
 
-  it('returns team for team user', () => {
-    expect(getCrmRole(makeUser({ email: 'support@tonydurante.us' }))).toBe('team')
+  it('returns team for a team user and null for roles that are not staff', () => {
+    expect(getCrmRole(makeUser({ email: 'support@tonydurante.us', app_metadata: { role: 'team' } }))).toBe('team')
+    expect(getCrmRole(makeUser({ email: 'support@tonydurante.us' }))).toBe(null)
+    expect(getCrmRole(makeUser({ app_metadata: { role: 'marketing' } }))).toBe(null)
   })
 
   it('returns null for client', () => {

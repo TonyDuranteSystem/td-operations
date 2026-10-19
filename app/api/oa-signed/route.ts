@@ -187,26 +187,26 @@ export async function POST(req: NextRequest) {
 
       // ─── 3. AUTO-UPLOAD SIGNED PDF TO DRIVE ───
       try {
-        const { data: acct } = await supabaseAdmin
-          .from("accounts")
-          .select("drive_folder_id")
-          .eq("id", oa.account_id)
-          .single()
-
         // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its OA saved in
         // the new storage and needs no Drive folder at all; a company still on Drive carries on exactly as before.
         const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
         const inStorage = (await companyDocState(oa.account_id)) !== "drive"
 
-        if (acct?.drive_folder_id || inStorage) {
+        // Stop Drive (dev job 264bb882, S1d): Drive is written only for a company deliberately left on it (folder, no storage,
+        // not closed). Any other state is an error step + a staff alarm — never "ok", never a silent skip.
+        const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
+        const legacy = inStorage ? null : await legacyDriveForAccount(oa.account_id)
+        const legacyFolderId = legacy && legacy.allowed ? legacy.folderId : null
+
+        if (legacyFolderId || inStorage) {
           let targetFolderId = ""
-          if (!inStorage && acct?.drive_folder_id) {
+          if (!inStorage && legacyFolderId) {
             const { listFolder } = await import("@/lib/google-drive")
-            const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
+            const folderResult = await listFolder(legacyFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
             const companyFolder = folderResult.files?.find(f =>
               f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
             )
-            targetFolderId = companyFolder?.id || acct.drive_folder_id
+            targetFolderId = companyFolder?.id || legacyFolderId
           }
 
           // File the document the SERVER recorded — never "whatever is newest in
@@ -288,7 +288,8 @@ export async function POST(req: NextRequest) {
             })
           }
         } else {
-          results.push({ step: "drive_upload", status: "skipped", detail: "No drive_folder_id on account" })
+          const sentence = await raiseDriveWriteRefused({ flow: "oa-signed", accountId: oa.account_id, reason: legacy && !legacy.allowed ? legacy.reason : "no_folder", detail: "Operating Agreement" })
+          results.push({ step: "drive_upload", status: "error", detail: sentence })
         }
       } catch (e) {
         results.push({ step: "drive_upload", status: "error", detail: e instanceof Error ? e.message : String(e) })
