@@ -155,7 +155,6 @@ describe("round 2 — names, ambiguity, one alarm each", () => {
     expect(namesMatch("José  Núñez", "jose nunez")).toBe(true)
     expect(namesMatch("Hans Müller", "Hans Mueller")).toBe(true)
     expect(namesMatch("Anne-Marie Dupont", "Annemarie Dupont")).toBe(true)
-    expect(namesMatch("Mario Luigi Rossi", "Mario Rossi")).toBe(true) // middle name left out
     expect(namesMatch("Łukasz Ørsted", "Lukasz Orsted")).toBe(true)
     expect(namesMatch("Straße Weiß", "Strasse Weiss")).toBe(true)
     expect(namesMatch("Иван Петров", "Петров Иван")).toBe(true) // non-Latin names are compared as they are
@@ -170,7 +169,15 @@ describe("round 2 — names, ambiguity, one alarm each", () => {
     expect(namesMatch("", "Maria Rossi")).toBe(false)
     expect(namesMatch("Mario Rossi", null)).toBe(false)
     expect(namesMatch("!!!", "???")).toBe(false) // nothing comparable on either side
-    expect(namesMatch("Rossi Mario Luigi", "Luigi Mario")).toBe(false) // subset but not in the same order is not accepted
+    expect(namesMatch("Mario Luigi Rossi", "Mario Rossi")).toBe(false) // a left-out middle name is no longer accepted: unsure = ambiguous
+    expect(namesMatch("Marco Zqrossi", "Anna Zqrossi")).toBe(false) // the same last name alone is never enough
+    expect(namesMatch("Anna Zqrossi", "Zqrossi Marco")).toBe(false)
+    expect(namesMatch("李小龙", "王小明")).toBe(false) // non-Latin names are compared as written, not reduced to nothing
+    expect(namesMatch("李小龙", "李小龙")).toBe(true)
+    expect(namesMatch("李 小龙", "小龙 李")).toBe(true) // same words, swapped
+    expect(namesMatch("???", "李小龙")).toBe(false)
+    expect(namesMatch("   ", "   ")).toBe(false)
+    expect(namesMatch("!!!", "!!!")).toBe(false) // nothing comparable: never a match, even against itself
   })
   it("a couple sharing one email: lead 'Mario Rossi' vs contact 'Maria Rossi' = ambiguous, ONE alarm, nobody used", async () => {
     rows = [{ id: "maria", email: "famiglia@x.it", full_name: "Maria Rossi" } as never]
