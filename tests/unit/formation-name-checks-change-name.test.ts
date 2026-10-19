@@ -75,10 +75,11 @@ vi.mock('@/lib/service-delivery', () => ({
   advanceServiceDelivery: (...args: unknown[]) => advanceServiceDeliveryMock(...args),
 }))
 
-vi.mock('@/lib/system-errors', () => ({ reportSystemError: vi.fn().mockResolvedValue(null) }))
+const reportSystemErrorMock = vi.fn().mockResolvedValue(null)
+vi.mock('@/lib/system-errors', () => ({ reportSystemError: (...args: unknown[]) => reportSystemErrorMock(...args) }))
 vi.mock('@/lib/portal/notifications', () => ({ notifyClientOfAdminMessage: () => Promise.resolve() }))
 
-import { handleNameAction, applyNameDecisionResponse, getNameLoopPolicyForSd, getOrInitNameChecks } from '@/lib/operations/formation-name-checks'
+import { handleNameAction, applyNameDecisionResponse, getNameLoopPolicyForSd, getOrInitNameChecks, askFirstNamesAtCreation } from '@/lib/operations/formation-name-checks'
 
 const SD_ID = 'sd-change-name'
 const nc = (name: string, status: NameCheck['status'], extra: Partial<NameCheck> = {}): NameCheck => ({ name, source: 'client_resubmit', status, updated_at: null, ...extra })
@@ -110,6 +111,7 @@ beforeEach(() => {
   createDecisionRequestMock.mockReset()
   createDecisionRequestMock.mockResolvedValue({ ok: true, id: 'decision-req-1' })
   advanceServiceDeliveryMock.mockClear()
+  reportSystemErrorMock.mockClear()
 })
 
 afterEach(() => {
@@ -316,5 +318,67 @@ describe('the client\'s answer to a name-change ask', () => {
     sdFixture = changeNameSd([nc('Old LLC', 'rejected_by_sos')])
     await applyNameDecisionResponse(askReq({ kind: 'new_names', split: 'lines', max: 1 }), 'responded', { text: 'old llc' })
     expect(writes[0].checks.map((c) => c.name)).toEqual(['Old LLC'])
+  })
+})
+
+describe('askFirstNamesAtCreation (the ask made when the service starts)', () => {
+  it('asks once, for up to 3 names, one per line, created by the system', async () => {
+    sdFixture = changeNameSd([])
+    const r = await askFirstNamesAtCreation(SD_ID)
+    expect(r).toEqual({ ok: true })
+    expect(createDecisionRequestMock).toHaveBeenCalledTimes(1)
+    const req = createDecisionRequestMock.mock.calls[0][0]
+    expect(req).toMatchObject({ request_type: 'text_input', created_by: 'system', service_delivery_id: SD_ID })
+    expect(req.options.name_check).toEqual({ kind: 'new_names', split: 'lines', max: 3 })
+  })
+
+  it('is idempotent: a client who was already asked (any status) is not asked again — a retried activation, a second creation path', async () => {
+    sdFixture = changeNameSd([])
+    pendingAsk = true
+    const r = await askFirstNamesAtCreation(SD_ID)
+    expect(r.ok).toBe(true)
+    expect(r.skipped).toMatch(/already asked/)
+    expect(createDecisionRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('does nothing when names are already on the list', async () => {
+    sdFixture = changeNameSd([nc('A LLC', 'pending')])
+    expect((await askFirstNamesAtCreation(SD_ID)).skipped).toMatch(/already on the list/)
+    expect(createDecisionRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('does nothing for a service that has no first ask (Formation, ITIN) or a finished case', async () => {
+    sdFixture = changeNameSd([], { service_type: 'Company Formation' })
+    expect((await askFirstNamesAtCreation(SD_ID)).skipped).toMatch(/no first ask/)
+    sdFixture = changeNameSd([], { service_type: 'ITIN' })
+    expect((await askFirstNamesAtCreation(SD_ID)).skipped).toMatch(/no first ask/)
+    sdFixture = changeNameSd([], { status: 'cancelled' })
+    expect((await askFirstNamesAtCreation(SD_ID)).skipped).toMatch(/finished/)
+    expect(createDecisionRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('a failure is REPORTED to the error dashboard (not swallowed) and returned — the case would otherwise wait on a client who was never asked', async () => {
+    sdFixture = changeNameSd([], { contact_id: null })
+    createDecisionRequestMock.mockResolvedValue({ ok: false, error: 'No client contact to send this request to (the service delivery has no contact).' })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const r = await askFirstNamesAtCreation(SD_ID)
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/no client contact/i)
+    expect(reportSystemErrorMock).toHaveBeenCalledTimes(1)
+    expect(reportSystemErrorMock.mock.calls[0][0].message).toContain('Ask the client for names')
+  })
+
+  it('never throws, even when the request creation blows up', async () => {
+    sdFixture = changeNameSd([])
+    createDecisionRequestMock.mockRejectedValue(new Error('db down'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const r = await askFirstNamesAtCreation(SD_ID)
+    expect(r.ok).toBe(false)
+    expect(reportSystemErrorMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unknown delivery is reported as not found without throwing', async () => {
+    sdFixture = null
+    expect((await askFirstNamesAtCreation(SD_ID)).ok).toBe(false)
   })
 })

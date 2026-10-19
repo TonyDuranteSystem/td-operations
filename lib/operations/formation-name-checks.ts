@@ -311,6 +311,77 @@ async function seedChecksFor(row: SdRow): Promise<NameCheck[]> {
   return checks
 }
 
+/** True when ANY "propose names" request (any status) was ever created for this SD — the first ask is created once, ever. */
+async function hasAnyNewNamesRequest(sdId: string): Promise<boolean> {
+  const { data } = await (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_decision_requests not in generated types
+    supabaseAdmin as any
+  )
+    .from('client_decision_requests')
+    .select('id')
+    .eq('service_delivery_id', sdId)
+    .eq('request_type', 'text_input')
+    .eq('options->name_check->>kind', 'new_names')
+    .limit(1)
+  return Array.isArray(data) && data.length > 0
+}
+
+/**
+ * The first "send us your names" ask of a service that starts with the CLIENT's turn (Company Change
+ * Name), created when the service delivery is created (createSD). A stage notice only fires when a
+ * stage is ADVANCED, never at creation, so without this a paid client was told nothing specific
+ * (International Automobile Authority, 2026-10-19). Idempotent — one ask per delivery, ever, whatever
+ * the retry (an activation re-run, a second creation path): it does nothing when any such ask already
+ * exists or names are already on the list. A failure is NEVER swallowed: it is reported to the error
+ * dashboard (the case would otherwise wait on a client who was never asked) and staff can press
+ * "Ask the client for names" in the workspace. Never throws.
+ */
+export async function askFirstNamesAtCreation(sdId: string): Promise<{ ok: boolean; skipped?: string; error?: string }> {
+  try {
+    const row = await loadSd(sdId)
+    if (!row) return { ok: false, error: 'Service delivery not found.' }
+    const policy = nameLoopPolicyFor(row.service_type)
+    const copy = policy ? firstNamesCopy(policy) : null
+    if (!policy || !copy) return { ok: true, skipped: 'this service has no first ask' }
+    if (isClosedCase(row)) return { ok: true, skipped: 'case already finished' }
+    if (Array.isArray(row.name_checks) && row.name_checks.length > 0) return { ok: true, skipped: 'names are already on the list' }
+    if (await hasAnyNewNamesRequest(sdId)) return { ok: true, skipped: 'the client was already asked' }
+    const created = await createDecisionRequest({
+      service_delivery_id: sdId,
+      request_type: 'text_input',
+      title: copy.title,
+      message: copy.message,
+      message_it: copy.message_it,
+      options: copy.options,
+      created_by: 'system',
+    })
+    if (!created.ok) {
+      await reportFirstAskFailure(sdId, row, created.error ?? 'unknown error')
+      return { ok: false, error: created.error }
+    }
+    return { ok: true }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    await reportFirstAskFailure(sdId, null, message)
+    return { ok: false, error: message }
+  }
+}
+
+async function reportFirstAskFailure(sdId: string, row: SdRow | null, reason: string): Promise<void> {
+  console.error(`askFirstNamesAtCreation failed for SD ${sdId}: ${reason}`)
+  try {
+    const { reportSystemError } = await import('@/lib/system-errors')
+    await reportSystemError({
+      source: 'server',
+      route: 'lib/operations/formation-name-checks.ts:askFirstNamesAtCreation',
+      message: `The client could not be asked for the new company name when the service started (SD ${sdId}): ${reason}. Press "Ask the client for names" in the workspace.`,
+      context: { service_delivery_id: sdId, account_id: row?.account_id ?? null, contact_id: row?.contact_id ?? null },
+    })
+  } catch {
+    /* best-effort — never mask the original failure */
+  }
+}
+
 /** The names-loop rules of an SD's service, or null when the SD (or its service) has no names loop. */
 export async function getNameLoopPolicyForSd(sdId: string): Promise<NameLoopPolicy | null> {
   const row = await loadSd(sdId)

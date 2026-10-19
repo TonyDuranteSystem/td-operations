@@ -439,6 +439,19 @@ export async function createSD(
     }
   }
 
+  // A service that starts with the CLIENT's turn says so at creation (Company Change Name asks for the new
+  // company names now): stage notices only fire when a stage is ADVANCED, never here, so without this a paid
+  // client was told nothing specific (International Automobile Authority, 2026-10-19). Idempotent per SD and
+  // never throws — a failure is reported to the error dashboard and staff can press "Ask the client for names".
+  if (row.service_type === "Company Change Name") {
+    try {
+      const { askFirstNamesAtCreation } = await import("@/lib/operations/formation-name-checks")
+      await askFirstNamesAtCreation(row.id)
+    } catch (err) {
+      console.warn(`[createSD] first names ask failed (non-fatal) for SD ${row.id}:`, err instanceof Error ? err.message : String(err))
+    }
+  }
+
   // Universal task per SD (2026-05-18, per Antonio). When no workflow row
   // matches this service_type, fall back to creating a plain task so every
   // service has at least one tracked task visible in the portal-chats
