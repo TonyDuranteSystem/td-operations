@@ -182,7 +182,7 @@ _Regenerated 2026-10-19. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-10-13)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-10-18)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-10-14)_
-- [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-17)_
+- [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-18)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-10-12)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-09-23)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-09-11)_
@@ -191,11 +191,11 @@ _Regenerated 2026-10-19. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-14)_
 - [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-10-17)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
-- [documents.md](documents.md) — Documents & Storage _(verified 2026-10-17)_
+- [documents.md](documents.md) — Documents & Storage _(verified 2026-10-18)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-12)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-15)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-18)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-15)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-18)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-17)_
@@ -209,10 +209,10 @@ _Regenerated 2026-10-19. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-16)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
-- [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-09-29)_
+- [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-10-09)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-10-17)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-10-18)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-10-09)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-09-18)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
