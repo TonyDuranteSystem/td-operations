@@ -50,6 +50,7 @@ vi.mock('@/lib/crm-store/save-form', () => ({
   },
 }))
 vi.mock('@/lib/forms/archive-enqueue', () => ({ enqueueFormArchiveJob: async (j: Record<string, unknown>) => { st.enqueued.push(j) } }))
+vi.mock('@/lib/archive/meta-merge', () => ({ mergeArchiveMeta: async () => undefined }))
 vi.mock('@/lib/system-errors', () => ({ reportSystemError: async (e: { message: string }) => { st.alarms.push(e.message) } }))
 vi.mock('@/lib/gmail', () => ({ gmailPost: async () => ({}) }))
 vi.mock('@/lib/db', () => ({ dbWriteSafe: async () => ({}) }))

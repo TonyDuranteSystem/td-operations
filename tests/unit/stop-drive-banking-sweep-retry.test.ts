@@ -33,7 +33,8 @@ describe('the sweep decision, banking + formation, with the clock set', () => {
 })
 
 describe('the archive job: fail, then retry and set the marker', () => {
-  const st = vi.hoisted(() => ({ row: {} as Record<string, unknown>, updates: [] as Array<Record<string, unknown>>, pkgOk: false }))
+  const st = vi.hoisted(() => ({ row: {} as Record<string, unknown>, updates: [] as Array<Record<string, unknown>>, merged: [] as Array<Record<string, unknown>>, pkgOk: false }))
+  vi.mock('@/lib/archive/meta-merge', () => ({ mergeArchiveMeta: async (_t: string, _id: string, patch: Record<string, unknown>) => { st.merged.push(patch) } }))
   vi.mock('@/lib/supabase-admin', () => {
     const b = () => {
       const c: Record<string, unknown> = {}
@@ -53,7 +54,7 @@ describe('the archive job: fail, then retry and set the marker', () => {
   vi.mock('@/lib/form-to-drive', () => ({ saveFormToDrive: async () => { throw new Error('the banking job must use the banking filer') } }))
 
   beforeEach(() => {
-    st.updates.length = 0; st.pkgOk = false
+    st.updates.length = 0; st.merged.length = 0; st.pkgOk = false
     st.row = {
       id: 's1', account_id: 'acc-1', contact_id: 'c1', token: 'tok', provider: 'relay', status: 'completed', submitted_data: {}, upload_paths: [], completed_at: '2026-10-20T09:00:00Z', created_at: '2026-10-20T09:00:00Z',
       drive_archived_at: null, drive_archive_meta: { pinned_plan: { folderId: 'account-storage:acc-1', bucket: 'onboarding-uploads', configKey: 'banking_relay', uploadPaths: [], companyName: 'Acme' } },
@@ -63,7 +64,7 @@ describe('the archive job: fail, then retry and set the marker', () => {
   it('first run: the job throws (so the queue retries), the attempt and the error are recorded, NO marker', async () => {
     const { archiveFormSubmission } = await import('@/lib/forms/archive-submission')
     await expect(archiveFormSubmission('banking', 's1')).rejects.toThrow(/not fully archived/)
-    const meta = st.updates.map((u) => u.drive_archive_meta as Record<string, unknown>).find(Boolean)
+    const meta = st.merged[0]
     expect(meta).toMatchObject({ attempts: 1 })
     expect(String(meta.last_error)).toMatch(/not filed|failed/)
     expect(st.updates.some((u) => u.drive_archived_at)).toBe(false)

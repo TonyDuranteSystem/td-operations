@@ -2,8 +2,9 @@
  * Stop Drive, slice S1c: the two archive backstop crons.
  *  - The window of 200 is filtered IN THE QUERY (inner join on the company): a company with no folder, or a Closed/Cancelled one,
  *    never occupies it, however many such rows exist — there is no page limit through which starvation could come back.
- *  - A company with no folder is counted, and a submission of such a company that nobody has filed raises ONE alarm (a system
- *    error) every run until it is filed — the skip is never silent.
+ *  - A company with no folder is NOT skipped: its archive job files the form in the company's storage and sets the filed marker.
+ *    A row that can never be filed is alerted ONCE (the existing stuck-row alert, remembered in the row) — see
+ *    stop-drive-sweep-alert.test.ts for the real decision path (this file stubs it).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { NextRequest } from "next/server"
@@ -12,17 +13,23 @@ const state = vi.hoisted(() => ({
   window: { candidates: [] as Array<Record<string, unknown>>, skippedFinished: 0, readError: null as string | null },
   enqueued: [] as string[],
   alarms: [] as Array<Record<string, unknown>>,
-  calls: [] as Array<{ table: string; cutoff: string }>,
+  calls: [] as Array<{ table: string; cutoff: string; opts: Record<string, unknown> }>,
+  /** the table the test's window belongs to (every other table's window is empty) */
+  windowTable: "banking_submissions",
 }))
 
 vi.mock("@/lib/archive/skip-no-drive-folder", async () => {
   const actual = await vi.importActual<typeof import("@/lib/archive/skip-no-drive-folder")>("@/lib/archive/skip-no-drive-folder")
   return {
     ...actual,
-    readSweepWindow: vi.fn(async (table: string, _cols: string, cutoff: string) => { state.calls.push({ table, cutoff }); return state.window }),
+    readSweepWindow: vi.fn(async (table: string, _cols: string, opts: { cutoffIso: string }) => {
+      state.calls.push({ table, cutoff: opts.cutoffIso, opts: opts as unknown as Record<string, unknown> })
+      return table === state.windowTable ? state.window : { candidates: [], skippedFinished: 0, readError: null }
+    }),
   }
 })
-vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: { from: () => { const c: Record<string, unknown> = {}; for (const m of ["select", "is", "gte", "order", "limit", "update", "eq", "in", "not"]) c[m] = () => c; c.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(r); return c } } }))
+vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: { from: () => { const c: Record<string, unknown> = {}; for (const m of ["select", "is", "gte", "order", "limit", "update", "eq"]) c[m] = () => c; c.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(r); return c } } }))
+vi.mock("@/lib/archive/meta-merge", () => ({ mergeArchiveMeta: async () => undefined }))
 vi.mock("@/lib/cron-log", () => ({ logCron: () => undefined }))
 vi.mock("@/lib/system-errors", () => ({ reportSystemError: async (e: Record<string, unknown>) => { state.alarms.push(e); return null } }))
 vi.mock("@/lib/team/post-message", () => ({ postTeamMessage: async () => undefined }))
@@ -41,9 +48,11 @@ beforeEach(() => {
   state.enqueued.length = 0
   state.alarms.length = 0
   state.calls.length = 0
+  state.windowTable = "banking_submissions"
 })
 
 describe("tax-archive-sweep", () => {
+  beforeEach(() => { state.windowTable = "tax_return_submissions" })
   it("processes the window the query produced — including a company with NO folder (its archive job files it into the storage) — and reports the finished ones it left alone", async () => {
     state.window = { candidates: [{ id: "s1", account_id: "storage-first" }, { id: "s2", account_id: "a2" }], skippedFinished: 40, readError: null }
     const { GET } = await import("@/app/api/cron/tax-archive-sweep/route")
@@ -58,7 +67,7 @@ describe("tax-archive-sweep", () => {
     const mod = await import("@/lib/archive/skip-no-drive-folder")
     const { GET } = await import("@/app/api/cron/tax-archive-sweep/route")
     await GET(get())
-    expect(vi.mocked(mod.readSweepWindow).mock.calls.at(-1)?.[3]).toBe("status.in.(completed,reviewed),review_status.not.is.null")
+    expect((vi.mocked(mod.readSweepWindow).mock.calls.at(-1)?.[2] as { realFilter: string }).realFilter).toBe("status.in.(completed,reviewed),review_status.not.is.null")
   })
 
   it("a read error is a 500 with a system error", async () => {
@@ -81,9 +90,9 @@ describe("forms-archive-sweep (banking)", () => {
     expect(state.calls[0].table).toBe("banking_submissions")
   })
   it("banking asks only for completed / reviewed submissions", async () => {
-    const mod = await import("@/lib/archive/skip-no-drive-folder")
     const { GET } = await import("@/app/api/cron/forms-archive-sweep/route")
     await GET(get())
-    expect(vi.mocked(mod.readSweepWindow).mock.calls.at(-1)?.[3]).toBe("status.in.(completed,reviewed)")
+    const banking = state.calls.find((c) => c.table === "banking_submissions")!
+    expect((banking.opts as { realFilter: string }).realFilter).toBe("status.in.(completed,reviewed)")
   })
 })

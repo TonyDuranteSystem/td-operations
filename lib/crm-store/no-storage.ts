@@ -45,8 +45,13 @@ export type NoStorageDecision =
 
 const refuse = (reason: NoStorageReason): NoStorageDecision => ({ route: "refuse", reason, sentence: NO_STORAGE_REASON_SENTENCE[reason] })
 
-/** Statuses of a finished company: never written to, whatever folder it still has. Case-insensitive; 'canceled' is accepted too. */
-const FINISHED_STATUSES = new Set(["closed", "cancelled", "canceled"])
+/**
+ * Statuses of a finished company: never written to, whatever folder it still has. `accounts.status` is a database enum, so the
+ * labels are exactly these two (queries use them as they are — `ilike` does not work on an enum). The in-code check below is also
+ * case-insensitive and accepts 'canceled', so a value from any other source (a form, an import) is read the same way.
+ */
+export const FINISHED_DB_LABELS = ["Closed", "Cancelled"] as const
+const FINISHED_STATUSES = new Set<string>([...FINISHED_DB_LABELS.map((x) => x.toLowerCase()), "canceled"])
 
 /** Pure: the folder id from the two places a company / person keeps it: `drive_folder_id`, else the id inside the older link. */
 export function folderIdOf(a: { drive_folder_id?: string | null; gdrive_folder_url?: string | null } | null | undefined): string | null {

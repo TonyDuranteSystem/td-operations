@@ -1,7 +1,7 @@
 /**
  * Stop Drive S1d, form lanes round 3 — items 5b, 7, 9, 10: a pinned Drive id is ignored, the banking sweep start date, one summary key + the applicant rule, the alarm told once.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 describe('5b. a pinned Drive folder id is ignored', () => {
   it('the destination is looked up again; a pin counts only when it is THIS company\'s storage marker', async () => {
@@ -70,5 +70,20 @@ describe('9/10. one summary key, the applicant rule, the alarm told once', () =>
     expect(await raiseThrottledAlarm('banking_package_problem', { ...d, token: 'other' }, 2_000, deps)).toBe(true)
     expect(await raiseThrottledAlarm('banking_package_problem', d, 1_000 + 61 * 60_000, deps)).toBe(true)
     expect(raised).toHaveLength(3)
+  })
+})
+
+describe('the filed mark merges (does not overwrite) the meta, and resets the old failures', () => {
+  it('sets the marker, then MERGES attempts 0 / alerted flag cleared / not waiting — nothing else is rewritten', async () => {
+    vi.resetModules()
+    const updates: Array<Record<string, unknown>> = [], merged: Array<Record<string, unknown>> = []
+    vi.doMock('@/lib/supabase-admin', () => ({ supabaseAdmin: { from: () => { const c: Record<string, unknown> = {}; c.update = (p: Record<string, unknown>) => { updates.push(p); return c }; c.eq = () => Promise.resolve({ error: null }); return c } } }))
+    vi.doMock('@/lib/archive/meta-merge', () => ({ mergeArchiveMeta: async (_t: string, _id: string, patch: Record<string, unknown>) => { merged.push(patch) } }))
+    const { markBankingSubmissionFiled } = await import('@/lib/forms/mark-banking-filed')
+    expect(await markBankingSubmissionFiled('s1', { flow: 'x', summaryFileId: 'f', copied: ['a'], folderId: 'account-storage:a' })).toBe(true)
+    expect(typeof updates[0].drive_archived_at).toBe('string')
+    expect(updates[0].drive_archive_meta).toBeUndefined()
+    expect(merged[0]).toMatchObject({ attempts: 0, sweep_alerted: null, waiting_since: null, last_error: null })
+    vi.doUnmock('@/lib/supabase-admin'); vi.doUnmock('@/lib/archive/meta-merge')
   })
 })

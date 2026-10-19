@@ -23,26 +23,29 @@ export function freshSubmissionMeta(prior: Record<string, unknown> | null | unde
 
 export async function markBankingSubmissionFiled(submissionId: string, info: FiledInfo, now: Date = new Date()): Promise<boolean> {
   const { supabaseAdmin } = await import("@/lib/supabase-admin")
-  const { data: row, error } = await supabaseAdmin.from("banking_submissions").select("drive_archive_meta").eq("id", submissionId).maybeSingle()
-  if (error) return false
-  const prior = ((row as { drive_archive_meta?: Record<string, unknown> | null } | null)?.drive_archive_meta ?? {}) as Record<string, unknown>
+  const { mergeArchiveMeta } = await import("@/lib/archive/meta-merge")
   const { error: upErr } = await supabaseAdmin
     .from("banking_submissions")
     // as never: the archive columns are not in the generated types (same as the archive engine)
-    .update({
-      drive_archived_at: now.toISOString(),
-      // attempts / the "alerted" flag of earlier failures are reset: a later failed resubmission must be able to alert again
-      drive_archive_meta: { ...freshSubmissionMeta(prior, {}), attempts: 0, last_error: null, filed_by: info.flow, summary_file_id: info.summaryFileId, copied: info.copied, drive_folder_id: info.folderId },
-    } as never)
+    .update({ drive_archived_at: now.toISOString() } as never)
     .eq("id", submissionId)
-  return !upErr
+  if (upErr) return false
+  try {
+    // MERGED atomically (the same call the archive engine and the sweep use) — never a copy of a meta read earlier. The failed-attempt count,
+    // the "alerted" flag and a move-wait of earlier failures are reset: a later failed resubmission must be able to alert again.
+    await mergeArchiveMeta("banking_submissions", submissionId, {
+      attempts: 0, sweep_alerted: null, waiting_since: null, last_error: null,
+      filed_by: info.flow, summary_file_id: info.summaryFileId, copied: info.copied, drive_folder_id: info.folderId,
+    })
+  } catch (e) {
+    // the package IS filed (the marker is set); only the record of where is missing
+    console.error("[forms/mark-banking-filed] filed, but the meta record could not be merged (non-fatal):", e)
+  }
+  return true
 }
 
 /** Record which form produced the row (the public form calls this before filing), so every later lane builds the same summary key. */
 export async function setBankingOrigin(submissionId: string, origin: "wizard" | "external"): Promise<void> {
-  const { supabaseAdmin } = await import("@/lib/supabase-admin")
-  const { data: row } = await supabaseAdmin.from("banking_submissions").select("drive_archive_meta").eq("id", submissionId).maybeSingle()
-  const prior = ((row as { drive_archive_meta?: Record<string, unknown> | null } | null)?.drive_archive_meta ?? {}) as Record<string, unknown>
-  if (prior["origin"] === origin) return
-  await supabaseAdmin.from("banking_submissions").update({ drive_archive_meta: { ...prior, origin } } as never).eq("id", submissionId)
+  const { mergeArchiveMeta } = await import("@/lib/archive/meta-merge")
+  await mergeArchiveMeta("banking_submissions", submissionId, { origin })
 }

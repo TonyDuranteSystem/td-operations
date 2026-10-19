@@ -4,7 +4,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 describe('8. a company mid-move is waiting, not failing', () => {
-  const st = vi.hoisted(() => ({ row: {} as Record<string, unknown>, updates: [] as Array<Record<string, unknown>> }))
+  const st = vi.hoisted(() => ({ row: {} as Record<string, unknown>, updates: [] as Array<Record<string, unknown>>, merged: [] as Array<Record<string, unknown>> }))
+  vi.mock('@/lib/archive/meta-merge', () => ({ mergeArchiveMeta: async (_t: string, _id: string, patch: Record<string, unknown>) => { st.merged.push(patch) } }))
   vi.mock('@/lib/forms/file-banking-submission', async (orig) => ({
     ...(await orig<typeof import('@/lib/forms/file-banking-submission')>()),
     buildBankingInput: async () => ({ flow: 'x', formType: 'banking_relay', accountId: 'acc-1', contactId: 'c1', submittedData: {}, uploadPaths: [], bucket: 'b', token: 't' }),
@@ -22,12 +23,12 @@ describe('8. a company mid-move is waiting, not failing', () => {
     return { supabaseAdmin: { from: () => sb() } }
   })
   const base = { id: 's1', account_id: 'acc-1', contact_id: 'c1', token: 'tok', provider: 'relay', status: 'completed', submitted_data: {}, upload_paths: [], completed_at: '2026-10-20T09:00:00Z', created_at: '2026-10-20T09:00:00Z', drive_archived_at: null }
-  beforeEach(() => { st.updates.length = 0 })
+  beforeEach(() => { st.updates.length = 0; st.merged.length = 0 })
   it('the first waits do not use up attempts; the wait is remembered', async () => {
     st.row = { ...base, drive_archive_meta: { attempts: 1 } }
     const { archiveFormSubmission } = await import('@/lib/forms/archive-submission')
     await expect(archiveFormSubmission('banking', 's1')).rejects.toThrow(/not fully archived/)
-    const meta = st.updates.map((u) => u.drive_archive_meta as Record<string, unknown>).find(Boolean)!
+    const meta = st.merged[0]
     expect(meta.attempts).toBe(1)
     expect(typeof meta.waiting_since).toBe('string')
   })
@@ -35,7 +36,7 @@ describe('8. a company mid-move is waiting, not failing', () => {
     st.row = { ...base, drive_archive_meta: { attempts: 1, waiting_since: new Date(Date.now() - 7 * 3600_000).toISOString() } }
     const { archiveFormSubmission } = await import('@/lib/forms/archive-submission')
     await expect(archiveFormSubmission('banking', 's1')).rejects.toThrow()
-    const meta = st.updates.map((u) => u.drive_archive_meta as Record<string, unknown>).find(Boolean)!
+    const meta = st.merged[0]
     expect(meta.attempts).toBe(2)
   })
 })

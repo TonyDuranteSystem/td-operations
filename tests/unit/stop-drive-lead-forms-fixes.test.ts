@@ -140,12 +140,15 @@ describe("archiveFormSubmission — an unresolvable destination counts as an att
     vi.doMock("@/lib/forms/archive-registry", () => ({
       getArchiveRecipe: () => ({ table: "closure_submissions", selectColumns: "*", isReal: () => true, resolvePlan: async () => { throw new Error("closure folder: no company storage and no contact record") } }),
     }))
+    const merged: Array<Record<string, unknown>> = []
+    vi.doMock("@/lib/archive/meta-merge", () => ({ mergeArchiveMeta: async (_t: string, _id: string, patch: Record<string, unknown>) => { merged.push(patch) } }))
     const { archiveFormSubmission } = await import("@/lib/forms/archive-submission")
     await expect(archiveFormSubmission("closure", "sub-1")).rejects.toThrow(/no company storage/)
-    const meta = updates.map((u) => u.drive_archive_meta as Record<string, unknown> | undefined).filter(Boolean)[0]
+    const meta = merged[0]
     expect(meta).toMatchObject({ attempts: 1 })
     expect(String(meta!.last_error)).toContain("destination unresolved")
     vi.doUnmock("@/lib/forms/archive-registry")
+    vi.doUnmock("@/lib/archive/meta-merge")
   })
 })
 
@@ -216,7 +219,7 @@ describe("round 2 — MMLLC passport names, filing deadline, recipes, sweep", ()
     expect(ARCHIVE_RECIPES.onboarding).toBeUndefined()
   })
   it("the sweep only considers formation rows that carry a pinned plan — history filed the old way is never re-filed, whatever its date", () => {
-    const row = { status: "completed", created_at: "2026-10-18T10:00:00Z", drive_archived_at: null, drive_archive_meta: {} }
+    const row = { status: "completed", created_at: "2026-10-20T10:00:00Z", drive_archived_at: null, drive_archive_meta: {} }
     const now = new Date("2026-10-25T00:00:00Z")
     expect(decideFormArchiveSweep(row, ARCHIVE_RECIPES.formation, now)).toBe("skip")
     expect(decideFormArchiveSweep({ ...row, drive_archive_meta: { pinned_plan: { folderId: "person-storage:x" } } }, ARCHIVE_RECIPES.formation, now)).toBe("enqueue")

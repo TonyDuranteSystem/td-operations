@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { parseItinIssueDateFromOcr } from '@/lib/ocr-helpers'
 import { writeITINFields } from '@/lib/itin/write-itin-fields'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 const CATEGORY_MAP: Record<string, { num: number; subfolder: string }> = {
   Contacts: { num: 2, subfolder: '2. Contacts' },
@@ -28,6 +29,9 @@ const CATEGORY_MAP: Record<string, { num: number; subfolder: string }> = {
 }
 
 export async function POST(req: NextRequest) {
+  // STAFF ONLY: /api/* inherits only "is logged in" from the middleware, and a portal client has a login.
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const body = await req.json()
     const { contact_id: contactId, storage_path: storagePath, file_name: fileName, mime_type: mimeType, document_type: documentType = 'Other', category = 'Contacts' } = body

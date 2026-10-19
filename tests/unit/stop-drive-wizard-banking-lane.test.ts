@@ -54,6 +54,7 @@ vi.mock('@/lib/forms/archive-enqueue', () => ({ enqueueFormArchiveJob: async (j:
 vi.mock('@/lib/portal/auto-save-document', () => ({ autoSaveDocument: async () => ({}) }))
 vi.mock('@/lib/portal/chat-events', () => ({ emitBankingWizardSubmittedEvent: async () => ({}), retireBankingWizardSubmittedNote: async () => ({}) }))
 vi.mock('@/lib/notifications/act-event', () => ({ emitActionNeeded: async () => ({}) }))
+vi.mock('@/lib/archive/meta-merge', () => ({ mergeArchiveMeta: async () => undefined }))
 vi.mock('@/lib/system-errors', () => ({ reportSystemError: async (e: { message: string }) => { st.alarms.push(e.message) } }))
 
 const PASSPORT = 'banking_relay/c1/passport_image_abc_front.jpg'

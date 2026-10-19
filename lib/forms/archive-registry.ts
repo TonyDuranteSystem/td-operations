@@ -55,13 +55,18 @@ export interface ArchiveRecipe {
    * plan at submission and the engine skips this.
    */
   resolvePlan(row: Record<string, unknown>): Promise<ArchivePlan>
-  /** OPTIONAL: the sweep only considers rows that carry a PINNED plan (written when the completion route filed them). Rows made before the form had this
-   *  retry path have none — they were filed the old way and are never re-filed, whatever their date. */
-  sweepOnlyPinned?: boolean
-  /** OPTIONAL: the sweep ignores rows created before this moment (later than the global cutoff): history filed the old way is never mass-filed by the new rules. */
+  /** OPTIONAL: the sweep never touches rows created before this (a form that joined the sweep later: older rows were filed the old way). */
   sweepNotBefore?: string
-  /** OPTIONAL: statuses that count as a real submission — filtered IN the sweep query so shells never fill its window. */
-  sweepStatuses?: string[]
+  /**
+   * OPTIONAL: the PostgREST `or` expression that keeps only REAL submissions IN the sweep's query (so unfilled shells never fill its
+   * window). Must agree with `isReal`. Default: completed or reviewed.
+   */
+  sweepRealFilter?: string
+  /** OPTIONAL: false for a table with no account_id (a lead-stage form): the sweep then does no company join. Default true. */
+  sweepHasAccount?: boolean
+  /** OPTIONAL: the sweep only considers rows that carry a PINNED plan (written when the completion route filed them). Rows made before the form had this
+   *  retry path have none — they were filed the old way and are never re-filed, whatever their date. Applied IN the sweep query and again in the pure decision. */
+  sweepOnlyPinned?: boolean
   /** OPTIONAL: the name each stored upload gets (formation: the member's name on each passport). */
   fileNameOf?(row: Record<string, unknown>): ((path: string) => string) | undefined
   /**
@@ -74,8 +79,9 @@ export interface ArchiveRecipe {
   resolveBucket?: (path: string) => string
 }
 
-/** Banking rows created before this are never swept by the new filing rules (bump to the day the change goes live). */
+/** Rows created before this are never swept by the new filing rules (bump to the day the change goes live). */
 export const BANKING_SWEEP_NOT_BEFORE_ISO = "2026-10-19T00:00:00Z"
+export const FORM_SWEEP_NOT_BEFORE_ISO = "2026-10-19T00:00:00Z"
 
 function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? (v as unknown[]).filter((p): p is string => typeof p === "string") : []
@@ -163,6 +169,7 @@ const bankingRecipe: ArchiveRecipe = {
  */
 const itinRecipe: ArchiveRecipe = {
   formType: "itin",
+  sweepRealFilter: "status.eq.completed",
   table: "itin_submissions",
   selectColumns:
     "id, token, lead_id, account_id, contact_id, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
@@ -249,7 +256,9 @@ const closureRecipe: ArchiveRecipe = {
 const formationRecipe: ArchiveRecipe = {
   formType: "formation",
   sweepOnlyPinned: true,
-  sweepStatuses: ["completed"],
+  sweepRealFilter: "status.eq.completed",
+  sweepHasAccount: false, // a lead-stage form: no company yet
+  sweepNotBefore: FORM_SWEEP_NOT_BEFORE_ISO,
   table: "formation_submissions",
   selectColumns: "id, token, lead_id, contact_id, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
   isReal(row) {

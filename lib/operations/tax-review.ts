@@ -123,6 +123,7 @@ export async function approveAndApplyTaxReview(
       jobId = existing
       correctionsAlreadyApplied = true
     } else {
+      try {
       const enq = await enqueueJob({
         job_type: "tax_form_setup",
         payload: {
@@ -143,6 +144,15 @@ export async function approveAndApplyTaxReview(
         created_by: actor,
       })
       jobId = enq.id
+      } catch (e) {
+        // Two near-simultaneous reviews: the database allows ONE review-apply job per submission (unique index
+        // uq_job_queue_tax_review_apply), so the loser's insert fails — that means "already applied", not an error.
+        if (!isDuplicateJobError(e)) throw e
+        const winner = await findReviewApplyJob(sub.id)
+        if (!winner) throw e
+        jobId = winner
+        correctionsAlreadyApplied = true
+      }
     }
   } catch (err) {
     return {
@@ -195,6 +205,12 @@ export async function approveAndApplyTaxReview(
  * A failed / cancelled job does NOT count (the corrections were not applied, so the next run enqueues again). A lookup error
  * throws — a duplicate apply is the dangerous direction, so an unreadable queue is never read as "nothing queued".
  */
+/** Is this the unique-index refusal of a second review-apply job? */
+export function isDuplicateJobError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e)
+  return /duplicate key|uq_job_queue_tax_review_apply|23505/i.test(msg)
+}
+
 export async function findReviewApplyJob(submissionId: string): Promise<string | null> {
   const { data, error } = await supabaseAdmin
     .from("job_queue")
