@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 /** Stop-Drive S1a fix round (2026-10-18): exact contact match, honest filing result + alarm, attempts counted when the destination cannot be resolved. */
 
 let rows: Array<{ id: string; email: string | null }> = []
+let aliasRows: Array<{ id: string; full_name: string | null }> = []
 const patterns: string[] = []
 const updates: Array<Record<string, unknown>> = []
 vi.mock("@/lib/supabase-admin", () => {
@@ -19,6 +20,7 @@ vi.mock("@/lib/supabase-admin", () => {
   })
   chain.update = (u: Record<string, unknown>) => { updates.push(u); return chain }
   chain.is = () => chain
+  chain.contains = () => ({ order: () => ({ limit: async () => ({ data: aliasRows, error: null }) }) })
   return { supabaseAdmin: { from: () => chain } }
 })
 
@@ -41,7 +43,7 @@ import { fileFormPackage, memberAwareFileName, splitMemberPassports, type FileFo
 import { ARCHIVE_RECIPES } from "@/lib/forms/archive-registry"
 import { decideFormArchiveSweep } from "@/lib/forms/archive-sweep"
 
-beforeEach(() => { rows = []; patterns.length = 0; updates.length = 0; alarms.length = 0; saveMock.mockReset(); destination = { marker: "person-storage:11111111-1111-4111-8111-111111111111" } })
+beforeEach(() => { aliasRows = []; rows = []; patterns.length = 0; updates.length = 0; alarms.length = 0; saveMock.mockReset(); destination = { marker: "person-storage:11111111-1111-4111-8111-111111111111" } })
 
 describe("findContactByExactEmail — the wrong-person bug (zz_qa2sd@… matched zzxqa2sd@…)", () => {
   it("escapes the wildcard characters so '_' and '%' are plain letters", () => {
@@ -50,7 +52,7 @@ describe("findContactByExactEmail — the wrong-person bug (zz_qa2sd@… matched
   })
   it("sends the escaped pattern to the database", async () => {
     await findContactByExactEmail("ZZ_QA2SD@x.test ")
-    expect(patterns).toEqual(["%zz\\_qa2sd@x.test%"])
+    expect(patterns).toEqual(["%zz\\_qa2sd@x.test%", "%zz\\_qa2sd@x.test%"]) // main address and second address
   })
   it("never takes a look-alike row the database returned (defence in depth)", async () => {
     rows = [{ id: "other", email: "zzxqa2sd@x.test" }]
@@ -112,13 +114,6 @@ describe("fileFormPackage — a failed filing is never reported as ok", () => {
     expect(args[5].bucket).toBe("closure-uploads")
     expect(args[5].resolveBucket("closure/x.pdf")).toBe("onboarding-uploads")
   })
-  it("no contact and none expected (onboarding): skipped quietly, no alarm", async () => {
-    destination = { marker: null, reason: "no_contact" }
-    const r = await fileFormPackage(base({ contactId: null, noContactIsExpected: true }))
-    expect(r.status).toBe("skipped")
-    expect(alarms).toEqual([])
-    expect(saveMock).not.toHaveBeenCalled()
-  })
   it("no contact where one is needed: error + alarm, nothing saved", async () => {
     destination = { marker: null, reason: "no_contact" }
     expect((await fileFormPackage(base({ contactId: null }))).status).toBe("error")
@@ -161,7 +156,6 @@ describe("round 2 — names, ambiguity, one alarm each", () => {
     expect(namesMatch("Hans Müller", "Hans Mueller")).toBe(true)
     expect(namesMatch("Anne-Marie Dupont", "Annemarie Dupont")).toBe(true)
     expect(namesMatch("Mario Luigi Rossi", "Mario Rossi")).toBe(true) // middle name left out
-    expect(namesMatch("Mario Rossi Jr.", "Mario Rossi")).toBe(true)
     expect(namesMatch("Łukasz Ørsted", "Lukasz Orsted")).toBe(true)
     expect(namesMatch("Straße Weiß", "Strasse Weiss")).toBe(true)
     expect(namesMatch("Иван Петров", "Петров Иван")).toBe(true) // non-Latin names are compared as they are
@@ -170,6 +164,9 @@ describe("round 2 — names, ambiguity, one alarm each", () => {
     expect(namesMatch("Mario Rossi", "Maria Rossi")).toBe(false)
     expect(namesMatch("Иван Петров", "Пётр Иванов")).toBe(false)
     expect(namesMatch("Mario Rossi", "Rossi")).toBe(false) // a single word is not enough
+    expect(namesMatch("John Smith Sr", "John Smith Jr")).toBe(false) // father and son sharing one address
+    expect(namesMatch("Mario Rossi Jr.", "Mario Rossi")).toBe(false) // a suffix on one side only: unsure = ambiguous
+    expect(namesMatch("John Smith Jr.", "john smith jr")).toBe(true)
     expect(namesMatch("", "Maria Rossi")).toBe(false)
     expect(namesMatch("Mario Rossi", null)).toBe(false)
     expect(namesMatch("!!!", "???")).toBe(false) // nothing comparable on either side
@@ -213,17 +210,33 @@ describe("round 2 — MMLLC passport names, filing deadline, recipes, sweep", ()
     expect(r.detail).toContain("retry job")
     expect(alarms).toEqual([])
   })
-  it("formation and onboarding now have a retry recipe; onboarding only counts once review linked a company/contact", () => {
+  it("formation has a retry recipe; onboarding does NOT (it is filed once, at review, by the company setup)", () => {
     expect(ARCHIVE_RECIPES.formation.table).toBe("formation_submissions")
     expect(ARCHIVE_RECIPES.formation.isReal({ status: "completed" })).toBe(true)
-    expect(ARCHIVE_RECIPES.onboarding.isReal({ status: "completed" })).toBe(false)
-    expect(ARCHIVE_RECIPES.onboarding.isReal({ status: "completed", account_id: "a" })).toBe(false) // a company alone is not a person to file under
-    expect(ARCHIVE_RECIPES.onboarding.isReal({ status: "completed", contact_id: "c" })).toBe(true)
+    expect(ARCHIVE_RECIPES.onboarding).toBeUndefined()
   })
-  it("the sweep never re-files forms that predate the recipe", () => {
+  it("the sweep only considers formation rows that carry a pinned plan — history filed the old way is never re-filed, whatever its date", () => {
     const row = { status: "completed", created_at: "2026-10-18T10:00:00Z", drive_archived_at: null, drive_archive_meta: {} }
-    expect(decideFormArchiveSweep(row, ARCHIVE_RECIPES.formation, new Date("2026-10-25T00:00:00Z"))).toBe("skip")
-    expect(decideFormArchiveSweep({ ...row, created_at: "2026-10-19T12:00:00Z" }, ARCHIVE_RECIPES.formation, new Date("2026-10-25T00:00:00Z"))).toBe("enqueue")
+    const now = new Date("2026-10-25T00:00:00Z")
+    expect(decideFormArchiveSweep(row, ARCHIVE_RECIPES.formation, now)).toBe("skip")
+    expect(decideFormArchiveSweep({ ...row, drive_archive_meta: { pinned_plan: { folderId: "person-storage:x" } } }, ARCHIVE_RECIPES.formation, now)).toBe("enqueue")
+  })
+})
+
+describe("round 4 — the canonical contact rules", () => {
+  it("a person found only through an alias address (alt_emails) is that person — no duplicate gets created", async () => {
+    aliasRows = [{ id: "survivor", full_name: "Anna Rossi" }]
+    expect(await findContactByExactEmail("old@x.it")).toMatchObject({ status: "one", id: "survivor" })
+  })
+  it("the same person through the main address AND an alias is still one", async () => {
+    rows = [{ id: "survivor", email: "a@x.it", full_name: "Anna" } as never]
+    aliasRows = [{ id: "survivor", full_name: "Anna" }]
+    expect(await findContactByExactEmail("a@x.it")).toMatchObject({ status: "one", id: "survivor" })
+  })
+  it("two real contacts through main + alias = many", async () => {
+    rows = [{ id: "c1", email: "a@x.it", full_name: "A" } as never]
+    aliasRows = [{ id: "c2", full_name: "B" }]
+    expect((await findContactByExactEmail("a@x.it")).status).toBe("many")
   })
 })
 
@@ -237,7 +250,7 @@ describe("round 3 — member passports, formation filing", () => {
   })
   it("other forms are not split", async () => {
     saveMock.mockResolvedValue({ summaryFileId: "store:x", copied: [], failed: [], skipped: [], errors: [] })
-    await fileFormPackage(base({ formType: "onboarding", uploadPaths: ["f/passport_member_0.pdf"] }))
+    await fileFormPackage(base({ formType: "closure", uploadPaths: ["f/passport_member_0.pdf"] }))
     expect(saveMock.mock.calls[0][2]).toEqual(["f/passport_member_0.pdf"])
   })
   it("the formation retry recipe leaves member passports out as well", async () => {

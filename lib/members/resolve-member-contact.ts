@@ -67,6 +67,14 @@ export interface ResolveMemberContactInput {
  * then records the member with a null contact_id, which is unconstrained) or
  * when contact creation fails.
  */
+/** A member's passport held on a form submission goes to THAT member's own storage once they have a contact (best-effort, never throws). */
+async function handOffHeldPassport(contactId: string): Promise<void> {
+  try {
+    const { fileHeldMemberPassportsForContact } = await import('@/lib/crm-store/held-member-passports')
+    await fileHeldMemberPassportsForContact(contactId)
+  } catch { /* never blocks provisioning */ }
+}
+
 export async function resolveMemberContactId(input: ResolveMemberContactInput): Promise<string | null> {
   const email = normalizeEmail(input.email)
   const name = (input.name || '').trim()
@@ -126,6 +134,7 @@ export async function resolveMemberContactId(input: ResolveMemberContactInput): 
         }
       }
     }
+    await handOffHeldPassport(matchedId)
     return matchedId
   }
 
@@ -191,5 +200,6 @@ export async function resolveMemberContactId(input: ResolveMemberContactInput): 
     })
   }
 
+  await handOffHeldPassport(created.id)
   return created.id
 }

@@ -16,7 +16,7 @@
  * What this route still does:
  * 1. Validate submission
  * 2. Look up (read-only) an existing contact by email, for linking tasks only
- * 3. File the raw submission in the client's storage
+ * 3. (no early filing: the company setup files the package once, at review)
  * 4. Check passport uploaded, flag if missing
  * 5. Check referral on lead -> create QB credit note task for Antonio
  * 6. Send Luca detailed email with all data + specific next steps
@@ -28,7 +28,7 @@
  */
 
 // Added 2026-04-14 P0.7: protect the 9-step auto-chain from mid-execution
-// Vercel timeout (CRM update + storage filing + PDF + email + task + SD history + log).
+// Vercel timeout (CRM update + PDF + email + task + SD history + log).
 export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
@@ -72,7 +72,6 @@ export async function POST(req: NextRequest) {
     let leadEmail = ""
     let referrerName = ""
     let contactId: string | null = (sub.contact_id as string | null) ?? null
-    let contactAmbiguous = false
 
     if (leadId) {
       const { data: lead } = await supabaseAdmin
@@ -96,11 +95,8 @@ export async function POST(req: NextRequest) {
       const { lookupLeadContact } = await import("@/lib/crm-store/lead-form-store")
       const found = contactId ? ({ state: "one", contactId } as const) : await lookupLeadContact({ email: leadEmail, leadName, route: "onboarding-form-completed", leadId, token })
       if (found.state === "one") {
-        contactId = found.contactId
-        // record it on the submission: the retry job and this route then agree on who the person is
-        if (!sub.contact_id) await supabaseAdmin.from("onboarding_submissions").update({ contact_id: contactId }).eq("id", submission_id).is("contact_id", null)
+        contactId = found.contactId // only to link the review task — never written to the submission or the contact
       } else if (found.state === "ambiguous" || found.state === "error") {
-        contactAmbiguous = true
         results.push({ step: "contact_lookup", status: "error", detail: found.detail })
       }
     }
@@ -111,28 +107,13 @@ export async function POST(req: NextRequest) {
     // until then; every use of it below already tolerates null.
     const deliveryId: string | null = null
 
-    // ---- STEP 3: File the data PDF + uploads in the client's storage ----
-    // (Stop-Drive S1a: this used to build a Leads/{name} folder in Drive.) Onboarding deliberately creates no contact before staff
-    // review, so a lead with no contact record yet keeps its uploads with the submission; once review links a company or a contact,
-    // the retry job (archive recipe "onboarding") files the package under it.
-    if (contactAmbiguous) {
-      results.push({ step: "storage_save", status: "error", detail: "The contact could not be decided safely (see contact_lookup) — nothing was filed; the uploads stay with the submission" })
-    } else {
-      const { fileFormPackage } = await import("@/lib/forms/file-form-package")
-      results.push(await fileFormPackage({
-        route: "onboarding-form-completed", formType: "onboarding", submittedData, uploadPaths, contactId, personName: leadName,
-        noContactIsExpected: true,
-        meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName },
-      }))
-      if (contactId) {
-        try {
-          const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
-          await enqueueFormArchiveJob({ formType: "onboarding", submissionId: submission_id, createdBy: "onboarding_form_completed" })
-        } catch (e) {
-          results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
-        }
-      }
-    }
+    // ---- STEP 3: (no early filing) ----
+    // Stop-Drive S1a: this step used to build a Leads/{name} folder in Drive. An onboarding package is filed ONCE, at review, by the
+    // company setup job — which knows the owner and the members and files each person's papers in that person's own storage and the
+    // company's papers in the company. Filing it here as well produced a second copy (and put every member's passport in one person's
+    // storage). Until review the uploads stay on the submission in the upload bucket. The contact lookup above is only for linking
+    // the review task: nothing is written to the contact or to the submission.
+    results.push({ step: "storage_save", status: "skipped", detail: "Filed once, at review, by the company setup — the uploads stay on the submission until then" })
 
     // ---- STEP 4: Check passport ----
     const hasPassport = uploadPaths.some(p => p.toLowerCase().includes("passport"))

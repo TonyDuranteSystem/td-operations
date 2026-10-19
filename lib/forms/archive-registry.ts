@@ -55,8 +55,11 @@ export interface ArchiveRecipe {
    * plan at submission and the engine skips this.
    */
   resolvePlan(row: Record<string, unknown>): Promise<ArchivePlan>
-  /** OPTIONAL: the sweep never touches rows created before this (a form that joined the sweep later: older rows were filed the old way). */
-  sweepNotBefore?: string
+  /** OPTIONAL: the sweep only considers rows that carry a PINNED plan (written when the completion route filed them). Rows made before the form had this
+   *  retry path have none — they were filed the old way and are never re-filed, whatever their date. */
+  sweepOnlyPinned?: boolean
+  /** OPTIONAL: statuses that count as a real submission — filtered IN the sweep query so shells never fill its window. */
+  sweepStatuses?: string[]
   /** OPTIONAL: the name each stored upload gets (formation: the member's name on each passport). */
   fileNameOf?(row: Record<string, unknown>): ((path: string) => string) | undefined
   /**
@@ -237,7 +240,8 @@ const closureRecipe: ArchiveRecipe = {
  */
 const formationRecipe: ArchiveRecipe = {
   formType: "formation",
-  sweepNotBefore: "2026-10-19T00:00:00Z",
+  sweepOnlyPinned: true,
+  sweepStatuses: ["completed"],
   table: "formation_submissions",
   selectColumns: "id, token, lead_id, contact_id, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
   isReal(row) {
@@ -258,32 +262,6 @@ const formationRecipe: ArchiveRecipe = {
   },
 }
 
-/**
- * ONBOARDING recipe (Stop-Drive S1a). An onboarding lead has no contact until staff review it, so a submission only becomes
- * "real" for filing once review has linked a company or a contact (account_id / contact_id) — before that the uploads stay with the
- * submission and nothing is retried or alerted. Then: the company's storage if it has one, else the person's.
- */
-const onboardingRecipe: ArchiveRecipe = {
-  formType: "onboarding",
-  sweepNotBefore: "2026-10-19T00:00:00Z",
-  table: "onboarding_submissions",
-  selectColumns: "id, token, lead_id, account_id, contact_id, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
-  isReal(row) {
-    // a lead with no contact yet has nothing to file under (the review's setup job files the company documents later)
-    return (row.status as string | null) === "completed" && !!row.contact_id
-  },
-  async resolvePlan(row) {
-    const { storageDestinationForForm } = await import("@/lib/crm-store/lead-form-store")
-    // PERSON only — never the company's folders: an onboarding package holds passports / IDs, which are personal documents.
-    // The company's own documents reach the company through the review's setup job. One copy, one place.
-    const dest = await storageDestinationForForm({ contactId: (row.contact_id as string | null) ?? null })
-    if (!dest.marker) throw new Error(`archive: onboarding ${row.id} — no contact to file under, or only a hidden study-copy storage; staff decide where it goes`)
-    const data = (row.submitted_data ?? {}) as Record<string, unknown>
-    const { data: lead } = row.lead_id ? await supabaseAdmin.from("leads").select("full_name").eq("id", row.lead_id as string).maybeSingle() : { data: null }
-    return { folderId: dest.marker, bucket: "onboarding-uploads", configKey: "onboarding", uploadPaths: deriveUploadPaths(row.upload_paths, data), companyName: lead?.full_name || undefined }
-  },
-}
-
 /** All registered form recipes, keyed by formType. Add a form here (+ its marker
  *  columns migration + enqueue wiring) when it adopts the durable archival. */
 export const ARCHIVE_RECIPES: Record<string, ArchiveRecipe> = {
@@ -291,7 +269,6 @@ export const ARCHIVE_RECIPES: Record<string, ArchiveRecipe> = {
   itin: itinRecipe,
   closure: closureRecipe,
   formation: formationRecipe,
-  onboarding: onboardingRecipe,
 }
 
 export function getArchiveRecipe(formType: string): ArchiveRecipe | null {

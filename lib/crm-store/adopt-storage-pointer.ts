@@ -152,6 +152,8 @@ export async function adoptStoragePointerRow(row: AdoptRow, deps?: AdoptDeps): P
     const baseSave = {
       ownerId, name: row.file_name, bytes: file.bytes, mimeType: row.mime_type ?? file.mimeType, documentType,
       callerKey: `adopt-storage:${row.id}`, published,
+      // a person's papers are never queued for the AI file reader
+      skipAnalysis: where === "person",
     }
     let saved
     try {

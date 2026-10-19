@@ -77,13 +77,15 @@ export async function GET(req: NextRequest) {
       stats.skippedFinished = win.skippedFinished
       skippedFinished += win.skippedFinished
     } else {
-      const { data: rows, error } = await supabaseAdmin
+      let query = supabaseAdmin
         .from(tbl)
         .select(recipe.selectColumns)
         .is("drive_archived_at", null)
         .gte("created_at", notBefore)
-        .order("created_at", { ascending: true })
-        .limit(200)
+      // a form that only counts real / pinned rows: filtered IN the query, so shells and never-filed history cannot fill the 200-row window
+      if (recipe.sweepStatuses) query = query.in("status", recipe.sweepStatuses)
+      if (recipe.sweepOnlyPinned) query = query.not("drive_archive_meta->pinned_plan", "is", null)
+      const { data: rows, error } = await query.order("created_at", { ascending: true }).limit(200)
       if (error) {
         await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${error.message}` }).catch(() => {})
         continue

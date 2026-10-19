@@ -207,18 +207,26 @@ export async function POST(req: NextRequest) {
     if (contactAmbiguous) {
       results.push({ step: "storage_save", status: "error", detail: "The contact could not be decided safely (see contact_lookup) — nothing was filed; the uploads stay with the submission" })
     } else {
-      const { fileFormPackage, memberAwareFileName } = await import("@/lib/forms/file-form-package")
-      results.push(await fileFormPackage({
+      const { fileFormPackage, memberAwareFileName, splitMemberPassports } = await import("@/lib/forms/file-form-package")
+      const filing = await fileFormPackage({
         route: "formation-form-completed", formType: "formation", submittedData, uploadPaths, contactId, personName: leadName,
         fileNameOf: memberAwareFileName(submittedData),
         meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName },
-      }))
-      // Retry path: the durable archive job (retries, then the sweep alerts) finishes anything the inline filing could not.
-      try {
-        const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
-        await enqueueFormArchiveJob({ formType: "formation", submissionId: submission_id, createdBy: "formation_form_completed" })
-      } catch (e) {
-        results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      })
+      results.push(filing)
+      // Retry path: the durable archive job (retries, then the sweep alerts) finishes anything the inline filing could not. The plan is
+      // PINNED (the destination just decided) — and only pinned rows are ever swept, so submissions made before this existed are never re-filed.
+      if (filing.folder) {
+        try {
+          const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
+          const { deriveUploadPaths } = await import("@/lib/forms/archive-registry")
+          await enqueueFormArchiveJob({
+            formType: "formation", submissionId: submission_id, createdBy: "formation_form_completed",
+            pin: { folderId: filing.folder, bucket: "onboarding-uploads", configKey: "formation", uploadPaths: splitMemberPassports(deriveUploadPaths(uploadPaths, submittedData)).forPrimary, companyName: leadName },
+          })
+        } catch (e) {
+          results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        }
       }
     }
 
