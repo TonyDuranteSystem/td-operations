@@ -22,7 +22,7 @@ vi.mock("@/lib/archive/skip-no-drive-folder", async () => {
     readSweepWindow: vi.fn(async (table: string, _cols: string, cutoff: string) => { state.calls.push({ table, cutoff }); return state.window }),
   }
 })
-vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: { from: () => { const c: Record<string, unknown> = {}; for (const m of ["select", "is", "gte", "order", "limit", "update", "eq"]) c[m] = () => c; c.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(r); return c } } }))
+vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: { from: () => { const c: Record<string, unknown> = {}; for (const m of ["select", "is", "gte", "order", "limit", "update", "eq", "in", "not"]) c[m] = () => c; c.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(r); return c } } }))
 vi.mock("@/lib/cron-log", () => ({ logCron: () => undefined }))
 vi.mock("@/lib/system-errors", () => ({ reportSystemError: async (e: Record<string, unknown>) => { state.alarms.push(e); return null } }))
 vi.mock("@/lib/team/post-message", () => ({ postTeamMessage: async () => undefined }))

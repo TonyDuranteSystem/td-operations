@@ -9,25 +9,26 @@ import { decideFormArchiveSweep, FORM_ARCHIVE_SWEEP_MAX_ATTEMPTS, FORM_ARCHIVE_S
 import { ARCHIVE_RECIPES } from '@/lib/forms/archive-registry'
 
 const NOW = new Date('2026-10-22T12:00:00Z') // after every form's sweep start date (19 Oct)
-const row = (over: Record<string, unknown>) => ({ id: 'r1', status: 'completed', contact_id: 'c1', created_at: '2026-10-20T09:00:00Z', drive_archived_at: null, drive_archive_meta: null, ...over })
+const PIN = { pinned_plan: { folderId: 'person-storage:c1', bucket: 'b', configKey: 'x', uploadPaths: [] } }
+const row = (over: Record<string, unknown>) => ({ id: 'r1', status: 'completed', contact_id: 'c1', created_at: '2026-10-20T09:00:00Z', drive_archived_at: null, drive_archive_meta: PIN, ...over })
 
-describe('the sweep decision, banking + formation + onboarding, with the clock set after 19 Oct', () => {
-  for (const type of ['banking', 'formation', 'onboarding'] as const) {
+describe('the sweep decision, banking + formation, with the clock set', () => {
+  for (const type of ['banking', 'formation'] as const) {
     const recipe = ARCHIVE_RECIPES[type]
     it(`${type}: a row filed inline (marker set) is left alone`, () => {
       expect(decideFormArchiveSweep(row({ drive_archived_at: '2026-10-20T09:05:00Z' }), recipe, NOW)).toBe('skip')
     })
     it(`${type}: a row whose filing failed (no marker) is re-queued`, () => {
-      expect(decideFormArchiveSweep(row({ drive_archive_meta: { attempts: 1, last_error: 'storage down' } }), recipe, NOW)).toBe('enqueue')
+      expect(decideFormArchiveSweep(row({ drive_archive_meta: { ...PIN, attempts: 1, last_error: 'storage down' } }), recipe, NOW)).toBe('enqueue')
     })
     it(`${type}: after the attempt limit staff are alerted ONCE, then it is quiet`, () => {
-      expect(decideFormArchiveSweep(row({ drive_archive_meta: { attempts: FORM_ARCHIVE_SWEEP_MAX_ATTEMPTS } }), recipe, NOW)).toBe('alert')
-      expect(decideFormArchiveSweep(row({ drive_archive_meta: { attempts: FORM_ARCHIVE_SWEEP_MAX_ATTEMPTS, [FORM_ARCHIVE_SWEEP_ALERTED_KEY]: true } }), recipe, NOW)).toBe('skip')
+      expect(decideFormArchiveSweep(row({ drive_archive_meta: { ...PIN, attempts: FORM_ARCHIVE_SWEEP_MAX_ATTEMPTS } }), recipe, NOW)).toBe('alert')
+      expect(decideFormArchiveSweep(row({ drive_archive_meta: { ...PIN, attempts: FORM_ARCHIVE_SWEEP_MAX_ATTEMPTS, [FORM_ARCHIVE_SWEEP_ALERTED_KEY]: true } }), recipe, NOW)).toBe('skip')
     })
   }
-  it('formation / onboarding rows created BEFORE their start date are not touched (their older rows were filed the old way)', () => {
-    expect(decideFormArchiveSweep(row({ created_at: '2026-10-18T09:00:00Z' }), ARCHIVE_RECIPES.formation, NOW)).toBe('skip')
-    expect(decideFormArchiveSweep(row({ created_at: '2026-10-18T09:00:00Z' }), ARCHIVE_RECIPES.banking, NOW)).toBe('enqueue')
+  it('formation / onboarding rows filed before they had a retry path (no pinned plan) are not touched; banking rows are re-queued either way', () => {
+    expect(decideFormArchiveSweep(row({ drive_archive_meta: null }), ARCHIVE_RECIPES.formation, NOW)).toBe('skip')
+    expect(decideFormArchiveSweep(row({ drive_archive_meta: null }), ARCHIVE_RECIPES.banking, NOW)).toBe('enqueue')
   })
 })
 

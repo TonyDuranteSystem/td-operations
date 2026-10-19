@@ -61,8 +61,7 @@ export async function GET(req: NextRequest) {
     // Cast: recipe.table is a runtime string; the typed client needs a table
     // literal (every recipe.table IS a real submission table).
     const tbl = recipe.table as "banking_submissions"
-    // a form may start later than the global cutoff (its own `sweepNotBefore`): the window never reaches back before either
-    const notBefore = recipe.sweepNotBefore && recipe.sweepNotBefore > FORM_ARCHIVE_SWEEP_CUTOFF_ISO ? recipe.sweepNotBefore : FORM_ARCHIVE_SWEEP_CUTOFF_ISO
+    const notBefore = FORM_ARCHIVE_SWEEP_CUTOFF_ISO
     // Banking: the window holds only REAL (completed / reviewed) submissions whose one stuck-row alert has not fired yet, of
     // companies that are not Closed / Cancelled — filtered IN the query, so shells and used-up rows never fill it. A company with
     // no folder is archived into its storage by the job itself; a completed row with no company stays in (and fails loudly).
