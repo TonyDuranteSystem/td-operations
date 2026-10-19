@@ -6,6 +6,7 @@ import { listAllLeads } from "@/lib/marketing/leads-read"
 import { leadDb } from "@/lib/marketing/meta-leads/service"
 import { clientFlagText, formatWhen } from "@/lib/marketing/lead-view"
 import { listTeams } from "@/lib/marketing/settings"
+import { MetaConnectionPanel } from "./meta-connection-panel"
 
 export const dynamic = "force-dynamic"
 
@@ -57,6 +58,7 @@ export default async function MarketingLeadsAdminPage() {
           {unassigned > 0 && <> · <b className="text-amber-700">{unassigned} lead{unassigned === 1 ? "" : "s"} with no team yet</b></>}
         </p>
         {open.find(e => e.last_error) && <p className="mt-1 text-xs text-slate-500">Latest problem: {open.find(e => e.last_error)?.last_error}</p>}
+        <MetaConnectionPanel />
       </section>
 
       <section>

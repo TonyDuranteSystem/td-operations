@@ -30,11 +30,26 @@ const fakeLeads: Record<string, unknown> = {}
 const failIds = new Set<string>()
 const seen: Array<{ url: string; auth: string | undefined }> = []
 let reconcileList: unknown[] = []
+const APP_ID = "1828939005203111"
+let pageSubscribed = false
+let tokenBad = false
+const posts: Array<{ url: string; auth: string | undefined; body: string }> = []
 const fake = http.createServer((req, res) => {
   seen.push({ url: req.url ?? "", auth: req.headers.authorization })
   const path = (req.url ?? "").split("?")[0]
   const send = (code: number, body: unknown) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)) }
   let m: RegExpExecArray | null
+  if (tokenBad && /^\/v25\.0\/(me|\d+\/subscribed_apps)$/.test(path)) return send(401, { error: { message: "Error validating access token: Session has expired", code: 190 } })
+  if (path === "/v25.0/me") return send(200, { id: "111", name: "QA Page" })
+  if ((m = /^\/v25\.0\/(\d+)\/subscribed_apps$/.exec(path))) {
+    if (req.method === "POST") {
+      let body = ""
+      req.on("data", c => { body += c })
+      req.on("end", () => { posts.push({ url: req.url ?? "", auth: req.headers.authorization, body }); pageSubscribed = true; send(200, { success: true }) })
+      return
+    }
+    return send(200, { data: pageSubscribed ? [{ id: APP_ID, name: "TD Marketing Leads", subscribed_fields: ["leadgen"] }] : [] })
+  }
   if ((m = /^\/v25\.0\/(\d+)\/leadgen_forms$/.exec(path))) return send(200, { data: [{ id: "222", name: "LLC ITA form", status: "ACTIVE" }] })
   if ((m = /^\/v25\.0\/(\d+)\/leads$/.exec(path))) return send(200, { data: reconcileList })
   if ((m = /^\/v25\.0\/(\d+)$/.exec(path))) {
@@ -271,6 +286,47 @@ async function main() {
   const anon = await browser.newContext()
   const ap = await anon.newPage(); const ar = await ap.goto(`${BASE}/marketing/leads`, { waitUntil: "networkidle", timeout: 180000 })
   ck("B15 nobody signed in is sent to the login", /\/login/.test(ap.url()) && !/Mario Rossi/.test(await ap.locator("body").innerText()), { u: ap.url(), s: ar?.status() })
+
+  // ═══ PART C — Antonio's "is Meta connected?" and "subscribe the Page" buttons ═══
+  const postJson = async (ctx: BrowserContext, path: string) => {
+    const r = await ctx.request.post(BASE + path, { maxRedirects: 0, timeout: 120000, headers: { accept: "application/json", "sec-fetch-mode": "cors" } })
+    return { status: r.status(), json: await r.json().catch(() => ({})) as { ok?: boolean; checks?: Array<{ key: string; status: string; detail: string }>; results?: Array<{ ok: boolean; detail: string }>; error?: string } }
+  }
+  const stat = (j: { checks?: Array<{ key: string; status: string; detail: string }> }, key: string) => j.checks?.find(c => c.key === key)
+  let c = await postJson(staff, "/api/marketing-admin/meta/check")
+  ck("C1 staff (not admin) cannot run the Meta check", c.status === 401 || c.status === 403, c)
+  c = await postJson(staff, "/api/marketing-admin/meta/subscribe")
+  ck("C2 staff cannot subscribe the Page either", c.status === 401 || c.status === 403, c)
+  c = await postJson(owner, "/api/marketing-admin/meta/check")
+  ck("C3 a marketing owner cannot reach the admin routes", c.status === 401 || c.status === 403, c)
+  c = await postJson(admin, "/api/marketing-admin/meta/check")
+  ck("C4 before subscribing: the key is accepted and forms are visible, but the Page is NOT subscribed", c.status === 200 && stat(c.json, "token")?.status === "ok" && stat(c.json, "forms_111")?.status === "ok" && stat(c.json, "subscribed_111")?.status === "fail" && c.json.ok === false, c)
+  ck("C5 secrets are reported as set / not set, never as values", /Set\./.test(stat(c.json, "app_secret")?.detail ?? "") && !/qa-app-secret|qa-page-token|qa-verify-token/.test(JSON.stringify(c.json)), c)
+  c = await postJson(admin, "/api/marketing-admin/meta/subscribe")
+  ck("C6 subscribing succeeds for the configured Page", c.status === 200 && c.json.results?.[0]?.ok === true, c)
+  ck("C7 Meta got a POST with the field in the body and the key in a header, never in the URL", posts.length === 1 && posts[0].body === "subscribed_fields=leadgen" && posts[0].auth === `Bearer ${TOKEN}` && !/qa-page-token|access_token/.test(posts[0].url), posts)
+  c = await postJson(admin, "/api/marketing-admin/meta/check")
+  ck("C8 after subscribing everything is green", c.status === 200 && c.json.ok === true && stat(c.json, "subscribed_111")?.status === "ok", c)
+  tokenBad = true
+  c = await postJson(admin, "/api/marketing-admin/meta/check")
+  ck("C9 an expired key is explained in plain words and stops the check", stat(c.json, "token")?.status === "fail" && /expired/.test(stat(c.json, "token")?.detail ?? "") && c.json.ok === false, c)
+  c = await postJson(admin, "/api/marketing-admin/meta/subscribe")
+  ck("C10 subscribing with an expired key says so instead of pretending", c.json.results?.[0]?.ok === false && /expired/.test(c.json.results?.[0]?.detail ?? ""), c)
+  tokenBad = false
+  // the real buttons, clicked in the real page
+  pageSubscribed = false
+  const adminPage = await admin.newPage()
+  adminPage.on("dialog", d => d.accept())
+  await adminPage.goto(`${BASE}/marketing-leads`, { waitUntil: "networkidle", timeout: 180000 })
+  await adminPage.getByRole("button", { name: "Check the Meta connection" }).click()
+  await adminPage.getByText("Not fully connected yet.").waitFor({ timeout: 60000 })
+  ck("C11 clicking 'Check' shows the problem in plain words", /Not subscribed yet/.test(await adminPage.locator("body").innerText()))
+  await adminPage.screenshot({ path: `${SHOTS}/qa-leads-meta-before.png`, fullPage: true })
+  await adminPage.getByRole("button", { name: "Subscribe the Page to new leads" }).click()
+  await adminPage.getByText("Meta is connected.").waitFor({ timeout: 60000 })
+  ck("C12 clicking 'Subscribe' then re-checking shows 'Meta is connected.'", /Subscribed\./.test(await adminPage.locator("body").innerText()) && pageSubscribed)
+  await adminPage.screenshot({ path: `${SHOTS}/qa-leads-meta-after.png`, fullPage: true })
+  await adminPage.close()
 
   await browser.close(); await db.end(); fake.close()
   console.log(`\n${pass} passed, ${fail} failed`)
