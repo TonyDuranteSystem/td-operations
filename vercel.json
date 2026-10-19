@@ -117,6 +117,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/marketing-lead-retry",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/wa-bridge-watch",
       "schedule": "*/5 * * * *"
     },

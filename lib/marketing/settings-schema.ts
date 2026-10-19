@@ -81,6 +81,8 @@ export const MARKETING_SETTING_DEFS = {
   owner_may_export_leads: { schema: z.boolean(), fallback: true },
   /** Whether adding a member needs Antonio's approval first. */
   member_invites_need_approval: { schema: z.boolean(), fallback: false },
+  /** Which team the leads arriving from Meta belong to. Empty text = no team chosen: the only ACTIVE team if there is exactly one, else nobody's yet (Antonio sees them and assigns). */
+  lead_intake_team_id: { schema: z.union([z.string().uuid(), z.literal("")]), fallback: "" as string },
 } as const
 
 export type MarketingSettingKey = keyof typeof MARKETING_SETTING_DEFS

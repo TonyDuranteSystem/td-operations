@@ -1,5 +1,7 @@
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { resolveMarketingContext } from '@/lib/marketing/guard'
+import { hasPermission } from '@/lib/marketing/permissions'
 import { createClient } from '@/lib/supabase/server'
 import { SignOutButton } from './sign-out-button'
 
@@ -24,7 +26,10 @@ export default async function MarketingHome() {
           <p className="text-sm text-slate-500">Signed in as {g.ctx.user.email}</p>
           <p className="text-lg font-medium">{g.ctx.team.name}</p>
           <p className="text-sm">{g.ctx.role === 'owner' ? 'You are the team owner.' : 'You are a team member.'}</p>
-          <p className="text-sm text-slate-500">Your workspace screens open soon. Nothing else is needed from you today.</p>
+          {hasPermission(g.ctx.permissions, 'leads.read') && (
+            <Link href="/marketing/leads" className="mt-3 block rounded-lg bg-slate-900 px-4 py-3 text-center text-sm font-medium text-white">Open the leads</Link>
+          )}
+          <p className="text-sm text-slate-500">More screens open soon.</p>
         </div>
       ) : (
         <div className="mt-6 rounded-xl border border-amber-300 bg-amber-50 p-5">
