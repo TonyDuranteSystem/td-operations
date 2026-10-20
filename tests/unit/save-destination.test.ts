@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import {
-  parseSaveChoice, decideDestination, validateDestination, saveToDestination, saveCallerKey, resolveProposal,
+  parseSaveChoice, decideDestination, validateDestination, saveToDestination, saveCallerKey, resolveProposal, noStorageSentenceFor, verifyProposalStillHolds, PROPOSAL_CHANGED_SENTENCE,
   type DestinationFacts, type DestinationDeps, type FileDeps, type OwnerRow, type SaveChoiceSave, type ResolveDeps,
 } from "@/lib/crm-store/save-destination"
 import { NO_STORAGE_REASON_SENTENCE } from "@/lib/crm-store/no-storage"
@@ -31,6 +31,16 @@ describe("parseSaveChoice", () => {
   })
 })
 
+describe("parseSaveChoice — proposalOf", () => {
+  it("is null when the place came from Change place, typed when it came from the proposal, an error when malformed", () => {
+    const base = { mode: "save", purpose: "irs_tax_return", ownerId: OWNER, folderId: FOLDER, fileName: "a.pdf" }
+    expect(parseSaveChoice(base)).toMatchObject({ ok: true, choice: { proposalOf: null } })
+    expect(parseSaveChoice({ ...base, proposalOf: { accountId: U(5), business: false } })).toMatchObject({ choice: { proposalOf: { accountId: U(5), business: false } } })
+    expect(parseSaveChoice({ ...base, proposalOf: { business: true } })).toMatchObject({ choice: { proposalOf: { accountId: null, business: true } } })
+    expect(parseSaveChoice({ ...base, proposalOf: { accountId: "nope" } }).ok).toBe(false)
+  })
+})
+
 describe("decideDestination — a place that is not allowed is refused with ONE plain sentence", () => {
   it("a good place is allowed", () => { expect(decideDestination(okFacts())).toEqual({ ok: true, unlinked: false }) })
   it("a place that does not exist / that staff may not open", () => {
@@ -50,6 +60,11 @@ describe("decideDestination — a place that is not allowed is refused with ONE 
     expect(decideDestination(okFacts({ owner: { id: OWNER, kind: "company", studyOnly: true, accountId: "a", contactId: null }, noStorageSentence: NO_STORAGE_REASON_SENTENCE.frozen })).error).toBe(NO_STORAGE_REASON_SENTENCE.frozen)
     expect(decideDestination(okFacts({ owner: { id: OWNER, kind: "company", studyOnly: true, accountId: "a", contactId: null }, noStorageSentence: NO_STORAGE_REASON_SENTENCE.archived })).error).toBe(NO_STORAGE_REASON_SENTENCE.archived)
     expect(decideDestination(okFacts({ companyState: "drive", noStorageSentence: NO_STORAGE_REASON_SENTENCE.no_folder })).ok).toBe(false)
+  })
+  it("a company mid-move that has no live storage yet is told it is MOVING (never the old-folder sentence)", () => {
+    const d = decideDestination(okFacts({ owner: { id: OWNER, kind: "company", studyOnly: true, accountId: "a", contactId: null }, companyState: "moving", noStorageSentence: NO_STORAGE_REASON_SENTENCE.frozen }))
+    expect(d.error).toBe(NO_STORAGE_REASON_SENTENCE.moving)
+    expect(d.error).not.toMatch(/Drive/)
   })
   it("MOVING company", () => { expect(decideDestination(okFacts({ companyState: "moving" })).error).toBe(NO_STORAGE_REASON_SENTENCE.moving) })
   it("the top folder of a client takes no file; '2. Contacts' neither", () => {
@@ -83,12 +98,16 @@ const deps = (state: { owner?: OwnerRow | null; folder?: { id: string; owner_id:
   noStorageSentence: async () => NO_STORAGE_REASON_SENTENCE.frozen,
   access: async () => state.access ?? true,
 })
-const choice: SaveChoiceSave = { mode: "save", purpose: "irs_tax_return", ownerId: OWNER, folderId: FOLDER, newFolderName: null, fileName: "2025 Tax Return" }
+const choice: SaveChoiceSave = { mode: "save", purpose: "irs_tax_return", ownerId: OWNER, folderId: FOLDER, newFolderName: null, fileName: "2025 Tax Return", proposalOf: null }
 
 describe("validateDestination — reads the live facts, then decides", () => {
   it("keeps the extension of the uploaded file when the typed name has none", async () => {
     const v = await validateDestination(choice, deps({}), "signed.pdf")
     expect(v.decision.ok).toBe(true); expect(v.finalName).toBe("2025 Tax Return.pdf")
+  })
+  it("a study-only company that is mid-move is read for its move too: the MOVING sentence", async () => {
+    const v = await validateDestination(choice, deps({ owner: { id: OWNER, kind: "company", study_only: true, account_id: "acc-1", contact_id: null, service_delivery_id: null }, companyState: "moving" }), "a.pdf")
+    expect(v.decision.error).toBe(NO_STORAGE_REASON_SENTENCE.moving)
   })
   it("wrong owner / trashed / study-only / moving / no access are each refused", async () => {
     expect((await validateDestination(choice, deps({ folder: { id: FOLDER, owner_id: U(9), kind: "tax", trashed_at: null } }), "a.pdf")).decision.ok).toBe(false)
@@ -199,5 +218,63 @@ describe("resolveProposal — the proposal as real ids", () => {
   })
   it("'choose' passes straight through", async () => {
     expect((await resolveProposal(proposeFaxPlace({ purpose: "something_else", company: null, fileName: "x" }), rdeps())).state).toBe("choose")
+  })
+})
+
+describe("every refusal shows ITS OWN sentence — Drive wording only for a company that stays in its old folder", () => {
+  const sentence = (state: "store" | "moving" | "drive", reason: keyof typeof NO_STORAGE_REASON_SENTENCE) =>
+    noStorageSentenceFor("acc-1", { companyState: async () => state, decisionSentence: async () => NO_STORAGE_REASON_SENTENCE[reason] })
+  it("moving → the moving sentence, whatever the other facts say", async () => {
+    for (const r of ["frozen", "archived", "no_folder", "no_company"] as const) expect(await sentence("moving", r)).toBe(NO_STORAGE_REASON_SENTENCE.moving)
+  })
+  it("not moving → the true reason from no-storage: archived / no folder / no company / frozen", async () => {
+    for (const r of ["frozen", "archived", "no_folder", "no_company"] as const) expect(await sentence("drive", r)).toBe(NO_STORAGE_REASON_SENTENCE[r])
+  })
+  it("only the 'frozen' sentence mentions Google Drive", () => {
+    for (const [reason, text] of Object.entries(NO_STORAGE_REASON_SENTENCE)) {
+      if (reason === "frozen") expect(text).toMatch(/Drive/)
+      else expect(text, reason).not.toMatch(/Drive/i)
+    }
+  })
+  it("resolveProposal: a mid-move company with no live storage → the MOVING sentence (checked before 'no storage')", async () => {
+    const p = proposeFaxPlace({ purpose: "irs_tax_return", company: acme, fileName: "2025.pdf" })
+    const r = await resolveProposal(p, rdeps({ liveOwnerOfAccount: async () => null, companyState: async () => "moving", noStorageSentenceForAccount: async () => NO_STORAGE_REASON_SENTENCE.frozen }))
+    expect(r).toMatchObject({ state: "refused", why: NO_STORAGE_REASON_SENTENCE.moving })
+  })
+  it("resolveProposal: each no-storage reason keeps its own sentence", async () => {
+    const p = proposeFaxPlace({ purpose: "irs_ein_request", company: acme, fileName: "x.pdf" })
+    for (const reason of ["archived", "no_folder", "frozen", "no_company"] as const) {
+      const r = await resolveProposal(p, rdeps({ liveOwnerOfAccount: async () => null, noStorageSentenceForAccount: async () => NO_STORAGE_REASON_SENTENCE[reason] }))
+      expect(r).toMatchObject({ state: "refused", why: NO_STORAGE_REASON_SENTENCE[reason] })
+    }
+  })
+})
+
+describe("verifyProposalStillHolds — a stale proposal is refused", () => {
+  const fromProposal = (over: Partial<SaveChoiceSave> = {}): SaveChoiceSave => ({
+    mode: "save", purpose: "irs_tax_return", ownerId: OWNER, folderId: U(20), newFolderName: "2025", fileName: "2025 Tax Return.pdf",
+    proposalOf: { accountId: "acc-1", business: false }, ...over,
+  })
+  it("the place the rules give now = the place sent → fine", async () => {
+    expect((await verifyProposalStillHolds(fromProposal(), rdeps())).ok).toBe(true)
+  })
+  it("the name was edited to 2019 but the 2025 place was sent → refused", async () => {
+    const r = await verifyProposalStillHolds(fromProposal({ fileName: "2019 Tax Return.pdf" }), rdeps())
+    expect(r).toEqual({ ok: false, error: PROPOSAL_CHANGED_SENTENCE })
+  })
+  it("the company changed (other owner) → refused; the place is no longer proposable → refused", async () => {
+    expect((await verifyProposalStillHolds(fromProposal(), rdeps({ liveOwnerOfAccount: async () => U(9) }))).ok).toBe(false)
+    expect((await verifyProposalStillHolds(fromProposal(), rdeps({ companyState: async () => "moving" }))).ok).toBe(false)
+    expect((await verifyProposalStillHolds(fromProposal({ proposalOf: { accountId: null, business: false } }), rdeps())).ok).toBe(false)
+  })
+  it("the year folder was made since the proposal (a retry): the same place → fine", async () => {
+    const r = await verifyProposalStillHolds(fromProposal(), rdeps({ childFolderId: async () => U(40) }))
+    expect(r.ok).toBe(true)
+  })
+  it("a place staff picked themselves (Change place) is not re-derived", async () => {
+    expect((await verifyProposalStillHolds(fromProposal({ proposalOf: null, fileName: "2019 anything" }), rdeps())).ok).toBe(true)
+  })
+  it("a lookup error is a refusal, never a yes", async () => {
+    expect((await verifyProposalStillHolds(fromProposal(), rdeps({ liveOwnerOfAccount: async () => { throw new Error("db") } }))).ok).toBe(false)
   })
 })

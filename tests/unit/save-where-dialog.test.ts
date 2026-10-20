@@ -6,7 +6,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createElement, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { RequiredDialog } from '@/components/storage/save-where-dialog'
+import { RequiredDialog, trapTarget } from '@/components/storage/save-where-dialog'
 
 type El = ReactElement<Record<string, unknown> & { children?: ReactNode }>
 function walk(node: ReactNode, visit: (el: El) => void) {
@@ -49,6 +49,25 @@ describe('RequiredDialog — cannot be dismissed by accident', () => {
     const other = vi.fn()
     onKeyDown({ key: 'a', preventDefault: other, stopPropagation: other })
     expect(other).not.toHaveBeenCalled()
+  })
+  it('Tab stays inside the window: the last control wraps to the first, Shift+Tab on the first wraps to the last, focus outside is brought in', () => {
+    expect(trapTarget(['a', 'b', 'c'], 'c', false)).toBe('a')
+    expect(trapTarget(['a', 'b', 'c'], 'a', true)).toBe('c')
+    expect(trapTarget(['a', 'b', 'c'], 'b', false)).toBeNull()   // inside: the browser moves on by itself
+    expect(trapTarget(['a', 'b', 'c'], 'b', true)).toBeNull()
+    expect(trapTarget(['a', 'b', 'c'], null, false)).toBe('a')
+    expect(trapTarget(['a', 'b', 'c'], 'zzz', true)).toBe('c')
+    expect(trapTarget([], null, false)).toBeNull()
+  })
+  it('the key handler applies the trap and still ignores Escape', () => {
+    const dlg = all.find((e) => e.props.role === 'dialog')!
+    const onKeyDown = dlg.props.onKeyDown as (e: unknown) => void
+    const first = { focus: vi.fn() }, last = { focus: vi.fn() }
+    ;(globalThis as unknown as { document: unknown }).document = { activeElement: last }
+    const preventDefault = vi.fn()
+    onKeyDown({ key: 'Tab', shiftKey: false, preventDefault, currentTarget: { querySelectorAll: () => [first, last] } })
+    expect(preventDefault).toHaveBeenCalledOnce(); expect(first.focus).toHaveBeenCalledOnce()
+    delete (globalThis as unknown as { document?: unknown }).document
   })
   it('takes no onClose prop at all', () => {
     expect(RequiredDialog.length).toBe(1)

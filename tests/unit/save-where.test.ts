@@ -52,6 +52,13 @@ describe("proposeFaxPlace — Antonio's fax rules, each with a reason", () => {
       expect(proposeFaxPlace({ purpose, company: { kind: "business" }, fileName: "x.pdf", now: NOW }).state).toBe("choose")
     }
   })
+  it("choosing Business for an IRS fax says plainly that a tax return / EIN request needs a company", () => {
+    const t = proposeFaxPlace({ purpose: "irs_tax_return", company: { kind: "business" }, fileName: "x.pdf", now: NOW })
+    expect(t.why).toMatch(/belongs to a company, so it has no place in Business/)
+    expect(t.why).not.toMatch(/pick the company above\. Or use/)
+    expect(proposeFaxPlace({ purpose: "irs_ein_request", company: { kind: "business" }, fileName: "x.pdf", now: NOW }).why).toMatch(/belongs to a company/)
+    expect(proposeFaxPlace({ purpose: "irs_tax_return", company: null, fileName: "x.pdf", now: NOW }).why).toMatch(/pick the company above/)
+  })
   it("every purpose is known; a stray value is not a purpose", () => {
     expect(FAX_PURPOSES.map((p) => p.key)).toEqual(["irs_tax_return", "irs_ein_request", "third_party", "something_else"])
     expect(isFaxPurpose("third_party")).toBe(true)

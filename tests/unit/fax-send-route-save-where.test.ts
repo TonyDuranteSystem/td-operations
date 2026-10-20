@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
-import type { DestinationDeps, FileDeps, OwnerRow } from '@/lib/crm-store/save-destination'
+import type { DestinationDeps, FileDeps, OwnerRow, ResolveDeps } from '@/lib/crm-store/save-destination'
 
 const U = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const OWNER = U(1), FOLDER = U(2), BIZ = U(3), BIZROOT = U(4)
@@ -52,7 +52,11 @@ vi.mock('@/lib/crm-store/save-destination', async (orig) => {
     trash: async () => {}, rowLinks: async (o) => ({ account: o.account_id, contact: o.contact_id }),
     pathOf: async () => 'Acme › 3. Tax › 2025', documentTypeLabel: async () => 'IRS Fax',
   }
-  return { ...real, realDestinationDeps: () => dd, realFileDeps: () => fd }
+  const rd: ResolveDeps = {
+    liveOwnerOfAccount: async () => OWNER, companyState: async () => st.companyState as 'store' | 'moving' | 'drive', noStorageSentenceForAccount: async () => 'NO-STORAGE-SENTENCE',
+    folderOfKind: async () => FOLDER, businessOwnerId: async () => BIZ, topFolder: async () => BIZROOT, childFolderId: async () => null, pathOf: async () => 'x',
+  }
+  return { ...real, realDestinationDeps: () => dd, realFileDeps: () => fd, realResolveDeps: () => rd }
 })
 vi.mock('@/lib/supabase-admin', () => {
   const b = (table: string) => {
@@ -149,6 +153,7 @@ describe('/api/tools/fax/send — a place that is not allowed stops BEFORE the f
   it('a trashed folder', async () => { st.folders[FOLDER] = { id: FOLDER, owner_id: OWNER, kind: 'tax', trashed_at: '2026-01-01' }; await refused({ save_choice: saveChoice() }, /trash/) })
   it('a company left on Drive / closed (study-only) → the plain sentence', async () => { st.owners[OWNER] = { id: OWNER, kind: 'company', study_only: true, account_id: 'acc-1', contact_id: null, service_delivery_id: null }; await refused({ save_choice: saveChoice() }, 'NO-STORAGE-SENTENCE') })
   it('a company being moved', async () => { st.companyState = 'moving'; await refused({ save_choice: saveChoice() }, /being moved/) })
+  it('a company mid-move with no live storage yet hears "moving", not the other sentence', async () => { st.companyState = 'moving'; st.owners[OWNER] = { id: OWNER, kind: 'company', study_only: true, account_id: 'acc-1', contact_id: null, service_delivery_id: null }; await refused({ save_choice: saveChoice() }, /being moved/) })
   it('a person\'s identity paper into a company', async () => { await refused({ save_choice: saveChoice(), file_name: 'Passport.pdf' }, /person's own paper/); await refused({ save_choice: saveChoice({ fileName: 'doc' }), file_name: 'Passport.pdf' }, /person's own paper/) })
   it('the top folder of a client', async () => { st.folders[FOLDER] = { id: FOLDER, owner_id: OWNER, kind: 'root', trashed_at: null }; await refused({ save_choice: saveChoice() }, /Open one of the folders first/) })
   it('not staff of the storage → 403 before the send', async () => {
@@ -158,6 +163,24 @@ describe('/api/tools/fax/send — a place that is not allowed stops BEFORE the f
   })
   it('a malformed choice', async () => { const r = await send({ save_choice: { mode: 'maybe' } }); expect(r.status).toBe(400); expect(st.sendCalls).toBe(0) })
   it('a place that does not exist', async () => { st.owners = {}; await refused({ save_choice: saveChoice() }, /no longer exists/) })
+})
+
+describe('/api/tools/fax/send — a STALE proposal is refused before the fax is sent', () => {
+  const proposed = (over: Record<string, unknown>) => saveChoice({ proposalOf: { accountId: U(7), business: false }, ...over })
+  it("the name was edited to 2019 but the 2025 place was sent → 422, nothing sent, nothing filed", async () => {
+    // the proposal made for "2025 …" was: Tax folder + a new folder "2025"; the name now says 2019
+    const r = await send({ save_choice: proposed({ newFolderName: '2025', fileName: '2019 Tax Return - Acme' }) })
+    expect(r.status).toBe(422); expect(r.body.destination_error).toBe(true); expect(r.body.error).toMatch(/proposed place changed/)
+    expect(st.sendCalls).toBe(0); expect(st.saves).toEqual([]); expect(st.bucketUploads).toEqual([])
+  })
+  it('a proposal that still matches the current answers goes through', async () => {
+    const r = await send({ save_choice: proposed({ newFolderName: '2019', fileName: '2019 Tax Return - Acme' }) })
+    expect(r.body.success).toBe(true); expect(st.sendCalls).toBe(1); expect(st.saves).toHaveLength(1)
+  })
+  it('a place staff picked with Change place is not re-derived (their own choice)', async () => {
+    const r = await send({ save_choice: saveChoice({ fileName: '2019 Tax Return - Acme' }) })
+    expect(r.body.success).toBe(true)
+  })
 })
 
 describe('/api/tools/fax/send — when the send or the filing goes wrong', () => {

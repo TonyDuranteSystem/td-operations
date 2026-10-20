@@ -70,8 +70,13 @@ export function documentTypeFor(purpose: FaxPurpose, ownerIsInternalArea: boolea
 export function proposeFaxPlace(i: { purpose: FaxPurpose; company: PlaceOwnerRef | null; fileName: string; now?: Date }): PlaceProposal {
   const { purpose } = i
   const company = i.company && i.company.kind === "company" ? i.company : null
+  const chosenBusiness = !!i.company && i.company.kind === "business"
   if (purpose === "irs_tax_return") {
-    if (!company) return { state: "choose", purpose, why: "A tax-return fax is saved in a company's Tax folder, so pick the company above. Or use Change place." }
+    if (!company) {
+      return { state: "choose", purpose, why: chosenBusiness
+        ? "A tax return belongs to a company, so it has no place in Business. Pick the company above, or use Change place (for example Business › Fax)."
+        : "A tax-return fax is saved in a company's Tax folder, so pick the company above. Or use Change place." }
+    }
     const year = taxYearFromName(i.fileName, i.now)
     return {
       state: "proposed", purpose,
@@ -83,7 +88,11 @@ export function proposeFaxPlace(i: { purpose: FaxPurpose; company: PlaceOwnerRef
     }
   }
   if (purpose === "irs_ein_request") {
-    if (!company) return { state: "choose", purpose, why: "An EIN request is saved in the company's own folder, so pick the company above. Or use Change place." }
+    if (!company) {
+      return { state: "choose", purpose, why: chosenBusiness
+        ? "An EIN request belongs to a company, so it has no place in Business. Pick the company above, or use Change place (for example Business › Fax)."
+        : "An EIN request is saved in the company's own folder, so pick the company above. Or use Change place." }
+    }
     return {
       state: "proposed", purpose,
       owner: company, folder: { kind: "company" },

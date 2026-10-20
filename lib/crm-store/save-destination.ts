@@ -14,7 +14,7 @@
 
 import { cleanNewFileName, folderNameProblem } from "./names"
 import { NO_STORAGE_REASON_SENTENCE } from "./no-storage"
-import { documentTypeFor, type FaxPurpose, type PlaceProposal, isFaxPurpose, type SaveDocumentType } from "./save-where"
+import { documentTypeFor, proposeFaxPlace, type FaxPurpose, type PlaceProposal, isFaxPurpose, type SaveDocumentType } from "./save-where"
 import { personalKind, type PersonalKind } from "@/lib/fax/save-sent-upload"
 
 export interface SaveChoiceSave {
@@ -25,6 +25,8 @@ export interface SaveChoiceSave {
   folderId: string
   newFolderName: string | null
   fileName: string
+  /** set when the place came straight from the window's PROPOSAL (not from "Change place"): who the proposal was for, so the server can re-derive it */
+  proposalOf: { accountId: string | null; business: boolean } | null
 }
 export type SaveChoice = SaveChoiceSave | { mode: "dont_save" }
 
@@ -43,7 +45,15 @@ export function parseSaveChoice(raw: unknown): { ok: boolean; choice: SaveChoice
   }
   if (typeof r.fileName !== "string" || !r.fileName.trim()) return { ok: false, choice: null, error: "Enter a file name." }
   const nf = typeof r.newFolderName === "string" && r.newFolderName.trim() ? r.newFolderName : null
-  return { ok: true, choice: { mode: "save", purpose: r.purpose, ownerId: r.ownerId, folderId: r.folderId, newFolderName: nf, fileName: r.fileName } }
+  let proposalOf: SaveChoiceSave["proposalOf"] = null
+  if (r.proposalOf !== undefined && r.proposalOf !== null) {
+    const po = r.proposalOf as Record<string, unknown>
+    if (typeof po !== "object" || (po.accountId !== null && po.accountId !== undefined && (typeof po.accountId !== "string" || !UUID.test(po.accountId)))) {
+      return { ok: false, choice: null, error: "The place to save the fax in was not understood. Please choose it again." }
+    }
+    proposalOf = { accountId: typeof po.accountId === "string" ? po.accountId : null, business: po.business === true }
+  }
+  return { ok: true, choice: { mode: "save", purpose: r.purpose, ownerId: r.ownerId, folderId: r.folderId, newFolderName: nf, fileName: r.fileName, proposalOf } }
 }
 
 export const IDENTITY_PAPER_SENTENCE =
@@ -72,8 +82,10 @@ export type Decision = { ok: boolean; error?: string; /** keep the CRM row off t
 export function decideDestination(f: DestinationFacts): Decision {
   const no = (error: string): Decision => ({ ok: false, error })
   if (!f.owner || !f.accessOk) return no("That place no longer exists. Choose another place.")
-  if (f.owner.studyOnly) return no(f.noStorageSentence ?? "This place has no document storage in the CRM, so the file could not be saved there.")
+  // a company in the middle of its move is checked FIRST: it has no live storage yet, but its answer is "try again in a few minutes",
+  // never the sentence for a company that stays in its old folder
   if (f.owner.kind === "company" && f.companyState === "moving") return no(NO_STORAGE_REASON_SENTENCE.moving)
+  if (f.owner.studyOnly) return no(f.noStorageSentence ?? "This place has no document storage in the CRM, so the file could not be saved there.")
   if (f.owner.kind === "company" && f.companyState === "drive") return no(f.noStorageSentence ?? NO_STORAGE_REASON_SENTENCE.no_folder)
   if (!f.folder || f.folder.ownerId !== f.owner.id) return no("That folder is not in the place you chose. Choose the place again.")
   if (f.folder.trashed) return no("That folder is in the trash. Choose another place.")
@@ -103,6 +115,19 @@ export interface DestinationDeps {
   access(ownerId: string): Promise<boolean>
 }
 
+/**
+ * The ONE sentence for a company that has no live storage — moving FIRST (a company mid-move has no live storage yet; it must hear
+ * "try again in a few minutes", not the sentence for a company that stays in its old folder), then the true reason from no-storage.ts.
+ */
+export async function noStorageSentenceFor(
+  accountId: string,
+  deps: { companyState(id: string): Promise<"store" | "moving" | "drive">; decisionSentence(id: string): Promise<string> },
+): Promise<string> {
+  if ((await deps.companyState(accountId)) === "moving") return NO_STORAGE_REASON_SENTENCE.moving
+  return deps.decisionSentence(accountId)
+}
+const realDeps = () => ({ companyState: async (id: string) => (await import("./switched-drive-guard")).companyDocState(id) })
+
 export interface Validated { decision: Decision; owner: OwnerRow | null; /** the name it will be saved under (the typed name, extension kept) */ finalName: string }
 
 /** Reads the live facts about the chosen place and decides (a read error is an error, never a "yes"). `uploadName` = the file's own name (its extension is kept). */
@@ -114,7 +139,7 @@ export async function validateDestination(choice: SaveChoiceSave, deps: Destinat
   const owner = await deps.readOwner(choice.ownerId)
   const accessOk = owner ? await deps.access(owner.id) : false
   const folder = owner ? await deps.readFolder(choice.folderId) : null
-  const companyState = owner && owner.kind === "company" && owner.account_id && !owner.study_only ? await deps.companyState(owner.account_id) : null
+  const companyState = owner && owner.kind === "company" && owner.account_id ? await deps.companyState(owner.account_id) : null
   const noStorageSentence = owner && owner.study_only ? await deps.noStorageSentence(owner) : null
   const decision = decideDestination({
     owner: owner ? { id: owner.id, kind: owner.kind, studyOnly: owner.study_only, accountId: owner.account_id, contactId: owner.contact_id } : null,
@@ -145,7 +170,7 @@ export function realDestinationDeps(login: { id: string | null; ownerOnly: boole
     companyState: async (accountId) => (await import("./switched-drive-guard")).companyDocState(accountId),
     noStorageSentence: async (owner) => {
       if (owner.kind === "person") return (await import("./no-storage")).NO_PERSON_STORAGE_SENTENCE
-      if (owner.kind === "company" && owner.account_id) return (await (await import("./no-storage")).noStorageDecisionFor(owner.account_id)).sentence
+      if (owner.kind === "company" && owner.account_id) return noStorageSentenceFor(owner.account_id, { companyState: realDeps().companyState, decisionSentence: async (id) => (await (await import("./no-storage")).noStorageDecisionFor(id)).sentence })
       return (await import("./no-storage")).NO_STORAGE_SENTENCE
     },
     access: async (ownerId) => {
@@ -314,9 +339,10 @@ export async function resolveProposal(p: PlaceProposal, deps: ResolveDeps): Prom
   let parentId: string
   let leaf: string | null = null
   if (p.owner.kind === "company") {
+    // moving FIRST: a company mid-move has no live storage yet, and must not get the "stays in its old folder" sentence
+    if ((await deps.companyState(p.owner.accountId)) === "moving") return { state: "refused", purpose: p.purpose, why: NO_STORAGE_REASON_SENTENCE.moving }
     const own = await deps.liveOwnerOfAccount(p.owner.accountId)
     if (!own) return { state: "refused", purpose: p.purpose, why: await deps.noStorageSentenceForAccount(p.owner.accountId) }
-    if ((await deps.companyState(p.owner.accountId)) === "moving") return { state: "refused", purpose: p.purpose, why: NO_STORAGE_REASON_SENTENCE.moving }
     ownerId = own
     if (p.folder.kind === "tax") {
       parentId = await deps.folderOfKind(ownerId, "tax")
@@ -351,7 +377,7 @@ export function realResolveDeps(): ResolveDeps {
   return {
     liveOwnerOfAccount: async (id) => (await import("./switched-drive-guard")).liveOwnerOfAccount(id),
     companyState: async (id) => (await import("./switched-drive-guard")).companyDocState(id),
-    noStorageSentenceForAccount: async (id) => (await (await import("./no-storage")).noStorageDecisionFor(id)).sentence,
+    noStorageSentenceForAccount: async (id) => noStorageSentenceFor(id, { companyState: realDeps().companyState, decisionSentence: async (x) => (await (await import("./no-storage")).noStorageDecisionFor(x)).sentence }),
     folderOfKind: async (ownerId, kind) => (await import("./formation-pilot")).folderOfKind(ownerId, kind),
     businessOwnerId: async () => (await import("./structure")).ensureArea("business", null),
     topFolder: async (ownerId) => {
@@ -365,5 +391,32 @@ export function realResolveDeps(): ResolveDeps {
       return ((data ?? [])[0]?.id as string | undefined) ?? null
     },
     pathOf: pathOfFolder,
+  }
+}
+
+export const PROPOSAL_CHANGED_SENTENCE = "The proposed place changed while you were choosing. Please look at it again, then save."
+
+/**
+ * A choice that came straight from the window's PROPOSAL is re-derived here from the CURRENT inputs (purpose, company, file name): if
+ * the place the browser sends is not the place the rules give now (e.g. the file name was edited from 2025 to 2019 and the old 2025
+ * folder was sent), the save is refused BEFORE the fax is sent. A choice made with "Change place" (proposalOf = null) is staff's own
+ * and is only checked by `validateDestination`. A tax-year folder that did not exist when the proposal was made but exists now is the
+ * same place (a retry, or two people at once), so it still matches.
+ */
+export async function verifyProposalStillHolds(choice: SaveChoiceSave, deps: ResolveDeps): Promise<{ ok: boolean; error?: string }> {
+  if (!choice.proposalOf) return { ok: true }
+  const bad = { ok: false, error: PROPOSAL_CHANGED_SENTENCE }
+  try {
+    const company = choice.proposalOf.business
+      ? ({ kind: "business" } as const)
+      : choice.proposalOf.accountId ? ({ kind: "company", accountId: choice.proposalOf.accountId, name: "Company" } as const) : null
+    const now = await resolveProposal(proposeFaxPlace({ purpose: choice.purpose, company, fileName: choice.fileName }), deps)
+    if (now.state !== "proposed" || now.ownerId !== choice.ownerId) return bad
+    if (now.folderId === choice.folderId && (now.newFolderName ?? null) === (choice.newFolderName ?? null)) return { ok: true }
+    // the folder to be made has been made since: the proposal then points at the new folder itself
+    if (choice.newFolderName && !now.newFolderName && (await deps.childFolderId(choice.folderId, choice.newFolderName)) === now.folderId) return { ok: true }
+    return bad
+  } catch {
+    return bad
   }
 }

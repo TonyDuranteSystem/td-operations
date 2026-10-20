@@ -42,7 +42,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { downloadFileBinary } from '@/lib/google-drive'
 import { sendFax, isValidFaxNo, normalizeFaxNo, DEFAULT_IRS_FAX_NUMBER, stripBase64Prefix } from '@/lib/fax/faxage'
 import { isStoreStaffUser } from '@/lib/crm-store/access'
-import { parseSaveChoice, validateDestination, saveToDestination, realDestinationDeps, realFileDeps, type FiledCopy, type SaveChoiceSave } from '@/lib/crm-store/save-destination'
+import { parseSaveChoice, validateDestination, verifyProposalStillHolds, realResolveDeps, saveToDestination, realDestinationDeps, realFileDeps, type FiledCopy, type SaveChoiceSave } from '@/lib/crm-store/save-destination'
 import { looksPersonal } from '@/lib/fax/save-sent-upload'
 import { taxYearFromName } from '@/lib/crm-store/save-where'
 
@@ -201,6 +201,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, destination_error: true, error: 'Only staff can save a file into the storage.' }, { status: 403 })
     }
     try {
+      // a place taken straight from the proposal must still be what the rules give for the CURRENT answers (a stale proposal is refused)
+      const holds = await verifyProposalStillHolds(saveChoice, realResolveDeps())
+      if (!holds.ok) {
+        return NextResponse.json({ success: false, destination_error: true, error: holds.error }, { status: 422 })
+      }
       const { isOwnerOnly } = await import('@/lib/auth')
       const validated = await validateDestination(saveChoice, realDestinationDeps({ id: user?.id ?? null, ownerOnly: isOwnerOnly(user) }), fileName)
       if (!validated.decision.ok) {
