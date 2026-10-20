@@ -49,12 +49,11 @@ const nextConfig = {
       ],
     },
   },
-  // CI-only speed switches (set by .github/workflows/ci.yml, never on Vercel).
-  // Trace collection alone is ~4 min of the CI build (two routes glob the whole source tree
-  // above) and the output is only used to package a deploy, which CI does not do.
-  outputFileTracing: process.env.CI_SKIP_TRACE !== '1',
-  // Type checking runs as its own parallel CI job instead of inside the build.
-  typescript: { ignoreBuildErrors: process.env.CI_SKIP_TYPECHECK === '1' },
+  // Skip build-trace collection on GitHub Actions only (~4 min of the CI build: two routes
+  // above glob the whole source tree). The trace output only matters when packaging a deploy,
+  // which CI does not do — Vercel builds and traces the full app itself. GITHUB_ACTIONS is set
+  // by GitHub automatically and never on Vercel or a dev machine, so this cannot leak.
+  outputFileTracing: process.env.GITHUB_ACTIONS !== 'true',
   eslint: {
     // Warnings in MCP tool files should not block production builds.
     // ESLint still runs in pre-commit (lint-staged) and pre-push hooks.
