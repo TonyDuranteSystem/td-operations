@@ -10,6 +10,7 @@
  * After confirmation, use gmail_send to send it.
  */
 
+import { resolveOaManagerName } from "@/lib/oa/resolve-manager"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -167,7 +168,7 @@ Prerequisites:
                 formation_date: account.formation_date || today,
                 ein_number: account.ein_number,
                 entity_type: entityType,
-                manager_name: signerContact.full_name,
+                manager_name: await resolveOaManagerName(account_id, signerContact.full_name),
                 member_name: signerContact.full_name,
                 member_address: account.physical_address || null,
                 member_email: signerContact.email || null,

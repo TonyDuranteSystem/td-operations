@@ -29,6 +29,8 @@
  * company shape and this route refuses any posted address.
  */
 
+import { resolveOaManagerName } from "@/lib/oa/resolve-manager"
+import { primaryAccess, rosterNeedsAttention, toGapView, memberLabel, type RosterMember } from "@/lib/members/oa-member-gaps"
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -131,6 +133,7 @@ export async function POST(request: NextRequest) {
     email: string | null
     ownership_pct: number | null
     is_primary: boolean | null
+    is_signer: boolean | null
     contact_id: string | null
     member_type: string
     representative_name: string | null
@@ -145,7 +148,7 @@ export async function POST(request: NextRequest) {
   if (isMMLC) {
     const { data: rows } = await supabaseAdmin
       .from('members')
-      .select('id, full_name, company_name, email, ownership_pct, is_primary, contact_id, member_type, representative_name, representative_email, address_street, address_city, address_state, address_zip, address_country')
+      .select('id, full_name, company_name, email, ownership_pct, is_primary, is_signer, contact_id, member_type, representative_name, representative_email, address_street, address_city, address_state, address_zip, address_country')
       .eq('account_id', account_id)
       .order('is_primary', { ascending: false })
 
@@ -153,6 +156,40 @@ export async function POST(request: NextRequest) {
 
     if (membersRows.length === 0) {
       return NextResponse.json({ error: 'No members found for this MMLLC — add members in the CRM first' }, { status: 422 })
+    }
+
+    // ── WHO MAY GENERATE: the company's PRIMARY member only (Antonio 2026-10-20) ──
+    const access = primaryAccess(membersRows, { contactId, email: user.email })
+    if (access === 'not_primary') {
+      const primaryName = membersRows.filter(m => m.is_primary).map(memberLabel).join(', ')
+      return NextResponse.json({
+        code: 'primary_only',
+        error: `Only the primary owner (${primaryName}) can create the Operating Agreement. Please ask them to do it, or contact support@tonydurante.us.`,
+      }, { status: 403 })
+    }
+    if (access === 'no_primary') {
+      // Nobody is flagged primary or signer: do not open the pop-up (it would hand every owner's details to whoever is linked) — staff must flag one.
+      await reportSystemError({
+        source: 'server',
+        route: '/api/portal/operating-agreement/create',
+        method: 'POST',
+        http_status: 422,
+        message: `Operating Agreement for ${account.company_name}: no member is flagged primary or signer — flag one so the owner can generate it.`,
+        context: { account_id, company: account.company_name },
+      })
+    }
+
+    // ── MISSING MEMBER DETAILS: the portal pop-up collects them (Antonio 2026-10-20) ──
+    const roster = membersRows as RosterMember[]
+    if (rosterNeedsAttention(roster)) {
+      if (access === 'no_primary') {
+        return NextResponse.json({ error: 'We need to finish setting up your company before this agreement can be created. Please contact support@tonydurante.us and we will take care of it.' }, { status: 422 })
+      }
+      return NextResponse.json({
+        code: 'member_info_needed',
+        error: 'We need a few more details about the owners before the Operating Agreement can be sent for signing.',
+        members: roster.map(toGapView),
+      }, { status: 422 })
     }
 
     // Being a member and being a SIGNER are different things (Antonio,
@@ -425,7 +462,7 @@ export async function POST(request: NextRequest) {
       // necessarily the logged-in clicker — same value serves manager_name and
       // member_name for both entity shapes; no separate MMLLC/SMLLC fallback
       // needed any more.
-      manager_name: contact.full_name,
+      manager_name: await resolveOaManagerName(account_id, contact.full_name),
       member_name: contact.full_name,
       // A Single Member LLC has ONE OWNER and no member roster — by design. Their
       // address is read from their contact record, the same record the screen

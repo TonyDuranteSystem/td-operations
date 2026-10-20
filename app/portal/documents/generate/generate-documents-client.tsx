@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { FileText, Shield, ArrowLeft, Download, PenLine, Loader2, CheckCircle2, History, ScrollText, Send, AlertTriangle, Check, X } from 'lucide-react'
+import { FileText, Shield, ArrowLeft, Download, PenLine, Loader2, CheckCircle2, History, ScrollText, Send, AlertTriangle, Check } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
 import DistributionResolutionTemplate from '@/components/portal/distribution-resolution-template'
 import TaxStatementTemplate from '@/components/portal/tax-statement-template'
@@ -20,6 +20,8 @@ import {
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { interpolateString } from '@/lib/template-interpolation'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { OaMembersDialog } from '@/components/portal/oa-members-dialog'
+import type { MemberGapView } from '@/lib/members/oa-member-gaps'
 
 interface HistoryItem {
   id: string
@@ -57,6 +59,7 @@ interface Props {
     entityType: string | null
     registeredAgentAddress?: string | null
     memberCount?: number | null
+    managerName?: string | null
   }
   members: ExtendedMemberInfo[]
   history: HistoryItem[]
@@ -102,6 +105,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   const [oaNotified, setOaNotified] = useState(true)
   const [oaCanSignNow, setOaCanSignNow] = useState(false)
   const [oaCreateError, setOaCreateError] = useState<string | null>(null)
+  // The pop-up that collects missing owner details (dev job d016d398) — set from the create route's 'member_info_needed' answer.
+  const [memberDialog, setMemberDialog] = useState<MemberGapView[] | null>(null)
   // "Is this wrong?" never lets the client pick a different name at generation
   // time — it sends them to correct the actual member records instead
   // (Antonio, dev job 9ad76300-6181-4250-a1de-c77f37933f82 / 9ad76300-6181-4250-a1de-c77f37933f82).
@@ -139,14 +144,16 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
     const memberCountOk = account.memberCount != null
       ? members.length === account.memberCount
       : null // null = not configured, can't check
-    const allHavePortal = members.every(m => m.contact_id != null)
+    // 'Complete' here = every owner we can email has an address on file; the pop-up on Create & Send collects the rest.
+    const allHavePortal = members.every(m => m.contact_id != null || !!(m.email ?? '').trim())
     const ownershipTotal = members.reduce((s, m) => s + (m.ownershipPct ?? 0), 0)
     const ownershipOk = Math.abs(ownershipTotal - 100) < 0.01
-    const missingPortal = members.filter(m => !m.contact_id).map(m => m.fullName)
+    const missingPortal = members.filter(m => m.contact_id == null && !(m.email ?? '').trim()).map(m => m.fullName)
     return { memberCountOk, allHavePortal, ownershipOk, ownershipTotal, missingPortal }
   })() : null
 
-  const oaCanProceed = !isMMLC || (oaPreflight?.allHavePortal === true)
+  // Missing owner details no longer block here: pressing Create & Send opens the pop-up that collects them (dev job d016d398).
+  const oaCanProceed = true
 
   // Members with addresses resolved from OA state (for OA template)
   const oaMembers = members.map(m => ({
@@ -359,6 +366,11 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
         }),
       })
       const data = await res.json().catch(() => ({}))
+      if (res.status === 422 && data.code === 'member_info_needed' && Array.isArray(data.members)) {
+        setMemberDialog(data.members as MemberGapView[])
+        setOaCreateStatus('idle')
+        return
+      }
       if (!res.ok) throw new Error(data.error || t('documentGenerate.oaCreateFailed'))
       // The route tells us whether anyone was actually reached, and whether the
       // signer identified by THIS login can sign. Ignoring either produced a
@@ -615,8 +627,8 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                   <div className="flex items-start gap-2 text-sm">
                     {oaPreflight.allHavePortal
                       ? <Check className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
-                      : <X className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />}
-                    <span className={oaPreflight.allHavePortal ? 'text-zinc-700' : 'text-red-600'}>
+                      : <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />}
+                    <span className={oaPreflight.allHavePortal ? 'text-zinc-700' : 'text-amber-600'}>
                       {oaPreflight.allHavePortal
                         ? t('documentGenerate.allHavePortal')
                         : interpolateString(
@@ -651,7 +663,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                     return resolvedManager ? (
                       <div className="pt-2 mt-1 border-t border-zinc-200 flex items-start justify-between gap-3 flex-wrap">
                         <span className="text-sm text-zinc-700">
-                          {t('documentGenerate.managerLabel')} <strong>{resolvedManager.fullName}</strong>
+                          {t('documentGenerate.managerLabel')} <strong>{account.managerName?.trim() || resolvedManager.fullName}</strong>
                         </span>
                         <button
                           type="button"
@@ -822,6 +834,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                   physicalAddress: account.physicalAddress,
                   entityType: account.entityType,
                   registeredAgentAddress: account.registeredAgentAddress || null,
+                  managerName: account.managerName ?? null,
                 }}
                 members={oaMembers}
                 effectiveDate={oaEffectiveDate}
@@ -888,6 +901,16 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                       beside a button is not visible in any useful sense. */}
                   {oaCreateError && (
                     <p className="max-w-sm text-sm text-red-600 text-left leading-snug">{oaCreateError}</p>
+                  )}
+                  {memberDialog && (
+                    <OaMembersDialog
+                      accountId={account.id}
+                      companyName={account.companyName}
+                      members={memberDialog}
+                      t={t}
+                      onClose={() => setMemberDialog(null)}
+                      onSaved={() => { setMemberDialog(null); handleCreateAndSend() }}
+                    />
                   )}
                 </div>
               ) : (

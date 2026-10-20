@@ -429,6 +429,7 @@ export type Database = {
           lead_source: string | null
           legal_link_verified: boolean
           mailing_link_verified: boolean
+          manager_name: string | null
           member_count: number | null
           member_structure: string | null
           name_history: Json
@@ -526,6 +527,7 @@ export type Database = {
           lead_source?: string | null
           legal_link_verified?: boolean
           mailing_link_verified?: boolean
+          manager_name?: string | null
           member_count?: number | null
           member_structure?: string | null
           name_history?: Json
@@ -623,6 +625,7 @@ export type Database = {
           lead_source?: string | null
           legal_link_verified?: boolean
           mailing_link_verified?: boolean
+          manager_name?: string | null
           member_count?: number | null
           member_structure?: string | null
           name_history?: Json

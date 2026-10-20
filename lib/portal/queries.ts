@@ -608,7 +608,7 @@ export async function getInProgressOnboardings(contactId: string): Promise<InPro
 export async function getPortalAccountDetail(accountId: string) {
   const { data } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, registered_agent_address, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link, member_count, suite_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip), legal_address:addresses!business_legal_address_id(address_line1, address_line2, city, state, zip), shipping_address:addresses!shipping_address_id(address_line1, address_line2, city, state, zip), registered_agent:addresses!registered_agent_id(name, agent_name, provider, address_line1, address_line2, city, state, zip)')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, registered_agent_address, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link, member_count, manager_name, suite_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip), legal_address:addresses!business_legal_address_id(address_line1, address_line2, city, state, zip), shipping_address:addresses!shipping_address_id(address_line1, address_line2, city, state, zip), registered_agent:addresses!registered_agent_id(name, agent_name, provider, address_line1, address_line2, city, state, zip)')
     .eq('id', accountId)
     .single()
 

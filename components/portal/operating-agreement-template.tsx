@@ -29,6 +29,8 @@ interface OAAccount {
   physicalAddress: string | null
   entityType: string | null
   registeredAgentAddress: string | null
+  /** The company's own Manager when it has one (not an owner); blank = the signer. */
+  managerName?: string | null
 }
 
 interface Props {
@@ -63,7 +65,7 @@ const OperatingAgreementTemplate = forwardRef<HTMLDivElement, Props>(
             initial_contribution: '$1,000 USD',
           }))
         : undefined,
-      manager_name: primaryMember?.fullName || 'N/A',
+      manager_name: (isMMLC && account.managerName?.trim()) || primaryMember?.fullName || 'N/A',
       effective_date: effectiveDate,
       business_purpose: 'engaging in any and all lawful business activities',
       initial_contribution: '$1,000 USD',
