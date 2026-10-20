@@ -50,6 +50,7 @@ import {
   SlidersHorizontal,
   HardDrive,
   ClipboardList,
+  Megaphone,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -137,6 +138,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'storage', name: 'Storage', href: '/storage', icon: HardDrive, tooltip: 'General-purpose CRM storage — folders and files organized by staff. Not connected to Google Drive.' },
   { id: 'forms', name: 'Forms', href: '/forms', icon: ClipboardList, adminOnly: true, tooltip: 'Standalone forms that are not tied to a client — view a form, make a one-time link to send, and read what comes back. Admin only.' },
   { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
+  { id: 'marketing', name: 'Marketing', href: '/marketing-leads', icon: Megaphone, adminOnly: true, tooltip: 'TD Marketing — the master view of Rocco\'s team: leads from the ads, who is working them, what needs you today, and the Meta connection. Admin only.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
   { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2, tooltip: 'LLCs and companies. Each account has services, documents, invoices, and a timeline.' },
@@ -608,16 +610,25 @@ export function Sidebar({
   // 'storage' instead of at the very bottom of the long list where it would not be seen.
   const formsIdx = navOrder.length > 0 ? missingFromSaved.indexOf('forms') : -1
   if (formsIdx !== -1) missingFromSaved.splice(formsIdx, 1)
+  // 'marketing' (2026-10-20) is new: for a returning user with a saved order, put it right after 'leads' instead of at the very bottom.
+  const marketingIdx = navOrder.length > 0 ? missingFromSaved.indexOf('marketing') : -1
+  if (marketingIdx !== -1) missingFromSaved.splice(marketingIdx, 1)
   const withResearch = researchIdx === -1
     ? [...navOrder, ...missingFromSaved]
     : [...navOrder.slice(0, 1), 'research', ...navOrder.slice(1), ...missingFromSaved]
   const baseOrder = talkIdx === -1 ? withResearch : ['td-talk', ...withResearch]
   const storagePos = baseOrder.indexOf('storage')
-  const mergedOrder = formsIdx === -1
+  const withForms = formsIdx === -1
     ? baseOrder
     : storagePos === -1
       ? [...baseOrder, 'forms']
       : [...baseOrder.slice(0, storagePos + 1), 'forms', ...baseOrder.slice(storagePos + 1)]
+  const leadsPos = withForms.indexOf('leads')
+  const mergedOrder = marketingIdx === -1
+    ? withForms
+    : leadsPos === -1
+      ? [...withForms, 'marketing']
+      : [...withForms.slice(0, leadsPos + 1), 'marketing', ...withForms.slice(leadsPos + 1)]
 
   // Build ordered nav with badges applied
   const orderedNav = mergedOrder
