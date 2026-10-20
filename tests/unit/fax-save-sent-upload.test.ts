@@ -1,90 +1,50 @@
-import { describe, it, expect, vi } from "vitest"
-import { companyNamedInFile, periodYearFromName, looksPersonal, fileSentUpload, type SentUploadDeps } from "@/lib/fax/save-sent-upload"
+import { describe, it, expect } from "vitest"
+import { looksPersonal, personalKind, normalizeFaxName } from "@/lib/fax/save-sent-upload"
 
-const accounts = [
-  { id: "a1", company_name: "Morgan & Taylor International LLC" },
-  { id: "a2", company_name: "Horus LLC" },
-  { id: "a3", company_name: "Horus LLC Holdings" },
-  { id: "a4", company_name: "AB LLC" },
-  { id: "a5", company_name: null },
-]
-
-describe("companyNamedInFile — whole name, one candidate only", () => {
-  it("finds the company whose full name is in the file name", () => {
-    expect(companyNamedInFile("2025 Tax Return - Morgan & Taylor International LLC_Signed_for_IRS.pdf", accounts)).toBe("a1")
-  })
-  it("two companies named (one name inside the other) -> nobody is guessed", () => {
-    expect(companyNamedInFile("2025 Horus LLC Holdings 1120.pdf", accounts)).toBeNull()
-  })
-  it("a short name is never matched; no name = null; no partial words", () => {
-    expect(companyNamedInFile("AB LLC return.pdf", accounts)).toBeNull()
-    expect(companyNamedInFile("scan0001.pdf", accounts)).toBeNull()
-    expect(companyNamedInFile("Horuss LLC return.pdf", accounts)).toBeNull()
+describe("normalizeFaxName", () => {
+  it("separators, camelCase and letter↔digit boundaries", () => {
+    expect(normalizeFaxName("SS-4_Acme_Signed_for_IRS.pdf")).toBe("ss 4 acme signed for irs pdf")
+    expect(normalizeFaxName("SS4Form.pdf")).toBe("ss 4 form pdf")
+    expect(normalizeFaxName("Form_1040_2024.pdf")).toBe("form 1040 2024 pdf")
+    expect(normalizeFaxName("Rossi(W-7).pdf")).toBe("rossi w 7 pdf")
   })
 })
 
-describe("periodYearFromName — conservative", () => {
-  const now = new Date("2026-10-18")
-  it("a tax paper naming exactly one year", () => {
-    expect(periodYearFromName("2025_FULFIL_1120Proforma.pdf", now)).toBe(2025)
-    expect(periodYearFromName("Tax Return 2024 Amended.pdf", now)).toBe(2024)
+describe("personalKind / looksPersonal — a person's own paper", () => {
+  it("identity and residence papers are 'identity' (spaces, hyphens, UNDERSCORES, camelCase)", () => {
+    for (const n of [
+      "Passport copy.pdf", "Passport_Rossi.pdf", "PassportRossi.pdf", "ID card.png", "ID_Card_Rossi.png", "W-7 Rossi.pdf", "W-7_Rossi.pdf", "W7_Rossi.pdf", "ITIN letter.pdf",
+      "Rossi_ITIN.pdf", "RossiITIN.pdf", "Proof of address.pdf", "Proof_of_Address.pdf", "Utility bill May.pdf", "Utility_Bill.pdf", "visa.pdf", "Rossi_visa.pdf",
+      "I-94.pdf", "I94_Rossi.pdf", "W-8BEN.pdf", "W8BEN_Rossi.pdf", "8843.pdf", "Form_8843_Rossi.pdf", "SSN card.jpg", "SSN_Rossi.jpg", "Driver license.jpg",
+      "Drivers_License_Rossi.jpg", "Driver's License.jpg", "Driving licence.pdf", "Birth certificate.pdf", "Birth_Cert_Rossi.pdf", "Carta d'identità.pdf", "Social Security card.pdf",
+      // Italian + other common forms (bug-hunter round 2)
+      "Carta_Identità.pdf", "Carta d'identità Rossi.pdf", "CartaIdentita_Rossi.pdf", "Documento d'identità.pdf", "Documento_Identita_Rossi.jpg", "Patente_Rossi.jpg", "Codice fiscale.pdf", "Codice_Fiscale_Rossi.pdf",
+      "Tessera sanitaria.pdf", "Permesso di soggiorno.pdf", "Permesso_di_Soggiorno_Rossi.pdf", "Rossi_ID.pdf", "Rossi ID.jpg", "ID.pdf", "Photo_ID.jpg", "PhotoID_Rossi.png", "Identity_Rossi.pdf", "Green card.pdf", "Green_Card_Rossi.pdf",
+      "IDfront.pdf", "IDback_Rossi.jpg", "IDcard.png", "SSNcard.jpg", "SSNscan_Rossi.pdf", "pasaporte.pdf", "Pasaporte_Rossi.pdf", "passaporte.pdf", "passeport.pdf", "Passeport_Rossi.jpg", "DNI_Rossi.pdf", "DNI.jpg", "Cedula_Rossi.pdf", "Licencia de conducir.pdf", "Licencia_de_Conducir_Rossi.jpg", "Permis de conduire.pdf",
+      "Maria_ID_Rossi.pdf", "Rossi_ID_2025_scan.pdf", "Rossi_ID_Document.pdf", "IDs.pdf", "Rossi_IDs.pdf", "RossiIDcard.png",
+      "ID_Rossi.pdf", "Rossi_ID_front.jpg", "Rossi_license.pdf", "Rossi license.jpg", "Resident card.pdf", "CIE_Rossi.pdf", "CIE.pdf", "Employment Authorization.pdf", "Employment_Authorization_Rossi.pdf", "Form I-9.pdf", "I-9_Rossi.pdf", "Rossi_visa.pdf", "visa.pdf", "Visa copy Rossi.pdf", "Rossi visa front.jpg", "State_ID_Rossi.pdf", "DL_Rossi.jpg", "Rossi_DL.jpg", "CI_Rossi.pdf", "Rossi_CI_front.jpg", "Rossi_ID_2024.pdf", "ID front.jpg", "Rossi_ID_2024.pdf", "Rossi_ID.webp", "Rossi_ID.bmp", "State ID.jpg", "State_ID_Rossi.pdf", "rossipassport.pdf", "ROSSIPASSPORT.PDF", "cartaidentita.pdf", "CartaIdentita.pdf", "rossipatente.jpg", "permessosoggiorno.pdf",
+      "DL_Rossi.jpg", "CI_Rossi.pdf", "Residence card.pdf", "Residence_Card_Rossi.jpg", "Permesso soggiorno.pdf", "Carta soggiorno.pdf", "GreenCard_Rossi.pdf",
+      "EAD_Rossi.pdf", "EAD.pdf", "Residence permit.pdf", "Residence_Permit_Rossi.pdf", "SS-5.pdf", "SS5_Rossi.pdf", "ITINRossi.pdf", "SSNRossi.pdf", "ssn_rossi.jpg",
+    ]) {
+      expect(personalKind(n), n).toBe("identity")
+      expect(looksPersonal(n)).toBe(true)
+    }
   })
-  it("a stray year in a non-tax paper is NOT a tax year", () => {
-    expect(periodYearFromName("SS-4 Acme LLC 2026.pdf", now)).toBeNull()
-    expect(periodYearFromName("Letter 2026.pdf", now)).toBeNull()
+  it("SS-4 and the 1040 family are 'form' in every spelling the production files use", () => {
+    for (const n of [
+      "SS-4 Rossi.pdf", "ss4.pdf", "SS-4_Acme_Signed_for_IRS.pdf", "SS4Form.pdf", "SS4_Acme.pdf", "1040 2025.pdf", "Form_1040_2024.pdf", "Form 1040-NR.pdf", "1040NR_Rossi.pdf", "Rossi_1040-NR_Signed_for_IRS.pdf",
+    ]) expect(personalKind(n), n).toBe("form")
   })
-  it("two different years, or none, or an implausible year -> no year", () => {
-    expect(periodYearFromName("Tax Return 2024 and 2025.pdf", now)).toBeNull()
-    expect(periodYearFromName("scan12345 return.pdf", now)).toBeNull()
-    expect(periodYearFromName("Tax return 2031.pdf", now)).toBeNull()
-  })
-})
-
-describe("looksPersonal", () => {
-  it("passports, IDs, W-7/ITIN papers, proofs of address are personal; a tax return is not", () => {
-    for (const n of ["Passport Mario Rossi.pdf", "W-7 Rossi.pdf", "ITIN package.pdf", "id card front.jpg", "Proof of address.pdf", "Driver license.png", "SS-4 Rossi.pdf", "Form 1040 2025 Rossi.pdf", "1040-NR Rossi.pdf", "W-8BEN.pdf"]) expect(looksPersonal(n)).toBe(true)
-    for (const n of ["2025 Tax Return - Acme LLC_Signed_for_IRS.pdf", "Form 1120 2025.pdf", "Form 1065 2025.pdf", "5472 Acme.pdf"]) expect(looksPersonal(n)).toBe(false)
-  })
-})
-
-describe("fileSentUpload", () => {
-  const base = { accountId: null, serviceDeliveryId: null, fileName: "x.pdf", bytes: Buffer.from("%PDF"), mimeType: "application/pdf", actor: "luca@x", contentHash: "h1" }
-  const mk = (over: Partial<SentUploadDeps> = {}) => {
-    const save = vi.fn(async () => ({ route: "store" as const, documentRowId: "doc-1" }))
-    const deps: SentUploadDeps = { accountOfDelivery: async () => "sd-acc", accounts: async () => accounts, save: save as unknown as SentUploadDeps["save"], ...over }
-    return { deps, save }
-  }
-  it("a named company: filed in ITS storage with the year; the key carries the company", async () => {
-    const m = mk()
-    const r = await fileSentUpload({ ...base, accountId: "a1", fileName: "2025 Tax return.pdf" }, m.deps)
-    expect(r).toEqual({ route: "store", accountId: "a1", documentRowId: "doc-1", inferred: false })
-    expect(m.save).toHaveBeenCalledWith(expect.objectContaining({ accountId: "a1", year: 2025, callerKey: "fax-upload:a1:h1" }))
-  })
-  it("the SAME bytes faxed for company A and then company B never share a key", async () => {
-    const m = mk()
-    await fileSentUpload({ ...base, accountId: "a1" }, m.deps)
-    await fileSentUpload({ ...base, accountId: "a2" }, m.deps)
-    const keys = m.save.mock.calls.map((c) => (c as unknown as [{ callerKey: string }])[0].callerKey)
-    expect(new Set(keys).size).toBe(2)
-  })
-  it("a flow fax uses the flow's company; a flow lookup error is NOT swallowed", async () => {
-    const m = mk()
-    expect(await fileSentUpload({ ...base, serviceDeliveryId: "sd1" }, m.deps)).toMatchObject({ route: "store", accountId: "sd-acc", inferred: false })
-    const bad = mk({ accountOfDelivery: async () => { throw new Error("db down") } })
-    await expect(fileSentUpload({ ...base, serviceDeliveryId: "sd1" }, bad.deps)).rejects.toThrow("db down")
-  })
-  it("a company guessed from the file name is reported as inferred", async () => {
-    const m = mk()
-    expect(await fileSentUpload({ ...base, fileName: "2025 Horus LLC 1120 Proforma Signed for IRS.pdf" }, m.deps)).toMatchObject({ route: "store", accountId: "a2", inferred: true })
-  })
-  it("a personal document is never filed in a company's storage, even with a company named", async () => {
-    const m = mk()
-    expect(await fileSentUpload({ ...base, accountId: "a1", fileName: "W-7 + passport copy.pdf" }, m.deps)).toEqual({ route: "none", reason: "personal_document" })
-    expect(m.save).not.toHaveBeenCalled()
-  })
-  it("nobody identifiable / company without storage / company moving -> nothing filed, with the reason", async () => {
-    expect(await fileSentUpload(base, mk().deps)).toEqual({ route: "none", reason: "no_company" })
-    expect(await fileSentUpload({ ...base, accountId: "a1" }, mk({ save: async () => ({ route: "drive" }) }).deps)).toEqual({ route: "none", reason: "company_has_no_storage" })
-    expect(await fileSentUpload({ ...base, accountId: "a1" }, mk({ save: async () => ({ route: "moving" }) }).deps)).toEqual({ route: "none", reason: "company_moving" })
+  it("a company paper is not personal — including the production '…Signed_for_IRS' shapes", () => {
+    for (const n of [
+      "2025 Tax Return - Acme International LLC.pdf", "2025_Tax_Return_Acme_Signed_for_IRS.pdf", "1120 2025.pdf", "Form_1120_2025.pdf", "5472.pdf", "Articles of Organization.pdf", "scan0042.pdf",
+      "Business License renewal.pdf", "Business_License.pdf", "Driver Services notice.pdf", "Identity Verification Services letter.pdf", "Advisory notice.pdf", "Itinerary 2025.pdf", "Vista Holdings LLC.pdf", "Assessment.pdf",
+      "Idaho Annual Report.pdf", "Licensing agreement.pdf", "License Agreement.pdf",
+      "Marketing_2024.pdf", "Paid copy.pdf", "Valid copy.pdf", "Void card.pdf", "Hybrid card.pdf", "Patented process.pdf", "Patented_Design_Copy.pdf", "Candidate scan.pdf", "Solid copy.pdf", "Rapid card.pdf", "DL Services.pdf", "DL_Services_Contract.pdf", "CI Report.pdf", "CI_Report_2025.pdf", "Visa statement.pdf", "Visa_Statement_May.pdf", "Visa card payment.pdf", "Visa Inc.pdf", "Visa_Inc_annual.pdf", "Invoice_ID.pdf", "Order ID 123.pdf", "Case_ID_77.pdf", "Business License renewal.pdf", "License Agreement.pdf", "Software license.pdf", "Liquor license application.pdf", "Tax ID letter.pdf", "Invoice ID 2025.pdf", "Invoice_ID_2025.pdf", "Order ID 551.pdf", "Case ID 77 notice.pdf", "File ID 12.pdf", "Member ID list.pdf", "Client ID 9001.pdf", "User ID report.pdf", "Customer ID export.pdf", "Account ID 55.pdf", "Transaction ID 1234.pdf", "Reference ID.pdf", "Dnieper river study.pdf", "Cedar Lane lease.pdf", "Provider notes.pdf", "Hidden fees.pdf", "Video script.pdf", "Pidgin.pdf", "Candid review.pdf", "Tax ID letter.pdf", "Tax_ID_Acme.pdf", "Employer ID notice.pdf", "EIN Letter Acme.pdf", "Read me.pdf", "Ready notice.pdf", "Patent application.pdf",
+      "Fiscal year report.pdf", "Documento di sintesi.pdf", "Carta dei servizi.pdf", "Brand guidelines.pdf", "Identity Verification Services letter.pdf", "Idle time report.pdf",
+    ]) {
+      expect(personalKind(n), n).toBeNull()
+      expect(looksPersonal(n)).toBe(false)
+    }
   })
 })

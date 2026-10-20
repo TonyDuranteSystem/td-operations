@@ -45,8 +45,17 @@ export interface SendFaxInput {
   recipName?: string
 }
 
+/**
+ * What Faxage's answer proves (bug-hunter round 3): 'accepted' = the job was queued; 'refused' = Faxage EXPLICITLY said no (an ERRnn code,
+ * or an error word in a normal 200 answer) so nothing went out; 'unknown' = anything else — a 502/504 from a gateway after the job may have
+ * been queued, a timeout, an empty or unreadable body. An unknown outcome must NEVER release the send's claim.
+ */
+export type FaxageOutcome = 'accepted' | 'refused' | 'unknown'
+
 export interface FaxageResult {
   ok: boolean
+  /** See {@link FaxageOutcome}. `ok` is true only for 'accepted'. */
+  outcome: FaxageOutcome
   /** Faxage job id when one can be parsed from the response. */
   jobId: string | null
   /** Raw response text (trimmed) for logging / surfacing. */
@@ -98,26 +107,52 @@ export function buildFaxageParams(input: SendFaxInput): URLSearchParams {
 export function parseFaxageResponse(text: string, httpOk: boolean): FaxageResult {
   const raw = (text || '').trim()
   const lower = raw.toLowerCase()
-  const isError =
-    !httpOk ||
-    lower.startsWith('err') ||
-    lower.includes('error') ||
-    lower.includes('invalid') ||
-    lower.includes('fail') ||
-    lower.includes('denied')
-
+  const looksHtml = /<\s*[a-z!\/]/i.test(raw)
+  const short = raw.length > 0 && raw.length <= 200 && !looksHtml
+  // REFUSED only on Faxage's own error token — "ERR02: Login incorrect", "ERR 05 …" — at the very start of a plain body. Words like
+  // "Error 502 - Bad Gateway", "Error: upstream timed out" or "error" somewhere inside an answer are NOT a refusal: a gateway talks that
+  // way after the job may have been queued, and a false refusal would release the claim and send the fax TWICE.
+  // A CONTRADICTION is not a refusal: an ERR token that also reads like a gateway page ("ERR 502 Bad Gateway"), or an ERR token next to a
+  // job id in the same body, means we cannot tell — the claim stays.
+  const looksGateway = /gateway|time[d ]?-?out|upstream|proxy|unavailable|bad request|service/.test(lower)
+  const hasJobLabel = /job\s*(?:num(?:ber)?|id)\s*[:#=]?\s*\d/.test(lower)
+  const refused = short && /^err\s*\d{1,3}\b/.test(lower) && !looksGateway && !hasJobLabel
+  // ACCEPTED only when the answer is a short plain 2xx body that gives a job id: LABELLED at the start ("JOBID: 123 queued for …",
+  // "Success JobNum: 123", "Job ID 123", "jobid=123" — words like "fail" or "invalid" later in the sentence do not matter, a company may be
+  // called Failla), or the whole body is essentially the number itself in the shape real ids have (8–12 digits, e.g. 1122910119).
+  // Anything else — maintenance or login HTML with a number in it, an empty body, a non-2xx answer — proves nothing.
   let jobId: string | null = null
-  // Prefer a labelled job id ("JobNum: 123", "Job ID 123", "jobid=123").
-  const labelled = raw.match(/job\s*(?:num(?:ber)?|id)?\s*[:#=]?\s*(\d+)/i)
-  if (labelled) {
-    jobId = labelled[1]
-  } else if (!isError) {
-    // Fall back to a standalone long number only on a non-error response.
-    const bare = raw.match(/\b(\d{4,})\b/)
-    if (bare) jobId = bare[1]
+  if (!refused && httpOk && short) {
+    const labelled = raw.match(/^(?:(?:success|ok|queued|submitted)\W*)?job\s*(?:num(?:ber)?|id)\s*[:#=]?\s*(\d+)/i)
+    if (labelled) jobId = labelled[1]
+    else {
+      const bare = raw.match(/^\s*(\d{8,12})\s*$/)
+      if (bare) jobId = bare[1]
+    }
   }
+  const outcome: FaxageOutcome = refused ? 'refused' : jobId ? 'accepted' : 'unknown'
+  return { ok: outcome === 'accepted', outcome, jobId, raw }
+}
 
-  return { ok: !isError, jobId, raw }
+/** The fax could not even be built / started: provably nothing was sent. */
+export class FaxNotSentError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'FaxNotSentError'
+  }
+}
+
+const NEVER_CONNECTED = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ERR_INVALID_URL'])
+
+/**
+ * Pure: is this error PROOF that nothing reached Faxage? (our own pre-network refusals, a name that does not resolve, a refused connection.)
+ * Anything else — a reset, a timeout, a parse failure after the answer — leaves the outcome unknown.
+ */
+export function isProvablyNotSent(e: unknown): boolean {
+  if (!(e instanceof Error)) return false
+  if (e.name === 'FaxRefusedOutsideProductionError' || e.name === 'FaxNotSentError') return true
+  const code = (e as { code?: unknown }).code ?? ((e as { cause?: { code?: unknown } }).cause?.code)
+  return typeof code === 'string' && NEVER_CONNECTED.has(code)
 }
 
 /** A real fax was attempted from a non-production environment (sandbox, local). */
@@ -138,16 +173,26 @@ export class FaxRefusedOutsideProductionError extends Error {
  * sandbox holds copies of real client records, and a fax cannot be taken back.
  * Tests inject their own fetch and are unaffected.
  */
+/** The Faxage call gives up after this long (the function itself is killed at 60 s): the outcome is then UNKNOWN, never "refused". */
+export const FAXAGE_TIMEOUT_MS = 45_000
+
 export async function sendFax(
   input: SendFaxInput,
   fetchImpl: typeof fetch = fetch,
+  timeoutMs: number = FAXAGE_TIMEOUT_MS,
 ): Promise<FaxageResult> {
   if (fetchImpl === globalThis.fetch && !isProductionDatabase()) throw new FaxRefusedOutsideProductionError()
-  const params = buildFaxageParams(input)
+  let params: URLSearchParams
+  try {
+    params = buildFaxageParams(input)
+  } catch (e) {
+    throw new FaxNotSentError(e instanceof Error ? e.message : 'The fax could not be prepared.')
+  }
   const res = await fetchImpl(FAXAGE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params.toString(),
+    signal: AbortSignal.timeout(timeoutMs),
   })
   const text = await res.text()
   return parseFaxageResponse(text, res.ok)

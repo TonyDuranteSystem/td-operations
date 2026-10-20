@@ -21,7 +21,9 @@
  * the Fax tool uses — so there is one send/idempotency/audit implementation.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createOnceGuard } from '@/lib/crm-store/once-guard'
+import { faxSendFailureText } from '@/lib/fax/client-errors'
 import { Printer, Loader2, Eye, CheckCircle2, AlertTriangle, RefreshCw, Send } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -35,7 +37,8 @@ interface FaxState {
   ss4_status: string | null
   account_id: string | null
   package: PackageInfo | null
-  already_faxed: { at: string; job_id: string | null; faxno: string | null } | null
+  /** `unconfirmed` = a send was started but never confirmed as sent (its outcome must be looked up in Faxage) */
+  already_faxed: { at: string; job_id: string | null; faxno: string | null; unconfirmed?: boolean } | null
   irs_number: string
   default_reason: string
   default_cover: string
@@ -57,6 +60,9 @@ export function Ss4FaxPanel({ serviceDeliveryId }: { serviceDeliveryId: string }
   const [confirming, setConfirming] = useState(false)
   const [sending, setSending] = useState(false)
   const [sentJob, setSentJob] = useState<string | null>(null)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const sendId = useRef(crypto.randomUUID())   // one Send = one fax (the server refuses a second try with the same id)
+  const sendGuard = useRef(createOnceGuard())   // three clicks in one instant = one request
   const [resending, setResending] = useState(false)
 
   const load = useCallback(async () => {
@@ -77,36 +83,70 @@ export function Ss4FaxPanel({ serviceDeliveryId }: { serviceDeliveryId: string }
   }, [serviceDeliveryId])
 
   useEffect(() => { load() }, [load])
+  // a different flow never inherits the previous flow's send id
+  useEffect(() => { sendId.current = crypto.randomUUID() }, [serviceDeliveryId])
 
   async function doSend(confirmResend: boolean) {
     if (!state?.package) return
+    await sendGuard.current.run(() => doSendOnce(confirmResend))
+  }
+
+  async function doSendOnce(confirmResend: boolean) {
+    if (!state?.package) return
     setSending(true)
     try {
-      const res = await fetch('/api/tools/fax/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          faxno,
-          recip_name: 'IRS',
-          reason: reason || undefined,
-          cover_message: cover || undefined,
-          document_id: state.package.document_id,
-          account_id: state.account_id ?? undefined,
-          service_delivery_id: serviceDeliveryId,
-          dedupe_service_delivery_id: serviceDeliveryId,
-          confirm_resend: confirmResend,
-        }),
-      })
-      const data = await res.json().catch(() => ({}))
+      // A confirmed RE-send is checked against the flow's latest fax RIGHT NOW: the panel may be stale (a colleague, another tab, a send that
+      // finished in between). If something newer completed, nothing is sent and the panel warns again.
+      if (confirmResend) {
+        const chk = await fetch(`/api/flows/${serviceDeliveryId}/ss4-fax`, { cache: 'no-store' })
+        const latest = (await chk.json().catch(() => null)) as FaxState | null
+        if (!chk.ok || !latest || !(latest as { success?: boolean }).success) throw new Error('Could not re-check this flow before sending again. The fax was NOT sent. Please try again.')
+        const before = state.already_faxed
+        const now = latest.already_faxed
+        if (now && (!before || now.at !== before.at || now.job_id !== before.job_id || !!now.unconfirmed !== !!before.unconfirmed)) {
+          setState((s) => (s ? { ...s, already_faxed: now } : s))
+          setConfirming(false)
+          toast.warning(now.unconfirmed ? 'A send for this flow was started in the meantime and is not confirmed. Check Faxage first. This fax was NOT sent.' : 'This flow was faxed again in the meantime. Check it before sending once more. This fax was NOT sent.')
+          return
+        }
+      }
+      let res: Response
+      try {
+        res = await fetch('/api/tools/fax/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            faxno,
+            recip_name: 'IRS',
+            reason: reason || undefined,
+            cover_message: cover || undefined,
+            document_id: state.package.document_id,
+            account_id: state.account_id ?? undefined,
+            service_delivery_id: serviceDeliveryId,
+            dedupe_service_delivery_id: serviceDeliveryId,
+            confirm_resend: confirmResend,
+            send_id: sendId.current,
+          }),
+        })
+      } catch {
+        // the request may have reached Faxage before the connection dropped: the outcome is UNKNOWN
+        throw new Error(faxSendFailureText({ networkError: true }))
+      }
+      const parsed = await res.json().catch(() => null)
+      const data = parsed ?? {}
       if (res.status === 409 && data.already_faxed) {
-        // Server double-send guard tripped — surface it and let staff confirm.
+        // Server double-send guard tripped — surface it. A normal "already sent" can be confirmed; an UNCONFIRMED send cannot be re-sent
+        // blindly (it must be looked up in Faxage and answered in Fax History first).
         setConfirming(false)
         setState((s) => (s ? { ...s, already_faxed: data.already_faxed } : s))
-        toast.warning('This flow was already faxed. Confirm below to send it again.')
+        if (!data.already_faxed.unconfirmed) sendId.current = crypto.randomUUID()   // a confirmed re-send is a NEW send, on purpose
+        toast.warning(data.already_faxed.unconfirmed ? 'A send for this flow was never confirmed. Check Faxage first.' : 'This flow was already faxed. Confirm below to send it again.')
         return
       }
-      if (!res.ok || !data.success) throw new Error(data.error || 'Could not send the fax.')
+      if (!res.ok || !data.success) throw new Error(faxSendFailureText({ status: res.status, json: parsed }, 'Could not send the fax.'))
       setSentJob(data.job_id ? String(data.job_id) : 'submitted')
+      sendId.current = crypto.randomUUID()   // the next fax of this panel is a new send
+      setHistoryError(data.history_error ? String(data.history_error) : null)
       setConfirming(false)
       toast.success('Fax submitted to the IRS.')
     } catch (err) {
@@ -213,6 +253,7 @@ export function Ss4FaxPanel({ serviceDeliveryId }: { serviceDeliveryId: string }
         <p className="text-xs text-green-700 mt-1">
           Job <span className="font-mono">{sentJob}</span>. Upload the fax confirmation below to advance the flow.
         </p>
+        {historyError && <p role="alert" className="mt-2 text-xs font-medium text-red-700">{historyError}</p>}
         <button onClick={() => { setSentJob(null); load() }} className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-green-700 hover:text-green-800">
           <RefreshCw className="h-3.5 w-3.5" /> Back to the fax panel
         </button>
@@ -242,7 +283,14 @@ export function Ss4FaxPanel({ serviceDeliveryId }: { serviceDeliveryId: string }
             <Eye className="h-3.5 w-3.5" /> View the package to fax
           </a>
 
-          {state.already_faxed && (
+          {state.already_faxed?.unconfirmed && (
+            <div role="alert" className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              A send for this flow was started{formatWhen(state.already_faxed.at) ? ` on ${formatWhen(state.already_faxed.at)}` : ''} but never confirmed, so it is not known whether the fax went out.
+              Check Faxage, then say what happened in{' '}
+              <a href="/tools/fax/history" target="_blank" rel="noreferrer" className="font-semibold underline">Fax History</a>. Until then it cannot be sent again from here.
+            </div>
+          )}
+          {state.already_faxed && !state.already_faxed.unconfirmed && (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               A fax was already sent for this flow{state.already_faxed.job_id ? ` (job ${state.already_faxed.job_id})` : ''}
               {formatWhen(state.already_faxed.at) ? ` on ${formatWhen(state.already_faxed.at)}` : ''}. Sending again will fax the IRS a second time.
@@ -288,7 +336,7 @@ export function Ss4FaxPanel({ serviceDeliveryId }: { serviceDeliveryId: string }
             <div className="mt-3 flex items-center gap-4">
               <button
                 onClick={() => setConfirming(true)}
-                disabled={!faxno.trim()}
+                disabled={!faxno.trim() || !!state.already_faxed?.unconfirmed}
                 className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Send className="h-4 w-4" /> {state.already_faxed ? 'Send fax again' : 'Send fax to IRS'}
