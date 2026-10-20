@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
-import { fileRenewal, type RenewalKind } from '@/lib/operations/file-renewal'
+import { fileRenewal, renewalFailureStatus, type RenewalKind } from '@/lib/operations/file-renewal'
 import { parsePrincipalOfficeDecision, type PrincipalOfficeDecision } from '@/lib/operations/principal-office'
 
 export const dynamic = 'force-dynamic'
@@ -125,7 +125,7 @@ export async function POST(req: NextRequest) {
     })
 
     if (!result.success) {
-      return NextResponse.json({ error: result.error ?? 'Failed to file renewal.' }, { status: 500 })
+      return NextResponse.json({ error: result.error ?? 'Failed to file renewal.' }, { status: renewalFailureStatus(result.error) })
     }
 
     return NextResponse.json({ ok: true, ...result.data })

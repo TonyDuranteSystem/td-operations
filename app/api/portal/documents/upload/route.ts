@@ -5,8 +5,7 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 import { PERSONAL_CATEGORY } from '@/lib/documents/visibility-guard'
 import { getClientContactId } from '@/lib/portal-auth'
-import { CLIENT_NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
-import { uploadBinaryToDrive } from '@/lib/google-drive'
+import { CLIENT_NO_STORAGE_SENTENCE, NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
 
 /**
  * POST /api/portal/documents/upload
@@ -134,52 +133,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Upload failed. Please try again.' }, { status: 500 })
   }
 
-  let driveFolderId: string | null = null
   if (!stored) {
-    let decision
-    try { decision = await noStorageDecisionFor(accountId) } catch {
-      return NextResponse.json({ error: 'Upload failed. Please try again.' }, { status: 500 })
-    }
-    if (decision.route === 'refuse') {
-      discardStaged()
-      return NextResponse.json({ error: CLIENT_NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
-    }
-    driveFolderId = decision.folderId
+    // Stop Drive S2: nothing is ever written to Drive, so a company whose file did not land in storage cannot receive it.
+    discardStaged()
+    return NextResponse.json({ error: CLIENT_NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
   }
 
   try {
-    let docId: string
-    if (stored) {
-      docId = stored.documentRowId
-    } else {
-      // A company left on its old folder (no storage, a folder, not finished): unchanged.
-      const driveFile = await uploadBinaryToDrive(fileName, fileBuffer, mimeType, driveFolderId as string)
-      const { data: doc, error: insertError } = await supabaseAdmin
-        .from('documents')
-        .insert({
-          file_name: fileName,
-          drive_file_id: driveFile.id,
-          account_id: accountId,
-          // A personal document (category 2 — passport/ID…) belongs to the member who
-          // uploaded it; without an owner nobody (not even the uploader) can see it.
-          // Teammates have no contact id, so theirs stays unowned (hidden) until staff assign it.
-          ...(categoryNum === PERSONAL_CATEGORY ? { contact_id: getClientContactId(user) } : {}),
-          category: categoryNum,
-          document_type_name: typeName,
-          status: 'classified',
-          confidence: 'high',
-          mime_type: mimeType,
-          file_size: fileBuffer.length,
-        })
-        .select('id')
-        .single()
-
-      if (insertError) {
-        console.error('Document insert error:', insertError)
-        return NextResponse.json({ error: 'File uploaded but failed to save record. Please contact support.' }, { status: 500 })
-      }
-      docId = doc.id as string
-    }
+    const docId = stored.documentRowId
 
     // Clean up Supabase Storage (async, don't block response)
     if (storagePath) {

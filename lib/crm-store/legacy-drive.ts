@@ -1,16 +1,15 @@
 /**
- * CRM Store — the ONE definition of "this company / person may still be written to in Google Drive" (Stop Drive, dev job 264bb882, slice S1d).
+ * CRM Store — the ONE answer to "may this company / person be written to in Google Drive?" (Stop Drive, dev job 264bb882, S1d + S2).
  *
- * Antonio (2026-10-18): everything points to the storage; the old Drive is an archive and the new "backup" folder mirrors the
- * storage. The only companies deliberately left on Drive are the few that have a Drive folder and no storage and are not
- * Closed / Cancelled (REBIS, YBR, Degasper, Fresh Legal at the time of writing) — their pre-existing Drive path must simply
- * keep working. Everything else writes NOTHING in Drive:
- *   - a company with storage (or mid-move)        → storage only
- *   - a Closed / Cancelled company                → read-only archive
+ * Since S2 the answer is ALWAYS no: nothing but the one-way backup writes to Drive (lib/google-drive-write-scope.ts). The few companies
+ * once left on their old Drive folder (REBIS, YBR, Degasper, Fresh Legal) are frozen — "these stay in Drive and stop" (Antonio,
+ * 2026-10-18). The verdict only says WHY, so the action that asked can answer in one plain sentence:
+ *   - a company with storage (or mid-move)          → storage only
+ *   - a Closed / Cancelled company                  → read-only archive
+ *   - a company frozen on its old Drive folder      → read-only archive
  *   - a company with no storage and no Drive folder → nothing to write into, and no folder is ever created
  *
- * Every writer that still has a Drive branch asks `legacyDriveForAccount` / `legacyDriveForContact` first; a refusal is an
- * ERROR for the caller plus a staff-visible alarm (`raiseDriveWriteRefused`), never an "ok" and never a silent skip.
+ * A refusal is an ERROR for the caller plus a staff-visible alarm (`raiseDriveWriteRefused`), never an "ok" and never a silent skip.
  */
 
 import { decideNoStorage, folderIdOf, isFinishedStatus } from "./no-storage"
@@ -21,7 +20,7 @@ import { decideNoStorage, folderIdOf, isFinishedStatus } from "./no-storage"
 export const isArchivedStatus = isFinishedStatus
 export const folderIdOfRecord = folderIdOf
 
-export type LegacyRefusalReason = "has_storage" | "moving" | "archived" | "no_folder" | "no_company"
+export type LegacyRefusalReason = "has_storage" | "moving" | "archived" | "no_folder" | "no_company" | "frozen"
 
 /** The one plain sentence per reason (the answer of the action that was asked for — not a notice, label or banner). */
 export const LEGACY_REFUSAL_SENTENCE: Record<LegacyRefusalReason, string> = {
@@ -30,13 +29,12 @@ export const LEGACY_REFUSAL_SENTENCE: Record<LegacyRefusalReason, string> = {
   archived: "This company is closed, so nothing new can be saved for it.",
   no_folder: "This company has no document storage in the CRM, so this file could not be saved.",
   no_company: "This file has no company to be saved for, so it could not be saved.",
+  frozen: "This company's files are in its old Google Drive folder, which is now read-only, so this file could not be saved. Add it by hand where it belongs.",
 }
 
 // The optional `undefined` members let callers read `.reason` / `.folderId` without a narrowing step (this project's
 // tsconfig is not strict, where a `true | false` tag does not narrow).
-export type LegacyDriveVerdict =
-  | { allowed: true; folderId: string; reason?: undefined; sentence?: undefined }
-  | { allowed: false; reason: LegacyRefusalReason; sentence: string; folderId?: undefined }
+export type LegacyDriveVerdict = { allowed: false; reason: LegacyRefusalReason; sentence: string }
 
 export interface AccountFacts {
   /** accounts.status; null when the account does not exist */
@@ -48,13 +46,13 @@ export interface AccountFacts {
 
 const refuse = (reason: LegacyRefusalReason): LegacyDriveVerdict => ({ allowed: false, reason, sentence: LEGACY_REFUSAL_SENTENCE[reason] })
 
-/** Pure: may a NEW write go into this company's Drive folder? Only the left-on-Drive state: folder + no storage + not closed. */
+/** Pure: may a NEW write go into this company's Drive folder? Never (S2) — the verdict names the true reason. */
 export function decideLegacyAccount(f: AccountFacts | null): LegacyDriveVerdict {
   if (!f || f.status === null) return refuse("no_company")
   if (f.state === "store") return refuse("has_storage")
   if (f.state === "moving") return refuse("moving")
   const d = decideNoStorage({ status: f.status, drive_folder_id: f.driveFolderId })
-  return d.route === "drive" ? { allowed: true, folderId: d.folderId } : refuse(d.reason === "moving" ? "no_folder" : d.reason)
+  return refuse(d.reason === "moving" ? "no_folder" : d.reason)
 }
 
 export interface LegacyAccountDeps {
@@ -95,11 +93,9 @@ export interface LegacyContactDeps {
 }
 
 /**
- * A person may still be written to in Drive only when they have no storage of their own and belong to a company deliberately
- * left on Drive (folder, no storage, not closed). Their folder is their own, or — if they never had one — that company's folder
- * (the same place the old staff upload used), so one person's papers are never split between Drive and a new storage while the
- * rest of their company stays in Drive. Anyone else (a lead, a person of a company in storage or closed) gets their own
- * storage (`saveDocumentForContact` opens it) — never a Drive folder. The refusal names the TRUE reason.
+ * A person is never written to in Drive (S2). Anyone without a storage of their own (a lead, a person of a company in storage or
+ * closed) gets their own storage (`saveDocumentForContact` opens it); a person of a company frozen on its old Drive folder is told
+ * so. The refusal names the TRUE reason.
  */
 export async function legacyDriveForContact(contactId: string, deps?: LegacyContactDeps): Promise<LegacyDriveVerdict> {
   const d: LegacyContactDeps = deps ?? {
@@ -122,13 +118,9 @@ export async function legacyDriveForContact(contactId: string, deps?: LegacyCont
   if (f.liveOwner) return refuse("has_storage")
   if (f.accountIds.length === 0) return refuse(f.driveFolderId ? "no_company" : "no_folder")
   const verdicts: LegacyDriveVerdict[] = []
-  for (const accountId of f.accountIds) {
-    const v = await d.account(accountId)
-    if (v.allowed) return { allowed: true, folderId: f.driveFolderId ?? (v.folderId as string) }
-    verdicts.push(v)
-  }
-  // none of their companies is a left-on-Drive one: say why (storage first, then a move in progress, then closed)
-  for (const reason of ["has_storage", "moving", "archived"] as const) {
+  for (const accountId of f.accountIds) verdicts.push(await d.account(accountId))
+  // say why (storage first, then a move in progress, then frozen on the old folder, then closed)
+  for (const reason of ["has_storage", "moving", "frozen", "archived"] as const) {
     if (verdicts.some((v) => v.reason === reason)) return refuse(reason)
   }
   return refuse("no_folder")

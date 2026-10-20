@@ -4,7 +4,6 @@ import { isDashboardUser } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { generateLeasePDF } from '@/lib/lease-pdf'
 import { NO_STORAGE_STATUS, noStorageDecisionFor, receiveVerdictFor } from '@/lib/crm-store/no-storage'
-import { listFolder, uploadBinaryToDriveUpsert } from '@/lib/google-drive'
 
 export async function POST(req: NextRequest) {
   const supabase = createClient()
@@ -117,81 +116,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // No storage: a company left on its old folder carries on as before; everyone else gets one plain sentence
-    // (and the lease row is left untouched).
+    // No storage: Stop Drive S2 — nothing is ever written to Drive, so the company gets one plain sentence with the true
+    // reason (and the lease row is left untouched).
     const decision = await noStorageDecisionFor(lease.account_id)
-    if (decision.route === 'refuse') {
-      dropOrphan()
-      return NextResponse.json({ error: decision.sentence }, { status: NO_STORAGE_STATUS })
-    }
-
-    // Find Company subfolder
-    const folderResult = await listFolder(decision.folderId) as {
-      files?: { id: string; name: string; mimeType: string }[]
-    }
-    const companyFolder = folderResult.files?.find(
-      f => f.name.includes('Company') && f.mimeType === 'application/vnd.google-apps.folder'
-    )
-    const targetFolderId = companyFolder?.id || decision.folderId
-
-    // Upload to Drive
-    const fileName = `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`
-    // Stable name -> UPSERT: regeneration refreshes the one existing file in place (LT Program incident class).
-    const driveResult = await uploadBinaryToDriveUpsert(
-      fileName, Buffer.from(pdfBytes), 'application/pdf', targetFolderId
-    ) as { id: string }
-
-    // Update or insert documents record
-    const { data: existingDoc } = await supabaseAdmin
-      .from('documents')
-      .select('id')
-      .eq('account_id', lease.account_id)
-      .in('document_type_name', ['Office Lease', 'Lease Agreement'])
-      .eq('portal_visible', true)
-      .limit(1)
-      .maybeSingle()
-
-    const driveLink = `https://drive.google.com/file/d/${driveResult.id}/view`
-
-    if (existingDoc) {
-      await supabaseAdmin
-        .from('documents')
-        .update({
-          drive_file_id: driveResult.id,
-          drive_link: driveLink,
-          file_name: fileName,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existingDoc.id)
-    } else {
-      await supabaseAdmin
-        .from('documents')
-        .insert({
-          account_id: lease.account_id,
-          file_name: fileName,
-          document_type_name: 'Office Lease',
-          category: 1,
-          category_name: 'Company',
-          drive_file_id: driveResult.id,
-          drive_link: driveLink,
-          status: 'classified',
-          confidence: '1.0',
-          processed_at: new Date().toISOString(),
-          portal_visible: true,
-        })
-    }
-
-    // Update lease record
-    await supabaseAdmin
-      .from('lease_agreements')
-      .update({
-        pdf_storage_path: storagePath,
-        pdf_drive_file_id: driveResult.id,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', lease_id)
-
-    return NextResponse.json({ ok: true, driveFileId: driveResult.id, storagePath })
+    dropOrphan()
+    return NextResponse.json({ error: decision.sentence }, { status: NO_STORAGE_STATUS })
   } catch (err) {
     console.error('[regen-lease-pdf]', err)
     return NextResponse.json(

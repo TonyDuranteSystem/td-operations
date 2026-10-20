@@ -38,13 +38,12 @@ import { formationStateForClient } from "@/lib/formation/state-lookup"
 import { resolveFormationStateCode, formationStateFromWizardData, type FormationStateCode } from "@/lib/formation/states"
 import { reanchorLeadConversations } from "@/lib/team/reanchor-conversations"
 import { logAction } from "@/lib/mcp/action-log"
-import { ensureCompanyFolder, migrateContactToCompany } from "@/lib/drive-folder-utils"
+import { ensureCompanyFolder } from "@/lib/drive-folder-utils"
 import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
 import { resolveMemberContactId } from "@/lib/members/resolve-member-contact"
 import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identity"
 import { upsertMemberRow } from "@/lib/members/write-member-row"
 import { syncTier } from "./sync-tier"
-import { uploadBinaryToDrive } from "@/lib/google-drive"
 
 const STATE_NAME_FROM_CODE: Record<string, string> = {
   NM: "New Mexico",
@@ -976,8 +975,6 @@ export async function materializeFormationCompany(
       .single()
     const ownerName = ownerContact ? [ownerContact.first_name, ownerContact.last_name].filter(Boolean).join(" ") : ""
 
-    let companyContactsSubfolderId: string | null = null
-
     // CRM Store pilot (sandbox only, job 685467b5 — lib/crm-store/formation-pilot.ts): a formation
     // whose files already live in the new store gets NO Drive company folder, NO Drive migration and
     // NO Drive passport copies (Drive is the backup, made by the store's own backup). Every other
@@ -993,11 +990,6 @@ export async function materializeFormationCompany(
     // ensureCompanyFolder (which then refuses with StoreOwnedAccountError) — the member passports then go to the members' storage
     // exactly like a pilot case, and nothing is skipped silently.
     let companyOpenedInStorage = false
-    const ensureDriveFolder = async () => {
-      const folderResult = await ensureCompanyFolder(accountId, chosenName, stateName, ownerName)
-      companyContactsSubfolderId = folderResult.subfolders["2. Contacts"] ?? null
-      return folderResult
-    }
 
     if (pilotCase) {
       steps.push({ step: "drive_folder", status: "skipped", detail: "CRM Store pilot — the company's files live in the new store; Drive gets the backup copy" })
@@ -1013,101 +1005,10 @@ export async function materializeFormationCompany(
           .is("account_id", null)
       }
     } else try {
-      const folderResult = await ensureDriveFolder()
-      steps.push({
-        step: "drive_folder",
-        status: "ok",
-        detail: folderResult.created ? "Company Drive folder created" : "Company Drive folder already exists, linked",
-      })
-
-      // Multi-company guard: if the owner already belongs to another active
-      // company, their contact Drive folder may live INSIDE that company —
-      // migrating it would drag the other company's files along and re-point
-      // the contact away from it. So for multi-company owners we do NOT migrate;
-      // instead we copy the owner passport from storage straight into THIS
-      // company's "2. Contacts" (same path as additional members) and relink the
-      // staging passport document to this account. Single-company owners keep
-      // the original migrate behavior (their contact folder is their own).
-      const ownerHasOtherActiveAccount = (existingLinks ?? []).some(l => {
-        const acc = l.accounts as unknown as { status: string } | null
-        return acc && acc.status !== "Cancelled" && acc.status !== "Closed"
-      })
-
-      if (ownerHasOtherActiveAccount) {
-        const ownerPassportPath = typeof submitted.passport_owner === "string"
-          ? submitted.passport_owner
-          : uploadPaths.find(p => p.includes("passport_owner")) || null
-        if (ownerPassportPath && companyContactsSubfolderId) {
-          try {
-            const cleanPath = ownerPassportPath.replace(/^\/+/, "")
-            // Duplicate-upload guard (LT Program incident class): a re-run
-            // must not re-copy — the prior run already relinked/inserted the
-            // documents row, so skip the whole block.
-            const { fileExistsInFolder } = await import("@/lib/google-drive")
-            const ownerDup = await fileExistsInFolder(companyContactsSubfolderId, cleanPath.split("/").pop() || "passport.pdf")
-            if (ownerDup.exists) {
-              steps.push({ step: "owner_passport_copy", status: "skipped", detail: `Already on Drive (${ownerDup.id})` })
-            } else {
-            const { data: blob, error: dlErr } = await supabaseAdmin.storage
-              .from("onboarding-uploads")
-              .download(cleanPath)
-            if (dlErr || !blob) {
-              steps.push({ step: "owner_passport_copy", status: "error", detail: dlErr?.message || "Download failed" })
-            } else {
-              const fileName = cleanPath.split("/").pop() || "passport.pdf"
-              const buffer = Buffer.from(await blob.arrayBuffer())
-              const mimeType = blob.type || "application/octet-stream"
-              const driveFile = await uploadBinaryToDrive(fileName, buffer, mimeType, companyContactsSubfolderId) as { id: string }
-              const newLink = `https://drive.google.com/file/d/${driveFile.id}/view`
-              // Relink the staging owner-passport doc row (created by
-              // formation_setup with account_id=null) to this company + the new
-              // Drive file, so there is exactly one row in the right place.
-              const { data: relinked } = await supabaseAdmin
-                .from("documents")
-                .update({ account_id: accountId, drive_file_id: driveFile.id, drive_link: newLink, updated_at: new Date().toISOString() })
-                .eq("contact_id", params.contact_id)
-                .eq("document_type_name", "Passport")
-                .eq("category", 2)
-                .is("account_id", null)
-                .select("id")
-              if (!relinked || relinked.length === 0) {
-                await supabaseAdmin.from("documents").insert({
-                  file_name: fileName,
-                  drive_file_id: driveFile.id,
-                  drive_link: newLink,
-                  document_type_name: "Passport",
-                  category: 2,
-                  category_name: "Contacts",
-                  status: "classified",
-                  contact_id: params.contact_id,
-                  account_id: accountId,
-                  portal_visible: true,
-                })
-              }
-              steps.push({ step: "owner_passport_copy", status: "ok", detail: `Owner passport placed in company 2.Contacts (${driveFile.id})` })
-            }
-            }
-          } catch (e) {
-            steps.push({ step: "owner_passport_copy", status: "error", detail: e instanceof Error ? e.message : String(e) })
-          }
-        }
-        steps.push({ step: "drive_migration", status: "skipped", detail: "Multi-company owner — contact folder NOT migrated (other company left intact)" })
-      } else {
-        const contactFolderId = ownerContact?.drive_folder_id || (() => {
-          const u = ownerContact?.gdrive_folder_url
-          if (!u) return null
-          const m = u.match(/folders\/([a-zA-Z0-9_-]+)/)
-          return m?.[1] ?? null
-        })()
-        if (contactFolderId && contactFolderId !== folderResult.folderId) {
-          const migrationResult = await migrateContactToCompany(contactFolderId, folderResult.folderId, params.contact_id)
-          steps.push({
-            step: "drive_migration",
-            status: migrationResult.errors.length > 0 ? "error" : "ok",
-            detail: `${migrationResult.moved} file(s) migrated${migrationResult.errors.length > 0 ? `, ${migrationResult.errors.length} error(s)` : ""}`,
-          })
-        }
-      }
+      // Stop Drive S2: this never returns a Drive folder — it opens the company's storage and throws StoreOwnedAccountError (handled
+      // below), or refuses (closed / moving / frozen company: a staff alarm is raised). Nothing is copied or migrated into Drive.
+      await ensureCompanyFolder(accountId, chosenName, stateName, ownerName)
+      steps.push({ step: "drive_folder", status: "error", detail: "Could not open this company's document storage" })
     } catch (driveErr) {
       if (driveErr instanceof Error && driveErr.name === "StoreOwnedAccountError") {
         companyOpenedInStorage = true
@@ -1129,7 +1030,6 @@ export async function materializeFormationCompany(
     // CRM Store pilot: each member's passport goes to that member's own personal storage first; only
     // the ones the store could not take continue to today's Drive copy (the Drive company folder is then
     // created for them — a file never ends up nowhere).
-    let drivePassports = pendingMemberPassports
     if ((pilotCase || companyOpenedInStorage) && pendingMemberPassports.length > 0) {
       const failed: typeof pendingMemberPassports = []
       for (const mp of pendingMemberPassports) {
@@ -1166,7 +1066,6 @@ export async function materializeFormationCompany(
       // company's later steps — SS-4, IRS package — onto Drive). They stay where the wizard uploaded them
       // and are listed from there (the same `storage:` pointer the workspace upload uses when there is no
       // Drive folder). The alarm was raised by the failed save.
-      drivePassports = []
       for (const mp of failed) {
         try {
           const cleanPath = mp.storage_path.replace(/^\/+/, "")
@@ -1192,49 +1091,6 @@ export async function materializeFormationCompany(
         }
       }
     }
-    if (companyContactsSubfolderId && drivePassports.length > 0) {
-      // Duplicate-upload guard (LT Program incident class): skip files already
-      // on Drive — the prior run also inserted their documents rows.
-      const { folderFileNameMap } = await import("@/lib/google-drive")
-      const contactsNames = await folderFileNameMap(companyContactsSubfolderId)
-      for (const mp of drivePassports) {
-        try {
-          const cleanPath = mp.storage_path.replace(/^\/+/, "")
-          const dupName = cleanPath.split("/").pop() || `passport_member_${mp.index}.pdf`
-          if (contactsNames?.has(dupName)) {
-            steps.push({ step: `member_${mp.index}_passport`, status: "skipped", detail: `Already on Drive (${contactsNames.get(dupName)})` })
-            continue
-          }
-          const { data: blob, error: dlErr } = await supabaseAdmin.storage
-            .from("onboarding-uploads")
-            .download(cleanPath)
-          if (dlErr || !blob) {
-            steps.push({ step: `member_${mp.index}_passport`, status: "error", detail: dlErr?.message || "Download failed" })
-            continue
-          }
-          const fileName = cleanPath.split("/").pop() || `passport_member_${mp.index}.pdf`
-          const buffer = Buffer.from(await blob.arrayBuffer())
-          const mimeType = blob.type || "application/octet-stream"
-          const driveFile = await uploadBinaryToDrive(fileName, buffer, mimeType, companyContactsSubfolderId) as { id: string }
-          await supabaseAdmin.from("documents").insert({
-            file_name: fileName,
-            drive_file_id: driveFile.id,
-            drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
-            document_type_name: "Passport",
-            category: 2,
-            category_name: "Contacts",
-            status: "classified",
-            contact_id: mp.contact_id,
-            account_id: accountId,
-            portal_visible: true,
-          })
-          steps.push({ step: `member_${mp.index}_passport`, status: "ok", detail: `Uploaded ${fileName}` })
-        } catch (e) {
-          steps.push({ step: `member_${mp.index}_passport`, status: "error", detail: e instanceof Error ? e.message : String(e) })
-        }
-      }
-    }
-
     // 10. Update SD: link to account + update service_name.
     //
     // Scoped to a SINGLE, unambiguous SD — not "every active Company Formation

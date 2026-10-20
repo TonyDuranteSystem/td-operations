@@ -4,14 +4,14 @@
  * The banking / closure / wizard completion flows used to read `accounts.drive_folder_id` and, when it was empty, quietly file
  * nothing (a company in the storage with no Drive folder — every new client — lost its form package). Now:
  *   - a company in storage      → the marker "account-storage:<id>" (`saveFormToDrive` files it in the company's storage)
- *   - a company left on Drive   → its own Drive folder (folder, no storage, not Closed / Cancelled)
  *   - anyone else                → no destination: the caller reports the plain sentence as an ERROR and a staff alarm is raised
+ *     (Stop Drive S2: a company left on its old Drive folder is frozen too — nothing is ever written to Drive)
  */
 import { legacyDriveForAccount, raiseDriveWriteRefused, LEGACY_REFUSAL_SENTENCE, type LegacyRefusalReason } from "./legacy-drive"
 
 // (the optional `undefined` members let callers read `.sentence` / `.folderId` without narrowing: tsconfig is not strict)
 export type FormDestination =
-  | { ok: true; folderId: string; via: "storage" | "legacy-drive"; reason?: undefined; sentence?: undefined }
+  | { ok: true; folderId: string; via: "storage"; reason?: undefined; sentence?: undefined }
   | { ok: false; reason: LegacyRefusalReason; sentence: string; folderId?: undefined; via?: undefined }
 
 export interface FormDestinationDeps {
@@ -38,7 +38,6 @@ export async function formDestinationForAccount(accountId: string | null | undef
   const marker = await d.storageMarker(accountId)
   if (marker) return { ok: true, folderId: marker, via: "storage" }
   const v = await d.legacy(accountId)
-  if (v.allowed) return { ok: true, folderId: v.folderId as string, via: "legacy-drive" }
   const sentence = await d.alarm({ flow, accountId, reason: v.reason as LegacyRefusalReason })
   return { ok: false, reason: v.reason as LegacyRefusalReason, sentence }
 }

@@ -834,7 +834,7 @@ function OverviewTab({
       />
 
       {/* Wizard Progress Card */}
-      <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} contactHasDriveFolder={!!contact.gdrive_folder_url} />
+      <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} />
 
     </div>
   )
@@ -1497,39 +1497,13 @@ function WizardProgressCard({
   wizardProgress,
   pendingActivations,
   contactId,
-  contactHasDriveFolder,
 }: {
   wizardProgress: WizardProgressRecord[]
   pendingActivations: PendingActivationRecord[]
   contactId: string
-  contactHasDriveFolder: boolean
 }) {
-  const [processing, setProcessing] = useState(false)
   const primaryWizard = wizardProgress[0] ?? null
   const primaryActivation = pendingActivations[0] ?? null
-
-  const handleProcessDocs = async () => {
-    setProcessing(true)
-    try {
-      const res = await fetch('/api/crm/admin-actions/contact-actions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contact_id: contactId, action: 'process_documents' }),
-      })
-      const data = await res.json()
-      if (data.success) {
-        toast.success(data.detail)
-        if (data.side_effects?.length) toast.info(data.side_effects.join(' | '))
-        window.location.reload()
-      } else {
-        toast.error(data.detail || 'Failed')
-      }
-    } catch {
-      toast.error('Network error')
-    } finally {
-      setProcessing(false)
-    }
-  }
 
   if (!primaryWizard) {
     // Show "not started" with days since payment if applicable
@@ -1632,23 +1606,6 @@ function WizardProgressCard({
             : `Last updated ${formatDate(primaryWizard.updated_at.split('T')[0])}`
           }
         </div>
-        {primaryWizard.status === 'submitted' && (
-          contactHasDriveFolder ? (
-            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700">
-              <CheckCircle2 className="h-3 w-3" />
-              Documents processed
-            </span>
-          ) : (
-            <button
-              onClick={handleProcessDocs}
-              disabled={processing}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 disabled:opacity-50 transition-colors"
-            >
-              {processing ? <Loader2 className="h-3 w-3 animate-spin" /> : <FolderOpen className="h-3 w-3" />}
-              Process Documents
-            </button>
-          )
-        )}
       </div>
     </div>
   )
@@ -3107,7 +3064,6 @@ function ContactDocumentsTab({
   const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
   const [resolvingDocId, setResolvingDocId] = useState<string | null>(null)
-  const [resolverFolders, setResolverFolders] = useState<{ id: string; name: string }[]>([])
 
   const handleRunOcr = async (docId: string) => {
     setOcrRunning(docId)
@@ -3148,29 +3104,6 @@ function ContactDocumentsTab({
     if (resolvingDocId === doc.id) return // already resolving this exact document — ignore a re-entrant click
     if (!doc.portal_visible && doc.account_id && isUnresolvedPersonalDocument({ category: doc.category, contact_id: doc.contact_id })) {
       setResolvingDocId(doc.id)
-      setResolverFolders([])
-      // resolverFolders is shared across every row in this tab (one resolver
-      // shows at a time), so a slower-to-resolve fetch for a PREVIOUS doc
-      // must not clobber a later doc's folder list if staff switch targets
-      // before the first fetch returns. Guard on resolvingDocId still
-      // matching this fetch's own doc.id when it lands.
-      const requestedForDocId = doc.id
-      fetch(`/api/accounts/${doc.account_id}/files`)
-        .then(res => res.json())
-        .then(data => {
-          setResolvingDocId(current => {
-            if (current === requestedForDocId) {
-              setResolverFolders((data.folders || []).map((f: { id: string; name: string }) => ({ id: f.id, name: f.name })))
-            }
-            return current
-          })
-        })
-        .catch(() => {
-          setResolvingDocId(current => {
-            if (current === requestedForDocId) setResolverFolders([])
-            return current
-          })
-        })
       return
     }
     setTogglingVis(doc.id)
@@ -3635,11 +3568,9 @@ function ContactDocumentsTab({
                 <div className="px-4 pb-2.5">
                   <ResolvePersonalDocument
                     documentId={doc.id}
-                    driveFileId={doc.drive_file_id}
                     accountId={doc.account_id}
                     confidence={doc.confidence}
                     updatedAt={doc.updated_at}
-                    folders={resolverFolders}
                     onResolved={() => { setResolvingDocId(null); window.location.reload() }}
                     onCancel={() => setResolvingDocId(null)}
                   />

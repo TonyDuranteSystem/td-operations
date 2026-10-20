@@ -5,81 +5,21 @@
  * Enables Claude on any device (iPad, iPhone, Mac) to list, read, upload,
  * and delete files without needing credentials — they stay server-side.
  *
- * IN-LINE SYNC: All files written to Supabase Storage are automatically
- * mirrored to Google Drive (My Drive > TD Operations/) preserving the
- * folder structure. Supabase Storage = source of truth, Drive = mirror.
+ * Stop Drive S2 (dev job 264bb882): these tools used to mirror every write into Google Drive (My Drive > TD Operations/). That
+ * mirror is GONE — nothing but the one-way storage backup may write to Drive. The bucket write is unchanged.
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import {
-  updateFileContent,
-  uploadFileMyDrive,
-  listFolderAnyDrive,
-  ensureDrivePath,
-} from "@/lib/google-drive"
 
 const BUCKET = "td-operations"
-
-// Google Drive folder ID for "TD Operations" in My Drive (support@tonydurante.us)
-// All Supabase Storage content is mirrored here
-const DRIVE_TD_OPERATIONS_FOLDER = (process.env.DRIVE_TD_OPERATIONS_FOLDER || "").trim()
-
-/**
- * Sync a file to Google Drive after writing to Supabase Storage.
- * Best-effort: if Drive sync fails, the Supabase write is still successful.
- * Mirrors the full Supabase Storage path into My Drive > TD Operations/.
- */
-async function syncToDrive(
-  filePath: string,
-  content: string,
-  mimeType: string,
-): Promise<string | null> {
-  // Skip sync if no Drive folder configured
-  if (!DRIVE_TD_OPERATIONS_FOLDER) return null
-
-  try {
-    const segments = filePath.split("/")
-    const fileName = segments.pop()!
-
-    // Ensure the parent folder path exists on Drive
-    // e.g. "Claude Memory/INDEX.md" → ensure "Claude Memory" folder exists
-    const parentFolderId = segments.length > 0
-      ? await ensureDrivePath(DRIVE_TD_OPERATIONS_FOLDER, segments)
-      : DRIVE_TD_OPERATIONS_FOLDER
-
-    // Check if file already exists in the target folder
-    const folderContents = (await listFolderAnyDrive(parentFolderId, 200)) as {
-      files?: { id: string; name: string; mimeType: string }[]
-    }
-    const match = folderContents.files?.find(
-      (f) => f.name === fileName,
-    )
-
-    if (match) {
-      await updateFileContent(match.id, content, mimeType)
-      return `updated ${match.id}`
-    } else {
-      const result = (await uploadFileMyDrive(
-        parentFolderId,
-        fileName,
-        content,
-        mimeType,
-      )) as { id: string }
-      return `created ${result.id}`
-    }
-  } catch (err: any) {
-    console.error(`[Drive sync] Failed for ${filePath}: ${err.message}`)
-    return `sync-error: ${err.message}`
-  }
-}
 
 export function registerStorageTools(server: McpServer) {
   // ─── storage_list ────────────────────────────────────────
   server.tool(
     "storage_list",
-    "List files and folders in Supabase Storage (td-operations bucket). Use path '' for root. Shows folder names and file details (name, size, last updated). Use storage_read to read file content. Storage files are auto-mirrored to Google Drive.",
+    "List files and folders in Supabase Storage (td-operations bucket). Use path '' for root. Shows folder names and file details (name, size, last updated). Use storage_read to read file content.",
     {
       path: z
         .string()
@@ -210,7 +150,7 @@ export function registerStorageTools(server: McpServer) {
   // ─── storage_write ───────────────────────────────────────
   server.tool(
     "storage_write",
-    "Write (create or overwrite) a text file in Supabase Storage. Creates parent folders automatically. Auto-detects MIME type from file extension. Files are automatically mirrored to Google Drive (My Drive > TD Operations/).",
+    "Write (create or overwrite) a text file in Supabase Storage. Creates parent folders automatically. Auto-detects MIME type from file extension.",
     {
       path: z
         .string()
@@ -257,19 +197,11 @@ export function registerStorageTools(server: McpServer) {
           }
         }
 
-        // In-line sync to Google Drive for Claude Memory files
-        const driveSync = await syncToDrive(filePath, content, ct)
-        const syncMsg = driveSync
-          ? driveSync.startsWith("sync-error")
-            ? ` ⚠️ Drive sync failed: ${driveSync}`
-            : ` 📂 Drive sync: ${driveSync}`
-          : ""
-
         return {
           content: [
             {
               type: "text" as const,
-              text: `✅ Written: ${filePath} (${(content.length / 1024).toFixed(1)} KB)${syncMsg}`,
+              text: `✅ Written: ${filePath} (${(content.length / 1024).toFixed(1)} KB)`,
             },
           ],
         }
@@ -284,7 +216,7 @@ export function registerStorageTools(server: McpServer) {
   // ─── storage_delete ──────────────────────────────────────
   server.tool(
     "storage_delete",
-    "Delete one or more files from Supabase Storage by path. Accepts an array of paths. Note: does NOT delete the Google Drive mirror copy — that must be removed separately if needed.",
+    "Delete one or more files from Supabase Storage by path. Accepts an array of paths.",
     {
       paths: z
         .array(z.string())

@@ -147,15 +147,16 @@ describe('saveSignedGeneratedDocument', () => {
     expect(driveUploads.length).toBe(0)
   })
 
-  it('a company left on its old folder (Active, folder, no storage) carries on exactly as before', async () => {
+  it('a company left on its old folder (Active, folder, no storage) is FROZEN (Stop Drive S2): refused with the true sentence, nothing written', async () => {
     const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
     vi.mocked(saveDocumentForAccount).mockResolvedValueOnce({ route: 'drive' })
     accountRow = { status: 'Active', drive_folder_id: 'folder-1', gdrive_folder_url: null } as never
     const { saveSignedGeneratedDocument } = await import('@/lib/portal/save-generated-document')
     const r = await saveSignedGeneratedDocument({ ...baseParams(), category: 1 })
-    expect(r.success).toBe(true)
-    expect(driveUploads[0]).toEqual({ fileName: 'Distribution_SIGNED.pdf', folder: 'folder-1' })
-    expect(autoSaveCalls[0]).toMatchObject({ accountId: 'acct-1', portalVisible: true, driveFileId: 'drive-file-1' })
+    expect(r.success).toBe(false)
+    expect(r.refused).toBe(true)
+    expect(driveUploads).toEqual([])
+    expect(autoSaveCalls).toEqual([])
   })
 
   it('saves in the storage (portal-visible record), stamps it new, and pre-marks the maker as seen', async () => {

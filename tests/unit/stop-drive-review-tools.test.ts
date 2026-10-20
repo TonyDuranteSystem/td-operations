@@ -142,12 +142,13 @@ describe("closure_form_review mark_reviewed (MCP)", () => {
     await run()
     expect(marked()).toBe(false)
   })
-  it("a company left on its old folder → filed there (old route), marked reviewed", async () => {
+  it("a company left on its old Drive folder is frozen (Stop Drive S2) → nothing filed anywhere, NOT marked reviewed", async () => {
     state.companyState = "drive"
     state.rows.accounts = { company_name: "Acme LLC", ...ACCOUNT_OLD_FOLDER }
-    await run()
-    expect(state.folderSaves).toBe(1)
-    expect(marked()).toBe(true)
+    const text = await run()
+    expect(state.folderSaves).toBe(0)
+    expect(marked()).toBe(false)
+    expect(text).toContain("NOT marked as reviewed")
   })
   it("without mark_reviewed nothing is filed or changed", async () => {
     state.companyState = "drive"

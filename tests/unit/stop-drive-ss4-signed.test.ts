@@ -119,18 +119,17 @@ describe("/api/ss4-signed", () => {
     expect(state.mails[0]).toContain("application/pdf")
   })
 
-  it("a company left on its old folder: the signed copy and the IRS package go to its folder as before, registered as internal documents", async () => {
+  it("a company left on its old folder is frozen (Stop Drive S2): nothing is written to Drive, the signed copy and the IRS package are reported as NOT filed, the email still goes", async () => {
     state.companyState = "drive"
-    state.driveMode = "record"
     state.rows.accounts = ACCOUNT_OLD_FOLDER
     const { POST } = await import("@/app/api/ss4-signed/route")
     const res = await POST(req())
     const { steps } = await stepsOf(res)
     expect(state.saves).toEqual([])
-    expect(state.driveCalls.filter((c) => c === "uploadBinaryToDriveUpsert")).toHaveLength(2)
-    expect(steps.find((s) => s.step === "drive_upload")?.status).toBe("ok")
-    expect(steps.find((s) => s.step === "irs_package")?.status).toBe("ok")
-    expect(steps.find((s) => s.step === "signed_doc")).toBeUndefined()
+    expect(state.driveCalls.filter((c) => c.startsWith("upload"))).toEqual([])
+    expect(steps.find((s) => s.step === "signed_doc")).toMatchObject({ status: "error", detail: NO_STORAGE_SENTENCE })
+    expect(steps.find((s) => s.step === "irs_package")?.status).toBe("error")
+    expect(state.mails).toHaveLength(1)
   })
 
   it("a webhook RETRY whose fallback row already exists is not reported as 'no storage' (the signed copy IS filed) — sandbox fallback", async () => {
@@ -214,18 +213,5 @@ describe("/api/ss4-signed", () => {
     const { POST } = await import("@/app/api/ss4-signed/route")
     await POST(req())
     expect(state.recorded.some((r) => r.table === "documents" && r.op === "insert")).toBe(true)
-  })
-
-  it("a company left on its old folder whose upload FAILED is told what is true — never 'no storage'", async () => {
-    state.companyState = "drive"
-    state.driveMode = "forbid" // every Drive call throws
-    state.rows.accounts = ACCOUNT_OLD_FOLDER
-    const { POST } = await import("@/app/api/ss4-signed/route")
-    const res = await POST(req())
-    const { steps } = await stepsOf(res)
-    const sd = steps.find((s) => s.step === "signed_doc")
-    expect(sd?.status).toBe("error")
-    expect(sd?.detail).toBe("The signed SS-4 could not be uploaded to the company's folder — see the earlier steps.")
-    expect(sd?.detail).not.toContain("no document storage")
   })
 })

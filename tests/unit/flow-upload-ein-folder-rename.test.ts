@@ -115,7 +115,8 @@ vi.mock("@/lib/crm-store/save-for-account", () => ({
   saveDocumentForContact: vi.fn(async (input: Record<string, unknown>) => {
     contactSaves.push(input)
     if (movingPerson) throw new MovingError("moving")
-    return ensuredPersons.length > 0 ? { route: "store", fileId: "pf-1", pointer: "store:pf-1", documentRowId: "pdoc-1", status: "created" } : { route: "drive" }
+    // (the real function opens the person's storage when they have none — Stop Drive S2: it never answers "drive")
+    return { route: "store", fileId: "pf-1", pointer: "store:pf-1", documentRowId: "pdoc-1", status: "created" }
   }),
 }))
 
@@ -251,17 +252,17 @@ describe("EIN letter upload — storage filing + auto-rename (route E2E)", () =>
     expect(advanceCalled).toBe(false)
   })
 
-  it("Scenario 6c — a company left on its old folder (Active, folder, no storage): filed there exactly as before, renamed, stage advances", async () => {
+  it("Scenario 6c — a company left on its old folder (Active, folder, no storage) is FROZEN (Stop Drive S2): one plain sentence (409), nothing saved, zero Drive calls, the stage does not advance", async () => {
     companyState = "drive"
-    driveMode = "record"
     accountRow = { company_name: "Acme Holdings LLC", entity_type: null, status: "Active", drive_folder_id: "OLDFOLDER", gdrive_folder_url: null }
     const res = await call(EIN_BODY)
-    expect(res.status).toBe(200)
-    expect(driveCalls).toContain("uploadBinaryToDriveUpsert")
+    expect(res.status).toBe(409)
+    expect((await res.json()).detail).toMatch(/read-only/)
+    expect(driveCalls).toEqual([])
     expect(saveCalls).toEqual([])
-    expect(documentsInsertPayload?.file_name).toBe("EIN Official – Acme Holdings LLC.pdf")
-    expect(documentsInsertPayload?.drive_file_id).toBe("drive-file-1")
-    expect(advanceCalled).toBe(true)
+    expect(documentsInsertPayload).toBeNull()
+    expect(removedPaths).toContain(EIN_BODY.storage_path)
+    expect(advanceCalled).toBe(false)
   })
 
   it("Scenario 7 — a flow with no company yet (ITIN, person with NO storage): the person's storage is opened and the file is filed there; no expiring link, no bucket-only keep", async () => {
@@ -301,27 +302,27 @@ describe("EIN letter upload — storage filing + auto-rename (route E2E)", () =>
     expect((actionLogPayload?.details as Record<string, unknown>)?.original_file_name).toBe("cp575_scan.pdf")
   })
 
-  it("Scenario 10 — an ITIN for a member of a company LEFT ON ITS OLD FOLDER: no new person storage (it would lock their folder); the legacy path carries on in that folder", async () => {
+  it("Scenario 10 — an ITIN for a member of a company LEFT ON ITS OLD FOLDER: the person's OWN storage is opened (Stop Drive S2: never the old Drive folder)", async () => {
     sdRow = { ...(sdRow as object), account_id: null, service_type: "ITIN", stage: "ITIN Approved" }
     companyState = "drive"
-    driveMode = "record"
     accountRow = { company_name: "Old Co LLC", entity_type: null, status: "Active", drive_folder_id: "OLDFOLDER", gdrive_folder_url: null }
     contactLinks = [{ account_id: "acct-old", is_primary: true, accounts: { drive_folder_id: "OLDFOLDER", gdrive_folder_url: null } }]
     const res = await call({ ...EIN_BODY, flow_stage: "ITIN Approved", folder: undefined, rename: undefined })
     expect(res.status).toBe(200)
-    expect(ensuredPersons).toEqual([])
-    expect(contactSaves).toEqual([])
-    expect(driveCalls).toContain("uploadBinaryToDrive")
+    expect(ensuredPersons).toEqual(["cont-1"])
+    expect(contactSaves).toHaveLength(1)
+    expect(driveCalls).toEqual([])
   })
 
-  it("Scenario 11 — a Company Formation that started on its old folder (no account yet, not ITIN) is NOT moved into a person's Personal documents: legacy path (the upload bucket here)", async () => {
+  it("Scenario 11 — a Company Formation that started with no account yet (not ITIN): the file is filed in the person's own storage, never kept only in the upload bucket and never Drive", async () => {
     sdRow = { ...(sdRow as object), account_id: null, service_type: "Company Formation", stage: "Articles Received" }
     const res = await call(EIN_BODY)
     expect(res.status).toBe(200)
-    expect(ensuredPersons).toEqual([])
-    expect(contactSaves).toEqual([])
-    expect(documentsInsertPayload?.drive_file_id).toContain("storage:")
-    expect(removedPaths).toEqual([]) // the bucket object IS the document here
+    expect(ensuredPersons).toEqual(["cont-1"])
+    expect(contactSaves).toHaveLength(1)
+    expect(driveCalls).toEqual([])
+    expect(documentsInsertPayload?.drive_file_id ?? "store:pf-1").not.toContain("storage:onboarding")
+    expect(removedPaths).toContain(EIN_BODY.storage_path)
   })
 
   it("Scenario 12 — an ITIN for a member of a SWITCHED company: filed through the person's storage opened via that company, nothing created up front", async () => {
@@ -364,57 +365,48 @@ describe("EIN letter upload — storage filing + auto-rename (route E2E)", () =>
     expect(contactSaves).toEqual([])
   })
 
-  it("Scenario 15 — a formation that started on its old folder whose linked folder is now LOCKED by the storage: no raw Drive error — the file stays in the upload bucket and the stage still moves", async () => {
+  it("Scenario 15 — a formation whose linked old Drive folder is locked: Drive is never called at all; the file is filed in the person's storage and the stage moves", async () => {
     sdRow = { ...(sdRow as object), account_id: null, service_type: "Company Formation" }
-    driveMode = "record"
     contactLinks = [{ account_id: "acct-old", is_primary: true, accounts: { drive_folder_id: "LOCKED", gdrive_folder_url: null, status: "Active" } }]
-    driveError = Object.assign(new Error("This company's files live in the new CRM storage — nothing may be written to its Google Drive folder."), { name: "SwitchedCompanyDriveWriteError" })
     const res = await call({ ...EIN_BODY, rename: undefined, folder: undefined })
     expect(res.status).toBe(200)
-    expect(documentsInsertPayload?.drive_file_id).toContain("storage:")
-    expect(removedPaths).toEqual([]) // the bucket object is now the document
+    expect(driveCalls).toEqual([])
+    expect(contactSaves).toHaveLength(1)
     expect(advanceCalled).toBe(true)
   })
 
-  it("Scenario 16 — any other old-folder upload failure is a plain sentence, never raw Drive text", async () => {
+  it("Scenario 16 — a failure opening / saving the person's storage is a plain sentence, never raw text from another system", async () => {
     sdRow = { ...(sdRow as object), account_id: null, service_type: "Company Formation" }
-    driveMode = "record"
-    contactLinks = [{ account_id: "acct-old", is_primary: true, accounts: { drive_folder_id: "F", gdrive_folder_url: null, status: "Active" } }]
-    driveError = new Error("googleapis: 503 backend error {internal}")
+    const { saveDocumentForContact } = await import("@/lib/crm-store/save-for-account")
+    vi.mocked(saveDocumentForContact).mockRejectedValueOnce(new Error("storage down"))
     const res = await call({ ...EIN_BODY, rename: undefined, folder: undefined })
     expect(res.status).toBe(500)
-    const body = await res.json()
-    expect(body.detail).toBe("The file could not be saved. Please try again.")
-    expect(JSON.stringify(body)).not.toContain("googleapis")
+    expect((await res.json()).detail).toContain("Could not save the file in the person's storage")
+    expect(driveCalls).toEqual([])
     expect(advanceCalled).toBe(false)
   })
 
-  it("Scenario 17 — a Closed company's retained folder never receives a member's file (legacy contact path)", async () => {
+  it("Scenario 17 — a Closed company's retained folder never receives a member's file: the person's own storage takes it, zero Drive calls", async () => {
     sdRow = { ...(sdRow as object), account_id: null, service_type: "Company Formation" }
-    driveMode = "record"
     contactLinks = [{ account_id: "acct-closed", is_primary: true, accounts: { drive_folder_id: "CLOSEDFOLDER", gdrive_folder_url: null, status: "Closed" } }]
     const res = await call({ ...EIN_BODY, rename: undefined, folder: undefined })
     expect(res.status).toBe(200)
     expect(driveCalls).toEqual([])
-    expect(documentsInsertPayload?.drive_file_id).toContain("storage:")
+    expect(contactSaves).toHaveLength(1)
   })
 
-  it("Scenario 18 — a company left on its old folder is filed in ITS FOLDER (not left in the upload bucket) wherever Drive is real; only a faked-Drive sandbox keeps the bucket copy", async () => {
+  it("Scenario 18 — a company left on its old folder is refused the same way whether or not Drive is faked: no Drive call, no bucket copy", async () => {
     companyState = "drive"
-    driveMode = "record"
     accountRow = { company_name: "Old Co LLC", entity_type: null, status: "Active", drive_folder_id: "OLDFOLDER", gdrive_folder_url: null }
     let res = await call({ ...EIN_BODY, rename: undefined, folder: undefined })
-    expect(res.status).toBe(200)
-    expect(driveCalls).toContain("uploadBinaryToDrive")
-    expect(documentsInsertPayload?.drive_file_id).toBe("drive-file-1")
-    // faked Drive (sandbox without live Drive)
-    driveCalls.length = 0
-    documentsInsertPayload = null
+    expect(res.status).toBe(409)
+    expect(driveCalls).toEqual([])
+    expect(documentsInsertPayload).toBeNull()
     setDriveMocked(true)
     res = await call({ ...EIN_BODY, rename: undefined, folder: undefined })
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(409)
     expect(driveCalls).toEqual([])
-    expect(documentsInsertPayload?.drive_file_id).toContain("storage:")
+    expect(documentsInsertPayload).toBeNull()
   })
 
   it("Scenario 19 — a Closed company's refusal uses the true reason ('closed'), not the generic sentence", async () => {

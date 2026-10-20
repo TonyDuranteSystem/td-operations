@@ -70,7 +70,9 @@ describe('uploadBinaryToDrive — small file (unchanged multipart path)', () => 
     vi.stubGlobal('fetch', fetchMock)
 
     const { uploadBinaryToDrive } = await import('@/lib/google-drive')
-    const result = await uploadBinaryToDrive('small.pdf', Buffer.from('x'.repeat(1000)), 'application/pdf', 'folder-1')
+    // Stop Drive S2: a Drive write only runs inside the one-way backup scope (re-imported here: resetModules gives a fresh scope per test)
+    const { runAsStoreBackup } = await import('@/lib/google-drive-write-scope')
+    const result = await runAsStoreBackup(() => uploadBinaryToDrive('small.pdf', Buffer.from('x'.repeat(1000)), 'application/pdf', 'folder-1'))
 
     expect(result).toEqual({ id: 'small-file-id', name: 'small.pdf' })
     // Exactly 2 calls: token exchange + one multipart POST. No resumable init/PUT.
@@ -100,7 +102,9 @@ describe('uploadBinaryToDrive — large file (resumable path)', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { uploadBinaryToDrive } = await import('@/lib/google-drive')
-    const result = await uploadBinaryToDrive('passport.png', bigData, 'image/png', 'folder-1')
+    // Stop Drive S2: a Drive write only runs inside the one-way backup scope (re-imported here: resetModules gives a fresh scope per test)
+    const { runAsStoreBackup } = await import('@/lib/google-drive-write-scope')
+    const result = await runAsStoreBackup(() => uploadBinaryToDrive('passport.png', bigData, 'image/png', 'folder-1'))
 
     expect(result).toEqual({ id: 'large-file-id', name: 'passport.png' })
     expect(fetchMock).toHaveBeenCalledTimes(3) // token + resumable init + PUT
@@ -116,7 +120,9 @@ describe('uploadBinaryToDrive — large file (resumable path)', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { uploadBinaryToDrive } = await import('@/lib/google-drive')
-    await expect(uploadBinaryToDrive('passport.png', bigData, 'image/png', 'folder-1')).rejects.toThrow(
+    // Stop Drive S2: a Drive write only runs inside the one-way backup scope (re-imported here: resetModules gives a fresh scope per test)
+    const { runAsStoreBackup } = await import('@/lib/google-drive-write-scope')
+    await expect(runAsStoreBackup(() => uploadBinaryToDrive('passport.png', bigData, 'image/png', 'folder-1'))).rejects.toThrow(
       /did not return a session URL/,
     )
   })
@@ -136,7 +142,9 @@ describe('uploadBinaryToDrive — large file (resumable path)', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { uploadBinaryToDrive } = await import('@/lib/google-drive')
-    await expect(uploadBinaryToDrive('passport.png', bigData, 'image/png', 'folder-1')).rejects.toThrow(
+    // Stop Drive S2: a Drive write only runs inside the one-way backup scope (re-imported here: resetModules gives a fresh scope per test)
+    const { runAsStoreBackup } = await import('@/lib/google-drive-write-scope')
+    await expect(runAsStoreBackup(() => uploadBinaryToDrive('passport.png', bigData, 'image/png', 'folder-1'))).rejects.toThrow(
       /quota exceeded/,
     )
   })

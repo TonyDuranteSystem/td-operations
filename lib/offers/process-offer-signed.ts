@@ -10,7 +10,6 @@
  */
 import { invoiceTargetForOffer } from "@/lib/offers/bill-to-server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
-import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { decideInvoiceAtSigning, getInvoiceDescription } from "@/lib/portal/offer-invoice-policy"
 import { computeOfferTotals } from "@/lib/offers/compute-offer-totals"
@@ -437,34 +436,8 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
         .limit(1)
         .maybeSingle()
 
-      // Get account for drive_folder_id (via account_id directly, or lead_id → accounts)
-      let driveFolderId: string | null = null
-      if (offer.account_id) {
-        const { data: acct } = await supabase
-          .from("accounts")
-          .select("drive_folder_id")
-          .eq("id", offer.account_id)
-          .single()
-        driveFolderId = acct?.drive_folder_id || null
-      } else if (offer.lead_id) {
-        const { data: lead } = await supabase
-          .from("leads")
-          .select("converted_to_account_id")
-          .eq("id", offer.lead_id)
-          .maybeSingle()
-
-        if (lead?.converted_to_account_id) {
-          const { data: acct } = await supabase
-            .from("accounts")
-            .select("drive_folder_id")
-            .eq("id", lead.converted_to_account_id)
-            .single()
-          driveFolderId = acct?.drive_folder_id || null
-        }
-      }
-
       // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its signed contract
-      // saved in the new storage and needs no Drive folder; a company still on Drive carries on exactly as before.
+      // saved in the new storage. Stop Drive S2: nothing is ever written to Drive.
       let docAccountId: string | null = offer.account_id || null
       if (!docAccountId && offer.lead_id) {
         const { data: leadForAcct } = await supabase.from("leads").select("converted_to_account_id").eq("id", offer.lead_id).maybeSingle()
@@ -475,31 +448,15 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
         const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
         inStorage = (await companyDocState(docAccountId)) !== "drive"
       }
-      // Stop Drive (dev job 264bb882, S1d): Drive is written only for a company deliberately left on it (folder, no storage,
-      // not closed). Any other state is an error result + a staff alarm, never "ok" and never a silent skip.
-      if (!inStorage) {
-        driveFolderId = null
-        if (docAccountId) {
-          const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
-          const legacy = await legacyDriveForAccount(docAccountId)
-          if (legacy.allowed) driveFolderId = legacy.folderId
-          else if (contract?.pdf_path) driveUploadResult = `error: ${await raiseDriveWriteRefused({ flow: "offer-signed", accountId: docAccountId, reason: legacy.reason, detail: `offer ${offer.id}` })}`
-        }
+      // A company with no storage: an error result + a staff alarm, never "ok" and never a silent skip (the signed PDF stays safe in
+      // the signed-contracts bucket).
+      if (!inStorage && docAccountId && contract?.pdf_path) {
+        const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
+        const legacy = await legacyDriveForAccount(docAccountId)
+        driveUploadResult = `error: ${await raiseDriveWriteRefused({ flow: "offer-signed", accountId: docAccountId, reason: legacy.reason, detail: `offer ${offer.id}` })}`
       }
 
-      if (contract?.pdf_path && (driveFolderId || inStorage)) {
-        let targetFolderId = ""
-        if (!inStorage && driveFolderId) {
-          const { listFolder } = await import("@/lib/google-drive")
-
-          // Find "1. Company" subfolder
-          const folderResult = await listFolder(driveFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
-          const companyFolder = folderResult.files?.find(
-            (f: { name: string; mimeType: string }) => f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
-          )
-          targetFolderId = companyFolder?.id || driveFolderId
-        }
-
+      if (contract?.pdf_path && inStorage) {
         // Download signed PDF from Storage
         const { data: blob } = await supabase.storage
           .from("signed-contracts")
@@ -510,46 +467,15 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
           const fileData = Buffer.from(arrayBuffer)
           const fileName = `Contract - ${offer.client_name} (Signed).pdf`
 
-          if (inStorage && docAccountId) {
-            // the same key on a retry is a new VERSION of the same file, never a second copy
-            const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
-            const routed = await saveSignedPdfForAccount({
-              accountId: docAccountId, fileName, bytes: fileData, label: "Signed Contract", category: 5, callerKey: `offer-signed:${offer.id}`,
-            })
-            if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its contract was being saved — nothing was saved.")
-            driveUploadResult = `ok: ${routed.pointer}`
-            console.warn(`[offer-signed] Saved contract PDF to the new storage: ${routed.pointer}`)
-          } else {
-          const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-          // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
-          const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
-          driveUploadResult = `ok: ${driveResult.id}`
-          console.warn(`[offer-signed] Uploaded contract PDF to Drive: ${driveResult.id}`)
+          // the same key on a retry is a new VERSION of the same file, never a second copy
+          const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+          const routed = await saveSignedPdfForAccount({
+            accountId: docAccountId, fileName, bytes: fileData, label: "Signed Contract", category: 5, callerKey: `offer-signed:${offer.id}`,
+          })
+          if (routed.route !== "store") throw new Error("This company's files are no longer in the storage — nothing was saved.")
+          driveUploadResult = `ok: ${routed.pointer}`
+          console.warn(`[offer-signed] Saved contract PDF to the new storage: ${routed.pointer}`)
 
-          // Auto-save to documents table for portal visibility
-          if (offer.lead_id) {
-            const { data: leadForDoc } = await supabase.from("leads").select("converted_to_account_id").eq("id", offer.lead_id).maybeSingle()
-            if (leadForDoc?.converted_to_account_id) {
-              await autoSaveDocument({
-                accountId: leadForDoc.converted_to_account_id,
-                fileName,
-                documentType: 'Signed Contract',
-                category: 5, // Correspondence
-                driveFileId: driveResult.id,
-                portalVisible: true,
-              })
-            }
-          } else if (offer.account_id) {
-            await autoSaveDocument({
-              accountId: offer.account_id,
-              fileName,
-              documentType: 'Signed Contract',
-              category: 5,
-              driveFileId: driveResult.id,
-              portalVisible: true,
-            })
-          }
-          }
         } else {
           driveUploadResult = "error: could not download PDF from Storage"
         }
@@ -586,7 +512,7 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
         }
       } else if (!driveUploadResult.startsWith("error")) {
         // (a refusal above already set an "error: …" result — it must not be overwritten by this "skipped")
-        driveUploadResult = `skipped: pdf_path=${!!contract?.pdf_path}, drive=${!!driveFolderId}`
+        driveUploadResult = `skipped: pdf_path=${!!contract?.pdf_path}`
       }
     } catch (e) {
       driveUploadResult = `error: ${e instanceof Error ? e.message : String(e)}`

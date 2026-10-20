@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { isArchivedStatus, folderIdOfRecord, forgetRecentAlarms, ALARM_THROTTLE_MS, decideLegacyAccount, legacyDriveForAccount, legacyDriveForContact, raiseDriveWriteRefused, LEGACY_REFUSAL_SENTENCE, LegacyDriveRefusedError } from '@/lib/crm-store/legacy-drive'
 
-// Stop Drive S1d: the ONE definition of the companies / people that may still be written to in Google Drive.
+// Stop Drive S1d + S2: the ONE answer to "may this company / person be written to in Google Drive?" — since S2 it is always NO, with the true reason.
 describe('decideLegacyAccount', () => {
   const base = { status: 'Offboarding', driveFolderId: 'f1', state: 'drive' as const }
-  it('folder + no storage + not closed -> allowed (REBIS / YBR / Degasper / Fresh Legal shape)', () => {
+  it('folder + no storage + not closed -> FROZEN, never allowed (REBIS / YBR / Degasper / Fresh Legal shape)', () => {
     for (const status of ['Offboarding', 'Suspended', 'Active', 'Pending Formation']) {
-      expect(decideLegacyAccount({ ...base, status })).toEqual({ allowed: true, folderId: 'f1' })
+      expect(decideLegacyAccount({ ...base, status })).toMatchObject({ allowed: false, reason: 'frozen' })
     }
   })
   it('a company in storage is never written to', () => expect(decideLegacyAccount({ ...base, state: 'store' })).toMatchObject({ allowed: false, reason: 'has_storage' }))
@@ -55,15 +55,15 @@ describe('status and folder helpers — one definition', () => {
 })
 
 describe('legacyDriveForContact', () => {
-  const ok = { allowed: true as const, folderId: 'acc-folder' }
-  const no = (reason: 'archived' | 'has_storage' | 'moving' | 'no_folder') => ({ allowed: false as const, reason, sentence: 'x' })
+  const ok = { allowed: false as const, reason: 'frozen' as const, sentence: 'x' }
+  const no = (reason: 'archived' | 'has_storage' | 'moving' | 'no_folder' | 'frozen') => ({ allowed: false as const, reason, sentence: 'x' })
   const mk = (f: { liveOwner: boolean; driveFolderId: string | null; accountIds: string[] }, accounts: Record<string, ReturnType<typeof no> | typeof ok>) =>
     ({ load: async () => f, account: async (id: string) => accounts[id] ?? no('archived') })
-  it("own folder + no storage + belongs to a legacy company -> allowed with the PERSON'S folder", async () => {
-    expect(await legacyDriveForContact('c', mk({ liveOwner: false, driveFolderId: 'p-folder', accountIds: ['a1', 'a2'] }, { a1: no('archived'), a2: ok }))).toEqual({ allowed: true, folderId: 'p-folder' })
+  it("own folder + no storage + belongs to a company frozen on its old folder -> refused as 'frozen' (never a Drive write)", async () => {
+    expect(await legacyDriveForContact('c', mk({ liveOwner: false, driveFolderId: 'p-folder', accountIds: ['a1', 'a2'] }, { a1: no('archived'), a2: ok }))).toMatchObject({ allowed: false, reason: 'frozen' })
   })
-  it("a person of a left-on-Drive company who never had a folder uses the COMPANY's folder (one person's papers are never split)", async () => {
-    expect(await legacyDriveForContact('c', mk({ liveOwner: false, driveFolderId: null, accountIds: ['a2'] }, { a2: ok }))).toEqual({ allowed: true, folderId: 'acc-folder' })
+  it("a person of a company frozen on its old folder who never had a folder -> refused as 'frozen' too", async () => {
+    expect(await legacyDriveForContact('c', mk({ liveOwner: false, driveFolderId: null, accountIds: ['a2'] }, { a2: ok }))).toMatchObject({ allowed: false, reason: 'frozen' })
   })
   it('a person with their own storage is never written to in Drive', async () => {
     expect(await legacyDriveForContact('c', mk({ liveOwner: true, driveFolderId: 'p', accountIds: ['a1'] }, { a1: ok }))).toMatchObject({ allowed: false, reason: 'has_storage' })
@@ -138,19 +138,20 @@ describe('alarm throttle — a retrying job cannot spam staff', () => {
   })
 })
 
-describe('ONE rule: legacy-drive.ts agrees with no-storage.ts (#731) on every combination', () => {
+describe('ONE rule: legacy-drive.ts agrees with no-storage.ts on every combination — and the answer is never "drive" (Stop Drive S2)', () => {
   const statuses = ['Active', 'Suspended', 'Offboarding', 'Pending Formation', 'Closed', 'closed', ' Cancelled ', 'CANCELED', '', null]
   const folders = [null, 'F1']
-  it('a company may be written to in Drive exactly when decideNoStorage says "drive" (and has no storage)', async () => {
+  it('a company is NEVER written to in Drive, and both rules give the same true reason', async () => {
     const { decideNoStorage } = await import('@/lib/crm-store/no-storage')
     for (const status of statuses) for (const folder of folders) {
       const mine = decideLegacyAccount({ status: status ?? '', driveFolderId: folder, state: 'drive' })
       const theirs = decideNoStorage({ status, drive_folder_id: folder })
-      expect(mine.allowed, `${status}/${folder}`).toBe(theirs.route === 'drive')
-      if (!mine.allowed && theirs.route === 'refuse') expect(mine.reason).toBe(theirs.reason)
+      expect(mine.allowed, `${status}/${folder}`).toBe(false)
+      expect(theirs.route, `${status}/${folder}`).toBe('refuse')
+      if (status !== '' && status !== null) expect(mine.reason).toBe(theirs.reason)
     }
   })
-  it('a person may be written to in Drive exactly when decideNoStorageForContact says "drive"', async () => {
+  it('a person is NEVER written to in Drive either', async () => {
     const { decideNoStorageForContact, decideNoStorage } = await import('@/lib/crm-store/no-storage')
     const companyCases = [{ status: 'Offboarding', folder: 'F1' }, { status: 'Closed', folder: 'F1' }, { status: 'Active', folder: null }]
     for (const own of [null, 'P1']) for (const live of [false, true]) for (const c of companyCases) {
@@ -160,7 +161,8 @@ describe('ONE rule: legacy-drive.ts agrees with no-storage.ts (#731) on every co
         load: async () => ({ liveOwner: live, driveFolderId: own, accountIds: ['a'] }),
         account: async () => decideLegacyAccount({ status: c.status, driveFolderId: c.folder, state: 'drive' }),
       })
-      expect(mine.allowed, JSON.stringify({ own, live, c })).toBe(theirs.route === 'drive')
+      expect(mine.allowed, JSON.stringify({ own, live, c })).toBe(false)
+      expect(theirs.route, JSON.stringify({ own, live, c })).toBe('refuse')
     }
   })
 })

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Stop Drive S1d: ensureCompanyFolder / ensureContactFolder NEVER create a Drive folder or anything inside one.
+// Stop Drive S1d + S2: ensureCompanyFolder / ensureContactFolder NEVER create a Drive folder, NEVER hand one back, and never touch Drive at all.
 // The REAL decisions (legacy-drive.ts) run; only the database rows, the storage state and Drive are fakes. Drive fails on any write.
 const st = vi.hoisted(() => ({
   rows: {} as Record<string, unknown>,
@@ -74,13 +74,13 @@ describe('ensureCompanyFolder', () => {
     expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
     expect(st.alarms).toEqual([])
   })
-  it('a company left on Drive: gets its folder back; a MISSING subfolder is not created', async () => {
+  it('a company left on its old Drive folder (REBIS shape) is FROZEN: refused + ONE alarm, no folder handed back, zero Drive calls, no storage opened', async () => {
     acct('Offboarding', 'F-rebis')
     const { ensureCompanyFolder } = await import('@/lib/drive-folder-utils')
-    const r = await ensureCompanyFolder('a1', 'REBIS', 'Delaware')
-    expect(r).toMatchObject({ folderId: 'F-rebis', created: false })
-    expect(st.driveWrites).toEqual([])
-    expect(r.subfolders).toEqual({}) // the (fake) folder is empty: nothing was made up
+    await expect(ensureCompanyFolder('a1', 'REBIS', 'Delaware')).rejects.toMatchObject({ name: 'LegacyDriveRefusedError', reason: 'frozen' })
+    expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
+    expect(st.alarms.map((a) => a.kind)).toEqual(['drive_write_refused'])
+    expect(st.openedCompanyStorage).toEqual([])
   })
 })
 
@@ -112,16 +112,17 @@ describe('ensureContactFolder', () => {
     await expect(ensureContactFolder('c9', 'Moving Person')).rejects.toMatchObject({ name: 'LegacyDriveRefusedError', reason: 'moving' })
     expect(st.openedPersonStorage).toEqual([]); expect(st.alarms.map((a) => a.kind)).toEqual(['drive_write_refused'])
   })
-  it('a person of a left-on-Drive company: their own folder back, nothing created', async () => {
+  it('a person of a company frozen on its old Drive folder: no folder handed back — their OWN storage is opened instead, zero Drive calls', async () => {
     acct('Offboarding', 'F-rebis'); st.rows.contacts = { drive_folder_id: 'P-folder', gdrive_folder_url: null }; links(['a1'])
     const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
-    expect((await ensureContactFolder('c4', 'Legacy Person')).folderId).toBe('P-folder')
-    expect(st.driveWrites).toEqual([]); expect(st.openedPersonStorage).toEqual([])
+    await expect(ensureContactFolder('c4', 'Legacy Person')).rejects.toMatchObject({ name: 'PersonFilesInStorageError' })
+    expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([]); expect(st.openedPersonStorage).toEqual(['c4'])
   })
-  it("the older link form is honoured: a person with only gdrive_folder_url still gets that folder", async () => {
+  it("the older link form changes nothing: a person with only gdrive_folder_url is treated the same way", async () => {
     acct('Offboarding', 'F-rebis'); st.rows.contacts = { drive_folder_id: null, gdrive_folder_url: 'https://drive.google.com/drive/folders/P-url' }; links(['a1'])
     const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
-    expect((await ensureContactFolder('c5', 'Url Person')).folderId).toBe('P-url')
+    await expect(ensureContactFolder('c5', 'Url Person')).rejects.toMatchObject({ name: 'PersonFilesInStorageError' })
+    expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
   })
 })
 void FIVE
