@@ -3,7 +3,7 @@
  *  - company in storage       -> saved in storage, ZERO Drive calls
  *  - Closed / Cancelled       -> nothing written in Drive, an ERROR step + a staff alarm
  *  - no storage and no folder -> nothing written, an ERROR step + a staff alarm (it used to say "skipped")
- *  - left-on-Drive company (folder, no storage, Offboarding) -> still filed in Drive, exactly as before
+ *  - left-on-Drive company (folder, no storage, Offboarding) -> FROZEN since Stop Drive S2: nothing written, an ERROR step + a staff alarm
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { NextRequest } from "next/server"
@@ -50,12 +50,12 @@ beforeEach(async () => {
   for (const k of Object.keys(st.rows)) delete st.rows[k]
 })
 
-const cases: Array<[string, () => void, "store" | "refused-closed" | "refused-nofolder" | "legacy"]> = [
+const cases: Array<[string, () => void, "store" | "refused-closed" | "refused-nofolder" | "refused-frozen"]> = [
   ["company in storage", () => { st.companyState = "store"; account("Active", null) }, "store"],
   ["Closed company with an old folder", () => account("Closed", "F-old"), "refused-closed"],
   ["Cancelled company with an old folder", () => account("Cancelled", "F-old"), "refused-closed"],
   ["Active company with no storage and no folder", () => account("Active", null), "refused-nofolder"],
-  ["left-on-Drive company (Offboarding, folder, no storage)", () => account("Offboarding", "F-rebis"), "legacy"],
+  ["left-on-Drive company (Offboarding, folder, no storage) is frozen", () => account("Offboarding", "F-rebis"), "refused-frozen"],
 ]
 
 function check(kind: string, stepName: (b: any) => { status: string; detail?: string } | undefined, run: () => Promise<any>, setupRows: () => void) { // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -67,14 +67,10 @@ function check(kind: string, stepName: (b: any) => { status: string; detail?: st
       if (expected === "store") {
         expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
         expect(step?.status).toBe("ok"); expect(st.saves).toHaveLength(1)
-      } else if (expected === "legacy") {
-        expect(st.driveWrites.length).toBeGreaterThan(0)
-        expect(st.driveWrites.join(" ")).toContain("F-rebis")
-        expect(st.alarms).toEqual([])
       } else {
         expect(st.driveWrites).toEqual([])
         expect(step?.status).toBe("error")
-        expect(step?.detail).toMatch(expected === "refused-closed" ? /company is closed/ : /no document storage/)
+        expect(step?.detail).toMatch(expected === "refused-closed" ? /company is closed/ : expected === "refused-frozen" ? /read-only/ : /no document storage/)
         expect(st.alarms.map((a) => a.kind)).toEqual(["drive_write_refused"])
         expect(st.autoSaved).toEqual([])
       }
@@ -115,9 +111,6 @@ describe("/api/signature-request-signed", () => {
     const lines = (body.results ?? []) as string[]
     if (expected === "store") {
       expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
-    } else if (expected === "legacy") {
-      expect(st.driveWrites.join(" ")).toContain("F-rebis")
-      expect(st.alarms).toEqual([])
     } else {
       expect(st.driveWrites).toEqual([])
       expect(lines.some((l) => l.startsWith("drive_upload: error"))).toBe(true)

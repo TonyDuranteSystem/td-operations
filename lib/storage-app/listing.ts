@@ -54,6 +54,7 @@ export async function appFolder(ownerId: string, folderId: string | null, device
   }
   // can the Mac save a NEW file into each folder? (the `clientSaves` setting decides for client storages; Business / My files as always)
   const settings = await getSettings()
+  const liveSet = await liveOwnerIds()
   const { data: ownRow } = await db().from("store_owners").select("account_id, contact_id").eq("id", ownerId).maybeSingle()
   const ownerIds = { ownerId, accountId: ownRow?.account_id ?? null, contactId: ownRow?.contact_id ?? null }
   const inShare = c.folder ? await (await import("@/lib/crm-store/staff-share")).isInStaffShare(c.folder.id) : false
@@ -61,13 +62,16 @@ export async function appFolder(ownerId: string, folderId: string | null, device
   return {
     owner: c.owner,
     folder: c.folder ? { id: c.folder.id, name: c.folder.name, kind: c.folder.kind, locked: !!c.folder.locked, canSave: canSave(c.folder.kind, !!c.folder.trashed) } : null,
-    folders: c.folders.filter((f) => f.kind !== "contacts").map((f) => ({ id: f.id, name: f.name, kind: f.kind, locked: !!f.locked, canSave: canSave(f.kind) })),
+    folders: c.folders.map((f) => ({ id: f.id, name: f.name, kind: f.kind, locked: !!f.locked, canSave: canSave(f.kind) })),
     files: c.files.filter((f) => f.state === "live").map((f) => ({
       id: f.id, name: f.name, size: f.size, mimeType: f.mimeType, updatedAt: f.updatedAt,
       downloadable: true,   // every file opens (Antonio 2026-10-17); kept so an older app build still reads the answer
       sensitive: isSensitiveForDevice({ documentType: f.documentType, ownerKind: f.inPersonStorage ? "person" : c.owner.kind, name: f.name }, settings.sensitiveTypes),
       mine: mine.has(f.id),
     })),
+    // "2. Contacts" of a company lists its PEOPLE (each opens that person's own storage) - exactly what the Storage page shows. A person whose own
+    // storage is hidden (a study copy) or does not exist is listed without a storage to open.
+    ...(c.folder?.kind === "contacts" ? { people: (c.people ?? []).map((pp) => ({ contactId: pp.contactId, name: pp.name, ownerId: pp.ownerId && liveSet.has(pp.ownerId) ? pp.ownerId : null })) } : {}),
   }
 }
 

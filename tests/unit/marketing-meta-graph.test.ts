@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, afterEach } from "vitest"
-import { configuredPageIds, fetchLead, GraphError, listFormLeads } from "@/lib/marketing/meta-leads/graph"
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest"
+import { configuredPageIds, fetchLead, GraphError, listFormLeads, useEnvKeyOnly } from "@/lib/marketing/meta-leads/graph"
 
 const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
 const asFetch = (f: unknown) => f as typeof fetch
+beforeEach(() => { useEnvKeyOnly() })
 afterEach(() => { vi.unstubAllEnvs() })
 
 describe("graph client", () => {
@@ -35,7 +36,7 @@ describe("graph client", () => {
   it("turns a Meta error into a short readable message and never echoes the token", async () => {
     vi.stubEnv("META_PAGE_ACCESS_TOKEN", "EAAB-secret-token")
     const f = vi.fn(async () => new Response(JSON.stringify({ error: { message: "Error validating access token: Session has expired" } }), { status: 400 }))
-    const err = await fetchLead("1", asFetch(f)).catch(e => e as Error)
+    const err = (await fetchLead("1", asFetch(f)).catch(e => e)) as Error
     expect(String(err.message)).toMatch(/Graph 400: Error validating access token/)
     expect(String(err.message)).not.toContain("EAAB-secret-token")
   })

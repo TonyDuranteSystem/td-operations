@@ -80,7 +80,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         let progress = Progress(totalUnitCount: 1)
         Task {
             do {
-                guard case .file(_, let fileId)? = FPItem.itemID(for: itemIdentifier) else { throw StorageAPIError.notFound }
+                guard case .file(_, let fileId)? = FPItem.itemID(for: itemIdentifier)?.underlying else { throw StorageAPIError.notFound }
                 let (url, info) = try await downloader.download(fileId: fileId)
                 do {
                     let item = try await catalog.item(for: FPItem.itemID(for: itemIdentifier)!)
@@ -115,7 +115,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 // system junk and partial downloads are never uploaded: the system is told this one is not synced
                 if NameMapper.isJunk(name) { Trace.log("createItem.excluded", ["name": name]); throw NSFileProviderError(.excludedFromSync) }
                 guard !isFolderItem else { Trace.log("createItem.refused", ["name": name, "why": "folder"]); throw noPermission("Folders can be created in the CRM, not from the Mac yet.") }
-                guard case .folder(let owner, let folder)? = FPItem.itemID(for: itemTemplate.parentItemIdentifier) else { Trace.log("createItem.refused", ["name": name, "why": "no folder"]); throw noPermission("Open one of the folders first — files go inside a folder.") }
+                let parentID = FPItem.itemID(for: itemTemplate.parentItemIdentifier)   // under a person listed in a company's "2. Contacts" the new item keeps that place
+                guard case .folder(let owner, let folder)? = parentID?.underlying else { Trace.log("createItem.refused", ["name": name, "why": "no folder"]); throw noPermission("Open one of the folders first — files go inside a folder.") }
                 // a file that is still being written is waited for (a browser download, a big copy): never saved half-finished
                 var size = 0
                 var modified = itemTemplate.contentModificationDate ?? nil
@@ -142,7 +143,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     if let before = url.flatMap({ FileStability.snapshot(of: $0) }), before.size != size { Trace.log("createItem.changedDuringUpload", ["name": name, "was": size, "now": before.size]); throw StorageAPIError.transport("The file changed while it was being saved.") }
                     fileId = try await api.save(intentId: intent, itemKey: key).fileId
                 }
-                let id = ItemID.file(owner: owner, file: fileId!)
+                let id = ItemID.file(owner: owner, file: fileId!).shown(via: parentID?.viaLink)
                 let item = try await catalog.item(for: id).replacingModified(modified)
                 ledger.record(id: item.itemIdentifier.rawValue, keepSeconds: 900)   // the Mac's own copy is only kept briefly: the CRM has the file now
                 Trace.log("createItem.saved", ["name": name, "size": size, "fileId": fileId ?? ""])
@@ -163,7 +164,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
             do {
                 // changed CONTENT: allowed only for a file THIS Mac saved (the CRM checks again) — it becomes a new version of that file
                 if changedFields.contains(.contents), let newContents {
-                    guard case .file(let owner, let fileId) = id else { throw noPermission(Self.changeInCRM) }
+                    guard case .file(let owner, let fileId) = id.underlying else { throw noPermission(Self.changeInCRM) }
                     let info = try await api.item(kind: "file", id: fileId)
                     guard info.mine == true else { Trace.log("modifyItem.refused", ["id": fileId, "why": "not mine"]); throw noPermission(Self.changeInCRM) }
                     let snap = try await FileStability.waitUntilStable(newContents)

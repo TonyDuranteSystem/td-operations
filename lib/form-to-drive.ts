@@ -1,17 +1,17 @@
 /**
- * Universal Form-to-Drive Module
+ * Universal Form-to-Storage Module (the name is historical)
  *
- * Generates a data summary PDF from any form submission and copies
- * uploaded files from Supabase Storage to the client's Google Drive folder.
+ * Generates a data summary PDF from any form submission and files it, with the uploaded files, in the company's / person's
+ * CRM storage (`saveFormToDrive`). Stop Drive S2: it NEVER writes to Google Drive any more — a destination that is a real Drive
+ * folder gets an error result.
  *
  * Used by all _review MCP tools when apply_changes=true.
  *
  * RULE: Every form submission (tax, formation, onboarding, ITIN, banking,
- * closure) MUST be converted to PDF and saved to Drive after review.
+ * closure) MUST be converted to PDF and saved to the CRM storage after review.
  */
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
-import { supabaseAdmin } from "@/lib/supabase-admin"
 import { TAX_FIELDS, TAX_MMLLC_FIELDS, TAX_CORP_FIELDS } from "@/components/portal/wizard/wizard-configs"
 import { formatMoneyWithSymbol } from "@/lib/money-input"
 
@@ -797,120 +797,6 @@ export async function generateFormSummaryPDF(
   return pdf.save()
 }
 
-// ─── Copy Uploads to Drive ───
-
-export async function copyUploadsToDrive(
-  uploadPaths: string[],
-  bucket: string,
-  targetFolderId: string,
-  fileMapping?: Record<string, string>, // optional: map category prefixes to Drive subfolders
-  opts?: {
-    existingNames?: Map<string, string> | null // optional pre-fetched folderFileNameMap for targetFolderId
-    // Per-file bucket resolver (2026-07-24, Drive-reliability). A single tax
-    // submission can now carry files from TWO buckets: portal-wizard uploads in
-    // "onboarding-uploads" and legacy EXTERNAL-form uploads (e.g. Carasso's EIN
-    // letter, path "carasso-consulting-llc-2025/…") in "tax-form-uploads". With
-    // one fixed bucket the external file downloads from the wrong bucket → 0
-    // files copied. When provided, this picks the bucket per path; else `bucket`.
-    resolveBucket?: (path: string) => string
-  }
-): Promise<{ copied: string[]; failed: string[]; skipped: string[] }> {
-  const { uploadBinaryToDrive, folderFileNameMap } = await import("@/lib/google-drive")
-  const copied: string[] = []
-  const failed: string[] = []
-  const skipped: string[] = []
-
-  // Duplicate-upload guard (LT Program incident, 2026-07-07): a re-run of the
-  // same job (or a duplicate submission) must not pile a second copy of an
-  // already-copied file into the folder. Upload file names embed a per-upload
-  // hash segment, so name-equality means the same stored object — skipping is
-  // lossless. A null map means the listing failed: default to uploading
-  // (worst case a stray duplicate, never a silently missing file).
-  const namesByFolder = new Map<string, Map<string, string> | null>()
-  if (opts?.existingNames !== undefined) namesByFolder.set(targetFolderId, opts.existingNames)
-  const existingNamesFor = async (folderId: string): Promise<Map<string, string> | null> => {
-    if (!namesByFolder.has(folderId)) namesByFolder.set(folderId, await folderFileNameMap(folderId))
-    return namesByFolder.get(folderId) ?? null
-  }
-
-  const MAX_RETRIES = 3
-  const RETRY_DELAYS = [0, 1000, 3000] // immediate, 1s, 3s
-
-  for (const path of uploadPaths) {
-    const fileName = path.split("/").pop() || "document.pdf"
-
-    // Destination depends only on the file name — resolve it up front so the
-    // skip check runs before the (potentially retried) download.
-    let destFolder = targetFolderId
-    if (fileMapping) {
-      for (const [prefix, folderId] of Object.entries(fileMapping)) {
-        if (fileName.toLowerCase().startsWith(prefix.toLowerCase())) {
-          destFolder = folderId
-          break
-        }
-      }
-    }
-
-    const existing = await existingNamesFor(destFolder)
-    if (existing?.has(fileName)) {
-      skipped.push(fileName)
-      continue
-    }
-
-    const fileBucket = opts?.resolveBucket ? opts.resolveBucket(path) : bucket
-
-    let downloaded = false
-
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        if (RETRY_DELAYS[attempt] > 0) {
-          await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]))
-        }
-
-        const { data: fileData, error: dlError } = await supabaseAdmin.storage
-          .from(fileBucket)
-          .download(path)
-
-        if (dlError) {
-          console.warn(`[copyUploadsToDrive] Attempt ${attempt + 1}/${MAX_RETRIES} failed for ${fileBucket}/${path}: ${dlError.message}`)
-          if (attempt === MAX_RETRIES - 1) {
-            failed.push(`${fileName} (download error after ${MAX_RETRIES} attempts: ${dlError.message})`)
-          }
-          continue
-        }
-
-        if (!fileData || fileData.size === 0) {
-          console.warn(`[copyUploadsToDrive] Attempt ${attempt + 1}/${MAX_RETRIES} empty for ${fileBucket}/${path} (size: ${fileData?.size ?? 'null'})`)
-          if (attempt === MAX_RETRIES - 1) {
-            failed.push(`${fileName} (empty after ${MAX_RETRIES} attempts)`)
-          }
-          continue
-        }
-
-        // Download succeeded — upload to Drive
-        const buf = Buffer.from(await fileData.arrayBuffer())
-        const mimeType = fileData.type || "application/octet-stream"
-
-        await uploadBinaryToDrive(fileName, buf, mimeType, destFolder)
-        copied.push(fileName)
-        downloaded = true
-        break
-      } catch (e) {
-        console.warn(`[copyUploadsToDrive] Attempt ${attempt + 1}/${MAX_RETRIES} exception for ${path}: ${e instanceof Error ? e.message : String(e)}`)
-        if (attempt === MAX_RETRIES - 1) {
-          failed.push(`${fileName}: ${e instanceof Error ? e.message : String(e)} (after ${MAX_RETRIES} attempts)`)
-        }
-      }
-    }
-
-    if (!downloaded && !failed.some(f => f.startsWith(fileName))) {
-      failed.push(`${fileName} (failed after ${MAX_RETRIES} attempts)`)
-    }
-  }
-
-  return { copied, failed, skipped }
-}
-
 // ─── Tax-return payload normalization for the summary PDF ───
 
 /**
@@ -1203,104 +1089,14 @@ export async function saveFormToDrive(
     }
   }
 
-  const { listFolder, createFolder, uploadBinaryToDriveUpsert, folderFileNameMap } = await import("@/lib/google-drive")
-  const errors: string[] = []
-
-  // Find or create subfolder.
-  // ABORT-ON-UNRESOLVED (2026-07-24, Drive-reliability): if the target
-  // subfolder / year folder cannot be resolved, we MUST NOT continue — the old
-  // code fell through with targetFolderId still = the account ROOT and dumped
-  // the PDF + every file there while still returning a truthy summaryFileId,
-  // reporting "ok" while 3.Tax/{year} stayed empty (a silent misfile). Return
-  // with errors and NO uploads so the durable archive job retries instead.
-  let targetFolderId = driveFolderId
-  try {
-    const contents = await listFolder(driveFolderId)
-    const existing = contents?.files?.find(
-      (f: { name: string; mimeType: string }) =>
-        f.name === config.driveSubfolder && f.mimeType === "application/vnd.google-apps.folder"
-    )
-    if (existing) {
-      targetFolderId = existing.id
-    } else {
-      const newFolder = await createFolder(driveFolderId, config.driveSubfolder)
-      targetFolderId = newFolder.id
-    }
-
-    // For tax_return: create year subfolder inside "3. Tax/"
-    if (formType === "tax_return" && meta.year) {
-      const yearStr = String(meta.year)
-      const yearContents = await listFolder(targetFolderId)
-      const yearFolder = yearContents?.files?.find(
-        (f: { name: string; mimeType: string }) =>
-          f.name === yearStr && f.mimeType === "application/vnd.google-apps.folder"
-      )
-      if (yearFolder) {
-        targetFolderId = yearFolder.id
-      } else {
-        const newYear = await createFolder(targetFolderId, yearStr)
-        targetFolderId = newYear.id
-      }
-    }
-  } catch (e) {
-    // Do NOT fall through to the account root — abort the whole archival.
-    return {
-      summaryFileId: null,
-      copied: [],
-      failed: [],
-      skipped: [],
-      errors: [`Subfolder unresolved (aborted to avoid misfiling to account root): ${e instanceof Error ? e.message : String(e)}`],
-    }
+  // Stop Drive S2: a destination that is a real Google Drive folder (not a storage) is never written to — the old Drive filing
+  // (summary PDF + copies of the uploads) is gone. The answer is an error the caller reports; the client's uploads stay safe in
+  // their upload bucket.
+  return {
+    summaryFileId: null,
+    copied: [],
+    failed: [],
+    skipped: [],
+    errors: ["This company has no document storage in the CRM, so the form package was not filed."],
   }
-
-  // One listing of the target folder feeds both the summary-PDF upsert and
-  // the upload skip-guard below (LT Program duplicate incident, 2026-07-07). If
-  // the listing itself fails, ABORT — a null map turns the stable-name UPSERT
-  // into a blind CREATE (duplicate PDFs/files on a retry). Better to fail and
-  // let the durable job retry with a good listing.
-  const existingNames = await folderFileNameMap(targetFolderId)
-  if (!existingNames) {
-    return {
-      summaryFileId: null,
-      copied: [],
-      failed: [],
-      skipped: [],
-      errors: ["Target folder listing failed (aborted to avoid duplicate uploads on retry)"],
-    }
-  }
-
-  // Generate summary PDF. The file name is stable across runs, so this is an
-  // UPSERT: a re-run or resubmission refreshes the one existing PDF in place
-  // instead of piling up copies.
-  let summaryFileId: string | null = null
-  try {
-    const summaryPdf = await generateFormSummaryPDF(config, submittedData, {
-      ...meta,
-      uploadCount: uploadPaths.length,
-      deterministic: true,
-    })
-    const slug = (meta.companyName || meta.token).replace(/\s+/g, "_")
-    const result = await uploadBinaryToDriveUpsert(
-      `${config.filePrefix}_${slug}.pdf`,
-      Buffer.from(summaryPdf),
-      "application/pdf",
-      targetFolderId,
-      existingNames
-    )
-    summaryFileId = result.id
-  } catch (e) {
-    errors.push(`Summary PDF error: ${e instanceof Error ? e.message : String(e)}`)
-  }
-
-  // Copy uploaded files (bucket may be overridden — see opts.bucket docblock).
-  // Already-present file names are skipped, not re-uploaded.
-  const { copied, failed, skipped } = await copyUploadsToDrive(
-    uploadPaths,
-    bucket,
-    targetFolderId,
-    undefined,
-    { existingNames, resolveBucket: opts?.resolveBucket }
-  )
-
-  return { summaryFileId, copied, failed, skipped, errors }
 }

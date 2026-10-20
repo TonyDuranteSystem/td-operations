@@ -337,7 +337,6 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   // ─── 2a.1. DRIVE FOLDER + PASSPORT PROCESSING ───
   // Phase 1: Create contact-level Drive folder (Contacts/{Name}/)
   // Documents will migrate to company folder when LLC name is selected (Phase 2)
-  let contactDriveFolderId: string | null = null
 
   // ─── 2a.0. CRM STORE PILOT (sandbox only, job 685467b5 — lib/crm-store/formation-pilot.ts) ───
   // A formation already on file (made at payment) whose buyer is a pilot contact keeps its files in
@@ -425,87 +424,10 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     try {
       const { ensureContactFolder } = await import("@/lib/drive-folder-utils")
       const contactName = [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ") || p.token
-      const folderResult = await ensureContactFolder(p.contact_id, contactName)
-      contactDriveFolderId = folderResult.folderId
-
-      if (folderResult.created) {
-        result.steps.push(step("drive_folder", "ok", `Created: Contacts/${contactName}/`))
-      } else {
-        result.steps.push(step("drive_folder", "skipped", "Already exists"))
-      }
-
-      // Copy passport from Supabase Storage to Drive. File fields may now hold
-      // multiple paths; the owner-passport OCR/Drive flow acts on the first one
-      // (any extras remain in storage + upload_paths). dev_task 64bfcdd9.
-      const passportPath = firstUploadPath(submitted.passport_owner)
-      if (passportPath && contactDriveFolderId) {
-        try {
-          const contactsSubfolder = folderResult.subfolders["2. Contacts"]
-          if (contactsSubfolder) {
-            const cleanPath = passportPath.replace(/^\/+/, "")
-            // Duplicate-upload guard (LT Program incident): a re-run of this
-            // job must not add a second Drive copy. The prior run also did
-            // the OCR writeback + documents insert, so skip the whole block.
-            const dupCheckName = cleanPath.split("/").pop() || "passport.pdf"
-            const { fileExistsInFolder } = await import("@/lib/google-drive")
-            const dup = await fileExistsInFolder(contactsSubfolder, dupCheckName)
-            if (dup.exists) {
-              result.steps.push(step("passport_copy", "skipped", `Already on Drive (${dup.id})`))
-            } else {
-            const { data: blob, error: dlErr } = await supabaseAdmin.storage
-              .from("onboarding-uploads")
-              .download(cleanPath)
-
-            if (dlErr || !blob) {
-              result.steps.push(step("passport_copy", "error", dlErr?.message || "Download failed"))
-            } else {
-              const { uploadBinaryToDrive } = await import("@/lib/google-drive")
-              const fileName = cleanPath.split("/").pop() || "passport.pdf"
-              const buffer = Buffer.from(await blob.arrayBuffer())
-              const mimeType = blob.type || "application/octet-stream"
-
-              const driveFile = await uploadBinaryToDrive(fileName, buffer, mimeType, contactsSubfolder) as { id: string; name: string }
-              result.steps.push(step("passport_copy", "ok", `Uploaded to Drive: ${driveFile.id}`))
-
-              // OCR + MRZ extraction — shared helper writes passport_number /
-              // passport_expiry_date / date_of_birth to the contact and creates
-              // a manual-entry task for unsupported formats (HEIC).
-              const { extractAndStorePassportData } = await import("@/lib/jobs/passport-writeback")
-              const passportResult = await extractAndStorePassportData({
-                contact_id: p.contact_id!,
-                drive_file_id: driveFile.id,
-                mime_type: mimeType,
-                skip_dob: !!submitted.owner_dob,
-                contact_name: [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ") || p.token,
-                account_id: accountId,
-              })
-              result.steps.push(step("passport_ocr", passportResult.status, passportResult.detail))
-
-              // Create document record
-              await supabaseAdmin.from("documents").insert({
-                file_name: fileName,
-                drive_file_id: driveFile.id,
-                drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
-                document_type_name: "Passport",
-                category: 2,
-                category_name: "Contacts",
-                status: "classified",
-                contact_id: p.contact_id,
-                account_id: accountId,
-                portal_visible: true,
-              })
-              result.steps.push(step("passport_doc_record", "ok", "Document record created"))
-            }
-            }
-          } else {
-            result.steps.push(step("passport_copy", "error", "No '2. Contacts' subfolder found"))
-          }
-        } catch (passErr) {
-          result.steps.push(step("passport_copy", "error", passErr instanceof Error ? passErr.message : String(passErr)))
-        }
-      } else if (!passportPath) {
-        result.steps.push(step("passport_copy", "skipped", "No passport uploaded"))
-      }
+      // Stop Drive S2: this never returns a Drive folder — it opens the person's own storage and throws PersonFilesInStorageError (handled
+      // below: the passport goes to THEIR storage), or refuses (a staff alarm is raised).
+      await ensureContactFolder(p.contact_id, contactName)
+      result.steps.push(step("drive_folder", "error", "Could not open this person's document storage"))
     } catch (driveErr) {
       if (driveErr instanceof Error && driveErr.name === "PersonFilesInStorageError") {
         // Stop Drive (dev job 264bb882, S1d): a returning client (company in storage, no storage of their own yet — their storage was

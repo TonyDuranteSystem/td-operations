@@ -84,15 +84,15 @@ describe("confirm-ra-switch", () => {
     expect(state.recorded.filter((r) => r.table === "service_deliveries")).toEqual([])
   })
 
-  it("a company left on its old folder: the switch is confirmed and the receipt is copied to its folder as before", async () => {
+  it("a company left on its old folder is frozen (Stop Drive S2): refused up front with the true sentence, zero Drive calls, stage not moved", async () => {
     state.route = "drive"
     state.rows.accounts = { ...(state.rows.accounts as object), ...ACCOUNT_OLD_FOLDER }
     const { POST } = await import("@/app/api/onboarding-review/[id]/confirm-ra-switch/route")
     const res = await POST(req(), { params: { id: "sub-1" } })
-    const body = await res.json()
-    expect(body.success).toBe(true)
-    expect(body.message).toContain("also filed to the company's folder")
-    expect(state.driveCalls).toEqual(["uploadBinaryToDrive"])
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: NO_STORAGE_REASON_SENTENCE.frozen })
+    expect(state.driveCalls).toEqual([])
+    expect(state.recorded.filter((r) => r.table === "service_deliveries")).toEqual([])
   })
 
   it("a company being MOVED: refused up front with 'try again' — nothing saved, the stage not moved, no staged copy made", async () => {

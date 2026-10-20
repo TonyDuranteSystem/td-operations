@@ -1,10 +1,11 @@
 /**
- * CRM Store — the one sentence for "this company has no storage" (Stop Drive, dev job 264bb882, slice S1c).
+ * CRM Store — the one sentence for "this company has no storage" (Stop Drive, dev job 264bb882, slices S1c + S2).
  *
- * Every document save goes to the CRM storage. A company that has none and is finished (Closed / Cancelled) or has no folder
- * at all cannot receive a new file — the action says so in ONE plain sentence. The few companies deliberately left as they
- * are (a folder, no storage, not finished) keep their old behaviour (see decideNoStorage below). It is not a notice, a label or
- * a banner: it is the answer of the action that was asked for. Nothing is skipped silently.
+ * Every document save goes to the CRM storage. A company that has none cannot receive a new file — the action says so in ONE plain
+ * sentence. Since S2 there is NO exception: the four companies once left on their old Drive folder (REBIS, YBR, Degasper, Fresh
+ * Legal) are frozen too — "these stay in Drive and stop" (Antonio, 2026-10-18): their old records stay a read-only archive and a
+ * new file for them is added by hand. It is not a notice, a label or a banner: it is the answer of the action that was asked for.
+ * Nothing is skipped silently.
  */
 
 export const NO_STORAGE_SENTENCE = "This company has no document storage in the CRM, so this file could not be saved."
@@ -23,10 +24,10 @@ export function notStored(routed: { route: string }): boolean {
 // ─── A company with NO storage: which of the two answers? ──────────────────────────────────────────────────────────
 //
 // Antonio 2026-10-18: four companies were deliberately left as they are (REBIS, YBR, Degasper, Fresh Legal: status Active /
-// Suspended / Offboarding, they HAVE a Drive folder and NO storage). They must keep working exactly as before. Everything else
-// that has no storage — a Closed or Cancelled company, or a company with no folder at all — gets the one sentence.
+// Suspended / Offboarding, they HAVE a Drive folder and NO storage). "These stay in Drive and stop": since S2 nothing is ever
+// written to Drive for them either ("frozen"). Every company that has no storage gets a plain sentence with the true reason.
 
-export type NoStorageReason = "moving" | "archived" | "no_folder" | "no_company"
+export type NoStorageReason = "moving" | "archived" | "no_folder" | "no_company" | "frozen"
 
 /** The ONE plain sentence per reason (the answer of the action that was asked for — not a notice, label or banner). */
 export const NO_STORAGE_REASON_SENTENCE: Record<NoStorageReason, string> = {
@@ -34,14 +35,14 @@ export const NO_STORAGE_REASON_SENTENCE: Record<NoStorageReason, string> = {
   archived: "This company is closed, so nothing new can be saved for it.",
   no_folder: NO_STORAGE_SENTENCE,
   no_company: "This file has no company to be saved for, so it could not be saved.",
+  frozen: "This company's files are in its old Google Drive folder, which is now read-only, so this file could not be saved. Add it by hand where it belongs.",
 }
 
 /** What a CLIENT is told while their company's files are being moved. */
 export const CLIENT_MOVING_SENTENCE = "We are updating your documents right now. Please try again in a few minutes."
 
-export type NoStorageDecision =
-  | { route: "drive"; folderId: string; reason?: undefined; sentence?: undefined }
-  | { route: "refuse"; reason: NoStorageReason; sentence: string; folderId?: undefined }
+/** Since S2 the only answer is a refusal (the "drive" route no longer exists: nothing but the backup writes to Drive). */
+export type NoStorageDecision = { route: "refuse"; reason: NoStorageReason; sentence: string }
 
 const refuse = (reason: NoStorageReason): NoStorageDecision => ({ route: "refuse", reason, sentence: NO_STORAGE_REASON_SENTENCE[reason] })
 
@@ -68,14 +69,13 @@ export function driveIdFromUrl(url: string | null | undefined): string | null {
 }
 
 /**
- * Pure: THE rule for a company that has no storage. Keep its own folder only when it is not finished AND has a folder
- * (the companies deliberately left on their old folder); otherwise refuse with the true reason.
+ * Pure: THE rule for a company that has no storage: always a refusal, with the true reason — finished (Closed / Cancelled), still on
+ * its old Drive folder (frozen — read-only archive), or no folder at all.
  */
 export function decideNoStorage(a: { status?: string | null; drive_folder_id?: string | null; gdrive_folder_url?: string | null } | null | undefined): NoStorageDecision {
   if (!a) return refuse("no_company")
   if (FINISHED_STATUSES.has(String(a.status ?? "").trim().toLowerCase())) return refuse("archived")
-  const folderId = folderIdOf(a)
-  return folderId ? { route: "drive", folderId } : refuse("no_folder")
+  return folderIdOf(a) ? refuse("frozen") : refuse("no_folder")
 }
 
 /** Strict read (a read error throws — it is never mistaken for "no folder"). Call ONLY after a save came back `route: "drive"`. */
@@ -116,8 +116,8 @@ export type ReceiveVerdict = { ok: true; reason?: undefined; sentence?: undefine
 
 /**
  * Can a new file for this company be saved at all — decided BEFORE a caller changes anything else, so a refusal never leaves a
- * half-done update behind. Storage → ok; a company being moved → not now (try again); a company left on its old folder → ok;
- * everything else → refused with the true reason. Strict: a read error throws.
+ * half-done update behind. Storage → ok; a company being moved → not now (try again);
+ * everything else (including a company frozen on its old Drive folder) → refused with the true reason. Strict: a read error throws.
  */
 export async function receiveVerdictFor(accountId: string): Promise<ReceiveVerdict> {
   const { companyDocState } = await import("./switched-drive-guard")
@@ -126,7 +126,7 @@ export async function receiveVerdictFor(accountId: string): Promise<ReceiveVerdi
   if (state === "store") return { ok: true }
   if (state === "moving") return { ok: false, reason: "moving", sentence: NO_STORAGE_REASON_SENTENCE.moving }
   const d = await noStorageDecisionFor(accountId)
-  return d.route === "drive" ? { ok: true } : { ok: false, reason: d.reason, sentence: d.sentence }
+  return { ok: false, reason: d.reason, sentence: d.sentence }
 }
 
 /** Boolean form of `receiveVerdictFor` (a company being moved counts as "cannot receive right now"). */
@@ -148,9 +148,8 @@ export interface ContactFacts {
 }
 
 /**
- * Pure: may a NEW write still go into Drive for this PERSON? Only when they have no storage of their own and belong to a company
- * deliberately left on its old folder (the person's own folder, else that company's). Anyone else gets their own storage — never a
- * Drive folder. Reuses the company rule above, so there is ONE definition.
+ * Pure: a person with no storage of their own is never written to in Drive (S2). The refusal names the true reason; a person of a
+ * company that is only frozen on its old Drive folder is told so. Reuses the company rule above, so there is ONE definition.
  */
 export function decideNoStorageForContact(f: ContactFacts): NoStorageDecision {
   const d = decideContactInner(f)
@@ -161,7 +160,7 @@ export function decideNoStorageForContact(f: ContactFacts): NoStorageDecision {
 function decideContactInner(f: ContactFacts): NoStorageDecision {
   if (f.liveOwner || f.companyInStorageOrMoving) return refuse("no_folder")
   if (f.companyVerdicts.length === 0) return refuse(f.folderId ? "no_company" : "no_folder")
-  for (const v of f.companyVerdicts) if (v.route === "drive") return { route: "drive", folderId: f.folderId ?? v.folderId }
+  if (f.companyVerdicts.some((v) => v.reason === "frozen")) return refuse("frozen")
   if (f.companyVerdicts.some((v) => v.reason === "archived")) return refuse("archived")
   return refuse("no_folder")
 }

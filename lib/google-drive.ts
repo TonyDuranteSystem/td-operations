@@ -8,9 +8,17 @@
  *   3. Impersonate support@tonydurante.us via DWD
  *
  * All calls target the "Tony Durante LLC" Shared Drive.
+ *
+ * Stop Drive S2 (dev job 264bb882): Google Drive is the ONE-WAY BACKUP of the CRM storage plus a read-only archive. EVERY write
+ * verb in this file (create folder, upload, update, move, rename, trash …) refuses unless it runs inside `runAsStoreBackup`
+ * (lib/google-drive-write-scope.ts) — the check is the first line of each verb (before the sandbox mock, so a sandbox sees what
+ * production sees) and the raw network door (`driveWriteFetch`) refuses a non-read request outside the backup as a second line.
+ * Reads (search, list, metadata, download, the owner/drop read-only paths) are never affected. A new write verb MUST call
+ * `assertDriveWriteScope(...)` first and send its request through `driveWriteFetch`.
  */
 
 import { assertDriveWriteAllowed, type DriveWriteTarget } from "./google-drive-guard"
+import { assertDriveWriteScope, driveWriteFetch } from "./google-drive-write-scope"
 import { SignJWT, importPKCS8 } from "jose"
 
 // ─── Configuration ──────────────────────────────────────────
@@ -100,6 +108,8 @@ function forgetDriveParents(id: string): void {
   driveParentsCache.delete(id)
 }
 async function guardDriveWrite(target: DriveWriteTarget): Promise<void> {
+  // Stop Drive S2: only the one-way backup may write (second line of defence; every write verb also checks this first).
+  assertDriveWriteScope("guardDriveWrite")
   await assertDriveWriteAllowed(target, async (id) => {
     if (driveIdCache.has(id)) return driveIdCache.get(id) ?? null
     const meta = (await driveGet(`/files/${id}`, { fields: "id,driveId" })) as { driveId?: string }
@@ -259,7 +269,7 @@ async function driveUpload(
     `--${boundary}--`,
   ].join("\r\n")
 
-  const res = await fetch(
+  const res = await driveWriteFetch(
     `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true`,
     {
       method: "POST",
@@ -458,6 +468,7 @@ export async function uploadFile(
   content: string,
   mimeType = "text/plain",
 ) {
+  assertDriveWriteScope("uploadFile")
   if (driveMocked()) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'uploadFile', fileName })
     return { id: 'sandbox-mock', name: fileName }
@@ -476,6 +487,7 @@ export async function updateFileContent(
   mimeType = "text/plain",
   newName?: string,
 ) {
+  assertDriveWriteScope("updateFileContent")
   if (driveMocked()) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'updateFileContent', fileId })
     return { id: fileId, name: newName ?? 'sandbox-mock' }
@@ -499,7 +511,7 @@ export async function updateFileContent(
     `--${boundary}--`,
   ].join("\r\n")
 
-  const res = await fetch(
+  const res = await driveWriteFetch(
     `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart&supportsAllDrives=true`,
     {
       method: "PATCH",
@@ -525,6 +537,7 @@ export async function updateFileContent(
  * Rename a file or folder on Drive (metadata-only update)
  */
 export async function renameFile(fileId: string, newName: string) {
+  assertDriveWriteScope("renameFile")
   if (driveMocked()) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'renameFile', fileId })
     return { id: fileId, name: newName }
@@ -532,7 +545,7 @@ export async function renameFile(fileId: string, newName: string) {
   await guardDriveWrite({ kind: "shared", ids: [fileId] })
   const token = await getAccessToken()
 
-  const res = await fetch(
+  const res = await driveWriteFetch(
     `${DRIVE_API}/files/${fileId}?supportsAllDrives=true`,
     {
       method: "PATCH",
@@ -558,6 +571,7 @@ export async function renameFile(fileId: string, newName: string) {
  * Create a folder in Drive
  */
 export async function createFolder(parentFolderId: string, folderName: string) {
+  assertDriveWriteScope("createFolder")
   if (driveMocked()) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'createFolder', folderName })
     return { id: 'sandbox-mock', name: folderName }
@@ -565,7 +579,7 @@ export async function createFolder(parentFolderId: string, folderName: string) {
   await guardDriveWrite({ kind: "shared", ids: [parentFolderId] })
   const token = await getAccessToken()
 
-  const res = await fetch(
+  const res = await driveWriteFetch(
     `${DRIVE_API}/files?supportsAllDrives=true`,
     {
       method: "POST",
@@ -599,6 +613,7 @@ export async function moveFile(
   fileId: string,
   newParentId: string,
 ) {
+  assertDriveWriteScope("moveFile")
   if (driveMocked()) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'moveFile', fileId, newParentId })
     return { id: fileId }
@@ -611,7 +626,7 @@ export async function moveFile(
   const meta = (await getFileMetadata(fileId)) as { parents?: string[] }
   const previousParents = meta.parents?.join(",") || ""
 
-  const res = await fetch(
+  const res = await driveWriteFetch(
     `${DRIVE_API}/files/${fileId}?addParents=${newParentId}&removeParents=${previousParents}&supportsAllDrives=true`,
     {
       method: "PATCH",
@@ -671,6 +686,7 @@ export async function listFolderAnyDrive(folderId: string, maxResults = 50) {
  * Used for TD Operations mirror structure.
  */
 export async function createFolderMyDrive(parentFolderId: string, folderName: string) {
+  assertDriveWriteScope("createFolderMyDrive")
   if (driveMocked()) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'createFolderMyDrive', folderName })
     return { id: 'sandbox-mock', name: folderName }
@@ -678,7 +694,7 @@ export async function createFolderMyDrive(parentFolderId: string, folderName: st
   await guardDriveWrite({ kind: "shared", ids: [parentFolderId] })
   const token = await getAccessToken()
 
-  const res = await fetch(
+  const res = await driveWriteFetch(
     `${DRIVE_API}/files?supportsAllDrives=true`,
     {
       method: "POST",
@@ -714,6 +730,7 @@ export async function uploadFileMyDrive(
   content: string,
   mimeType = "text/plain",
 ) {
+  assertDriveWriteScope("uploadFileMyDrive")
   if (driveMocked()) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'uploadFileMyDrive', fileName })
     return { id: 'sandbox-mock', name: fileName }
@@ -739,7 +756,7 @@ export async function uploadFileMyDrive(
     `--${boundary}--`,
   ].join("\r\n")
 
-  const res = await fetch(
+  const res = await driveWriteFetch(
     `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true`,
     {
       method: "POST",
@@ -767,6 +784,7 @@ export async function uploadFileMyDrive(
  * Example: ensureDrivePath("rootId", ["SOP", "Templates"]) → creates SOP/ and SOP/Templates/ if needed
  */
 export async function ensureDrivePath(rootFolderId: string, pathSegments: string[]): Promise<string> {
+  assertDriveWriteScope("ensureDrivePath")
   if (driveMocked()) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'ensureDrivePath', pathSegments })
     return 'sandbox-mock-folder-id'
@@ -825,7 +843,7 @@ async function uploadBinaryToDriveResumable(
     driveId: SHARED_DRIVE_ID(),
   })
 
-  const initRes = await fetch(
+  const initRes = await driveWriteFetch(
     `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true`,
     {
       method: "POST",
@@ -851,7 +869,7 @@ async function uploadBinaryToDriveResumable(
     throw new Error("Drive resumable upload init did not return a session URL")
   }
 
-  const putRes = await fetch(sessionUrl, {
+  const putRes = await driveWriteFetch(sessionUrl, {
     method: "PUT",
     headers: {
       "Content-Type": mimeType,
@@ -880,6 +898,7 @@ export async function uploadBinaryToDrive(
   mimeType: string,
   parentFolderId: string,
 ) {
+  assertDriveWriteScope("uploadBinaryToDrive")
   if (driveMocked()) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'uploadBinaryToDrive', fileName })
     return { id: 'sandbox-mock', name: fileName }
@@ -910,7 +929,7 @@ export async function uploadBinaryToDrive(
 
   const body = Buffer.concat([metadataPart, contentHeader, data, ending])
 
-  const res = await fetch(
+  const res = await driveWriteFetch(
     `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true`,
     {
       method: "POST",
@@ -999,6 +1018,7 @@ export async function fileExistsInFolder(folderId: string, fileName: string): Pr
  * form-summary PDFs) whose file name is stable across runs.
  */
 export async function updateBinaryFile(fileId: string, data: Buffer, mimeType: string) {
+  assertDriveWriteScope("updateBinaryFile")
   if (driveMocked()) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'updateBinaryFile', fileId })
     return { id: fileId, name: 'sandbox-mock' }
@@ -1016,7 +1036,7 @@ export async function updateBinaryFile(fileId: string, data: Buffer, mimeType: s
   const ending = Buffer.from(`\r\n--${boundary}--`)
   const body = Buffer.concat([metadataPart, contentHeader, data, ending])
 
-  const res = await fetch(
+  const res = await driveWriteFetch(
     `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart&supportsAllDrives=true`,
     {
       method: "PATCH",
@@ -1055,6 +1075,7 @@ export async function uploadBinaryToDriveUpsert(
   parentFolderId: string,
   existingNames?: Map<string, string> | null,
 ): Promise<{ id: string; name: string; action: "created" | "overwritten" }> {
+  assertDriveWriteScope("uploadBinaryToDriveUpsert")
   let names = existingNames
   if (names === undefined) names = await folderFileNameMap(parentFolderId)
   const existingId = names?.get(fileName)
@@ -1189,6 +1210,7 @@ export async function downloadFileContent(fileId: string): Promise<string> {
  * Trash a file (soft-delete, recoverable for 30 days)
  */
 export async function trashFile(fileId: string): Promise<{ id: string; name: string }> {
+  assertDriveWriteScope("trashFile")
   if (driveMocked()) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'trashFile', fileId })
     return { id: fileId, name: 'sandbox-blocked' }
@@ -1196,7 +1218,7 @@ export async function trashFile(fileId: string): Promise<{ id: string; name: str
   await guardDriveWrite({ kind: "shared", ids: [fileId] })
   const token = await getAccessToken()
 
-  const res = await fetch(
+  const res = await driveWriteFetch(
     `${DRIVE_API}/files/${fileId}?supportsAllDrives=true`,
     {
       method: "PATCH",
@@ -1240,6 +1262,7 @@ export async function findTaxFolder(driveFolderId: string): Promise<string | nul
  * Returns the year folder ID.
  */
 export async function findOrCreateYearFolder(taxFolderId: string, year: number): Promise<string> {
+  assertDriveWriteScope("findOrCreateYearFolder")
   const listing = (await listFolder(taxFolderId, 100)) as {
     files?: { id: string; name: string; mimeType: string }[]
     nextPageToken?: string
@@ -1336,13 +1359,14 @@ export async function getTaggedItem(fileId: string): Promise<DriveTaggedItem | n
 
 /** Create a folder carrying appProperties. */
 export async function createTaggedFolder(parentFolderId: string, folderName: string, appProperties: Record<string, string>): Promise<DriveTaggedItem> {
+  assertDriveWriteScope("createTaggedFolder")
   if (driveMocked()) {
     console.warn("[SANDBOX] Drive write blocked:", { operation: "createTaggedFolder", folderName })
     return { id: "sandbox-mock", name: folderName }
   }
   await guardDriveWrite({ kind: "shared", ids: [parentFolderId] })
   const token = await getAccessToken()
-  const res = await fetch(`${DRIVE_API}/files?supportsAllDrives=true&fields=${TAGGED_FIELDS}`, {
+  const res = await driveWriteFetch(`${DRIVE_API}/files?supportsAllDrives=true&fields=${TAGGED_FIELDS}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ name: folderName, mimeType: "application/vnd.google-apps.folder", parents: [parentFolderId], appProperties }),
@@ -1359,6 +1383,7 @@ export async function patchTaggedItem(
   fileId: string,
   p: { name?: string; newParentId?: string; appProperties?: Record<string, string> },
 ): Promise<DriveTaggedItem> {
+  assertDriveWriteScope("patchTaggedItem")
   if (driveMocked()) {
     console.warn("[SANDBOX] Drive write blocked:", { operation: "patchTaggedItem", fileId })
     return { id: fileId, name: p.name ?? "" }
@@ -1378,7 +1403,7 @@ export async function patchTaggedItem(
   const body: Record<string, unknown> = {}
   if (p.name !== undefined) body.name = p.name
   if (p.appProperties) body.appProperties = p.appProperties
-  const res = await fetch(url.toString(), {
+  const res = await driveWriteFetch(url.toString(), {
     method: "PATCH",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -1409,6 +1434,7 @@ export async function uploadStreamToDrive(p: {
   stream: ReadableStream<Uint8Array>
   appProperties: Record<string, string>
 }): Promise<DriveTaggedItem> {
+  assertDriveWriteScope("uploadStreamToDrive")
   if (driveMocked()) {
     console.warn("[SANDBOX] Drive write blocked:", { operation: "uploadStreamToDrive", name: p.name })
     return { id: p.fileId ?? "sandbox-mock", name: p.name }
@@ -1423,7 +1449,7 @@ export async function uploadStreamToDrive(p: {
   const meta = p.mode === "create"
     ? { name: p.name, parents: [p.parentId], mimeType: p.mimeType, appProperties: p.appProperties }
     : { name: p.name, appProperties: p.appProperties }
-  const init = await fetch(initUrl, {
+  const init = await driveWriteFetch(initUrl, {
     method: p.mode === "create" ? "POST" : "PATCH",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1471,7 +1497,7 @@ export async function uploadStreamToDrive(p: {
     }
     if (!isLast && chunk.length === 0) throw new Error("uploadStreamToDrive: nothing to send before the end")
     const range = p.size === 0 ? "bytes */0" : `bytes ${committed}-${committed + chunk.length - 1}/${p.size}`
-    const put = await fetch(session, { method: "PUT", headers: { "Content-Range": range }, body: chunk })
+    const put = await driveWriteFetch(session, { method: "PUT", headers: { "Content-Range": range }, body: chunk })
     if (put.status === 308) {
       const r = put.headers.get("range")                      // "bytes=0-12345" → next byte 12346
       const kept = r ? Number(r.split("-")[1]) + 1 : committed

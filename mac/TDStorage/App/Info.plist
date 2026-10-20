@@ -14,6 +14,7 @@
 	<key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>TDServerURL</key><string>$(TD_SERVER_URL)</string>
+	<key>TDDomainName</key><string>$(TD_DOMAIN_NAME)</string>
 	<key>TDKeychainService</key><string>$(TD_KEYCHAIN_SERVICE)</string>
 	<key>TDKeychainGroup</key><string>$(TD_KEYCHAIN_GROUP)</string>
 	<key>NSAppTransportSecurity</key>

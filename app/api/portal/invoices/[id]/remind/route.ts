@@ -139,6 +139,7 @@ export async function POST(
       from_email: fromAddressFor(sender),
       account_id: invoice.account_id || null,
       contact_id: invoice.contact_id || null,
+      invoice_id: invoice.id,
     })
     const trackedHtml = html + `<img src="${APP_BASE_URL}/api/track/open/${trackingId}" width="1" height="1" style="display:none" alt="" />`
 

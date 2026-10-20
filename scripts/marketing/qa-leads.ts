@@ -30,11 +30,47 @@ const fakeLeads: Record<string, unknown> = {}
 const failIds = new Set<string>()
 const seen: Array<{ url: string; auth: string | undefined }> = []
 let reconcileList: unknown[] = []
+const APP_ID = "1828939005203111"
+const USER_KEY = "EAAB-qa-personal-key-0123456789abcdef"
+const LONG_KEY = "EAAB-qa-long-lasting-key-0123456789ab"
+const PAGE_KEY = "EAAB-qa-the-page-own-key-0123456789a"
+const EXPIRED_KEY = "EAAB-qa-expired-key-0000000000000000"
+let hideMyPage = false
+const exchanges: Array<{ method: string; url: string; auth: string | undefined; body: string }> = []
+let pageSubscribed = false
+let tokenBad = false
+const posts: Array<{ url: string; auth: string | undefined; body: string }> = []
 const fake = http.createServer((req, res) => {
   seen.push({ url: req.url ?? "", auth: req.headers.authorization })
   const path = (req.url ?? "").split("?")[0]
   const send = (code: number, body: unknown) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)) }
   let m: RegExpExecArray | null
+  if (tokenBad && /^\/v25\.0\/(me|\d+\/subscribed_apps)$/.test(path)) return send(401, { error: { message: "Error validating access token: Session has expired", code: 190 } })
+  const auth = String(req.headers.authorization ?? "")
+  if (path === "/v25.0/me") {
+    if (auth === `Bearer ${EXPIRED_KEY}`) return send(401, { error: { message: "Error validating access token: Session has expired", code: 190 } })
+    if (auth === `Bearer ${USER_KEY}` || auth === `Bearer ${LONG_KEY}`) return send(200, { id: "u9", name: "Tony Durante" })
+    return send(200, { id: "111", name: "QA Page" })
+  }
+  if (path === "/v25.0/me/accounts") {
+    if (auth !== `Bearer ${USER_KEY}` && auth !== `Bearer ${LONG_KEY}`) return send(400, { error: { message: "(#100) wrong kind of key", code: 100 } })
+    return send(200, { data: hideMyPage ? [{ id: "222", name: "Some Other Page", access_token: "x" }] : [{ id: "111", name: "QA Page", access_token: PAGE_KEY }, { id: "222", name: "Some Other Page", access_token: "x" }] })
+  }
+  if (path === "/v25.0/oauth/access_token") {
+    let body = ""
+    req.on("data", c => { body += c })
+    req.on("end", () => { exchanges.push({ method: req.method ?? "", url: req.url ?? "", auth: req.headers.authorization, body }); send(200, { access_token: LONG_KEY, expires_in: 5184000 }) })
+    return
+  }
+  if ((m = /^\/v25\.0\/(\d+)\/subscribed_apps$/.exec(path))) {
+    if (req.method === "POST") {
+      let body = ""
+      req.on("data", c => { body += c })
+      req.on("end", () => { posts.push({ url: req.url ?? "", auth: req.headers.authorization, body }); pageSubscribed = true; send(200, { success: true }) })
+      return
+    }
+    return send(200, { data: pageSubscribed ? [{ id: APP_ID, name: "TD Marketing Leads", subscribed_fields: ["leadgen"] }] : [] })
+  }
   if ((m = /^\/v25\.0\/(\d+)\/leadgen_forms$/.exec(path))) return send(200, { data: [{ id: "222", name: "LLC ITA form", status: "ACTIVE" }] })
   if ((m = /^\/v25\.0\/(\d+)\/leads$/.exec(path))) return send(200, { data: reconcileList })
   if ((m = /^\/v25\.0\/(\d+)$/.exec(path))) {
@@ -73,6 +109,7 @@ async function main() {
   await db.query("set session_replication_role = replica")
   await db.query("delete from marketing_lead_events"); await db.query("delete from marketing_leadgen_events"); await db.query("delete from marketing_leads")
   await db.query("delete from contacts where email like 'qa-leads-%'")
+  await db.query("delete from marketing_meta_connection")
   const oldTeams = (await db.query("select id from marketing_teams where name like 'QA %'")).rows.map(x => x.id)
   if (oldTeams.length) {
     for (const t of ["marketing_team_members", "marketing_invites", "marketing_settings", "marketing_settings_history", "marketing_commission_terms"]) await db.query(`delete from ${t} where team_id = any($1)`, [oldTeams])
@@ -271,6 +308,118 @@ async function main() {
   const anon = await browser.newContext()
   const ap = await anon.newPage(); const ar = await ap.goto(`${BASE}/marketing/leads`, { waitUntil: "networkidle", timeout: 180000 })
   ck("B15 nobody signed in is sent to the login", /\/login/.test(ap.url()) && !/Mario Rossi/.test(await ap.locator("body").innerText()), { u: ap.url(), s: ar?.status() })
+
+  // ═══ PART C — Antonio's "is Meta connected?" and "subscribe the Page" buttons ═══
+  const postJson = async (ctx: BrowserContext, path: string) => {
+    const r = await ctx.request.post(BASE + path, { maxRedirects: 0, timeout: 120000, headers: { accept: "application/json", "sec-fetch-mode": "cors" } })
+    return { status: r.status(), json: await r.json().catch(() => ({})) as { ok?: boolean; checks?: Array<{ key: string; status: string; detail: string }>; results?: Array<{ ok: boolean; detail: string }>; error?: string } }
+  }
+  const stat = (j: { checks?: Array<{ key: string; status: string; detail: string }> }, key: string) => j.checks?.find(c => c.key === key)
+  let c = await postJson(staff, "/api/marketing-admin/meta/check")
+  ck("C1 staff (not admin) cannot run the Meta check", c.status === 401 || c.status === 403, c)
+  c = await postJson(staff, "/api/marketing-admin/meta/subscribe")
+  ck("C2 staff cannot subscribe the Page either", c.status === 401 || c.status === 403, c)
+  c = await postJson(owner, "/api/marketing-admin/meta/check")
+  ck("C3 a marketing owner cannot reach the admin routes", c.status === 401 || c.status === 403, c)
+  c = await postJson(admin, "/api/marketing-admin/meta/check")
+  ck("C4 before subscribing: the key is accepted and forms are visible, but the Page is NOT subscribed", c.status === 200 && stat(c.json, "token")?.status === "ok" && stat(c.json, "forms_111")?.status === "ok" && stat(c.json, "subscribed_111")?.status === "fail" && c.json.ok === false, c)
+  ck("C5 secrets are reported as set / not set, never as values", /Set\./.test(stat(c.json, "app_secret")?.detail ?? "") && !/qa-app-secret|qa-page-token|qa-verify-token/.test(JSON.stringify(c.json)), c)
+  c = await postJson(admin, "/api/marketing-admin/meta/subscribe")
+  ck("C6 subscribing succeeds for the configured Page", c.status === 200 && c.json.results?.[0]?.ok === true, c)
+  ck("C7 Meta got a POST with the field in the body and the key in a header, never in the URL", posts.length === 1 && posts[0].body === "subscribed_fields=leadgen" && posts[0].auth === `Bearer ${TOKEN}` && !/qa-page-token|access_token/.test(posts[0].url), posts)
+  c = await postJson(admin, "/api/marketing-admin/meta/check")
+  ck("C8 after subscribing everything is green", c.status === 200 && c.json.ok === true && stat(c.json, "subscribed_111")?.status === "ok", c)
+  tokenBad = true
+  c = await postJson(admin, "/api/marketing-admin/meta/check")
+  ck("C9 an expired key is explained in plain words and stops the check", stat(c.json, "token")?.status === "fail" && /expired/.test(stat(c.json, "token")?.detail ?? "") && c.json.ok === false, c)
+  c = await postJson(admin, "/api/marketing-admin/meta/subscribe")
+  ck("C10 subscribing with an expired key says so instead of pretending", c.json.results?.[0]?.ok === false && /expired/.test(c.json.results?.[0]?.detail ?? ""), c)
+  tokenBad = false
+  // the real buttons, clicked in the real page
+  pageSubscribed = false
+  const adminPage = await admin.newPage()
+  adminPage.on("dialog", d => d.accept())
+  await adminPage.goto(`${BASE}/marketing-leads`, { waitUntil: "networkidle", timeout: 180000 })
+  await adminPage.getByRole("button", { name: "Check the Meta connection" }).click()
+  await adminPage.getByText("Not fully connected yet.").waitFor({ timeout: 60000 })
+  ck("C11 clicking 'Check' shows the problem in plain words", /Not subscribed yet/.test(await adminPage.locator("body").innerText()))
+  await adminPage.screenshot({ path: `${SHOTS}/qa-leads-meta-before.png`, fullPage: true })
+  await adminPage.getByRole("button", { name: "Subscribe the Page to new leads" }).click()
+  await adminPage.getByText("Meta is connected.").waitFor({ timeout: 60000 })
+  ck("C12 clicking 'Subscribe' then re-checking shows 'Meta is connected.'", /Subscribed\./.test(await adminPage.locator("body").innerText()) && pageSubscribed)
+  await adminPage.screenshot({ path: `${SHOTS}/qa-leads-meta-after.png`, fullPage: true })
+  await adminPage.close()
+
+  // ═══ PART D — "Connect Meta": a personal key becomes the Page's own key, stored encrypted ═══
+  const postBody = async (ctx: BrowserContext, path: string, body: unknown, contentType = "application/json") => {
+    const r = await ctx.request.post(BASE + path, { maxRedirects: 0, timeout: 120000, headers: { accept: "application/json", "sec-fetch-mode": "cors", "content-type": contentType }, data: typeof body === "string" ? body : JSON.stringify(body) })
+    return { status: r.status(), text: await r.text() }
+  }
+  type Rep = { ok?: boolean; steps?: Array<{ key: string; status: string; detail: string }>; error?: string }
+  const rep = (t: string): Rep => { try { return JSON.parse(t) as Rep } catch { return {} } }
+  const stored = async () => (await db.query("select page_id, page_name, page_key_enc, long_lived, connected_by from marketing_meta_connection")).rows
+  const metaCallsBefore = () => seen.length
+
+  let d = await postBody(staff, "/api/marketing-admin/meta/connect", {})
+  ck("D1 staff cannot use Connect Meta", d.status === 401 || d.status === 403, d)
+  d = await postBody(owner, "/api/marketing-admin/meta/connect", {})
+  ck("D2 a marketing owner cannot use Connect Meta", d.status === 401 || d.status === 403, d)
+  d = await postBody(admin, "/api/marketing-admin/meta/connect", "userKey=abc", "application/x-www-form-urlencoded")
+  ck("D3 a form post (not JSON) is refused: cross-site forms cannot trigger it", d.status === 415, d)
+  const before = metaCallsBefore()
+  d = await postBody(admin, "/api/marketing-admin/meta/connect", { userKey: "not a key, has spaces!" })
+  ck("D4 something that does not look like a key is refused before any Meta call, and is not echoed", d.status === 400 && metaCallsBefore() === before && !/not a key/.test(d.text), d)
+
+  // wrong kind: a personal key whose Pages do not include ours
+  hideMyPage = true
+  d = await postBody(admin, "/api/marketing-admin/meta/connect", { userKey: USER_KEY })
+  let r2 = rep(d.text)
+  ck("D5 a personal key that does not manage our Page is refused with the Pages it does manage, and stores nothing", d.status === 200 && r2.ok === false && /does not manage this Page.*Some Other Page/.test(JSON.stringify(r2.steps)) && (await stored()).length === 0, { r2, n: (await stored()).length })
+  hideMyPage = false
+
+  // an expired key
+  d = await postBody(admin, "/api/marketing-admin/meta/connect", { userKey: EXPIRED_KEY })
+  r2 = rep(d.text)
+  ck("D6 an expired key is explained in plain words and nothing is stored", r2.ok === false && /invalid or has expired/.test(JSON.stringify(r2.steps)) && (await stored()).length === 0, r2)
+
+  // the real thing
+  exchanges.length = 0
+  d = await postBody(admin, "/api/marketing-admin/meta/connect", { userKey: USER_KEY })
+  r2 = rep(d.text)
+  ck("D7 a personal key is turned into the Page's own key: connected", d.status === 200 && r2.ok === true, r2)
+  const rows = await stored()
+  ck("D8 exactly one row is stored, for our Page, marked long-lasting, with the admin's name on it", rows.length === 1 && rows[0].page_id === "111" && rows[0].long_lived === true && rows[0].connected_by === "qa-leads-admin@example.test", rows)
+  ck("D9 the stored value is encrypted: the plain Page key appears nowhere in the table", !!rows[0] && !JSON.stringify(rows).includes(PAGE_KEY) && String(rows[0].page_key_enc).startsWith("v1."), rows[0]?.page_key_enc?.slice(0, 12))
+  ck("D10 the report and the response never contain any key", !new RegExp(`${USER_KEY}|${LONG_KEY}|${PAGE_KEY}`).test(d.text), "key found in response")
+  ck("D11 the extension was a POST with the app id, secret and key in the body, no Authorization header, nothing in the URL", exchanges.length === 1 && exchanges[0].method === "POST" && exchanges[0].auth === undefined && /client_secret=qa-app-secret/.test(exchanges[0].body) && /fb_exchange_token=/.test(exchanges[0].body) && !/qa-app-secret|fb_exchange_token/.test(exchanges[0].url), exchanges)
+
+  // from now on the stored Page key is the one used
+  seen.length = 0
+  pageSubscribed = false
+  c = await postJson(admin, "/api/marketing-admin/meta/check")
+  ck("D12 the check now says where the key comes from (our database, long-lasting)", /Stored safely in our database.*long-lasting/.test(stat(c.json, "page_token")?.detail ?? ""), stat(c.json, "page_token"))
+  ck("D13 the check used the stored Page key for the Page, not the Vercel one", seen.some(x => x.url.includes("/subscribed_apps") && x.auth === `Bearer ${PAGE_KEY}`) && !seen.some(x => x.url.includes("/subscribed_apps") && x.auth === `Bearer ${TOKEN}`), seen.map(x => `${x.url.split("?")[0]} ${x.auth?.slice(0, 20)}`))
+  fakeLeads["9010"] = lead("9010", "After Connect", "afterconnect.qa@example.test", "+39 331 4445566")
+  seen.length = 0
+  const b10 = hook("9010"); p = await post(b10, sign(b10))
+  ck("D14 a new lead is fetched with the stored Page key", p.status === 200 && seen.some(x => x.url.startsWith("/v25.0/9010") && x.auth === `Bearer ${PAGE_KEY}`), { p, seen: seen.map(x => `${x.url.split("?")[0]} ${x.auth?.slice(0, 20)}`) })
+
+  // connecting again replaces the row (still one per Page)
+  d = await postBody(admin, "/api/marketing-admin/meta/connect", { userKey: USER_KEY })
+  ck("D15 connecting again keeps exactly one row per Page", rep(d.text).ok === true && (await stored()).length === 1, await stored())
+
+  // the real button in the real page, with the key box
+  const connectPage = await admin.newPage()
+  await connectPage.goto(`${BASE}/marketing-leads`, { waitUntil: "networkidle", timeout: 180000 })
+  await connectPage.getByText("I have a fresh Facebook key to use").click()
+  await connectPage.getByPlaceholder(/Paste your Facebook key/).fill(USER_KEY)
+  await connectPage.getByRole("button", { name: "Connect Meta" }).click()
+  await connectPage.getByText("Connected.", { exact: true }).waitFor({ timeout: 90000 })
+  const bodyText = await connectPage.locator("body").innerText()
+  ck("D16 clicking 'Connect Meta' with a pasted key shows 'Connected.' in plain words, and the key box is emptied", /does not expire on a clock/.test(bodyText) && (await connectPage.getByPlaceholder(/Paste your Facebook key/).inputValue()) === "", bodyText.slice(0, 400))
+  ck("D17 the page never shows any key", !new RegExp(`${USER_KEY}|${LONG_KEY}|${PAGE_KEY}`).test(bodyText), "key on screen")
+  await connectPage.screenshot({ path: `${SHOTS}/qa-leads-meta-connect.png`, fullPage: true })
+  await connectPage.close()
 
   await browser.close(); await db.end(); fake.close()
   console.log(`\n${pass} passed, ${fail} failed`)

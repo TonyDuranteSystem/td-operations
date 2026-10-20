@@ -21,7 +21,11 @@ afterEach(() => {
   else process.env.SANDBOX_MODE = ORIGINAL_SANDBOX
 })
 
-import { uploadBinaryToDriveUpsert } from '@/lib/google-drive'
+import { uploadBinaryToDriveUpsert as upsert } from '@/lib/google-drive'
+import { runAsStoreBackup } from '@/lib/google-drive-write-scope'
+
+// Stop Drive S2: a Drive write only runs inside the one-way backup scope
+const uploadBinaryToDriveUpsert: typeof upsert = (...a) => runAsStoreBackup(() => upsert(...a))
 
 const DATA = Buffer.from('test')
 

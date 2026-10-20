@@ -93,7 +93,7 @@ async function main() {
   // ── 3. production-Drive guard, real Drive calls
   const prodFolder = arg("prod-folder")
   process.env.GOOGLE_DRIVE_LIVE = "1"
-  const drive = await import("@/lib/google-drive")
+  const drive = await (await import("./_drive-fixture")).driveFixture()
   delete process.env.GOOGLE_SHARED_DRIVE_ID
   let refusedNoTestDrive = false
   try { await drive.createFolder(TEST_DRIVE, "zz-s2-guard-should-not-exist") } catch (e) { refusedNoTestDrive = /refused/.test(String(e)) }

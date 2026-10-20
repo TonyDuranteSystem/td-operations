@@ -16,8 +16,8 @@ export const MAX_ATTEMPTS = 8
 
 export interface IngestDeps {
   db: Db
-  /** Fetches one lead from Meta. Throws on any failure. */
-  fetchLead: (leadgenId: string) => Promise<GraphLead>
+  /** Fetches one lead from Meta (with the key of the Page it came from). Throws on any failure. */
+  fetchLead: (leadgenId: string, pageId?: string | null) => Promise<GraphLead>
   /** The team new leads belong to (null = not assigned yet). */
   resolveTeam: () => Promise<string | null>
   now?: () => Date
@@ -119,7 +119,7 @@ export async function ingestLeadgenEvent(deps: IngestDeps, ev: LeadgenEvent, sou
 
   // 2. the lead itself
   let graph: GraphLead
-  try { graph = prefetched ?? (await deps.fetchLead(ev.leadgenId)) } catch (e) { return markFailed(deps, ev.leadgenId, attempts, e) }
+  try { graph = prefetched ?? (await deps.fetchLead(ev.leadgenId, ev.pageId)) } catch (e) { return markFailed(deps, ev.leadgenId, attempts, e) }
   let mapped: MappedLead
   try { mapped = mapGraphLead({ ...graph, id: ev.leadgenId }) } catch (e) { return markFailed(deps, ev.leadgenId, attempts, e) }
 

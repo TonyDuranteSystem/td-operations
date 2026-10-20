@@ -1,7 +1,7 @@
 /**
  * Stop Drive S1d (dev job 264bb882): the hand-signed Operating Agreement filing and the signed-offer contract filing.
  * Storage company = storage, zero Drive calls. Closed / Cancelled / no folder = nothing written in Drive + an alarm.
- * Left-on-Drive company (Offboarding, folder, no storage) = still filed in Drive.
+ * Left-on-Drive company (Offboarding, folder, no storage) = FROZEN since Stop Drive S2 (alarm, nothing written).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { NextRequest } from "next/server"
@@ -42,11 +42,11 @@ beforeEach(async () => {
 })
 
 const acct = (status: string, folder: string | null) => { st.rows.accounts = { status, drive_folder_id: folder, company_name: "Acme LLC" } }
-const cases: Array<[string, () => void, "store" | "refused" | "legacy"]> = [
+const cases: Array<[string, () => void, "store" | "refused"]> = [
   ["company in storage", () => { st.companyState = "store"; acct("Active", null) }, "store"],
   ["Closed company with an old folder", () => acct("Closed", "F-old"), "refused"],
   ["Active company, no storage, no folder", () => acct("Active", null), "refused"],
-  ["left-on-Drive company (Offboarding, folder)", () => acct("Offboarding", "F-rebis"), "legacy"],
+  ["left-on-Drive company (Offboarding, folder) is frozen", () => acct("Offboarding", "F-rebis"), "refused"],
 ]
 
 describe("/api/operating-agreement/[token]/hand-signed", () => {
@@ -62,7 +62,6 @@ describe("/api/operating-agreement/[token]/hand-signed", () => {
     const { POST } = await import("@/app/api/operating-agreement/[token]/hand-signed/route")
     await POST(req, { params: Promise.resolve({ token: "tok" }) })
     if (expected === "store") { expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([]) }
-    else if (expected === "legacy") { expect(st.driveWrites.join(" ")).toContain("F-rebis"); expect(st.alarms).toEqual([]) }
     else { expect(st.driveWrites).toEqual([]); expect(st.alarms.map((a) => a.kind)).toEqual(["drive_write_refused"]) }
   })
 })

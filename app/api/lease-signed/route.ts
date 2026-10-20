@@ -13,7 +13,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
-import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 
 export async function POST(req: NextRequest) {
   try {
@@ -249,36 +248,12 @@ export async function POST(req: NextRequest) {
           if (routed.route === "store") {
             results.push({ step: "drive_upload", status: "ok", detail: `Saved to the new storage: ${routed.pointer}` })
           } else {
-            // Only a company deliberately left on Drive (folder, no storage, not closed) is still written to in Drive;
-            // any other state is an error step plus a staff alarm (Stop Drive S1d, dev job 264bb882).
+            // Stop Drive S2: nothing is written to Drive any more. A company with no storage is an error step plus a staff
+            // alarm — the signed PDF stays safe in the signed-leases bucket.
             const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
             const legacy = await legacyDriveForAccount(lease.account_id)
-
-            if (legacy.allowed) {
-              const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-              const folderResult = await listFolder(legacy.folderId) as { files?: { id: string; name: string; mimeType: string }[] }
-              const companyFolder = folderResult.files?.find(f =>
-                f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
-              )
-              const targetFolderId = companyFolder?.id || legacy.folderId
-
-              // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
-              const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
-              results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
-
-              // Auto-save to documents table for portal
-              await autoSaveDocument({
-                accountId: lease.account_id,
-                fileName,
-                documentType: 'Lease Agreement',
-                category: 1, // Company
-                driveFileId: driveResult.id,
-                portalVisible: true,
-              })
-            } else {
-              const sentence = await raiseDriveWriteRefused({ flow: "lease-signed", accountId: lease.account_id, reason: legacy.reason, detail: `lease ${lease.id}` })
-              results.push({ step: "drive_upload", status: "error", detail: sentence })
-            }
+            const sentence = await raiseDriveWriteRefused({ flow: "lease-signed", accountId: lease.account_id, reason: legacy.reason, detail: `lease ${lease.id}` })
+            results.push({ step: "drive_upload", status: "error", detail: sentence })
           }
         }
       } catch (e) {

@@ -55,7 +55,6 @@ import { OA_AGREEMENT_SELECT, OA_SIGNATURE_SELECT, resolveSignerIndex, signerLin
 // account's Drive folder and log against the contact, so it needs them — added
 // here, never sent to a browser.
 const OA_HAND_SIGNED_SELECT = `${OA_AGREEMENT_SELECT}, account_id, contact_id`
-import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { reportSystemError } from "@/lib/system-errors"
 import type { OAData, OAMember } from "@/lib/types/oa-templates"
 
@@ -279,34 +278,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   // error audit instead of surfacing as a scary message on a completed action.
   const filed: string[] = []
   try {
-    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has both documents
-    // saved in the new storage and needs no Drive folder. Stop Drive (dev job 264bb882, S1d): Drive is written only for a
-    // company deliberately left on it (folder, no storage, not closed); any other state is an alarm, never a silent skip.
+    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) Stop Drive S2: both documents are saved in the
+    // company's storage and NOTHING is written to Drive; a company with no storage is an alarm, never a silent skip (and the
+    // client's scan is then kept safe below).
     let inStorage = false
-    let legacyFolderId: string | null = null
     if (agreement.account_id) {
       const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
       inStorage = (await companyDocState(agreement.account_id)) !== "drive"
       if (!inStorage) {
         const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
         const legacy = await legacyDriveForAccount(agreement.account_id)
-        if (legacy.allowed) legacyFolderId = legacy.folderId
-        else await raiseDriveWriteRefused({ flow: "oa-hand-signed", accountId: agreement.account_id, reason: legacy.reason, detail: "Operating Agreement draft/scan not filed" })
+        await raiseDriveWriteRefused({ flow: "oa-hand-signed", accountId: agreement.account_id, reason: legacy.reason, detail: "Operating Agreement draft/scan not filed" })
       }
     }
 
-    if (agreement.account_id && (legacyFolderId || inStorage)) {
-      let targetFolderId = ""
-      if (!inStorage && legacyFolderId) {
-        const { listFolder } = await import("@/lib/google-drive")
-        const folderResult = (await listFolder(legacyFolderId)) as {
-          files?: { id: string; name: string; mimeType: string }[]
-        }
-        const companyFolder = folderResult.files?.find(
-          f => f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder",
-        )
-        targetFolderId = companyFolder?.id || legacyFolderId
-      }
+    if (agreement.account_id && inStorage) {
 
       // 1. The draft the client printed. Named so nobody mistakes it for an
       //    executed agreement when they find it in six months.
@@ -334,30 +320,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       }
       const draftPdf = await generateOperatingAgreementPDF({ data, draft: true })
       const draftName = `Operating Agreement - ${agreement.company_name} (Unsigned Copy - client signed by hand).pdf`
-      if (inStorage) {
-        const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
-        const routed = await saveSignedPdfForAccount({
-          accountId: agreement.account_id, fileName: draftName, bytes: Buffer.from(draftPdf), label: "Operating Agreement", category: 1,
-          callerKey: `oa-handsigned-draft:${agreement.id}`, documentType: "operating_agreement",
-        })
-        if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its Operating Agreement was being saved — nothing was saved.")
-      } else {
-        const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-        const draftFile = (await uploadBinaryToDriveUpsert(
-          draftName,
-          Buffer.from(draftPdf),
-          "application/pdf",
-          targetFolderId,
-        )) as { id: string }
-        await autoSaveDocument({
-          accountId: agreement.account_id,
-          fileName: draftName,
-          documentType: "Operating Agreement",
-          category: 1,
-          driveFileId: draftFile.id,
-          portalVisible: true,
-        })
-      }
+      const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+      const routed = await saveSignedPdfForAccount({
+        accountId: agreement.account_id, fileName: draftName, bytes: Buffer.from(draftPdf), label: "Operating Agreement", category: 1,
+        callerKey: `oa-handsigned-draft:${agreement.id}`, documentType: "operating_agreement",
+      })
+      if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its Operating Agreement was being saved — nothing was saved.")
+
       filed.push("draft")
 
       // 2. The client's scan, when they gave us one. THIS is the executed
@@ -366,31 +335,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       if (file) {
         const ext = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")) : ".pdf"
         const scanName = `Operating Agreement - ${agreement.company_name} (Signed - hand-signed scan)${ext}`
-        if (inStorage) {
-          const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
-          const routed = await saveDocumentForAccount({
-            accountId: agreement.account_id, name: scanName, bytes: Buffer.from(await file.arrayBuffer()), mimeType: file.type || "application/pdf",
-            folder: "company", documentType: "operating_agreement", callerKey: `oa-handsigned-scan:${agreement.id}`, portalVisible: true,
-            row: { document_type_name: "Operating Agreement", category: 1, status: "classified" },
-          })
-          if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the signed scan was being saved — nothing was saved.")
-        } else {
-          const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-          const scanFile = (await uploadBinaryToDriveUpsert(
-            scanName,
-            Buffer.from(await file.arrayBuffer()),
-            file.type || "application/pdf",
-            targetFolderId,
-          )) as { id: string }
-          await autoSaveDocument({
-            accountId: agreement.account_id,
-            fileName: scanName,
-            documentType: "Operating Agreement",
-            category: 1,
-            driveFileId: scanFile.id,
-            portalVisible: true,
-          })
-        }
+        const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
+        const routed = await saveDocumentForAccount({
+          accountId: agreement.account_id, name: scanName, bytes: Buffer.from(await file.arrayBuffer()), mimeType: file.type || "application/pdf",
+          folder: "company", documentType: "operating_agreement", callerKey: `oa-handsigned-scan:${agreement.id}`, portalVisible: true,
+          row: { document_type_name: "Operating Agreement", category: 1, status: "classified" },
+        })
+        if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the signed scan was being saved — nothing was saved.")
+
         filed.push("scan")
       }
     }
@@ -407,6 +359,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     }).catch(() => {})
   }
 
+  // ── Never lose the client's scan (Stop Drive S2) ──────────────────────────
+  // Nothing is written to Drive any more. When the scan could not be filed in the company's storage (a company with no storage), a
+  // private copy is kept in the signed-OA bucket so staff can file it by hand. That bucket is only ever read at a path the SERVER
+  // recorded, so this extra object is inert.
+  let scanHeldAt: string | null = null
+  if (file && !filed.includes("scan")) {
+    try {
+      const ext = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")) : ".pdf"
+      const heldPath = `${agreement.token}/hand-signed-scan-held${ext}`
+      const { error: heldErr } = await supabaseAdmin.storage
+        .from("signed-oa")
+        .upload(heldPath, Buffer.from(await file.arrayBuffer()), { contentType: file.type || "application/pdf", upsert: true })
+      if (!heldErr) scanHeldAt = heldPath
+    } catch { /* the system error above already tells staff the scan was not filed */ }
+  }
+
   // ── Tell staff ────────────────────────────────────────────────────────────
   // A hand-signed agreement needs a human to look at it — either to chase the
   // scan, or to check the one that arrived. Silence here would mean nobody ever
@@ -420,7 +388,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       `${declaredBy} confirmed they signed the Operating Agreement for ${agreement.company_name} on paper.`,
       ``,
       file
-        ? `They uploaded a scan. It is filed to Drive and visible in their portal.`
+        ? filed.includes("scan")
+          ? `They uploaded a scan. It is filed in the company's storage and visible in their portal.`
+          : `They uploaded a scan but it could NOT be filed (the company has no document storage).${scanHeldAt ? ` A safe copy is held in the signed-oa bucket at ${scanHeldAt} — file it by hand.` : " THE COPY COULD NOT BE KEPT — ask the client to send it again."}`
         : `They did NOT upload a scan. TD holds only the unsigned draft — chase the signed copy.`,
       ``,
       `Entity: ${agreement.entity_type || "SMLLC"}`,

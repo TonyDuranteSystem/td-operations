@@ -33,7 +33,7 @@ async function main() {
   const { supabaseAdmin } = await import("@/lib/supabase-admin")
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
-  const drive = await import("@/lib/google-drive")
+  const drive = await (await import("./_drive-fixture")).driveFixture()
   const day = new Date().toISOString().slice(0, 16).replace("T", " ")
   const mk = async (parent: string, name: string) => ((await drive.createFolder(parent, name)) as { id: string }).id
   const up = async (parent: string, name: string, bytes: Buffer, mime = "application/pdf") => ((await drive.uploadBinaryToDrive(name, bytes, mime, parent)) as { id: string }).id

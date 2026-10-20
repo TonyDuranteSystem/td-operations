@@ -6,6 +6,7 @@ import { isItemHiddenFromViewer } from '@/lib/portal/history-cutoff'
 import { resolveMailingAddress } from '@/lib/addresses'
 import { NextRequest, NextResponse } from 'next/server'
 import { displayCustomerAddress } from '@/lib/portal/customer-address'
+import { latestDeliveryProblems } from '@/lib/portal/invoice-delivery'
 
 /**
  * GET /api/portal/invoices/[id] — Full invoice detail with customer + items
@@ -86,8 +87,12 @@ export async function GET(
     supabaseAdmin.from('payment_links').select('id', { count: 'exact', head: true }).eq('account_id', invoice.account_id),
   ])
 
+  // Did the LAST email of this invoice fail to reach the customer? (Resend reports it afterwards, see /api/webhooks/resend)
+  const delivery = (await latestDeliveryProblems(invoice.account_id, [id])).get(id) ?? null
+
   return NextResponse.json({
     ...invoice,
+    email_delivery: delivery,
     customer,
     payment_setup: { hasBankAccount: (bankCount ?? 0) > 0, hasPaymentLink: (linkCount ?? 0) > 0 },
     items: items ?? [],

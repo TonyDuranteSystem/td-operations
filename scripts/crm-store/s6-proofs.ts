@@ -54,7 +54,7 @@ async function main() {
   const { materializeFormationCompany } = await import("@/lib/operations/formation-materialize")
   const { resolveArticlesForSs4 } = await import("@/lib/ss4/resolve-articles-pdf")
   const { backupOwner } = await import("@/lib/crm-store/backup")
-  const drive = await import("@/lib/google-drive")
+  const drive = await (await import("./_drive-fixture")).driveFixture()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
   const tag = Date.now()

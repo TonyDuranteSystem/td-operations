@@ -16,9 +16,9 @@ project = Xcodeproj::Project.new('TDStorage.xcodeproj')
 # tokens: a token is also only valid for the database that made it.
 prod_url = (ENV['TD_PRODUCTION_URL'] || 'https://crm.tonydurante.us').sub(%r{\A(https?:)//}, '\\1/$()/')
 CONFIGS = {
-  'Debug'   => { 'TD_SERVER_URL' => 'http:/$()/localhost:3050',            'ID' => 'com.tonydurante.tdstorage.local',   'SUFFIX' => 'local' },
-  'Sandbox' => { 'TD_SERVER_URL' => 'https:/$()/td-operations-sandbox.vercel.app', 'ID' => 'com.tonydurante.tdstorage.sandbox', 'SUFFIX' => 'sandbox' },
-  'Production' => { 'TD_SERVER_URL' => prod_url, 'ID' => 'com.tonydurante.tdstorage', 'SUFFIX' => 'prod' },
+  'Debug'   => { 'TD_SERVER_URL' => 'http:/$()/localhost:3050',            'ID' => 'com.tonydurante.tdstorage.local',   'SUFFIX' => 'local', 'NAME' => 'TD Storage (test)' },
+  'Sandbox' => { 'TD_SERVER_URL' => 'https:/$()/td-operations-sandbox.vercel.app', 'ID' => 'com.tonydurante.tdstorage.sandbox', 'SUFFIX' => 'sandbox', 'NAME' => 'TD Storage (sandbox)' },
+  'Production' => { 'TD_SERVER_URL' => prod_url, 'ID' => 'com.tonydurante.tdstorage', 'SUFFIX' => 'prod', 'NAME' => 'TD Storage' },
 }
 project.build_configurations.each { |c| c.build_settings.clear }
 project.build_configurations.find { |c| c.name == 'Release' }.name = 'Sandbox'   # the second configuration
@@ -61,7 +61,7 @@ ext.add_file_references(core_files + ext_files)
     c.build_settings.merge!(
       'PRODUCT_NAME' => name, 'PRODUCT_BUNDLE_IDENTIFIER' => "#{cfg['ID']}#{idsuffix}",
       'INFOPLIST_FILE' => "#{dir}/Info.plist", 'CODE_SIGN_ENTITLEMENTS' => "#{dir}/#{ents}",
-      'TD_SERVER_URL' => cfg['TD_SERVER_URL'],
+      'TD_SERVER_URL' => cfg['TD_SERVER_URL'], 'TD_DOMAIN_NAME' => cfg['NAME'],
       'TD_KEYCHAIN_SERVICE' => "com.tonydurante.tdstorage.#{cfg['SUFFIX']}",
       'TD_KEYCHAIN_GROUP' => "$(AppIdentifierPrefix)com.tonydurante.tdstorage.#{cfg['SUFFIX']}.shared",
       'LD_RUNPATH_SEARCH_PATHS' => ['$(inherited)', '@executable_path/../Frameworks', '@executable_path/../../../../Frameworks'],

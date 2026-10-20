@@ -24,7 +24,7 @@ async function main() {
   await db.connect()
   const q = async (sql: string, p: unknown[] = []) => (await db.query(sql, p)).rows
   const tag = Date.now()
-  const { uploadBinaryToDrive } = await import("../../../lib/google-drive")
+  const { uploadBinaryToDrive } = await (await import("../_drive-fixture")).driveFixture()
   const { planCatchUp, runCatchUp, undoCatchUp, listCatchUp } = await import("../../../lib/crm-store/catch-up")
   const { companyDocState } = await import("../../../lib/crm-store/switched-drive-guard")
   const actor = (await q("select id from auth.users limit 1"))[0]?.id as string

@@ -12,6 +12,7 @@ import { logCron } from "@/lib/cron-log"
 import { retryOpenEvents } from "@/lib/marketing/meta-leads/ingest"
 import { liveDeps, reconcileRecentLeads } from "@/lib/marketing/meta-leads/service"
 import { configuredPageIds } from "@/lib/marketing/meta-leads/graph"
+import { anyPageKeyAvailable } from "@/lib/marketing/meta-leads/key-resolver"
 
 const ENDPOINT = "/api/cron/marketing-lead-retry"
 
@@ -25,8 +26,8 @@ function isAuthorized(req: NextRequest): boolean {
 async function handle(req: NextRequest): Promise<NextResponse> {
   const start = Date.now()
   if (!isAuthorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  if (!process.env.META_PAGE_ACCESS_TOKEN) {
-    return NextResponse.json({ ok: true, skipped: "META_PAGE_ACCESS_TOKEN is not set" })
+  if (!(await anyPageKeyAvailable(configuredPageIds()))) {
+    return NextResponse.json({ ok: true, skipped: "no Page key is stored or set yet" })
   }
   try {
     const deps = liveDeps()

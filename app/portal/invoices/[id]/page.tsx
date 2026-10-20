@@ -18,6 +18,7 @@ import { sendNotices } from '@/lib/portal/invoice-send-notices'
 import { invoiceStatusRule } from '@/lib/portal/invoice-status'
 import { InvoiceCreatedDialog } from '@/components/portal/invoice-created-dialog'
 import { invoiceCreatedPopupIsOff } from '@/lib/portal/invoice-created-popup'
+import { InvoiceDeliveryBanner } from '@/components/portal/invoice-delivery-banner'
 
 // The calendar day in the user's own timezone (toISOString() is UTC: after 8pm in New York it is already tomorrow).
 const todayLocal = () => new Date().toLocaleDateString('en-CA')
@@ -42,6 +43,7 @@ interface InvoiceDetail {
   message: string | null
   recurring_frequency?: string | null
   recurring_next_date?: string | null
+  email_delivery?: { detail: string | null; to: string | null; at: string | null } | null
   created_at: string
   customer: { name: string; email: string | null; address: string | null; vat_number: string | null } | null
   items: { description: string; quantity: number; unit_price: number; amount: number; sort_order: number }[]
@@ -435,6 +437,10 @@ export default function InvoiceDetailPage() {
           )}
         </div>
       </div>
+
+      {invoice.email_delivery && (
+        <InvoiceDeliveryBanner t={t} problem={invoice.email_delivery} customerId={invoice.customer_id} onDownload={handleDownloadPDF} />
+      )}
 
       <InvoiceSendNotices
         notices={notices}

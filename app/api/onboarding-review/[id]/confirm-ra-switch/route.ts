@@ -43,7 +43,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { advanceStageIfAt } from '@/lib/operations/service-delivery'
-import { NO_STORAGE_STATUS, receiveVerdictFor, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
+import { NO_STORAGE_STATUS, receiveVerdictFor } from '@/lib/crm-store/no-storage'
 import { deriveRenewalDates, applyRenewalDateFills } from '@/lib/operations/renewal-dates'
 
 const MAX_RECEIPT_BYTES = 15 * 1024 * 1024
@@ -145,7 +145,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       )
     }
 
-    // 2. File the receipt in the company's storage (or, for a company left on its old folder, there). The switch itself was
+    // 2. File the receipt in the company's storage . The switch itself was
     // done by hand on Harbor Compliance's site and is already real, so a filing problem here never blocks the confirmation:
     // the receipt stays safe in the upload area (step 1) and the message below says so — nothing is skipped quietly.
     let filingNote: string
@@ -162,15 +162,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         if (routed.route === 'store') {
           filingNote = "also filed in the company's CRM storage (1. Company)."
         } else {
-          // a company left on its old folder: the copy goes there, as before (the receipt is already safe above)
-          const decision = await noStorageDecisionFor(sub.account_id)
-          if (decision.route === 'drive') {
-            const { uploadBinaryToDrive } = await import('@/lib/google-drive')
-            await uploadBinaryToDrive(fileName, buffer, mimeType, decision.folderId)
-            filingNote = "also filed to the company's folder."
-          } else {
-            filingNote = 'kept in the upload area — this company has no document storage in the CRM.'
-          }
+          // Stop Drive S2: nothing is written to Drive; the receipt is already safe in the upload area (step 1)
+          filingNote = 'kept in the upload area — this company has no document storage in the CRM.'
         }
       } catch (e) {
         if (e instanceof CompanyMovingError) filingNote = "kept in the upload area — the company's files are being moved right now, so file it again in a few minutes."

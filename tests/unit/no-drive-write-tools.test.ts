@@ -2,10 +2,11 @@
  * Stop Drive (dev job 264bb882): the MCP server and the AI assistants have NO Drive write TOOL any more.
  * Reads (search / list / info / read) and the CRM-storage tools stay.
  *
- * What this does NOT claim (and the test pins, so a doc can never say more than is true):
- *  - `storage_write` / `storage_move` still mirror their own bucket into My Drive (`syncToDrive` in storage.ts);
- *  - the review tools of formation / banking / closure / tax still call `saveFormToDrive` (guarded by guardDriveWrite).
- *    Moving those to storage is session S1d; this list may only SHRINK.
+ * Stop Drive S2: the Drive mirror of `storage_write` is GONE too — NO MCP tool file calls any Drive write helper, no tool mirrors into
+ * Drive, and the Drive client itself refuses every write outside the one-way backup (tests/unit/drive-write-switch.test.ts).
+ * What is pinned (so a doc can never say more than is true):
+ *  - the review tools of formation / banking / closure / tax still call `saveFormToDrive`, which since S2 files ONLY in the CRM
+ *    storage (a real Drive folder gets an error result). This list may only SHRINK.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -43,10 +44,9 @@ describe('MCP server — no Drive write tools', () => {
     }
   }, 60_000)
 
-  it('no MCP tool file (except the by-hand storage tools) calls a Drive write helper', () => {
+  it('no MCP tool file calls a Drive write helper (the storage tools no longer mirror into Drive either)', () => {
     const dir = join(ROOT, 'lib/mcp/tools')
-    const allowed = new Set(['storage.ts', 'my-files-drop.ts'])
-    for (const f of readdirSync(dir).filter(n => n.endsWith('.ts') && !allowed.has(n))) {
+    for (const f of readdirSync(dir).filter(n => n.endsWith('.ts'))) {
       const src = readFileSync(join(dir, f), 'utf8')
       for (const h of DRIVE_WRITE_HELPERS) {
         expect(new RegExp(`\\b${h}\\b`).test(src), `${f} uses ${h}`).toBe(false)
@@ -63,9 +63,9 @@ describe('what still touches Drive from MCP tools — pinned exactly (may only s
     const allowed = ['banking-form.ts', 'closure.ts', 'formation.ts', 'tax.ts']
     expect(users.filter(f => !allowed.includes(f)), `New saveFormToDrive callers: ${users.join(', ')}`).toEqual([])
   })
-  it('only storage.ts mirrors into My Drive (syncToDrive)', () => {
+  it('no tool mirrors into My Drive any more (syncToDrive is gone)', () => {
     const users = files.filter(f => /\bsyncToDrive\b/.test(readFileSync(join(dir, f), 'utf8'))).sort()
-    expect(users).toEqual(['storage.ts'])
+    expect(users).toEqual([])
   })
 })
 
