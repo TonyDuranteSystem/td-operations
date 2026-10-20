@@ -14,6 +14,7 @@ import { Loader2, Printer } from 'lucide-react'
 import { isValidFaxNo, normalizeFaxNo } from '@/lib/fax/faxage'
 import { fetchStorageFileBytes } from '@/lib/crm-storage/fetch-file'
 import { FAX_INLINE_MAX_BYTES, faxSizeProblem } from '@/lib/fax/staged-upload'
+import { faxSendFailureText } from '@/lib/fax/client-errors'
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -72,15 +73,21 @@ export function ShareFaxDialog({
       } else {
         payload.file_base64 = await fileToBase64(file)
       }
-      const res = await fetch('/api/tools/fax/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-      const d = await res.json().catch(() => ({}))
+      let res: Response
+      try {
+        res = await fetch('/api/tools/fax/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      } catch {
+        throw new Error(faxSendFailureText({ networkError: true }))   // it may have reached Faxage: the outcome is UNKNOWN
+      }
+      const parsed = await res.json().catch(() => null)
+      const d = parsed ?? {}
       if (res.status === 409 && d.recent_duplicate) {
         // the same file went to this number a few minutes ago: nothing was sent; ask first
         setSending(false)
         if (window.confirm(`${d.error}\n\nSend it again anyway?`)) { sendId.current = crypto.randomUUID(); await handleSend(true) }
         return
       }
-      if (!res.ok) throw new Error(d.error || 'Could not send the fax. Please try again.')
+      if (!res.ok) throw new Error(faxSendFailureText({ status: res.status, json: parsed }))
       onSent(d.history_error ? String(d.history_error) : null)
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Could not send the fax. Please try again.')

@@ -3,7 +3,7 @@ import { NextRequest } from "next/server"
 
 const st = vi.hoisted(() => ({
   user: { id: "u1", email: "luca@tonydurante.us", app_metadata: { role: "team" } } as Record<string, unknown> | null,
-  signedFor: [] as string[], signFails: false, row: null as null | { id: string; action_type: string; details: Record<string, unknown> }, deleted: [] as string[], updated: [] as Array<Record<string, unknown>>, dbError: false,
+  signedFor: [] as string[], signFails: false, row: null as null | { id: string; action_type: string; details: Record<string, unknown>; created_at?: string }, eqs: [] as Array<[string, unknown]>, deleted: [] as string[], updated: [] as Array<Record<string, unknown>>, dbError: false,
 }))
 vi.mock("@/lib/supabase/server", () => ({ createClient: () => ({ auth: { getUser: async () => ({ data: { user: st.user } }) } }) }))
 vi.mock("@/lib/auth", () => ({ isDashboardUser: (u: unknown) => !!u && (u as { app_metadata?: { role?: string } }).app_metadata?.role !== "client" }))
@@ -16,7 +16,7 @@ vi.mock("@/lib/supabase-admin", () => ({
       c.select = () => c; c.maybeSingle = () => c
       c.delete = () => { mode = "delete"; return c }
       c.update = (p: Record<string, unknown>) => { mode = "update"; patch = p; return c }
-      c.eq = () => c
+      c.eq = (col: string, val: unknown) => { st.eqs.push([col, val]); return c }
       c.then = (r: (v: unknown) => unknown) => {
         if (st.dbError) return Promise.resolve({ data: null, error: { message: "db" } }).then(r)
         if (mode === "delete") st.deleted.push("x")
@@ -33,7 +33,7 @@ const post = async (path: string, body: unknown) => {
   const res = await mod.POST(new NextRequest(`http://localhost/api/tools/fax/${path}`, { method: "POST", body: JSON.stringify(body) }))
   return { status: res.status, body: await res.json() }
 }
-beforeEach(() => { st.user = { id: "u1", email: "l@x", app_metadata: { role: "team" } }; st.signedFor.length = 0; st.signFails = false; st.row = null; st.deleted.length = 0; st.updated.length = 0; st.dbError = false })
+beforeEach(() => { st.user = { id: "u1", email: "l@x", app_metadata: { role: "team" } }; st.signedFor.length = 0; st.signFails = false; st.row = null; st.deleted.length = 0; st.updated.length = 0; st.dbError = false; st.eqs.length = 0 })
 
 describe("POST /api/tools/fax/upload-url", () => {
   it("staff only", async () => { st.user = null; expect((await post("upload", { file_name: "a.pdf", file_size: 5 })).status).toBe(403) })
@@ -66,11 +66,25 @@ describe("POST /api/tools/fax/claim — staff say what happened to an unconfirme
     expect((await post("claim", { id: "c1", outcome: "not_sent" })).status).toBe(404)
   })
   it("'it did NOT go out' removes the claim; 'it DID go out' turns it into a sent row marked as set by hand", async () => {
-    st.row = { id: "c1", action_type: "fax_claim", details: { faxno: "1", content_hash: "h" } }
+    st.row = { id: "c1", action_type: "fax_claim", details: { faxno: "1", content_hash: "h" }, created_at: new Date(Date.now() - 10 * 60_000).toISOString() }
     expect((await post("claim", { id: "c1", outcome: "not_sent" })).body).toMatchObject({ success: true }); expect(st.deleted).toHaveLength(1)
     const r = await post("claim", { id: "c1", outcome: "sent" })
     expect(r.body.success).toBe(true)
     expect(st.updated[0]).toMatchObject({ action_type: "fax_sent" }); expect((st.updated[0].details as Record<string, unknown>).outcome_set_by_hand).toBe("l@x")
+  })
+  it("the delete / update are tied to the claim kind (a crafted request cannot touch another kind of row)", async () => {
+    st.row = { id: "c1", action_type: "fax_claim", details: {}, created_at: new Date(Date.now() - 10 * 60_000).toISOString() }
+    await post("claim", { id: "c1", outcome: "not_sent" })
+    expect(st.eqs).toContainEqual(["action_type", "fax_claim"])
+  })
+  it("a send younger than 2 minutes cannot be answered yet (it may still finish)", async () => {
+    st.row = { id: "c1", action_type: "fax_claim", details: {}, created_at: new Date(Date.now() - 30_000).toISOString() }
+    const r = await post("claim", { id: "c1", outcome: "not_sent" })
+    expect(r.status).toBe(409); expect(r.body.error).toMatch(/less than 2 minutes/); expect(st.deleted).toEqual([])
+  })
+  it("a staff member of the dashboard who is not storage staff is refused", async () => {
+    st.user = { id: "u2", app_metadata: { role: "partner" } }
+    expect((await post("claim", { id: "c1", outcome: "sent" })).status).toBe(403)
   })
   it("a database error is a plain 503 (nothing changed)", async () => {
     st.dbError = true

@@ -19,12 +19,20 @@ export default async function FaxHistoryPage() {
   // document-source fax, or (since the upload-persistence change) the doc created
   // from an uploaded file. It is NULL only for legacy uploads sent before that
   // change, which have no stored file to link to.
-  const { data: logs } = await supabaseAdmin
+  // Unconfirmed sends are read APART from the 200 newest sent faxes, so they can never fall out of view: they are shown FIRST.
+  const { data: claims } = await supabaseAdmin
     .from('action_log')
     .select('id, created_at, summary, details, record_id, action_type')
-    .in('action_type', ['fax_sent', 'fax_claim'])   // a claim = a send that was never confirmed as sent: shown as such, never as sent
+    .eq('action_type', 'fax_claim')   // a send that was never confirmed as sent: shown as such, never as sent
+    .order('created_at', { ascending: false })
+    .limit(100)
+  const { data: sent } = await supabaseAdmin
+    .from('action_log')
+    .select('id, created_at, summary, details, record_id, action_type')
+    .eq('action_type', 'fax_sent')
     .order('created_at', { ascending: false })
     .limit(200)
+  const logs = [...(claims ?? []), ...(sent ?? [])]
 
   const rows: FaxHistoryRow[] = (logs ?? []).map((l) => {
     const d = (l.details ?? {}) as Record<string, unknown>

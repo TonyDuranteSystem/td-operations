@@ -20,6 +20,7 @@ describe("personalKind / looksPersonal — a person's own paper", () => {
       // Italian + other common forms (bug-hunter round 2)
       "Carta_Identità.pdf", "Carta d'identità Rossi.pdf", "CartaIdentita_Rossi.pdf", "Documento d'identità.pdf", "Documento_Identita_Rossi.jpg", "Patente_Rossi.jpg", "Codice fiscale.pdf", "Codice_Fiscale_Rossi.pdf",
       "Tessera sanitaria.pdf", "Permesso di soggiorno.pdf", "Permesso_di_Soggiorno_Rossi.pdf", "Rossi_ID.pdf", "Rossi ID.jpg", "ID.pdf", "Photo_ID.jpg", "PhotoID_Rossi.png", "Identity_Rossi.pdf", "Green card.pdf", "Green_Card_Rossi.pdf",
+      "IDfront.pdf", "IDback_Rossi.jpg", "IDcard.png", "SSNcard.jpg", "SSNscan_Rossi.pdf", "pasaporte.pdf", "Pasaporte_Rossi.pdf", "passaporte.pdf", "passeport.pdf", "Passeport_Rossi.jpg", "DNI_Rossi.pdf", "DNI.jpg", "Cedula_Rossi.pdf", "Licencia de conducir.pdf", "Licencia_de_Conducir_Rossi.jpg", "Permis de conduire.pdf",
       "ID_Rossi.pdf", "Rossi_ID_front.jpg", "ID front.jpg", "Rossi_ID_2024.pdf", "Rossi_ID.webp", "Rossi_ID.bmp", "State ID.jpg", "State_ID_Rossi.pdf", "rossipassport.pdf", "ROSSIPASSPORT.PDF", "cartaidentita.pdf", "CartaIdentita.pdf", "rossipatente.jpg", "permessosoggiorno.pdf",
       "DL_Rossi.jpg", "CI_Rossi.pdf", "Residence card.pdf", "Residence_Card_Rossi.jpg", "Permesso soggiorno.pdf", "Carta soggiorno.pdf", "GreenCard_Rossi.pdf",
       "EAD_Rossi.pdf", "EAD.pdf", "Residence permit.pdf", "Residence_Permit_Rossi.pdf", "SS-5.pdf", "SS5_Rossi.pdf", "ITINRossi.pdf", "SSNRossi.pdf", "ssn_rossi.jpg",
@@ -38,7 +39,7 @@ describe("personalKind / looksPersonal — a person's own paper", () => {
       "2025 Tax Return - Acme International LLC.pdf", "2025_Tax_Return_Acme_Signed_for_IRS.pdf", "1120 2025.pdf", "Form_1120_2025.pdf", "5472.pdf", "Articles of Organization.pdf", "scan0042.pdf",
       "Business License renewal.pdf", "Business_License.pdf", "Driver Services notice.pdf", "Identity Verification Services letter.pdf", "Advisory notice.pdf", "Itinerary 2025.pdf", "Vista Holdings LLC.pdf", "Assessment.pdf",
       "Idaho Annual Report.pdf", "Licensing agreement.pdf", "License Agreement.pdf",
-      "Marketing_2024.pdf", "Provider notes.pdf", "Hidden fees.pdf", "Video script.pdf", "Pidgin.pdf", "Candid review.pdf", "Tax ID letter.pdf", "Tax_ID_Acme.pdf", "Employer ID notice.pdf", "EIN Letter Acme.pdf", "Read me.pdf", "Ready notice.pdf", "Patent application.pdf",
+      "Marketing_2024.pdf", "Invoice ID 2025.pdf", "Invoice_ID_2025.pdf", "Order ID 551.pdf", "Case ID 77 notice.pdf", "File ID 12.pdf", "Member ID list.pdf", "Client ID 9001.pdf", "User ID report.pdf", "Customer ID export.pdf", "Account ID 55.pdf", "Transaction ID 1234.pdf", "Reference ID.pdf", "Dnieper river study.pdf", "Cedar Lane lease.pdf", "Provider notes.pdf", "Hidden fees.pdf", "Video script.pdf", "Pidgin.pdf", "Candid review.pdf", "Tax ID letter.pdf", "Tax_ID_Acme.pdf", "Employer ID notice.pdf", "EIN Letter Acme.pdf", "Read me.pdf", "Ready notice.pdf", "Patent application.pdf",
       "Fiscal year report.pdf", "Documento di sintesi.pdf", "Carta dei servizi.pdf", "Brand guidelines.pdf", "Identity Verification Services letter.pdf", "Idle time report.pdf",
     ]) {
       expect(personalKind(n), n).toBeNull()

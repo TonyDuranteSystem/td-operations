@@ -29,7 +29,8 @@ export interface ClaimDeps {
   listPendingSame(faxno: string, hash: string): Promise<{ rows: ClaimRow[]; error: string | null }>
   insertClaim(row: Record<string, unknown>): Promise<{ id: string | null; error: string | null }>
   remove(id: string): Promise<{ error: string | null }>
-  update(id: string, patch: Record<string, unknown>): Promise<{ error: string | null }>
+  /** `count` = how many rows the update touched (0 = the row is gone: the update did NOT happen) */
+  update(id: string, patch: Record<string, unknown>): Promise<{ error: string | null; count: number }>
   insertRecord(row: Record<string, unknown>): Promise<{ id: string | null; error: string | null }>
 }
 
@@ -57,7 +58,7 @@ const priorOf = (r: ClaimRow) => {
 }
 
 export async function claimSend(
-  i: { sendId: string | null; faxno: string; hash: string; confirmResend: boolean; actor: string; summary: string; serviceDeliveryId: string | null; now?: Date },
+  i: { sendId: string | null; faxno: string; hash: string; confirmResend: boolean; actor: string; summary: string; serviceDeliveryId: string | null; /** what staff must be able to recognise the send by while it is unconfirmed */ display?: { file_name?: string | null; recip_name?: string | null; reason?: string | null }; now?: Date },
   deps: ClaimDeps,
 ): Promise<ClaimResult> {
   const since = new Date((i.now ?? new Date()).getTime() - RECENT_MINUTES * 60_000).toISOString()
@@ -119,7 +120,7 @@ export async function claimSend(
 
   const ins = await withTimeout(deps.insertClaim({
     actor: i.actor, action_type: 'fax_claim', table_name: 'documents', service_delivery_id: i.serviceDeliveryId, summary: i.summary,
-    details: { send_id: i.sendId, faxno: i.faxno, content_hash: i.hash, claim: 'pending' },
+    details: { send_id: i.sendId, faxno: i.faxno, content_hash: i.hash, claim: 'pending', file_name: i.display?.file_name ?? null, recip_name: i.display?.recip_name ?? null, reason: i.display?.reason ?? null },
   }), CLAIM_STEP_TIMEOUT_MS, { id: null, error: 'timed out' })
   if (ins.error || !ins.id) return { ok: false, status: 503, code: 'claim_failed', error: `Could not start this fax safely.${NOT_SENT} Please try again.` }
 
@@ -144,21 +145,35 @@ export interface CompletedRecord { actor: string; account_id: string | null; ser
  * The fax HAS gone out: turn the claim into the history row. Every write is checked, retried once; if the update cannot be written the
  * completed row is inserted as a new one. Returns where it ended: 'update' | 'insert' | 'none' (nothing could be written — the caller raises an alarm).
  */
-export async function finishClaim(claimId: string | null, rec: CompletedRecord, deps: ClaimDeps): Promise<{ via: 'update' | 'insert' | 'none'; id: string | null; error: string | null }> {
+export async function finishClaim(claimId: string | null, rec: CompletedRecord, deps: ClaimDeps): Promise<{ via: 'update' | 'insert' | 'none'; id: string | null; error: string | null; staleClaim: boolean }> {
   let lastError: string | null = null
   if (claimId) {
     for (let k = 0; k < 2; k++) {
       const r = await deps.update(claimId, { action_type: 'fax_sent', record_id: rec.record_id, account_id: rec.account_id, summary: rec.summary, details: rec.details })
-      if (!r.error) return { via: 'update', id: claimId, error: null }
-      lastError = r.error
+      // an update that touched NO row did not happen (the claim was removed by hand): fall through to the insert
+      if (!r.error && r.count > 0) return { via: 'update', id: claimId, error: null, staleClaim: false }
+      lastError = r.error ?? 'the claim row was gone'
+      if (!r.error && r.count === 0) break
     }
   }
   for (let k = 0; k < 2; k++) {
     const r = await deps.insertRecord({ actor: rec.actor, action_type: 'fax_sent', table_name: 'documents', record_id: rec.record_id, account_id: rec.account_id, service_delivery_id: rec.service_delivery_id, summary: rec.summary, details: rec.details })
-    if (!r.error) return { via: 'insert', id: r.id, error: null }
+    if (!r.error) {
+      // the completed row now exists: the old claim must go, or History would show the fax as Sent AND as "outcome unknown" and the claim
+      // would block this same file + number for ever
+      let staleClaim = false
+      if (claimId) {
+        staleClaim = true
+        for (let j = 0; j < 2 && staleClaim; j++) {
+          const d = await deps.remove(claimId)
+          if (!d.error) staleClaim = false
+        }
+      }
+      return { via: 'insert', id: r.id, error: null, staleClaim }
+    }
     lastError = r.error
   }
-  return { via: 'none', id: null, error: lastError }
+  return { via: 'none', id: null, error: lastError, staleClaim: false }
 }
 
 export const HISTORY_NOT_SAVED_SENTENCE = 'The fax WAS sent, but its history entry could not be saved. Do not send it again; tell the team so it is noted by hand.'
@@ -185,7 +200,8 @@ export async function realClaimDeps(): Promise<ClaimDeps> {
       return { id: (data?.id as string | undefined) ?? null, error: msg(error) }
     },
     remove: async (id) => { const { error } = await supabaseAdmin.from('action_log').delete().eq('id', id); return { error: msg(error) } },
-    update: async (id, patch) => { const { error } = await supabaseAdmin.from('action_log').update(patch as never).eq('id', id); return { error: msg(error) } },
+    // only a still-open row of the fax flow can be completed (a claim, or the fax_sent row this same send already made) — never another kind of row
+    update: async (id, patch) => { const { data, error } = await supabaseAdmin.from('action_log').update(patch as never).eq('id', id).in('action_type', ['fax_claim', 'fax_sent']).select('id'); return { error: msg(error), count: (data ?? []).length } },
     insertRecord: async (row) => {
       const { data, error } = await supabaseAdmin.from('action_log').insert(row as never).select('id').single()
       return { id: (data?.id as string | undefined) ?? null, error: msg(error) }

@@ -16,7 +16,7 @@ function mem(over: Partial<{ failList: boolean; failInsert: boolean; failUpdate:
       return { id: r.id, error: null }
     },
     remove: async (id) => { if (over.failRemove) return { error: "delete failed" }; const k = rows.findIndex((r) => r.id === id); if (k >= 0) rows.splice(k, 1); return { error: null } },
-    update: async (id, patch) => { if (updFails > 0) { updFails--; return { error: "update failed" } } const r = rows.find((x) => x.id === id)!; Object.assign(r, { action_type: patch.action_type, details: patch.details }); return { error: null } },
+    update: async (id, patch) => { if (updFails > 0) { updFails--; return { error: "update failed", count: 0 } } const r = rows.find((x) => x.id === id); if (!r) return { error: null, count: 0 }; Object.assign(r, { action_type: patch.action_type, details: patch.details }); return { error: null, count: 1 } },
     insertRecord: async (row) => { if (recFails > 0) { recFails--; return { id: null, error: "insert failed" } } rows.push({ id: `r${++n}`, action_type: String(row.action_type), created_at: "t", details: row.details as Record<string, unknown> }); return { id: `r${n}`, error: null } },
   }
   return { rows, deps }
@@ -126,7 +126,7 @@ describe("finishClaim — the record of an irreversible fax", () => {
   const rec = { actor: "l", account_id: "a", service_delivery_id: null, summary: "s", record_id: "d", details: { job_id: "J" } }
   it("the claim becomes the fax_sent row", async () => {
     const m = mem(); const c = await claimSend(input, m.deps) as { claimId: string }
-    expect(await finishClaim(c.claimId, rec, m.deps)).toEqual({ via: "update", id: c.claimId, error: null }); expect(m.rows[0].action_type).toBe("fax_sent")
+    expect(await finishClaim(c.claimId, rec, m.deps)).toEqual({ via: "update", id: c.claimId, error: null, staleClaim: false }); expect(m.rows[0].action_type).toBe("fax_sent")
   })
   it("one failed update is retried", async () => {
     const m = mem({ failUpdate: 1 }); const c = await claimSend(input, m.deps) as { claimId: string }
@@ -136,10 +136,28 @@ describe("finishClaim — the record of an irreversible fax", () => {
     const m = mem({ failUpdate: 2 }); const c = await claimSend(input, m.deps) as { claimId: string }
     expect((await finishClaim(c.claimId, rec, m.deps)).via).toBe("insert")
     expect(m.rows.filter((r) => r.action_type === "fax_sent")).toHaveLength(1)
+    // the stale claim is GONE (History would show Sent AND Outcome unknown; it would block this file + number for ever)
+    expect(m.rows.filter((r) => r.action_type === "fax_claim")).toHaveLength(0)
+    expect(m.rows).toHaveLength(1)
   })
   it("nothing can be written: the answer says so (the route raises the alarm)", async () => {
     const m = mem({ failUpdate: 2, failInsertRecord: 2 }); const c = await claimSend(input, m.deps) as { claimId: string }
-    expect(await finishClaim(c.claimId, rec, m.deps)).toEqual({ via: "none", id: null, error: "insert failed" })
+    expect(await finishClaim(c.claimId, rec, m.deps)).toEqual({ via: "none", id: null, error: "insert failed", staleClaim: false })
+  })
+  it("the claim row was removed by hand before the update: the update touched NO row, so the completed row is inserted (not lost silently)", async () => {
+    const m = mem(); const c = await claimSend(input, m.deps) as { claimId: string }
+    await m.deps.remove(c.claimId)
+    const r = await finishClaim(c.claimId, rec, m.deps)
+    expect(r.via).toBe("insert"); expect(m.rows.filter((x) => x.action_type === "fax_sent")).toHaveLength(1)
+  })
+  it("a stale claim that cannot be removed after a fallback insert is reported", async () => {
+    const m = mem({ failUpdate: 2, failRemove: true }); const c = await claimSend(input, m.deps) as { claimId: string }
+    const r = await finishClaim(c.claimId, rec, m.deps)
+    expect(r).toMatchObject({ via: "insert", staleClaim: true })
+  })
+  it("the claim carries what staff need to recognise it (file, recipient, reason)", async () => {
+    const m = mem(); await claimSend({ ...input, display: { file_name: "2025 Tax Return.pdf", recip_name: "IRS", reason: "Tax return" } }, m.deps)
+    expect(m.rows[0].details).toMatchObject({ file_name: "2025 Tax Return.pdf", recip_name: "IRS", reason: "Tax return" })
   })
   it("no claim id (the claim could not be kept): the row is inserted", async () => {
     const m = mem()

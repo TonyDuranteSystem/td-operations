@@ -85,7 +85,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   // Most recent fax already sent for this flow.
   const { data: prior } = await supabaseAdmin
     .from('action_log')
-    .select('created_at, details')
+    .select('created_at, details, action_type')
     .in('action_type', ['fax_sent', 'fax_claim'])   // an unconfirmed send counts too: the panel must not offer a second fax
     .eq('service_delivery_id', serviceDeliveryId)
     .order('created_at', { ascending: false })
@@ -100,7 +100,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       account_id: accountId,
       package: packageDoc,
       already_faxed: prior
-        ? { at: prior.created_at, job_id: priorDetails?.job_id ?? null, faxno: priorDetails?.faxno ?? null }
+        ? { at: prior.created_at, job_id: priorDetails?.job_id ?? null, faxno: priorDetails?.faxno ?? null, unconfirmed: (prior as { action_type?: string }).action_type === 'fax_claim' }
         : null,
       irs_number: IRS_EIN_FAX_DOMESTIC,
       default_reason: `SS-4 / EIN application - ${companyName}`,

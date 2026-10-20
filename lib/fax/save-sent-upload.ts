@@ -30,7 +30,9 @@ export function normalizeFaxName(fileName: string): string {
 
 /**
  * Identity and residence papers: they belong to ONE person. Whole words only — "Business License", "Driver Services", "Tax ID" and
- * "Identity Verification Services" are company papers. English and Italian (Italian clients are common).
+ * "Identity Verification Services" are company papers. English and Italian (Italian clients are common), plus the common Spanish and
+ * French forms. NAMES IN OTHER SCRIPTS (Cyrillic, Chinese, Arabic …) CANNOT BE CHECKED by this list: the window is the protection there
+ * (an identity paper is never offered a client's storage by the proposal rules), and staff must not choose one by hand.
  */
 const IDENTITY = [
   "passport", "passaporto", "id card", "idcard", "photo id", "identity card", "identity document", "identity(?! (?:verification|theft|protection|services|access|management))",
@@ -40,12 +42,14 @@ const IDENTITY = [
   // a lone "ID" ANYWHERE as a whole word (ID_Rossi, Rossi_ID_front, ID front, Rossi_ID_2024.webp) — but not "Tax ID" / "Employer ID" /
   // "Company ID" letters. A "State ID" IS an identity card. The safe side: a false block only makes staff pick Business / My files /
   // "Don't save"; a miss would put someone's ID in a company's storage.
-  "(?<!tax )(?<!employer )(?<!company )id",
+  "(?<!(?:tax|employer|company|invoice|order|case|file|member|client|user|customer|account|transaction|reference|policy|project|ticket|booking|payment|tracking|session|device|network|ein|document|record|batch|job) )id",
   // abbreviations: driver's licence, Italian carta d'identità, residence card / permit without "of"
   "dl", "ci", "residence card", "permesso soggiorno", "carta soggiorno",
+  // Spanish / French (the same safe side): DNI, cédula, pasaporte, licencia de conducir, passeport, permis de conduire
+  "dni", "cedula", "pasaporte", "passeport", "licencia de conducir", "licencia conducir", "permis de conduire",
 ]
 /** Long words that also count when GLUED to other text in lower case ("rossipassport.pdf", "cartaidentita.pdf"): matched on the name without spaces. */
-const GLUED_IDENTITY = /(passport|passaporto|identita|patente|soggiorno|codicefiscale|tesserasanitaria|greencard|driverlicen|drivinglicen)/
+const GLUED_IDENTITY = /(passport|passaporto|pasaporte|passaporte|passeport|identita|patente|soggiorno|codicefiscale|tesserasanitaria|greencard|driverlicen|drivinglicen|idfront|idback|idcard|idcopy|idscan|ssncard|ssnscan|ssncopy)/
 /** Forms that carry a person's tax id: SS-4 names a responsible person; 1040 / 1040-NR are an individual's return. */
 const PERSONAL_FORM = ["ss 4", "1040(?: nr| sr| x)?"]
 

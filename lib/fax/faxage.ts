@@ -107,27 +107,26 @@ export function buildFaxageParams(input: SendFaxInput): URLSearchParams {
 export function parseFaxageResponse(text: string, httpOk: boolean): FaxageResult {
   const raw = (text || '').trim()
   const lower = raw.toLowerCase()
+  const looksHtml = /<\s*[a-z!\/]/i.test(raw)
+  const short = raw.length > 0 && raw.length <= 200 && !looksHtml
+  // REFUSED only on Faxage's own error token — "ERR02: Login incorrect", "ERR 05 …" — at the very start of a plain body. Words like
+  // "Error 502 - Bad Gateway", "Error: upstream timed out" or "error" somewhere inside an answer are NOT a refusal: a gateway talks that
+  // way after the job may have been queued, and a false refusal would release the claim and send the fax TWICE.
+  const refused = short && /^err\s*\d{1,3}\b/.test(lower)
+  // ACCEPTED only when the answer is short and plain and gives a job id: labelled ("JobNum: 123", "Job ID 123", "jobid=123"), or the whole
+  // body is essentially the number itself in the shape real ids have (8–12 digits, e.g. 1122910119). Anything else — maintenance or login
+  // HTML with a number in it, an empty body, a non-2xx answer, "invalid"/"fail"/"denied" words — proves nothing.
   const errWord = lower.includes('error') || lower.includes('invalid') || lower.includes('fail') || lower.includes('denied')
-  const errCode = /^err\s*\d/.test(lower) || lower.startsWith('err')
-  // 'refused' needs Faxage's own voice: an ERR code (any HTTP status) or an error word in a normal 2xx answer. A non-2xx page ("502 Bad
-  // Gateway", a timeout page) or an empty body proves nothing: the job may be queued.
-  let outcome: FaxageOutcome
-  if (errCode || (httpOk && errWord)) outcome = 'refused'
-  else if (!httpOk || raw === '') outcome = 'unknown'
-  else outcome = 'accepted'
-  const isError = outcome !== 'accepted'
-
   let jobId: string | null = null
-  // Prefer a labelled job id ("JobNum: 123", "Job ID 123", "jobid=123").
-  const labelled = raw.match(/job\s*(?:num(?:ber)?|id)?\s*[:#=]?\s*(\d+)/i)
-  if (labelled) {
-    jobId = labelled[1]
-  } else if (!isError) {
-    // Fall back to a standalone long number only on a non-error response.
-    const bare = raw.match(/\b(\d{4,})\b/)
-    if (bare) jobId = bare[1]
+  if (!refused && httpOk && short && !errWord) {
+    const labelled = raw.match(/job\s*(?:num(?:ber)?|id)\s*[:#=]?\s*(\d+)/i)
+    if (labelled) jobId = labelled[1]
+    else {
+      const bare = raw.match(/^\s*(\d{8,12})\s*$/)
+      if (bare) jobId = bare[1]
+    }
   }
-
+  const outcome: FaxageOutcome = refused ? 'refused' : jobId ? 'accepted' : 'unknown'
   return { ok: outcome === 'accepted', outcome, jobId, raw }
 }
 
@@ -170,9 +169,13 @@ export class FaxRefusedOutsideProductionError extends Error {
  * sandbox holds copies of real client records, and a fax cannot be taken back.
  * Tests inject their own fetch and are unaffected.
  */
+/** The Faxage call gives up after this long (the function itself is killed at 60 s): the outcome is then UNKNOWN, never "refused". */
+export const FAXAGE_TIMEOUT_MS = 45_000
+
 export async function sendFax(
   input: SendFaxInput,
   fetchImpl: typeof fetch = fetch,
+  timeoutMs: number = FAXAGE_TIMEOUT_MS,
 ): Promise<FaxageResult> {
   if (fetchImpl === globalThis.fetch && !isProductionDatabase()) throw new FaxRefusedOutsideProductionError()
   let params: URLSearchParams
@@ -185,6 +188,7 @@ export async function sendFax(
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params.toString(),
+    signal: AbortSignal.timeout(timeoutMs),
   })
   const text = await res.text()
   return parseFaxageResponse(text, res.ok)

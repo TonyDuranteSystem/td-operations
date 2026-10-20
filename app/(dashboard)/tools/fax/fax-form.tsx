@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { createOnceGuard } from '@/lib/crm-store/once-guard'
+import { faxSendFailureText } from '@/lib/fax/client-errors'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { Loader2, Send, Upload, FileText, CheckCircle2, History } from 'lucide-react'
@@ -141,13 +142,20 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
         payload.document_id = documentId
       }
 
-      const res = await fetch('/api/tools/fax/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
+      let res: Response
+      try {
+        res = await fetch('/api/tools/fax/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+      } catch {
+        // the request may have reached Faxage before the connection dropped: the outcome is UNKNOWN
+        throw new Error(faxSendFailureText({ networkError: true }))
+      }
       if (res.status === 413) throw new Error(`This file is too big to send this way. Make it smaller (the most is ${MAX_FILE_MB} MB) and try again.`)
-      const data = await res.json().catch(() => ({}))
+      const parsed = await res.json().catch(() => null)
+      const data = parsed ?? {}
       if (res.status === 409 && data.recent_duplicate) {
         // the same file went to this number a few minutes ago: nothing was sent; the user decides
         setDupWarning(String(data.error))
@@ -165,7 +173,7 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
       if (!res.ok || !data.success) {
         // the chosen place was refused BEFORE the fax was sent: nothing went out, the window stays open with the reason
         if (data.destination_error && data.error) return { error: String(data.error) }
-        throw new Error(data.error || 'Could not send the fax. Please try again.')
+        throw new Error(faxSendFailureText({ status: res.status, json: parsed }))
       }
       setSent(data.job_id ? `Job ${data.job_id}` : (data.faxage_response || 'Fax submitted.'))
       setSavedWarn(!!data.save_failed || !!data.history_error)

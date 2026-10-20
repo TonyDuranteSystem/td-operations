@@ -136,7 +136,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
   if (dedupeSdId && !confirmResend) {
     const { data: prior, error: priorErr } = await supabaseAdmin
       .from('action_log')
-      .select('created_at, details')
+      .select('created_at, details, action_type')
       .in('action_type', ['fax_sent', 'fax_claim'])
       .eq('service_delivery_id', dedupeSdId)
       .order('created_at', { ascending: false })
@@ -147,11 +147,15 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
     }
     if (prior) {
       const details = (prior.details as { job_id?: string; faxno?: string } | null) ?? {}
+      // an UNCONFIRMED send is not "already sent": say what it is, and never offer a blind re-send
+      const unconfirmed = (prior as { action_type?: string }).action_type === 'fax_claim'
       return NextResponse.json(
         {
           success: false,
-          already_faxed: { at: prior.created_at, job_id: details.job_id ?? null, faxno: details.faxno ?? null },
-          error: 'A fax was already sent for this flow. Confirm to send it again.',
+          already_faxed: { at: prior.created_at, job_id: details.job_id ?? null, faxno: details.faxno ?? null, unconfirmed },
+          error: unconfirmed
+            ? 'A send for this flow was started but never confirmed, so it is not known whether the fax went out. Check Faxage, then say what happened in Fax History before sending again. This attempt was NOT sent.'
+            : 'A fax was already sent for this flow. Confirm to send it again.',
         },
         { status: 409 },
       )
@@ -219,6 +223,9 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
       return NextResponse.json({ success: false, error: 'The uploaded file could not be read. Please choose it again.' }, { status: 400 })
     }
     const buf = Buffer.from(await blob.arrayBuffer())
+    if (buf.length === 0) {
+      return NextResponse.json({ success: false, error: 'The uploaded file is empty. Please choose it again.' }, { status: 400 })
+    }
     const tooBig = faxSizeProblem(buf.length)
     if (tooBig) return NextResponse.json({ success: false, error: tooBig }, { status: 400 })
     fileBase64 = buf.toString('base64')
@@ -269,6 +276,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
   const claimDeps = await realClaimDeps()
   const claim = await claimSend({
     sendId, faxno, hash, confirmResend, actor: user?.email || 'dashboard', summary: `Fax to ${faxno} — ${fileName} (sending)`, serviceDeliveryId,
+    display: { file_name: fileName, recip_name: recipName ?? null, reason: reason || null },
   }, claimDeps)
   if (!claim.ok) {
     return NextResponse.json({
@@ -299,7 +307,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
     }
     // the outcome is UNKNOWN (the fax may have left): the claim stays, so a retry is stopped until staff have looked in Fax History
     return NextResponse.json(
-      { success: false, error: `${e instanceof Error ? e.message : 'Failed to reach the fax service.'} It is not known whether the fax went out: check Fax History and Faxage before sending it again. This attempt stays marked until you say what happened.` },
+      { success: false, outcome_unknown: true, error: `${e instanceof Error ? e.message : 'Failed to reach the fax service.'} It is not known whether the fax went out: check Fax History and Faxage before sending it again. This attempt stays marked until you say what happened.` },
       { status: 502 },
     )
   }
@@ -351,6 +359,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
   }
   let historyError: string | null = null
   const first = await finishClaim(claim.claimId!, { actor, account_id: logAccount, service_delivery_id: serviceDeliveryId, summary, record_id: recordDocId, details: { ...detailsBase, filing_status: stored ? 'not_needed' : 'pending' } }, claimDeps)
+  if (first.staleClaim) await reportHistoryFailure('a leftover unconfirmed marker of this fax could not be removed')
   if (first.via === 'none') { historyError = HISTORY_NOT_SAVED_SENTENCE; await reportHistoryFailure(first.error ?? 'unknown') }
   const historyId = first.id
 
@@ -437,6 +446,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
       document_id: recordDocId ?? uploadedDocId,
     },
   }, claimDeps)
+  if (final.staleClaim) await reportHistoryFailure('a leftover unconfirmed marker of this fax could not be removed')
   if (final.via === 'none' && !historyError) { historyError = HISTORY_NOT_SAVED_SENTENCE; await reportHistoryFailure(final.error ?? 'unknown') }
 
   return NextResponse.json({

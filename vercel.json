@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/fax-staging-sweep",
+      "schedule": "10 4 * * *"
+    },
+    {
       "path": "/api/cron/payment-integrity-alarm",
       "schedule": "0 9 * * *"
     },

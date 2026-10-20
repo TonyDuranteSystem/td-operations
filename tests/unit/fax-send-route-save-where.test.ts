@@ -101,7 +101,7 @@ vi.mock('@/lib/supabase-admin', () => {
         } else if (mode === 'delete') { const k = st.actionLog.findIndex((r) => filters.every((f) => f(r))); if (k >= 0) st.actionLog.splice(k, 1) }
         else if (mode === 'update') {
           if (st.logFail.updateAll || st.logFail.update > 0) { if (st.logFail.update > 0) st.logFail.update--; out = { data: null, error: { message: 'update failed' } } }
-          else { const row = st.actionLog.find((r) => filters.every((f) => f(r))); if (row) Object.assign(row, patch) }
+          else { const row = st.actionLog.find((r) => filters.every((f) => f(r))); if (row) { Object.assign(row, patch); out = { data: [{ id: row.id }], error: null } } else out = { data: [], error: null } }
         }
       } else if (table === 'documents') {
         out = mode === 'insert' ? { data: c.__inserted, error: null } : { data: { id: 'stored-doc', file_name: 'SS-4 package.pdf', drive_file_id: 'store:sf-1', account_id: 'acc-1' }, error: null }
@@ -489,5 +489,40 @@ describe('/api/tools/fax/send — outcome unknown, proofs of "not sent", the 10-
     st.removed.length = 0
     const refused = await send({ file_base64: undefined, staged_path: path, save_choice: saveChoice({ ownerId: U(99) }) })
     expect(refused.status).toBe(422); expect(st.removed).toContain(path)
+  })
+})
+
+describe('/api/tools/fax/send — round 4', () => {
+  it('the claim carries the file name, recipient and reason (staff can recognise an unconfirmed send)', async () => {
+    st.sendUnknown = true
+    await send({ save_choice: saveChoice(), recip_name: 'IRS', reason: 'Tax return Acme', send_id: SEND_ID })
+    expect(st.actionLog[0].details).toMatchObject({ file_name: '2025 Tax Return - Acme.pdf', recip_name: 'IRS', reason: 'Tax return Acme' })
+  })
+  it('the flow guard says "never confirmed" for an unconfirmed send, and "already sent" only for a real one', async () => {
+    st.actionLog.push({ id: 'c', action_type: 'fax_claim', created_at: new Date().toISOString(), service_delivery_id: 'sd-1', details: { faxno: '1', content_hash: 'zz' } })
+    const a = await send({ save_choice: saveChoice(), dedupe_service_delivery_id: 'sd-1' })
+    expect(a.status).toBe(409); expect(a.body.already_faxed.unconfirmed).toBe(true); expect(a.body.error).toMatch(/never confirmed/); expect(a.body.error).not.toMatch(/already sent/)
+    st.actionLog.length = 0
+    st.actionLog.push({ id: 's', action_type: 'fax_sent', created_at: new Date().toISOString(), service_delivery_id: 'sd-1', details: { faxno: '1', content_hash: 'zz', job_id: 'J9' } })
+    const b = await send({ save_choice: saveChoice(), dedupe_service_delivery_id: 'sd-1' })
+    expect(b.body.already_faxed.unconfirmed).toBe(false); expect(b.body.error).toMatch(/already sent/)
+  })
+  it('an empty staged file is refused', async () => {
+    const path = 'fax-upload/123e4567-e89b-12d3-a456-426614174111.pdf'
+    st.staged.set(path, Buffer.alloc(0))
+    const r = await send({ file_base64: undefined, staged_path: path, save_choice: saveChoice() })
+    expect(r.status).toBe(400); expect(r.body.error).toMatch(/empty/); expect(st.sendCalls).toBe(0)
+  })
+  it('a timeout of the Faxage call is an UNKNOWN outcome: the claim stays and the answer says outcome_unknown', async () => {
+    st.sendThrows = true
+    const r = await send({ save_choice: saveChoice(), send_id: SEND_ID })
+    expect(r.status).toBe(502); expect(r.body.outcome_unknown).toBe(true)
+    expect(st.actionLog.map((x) => x.action_type)).toEqual(['fax_claim'])
+  })
+  it('a fallback insert removes the old claim (no row stays that would show "outcome unknown" next to the sent fax)', async () => {
+    st.logFail.updateAll = true
+    await send({ save_choice: saveChoice(), send_id: SEND_ID })
+    expect(st.actionLog.filter((x) => x.action_type === 'fax_claim')).toHaveLength(0)
+    expect(st.actionLog.filter((x) => x.action_type === 'fax_sent')).toHaveLength(1)
   })
 })

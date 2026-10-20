@@ -93,46 +93,66 @@ describe('buildFaxageParams', () => {
   })
 })
 
-describe('parseFaxageResponse', () => {
+describe('parseFaxageResponse — a refusal only on Faxage\'s own ERR token, a success only on a plain answer with a job id', () => {
   it('parses a labelled job id on success', () => {
     const r = parseFaxageResponse('Success JobNum: 998877', true)
-    expect(r.ok).toBe(true)
-    expect(r.jobId).toBe('998877')
+    expect(r).toMatchObject({ ok: true, outcome: 'accepted', jobId: '998877' })
+    expect(parseFaxageResponse('Job ID 123456', true)).toMatchObject({ outcome: 'accepted', jobId: '123456' })
+    expect(parseFaxageResponse('jobid=77', true)).toMatchObject({ outcome: 'accepted', jobId: '77' })
   })
-  it('parses a bare numeric id on a non-error response', () => {
-    const r = parseFaxageResponse('123456', true)
-    expect(r.ok).toBe(true)
-    expect(r.jobId).toBe('123456')
+  it('the REAL production shape: the body is just the 10-digit job id', () => {
+    expect(parseFaxageResponse('1122910119', true)).toMatchObject({ ok: true, outcome: 'accepted', jobId: '1122910119' })
+    expect(parseFaxageResponse('  1122910119\n', true)).toMatchObject({ outcome: 'accepted', jobId: '1122910119' })
+    expect(parseFaxageResponse('JOBID: 1122910119', true)).toMatchObject({ outcome: 'accepted', jobId: '1122910119' })
   })
-  it('flags error tokens as failures', () => {
-    expect(parseFaxageResponse('ERR: invalid login', true).ok).toBe(false)
-    expect(parseFaxageResponse('Authentication failed', true).ok).toBe(false)
-    expect(parseFaxageResponse('Access denied', true).ok).toBe(false)
+  it('REFUSED only for the strict ERR token (any case, with or without a space), also on a non-2xx status', () => {
+    for (const body of ['ERR02: Login incorrect', 'ERR 05 No such file', 'err02', 'Err28', 'ERR02']) {
+      expect(parseFaxageResponse(body, true).outcome, body).toBe('refused')
+      expect(parseFaxageResponse(body, false).outcome, body + ' (non-2xx)').toBe('refused')
+    }
+    expect(parseFaxageResponse('ERR02: Login incorrect', true).ok).toBe(false)
   })
-  it('treats a non-2xx HTTP status as failure even with friendly text', () => {
-    const r = parseFaxageResponse('ok', false)
-    expect(r.ok).toBe(false)
+  it('a gateway / platform error that merely STARTS with "Error" is NOT a refusal (the job may be queued: the claim must stay)', () => {
+    for (const [body, ok] of [['Error 502 - Bad Gateway', false], ['Error: upstream timed out', false], ['Error 504', true], ['Error code 500', true], ['ERROR: connection reset', false]] as Array<[string, boolean]>) {
+      expect(parseFaxageResponse(body, ok).outcome, body).toBe('unknown')
+    }
   })
-  it('OUTCOME: only an explicit Faxage "no" is a refusal; a gateway error, a timeout or an empty body is UNKNOWN (the job may be queued)', () => {
-    expect(parseFaxageResponse('JobNum: 99', true).outcome).toBe('accepted')
-    expect(parseFaxageResponse('ERR02: Login incorrect', true).outcome).toBe('refused')
-    expect(parseFaxageResponse('ERR02: Login incorrect', false).outcome).toBe('refused')
-    expect(parseFaxageResponse('Error code 500', true).outcome).toBe('refused')
-    expect(parseFaxageResponse('<html>502 Bad Gateway</html>', false).outcome).toBe('unknown')
-    expect(parseFaxageResponse('504 Gateway Timeout', false).outcome).toBe('unknown')
-    expect(parseFaxageResponse('', true).outcome).toBe('unknown')
-    expect(parseFaxageResponse('', false).outcome).toBe('unknown')
-    expect(parseFaxageResponse('ok', false).outcome).toBe('unknown')
+  it('a 2xx body that merely CONTAINS error / invalid / fail / denied words is NOT a refusal', () => {
+    for (const body of ['Your request had an error', 'invalid session, please log in', 'Authentication failed', 'Access denied', 'JobNum: 5 (no error)']) {
+      expect(parseFaxageResponse(body, true).outcome, body).toBe('unknown')
+    }
+  })
+  it('a 2xx page that is not a plain answer is never a success, even with a number in it', () => {
+    expect(parseFaxageResponse('<html><body>Maintenance until 2026</body></html>', true).outcome).toBe('unknown')
+    expect(parseFaxageResponse('<html><title>Login</title> code 4021</html>', true).outcome).toBe('unknown')
+    expect(parseFaxageResponse('Maintenance window 2026', true).outcome).toBe('unknown')
+    expect(parseFaxageResponse('x'.repeat(300) + ' JobNum: 123456', true).outcome).toBe('unknown')
+  })
+  it('too short / too long numbers and an empty body prove nothing', () => {
+    for (const body of ['123456', '1234567890123', '', '   ', '12']) expect(parseFaxageResponse(body, true).outcome, body).toBe('unknown')
     expect(parseFaxageResponse('', true).ok).toBe(false)
   })
-  it('does not pull a job id out of an error response', () => {
-    const r = parseFaxageResponse('Error code 500', true)
-    expect(r.ok).toBe(false)
-    expect(r.jobId).toBeNull()
+  it('a non-2xx status is never a success, whatever the text', () => {
+    expect(parseFaxageResponse('ok', false).outcome).toBe('unknown')
+    expect(parseFaxageResponse('1122910119', false).outcome).toBe('unknown')
+    expect(parseFaxageResponse('504 Gateway Timeout', false).outcome).toBe('unknown')
+    expect(parseFaxageResponse('<html>502 Bad Gateway</html>', false).outcome).toBe('unknown')
+  })
+  it('no job id is pulled out of anything that is not accepted', () => {
+    expect(parseFaxageResponse('Error code 500', true).jobId).toBeNull()
+    expect(parseFaxageResponse('<html>1122910119</html>', true).jobId).toBeNull()
   })
 })
 
 describe('sendFax — what is provably NOT sent', () => {
+  it('the call to Faxage gives up after the time limit: the outcome is then UNKNOWN (not provably not sent)', async () => {
+    const { isProvablyNotSent } = await import('@/lib/fax/faxage')
+    const hang = ((_url: string, init?: RequestInit) => new Promise((_res, rej) => { init?.signal?.addEventListener('abort', () => rej(init.signal?.reason)) })) as unknown as typeof fetch
+    let err: unknown
+    try { await sendFax({ credentials: { username: 'u', company: 'c', password: 'p' }, faxno: '3055551212', fileName: 'a.pdf', fileBase64: 'AAAA' }, hang, 20) } catch (e) { err = e }
+    expect(err).toBeInstanceOf(Error)
+    expect(isProvablyNotSent(err)).toBe(false)
+  })
   it('a 502 / 504 after the request left is an UNKNOWN outcome, not a refusal', async () => {
     for (const status of [502, 504]) {
       const r = await sendFax({ credentials: { username: 'u', company: 'c', password: 'p' }, faxno: '3055551212', fileName: 'a.pdf', fileBase64: 'AAAA' },
