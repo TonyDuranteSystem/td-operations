@@ -48,6 +48,8 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage, ser
   const [askingFirst, setAskingFirst] = useState(false)
   const [returning, setReturning] = useState(false)
   const [firstAskSent, setFirstAskSent] = useState(false)
+  // The client already has an open "send us your names" form (Company Change Name asks at creation): say so, don't offer to ask again.
+  const [asksOpen, setAsksOpen] = useState(false)
   const [newName, setNewName] = useState('')
   const [addingName, setAddingName] = useState(false)
 
@@ -74,6 +76,7 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage, ser
       const data = await res.json().catch(() => null)
       if (!res.ok || !data || !data.success) throw new Error(data?.error || 'Could not load the LLC names.')
       setChecks((data.name_checks as NameCheck[]) ?? [])
+      setAsksOpen(data.names_ask_open === true)
       setLoaded(true)
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not load the LLC names.')
@@ -320,9 +323,11 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage, ser
             <div className="space-y-2">
               <p className="text-sm text-zinc-500">No names submitted by the client yet.</p>
               {policy.firstNamesCount > 0 && !extras && (
-                firstAskSent ? (
+                firstAskSent || asksOpen ? (
                   <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                    Request sent. The client&apos;s names will appear here as soon as they answer.
+                    {asksOpen && !firstAskSent
+                      ? 'The client has the names form in their portal. Their names will appear here as soon as they answer.'
+                      : 'Request sent. The client\u2019s names will appear here as soon as they answer.'}
                   </p>
                 ) : (
                   <button

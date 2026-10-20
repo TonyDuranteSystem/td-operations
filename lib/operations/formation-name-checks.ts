@@ -15,6 +15,7 @@ import {
   allNamesDead,
   addStaffName,
   addClientNames,
+  namesAnswerProblem,
   anotherNameInProgress,
   nameActionProblem,
   nameDedupeKey,
@@ -316,6 +317,22 @@ async function seedChecksFor(row: SdRow): Promise<NameCheck[]> {
     checks = initNameChecksFromWizard(wizardData)
   }
   return checks
+}
+
+/** True when the client currently has an OPEN "send us your names" form for this SD (the staff panel then says so instead of offering to ask again). */
+export async function hasOpenNamesAsk(sdId: string): Promise<boolean> {
+  const { data } = await (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_decision_requests not in generated types
+    supabaseAdmin as any
+  )
+    .from('client_decision_requests')
+    .select('id')
+    .eq('service_delivery_id', sdId)
+    .eq('request_type', 'text_input')
+    .eq('status', 'pending')
+    .eq('options->name_check->>kind', 'new_names')
+    .limit(1)
+  return Array.isArray(data) && data.length > 0
 }
 
 /** True when ANY "propose names" request (any status) was ever created for this SD — the first ask is created once, ever. */
@@ -806,6 +823,19 @@ export async function handleNameAction(params: {
 }
 
 /**
+ * Refuse a client's "send us your names" answer BEFORE it is saved when nothing in it can be used (see
+ * namesAnswerProblem) — the card then stays open with the reason instead of turning to "Thank you" while the list did not change.
+ * Only for the Company Change Name asks (`split: 'lines'`); Formation's own "new names" answers are unchanged. Returns a plain
+ * sentence for the client, or null (also when the list cannot be read — never block an answer on a read failure).
+ */
+export async function checkNamesAnswerBeforeSaving(req: DecisionRequest, response: Record<string, unknown>): Promise<string | null> {
+  const marker = (req.options as { name_check?: { kind?: string; split?: string; max?: number } } | null)?.name_check
+  if (!marker || marker.kind !== 'new_names' || marker.split !== 'lines' || !req.service_delivery_id) return null
+  const loaded = await loadWithChecks(req.service_delivery_id).catch(() => null)
+  return namesAnswerProblem({ text: response.text, separators: 'lines', max: typeof marker.max === 'number' ? marker.max : undefined, existing: loaded?.checks ?? [] })
+}
+
+/**
  * Apply a client's decision response back onto name_checks. Called from
  * respondToDecisionRequest ONLY when the request carries an `options.name_check`
  * marker (so the decisions system stays type-agnostic).
@@ -953,9 +983,11 @@ export async function applyNameDecisionResponse(
       const base = rejectionNote
         ? `Client rejected "${rejectedName}" — "${rejectionNote}"`
         : `Client rejected "${rejectedName}".`
-      const message = suggestedNewName
+      // The chat-event marker keeps this STAFF note out of the client's chat (without it the client saw it as their own
+      // message — production QA, 2026-10-20). Staff still see the rejection, the note and the suggestion on the name row.
+      const message = `${suggestedNewName
         ? `${base} They suggested "${suggestedNewName}" instead — added to the name list.`
-        : base
+        : base}\n\n<!-- chat-event: kind=name_rejected src=client_decision_requests:${req.id} -->`
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_id not in generated types
       await (supabaseAdmin as any).from('portal_messages').insert({
         account_id: req.account_id ?? null,

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Loader2, CheckCircle2, XCircle, HelpCircle } from 'lucide-react'
 import type { DecisionRequest } from '@/lib/decisions'
 import { useLocale } from '@/lib/portal/use-locale'
+import { nameDedupeKey } from '@/lib/flows/name-checks'
 
 interface DecisionCardProps {
   request: DecisionRequest
@@ -37,6 +38,14 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
     rejected: translate('decisionCard.rejected'),
     thanks: translate('decisionCard.thanks'),
     error: translate('decisionCard.error'),
+    nameChoice1: translate('decisionCard.nameChoice1'),
+    nameChoice2: translate('decisionCard.nameChoice2'),
+    nameChoice3: translate('decisionCard.nameChoice3'),
+    nameChoiceNew: translate('decisionCard.nameChoiceNew'),
+    nameHint1: translate('decisionCard.nameHint1'),
+    nameHint2: translate('decisionCard.nameHint2'),
+    needOneName: translate('decisionCard.needOneName'),
+    namesMustDiffer: translate('decisionCard.namesMustDiffer'),
   }
   const opts = (request.options ?? {}) as Record<string, unknown>
   const message = locale === 'it' && request.message_it ? request.message_it : request.message
@@ -56,6 +65,14 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
   const [note, setNote] = useState('')
   const [selected, setSelected] = useState('')
   const [text, setText] = useState('')
+  // "Send us your names" (Company Change Name): one box per name, laid out like the formation wizard's company-name step —
+  // 1st choice, 2nd choice (backup), 3rd choice (backup) — instead of one box with "one per line" (where a comma list became
+  // ONE name). The answer still travels as lines of text, so the server side is unchanged.
+  const nameMarker = (opts as { name_check?: { kind?: string; split?: string; max?: number } }).name_check
+  const nameBoxes = nameMarker?.kind === 'new_names' && nameMarker.split === 'lines'
+    ? Math.min(Math.max(Number(nameMarker.max) || 3, 1), 3)
+    : 0
+  const [nameFields, setNameFields] = useState<string[]>(['', '', ''])
   const [suggestedName, setSuggestedName] = useState('')
 
   // Formation name-approval requests carry a name_check marker — only those show
@@ -231,7 +248,45 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
             </>
           )}
 
-          {request.request_type === 'text_input' && (
+          {request.request_type === 'text_input' && nameBoxes > 0 && (
+            <>
+              <div className="space-y-2">
+                {Array.from({ length: nameBoxes }, (_, i) => {
+                  const label = nameBoxes === 1 ? t.nameChoiceNew : [t.nameChoice1, t.nameChoice2, t.nameChoice3][i]
+                  const hint = nameBoxes === 1 ? null : i === 0 ? t.nameHint1 : i === 1 ? t.nameHint2 : null
+                  return (
+                    <label key={i} className="block text-sm font-medium text-zinc-700">
+                      {label}
+                      <input
+                        type="text"
+                        value={nameFields[i] ?? ''}
+                        onChange={(e) => setNameFields((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))}
+                        maxLength={120}
+                        autoComplete="off"
+                        className="mt-1 w-full rounded-md border border-zinc-300 px-2 py-1.5 text-sm font-normal text-zinc-900"
+                      />
+                      {hint && <span className="mt-0.5 block text-xs font-normal text-zinc-500">{hint}</span>}
+                    </label>
+                  )
+                })}
+              </div>
+              <button
+                disabled={submitting || !(nameFields[0] ?? '').trim()}
+                onClick={() => {
+                  const names = nameFields.slice(0, nameBoxes).map((v) => v.replace(/\s+/g, ' ').trim()).filter(Boolean)
+                  if (names.length === 0) { setError(t.needOneName); return }
+                  if (new Set(names.map((n) => nameDedupeKey(n))).size !== names.length) { setError(t.namesMustDiffer); return }
+                  respond({ text: names.join('\n') })
+                }}
+                className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {t.submit}
+              </button>
+            </>
+          )}
+
+          {request.request_type === 'text_input' && nameBoxes === 0 && (
             <>
               <textarea
                 value={text}

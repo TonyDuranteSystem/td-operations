@@ -1,7 +1,7 @@
 /**
  * Formation Name Command Center API. Staff-only (workspace).
  *
- * GET  /api/flows/[id]/name-check → { success, name_checks } (initialized from
+ * GET  /api/flows/[id]/name-check → { success, name_checks, names_ask_open } (initialized from
  *      the formation wizard when the SD has none yet).
  * POST /api/flows/[id]/name-check → { action, name_index } applies a name status
  *      change; 'send_to_client' / 'mark_sos_rejected' also create the matching
@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { getOrInitNameChecks, getNameLoopPolicyForSd, handleNameAction, type NameAction } from '@/lib/operations/formation-name-checks'
+import { getOrInitNameChecks, getNameLoopPolicyForSd, handleNameAction, hasOpenNamesAsk, type NameAction } from '@/lib/operations/formation-name-checks'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 const ACTIONS: NameAction[] = ['mark_available', 'mark_not_available', 'send_to_client', 'mark_filed', 'mark_sos_rejected', 'request_new_names', 'add_name', 'ask_first_names', 'return_to_names', 'withdraw']
@@ -36,7 +36,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ success: false, error: 'Name checks are not available for this service.' }, { status: 404 })
   }
   const name_checks = await getOrInitNameChecks(params.id)
-  return NextResponse.json({ success: true, name_checks })
+  const names_ask_open = await hasOpenNamesAsk(params.id).catch(() => false)
+  return NextResponse.json({ success: true, name_checks, names_ask_open })
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {

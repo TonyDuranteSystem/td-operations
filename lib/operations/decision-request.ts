@@ -206,6 +206,18 @@ export async function respondToDecisionRequest(params: RespondDecisionParams): P
   const v = validateDecisionResponse(req.request_type, params.rawResponse, req.options ?? {})
   if (!v.ok || !v.status || !v.response) return { ok: false, error: v.error ?? 'Invalid response.' }
 
+  // A "send us your names" answer that cannot be used is refused WITH A REASON and the card stays open (it used to turn to
+  // "Thank you" with nothing added). Change Name asks only; a read failure never blocks an answer.
+  if (req.request_type === 'text_input' && (req.options as { name_check?: unknown } | null)?.name_check) {
+    try {
+      const { checkNamesAnswerBeforeSaving } = await import('@/lib/operations/formation-name-checks')
+      const problem = await checkNamesAnswerBeforeSaving(req as never, v.response)
+      if (problem) return { ok: false, error: problem }
+    } catch {
+      // non-critical — save the answer as before
+    }
+  }
+
   // TOCTOU guard: only the first responder (still pending) wins.
   const { data: updated } = await cdr()
     .update({

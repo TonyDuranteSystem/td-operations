@@ -35,6 +35,7 @@ import { buildClosureFollowUpCards, WRAP_UP_STAGE_NAME, type ClosureStepTask } f
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
 import { filedName, type NameCheck } from "@/lib/flows/name-checks"
+import { CHANGE_NAME_STAGES } from "@/lib/flows/change-name-stages"
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -470,11 +471,32 @@ export async function advanceServiceDelivery(
       }
     }
     const { changeNameAdvanceProblem } = await import("@/lib/flows/change-name-gates")
+    const stageRefs = stages as Array<{ stage_name: string; stage_order: number }>
+    // The two "did it really happen" facts are looked up ONLY for a forward move that crosses the step they guard.
+    const orderOfStage = (n: string) => stageRefs.find(s => s.stage_name === n)?.stage_order
+    const crosses = (n: string) => { const o = orderOfStage(n); return o !== undefined && fromOrder < o && targetStage.stage_order >= o }
+    let hasSignedForm: boolean | undefined
+    let nameApplied: boolean | undefined
+    if (crosses(CHANGE_NAME_STAGES.file)) {
+      // esign_* tables are not in the generated DB types.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { count } = await (supabaseAdmin as any).from("esign_envelopes").select("id", { count: "exact", head: true }).eq("service_delivery_id", delivery.id).eq("status", "completed")
+      hasSignedForm = (count ?? 0) > 0
+    }
+    if (crosses(CHANGE_NAME_STAGES.oa)) {
+      const { data: acct } = delivery.account_id
+        ? await supabaseAdmin.from("accounts").select("name_history").eq("id", delivery.account_id).maybeSingle()
+        : { data: null }
+      const { appliedEntry } = await import("@/lib/operations/change-name-apply")
+      nameApplied = appliedEntry((acct as { name_history?: unknown } | null)?.name_history, delivery.id) !== null
+    }
     const problem = changeNameAdvanceProblem({
       checks: (delivery as { name_checks?: unknown }).name_checks as never,
-      stages: stages as Array<{ stage_name: string; stage_order: number }>,
+      stages: stageRefs,
       fromOrder,
       targetOrder: targetStage.stage_order,
+      hasSignedForm,
+      nameApplied,
     })
     if (problem) {
       return {
