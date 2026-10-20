@@ -106,6 +106,7 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
   const [owner, setOwner] = useState<{ id: string; label: string; kind?: string } | null>(fixedOwner ? { id: fixedOwner, label: ownerLabel ?? '' } : null)
   const [groups, setGroups] = useState<NavGroup[] | null>(null)
   const [search, setSearch] = useState('')
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
   const [nodes, setNodes] = useState<Record<string, PickFolder[]>>({})
   const [rootId, setRootId] = useState<string | null>(null)
   const [rootFolder, setRootFolder] = useState<PickFolder | null>(null)
@@ -192,8 +193,6 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
   const q = search.trim().toLowerCase()
   const prefer = new Set(preferOwnerIds ?? [])
   const allOwners = (groups ?? []).flatMap((g) => g.owners.map((o) => ({ ...o, group: g.label })))
-  const shownOwners = allOwners.filter((o) => !q || o.label.toLowerCase().includes(q))
-    .sort((a, b) => Number(prefer.has(b.id)) - Number(prefer.has(a.id)))
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onClick={onClose} role="dialog" aria-modal="true" aria-label={title} data-modal-layer="picker">
@@ -216,17 +215,47 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
                 </li>
               ))}
               {groups === null && !error && <li className="p-2 text-sm text-zinc-500">Loading…</li>}
-              {shownOwners.slice(0, 200).map((o) => {
-                const Icon = ownerIcon(o.kind)
+              {/* the storage exactly as the Storage page lists it: Business, My files, then Clients by group — every storage, no cut-off */}
+              {(() => {
+                const pickable = (o: NavGroup['owners'][number], note?: string, label?: string) => {
+                  const Icon = ownerIcon(o.kind)
+                  return (
+                    <li key={o.id}>
+                      <button type="button" onClick={() => setOwner({ id: o.id, label: o.label, kind: o.kind })} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-zinc-50">
+                        <Icon className="h-4 w-4 text-zinc-400" /><span className={`min-w-0 flex-1 truncate ${label ? 'font-medium' : ''}`}>{label ?? o.label}</span>
+                        {note && <span className="text-xs text-zinc-400">{note}</span>}
+                      </button>
+                    </li>
+                  )
+                }
+                const matches = (o: NavGroup['owners'][number]) => !q || o.label.toLowerCase().includes(q)
+                const suggested = allOwners.filter((o) => prefer.has(o.id) && matches(o))
+                const business = (groups ?? []).filter((g) => g.section === 'business').flatMap((g) => g.owners).filter(matches)
+                const mine = (groups ?? []).filter((g) => g.section === 'private').flatMap((g) => g.owners).filter(matches)
                 return (
-                  <li key={o.id}>
-                    <button type="button" onClick={() => setOwner({ id: o.id, label: o.label, kind: o.kind })} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-zinc-50">
-                      <Icon className="h-4 w-4 text-zinc-400" /><span className="min-w-0 flex-1 truncate">{o.label}</span>
-                      <span className="text-xs text-zinc-400">{prefer.has(o.id) ? 'suggested · ' : ''}{o.group}</span>
-                    </button>
-                  </li>
+                  <>
+                    {suggested.map((o) => pickable(o, 'suggested'))}
+                    {business.map((o) => pickable(o, undefined, 'Business'))}
+                    {mine.map((o) => pickable(o, 'owners only', 'My files'))}
+                    {(groups ?? []).filter((g) => g.section === 'clients').map((g) => {
+                      const owners = g.owners.filter(matches)
+                      if (owners.length === 0) return null
+                      const isOpen = !!q || openGroups.has(g.key)
+                      return (
+                        <li key={g.key}>
+                          <button type="button" onClick={() => setOpenGroups((st) => { const n = new Set(st); if (n.has(g.key)) n.delete(g.key); else n.add(g.key); return n })}
+                            className="flex w-full items-center gap-1 rounded px-2 py-1.5 text-left text-sm font-medium hover:bg-zinc-50">
+                            {isOpen ? <ChevronDown className="h-4 w-4 text-zinc-400" /> : <ChevronRight className="h-4 w-4 text-zinc-400" />}
+                            <Folder className="h-4 w-4 shrink-0 text-amber-500" /><span className="min-w-0 flex-1 truncate">{g.label}</span>
+                            <span className="text-xs font-normal text-zinc-400">{owners.length}</span>
+                          </button>
+                          {isOpen && <ul className="pl-5">{owners.map((o) => pickable(o))}</ul>}
+                        </li>
+                      )
+                    })}
+                  </>
                 )
-              })}
+              })()}
             </ul>
           </>
         ) : (
