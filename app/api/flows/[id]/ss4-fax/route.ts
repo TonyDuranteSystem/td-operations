@@ -83,7 +83,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     : null
 
   // Most recent fax already sent for this flow.
-  const { data: prior } = await supabaseAdmin
+  const { data: prior, error: priorErr } = await supabaseAdmin
     .from('action_log')
     .select('created_at, details, action_type')
     .in('action_type', ['fax_sent', 'fax_claim'])   // an unconfirmed send counts too: the panel must not offer a second fax
@@ -91,6 +91,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
+  // a failed lookup must NOT read as "nothing was faxed" (that would offer a plain Send on a flow that may already have been faxed)
+  if (priorErr) {
+    return NextResponse.json({ success: false, error: 'Could not check whether this flow was already faxed. Please reload; nothing was sent.' }, { status: 503 })
+  }
   const priorDetails = (prior?.details as { job_id?: string; faxno?: string } | null) ?? null
 
   return NextResponse.json(

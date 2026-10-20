@@ -112,7 +112,11 @@ export function parseFaxageResponse(text: string, httpOk: boolean): FaxageResult
   // REFUSED only on Faxage's own error token — "ERR02: Login incorrect", "ERR 05 …" — at the very start of a plain body. Words like
   // "Error 502 - Bad Gateway", "Error: upstream timed out" or "error" somewhere inside an answer are NOT a refusal: a gateway talks that
   // way after the job may have been queued, and a false refusal would release the claim and send the fax TWICE.
-  const refused = short && /^err\s*\d{1,3}\b/.test(lower)
+  // A CONTRADICTION is not a refusal: an ERR token that also reads like a gateway page ("ERR 502 Bad Gateway"), or an ERR token next to a
+  // job id in the same body, means we cannot tell — the claim stays.
+  const looksGateway = /gateway|time[d ]?-?out|upstream|proxy|unavailable|bad request|service/.test(lower)
+  const hasJobLabel = /job\s*(?:num(?:ber)?|id)\s*[:#=]?\s*\d/.test(lower)
+  const refused = short && /^err\s*\d{1,3}\b/.test(lower) && !looksGateway && !hasJobLabel
   // ACCEPTED only when the answer is a short plain 2xx body that gives a job id: LABELLED at the start ("JOBID: 123 queued for …",
   // "Success JobNum: 123", "Job ID 123", "jobid=123" — words like "fail" or "invalid" later in the sentence do not matter, a company may be
   // called Failla), or the whole body is essentially the number itself in the shape real ids have (8–12 digits, e.g. 1122910119).

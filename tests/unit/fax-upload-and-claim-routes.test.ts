@@ -3,7 +3,7 @@ import { NextRequest } from "next/server"
 
 const st = vi.hoisted(() => ({
   user: { id: "u1", email: "luca@tonydurante.us", app_metadata: { role: "team" } } as Record<string, unknown> | null,
-  signedFor: [] as string[], signFails: false, row: null as null | { id: string; action_type: string; details: Record<string, unknown>; created_at?: string }, eqs: [] as Array<[string, unknown]>, deleted: [] as string[], updated: [] as Array<Record<string, unknown>>, dbError: false,
+  signedFor: [] as string[], signFails: false, row: null as null | { id: string; action_type: string; details: Record<string, unknown>; created_at?: string }, eqs: [] as Array<[string, unknown]>, zeroRows: false, deleted: [] as string[], updated: [] as Array<Record<string, unknown>>, dbError: false,
 }))
 vi.mock("@/lib/supabase/server", () => ({ createClient: () => ({ auth: { getUser: async () => ({ data: { user: st.user } }) } }) }))
 vi.mock("@/lib/auth", () => ({ isDashboardUser: (u: unknown) => !!u && (u as { app_metadata?: { role?: string } }).app_metadata?.role !== "client" }))
@@ -21,7 +21,7 @@ vi.mock("@/lib/supabase-admin", () => ({
         if (st.dbError) return Promise.resolve({ data: null, error: { message: "db" } }).then(r)
         if (mode === "delete") st.deleted.push("x")
         if (mode === "update") st.updated.push(patch)
-        return Promise.resolve({ data: mode === "select" ? st.row : null, error: null }).then(r)
+        return Promise.resolve({ data: mode === "select" ? st.row : st.zeroRows ? [] : [{ id: "c1" }], error: null }).then(r)
       }
       return c
     },
@@ -33,7 +33,7 @@ const post = async (path: string, body: unknown) => {
   const res = await mod.POST(new NextRequest(`http://localhost/api/tools/fax/${path}`, { method: "POST", body: JSON.stringify(body) }))
   return { status: res.status, body: await res.json() }
 }
-beforeEach(() => { st.user = { id: "u1", email: "l@x", app_metadata: { role: "team" } }; st.signedFor.length = 0; st.signFails = false; st.row = null; st.deleted.length = 0; st.updated.length = 0; st.dbError = false; st.eqs.length = 0 })
+beforeEach(() => { st.user = { id: "u1", email: "l@x", app_metadata: { role: "team" } }; st.signedFor.length = 0; st.signFails = false; st.row = null; st.deleted.length = 0; st.updated.length = 0; st.dbError = false; st.eqs.length = 0; st.zeroRows = false })
 
 describe("POST /api/tools/fax/upload-url", () => {
   it("staff only", async () => { st.user = null; expect((await post("upload", { file_name: "a.pdf", file_size: 5 })).status).toBe(403) })
@@ -85,6 +85,14 @@ describe("POST /api/tools/fax/claim — staff say what happened to an unconfirme
   it("a staff member of the dashboard who is not storage staff is refused", async () => {
     st.user = { id: "u2", app_metadata: { role: "partner" } }
     expect((await post("claim", { id: "c1", outcome: "sent" })).status).toBe(403)
+  })
+  it("when the delete / update touched NO row (it finished or was answered in the meantime) the answer is 409, never a false 'done'", async () => {
+    st.row = { id: "c1", action_type: "fax_claim", details: {}, created_at: new Date(Date.now() - 10 * 60_000).toISOString() }
+    st.zeroRows = true
+    for (const outcome of ["not_sent", "sent"]) {
+      const r = await post("claim", { id: "c1", outcome })
+      expect(r.status, outcome).toBe(409); expect(r.body.error, outcome).toMatch(/already answered or finished/)
+    }
   })
   it("a database error is a plain 503 (nothing changed)", async () => {
     st.dbError = true

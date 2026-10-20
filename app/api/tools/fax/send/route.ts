@@ -272,7 +272,12 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
   }
 
   // ONE fax per Send: the claim is written BEFORE Faxage is called (see lib/fax/send-claim.ts). A lookup / write error stops the send.
-  const hash = createHash('sha256').update(Buffer.from(stripBase64Prefix(fileBase64), 'base64')).digest('hex')
+  // an EMPTY file is refused for EVERY source (inline, stored document, 'Fax this file', staged) BEFORE anything is claimed or sent
+  const sendBytes = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
+  if (sendBytes.length === 0) {
+    return NextResponse.json({ success: false, error: 'The file is empty (0 bytes), so there is nothing to fax. Please choose the file again.' }, { status: 400 })
+  }
+  const hash = createHash('sha256').update(sendBytes).digest('hex')
   const claimDeps = await realClaimDeps()
   const claim = await claimSend({
     sendId, faxno, hash, confirmResend, actor: user?.email || 'dashboard', summary: `Fax to ${faxno} — ${fileName} (sending)`, serviceDeliveryId,
@@ -361,7 +366,8 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
   const first = await finishClaim(claim.claimId!, { actor, account_id: logAccount, service_delivery_id: serviceDeliveryId, summary, record_id: recordDocId, details: { ...detailsBase, filing_status: stored ? 'not_needed' : 'pending' } }, claimDeps)
   if (first.staleClaim) await reportHistoryFailure('a leftover unconfirmed marker of this fax could not be removed')
   if (first.via === 'none') { historyError = HISTORY_NOT_SAVED_SENTENCE; await reportHistoryFailure(first.error ?? 'unknown') }
-  const historyId = first.id
+  // if the first write failed, the ORIGINAL claim is still the row to complete (never leave it behind next to the sent fax)
+  const historyId = first.id ?? claim.claimId!
 
   // Keep the sent UPLOAD. Nothing below can fail the fax.
   //  1. "Save here": file it at the place staff chose (storage writer, type IRS Fax for an IRS fax, hidden from the client).
@@ -447,6 +453,8 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
     },
   }, claimDeps)
   if (final.staleClaim) await reportHistoryFailure('a leftover unconfirmed marker of this fax could not be removed')
+  // the history row WAS saved by the second attempt: the warning from the first attempt no longer applies
+  if (final.via !== 'none') historyError = null
   if (final.via === 'none' && !historyError) { historyError = HISTORY_NOT_SAVED_SENTENCE; await reportHistoryFailure(final.error ?? 'unknown') }
 
   return NextResponse.json({

@@ -21,7 +21,8 @@ export async function POST(req: NextRequest) {
   const tooBig = faxSizeProblem(size)
   if (tooBig) return NextResponse.json({ error: tooBig }, { status: 400 })
   // best effort: whenever a new upload is staged, abandoned ones older than 24 hours go (the daily cron is the safety net)
-  try { await (await import('@/lib/fax/staged-sweep')).sweepFaxStaging() } catch { /* never blocks an upload */ }
+  // (not awaited: it never slows an upload down)
+  void import('@/lib/fax/staged-sweep').then((m) => m.sweepFaxStaging()).catch(() => { /* never blocks an upload */ })
   const path = faxStagingPathFor(randomUUID(), fileName)
   const { data, error } = await supabaseAdmin.storage.from(FAX_STAGING_BUCKET).createSignedUploadUrl(path)
   if (error || !data) return NextResponse.json({ error: 'Could not start the upload. Please try again.' }, { status: 500 })

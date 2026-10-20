@@ -133,6 +133,16 @@ describe('parseFaxageResponse — a refusal only on Faxage\'s own ERR token, a s
       expect(parseFaxageResponse(body, false).outcome, body + ' (non-2xx)').toBe('unknown')
     }
   })
+  it('PRODUCTION FORMAT (verified 2026-10-20 from every stored answer: ^JOBID: [0-9]{8,12}$): the exact real string is accepted', () => {
+    expect(parseFaxageResponse('JOBID: 1122910119', true)).toMatchObject({ ok: true, outcome: 'accepted', jobId: '1122910119' })
+    expect(parseFaxageResponse('JOBID: 1122910119', false).outcome).toBe('unknown')
+  })
+  it('a CONTRADICTION is unknown, not a refusal: an ERR token that reads like a gateway page, or ERR next to a job id', () => {
+    for (const body of ['ERR 502 Bad Gateway', 'ERR504 Gateway Timeout', 'ERR 503 Service Unavailable', 'ERR05 upstream timed out', 'ERR02 JOBID: 1122910119', 'ERR 12 job id 5']) {
+      expect(parseFaxageResponse(body, true).outcome, body).toBe('unknown')
+      expect(parseFaxageResponse(body, false).outcome, body + ' (non-2xx)').toBe('unknown')
+    }
+  })
   it('the real refusals still release: ERR02 on a 200, ERR12 on an HTTP 500', () => {
     expect(parseFaxageResponse('ERR02: Login incorrect', true).outcome).toBe('refused')
     expect(parseFaxageResponse('ERR12', false).outcome).toBe('refused')

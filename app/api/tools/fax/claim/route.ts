@@ -28,12 +28,15 @@ export async function POST(req: NextRequest) {
   }
 
   if (outcome === 'not_sent') {
-    const { error: delErr } = await supabaseAdmin.from('action_log').delete().eq('id', id).eq('action_type', 'fax_claim')
+    const { data: gone, error: delErr } = await supabaseAdmin.from('action_log').delete().eq('id', id).eq('action_type', 'fax_claim').select('id')
     if (delErr) return NextResponse.json({ error: 'Could not save your answer. Please try again.' }, { status: 503 })
+    // nothing deleted = the send finished (or was answered) in the meantime: say so, never pretend
+    if ((gone ?? []).length === 0) return NextResponse.json({ error: 'That fax was already answered or finished. Reload Fax History.' }, { status: 409 })
   } else {
     const details = { ...((row.details as Record<string, unknown> | null) ?? {}), outcome_set_by_hand: user?.email || 'staff', outcome_set_at: new Date().toISOString(), filing_status: 'unknown' }
-    const { error: upErr } = await supabaseAdmin.from('action_log').update({ action_type: 'fax_sent', summary: 'Fax sent (confirmed by hand in Faxage)', details } as never).eq('id', id).eq('action_type', 'fax_claim')
+    const { data: changed, error: upErr } = await supabaseAdmin.from('action_log').update({ action_type: 'fax_sent', summary: 'Fax sent (confirmed by hand in Faxage)', details } as never).eq('id', id).eq('action_type', 'fax_claim').select('id')
     if (upErr) return NextResponse.json({ error: 'Could not save your answer. Please try again.' }, { status: 503 })
+    if ((changed ?? []).length === 0) return NextResponse.json({ error: 'That fax was already answered or finished. Reload Fax History.' }, { status: 409 })
   }
   return NextResponse.json({ success: true, outcome })
 }

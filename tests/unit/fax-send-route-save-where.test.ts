@@ -12,23 +12,23 @@ const OWNER = U(1), FOLDER = U(2), BIZ = U(3), BIZROOT = U(4)
 
 const st = vi.hoisted(() => ({
   user: { id: '00000000-0000-4000-8000-0000000000aa', email: 'luca@tonydurante.us', app_metadata: { role: 'team' } } as Record<string, unknown>,
-  logsAtSend: [] as number[], sendCalls: 0, sendOk: true, sendThrows: false as boolean | 'sandbox' | 'notsent', sendUnknown: false, errors: [] as string[], actionLog: [] as Array<Record<string, unknown>>, bucketUploads: [] as string[], docInserts: [] as Array<Record<string, unknown>>,
-  storeReads: 0,
+  logsAtSend: [] as number[], sendCalls: 0, sendOk: true, sendThrows: false as boolean | 'sandbox' | 'notsent' | 'timeout', sendUnknown: false, errors: [] as string[], actionLog: [] as Array<Record<string, unknown>>, bucketUploads: [] as string[], docInserts: [] as Array<Record<string, unknown>>,
+  storeReads: 0, storeEmpty: false,
   owners: {} as Record<string, unknown>, folders: {} as Record<string, unknown>, companyState: 'store' as string,
   files: new Map<string, { fileId: string; name: string }>(), rows: [] as Array<Record<string, unknown>>, saves: [] as string[], saveThrows: false, logsAtSave: [] as number[],
-  logFail: { select: false, insert: false, update: 0, updateAll: false, insertRecordAfterClaim: false } as { select: boolean; insert: boolean; update: number; updateAll: boolean; insertRecordAfterClaim: boolean }, nextLogId: 1, signedUrls: 0, removed: [] as string[], staged: new Map<string, Buffer>(),
+  logFail: { select: false, insert: false, update: 0, updateAll: false, insertRecordAfterClaim: false, insertRecordCount: 0 } as { select: boolean; insert: boolean; update: number; updateAll: boolean; insertRecordAfterClaim: boolean; insertRecordCount: number }, nextLogId: 1, signedUrls: 0, removed: [] as string[], staged: new Map<string, Buffer>(),
 }))
 vi.mock('@/lib/supabase/server', () => ({ createClient: () => ({ auth: { getUser: async () => ({ data: { user: st.user } }) } }) }))
 vi.mock('@/lib/auth', () => ({ isDashboardUser: () => true, isOwnerOnly: () => false }))
 vi.mock('@/lib/google-drive', () => ({ downloadFileBinary: async () => { throw new Error('Drive must not be used') } }))
 vi.mock('@/lib/fax/faxage', () => ({
   isProvablyNotSent: (e: unknown) => e instanceof Error && (e.name === 'FaxRefusedOutsideProductionError' || (((e as { cause?: { code?: string } }).cause?.code) === 'ENOTFOUND')),
-  sendFax: async () => { if (st.sendThrows === 'sandbox') { const e = new Error('Fax sending is blocked outside production'); e.name = 'FaxRefusedOutsideProductionError'; throw e } if (st.sendThrows === 'notsent') { throw Object.assign(new Error('fetch failed'), { cause: { code: 'ENOTFOUND' } }) } if (st.sendThrows) throw new Error('socket hang up'); st.logsAtSend.push(st.actionLog.length); st.sendCalls++; if (st.sendUnknown) return { ok: false, outcome: 'unknown', jobId: null, raw: '502 Bad Gateway' }; return st.sendOk ? { ok: true, outcome: 'accepted', jobId: 'J1', raw: 'ok' } : { ok: false, outcome: 'refused', jobId: null, raw: 'ERR99 bad' } },
-  isValidFaxNo: (x: string) => String(x).replace(/\D/g, '').length >= 10, normalizeFaxNo: (x: string) => x, DEFAULT_IRS_FAX_NUMBER: '1', stripBase64Prefix: (x: string) => x,
+  sendFax: async () => { if (st.sendThrows === 'sandbox') { const e = new Error('Fax sending is blocked outside production'); e.name = 'FaxRefusedOutsideProductionError'; throw e } if (st.sendThrows === 'timeout') { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError') } if (st.sendThrows === 'notsent') { throw Object.assign(new Error('fetch failed'), { cause: { code: 'ENOTFOUND' } }) } if (st.sendThrows) throw new Error('socket hang up'); st.logsAtSend.push(st.actionLog.length); st.sendCalls++; if (st.sendUnknown) return { ok: false, outcome: 'unknown', jobId: null, raw: '502 Bad Gateway' }; return st.sendOk ? { ok: true, outcome: 'accepted', jobId: 'J1', raw: 'ok' } : { ok: false, outcome: 'refused', jobId: null, raw: 'ERR99 bad' } },
+  isValidFaxNo: (x: string) => String(x).replace(/\D/g, '').length >= 10, normalizeFaxNo: (x: string) => x, DEFAULT_IRS_FAX_NUMBER: '1', stripBase64Prefix: (b: string) => { if (!b) return ''; if (b.startsWith('data:')) { const c = b.indexOf(','); if (c !== -1) return b.slice(c + 1) } return b },
 }))
 vi.mock('@/lib/crm-store/document-pointer', () => ({
   parseStorePointer: (p: string) => (p.startsWith('store:') ? p.slice(6) : null), staffOnlyStorePointers: async () => new Set(),
-  readStoreFile: async () => { st.storeReads++; return { bytes: Buffer.from('%PDF stored'), name: 'SS-4 package.pdf' } },
+  readStoreFile: async () => { st.storeReads++; return { bytes: st.storeEmpty ? Buffer.alloc(0) : Buffer.from('%PDF stored'), name: 'SS-4 package.pdf' } },
 }))
 vi.mock('@/lib/system-errors', () => ({ reportSystemError: async (e: { message: string }) => { st.errors.push(e.message) } }))
 vi.mock('@/lib/crm-store/save-destination', async (orig) => {
@@ -86,6 +86,7 @@ vi.mock('@/lib/supabase-admin', () => {
       if (table === 'documents') { st.docInserts.push(row) }
       if (table === 'action_log') {
         if (st.logFail.insert || (st.logFail.insertRecordAfterClaim && row.action_type === 'fax_sent')) { c.__insertError = true; return c }
+        if (st.logFail.insertRecordCount > 0 && row.action_type === 'fax_sent') { st.logFail.insertRecordCount--; c.__insertError = true; return c }
         const r = { ...row, id: `log-${st.nextLogId++}`, created_at: new Date().toISOString() }
         st.actionLog.push(r); c.__inserted = r
       } else c.__inserted = { id: 'bucket-doc' }
@@ -129,7 +130,7 @@ const send = async (extra: Record<string, unknown> = {}) => {
 beforeEach(() => {
   st.user = { id: '00000000-0000-4000-8000-0000000000aa', email: 'luca@tonydurante.us', app_metadata: { role: 'team' } }
   st.sendCalls = 0; st.logsAtSend.length = 0; st.sendOk = true; st.sendThrows = false; st.sendUnknown = false; st.errors.length = 0; st.actionLog.length = 0; st.bucketUploads.length = 0; st.docInserts.length = 0; st.storeReads = 0
-  st.companyState = 'store'; st.files.clear(); st.rows.length = 0; st.saves.length = 0; st.saveThrows = false; st.logsAtSave.length = 0; st.logFail = { select: false, insert: false, update: 0, updateAll: false, insertRecordAfterClaim: false }; st.nextLogId = 1; st.signedUrls = 0; st.removed.length = 0; st.staged.clear()
+  st.companyState = 'store'; st.files.clear(); st.rows.length = 0; st.saves.length = 0; st.saveThrows = false; st.logsAtSave.length = 0; st.logFail = { select: false, insert: false, update: 0, updateAll: false, insertRecordAfterClaim: false, insertRecordCount: 0 }; st.storeEmpty = false; st.nextLogId = 1; st.signedUrls = 0; st.removed.length = 0; st.staged.clear()
   st.owners = {
     [OWNER]: { id: OWNER, kind: 'company', study_only: false, account_id: 'acc-1', contact_id: null, service_delivery_id: null },
     [BIZ]: { id: BIZ, kind: 'business', study_only: false, account_id: null, contact_id: null, service_delivery_id: null },
@@ -524,5 +525,37 @@ describe('/api/tools/fax/send — round 4', () => {
     await send({ save_choice: saveChoice(), send_id: SEND_ID })
     expect(st.actionLog.filter((x) => x.action_type === 'fax_claim')).toHaveLength(0)
     expect(st.actionLog.filter((x) => x.action_type === 'fax_sent')).toHaveLength(1)
+  })
+})
+
+describe('/api/tools/fax/send — final bug-hunt', () => {
+  it('N1: the first history write fails completely, the second works — no fax_claim row is left, the warning is cleared', async () => {
+    st.logFail.update = 2; st.logFail.insertRecordCount = 2
+    const r = await send({ save_choice: saveChoice(), send_id: SEND_ID })
+    expect(r.body).toMatchObject({ success: true, fax_sent: true, history_error: null })
+    expect(st.actionLog.filter((x) => x.action_type === 'fax_claim')).toHaveLength(0)
+    expect(st.actionLog.filter((x) => x.action_type === 'fax_sent')).toHaveLength(1)
+    expect(st.actionLog[0].details).toMatchObject({ filing_status: 'done' })
+  })
+  it('N2: an EMPTY file is refused for every source, with a plain message, before anything is claimed or sent', async () => {
+    const empty = 'data:application/pdf;base64,'
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['inline upload', { file_base64: empty, save_choice: saveChoice() }],
+      ['inline upload (blank base64 after the prefix)', { file_base64: 'data:application/pdf;base64,   ', save_choice: saveChoice() }],
+      ['"Fax this file"', { file_base64: empty, already_stored: true }],
+      ['a stored document', { document_id: 'stored-doc', file_base64: undefined, file_name: undefined }],
+    ]
+    for (const [name, extra] of cases) {
+      st.storeEmpty = name === 'a stored document'
+      const r = await send(extra)
+      expect(r.status, name).toBe(400); expect(r.body.error, name).toMatch(/empty \(0 bytes\)/)
+      expect(st.sendCalls, name).toBe(0); expect(st.actionLog, name).toEqual([])
+    }
+  })
+  it('N11: a REAL timeout (TimeoutError from the abort signal) is an UNKNOWN outcome: outcome_unknown, the claim stays', async () => {
+    st.sendThrows = 'timeout'
+    const r = await send({ save_choice: saveChoice(), send_id: SEND_ID })
+    expect(r.status).toBe(502); expect(r.body.outcome_unknown).toBe(true); expect(r.body.error).toMatch(/not known whether the fax went out/)
+    expect(st.actionLog.map((x) => x.action_type)).toEqual(['fax_claim'])
   })
 })

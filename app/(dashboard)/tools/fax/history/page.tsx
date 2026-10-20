@@ -20,19 +20,23 @@ export default async function FaxHistoryPage() {
   // from an uploaded file. It is NULL only for legacy uploads sent before that
   // change, which have no stored file to link to.
   // Unconfirmed sends are read APART from the 200 newest sent faxes, so they can never fall out of view: they are shown FIRST.
-  const { data: claims } = await supabaseAdmin
+  const { data: claims, error: claimsError } = await supabaseAdmin
     .from('action_log')
     .select('id, created_at, summary, details, record_id, action_type')
     .eq('action_type', 'fax_claim')   // a send that was never confirmed as sent: shown as such, never as sent
     .order('created_at', { ascending: false })
     .limit(100)
-  const { data: sent } = await supabaseAdmin
+  const { data: sent, error: sentError } = await supabaseAdmin
     .from('action_log')
     .select('id, created_at, summary, details, record_id, action_type')
     .eq('action_type', 'fax_sent')
     .order('created_at', { ascending: false })
     .limit(200)
   const logs = [...(claims ?? []), ...(sent ?? [])]
+  // a failed read is SAID, never shown as "no faxes have been sent"
+  const loadError = claimsError || sentError
+    ? `${claimsError ? 'The list of unconfirmed sends' : 'The list of sent faxes'} could not be loaded. What is shown below may be incomplete. Reload the page; if it keeps happening, check Faxage directly.`
+    : null
 
   const rows: FaxHistoryRow[] = (logs ?? []).map((l) => {
     const d = (l.details ?? {}) as Record<string, unknown>
@@ -92,7 +96,8 @@ export default async function FaxHistoryPage() {
         </Link>
       </div>
 
-      <FaxHistoryTable rows={rows} />
+      {loadError && <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{loadError}</p>}
+      {!(loadError && rows.length === 0) && <FaxHistoryTable rows={rows} />}
     </div>
   )
 }

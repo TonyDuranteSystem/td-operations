@@ -95,6 +95,21 @@ export function Ss4FaxPanel({ serviceDeliveryId }: { serviceDeliveryId: string }
     if (!state?.package) return
     setSending(true)
     try {
+      // A confirmed RE-send is checked against the flow's latest fax RIGHT NOW: the panel may be stale (a colleague, another tab, a send that
+      // finished in between). If something newer completed, nothing is sent and the panel warns again.
+      if (confirmResend) {
+        const chk = await fetch(`/api/flows/${serviceDeliveryId}/ss4-fax`, { cache: 'no-store' })
+        const latest = (await chk.json().catch(() => null)) as FaxState | null
+        if (!chk.ok || !latest || !(latest as { success?: boolean }).success) throw new Error('Could not re-check this flow before sending again. The fax was NOT sent. Please try again.')
+        const before = state.already_faxed
+        const now = latest.already_faxed
+        if (now && (!before || now.at !== before.at || now.job_id !== before.job_id || !!now.unconfirmed !== !!before.unconfirmed)) {
+          setState((s) => (s ? { ...s, already_faxed: now } : s))
+          setConfirming(false)
+          toast.warning(now.unconfirmed ? 'A send for this flow was started in the meantime and is not confirmed. Check Faxage first. This fax was NOT sent.' : 'This flow was faxed again in the meantime. Check it before sending once more. This fax was NOT sent.')
+          return
+        }
+      }
       let res: Response
       try {
         res = await fetch('/api/tools/fax/send', {

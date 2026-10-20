@@ -16,11 +16,12 @@
  */
 
 /** Pure: the file name as lowercase words separated by single spaces (accents removed; also splits camelCase, ACRONYMName and letter↔digit). */
-export function normalizeFaxName(fileName: string): string {
+export function normalizeFaxName(fileName: string, opts: { acronymSplit?: boolean } = {}): string {
+  const acronymSplit = opts.acronymSplit !== false
   return fileName
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")        // "Identità" → "Identita"
     .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")                   // "ITINRossi" → "ITIN Rossi"
+    .replace(acronymSplit ? /([A-Z]+)([A-Z][a-z])/g : /(?!)/g, "$1 $2")   // "ITINRossi" → "ITIN Rossi" (off for the glued forms: "IDfront" must stay one word)
     .replace(/([A-Za-z])(\d)/g, "$1 $2")
     .replace(/(\d)([A-Za-z])/g, "$1 $2")
     .replace(/[^A-Za-z0-9]+/g, " ")
@@ -41,8 +42,22 @@ const IDENTITY = [
   "permesso soggiorno", "carta soggiorno", "dni", "cedula", "pasaporte", "passeport", "licencia de conducir", "licencia conducir", "permis de conduire",
   "birth cert[a-z]*", "itin", "ssn", "social security", "proof of address", "utility bill", "w 7", "i 94", "w 8 ben", "8843",
 ]
-/** Long words that also count when GLUED to other text in lower case ("rossipassport.pdf", "cartaidentita.pdf"): matched on the name without spaces. */
-const GLUED_IDENTITY = /(passport|passaporto|pasaporte|passaporte|passeport|identita|patente|soggiorno|codicefiscale|tesserasanitaria|greencard|driverlicen|drivinglicen|idfront|idback|idcard|idcopy|idscan|ssncard|ssnscan|ssncopy)/
+/**
+ * Words that also count when GLUED to other text in lower case — "rossipassport", "cartaidentita", "rossipatente", "idfront". Matched PER WORD
+ * (never across the joined name: "Paid copy", "Valid copy", "Void card", "Hybrid card" must not look like "idcopy" / "idcard") and only where the
+ * word sits at the START or END of a token ("patented" is not "patente"; "rossipatente" is).
+ */
+const GLUED_ANYWHERE = ['passport', 'passaporto', 'pasaporte', 'passaporte', 'passeport', 'identita', 'soggiorno', 'codicefiscale', 'tesserasanitaria', 'greencard', 'driverlicen', 'drivinglicen']
+const GLUED_SUFFIX = ['patente']
+const GLUED_PREFIX = ['idfront', 'idback', 'idcard', 'idcopy', 'idscan', 'ssncard', 'ssnscan', 'ssncopy']
+export function gluedIdentityIn(normalized: string): boolean {
+  for (const tok of normalized.split(' ').filter(Boolean)) {
+    if (GLUED_ANYWHERE.some((w) => tok.startsWith(w) || tok.endsWith(w))) return true
+    if (GLUED_SUFFIX.some((w) => tok.endsWith(w))) return true
+    if (GLUED_PREFIX.some((w) => tok.startsWith(w))) return true
+  }
+  return false
+}
 
 /**
  * The SHORT ambiguous words. "ID", "DL", "CI", "CIE", "visa" and "license" are also business words (Invoice ID, DL Services, CI Report,
@@ -52,12 +67,12 @@ const GLUED_IDENTITY = /(passport|passaporto|pasaporte|passaporte|passeport|iden
  *    word — "Rossi_ID", "ID_Rossi", "DL_Rossi", "CI_Rossi", "CIE_Rossi", "Rossi_visa", "visa", "Rossi_license".
  * Never after Invoice / Order / Case / File / Member / Client / User / Customer / Tax / Employer …
  */
-const LONE_WORDS = new Set(['id', 'dl', 'ci', 'cie', 'visa', 'license', 'licence'])
-const SCAN_WORDS = new Set(['front', 'back', 'scan', 'scans', 'scanned', 'photo', 'picture', 'copy', 'image', 'selfie', 'jpg', 'jpeg', 'png'])
+const LONE_WORDS = new Set(['id', 'ids', 'dl', 'ci', 'cie', 'visa', 'license', 'licence'])
+const SCAN_WORDS = new Set(['front', 'back', 'scan', 'scans', 'scanned', 'photo', 'picture', 'copy', 'image', 'selfie', 'jpg', 'jpeg', 'png', 'document', 'documents', 'doc'])
 const BUSINESS_WORDS = new Set([
   'services', 'service', 'report', 'reports', 'statement', 'statements', 'payment', 'payments', 'card', 'cards', 'inc', 'llc', 'corp', 'ltd', 'co', 'company',
   'tax', 'employer', 'ein', 'invoice', 'order', 'case', 'file', 'member', 'client', 'user', 'customer', 'account', 'transaction', 'reference', 'policy', 'project',
-  'ticket', 'booking', 'tracking', 'session', 'device', 'network', 'document', 'record', 'batch', 'job', 'fee', 'fees', 'charge', 'charges', 'receipt', 'receipts', 'bank',
+  'ticket', 'booking', 'tracking', 'session', 'device', 'network', 'record', 'batch', 'job', 'fee', 'fees', 'charge', 'charges', 'receipt', 'receipts', 'bank',
   'business', 'software', 'agreement', 'renewal', 'application', 'professional', 'liquor', 'contractor', 'permit', 'fees',
 ])
 const FILE_ENDINGS = new Set(['pdf', 'png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'webp', 'bmp', 'heic', 'doc', 'docx'])
@@ -66,13 +81,17 @@ const FILE_ENDINGS = new Set(['pdf', 'png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif',
 export function loneIdentityWordIn(normalized: string): boolean {
   const tokens = normalized.split(' ').filter(Boolean)
   while (tokens.length > 1 && FILE_ENDINGS.has(tokens[tokens.length - 1])) tokens.pop()
-  while (tokens.length > 1 && /^\d+$/.test(tokens[tokens.length - 1])) tokens.pop()
-  for (let i = 0; i < tokens.length; i++) {
-    if (!LONE_WORDS.has(tokens[i])) continue
-    const before = tokens[i - 1], after = tokens[i + 1]
+  // numbers and years carry no meaning here ("Rossi_ID_2025_scan" is "Rossi ID scan")
+  const words = tokens.filter((t) => !/^\d+$/.test(t))
+  if (words.length === 0) return false
+  for (let i = 0; i < words.length; i++) {
+    if (!LONE_WORDS.has(words[i])) continue
+    const before = words[i - 1], after = words[i + 1]
     if ((before && BUSINESS_WORDS.has(before)) || (after && BUSINESS_WORDS.has(after))) continue
     if ((before && SCAN_WORDS.has(before)) || (after && SCAN_WORDS.has(after))) return true
-    if (i === 0 || i === tokens.length - 1) return true
+    if (i === 0 || i === words.length - 1) return true
+    // plain words on BOTH sides ("Maria_ID_Rossi"): a name around it — identity (a false block only makes staff pick another place)
+    if (before && after) return true
   }
   return false
 }
@@ -88,7 +107,9 @@ export type PersonalKind = "identity" | "form" | null
 /** Pure: is this file name a person's own paper? "identity" = never in client storage; "form" = saved, but kept off the company's Documents tab. */
 export function personalKind(fileName: string): PersonalKind {
   const n = normalizeFaxName(fileName)
-  if (IDENTITY_RE.test(n) || GLUED_IDENTITY.test(n.replace(/ /g, "")) || loneIdentityWordIn(n)) return "identity"
+  // the second reading keeps an acronym glued to a lower-case word in one piece ("IDs", "IDfront") — both readings are checked
+  const plain = normalizeFaxName(fileName, { acronymSplit: false })
+  if (IDENTITY_RE.test(n) || gluedIdentityIn(n) || gluedIdentityIn(plain) || loneIdentityWordIn(n) || loneIdentityWordIn(plain)) return "identity"
   if (FORM_RE.test(n)) return "form"
   return null
 }

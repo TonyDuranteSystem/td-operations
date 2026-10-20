@@ -17,19 +17,24 @@ export function staleStagedPaths(objects: StagedObject[], now: Date = new Date()
   for (const o of objects) {
     const path = `${FAX_STAGING_PREFIX}${o.name}`
     if (!isFaxStagingPath(path)) continue
-    const t = Date.parse(o.created_at ?? o.updated_at ?? '')
-    // an object with no readable time is treated as old: it can only be an orphan
-    if (Number.isNaN(t) || t < limit) out.push(path)
+    // an object with NO readable time is left alone: it may be a folder placeholder or a file being written right now
+    const t = Date.parse(o.created_at ?? '')
+    if (!Number.isNaN(t) && t < limit) out.push(path)
   }
   return out
 }
 
-export async function sweepFaxStaging(now: Date = new Date()): Promise<{ checked: number; deleted: number; error: string | null }> {
-  const { supabaseAdmin } = await import('@/lib/supabase-admin')
-  const bucket = supabaseAdmin.storage.from(FAX_STAGING_BUCKET)
+export interface StagingBucket {
+  list(path: string, opts: { limit: number; sortBy: { column: string; order: string } }): Promise<{ data: StagedObject[] | null; error: { message: string } | null }>
+  remove(paths: string[]): Promise<{ error: { message: string } | null }>
+}
+
+/** `bucket` is injectable for tests; the default is the private staging bucket. */
+export async function sweepFaxStaging(now: Date = new Date(), bucketOverride?: StagingBucket): Promise<{ checked: number; deleted: number; error: string | null }> {
+  const bucket = bucketOverride ?? ((await import('@/lib/supabase-admin')).supabaseAdmin.storage.from(FAX_STAGING_BUCKET) as unknown as StagingBucket)
   const { data, error } = await bucket.list(FAX_STAGING_PREFIX.replace(/\/$/, ''), { limit: 1000, sortBy: { column: 'created_at', order: 'asc' } })
   if (error) return { checked: 0, deleted: 0, error: error.message }
-  const stale = staleStagedPaths((data ?? []) as StagedObject[], now)
+  const stale = staleStagedPaths(data ?? [], now)
   if (stale.length === 0) return { checked: (data ?? []).length, deleted: 0, error: null }
   const { error: rmErr } = await bucket.remove(stale)
   return { checked: (data ?? []).length, deleted: rmErr ? 0 : stale.length, error: rmErr ? rmErr.message : null }
