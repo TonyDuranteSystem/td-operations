@@ -49,6 +49,11 @@ const nextConfig = {
       ],
     },
   },
+  // Skip build-trace collection on GitHub Actions only (~4 min of the CI build: two routes
+  // above glob the whole source tree). The trace output only matters when packaging a deploy,
+  // which CI does not do — Vercel builds and traces the full app itself. GITHUB_ACTIONS is set
+  // by GitHub automatically and never on Vercel or a dev machine, so this cannot leak.
+  outputFileTracing: process.env.GITHUB_ACTIONS !== 'true',
   eslint: {
     // Warnings in MCP tool files should not block production builds.
     // ESLint still runs in pre-commit (lint-staged) and pre-push hooks.
