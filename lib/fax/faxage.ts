@@ -113,13 +113,13 @@ export function parseFaxageResponse(text: string, httpOk: boolean): FaxageResult
   // "Error 502 - Bad Gateway", "Error: upstream timed out" or "error" somewhere inside an answer are NOT a refusal: a gateway talks that
   // way after the job may have been queued, and a false refusal would release the claim and send the fax TWICE.
   const refused = short && /^err\s*\d{1,3}\b/.test(lower)
-  // ACCEPTED only when the answer is short and plain and gives a job id: labelled ("JobNum: 123", "Job ID 123", "jobid=123"), or the whole
-  // body is essentially the number itself in the shape real ids have (8–12 digits, e.g. 1122910119). Anything else — maintenance or login
-  // HTML with a number in it, an empty body, a non-2xx answer, "invalid"/"fail"/"denied" words — proves nothing.
-  const errWord = lower.includes('error') || lower.includes('invalid') || lower.includes('fail') || lower.includes('denied')
+  // ACCEPTED only when the answer is a short plain 2xx body that gives a job id: LABELLED at the start ("JOBID: 123 queued for …",
+  // "Success JobNum: 123", "Job ID 123", "jobid=123" — words like "fail" or "invalid" later in the sentence do not matter, a company may be
+  // called Failla), or the whole body is essentially the number itself in the shape real ids have (8–12 digits, e.g. 1122910119).
+  // Anything else — maintenance or login HTML with a number in it, an empty body, a non-2xx answer — proves nothing.
   let jobId: string | null = null
-  if (!refused && httpOk && short && !errWord) {
-    const labelled = raw.match(/job\s*(?:num(?:ber)?|id)\s*[:#=]?\s*(\d+)/i)
+  if (!refused && httpOk && short) {
+    const labelled = raw.match(/^(?:(?:success|ok|queued|submitted)\W*)?job\s*(?:num(?:ber)?|id)\s*[:#=]?\s*(\d+)/i)
     if (labelled) jobId = labelled[1]
     else {
       const bare = raw.match(/^\s*(\d{8,12})\s*$/)

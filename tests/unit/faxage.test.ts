@@ -118,9 +118,25 @@ describe('parseFaxageResponse — a refusal only on Faxage\'s own ERR token, a s
     }
   })
   it('a 2xx body that merely CONTAINS error / invalid / fail / denied words is NOT a refusal', () => {
-    for (const body of ['Your request had an error', 'invalid session, please log in', 'Authentication failed', 'Access denied', 'JobNum: 5 (no error)']) {
+    for (const body of ['Your request had an error', 'invalid session, please log in', 'Authentication failed', 'Access denied']) {
       expect(parseFaxageResponse(body, true).outcome, body).toBe('unknown')
     }
+  })
+  it('a LABELLED job id at the start of a plain 2xx answer is accepted even when later words look like errors (a company may be called Failla)', () => {
+    expect(parseFaxageResponse('JOBID: 7771234 queued for Failla Accounting', true)).toMatchObject({ outcome: 'accepted', jobId: '7771234' })
+    expect(parseFaxageResponse('JOBID: 7771235 (invalid cover page ignored)', true)).toMatchObject({ outcome: 'accepted', jobId: '7771235' })
+    expect(parseFaxageResponse('JobNum: 5 (no error)', true)).toMatchObject({ outcome: 'accepted', jobId: '5' })
+  })
+  it('an HTML body is never Faxage\'s own refusal, and never a success', () => {
+    for (const body of ['<html><body>Error</body></html>', '<html><h1>ERR02</h1> JobNum: 5</html>', '<!doctype html><title>Error 500</title>']) {
+      expect(parseFaxageResponse(body, true).outcome, body).toBe('unknown')
+      expect(parseFaxageResponse(body, false).outcome, body + ' (non-2xx)').toBe('unknown')
+    }
+  })
+  it('the real refusals still release: ERR02 on a 200, ERR12 on an HTTP 500', () => {
+    expect(parseFaxageResponse('ERR02: Login incorrect', true).outcome).toBe('refused')
+    expect(parseFaxageResponse('ERR12', false).outcome).toBe('refused')
+    expect(parseFaxageResponse('ERR12', false).ok).toBe(false)
   })
   it('a 2xx page that is not a plain answer is never a success, even with a number in it', () => {
     expect(parseFaxageResponse('<html><body>Maintenance until 2026</body></html>', true).outcome).toBe('unknown')
