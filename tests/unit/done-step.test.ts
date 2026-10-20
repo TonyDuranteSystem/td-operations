@@ -20,7 +20,8 @@ const PROD_STEPS: Record<string, string[]> = {
   'Certificate of Incumbency': ['Requested', 'Received', 'Sent to Client'],
   'Client Onboarding': ['Data Collection', 'Review & CRM Setup', 'Post-Review & Closing'],
   'CMRA Mailing Address': ['Lease Created', 'Lease Signed', 'CMRA Active'],
-  'Company Change Name': ['Collect three company names', 'Inform Client name available', 'File the change name form', 'Ship change name form to teh SoS', 'Form Change Name received from the SoS'],
+  // 8 steps since 2026-10-19 (migration 20261019-1000-change-name-8-steps); the only done step is the new last one, "Completed".
+  'Company Change Name': ['Collect three company names', 'Check names and client confirms', 'Client signs the name-change form', 'File the form with the state', 'Waiting for the state', 'Update our records', 'Client updates the Operating Agreement', 'Completed'],
   'Company Closure': ['Data Collection', 'State Compliance Check', 'State Dissolution Filing', 'IRS Closure', 'Closing'],
   'Company Formation': ['Payment Confirmed', 'Wizard Submitted', 'Filed with State', 'Articles Received', 'SS-4 Prepared', 'SS-4 Signed', 'SS-4 Sent to IRS', 'EIN Received'],
   'Consulting Call': ['To Schedule', 'Scheduled', 'Call Done'],

@@ -34,7 +34,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
-import { hasCollectedSignatures } from '@/lib/portal/oa-regenerate-guard'
+import { hasCollectedSignatures, isNameChangeNewVersion, previousNameForNewOa, uniqueOaToken } from '@/lib/portal/oa-regenerate-guard'
 import { OA_SUPPORTED_STATES, normalizeOAState } from '@/lib/types/oa-templates'
 import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
@@ -251,7 +251,7 @@ export async function POST(request: NextRequest) {
   // inert row and now five channels point them at a dead page.
   const { data: existingOAs } = await supabaseAdmin
     .from('oa_agreements')
-    .select('id, status, signed_count')
+    .select('id, status, signed_count, company_name')
     .eq('account_id', account_id)
     .order('created_at', { ascending: false })
 
@@ -259,6 +259,12 @@ export async function POST(request: NextRequest) {
     // Guard against the NEWEST row (the one a client could be mid-signature on);
     // the sweep below then clears every sibling so no token collision survives.
     const existing = existingOAs[0]
+    // Company Change Name (step 7): the company was renamed after this agreement was fully signed. The client may then
+    // generate a NEW agreement with the new name, and the signed one is KEPT — nothing about it is deleted, voided or edited
+    // (it just stops being the newest). Derived here from the data, never from the request.
+    const isRenameNewVersion = isNameChangeNewVersion(existing, account.company_name as string)
+    // (the block below is deliberately not re-indented, to keep this change reviewable)
+    if (!isRenameNewVersion) {
     // Refuse if ANY signature has already been collected — not just when the OA
     // is fully signed. A multi-member OA stays 'partially_signed' until the LAST
     // member signs, so the old `status === 'signed'` guard let a re-generate
@@ -345,6 +351,8 @@ export async function POST(request: NextRequest) {
       }, { status: 409 })
     }
 
+    }
+
     // Sweep every OTHER row for this account too — an older sibling would collide
     // on the token and make the new agreement unreachable on every channel.
     //
@@ -386,11 +394,21 @@ export async function POST(request: NextRequest) {
       }))
     : null
 
+  // The plain token can already be taken — a renamed company whose new name makes the same slug, with the old signed agreement still
+  // in place. The token is UNIQUE and is also the storage folder name, so take a free one instead of failing (or sharing a folder).
+  const { data: takenTokens } = await supabaseAdmin.from('oa_agreements').select('token').like('token', `${token}%`)
+  const oaToken = uniqueOaToken(token, new Set((takenTokens ?? []).map(r => r.token as string)))
+
+  // A renamed company's new agreement says "formerly known as <the name on its signed one>" (frozen on the row; null for every other company).
+  const previousCompanyName = previousNameForNewOa(existingOAs ?? [], account.company_name as string)
+
   // ── 7. INSERT OA_AGREEMENTS ──
   const { data: oa, error: insertErr } = await supabaseAdmin
     .from('oa_agreements')
     .insert({
-      token,
+      token: oaToken,
+      // not in the generated types until the column reaches production (migration 20261019-1600)
+      ...(previousCompanyName ? { previous_company_name: previousCompanyName } : {}),
       account_id,
       contact_id: signerContactId,
       company_name: account.company_name,

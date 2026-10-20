@@ -205,3 +205,37 @@ describe("getWelcomeMessage", () => {
     expect(result).toBeNull()
   })
 })
+
+describe("Company Change Name welcome (dev job bb64c417, B2)", () => {
+  it("a name change maps to the company_change_name template, bilingual, with the contact and company filled in", async () => {
+    CATALOG_ROWS = [
+      {
+        slug: "company_change_name",
+        display_name: "Welcome — your company name change is being set up",
+        display_name_translations: { it: "Benvenuto — il cambio nome della tua società è in lavorazione" },
+        description: "Hi {{firstName}}, we're starting the name change for {{companyName}}.",
+        description_translations: { it: "Caro {{firstName}}, stiamo avviando il cambio nome di {{companyName}}." },
+        status: "active",
+        metadata: { priority: 45, wizard_path: "/portal" },
+      },
+    ]
+    const en = await getWelcomeMessage({ contractType: "", pipelines: ["Company Change Name"], language: "English" })
+    expect(en?.slug).toBe("company_change_name")
+    expect(en?.priority).toBe(45)
+    expect(renderTemplate(en!.body, { firstName: "Hamid", companyName: "Acme LLC" })).toBe("Hi Hamid, we're starting the name change for Acme LLC.")
+    const it = await getWelcomeMessage({ contractType: "", pipelines: ["Company Change Name"], language: "Italian" })
+    expect(it?.title).toBe("Benvenuto — il cambio nome della tua società è in lavorazione")
+  })
+
+  it("the migration adds that row without overwriting an edited one, and says what the client does first", async () => {
+    const { readFileSync } = await import("node:fs")
+    const { join } = await import("node:path")
+    const sql = readFileSync(join(process.cwd(), "scripts/migrations/20261019-1100-change-name-welcome.sql"), "utf8")
+    expect(sql).toContain("'welcome_messages', 'company_change_name'")
+    expect(sql).toContain("NOT EXISTS (SELECT 1 FROM public.catalog_entries WHERE catalog_id = 'welcome_messages' AND slug = 'company_change_name')")
+    expect(sql).toContain('"Action required"')
+    expect(sql).toContain('"Azione richiesta"')
+    expect(sql).toContain("{{firstName}}")
+    expect(sql).toContain("{{companyName}}")
+  })
+})

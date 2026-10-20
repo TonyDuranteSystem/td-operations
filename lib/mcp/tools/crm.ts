@@ -6,6 +6,7 @@
 import { syncSupabaseToAirtable } from "@/lib/sync-airtable"
 import { logAction } from "@/lib/mcp/action-log"
 import { syncPortalLoginEmail } from "@/lib/operations/portal-login-email"
+import { handNameEditProblem } from "@/lib/operations/account-name-change"
 import {
   setAccountRenewalDate,
   checkDeadlineDirectWrite,
@@ -936,6 +937,11 @@ export function registerCrmTools(server: McpServer) {
         // total failure on the second, leaving the account silently
         // half-changed (round-4 council, bug-hunter major).
         let renewalMirrorWarning = ""
+        if (table === "accounts") {
+          // a company's legal name changes only through the Change Name service (previous name + storage archive); a capitals/spacing fix is fine
+          const nameProblem = await handNameEditProblem(id, updates)
+          if (nameProblem) return { content: [{ type: "text" as const, text: `❌ ${nameProblem}` }] }
+        }
         if (table === "accounts") {
           const renewalColumns: RenewalDateColumn[] = ["ra_renewal_date", "annual_report_due_date"]
           const toApply: Array<{ column: RenewalDateColumn; value: string | null }> = []

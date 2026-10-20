@@ -404,7 +404,10 @@ export async function backupOwner(
       rootDrive = await ensureOurFolder(rootFolder.id, parent, rootFolder.name)
     }
 
-    // folders, top-down; inside an adopted root, existing sub-folders with the same name are adopted
+    // folders, top-down; inside an adopted root, existing sub-folders with the same name are adopted — EXCEPT one that another
+    // folder of this storage already owns (a Drive folder belongs to one CRM folder: UNIQUE(provider, direction, external_id)).
+    // After a name change the archived "3. Tax" keeps its adopted Drive folder, and the new "3. Tax" gets a folder of its own.
+    const claimed = new Set(Array.from(snap.backupRefs.values()).map((r) => r.external_id))
     const mirror = new Map<string, string>([[rootFolder.id, rootDrive]])
     const walk = async (folderId: string, driveParent: string, parentAdopted: boolean) => {
       const existing = parentAdopted && !fresh ? await io.childFolders(driveParent, cfg.mainDriveId) : []
@@ -423,10 +426,11 @@ export async function backupOwner(
           }
           continue
         }
-        const match = !ref ? existing.find((f) => norm(f.name) === norm(child.name)) : undefined
+        const match = !ref ? existing.find((f) => norm(f.name) === norm(child.name) && !claimed.has(f.id)) : undefined
         const id = ref?.drive_path?.adopted || match
           ? await adoptFolder(child.id, ref?.drive_path?.adopted ? ref.external_id : match!.id, driveParent)
           : await ensureOurFolder(child.id, driveParent, child.name)
+        claimed.add(id)
         mirror.set(child.id, id)
         await walk(child.id, id, !!(ref?.drive_path?.adopted || match))
       }

@@ -823,7 +823,7 @@ export async function GET(request: Request) {
       supabaseAdmin.from("accounts").select("id, drive_folder_id, portal_tier, company_name, state_of_formation, entity_type, ein_number, formation_date").eq("id", accountId).single(),
       supabaseAdmin.from("account_contacts").select("contact_id, role, contact:contacts(id, full_name, email)").eq("account_id", accountId),
       supabaseAdmin.from("service_deliveries").select("id, service_type, stage, stage_order, status").eq("account_id", accountId).eq("status", "active"),
-      supabaseAdmin.from("oa_agreements").select("id, token, status").eq("account_id", accountId).limit(1),
+      supabaseAdmin.from("oa_agreements").select("id, token, status").eq("account_id", accountId).order("created_at", { ascending: false }).limit(1),
       supabaseAdmin.from("lease_agreements").select("id, token, status, suite_number").eq("account_id", accountId).eq("contract_year", year).limit(1),
       supabaseAdmin.from("banking_submissions").select("id, token, status").eq("account_id", accountId).eq("provider", "relay").limit(1),
       supabaseAdmin.from("banking_submissions").select("id, token, status").eq("account_id", accountId).eq("provider", "payset").limit(1),

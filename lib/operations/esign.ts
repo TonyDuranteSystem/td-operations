@@ -504,6 +504,15 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
       }
     }
 
+    // 1b. A service delivery waiting on this signature moves on by itself (Company Change Name: signing → filing).
+    //     Idempotent and best-effort (lib/esign/delivery-advance.ts) — it never fails the signer's submit.
+    try {
+      const { advanceDeliveryAfterEsign } = await import("@/lib/esign/delivery-advance")
+      await advanceDeliveryAfterEsign(envelopeId)
+    } catch {
+      /* never break completion */
+    }
+
     // 2. Notify support (inline; sandbox blocks the actual send).
     try {
       let company = ""

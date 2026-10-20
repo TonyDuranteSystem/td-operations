@@ -184,6 +184,15 @@ export async function POST(req: NextRequest) {
         results.push({ step: "sd_history", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
 
+      // ─── 2b. CLOSE A COMPANY CHANGE NAME JOB (its last step is this very signature) ───
+      try {
+        const { advanceNameChangeAfterOaSigned } = await import("@/lib/oa/name-change-advance")
+        const closed = await advanceNameChangeAfterOaSigned({ accountId: oa.account_id, oaId: oa.id, signedOaName: oa.company_name })
+        if (closed.advanced) results.push({ step: "name_change_closed", status: "ok", detail: "Closed the Company Change Name job" })
+      } catch (e) {
+        results.push({ step: "name_change_closed", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+
       // ─── 3. AUTO-UPLOAD SIGNED PDF TO DRIVE ───
       try {
         // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company in storage has its OA saved there.

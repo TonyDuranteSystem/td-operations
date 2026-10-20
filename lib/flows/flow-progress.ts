@@ -18,7 +18,7 @@
  * tracker's defensive "don't guess" stance without hiding the whole flow.
  */
 
-import { actionStageConfigFor } from '@/lib/portal/action-stage-registry'
+import { actionStageConfigFor, resolveActionLink } from '@/lib/portal/action-stage-registry'
 
 export interface FlowStageRow {
   stage_name: string
@@ -29,6 +29,32 @@ export interface FlowStageRow {
    *  Optional — only some flows (e.g. ITIN) populate it. EN-only today. */
   client_description?: string | null
   icon?: string | null
+  /** The catalog's `client_visible` flag, passed ONLY for services in SERVICES_HIDING_INVISIBLE_STEPS (see
+   *  `stageClientVisibleFlag`). `false` = a bookkeeping step the client never sees in the progress list. */
+  client_visible?: boolean | null
+}
+
+/**
+ * Services whose catalog steps flagged `client_visible = false` are left out of the client's progress list.
+ * Company Change Name has a closing bookkeeping step ("Completed") that is not one of the seven steps the client
+ * is told about. The flag also exists on a step of the two renewal services, but nothing ever honoured it there;
+ * switching that on is a separate decision, so it is deliberately NOT done here.
+ */
+export const SERVICES_HIDING_INVISIBLE_STEPS: ReadonlySet<string> = new Set(['Company Change Name'])
+
+/** What to put in `FlowStageRow.client_visible` for a catalog row: the flag when this service honours it, else null. */
+export function stageClientVisibleFlag(serviceType: string | null | undefined, raw: unknown): boolean | null {
+  return serviceType && SERVICES_HIDING_INVISIBLE_STEPS.has(serviceType) && raw === false ? false : null
+}
+
+/**
+ * The current stage is a hidden closing step that sits after every visible step (a finished Company Change Name at
+ * "Completed"): the whole visible journey is done, nothing is "current". Pure.
+ */
+function isPastVisibleEnd(stages: FlowStageRow[], current: FlowStageRow | null): boolean {
+  if (!current || current.client_visible !== false) return false
+  const visible = stages.filter(s => s.client_visible !== false)
+  return visible.length > 0 && visible.every(s => s.stage_order < current.stage_order)
 }
 
 export interface FlowStep {
@@ -45,7 +71,7 @@ export interface FlowStep {
    *  flow-detail link. */
   isActionRequired: boolean
   /** Where the action-required glow links to (action-stage-registry.ts's
-   *  link, with {sd_id} interpolated), or null when not applicable. */
+   *  link, with {sd_id} / {account_id} interpolated), or null when not applicable. */
   actionHref: string | null
 }
 
@@ -93,11 +119,14 @@ export function buildJourneySteps(
   currentStageName: string | null,
   locale: 'en' | 'it',
 ): JourneyStep[] {
-  const ordered = [...stages].sort((a, b) => a.stage_order - b.stage_order)
+  const allOrdered = [...stages].sort((a, b) => a.stage_order - b.stage_order)
+  const ordered = allOrdered.filter(s => s.client_visible !== false)
 
+  // The current stage may be a hidden step — look it up in the FULL list.
   const current = currentStageName
-    ? ordered.find(s => s.stage_name === currentStageName) ?? null
+    ? allOrdered.find(s => s.stage_name === currentStageName) ?? null
     : null
+  const finished = isPastVisibleEnd(allOrdered, current)
 
   let currentIdx = -1
   if (current) {
@@ -111,13 +140,15 @@ export function buildJourneySteps(
     label: labelFor(s, locale) ?? s.stage_name,
     description: s.client_description ?? null,
     state:
-      currentIdx === -1
-        ? 'future'
-        : i < currentIdx
-          ? 'completed'
-          : i === currentIdx
-            ? 'current'
-            : 'future',
+      finished
+        ? 'completed'
+        : currentIdx === -1
+          ? 'future'
+          : i < currentIdx
+            ? 'completed'
+            : i === currentIdx
+              ? 'current'
+              : 'future',
   }))
 }
 
@@ -127,7 +158,7 @@ export function computeFlowProgress(
   locale: 'en' | 'it',
 ): FlowProgress {
   const labelled = stages
-    .filter(s => s.client_label !== null)
+    .filter(s => s.client_label !== null && s.client_visible !== false)
     .sort((a, b) => a.stage_order - b.stage_order)
 
   const totalStages = labelled.length
@@ -143,6 +174,11 @@ export function computeFlowProgress(
     : null
   if (!current) {
     return { completedStages: 0, totalStages, currentLabel: null }
+  }
+
+  // A finished job sitting on a hidden closing step: every visible step is done.
+  if (isPastVisibleEnd(stages, current)) {
+    return { completedStages: totalStages, totalStages, currentLabel: labelFor(labelled[totalStages - 1], locale) }
   }
 
   // Highest labelled stage at or below the current order = the active step.
@@ -181,9 +217,10 @@ export function buildFlowSteps(
   locale: 'en' | 'it',
   serviceType: string,
   sdId: string,
+  accountId?: string | null,
 ): FlowStep[] | null {
   const labelled = stages
-    .filter(s => s.client_label !== null)
+    .filter(s => s.client_label !== null && s.client_visible !== false)
     .sort((a, b) => a.stage_order - b.stage_order)
 
   if (labelled.length === 0) return null
@@ -191,6 +228,7 @@ export function buildFlowSteps(
   const current = currentStageName
     ? stages.find(s => s.stage_name === currentStageName) ?? null
     : null
+  const finished = isPastVisibleEnd(stages, current)
 
   let currentIdx = -1
   if (current) {
@@ -201,13 +239,15 @@ export function buildFlowSteps(
 
   return labelled.map((s, i) => {
     const state: FlowStep['state'] =
-      currentIdx === -1
-        ? 'future'
-        : i < currentIdx
-          ? 'completed'
-          : i === currentIdx
-            ? 'current'
-            : 'future'
+      finished
+        ? 'completed'
+        : currentIdx === -1
+          ? 'future'
+          : i < currentIdx
+            ? 'completed'
+            : i === currentIdx
+              ? 'current'
+              : 'future'
     const actionConfig = state === 'current' ? actionStageConfigFor(serviceType, s.stage_name) : null
     return {
       stageName: s.stage_name,
@@ -215,7 +255,7 @@ export function buildFlowSteps(
       icon: s.icon ?? null,
       state,
       isActionRequired: actionConfig !== null,
-      actionHref: actionConfig ? actionConfig.link.replace('{sd_id}', sdId) : null,
+      actionHref: actionConfig ? resolveActionLink(actionConfig.link, { sdId, accountId }) : null,
     }
   })
 }

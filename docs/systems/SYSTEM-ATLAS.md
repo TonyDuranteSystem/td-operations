@@ -185,10 +185,10 @@ _Regenerated 2026-10-20. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-19)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-10-12)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-09-23)_
-- [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-09-11)_
+- [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-10-19)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-19)_
-- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-14)_
+- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-19)_
 - [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-10-19)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-10-19)_
@@ -228,5 +228,5 @@ _Regenerated 2026-10-20. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-10-18)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-10-01)_
 - [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-10-18)_
-- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-10-16)_
+- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-10-19)_
 <!-- /GENERATED:deep-docs -->

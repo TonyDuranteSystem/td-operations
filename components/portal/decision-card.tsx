@@ -40,6 +40,9 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
   }
   const opts = (request.options ?? {}) as Record<string, unknown>
   const message = locale === 'it' && request.message_it ? request.message_it : request.message
+  // Optional Italian title / placeholder of the request (options.title_it / placeholder_it); English otherwise.
+  const cardTitle = locale === 'it' && typeof opts.title_it === 'string' && opts.title_it ? opts.title_it : request.title
+  const inputPlaceholder = locale === 'it' && typeof opts.placeholder_it === 'string' && opts.placeholder_it ? opts.placeholder_it : ((opts.placeholder as string) || '')
   // Per-request button labels (with optional IT variants), falling back to the
   // localized defaults.
   const approveLabel = ((locale === 'it' ? (opts.approve_label_it ?? opts.approve_label) : opts.approve_label) as string | undefined) || t.yes
@@ -123,7 +126,7 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
         <HelpCircle className={`mt-0.5 h-4 w-4 shrink-0 ${isPendingActionable ? 'text-amber-500' : 'text-zinc-400'}`} />
         <div className="min-w-0 flex-1">
           {isPendingActionable && <div className="text-[11px] font-medium uppercase tracking-wide text-amber-700">{t.actionRequired}</div>}
-          <h3 className="text-lg font-bold text-zinc-900 break-words">{request.title}</h3>
+          <h3 className="text-lg font-bold text-zinc-900 break-words">{cardTitle}</h3>
           <p className="mt-1.5 text-sm text-zinc-700 whitespace-pre-wrap break-words">{message}</p>
         </div>
       </div>
@@ -233,7 +236,7 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
               <textarea
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder={(opts.placeholder as string) || ''}
+                placeholder={inputPlaceholder}
                 rows={3}
                 className="w-full rounded-md border border-zinc-300 px-2 py-1.5 text-sm"
               />

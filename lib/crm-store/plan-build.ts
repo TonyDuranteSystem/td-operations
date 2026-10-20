@@ -22,6 +22,7 @@
 import { createHash } from "crypto"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { pickKindFolder, isPlainKind, type LookupFolder } from "./folder-lookup"
 import type { ImportItem, RunView } from "./drive-import"
 import { MERGE_MAX_BYTES, mergeTooLarge, transferMode } from "./stream-import"
 
@@ -474,12 +475,13 @@ const md5Hex = (b: Buffer) => createHash("md5").update(b).digest("hex")
 const sha256Hex = (b: Buffer) => createHash("sha256").update(b).digest("hex")
 
 async function folderOfKindIn(ownerId: string, kind: string): Promise<string> {
-  const { data, error } = await db().from("store_folders").select("id, parent_id").eq("owner_id", ownerId).eq("kind", kind).is("trashed_at", null)
+  if (!isPlainKind(kind)) throw new Error(`The storage has no "${kind}" folder.`)
+  // the top folder plus every live folder of this kind; only the top folder's DIRECT child counts (folder-lookup.ts)
+  const { data, error } = await db().from("store_folders").select("id, parent_id, kind, created_at").eq("owner_id", ownerId).is("trashed_at", null).or(`parent_id.is.null,kind.eq.${kind}`)
   if (error) throw new Error(`Could not read the folders (${error.message}).`)
-  const rows = (data ?? []) as { id: string; parent_id: string | null }[]
-  const hit = rows.find((r) => r.parent_id !== null) ?? rows[0]
-  if (!hit) throw new Error(`The storage has no "${kind}" folder.`)
-  return hit.id
+  const id = pickKindFolder((data ?? []) as LookupFolder[], kind)
+  if (!id) throw new Error(`The storage has no "${kind}" folder.`)
+  return id
 }
 
 async function ownerIdOf(o: PlanItem["owner"]): Promise<string> {

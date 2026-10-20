@@ -176,6 +176,7 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     due_date: sd.due_date ?? null,
     stage_entered_at: sd.stage_entered_at ?? null,
     account_id: sd.account_id ?? '',
+    contact_id: sd.contact_id ?? null,
     contact_name: contactName,
     current_client_label: currentStageRow?.client_label ?? null,
     formation_filed_name: formationFiledName,

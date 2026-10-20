@@ -43,6 +43,11 @@ export const STAGE_COMPONENT_TYPES = [
   'irs_tracking_entry',
   'suite_panel',
   'closure_wrapup',
+  // E-sign (the esign_* engine) of a form for THIS delivery: prepare it, see its status; the delivery
+  // moves on by itself when the client has signed (lib/esign/delivery-advance.ts).
+  'esign_panel',
+  // Company Change Name, "Update our records": the one button that renames the company and moves its old folders (lib/operations/change-name-apply.ts).
+  'apply_name_panel',
 ] as const
 
 export type StageComponentType = (typeof STAGE_COMPONENT_TYPES)[number]

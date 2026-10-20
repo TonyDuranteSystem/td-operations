@@ -94,11 +94,11 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
       .select('id, deal_name, stage, amount, amount_currency, close_date, deal_type, deal_category, service_type, payment_status, notes, created_at, updated_at')
       .eq('account_id', params.id)
       .order('created_at', { ascending: false }),
-    // Tax Returns (matched by company_name)
+    // Tax Returns (matched by company_name, or by the account itself: a return keeps the name it was opened under after a name change)
     supabase
       .from('tax_returns')
       .select('id, company_name, client_name, return_type, tax_year, deadline, status, paid, data_received, sent_to_accountant, accountant_status, special_case, extension_filed, extension_deadline, notes, updated_at')
-      .eq('company_name', account.company_name)
+      .or(`account_id.eq.${params.id},company_name.eq."${String(account.company_name).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)
       .order('tax_year', { ascending: false }),
     // Documents
     supabase

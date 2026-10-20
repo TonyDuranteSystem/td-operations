@@ -12,8 +12,9 @@ import { syncPortalLoginEmail } from '@/lib/operations/portal-login-email'
 import { createSD } from '@/lib/operations/service-delivery'
 import { createAccount as createAccountOp, createAndLinkContact as createAndLinkContactOp } from '@/lib/operations/account'
 import { setAccountRenewalDate, type RenewalDateColumn } from '@/lib/operations/renewal-dates'
+import { handNameEditProblem } from '@/lib/operations/account-name-change'
 import { allocateCompanySuite, adminChangeCompanySuite, syncPhysicalAddressToSuite } from '@/lib/operations/suite'
-import { isOwnerOnly } from '@/lib/auth'
+import { isOwnerOnly, isStaffUser } from '@/lib/auth'
 import type { Json } from '@/lib/database.types'
 
 const RENEWAL_DATE_FIELDS = new Set<string>(['ra_renewal_date', 'annual_report_due_date'])
@@ -25,6 +26,21 @@ async function getDashboardActor(): Promise<string> {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   return `dashboard:${user?.email?.split('@')[0] ?? 'unknown'}`
+}
+
+/**
+ * "Fix spelling" next to a company's name: the person types the right name; the company and its storage top folder are renamed to
+ * match, and no previous name is recorded. (A company that really changed its name goes through the Change Name workspace.)
+ */
+export async function fixAccountNameSpelling(accountId: string, newName: string): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isStaffUser(user)) return { success: false, error: 'Not allowed.' }
+  const { fixCompanyNameSpelling } = await import('@/lib/operations/account-name-spelling')
+  const result = await fixCompanyNameSpelling({ accountId, newName, actor: await getDashboardActor() })
+  if (!result.ok) return { success: false, error: result.error }
+  revalidatePath(`/accounts/${accountId}`)
+  return { success: true }
 }
 
 export async function updateAccountField(
@@ -92,6 +108,13 @@ export async function updateAccountField(
     coercedValue = normalized
   } else {
     coercedValue = value || null
+  }
+
+  // A company's legal name changes ONLY through the Change Name service (previous name + storage archive in one step) — a hand
+  // edit of the name is refused, except a fix of capital letters / spacing (lib/operations/account-name-change.ts).
+  if (field === 'company_name') {
+    const problem = await handNameEditProblem(accountId, { company_name: coercedValue })
+    if (problem) return { success: false, error: problem }
   }
 
   // ra_renewal_date / annual_report_due_date go through setAccountRenewalDate

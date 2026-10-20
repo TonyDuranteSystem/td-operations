@@ -14,6 +14,7 @@ interface OAAgreement {
   id: string
   token: string
   company_name: string
+  previous_company_name?: string | null
   state_of_formation: string
   formation_date: string
   ein_number: string | null
@@ -657,6 +658,7 @@ function OperatingAgreementCodeContent() {
   // Generate OA sections from template
   const oaData: OAData = {
     company_name: oa.company_name,
+    previous_company_name: oa.previous_company_name || undefined,
     state_of_formation: oa.state_of_formation,
     formation_date: oa.formation_date,
     ein_number: oa.ein_number || undefined,

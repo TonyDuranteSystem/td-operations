@@ -19,6 +19,7 @@ import { logAction } from "@/lib/mcp/action-log"
 import { resolveMemberContactId, describeContactRoles } from "@/lib/members/resolve-member-contact"
 import { normalizeEmail, normalizePersonName, escapeLikePattern } from "@/lib/members/member-identity"
 import { normalizeEIN } from "@/lib/jobs/validation"
+import { handNameEditProblem } from "@/lib/operations/account-name-change"
 import type { Database } from "@/lib/database.types"
 
 // Legal suffixes stripped for near-duplicate company-name comparison only —
@@ -151,6 +152,10 @@ export async function updateAccount(
     if (!params.patch || Object.keys(params.patch).length === 0) {
       return { success: false, outcome: "error", error: "patch must contain at least one field" }
     }
+
+    // a company's legal name changes only through the Change Name service (lib/operations/account-name-change.ts)
+    const nameProblem = await handNameEditProblem(params.id, params.patch as Record<string, unknown>)
+    if (nameProblem) return { success: false, outcome: "error", error: nameProblem }
 
     const nowIso = new Date().toISOString()
     const updates: AccountUpdate = { ...params.patch, updated_at: nowIso }

@@ -121,15 +121,30 @@ export async function createDecisionRequest(params: CreateDecisionParams): Promi
 
   if (error || !data) return { ok: false, error: error?.message ?? 'Insert failed.' }
 
-  // Notify the client in the portal (non-fatal).
+  // Notify the client in the portal (non-fatal). In the client's language: Italian body for an Italian
+  // contact, and the Italian title when the request carries one (options.title_it) — the bell / push / digest
+  // email used to be English for everyone.
   try {
     const { createPortalNotification } = await import('@/lib/portal/notifications')
+    let title = params.title.trim()
+    let body = 'You have a new request from Tony Durante LLC — please review and respond.'
+    try {
+      const { data: contactRow } = await supabaseAdmin.from('contacts').select('language').eq('id', contact_id).maybeSingle()
+      const { isItalian } = await import('@/lib/locale')
+      if (isItalian(contactRow?.language)) {
+        body = 'Hai una nuova richiesta da Tony Durante LLC — controlla e rispondi.'
+        const titleIt = (params.options as { title_it?: unknown } | undefined)?.title_it
+        if (typeof titleIt === 'string' && titleIt.trim()) title = titleIt.trim()
+      }
+    } catch {
+      /* language lookup is best-effort — keep the English wording */
+    }
     await createPortalNotification({
       account_id: account_id ?? undefined,
       contact_id,
       type: 'decision',
-      title: params.title.trim(),
-      body: 'You have a new request from Tony Durante LLC — please review and respond.',
+      title,
+      body,
       link: `/portal/flows/${params.service_delivery_id}`,
     })
   } catch {

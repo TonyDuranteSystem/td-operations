@@ -886,7 +886,7 @@ export function isWithinNewBadgeWindow(createdAt: string): boolean {
 
 export async function getPortalFlows(accountId: string, locale: 'en' | 'it', contactId?: string | null): Promise<PortalFlow[]> {
   const { FLOW_TYPES, CONTACT_FLOW_TYPES, deriveFlowYear, buildFlowTopic } = await import('@/lib/flows/resolve-flows')
-  const { computeFlowProgress, buildFlowSteps } = await import('@/lib/flows/flow-progress')
+  const { computeFlowProgress, buildFlowSteps, stageClientVisibleFlag } = await import('@/lib/flows/flow-progress')
 
   // Account-scoped flows (Tax Return, State Annual Report, State RA Renewal, CMRA).
   // Skipped when there's no account (accountId === '' for no-account/ITIN-only
@@ -938,7 +938,7 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it', con
   const serviceTypes = Array.from(new Set(sds.map(s => s.service_type).filter((t): t is string => !!t)))
   const { data: stageRows } = await supabaseAdmin
     .from('pipeline_stages')
-    .select('service_type, stage_name, stage_order, client_label, client_label_it, icon')
+    .select('service_type, stage_name, stage_order, client_label, client_label_it, icon, client_visible')
     .in('service_type', serviceTypes)
 
   const stagesByType = new Map<string, FlowStageRow[]>()
@@ -951,6 +951,7 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it', con
       client_label: (r.client_label as string | null) ?? null,
       client_label_it: (r.client_label_it as string | null) ?? null,
       icon: (r.icon as string | null) ?? null,
+      client_visible: stageClientVisibleFlag(r.service_type, r.client_visible),
     })
     stagesByType.set(r.service_type, list)
   }
@@ -959,7 +960,7 @@ export async function getPortalFlows(accountId: string, locale: 'en' | 'it', con
     const serviceType = sd.service_type ?? ''
     const stages = stagesByType.get(serviceType) ?? []
     const progress = computeFlowProgress(stages, sd.stage ?? null, locale)
-    const steps = buildFlowSteps(stages, sd.stage ?? null, locale, serviceType, sd.id as string)
+    const steps = buildFlowSteps(stages, sd.stage ?? null, locale, serviceType, sd.id as string, accountId || null)
     const year = deriveFlowYear(sd)
     const title = buildFlowTopic(serviceType, year) || sd.service_name || serviceType || 'Service'
     return {
@@ -1269,20 +1270,13 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
       .select('id', { count: 'exact', head: true })
       .eq('account_id', accountId)
       .in('status', ['Pending', 'Overdue'])),
-    // Tax returns (need company_name lookup)
+    // Tax returns — matched by account, NOT by name: a renamed company keeps its old name on its returns (Company Change Name),
+    // and a name match made those returns vanish from the portal (3 production returns were already hidden this way).
     supabaseAdmin
-      .from('accounts')
-      .select('company_name')
-      .eq('id', accountId)
-      .single()
-      .then(async ({ data: acct }) => {
-        if (!acct?.company_name) return 0
-        const { count } = await supabaseAdmin
-          .from('tax_returns')
-          .select('id', { count: 'exact', head: true })
-          .eq('company_name', acct.company_name)
-        return count ?? 0
-      }),
+      .from('tax_returns')
+      .select('id', { count: 'exact', head: true })
+      .eq('account_id', accountId)
+      .then(({ count }) => count ?? 0),
     // Unsigned OA, Lease, or SS-4 agreements.
     // NOTE: this no longer gates the "Sign Documents" nav entry — that entry is
     // now tier-gated only (see portal-sidebar.tsx), because this count covered
@@ -1411,24 +1405,18 @@ export async function getUnreadChatCount(contactId: string): Promise<number> {
 }
 
 export async function getPortalTaxReturns(accountId: string) {
-  // Tax returns are matched by company_name, not account_id. We also fetch the
+  // Tax returns are matched by account_id (NOT by company name: a renamed company keeps its old name on its returns). We also fetch the
   // matching Tax Return SD's status so the portal home can show the
   // "extension filed" pause banner when the SD is on_hold (R093: status is the
   // source of truth per-account — we attach it to every tr row for
   // convenience, since there's at most one active Tax Return SD per account).
-  const { data: account } = await supabaseAdmin
-    .from('accounts')
-    .select('company_name')
-    .eq('id', accountId)
-    .single()
-
-  if (!account?.company_name) return []
+  if (!accountId) return []
 
   const [taxRes, sdRes, subRes] = await Promise.all([
     supabaseAdmin
       .from('tax_returns')
       .select('id, tax_year, return_type, status, deadline, extension_filed, extension_deadline, extension_submission_id, data_received, sent_to_accountant')
-      .eq('company_name', account.company_name)
+      .eq('account_id', accountId)
       .order('tax_year', { ascending: false })
       .limit(5),
     supabaseAdmin
@@ -1559,13 +1547,7 @@ export async function getPortalActionItems(
 ): Promise<ActionItemsResult> {
   const today = new Date().toISOString().split('T')[0]
 
-  // Look up company_name for tax_returns query (matched by name, not account_id)
-  const { data: acctForTax } = await supabaseAdmin
-    .from('accounts')
-    .select('company_name')
-    .eq('id', accountId)
-    .single()
-
+  // (the pending-tax-return lookup below matches by account_id, not company name — a renamed company keeps its old name on its returns)
   const [wizardRes, invoiceRes, oaRes, leaseRes, ss4Res, msaRes, taxRes, sigReqRes] = await Promise.all([
     // 1. In-progress wizard forms — SCOPED TO THE SELECTED ACCOUNT ONLY.
     // Per-company scoping (dev_task bb54680b): a contact-scoped wizard
@@ -1631,11 +1613,11 @@ export async function getPortalActionItems(
     // Excludes rows already "Data Received" / past-data-receipt states and
     // rows marked "TR Filed" — those are done from the client's POV so the
     // "Complete Tax Information" CTA would be stale.
-    acctForTax?.company_name
+    accountId
       ? supabaseAdmin
           .from('tax_returns')
           .select('id, tax_year, return_type, created_at, status')
-          .eq('company_name', acctForTax.company_name)
+          .eq('account_id', accountId)
           .eq('data_received', false)
           .not('status', 'in', '("TR Filed","Data Received","Sent to Accountant","Sent to India","Payment Pending")')
           .limit(5)

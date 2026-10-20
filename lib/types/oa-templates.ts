@@ -18,6 +18,8 @@ export interface OAMember {
 
 export interface OAData {
   company_name: string
+  /** The company's name before a rename (Company Change Name) — printed as "formerly known as …". Frozen on the agreement. */
+  previous_company_name?: string
   state_of_formation: string
   formation_date: string
   ein_number?: string
@@ -184,7 +186,7 @@ function generateSMLLCSections(data: OAData, state: string, stateName: string): 
       title: "Article I — Formation",
       content: `1.1 Formation. ${data.member_name} (the "Member") hereby forms a single-member limited liability company (the "Company") under the laws of the State of ${stateName}. The Company was formed by filing Articles of Organization with the ${stateName} filing office on ${data.formation_date || data.effective_date}.
 
-1.2 Name. The name of the Company is ${data.company_name}.${data.ein_number ? ` The Company's Employer Identification Number (EIN) is ${data.ein_number}.` : ""}
+1.2 Name. The name of the Company is ${data.company_name}.${data.previous_company_name ? ` The Company was formerly known as ${data.previous_company_name}.` : ""}${data.ein_number ? ` The Company's Employer Identification Number (EIN) is ${data.ein_number}.` : ""}
 
 1.3 Principal Office. The principal office of the Company shall be located at ${data.principal_address}, or at such other place as the Manager may designate from time to time.
 
@@ -290,7 +292,7 @@ function generateMMLLCSections(data: OAData, state: string, stateName: string): 
       title: "Article I — Formation",
       content: `1.1 Formation. The undersigned Members hereby form a multi-member limited liability company (the "Company") under the laws of the State of ${stateName}. The Company was formed by filing Articles of Organization with the ${stateName} filing office on ${data.formation_date || data.effective_date}.
 
-1.2 Name. The name of the Company is ${data.company_name}.${data.ein_number ? ` The Company's Employer Identification Number (EIN) is ${data.ein_number}.` : ""}
+1.2 Name. The name of the Company is ${data.company_name}.${data.previous_company_name ? ` The Company was formerly known as ${data.previous_company_name}.` : ""}${data.ein_number ? ` The Company's Employer Identification Number (EIN) is ${data.ein_number}.` : ""}
 
 1.3 Principal Office. The principal office of the Company shall be located at ${data.principal_address}, or at such other place as the Manager may designate from time to time.
 

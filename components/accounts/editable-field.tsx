@@ -18,6 +18,9 @@ interface EditableFieldProps {
   type?: 'text' | 'select' | 'date' | 'textarea'
   options?: { label: string; value: string }[]
   readOnly?: boolean
+  /** The pen is shown but LOCKED: clicking it calls `onLockedClick(lockedMessage)` instead of editing (used for the company name — see "Fix spelling"). */
+  lockedMessage?: string
+  onLockedClick?: (message: string) => void
   onSave: (value: string) => Promise<{ success: boolean; error?: string }>
   /** Override className for the display value (e.g. heading style) */
   className?: string
@@ -35,6 +38,8 @@ export function EditableField({
   type = 'text',
   options,
   readOnly = false,
+  lockedMessage,
+  onLockedClick,
   onSave,
   className,
 }: EditableFieldProps) {
@@ -96,7 +101,20 @@ export function EditableField({
               ? (options.find(o => o.value === value)?.label || value || '\u2014')
               : (value || '\u2014')}
         </span>
-        {!readOnly && (
+        {!readOnly && lockedMessage && (
+          <FastTooltip label={lockedMessage}>
+            <button
+              type="button"
+              aria-disabled="true"
+              onClick={() => onLockedClick?.(lockedMessage)}
+              className="p-1 rounded opacity-0 group-hover:opacity-50 cursor-not-allowed transition-opacity"
+              aria-label={lockedMessage}
+            >
+              <Pencil className="h-3 w-3 text-muted-foreground" />
+            </button>
+          </FastTooltip>
+        )}
+        {!readOnly && !lockedMessage && (
           <FastTooltip label={`Edit ${label}`}>
             <button
               onClick={() => setEditing(true)}

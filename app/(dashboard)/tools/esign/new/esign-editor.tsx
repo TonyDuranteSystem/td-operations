@@ -395,13 +395,17 @@ function SendConfirmDialog({ documentName, signers, companyName, onCancel, onCon
   )
 }
 
-export function EsignEditor({ initialAccount = null, initialSigner = null }: {
+export function EsignEditor({ initialAccount = null, initialSigner = null, serviceDeliveryId = null, initialDocumentName = "" }: {
   initialAccount?: { id: string; company_name: string } | null
   initialSigner?: { contact_id: string; full_name: string; email: string | null; company: string | null } | null
+  /** Set when opened from a service workspace: the envelope is linked to that delivery. */
+  serviceDeliveryId?: string | null
+  /** Pre-filled document name (the PDF's file name still fills it only when this is empty). */
+  initialDocumentName?: string
 } = {}) {
   const [file, setFile] = useState<File | null>(null)
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null)
-  const [documentName, setDocumentName] = useState("")
+  const [documentName, setDocumentName] = useState(initialDocumentName)
   const [signers, setSigners] = useState<Signer[]>(
     initialSigner
       ? [{ kind: "crm", name: initialSigner.full_name, email: initialSigner.email || "", contact_id: initialSigner.contact_id, company: initialSigner.company }]
@@ -665,6 +669,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
       const payload = {
         document_name: documentName.trim(),
         owner_account_id: account?.id ?? null,
+        service_delivery_id: serviceDeliveryId,
         routing_order: signers.length > 1 ? routingOrder : "sequential",
         expires_in_days: expiryDays,
         signers: signers.map(s => ({ name: s.name.trim(), email: s.email.trim() || null, contact_id: s.contact_id })),
@@ -722,7 +727,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
       busyRef.current = false
       setCreating(false)
     }
-  }, [file, documentName, signers, fields, account, routingOrder, expiryDays])
+  }, [file, documentName, signers, fields, account, routingOrder, expiryDays, serviceDeliveryId])
 
   if (result) {
     const sent = result.sentResult

@@ -73,6 +73,21 @@ const ACTION_STAGES: Record<string, ActionStageConfig> = {
   },
 }
 
+// Company Change Name, last client step: the state approved the name and our records are updated, so the client generates the NEW
+// Operating Agreement (it carries the new name) and signs it. The earlier signed agreement stays on file. The link carries the company
+// (`{account_id}`) so a client with several companies lands on the right one. Wording is a DRAFT until Antonio approves it.
+ACTION_STAGES['Company Change Name::Client updates the Operating Agreement'] = {
+  title: {
+    en: 'Generate your updated Operating Agreement',
+    it: 'Genera il tuo Operating Agreement aggiornato',
+  },
+  message: {
+    en: 'The state approved your new company name and we updated our records. Please open your portal, go to Generate Documents and create your updated Operating Agreement — it carries your new name — then sign it. Your previous signed agreement stays on file.',
+    it: 'Lo stato ha approvato il nuovo nome della società e abbiamo aggiornato i nostri dati. Accedi al portale, vai su Genera Documenti e crea il tuo Operating Agreement aggiornato — riporta il nuovo nome — poi firmalo. Il tuo precedente accordo firmato resta archiviato.',
+  },
+  link: '/portal/documents/generate?account={account_id}',
+}
+
 /** Config for a stage the client must act on, or null for ordinary stages. */
 export function actionStageConfigFor(
   serviceType: string | null | undefined,
@@ -80,4 +95,13 @@ export function actionStageConfigFor(
 ): ActionStageConfig | null {
   if (!serviceType || !stageName) return null
   return ACTION_STAGES[`${serviceType}::${stageName}`] ?? null
+}
+
+/**
+ * Fill the tokens of an action link: `{sd_id}` (the service delivery) and `{account_id}` (the company, so a client with several
+ * companies lands on the right one). With no company known the `?account=…` part is dropped rather than left as a literal token. Pure.
+ */
+export function resolveActionLink(link: string, ids: { sdId: string; accountId?: string | null }): string {
+  const withSd = link.replace('{sd_id}', ids.sdId)
+  return ids.accountId ? withSd.replace('{account_id}', ids.accountId) : withSd.replace(/[?&]account=\{account_id\}/, '')
 }

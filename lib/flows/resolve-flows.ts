@@ -23,6 +23,9 @@ export const FLOW_TYPES = [
   'State Annual Report',
   'State RA Renewal',
   'CMRA Mailing Address',
+  // A name change belongs to an existing company (account-scoped, a one-off — not a recurring
+  // flow): the client gets a step card + page, staff a workspace link on the company page.
+  'Company Change Name',
 ] as const
 
 /** CONTACT-scoped flow types — their SDs carry a contact_id and frequently have
@@ -34,6 +37,10 @@ export const FLOW_TYPES = [
  *  contact-scoped queries (which filter account_id IS NULL) only ever surface the
  *  in-progress one. */
 export const CONTACT_FLOW_TYPES = ['ITIN', 'Company Formation'] as const
+
+/** Flow types whose client page shows the rich per-step journey (driven by client_description)
+ *  instead of the compact stepper: the contact-scoped ones, plus Company Change Name. */
+export const JOURNEY_FLOW_TYPES = [...CONTACT_FLOW_TYPES, 'Company Change Name'] as const
 
 /** Every flow type that has a Workspace (account-scoped + contact-scoped). */
 export const ALL_FLOW_TYPES = [...FLOW_TYPES, ...CONTACT_FLOW_TYPES] as const

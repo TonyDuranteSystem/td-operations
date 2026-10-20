@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { handNameEditProblem } from '@/lib/operations/account-name-change'
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await requireStaffRoute()
@@ -35,6 +36,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const { account, contact, contacts } = await req.json()
 
   if (account && Object.keys(account).length > 0) {
+    // a company's legal name changes only through the Change Name service (lib/operations/account-name-change.ts)
+    const nameProblem = await handNameEditProblem(params.id, account)
+    if (nameProblem) return NextResponse.json({ error: nameProblem }, { status: 400 })
     const { error: accErr } = await supabaseAdmin
       .from('accounts')
       .update(account)
