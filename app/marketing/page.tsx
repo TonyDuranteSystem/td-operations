@@ -29,6 +29,9 @@ export default async function MarketingHome() {
           {hasPermission(g.ctx.permissions, 'leads.read') && (
             <Link href="/marketing/leads" className="mt-3 block rounded-lg bg-slate-900 px-4 py-3 text-center text-sm font-medium text-white">Open the leads</Link>
           )}
+          {hasPermission(g.ctx.permissions, 'team.manage') && (
+            <Link href="/marketing/team" className="block rounded-lg border px-4 py-3 text-center text-sm font-medium">Team</Link>
+          )}
           <p className="text-sm text-slate-500">More screens open soon.</p>
         </div>
       ) : (
