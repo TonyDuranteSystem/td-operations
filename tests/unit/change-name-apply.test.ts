@@ -37,9 +37,13 @@ vi.mock('@/lib/supabase-admin', () => ({
   },
 }))
 const applyMock = vi.fn()
-vi.mock('@/lib/operations/account-name-change', () => ({ applyAccountNameChange: (...a: unknown[]) => applyMock(...a) }))
+const undoMock = vi.fn()
+vi.mock('@/lib/operations/account-name-change', () => ({
+  applyAccountNameChange: (...a: unknown[]) => applyMock(...a),
+  undoAccountNameChange: (...a: unknown[]) => undoMock(...a),
+}))
 
-import { applyNameBlockers, typedNameDiffersFromFiled, getApplyNameState, applyNewName } from '@/lib/operations/change-name-apply'
+import { applyNameBlockers, typedNameDiffersFromFiled, getApplyNameState, applyNewName, undoBlocker, undoNewName, sentence } from '@/lib/operations/change-name-apply'
 
 const ready = { serviceType: 'Company Change Name', jobStatus: 'active', stage: CHANGE_NAME_STAGES.records, filedName: 'Acme Holdings', hasStampedDocument: true, openLeaseCount: 0, alreadyApplied: false }
 
@@ -131,7 +135,7 @@ describe('applyNewName', () => {
 
   it('the database refusing (case-only change, storage in an unexpected shape, an upload running…) comes back as a plain message', async () => {
     applyMock.mockRejectedValue(new Error('the new name differs only by capital letters or spacing'))
-    expect(await go()).toMatchObject({ ok: false, error: 'the new name differs only by capital letters or spacing' })
+    expect(await go()).toMatchObject({ ok: false, error: 'The new name differs only by capital letters or spacing.' })
   })
 
   it('a company renamed by someone else meanwhile is a conflict, not an overwrite', async () => {
@@ -166,3 +170,85 @@ describe('wiring', () => {
     expect(q.match(/\.from\('tax_returns'\)[\s\S]{0,260}\.eq\('account_id', accountId\)/g)?.length).toBeGreaterThanOrEqual(3)
   })
 })
+
+describe('undoBlocker', () => {
+  it('allows an applied change while the job is on the records step', () => {
+    expect(undoBlocker({ serviceType: 'Company Change Name', stage: CHANGE_NAME_STAGES.records, applied: true })).toBeNull()
+  })
+  it('refuses when nothing was applied, when the job moved on, or for another service — with a plain reason', () => {
+    expect(undoBlocker({ serviceType: 'Company Change Name', stage: CHANGE_NAME_STAGES.records, applied: false })).toMatch(/no name change to undo/)
+    expect(undoBlocker({ serviceType: 'Company Change Name', stage: CHANGE_NAME_STAGES.oa, applied: true })).toMatch(/Move it back/)
+    expect(undoBlocker({ serviceType: 'Company Formation', stage: CHANGE_NAME_STAGES.records, applied: true })).toMatch(/not a Company Change Name/)
+  })
+})
+
+describe('sentence (the database refuses in lower-case fragments; staff read them as sentences)', () => {
+  it('capitalises the first letter and ends with a full stop, once', () => {
+    expect(sentence('the new folders already hold files')).toBe('The new folders already hold files.')
+    expect(sentence('Already a sentence.')).toBe('Already a sentence.')
+    expect(sentence('  is this ok?  ')).toBe('Is this ok?')
+    expect(sentence('')).toBe('')
+  })
+})
+
+describe('undoNewName', () => {
+  const applied = [{ type: 'change', change_id: 'sd1', old_name: 'Old Name LLC', new_name: 'Acme Holdings LLC' }]
+  beforeEach(() => {
+    sd = { id: 'sd1', service_type: 'Company Change Name', status: 'active', stage: CHANGE_NAME_STAGES.records, account_id: 'a1', name_checks: [{ name: 'Acme Holdings', status: 'filed', source: 'wizard', updated_at: null }] }
+    account = { id: 'a1', company_name: 'Acme Holdings LLC', name_history: applied, notes: 'earlier' }
+    docCount = 1
+    leaseCount = 0
+    noteUpdates = []
+    undoMock.mockReset()
+    undoMock.mockResolvedValue({ status: 'undone', account_id: 'a1', restored_name: 'Old Name LLC', storage: { status: 'undone' } })
+  })
+  const go = () => undoNewName({ sdId: 'sd1', actorId: 'u1', actorLabel: 'Luca' })
+
+  it('undoes THIS job\'s change through the database function (the job id is the change id) and notes it on the company', async () => {
+    const r = await go()
+    expect(r).toEqual({ ok: true, restoredName: 'Old Name LLC', alreadyUndone: false })
+    expect(undoMock).toHaveBeenCalledWith({ accountId: 'a1', changeId: 'sd1', actor: 'u1' })
+    expect(String(noteUpdates[0].notes)).toContain('earlier')
+    expect(String(noteUpdates[0].notes)).toContain('Name change undone: the company is "Old Name LLC" again')
+  })
+  it('refuses before touching anything when nothing was applied or the job moved on', async () => {
+    account = { ...(account as object), name_history: [] }
+    expect((await go()).error).toMatch(/no name change to undo/)
+    account = { ...(account as object), name_history: applied }
+    sd = { ...(sd as object), stage: CHANGE_NAME_STAGES.oa }
+    expect((await go()).error).toMatch(/Move it back/)
+    expect(undoMock).not.toHaveBeenCalled()
+  })
+  it('passes on the database refusal in plain words (new folders already hold files, a later change exists, …)', async () => {
+    undoMock.mockRejectedValue(new Error('the new folders already hold files or folders — the name change can no longer be undone'))
+    expect(await go()).toEqual({ ok: false, error: 'The new folders already hold files or folders — the name change can no longer be undone.' })
+    expect(noteUpdates).toHaveLength(0)
+  })
+  it('a company renamed again meanwhile is a conflict, not an overwrite', async () => {
+    undoMock.mockResolvedValue({ status: 'conflict', account_id: 'a1', current_name: 'Third Name LLC' })
+    expect((await go()).error).toMatch(/Third Name LLC/)
+    expect(noteUpdates).toHaveLength(0)
+  })
+  it('a second click after it was undone changes nothing and writes no second note', async () => {
+    account = { ...(account as object), company_name: 'Old Name LLC', name_history: [...applied, { type: 'undo', change_id: 'sd1' }] }
+    expect((await go()).error).toMatch(/no name change to undo/)
+    undoMock.mockResolvedValue({ status: 'already_undone', account_id: 'a1' })
+    account = { ...(account as object), name_history: applied }
+    const r = await go()
+    expect(r).toMatchObject({ ok: true, alreadyUndone: true })
+    expect(noteUpdates).toHaveLength(0)
+  })
+})
+
+describe('undo wiring', () => {
+  it('the route is staff-only, the panel has the Undo button with its own confirmation', () => {
+    const route = read('app/api/flows/[id]/undo-new-name/route.ts')
+    expect(route).toContain('requireStaffRoute()')
+    expect(route).toContain('actorId: user.id')
+    const panel = read('components/flows/apply-name-panel.tsx')
+    expect(panel).toContain('Undo name change')
+    expect(panel).toContain('/undo-new-name')
+    expect(panel).toContain('Yes, undo it')
+  })
+})
+

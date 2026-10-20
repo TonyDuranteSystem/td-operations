@@ -16,7 +16,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { CHANGE_NAME_STAGES } from '@/lib/flows/change-name-stages'
 import { nameDedupeKey, type NameCheck } from '@/lib/flows/name-checks'
-import { applyAccountNameChange } from '@/lib/operations/account-name-change'
+import { applyAccountNameChange, undoAccountNameChange } from '@/lib/operations/account-name-change'
 
 export const OPEN_LEASE_STATUSES = ['draft', 'sent', 'viewed'] as const
 
@@ -163,7 +163,7 @@ export async function applyNewName(p: { sdId: string; typedName: string; confirm
   try {
     result = await applyAccountNameChange({ accountId: loaded.sd.account_id, changeId: p.sdId, newName: typed, expectedOldName: state.currentName, actor: p.actorId })
   } catch (err) {
-    return { ok: false, error: err instanceof Error && err.message ? err.message : 'The name change could not be made.' }
+    return { ok: false, error: sentence(err instanceof Error && err.message ? err.message : 'The name change could not be made.') }
   }
   if (result.status === 'conflict') {
     return { ok: false, error: `The company's name is now "${result.current_name}" — it changed since this page loaded. Reload and check.` }
@@ -178,16 +178,74 @@ export async function applyNewName(p: { sdId: string; typedName: string; confirm
   }
 }
 
-/** CRM update rule: every client-facing change leaves a dated line in the company's notes. Best-effort — the rename itself is already done. */
-async function logNameChange(accountId: string, oldName: string, newName: string, who: string): Promise<void> {
+/** The database refuses in a lower-case fragment ("the new folders already hold files …"); staff read it on screen as a sentence. */
+export function sentence(message: string): string {
+  const m = message.trim()
+  if (!m) return m
+  const s = m.charAt(0).toUpperCase() + m.slice(1)
+  return /[.!?]$/.test(s) ? s : `${s}.`
+}
+
+/** CRM update rule: every client-facing change leaves a dated line in the company's notes. Best-effort — the change itself is already done. */
+async function appendCompanyNote(accountId: string, line: string): Promise<void> {
   try {
     const { data: acct } = await supabaseAdmin.from('accounts').select('notes').eq('id', accountId).maybeSingle()
     const day = new Date().toISOString().slice(0, 10)
-    const line = `${day}: Company renamed from "${oldName}" to "${newName}" (Company Change Name, applied by ${who}). Old storage folders moved to "Previous names".`
-    const notes = [acct?.notes, line].filter(Boolean).join('\n')
-    // eslint-disable-next-line no-restricted-syntax -- a dated CRM note line (CRM update rule); the rename itself went through the database function
+    const notes = [acct?.notes, `${day}: ${line}`].filter(Boolean).join('\n')
+    // eslint-disable-next-line no-restricted-syntax -- a dated CRM note line (CRM update rule); the change itself went through the database function
     await supabaseAdmin.from('accounts').update({ notes }).eq('id', accountId)
   } catch (err) {
-    console.error('applyNewName: could not write the CRM note:', err)
+    console.error('change-name-apply: could not write the CRM note:', err)
   }
+}
+
+async function logNameChange(accountId: string, oldName: string, newName: string, who: string): Promise<void> {
+  await appendCompanyNote(accountId, `Company renamed from "${oldName}" to "${newName}" (Company Change Name, applied by ${who}). Old storage folders moved to "Previous names".`)
+}
+
+// ─────────────────────────────────────────────────────────────── undo
+
+/** PURE: why the name change cannot be undone from the workspace right now, or null. */
+export function undoBlocker(f: { serviceType: string | null | undefined; stage: string | null | undefined; applied: boolean }): string | null {
+  if (f.serviceType !== 'Company Change Name') return 'This is not a Company Change Name job.'
+  if (!f.applied) return 'There is no name change to undo — the new name has not been applied.'
+  if (f.stage !== CHANGE_NAME_STAGES.records) {
+    return `The job has moved on from "${CHANGE_NAME_STAGES.records}". Move it back to that step first — a name change can only be undone there, before the client is asked for the new Operating Agreement.`
+  }
+  return null
+}
+
+export interface UndoNameResult {
+  ok: boolean
+  error?: string
+  restoredName?: string
+  alreadyUndone?: boolean
+}
+
+/**
+ * Undo the name change this job applied: the company gets its old name back (and its old "previous name"), the new empty folders go,
+ * the old folders come back — one database transaction (undoAccountNameChange). The database refuses once the new folders hold anything,
+ * or when a later name change exists; its message is passed on in plain words.
+ */
+export async function undoNewName(p: { sdId: string; actorId: string; actorLabel: string }): Promise<UndoNameResult> {
+  const state = await getApplyNameState(p.sdId)
+  if (!state.ok) return { ok: false, error: state.error }
+  const loaded = await load(p.sdId)
+  if (!loaded?.sd.account_id) return { ok: false, error: 'This job has no company.' }
+  const blocker = undoBlocker({ serviceType: loaded.sd.service_type, stage: loaded.sd.stage, applied: state.applied !== null })
+  if (blocker) return { ok: false, error: blocker }
+
+  let result
+  try {
+    result = await undoAccountNameChange({ accountId: loaded.sd.account_id, changeId: p.sdId, actor: p.actorId })
+  } catch (err) {
+    return { ok: false, error: sentence(err instanceof Error && err.message ? err.message : 'The name change could not be undone.') }
+  }
+  if (result.status === 'conflict') {
+    return { ok: false, error: `The company's name is now "${result.current_name}" — it changed after this name change, so it cannot be undone from here.` }
+  }
+  if (result.status === 'undone') {
+    await appendCompanyNote(loaded.sd.account_id, `Name change undone: the company is "${result.restored_name}" again (Company Change Name, undone by ${p.actorLabel}). Old storage folders moved back.`)
+  }
+  return { ok: true, restoredName: result.restored_name, alreadyUndone: result.status === 'already_undone' }
 }
