@@ -34,6 +34,7 @@ class Query {
   insert(row: Row) { this.op = "insert"; this.payload = row; return this }
   update(patch: Row) { this.op = "update"; this.payload = patch; return this }
   eq(c: string, v: unknown) { this.filters.push(r => r[c] === v); return this }
+  is(c: string, v: null) { this.filters.push(r => (r[c] ?? null) === v); return this }
   in(c: string, vs: unknown[]) { this.filters.push(r => vs.includes(r[c])); return this }
   lt(c: string, v: string) { this.filters.push(r => String(r[c] ?? "") < v); return this }
   ilike(c: string, pat: string) { const re = likeToRegExp(pat); this.filters.push(r => re.test(String(r[c] ?? ""))); return this }

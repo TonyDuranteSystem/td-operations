@@ -9508,9 +9508,13 @@ export type Database = {
           adset_id: string | null
           adset_name: string | null
           answers: Json
+          callback_at: string | null
           campaign_id: string | null
           campaign_name: string | null
           city: string | null
+          claimed_at: string | null
+          claimed_by: string | null
+          claimed_by_label: string | null
           country: string | null
           email: string | null
           existing_client: Json | null
@@ -9520,9 +9524,11 @@ export type Database = {
           is_organic: boolean | null
           leadgen_id: string
           meta_created_time: string | null
+          not_in_target_reason: string | null
           page_id: string | null
           phone: string | null
           platform: string | null
+          qualification: Json | null
           raw: Json | null
           received_at: string
           source: string
@@ -9536,9 +9542,13 @@ export type Database = {
           adset_id?: string | null
           adset_name?: string | null
           answers?: Json
+          callback_at?: string | null
           campaign_id?: string | null
           campaign_name?: string | null
           city?: string | null
+          claimed_at?: string | null
+          claimed_by?: string | null
+          claimed_by_label?: string | null
           country?: string | null
           email?: string | null
           existing_client?: Json | null
@@ -9548,9 +9558,11 @@ export type Database = {
           is_organic?: boolean | null
           leadgen_id: string
           meta_created_time?: string | null
+          not_in_target_reason?: string | null
           page_id?: string | null
           phone?: string | null
           platform?: string | null
+          qualification?: Json | null
           raw?: Json | null
           received_at?: string
           source?: string
@@ -9564,9 +9576,13 @@ export type Database = {
           adset_id?: string | null
           adset_name?: string | null
           answers?: Json
+          callback_at?: string | null
           campaign_id?: string | null
           campaign_name?: string | null
           city?: string | null
+          claimed_at?: string | null
+          claimed_by?: string | null
+          claimed_by_label?: string | null
           country?: string | null
           email?: string | null
           existing_client?: Json | null
@@ -9576,9 +9592,11 @@ export type Database = {
           is_organic?: boolean | null
           leadgen_id?: string
           meta_created_time?: string | null
+          not_in_target_reason?: string | null
           page_id?: string | null
           phone?: string | null
           platform?: string | null
+          qualification?: Json | null
           raw?: Json | null
           received_at?: string
           source?: string

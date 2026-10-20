@@ -39,3 +39,49 @@ export function telHref(phone: string | null | undefined): string | null {
   const d = (phone ?? "").replace(/[^\d+]/g, "")
   return d.replace(/\D/g, "").length >= 6 ? `tel:${d}` : null
 }
+
+export type LeadShow = "all" | "free" | "mine" | "callbacks"
+export const LEAD_SHOW_OPTIONS: ReadonlyArray<{ key: LeadShow; label: string }> = [
+  { key: "all", label: "All" }, { key: "free", label: "Not picked yet" }, { key: "mine", label: "Picked by me" }, { key: "callbacks", label: "Call backs" },
+]
+export function parseLeadShow(v: string | string[] | undefined): LeadShow {
+  const s = Array.isArray(v) ? v[0] : v
+  return LEAD_SHOW_OPTIONS.some(o => o.key === s) ? (s as LeadShow) : "all"
+}
+
+export interface FilterableLead { status: string; claimed_by: string | null; callback_at: string | null }
+
+/**
+ * The one lead list, narrowed. Call backs come first, soonest first (a promised call is the most urgent thing); every other filter keeps
+ * the order it was given (newest first). `stage` is a pipeline stage key or empty for all.
+ */
+export function filterLeads<T extends FilterableLead>(leads: readonly T[], f: { show: LeadShow; stage?: string | null }, userId: string): T[] {
+  let out = leads.filter(l => (f.stage ? l.status === f.stage : true))
+  if (f.show === "free") out = out.filter(l => l.claimed_by === null)
+  else if (f.show === "mine") out = out.filter(l => l.claimed_by === userId)
+  else if (f.show === "callbacks") {
+    out = out.filter(l => l.callback_at !== null).sort((a, b) => String(a.callback_at).localeCompare(String(b.callback_at)))
+  }
+  return out
+}
+
+/** Plain-English line for a history row. Unknown kinds show their own name so nothing is ever hidden. */
+export function eventText(kind: string, data: Record<string, unknown>, stages: readonly StageOption[], reasons: readonly StageOption[]): string {
+  const note = typeof data.note === "string" && data.note ? ` — ${data.note}` : ""
+  switch (kind) {
+    case "received": return "Lead arrived from the ad"
+    case "possible_existing_client": return "Flagged: may already be a TD client"
+    case "client_check_failed": return "Could not check whether this is a TD client"
+    case "claimed": return "Picked"
+    case "released": return "Given back"
+    case "note": return `Note: ${typeof data.text === "string" ? data.text : ""}`
+    case "status_changed": {
+      const to = stageLabel(stages, typeof data.to === "string" ? data.to : null)
+      if (data.outcome === "not_in_target") return `Not in target (${reasons.find(r => r.key === data.reason)?.label ?? String(data.reason ?? "")})${note}`
+      if (data.outcome === "call_back") return `Call back on ${formatWhen(typeof data.callback_at === "string" ? data.callback_at : null)}${note}`
+      if (data.outcome === "good") return `Good — moved to ${to}${note}`
+      return `Moved to ${to}${note}`
+    }
+    default: return kind
+  }
+}
