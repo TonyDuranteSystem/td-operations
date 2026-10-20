@@ -5,6 +5,8 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { Loader2, Send, Upload, FileText, CheckCircle2, History } from 'lucide-react'
 import { toast } from 'sonner'
+import { SaveWhereDialog, type SaveWhereChoice } from '@/components/storage/save-where-dialog'
+import { FAX_PURPOSES, type FaxPurpose } from '@/lib/crm-store/save-where'
 
 const MAX_FILE_MB = 10
 
@@ -59,6 +61,10 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
   const [documentId, setDocumentId] = useState('')
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState<string | null>(null)
+  const [savedNote, setSavedNote] = useState<string | null>(null)
+  const [asking, setAsking] = useState(false)   // the required "Where should this fax be saved?" window
+
+  const COMPANY_PURPOSES: FaxPurpose[] = ['irs_tax_return', 'irs_ein_request']
 
   const onFile = (f: File | null) => {
     if (f && f.size > MAX_FILE_MB * 1024 * 1024) {
@@ -68,12 +74,19 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
     setFile(f)
   }
 
-  const handleSend = async (e: React.FormEvent) => {
+  const handleSend = (e: React.FormEvent) => {
     e.preventDefault()
-    if (sending) return
+    if (sending || asking) return
     if (source === 'upload' && !file) { toast.error('Attach a file to fax.'); return }
     if (source === 'document' && !documentId) { toast.error('Select a document to fax.'); return }
+    // An uploaded file is saved somewhere on purpose: the required window opens first, in this same Send step. A document that is
+    // already stored (the picker above) is not copied again — it goes straight out.
+    if (source === 'upload') { setAsking(true); return }
+    void doSend(null)
+  }
 
+  /** Sends the fax. Returns { error } only when the window should stay open (the chosen place was refused before anything was sent). */
+  const doSend = async (choice: SaveWhereChoice | null): Promise<{ error?: string } | void> => {
     setSending(true)
     setSent(null)
     try {
@@ -86,6 +99,7 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
       if (source === 'upload' && file) {
         payload.file_base64 = await fileToBase64(file)
         payload.file_name = file.name
+        payload.save_choice = choice ?? { mode: 'dont_save' }
       } else {
         payload.document_id = documentId
       }
@@ -97,11 +111,21 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
+        // the chosen place was refused BEFORE the fax was sent: nothing went out, the window stays open with the reason
+        if (data.destination_error && data.error) return { error: String(data.error) }
         throw new Error(data.error || 'Could not send the fax. Please try again.')
       }
       setSent(data.job_id ? `Job ${data.job_id}` : (data.faxage_response || 'Fax submitted.'))
+      setSavedNote(
+        data.saved?.path ? `Saved in: ${data.saved.path}`
+          : data.save_error ? `The fax was sent, but the copy could not be saved where you chose (${data.save_error}). It was not filed in the storage.`
+            : choice && choice.mode === 'save' ? null : source === 'upload' ? "Not saved in the storage (you chose Don't save)." : null,
+      )
+      setAsking(false)
       toast.success('Fax submitted to Faxage.')
     } catch (err) {
+      // nothing went out: close the window; the form is still filled in and Send opens it again
+      setAsking(false)
       toast.error(err instanceof Error && err.message ? err.message : 'Could not send the fax.')
     } finally {
       setSending(false)
@@ -117,9 +141,10 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
         </div>
         <p className="text-sm text-green-700">The fax was submitted to Faxage for delivery.</p>
         <p className="text-xs text-green-600 mt-2 break-words font-mono">{sent}</p>
+        {savedNote && <p className="text-sm text-green-800 mt-2 break-words">{savedNote}</p>}
         <div className="mt-4 flex items-center gap-4">
           <button
-            onClick={() => { setSent(null); setFile(null); setDocumentId('') }}
+            onClick={() => { setSent(null); setSavedNote(null); setFile(null); setDocumentId('') }}
             className="text-sm font-medium text-blue-600 hover:text-blue-700"
           >
             Send another fax
@@ -136,6 +161,7 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
   }
 
   return (
+    <>
     <form onSubmit={handleSend} className="space-y-5 rounded-xl border bg-white p-6">
       <div>
         <label htmlFor="faxno" className="block text-sm font-medium text-zinc-700 mb-1">Recipient fax number</label>
@@ -248,5 +274,16 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
         {sending ? 'Sending…' : 'Send Fax'}
       </button>
     </form>
+
+    {/* outside the <form>: the window has its own forms and buttons */}
+    {asking && file && (
+      <SaveWhereDialog
+        fileName={file.name}
+        purposes={FAX_PURPOSES}
+        companyPurposes={COMPANY_PURPOSES}
+        onDecide={(c) => doSend(c)}
+      />
+    )}
+    </>
   )
 }

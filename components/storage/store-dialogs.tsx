@@ -89,11 +89,13 @@ const ownerIcon = (k: string) => (k === 'company' ? Building2 : k === 'person' ?
  * 'folder' = where a FOLDER may go (a top folder is fine; never inside itself). With `chooseOwner` the
  * picker first lists every storage (search), most likely first (`preferOwnerIds`).
  */
-export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, excludeFolderId, currentFolderId, chooseOwner, preferOwnerIds, newPeople, onPickPerson, onPick, onClose }: {
+export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, excludeFolderId, currentFolderId, chooseOwner, preferOwnerIds, newPeople, onPickPerson, allowNewFolder, onPick, onClose }: {
   title: string; ownerId?: string; ownerLabel?: string; mode: 'file' | 'folder'; excludeFolderId?: string | null; currentFolderId?: string | null
   chooseOwner?: boolean; preferOwnerIds?: string[]
   /** people of the same company who have NO storage yet: picking one gives them one (made when the file moves) */
   newPeople?: Array<{ contactId: string; name: string }>; onPickPerson?: (contactId: string, name: string) => void
+  /** shows "+ New folder here": makes a folder inside the chosen folder (or at the top of Business / My files) and chooses it — used by the save-where window */
+  allowNewFolder?: boolean
   onPick: (folderId: string, ownerId: string, path: string) => void; onClose: () => void
 }) {
   const [owner, setOwner] = useState<{ id: string; label: string } | null>(fixedOwner ? { id: fixedOwner, label: ownerLabel ?? '' } : null)
@@ -106,6 +108,8 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
   const [loading, setLoading] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const [chosen, setChosen] = useState<{ id: string; path: string } | null>(null)
+  const [newName, setNewName] = useState<string | null>(null)   // null = the "+ New folder here" box is closed
+  const [creating, setCreating] = useState(false)
 
   useEffect(() => {
     if (!chooseOwner || owner) return
@@ -166,6 +170,26 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
     )
   }
 
+  const createFolderHere = async () => {
+    if (!owner || newName === null || creating) return
+    const parentId = chosen?.id ?? rootId
+    if (!parentId) { setError('Open a folder first.'); return }
+    setCreating(true); setError(null)
+    try {
+      const res = await fetch('/api/crm-store/browse/folder/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parentId, name: newName }) })
+      const d = await res.json().catch(() => ({})) as { id?: string; name?: string; error?: string }
+      if (!res.ok || !d.id) throw new Error(d.error || 'The folder could not be created — please try again.')
+      await load(owner.id, parentId)
+      setOpen((o) => new Set(o).add(parentId))
+      setChosen({ id: d.id, path: `${chosen ? chosen.path : owner.label} › ${d.name ?? newName}` })
+      setNewName(null)
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'The folder could not be created — please try again.')
+    } finally {
+      setCreating(false)
+    }
+  }
+
   const q = search.trim().toLowerCase()
   const prefer = new Set(preferOwnerIds ?? [])
   const allOwners = (groups ?? []).flatMap((g) => g.owners.map((o) => ({ ...o, group: g.label })))
@@ -220,6 +244,19 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
                 : (nodes[rootId] ?? []).filter((k) => !k.trashed).map((k) => node(k, 0, [owner.label].filter(Boolean))))}
             </ul>
           </>
+        )}
+        {allowNewFolder && owner && rootId && (
+          <div className="mt-2">
+            {newName === null ? (
+              <button type="button" onClick={() => setNewName('')} className="text-sm font-medium text-blue-700 hover:underline">+ New folder here</button>
+            ) : (
+              <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); void createFolderHere() }}>
+                <input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} aria-label="New folder name" placeholder={`New folder inside ${chosen ? chosen.path.split(' › ').pop() : owner.label}`} className="min-w-0 flex-1 rounded-md border border-zinc-300 px-2 py-1.5 text-sm" />
+                <button type="submit" disabled={creating || !newName.trim()} className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50">{creating ? 'Making…' : 'Make folder'}</button>
+                <button type="button" onClick={() => setNewName(null)} className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm">Cancel</button>
+              </form>
+            )}
+          </div>
         )}
         <div className="mt-3 flex items-center gap-2 border-t border-zinc-100 pt-3">
           <span className="min-w-0 flex-1 truncate text-xs text-zinc-600">{chosen ? chosen.path : 'Choose a folder'}</span>

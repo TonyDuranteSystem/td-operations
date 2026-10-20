@@ -13,7 +13,14 @@
  *     recip_name?: string,
  *     account_id?: string,
  *     service_delivery_id?: string,
+ *     // upload source only — where the sent file is kept (the "Where should this be saved?" window; dev job c43a8b2e):
+ *     save_choice?: { mode: 'save', purpose, ownerId, folderId, newFolderName?, fileName } | { mode: 'dont_save' },
  *   }
+ *
+ * The chosen place is CHECKED BEFORE the fax goes out (staff-only, the folder belongs to that owner, not in the trash, the company
+ * has live storage and is not being moved …): a place that is not allowed stops the send with a 422 and the plain sentence. Only after
+ * a successful send is the file filed there; a filing failure never fails the fax (ONE system error, the old bucket copy is kept).
+ * No save_choice (an older caller sending a file that is already stored) = "Don't save": the internal bucket copy only.
  *
  * Credentials come from env (FAXAGE_USERNAME / FAXAGE_PASSWORD / FAXAGE_COMPANY)
  * — never from the client. The request shaping + response parsing live in
@@ -34,6 +41,10 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { downloadFileBinary } from '@/lib/google-drive'
 import { sendFax, isValidFaxNo, normalizeFaxNo, DEFAULT_IRS_FAX_NUMBER, stripBase64Prefix } from '@/lib/fax/faxage'
+import { isStoreStaffUser } from '@/lib/crm-store/access'
+import { parseSaveChoice, validateDestination, saveToDestination, realDestinationDeps, realFileDeps, type FiledCopy, type SaveChoiceSave } from '@/lib/crm-store/save-destination'
+import { looksPersonal } from '@/lib/fax/save-sent-upload'
+import { taxYearFromName } from '@/lib/crm-store/save-where'
 
 const MAX_COVER_LENGTH = 2000
 
@@ -177,6 +188,30 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Where the sent file is kept (upload source only; a stored document is not copied again). The place is checked NOW, before the fax
+  // goes out: a place that is not allowed stops the send and staff are told in the window.
+  const parsedChoice = documentId ? { ok: true, choice: null } : parseSaveChoice(body.save_choice)
+  if (!parsedChoice.ok) {
+    return NextResponse.json({ success: false, destination_error: true, error: parsedChoice.error }, { status: 400 })
+  }
+  const saveChoice = parsedChoice.choice
+  let toSave: { choice: SaveChoiceSave; validated: Awaited<ReturnType<typeof validateDestination>> } | null = null
+  if (saveChoice && saveChoice.mode === 'save') {
+    if (!isStoreStaffUser(user)) {
+      return NextResponse.json({ success: false, destination_error: true, error: 'Only staff can save a file into the storage.' }, { status: 403 })
+    }
+    try {
+      const { isOwnerOnly } = await import('@/lib/auth')
+      const validated = await validateDestination(saveChoice, realDestinationDeps({ id: user?.id ?? null, ownerOnly: isOwnerOnly(user) }), fileName)
+      if (!validated.decision.ok) {
+        return NextResponse.json({ success: false, destination_error: true, error: validated.decision.error }, { status: 422 })
+      }
+      toSave = { choice: saveChoice, validated }
+    } catch (e) {
+      return NextResponse.json({ success: false, destination_error: true, error: e instanceof Error ? e.message : 'Could not check the place you chose. Please try again.' }, { status: 503 })
+    }
+  }
+
   // Send via Faxage.
   let result
   try {
@@ -208,48 +243,37 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error }, { status: 502 })
   }
 
-  // Persist an UPLOADED file so it stays viewable from Fax History. A
-  // document-source fax already has a documents row (its id is `documentId`);
-  // an upload had no stored copy — the bytes were streamed to Faxage and lost.
-  // We now save the upload to the `onboarding-uploads` bucket and create a
-  // documents row (drive_file_id=`storage:<path>`, the same convention
-  // fetchFlowDocumentPdf / the preview route read), so every fax has a viewable
-  // attachment. Best-effort + AFTER a successful send (so a rejected fax never
-  // leaves an orphan file/row — Fax History only lists sent faxes anyway).
+  // Keep the sent UPLOAD. The fax has already gone out, so nothing below can fail it.
+  //  1. "Save here": file it at the place staff chose (storage writer, type IRS Fax for an IRS fax, hidden from the client).
+  //  2. Anything else ("Don't save", no choice, or filing failed): the internal bucket copy only, as before, so Fax History's
+  //     "View Document" still opens it. That bucket copy is not CRM storage. A place in Business / My files has no CRM row, so it also
+  //     gets the bucket copy for the History link.
   let uploadedDocId: string | null = null
-  let uploadFiledInStorage: { accountId: string; inferred: boolean } | null = null
+  let filed: FiledCopy | null = null
+  let saveError: string | null = null
   if (!documentId && fileBase64) {
-    // Stop Drive (dev job 264bb882, S1d): when the company is known the copy goes into ITS storage (Tax › year, type IRS Fax,
-    // hidden from the client) instead of a company-less bucket copy. See lib/fax/save-sent-upload.ts. A failure is never silent:
-    // ONE alarm, the fax has already gone out, and the old bucket copy below still runs.
-    try {
-      const { createHash } = await import('crypto')
-      const bytes0 = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
-      const { fileSentUpload } = await import('@/lib/fax/save-sent-upload')
-      const filed = await fileSentUpload({
-        accountId, serviceDeliveryId, fileName, bytes: bytes0, mimeType: mimeFromName(fileName), actor: user?.id ?? null,
-        contentHash: createHash('sha256').update(bytes0).digest('hex'),
-      })
-      if (filed.route === 'store') {
-        uploadedDocId = filed.documentRowId
-        uploadFiledInStorage = { accountId: filed.accountId, inferred: filed.inferred }
-        // only a CERTAIN company goes into the activity log: a company guessed from the file name must not land a wrong entry on a client's feed
-        if (!accountId && !filed.inferred) accountId = filed.accountId
-      } else if (filed.reason === 'company_moving') {
-        // a company in the middle of its move: rare and temporary — told once. (A company that simply has no storage — the few left on
-        // Drive, a closed one — is NOT a problem: the old copy is the expected result, so no alarm.)
-        const { reportSystemError } = await import('@/lib/system-errors')
-        await reportSystemError({ source: 'server', route: '/api/tools/fax/send', method: 'POST', message: "A faxed file could not be kept in the company's storage (the company is being moved) — the old copy was kept", context: { fileName, accountId, serviceDeliveryId } })
-      }
-    } catch (e) {
+    if (toSave) {
       try {
-        const { reportSystemError } = await import('@/lib/system-errors')
-        await reportSystemError({ source: 'server', route: '/api/tools/fax/send', method: 'POST', message: `A faxed file could not be kept in the company's storage — ${e instanceof Error ? e.message : String(e)}`, context: { fileName, accountId, serviceDeliveryId } })
-      } catch { /* an alarm never fails a sent fax */ }
+        const { createHash } = await import('crypto')
+        const bytes0 = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
+        filed = await saveToDestination(toSave.choice, toSave.validated.owner!, {
+          bytes: bytes0, mimeType: mimeFromName(toSave.validated.finalName), sha256: createHash('sha256').update(bytes0).digest('hex'),
+          actor: user?.id ?? null, unlinked: !!toSave.validated.decision.unlinked, finalName: toSave.validated.finalName,
+          periodYear: toSave.choice.purpose === 'irs_tax_return' ? taxYearFromName(toSave.validated.finalName) : null,
+        }, realFileDeps())
+        uploadedDocId = filed.documentRowId
+      } catch (e) {
+        saveError = e instanceof Error ? e.message : String(e)
+        filed = null
+        try {
+          const { reportSystemError } = await import('@/lib/system-errors')
+          await reportSystemError({ source: 'server', route: '/api/tools/fax/send', method: 'POST', message: `A faxed file could not be saved where staff chose — ${saveError}`, context: { fileName, ownerId: toSave.choice.ownerId, folderId: toSave.choice.folderId } })
+        } catch { /* an alarm never fails a sent fax */ }
+      }
     }
   }
-  if (!uploadFiledInStorage && !documentId && fileBase64) {
-    const personalPaper = (await import('@/lib/fax/save-sent-upload')).looksPersonal(fileName)
+  if (!documentId && fileBase64 && !uploadedDocId) {
+    const personalPaper = looksPersonal(fileName)
     try {
       const bytes = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
       const safeName = (fileName.replace(/[^\w.\-]+/g, '_').slice(0, 120)) || 'document.pdf'
@@ -284,6 +308,8 @@ export async function POST(req: NextRequest) {
       /* persistence is best-effort — never fail a sent fax */
     }
   }
+  // A company chosen in the window is certain (staff picked it): it goes on that company's activity feed (the Documents tab is a separate rule).
+  if (filed && toSave?.validated.owner?.kind === 'company') accountId = accountId ?? toSave.validated.owner.account_id
 
   // Audit trail (best-effort — never fail the send if logging fails).
   try {
@@ -306,8 +332,10 @@ export async function POST(req: NextRequest) {
         job_id: result.jobId,
         cover_message: coverMessage || null,
         source: documentId ? 'document' : 'upload',
-        filed_in_storage_of: uploadFiledInStorage?.accountId ?? null,
-        company_inferred_from_file_name: uploadFiledInStorage?.inferred ?? false,
+        save_choice: documentId ? 'stored_document' : saveChoice ? saveChoice.mode : 'none',
+        saved_at_place: filed?.path ?? null,
+        saved_file_id: filed?.fileId ?? null,
+        save_error: saveError,
         document_id: documentId ?? uploadedDocId,
         faxage_response: result.raw.slice(0, 500),
       },
@@ -320,6 +348,8 @@ export async function POST(req: NextRequest) {
     success: true,
     job_id: result.jobId,
     faxage_response: result.raw.slice(0, 500),
+    saved: filed ? { path: filed.path, name: filed.name, file_id: filed.fileId } : null,
+    save_error: saveError,
   })
 }
 
