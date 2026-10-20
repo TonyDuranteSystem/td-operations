@@ -34,6 +34,9 @@ export function ApplyNamePanel({ serviceDeliveryId }: { serviceDeliveryId: strin
   const [asking, setAsking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<DoneInfo | null>(null)
+  const [undoAsking, setUndoAsking] = useState(false)
+  const [undoBusy, setUndoBusy] = useState(false)
+  const [undone, setUndone] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setError(null)
@@ -79,6 +82,27 @@ export function ApplyNamePanel({ serviceDeliveryId }: { serviceDeliveryId: strin
     }
   }
 
+  async function undo() {
+    setUndoBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/undo-new-name`, { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data || !data.success) throw new Error(data?.error || 'The name change could not be undone.')
+      setUndone((data.result?.restoredName as string | undefined) ?? '')
+      setUndoAsking(false)
+      setDone(null)
+      setTyped('')
+      await load()
+      router.refresh() // the company name shown elsewhere on the page changed back
+    } catch (err) {
+      setUndoAsking(false)
+      setError(err instanceof Error && err.message ? err.message : 'The name change could not be undone.')
+    } finally {
+      setUndoBusy(false)
+    }
+  }
+
   const applied = state?.applied ?? (done ? { oldName: done.oldName ?? null, newName: done.newName ?? null } : null)
   const blocked = (state?.blockers?.length ?? 0) > 0
   const canApply = !!state && !blocked && typed.trim().length > 0 && (!needsConfirm || mismatchOk)
@@ -99,7 +123,28 @@ export function ApplyNamePanel({ serviceDeliveryId }: { serviceDeliveryId: strin
             <li>the IRS, the banks and the state registries still have the old name (separate services);</li>
             <li>the next step asks the client for the new Operating Agreement, which will carry the new name.</li>
           </ul>
+          {!undoAsking ? (
+            <button type="button" onClick={() => setUndoAsking(true)} disabled={undoBusy} className="mt-3 rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-900 hover:bg-emerald-100">
+              Undo name change
+            </button>
+          ) : (
+            <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-amber-900">
+              <p>This puts the old name and the old folders back. It only works while the new folders are still empty. Continue?</p>
+              <div className="mt-2 flex gap-2">
+                <button type="button" disabled={undoBusy} onClick={() => void undo()} className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:bg-zinc-300">
+                  {undoBusy ? 'Undoing…' : 'Yes, undo it'}
+                </button>
+                <button type="button" disabled={undoBusy} onClick={() => setUndoAsking(false)} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs">Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
+      )}
+
+      {undone !== null && !applied && (
+        <p className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
+          The name change was undone{undone ? `: the company is “${undone}” again` : ''}, and the old folders are back. You can apply the name again below.
+        </p>
       )}
 
       {state && !applied && (
