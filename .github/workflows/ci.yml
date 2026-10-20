@@ -13,7 +13,7 @@
 #      changed-files scope — CI catches anything pre-push skipped)
 #   3. npm run test:unit
 #   4. npm run test:integration (P1.7)
-#   5. npm run build
+#   5. npm run build (separate parallel job, with .next/cache)
 #
 # Not mirrored:
 #   - Remote-sync check (CI IS the remote, doesn't apply)
@@ -34,7 +34,7 @@ concurrency:
 
 jobs:
   checks:
-    name: Lint + tests + build
+    name: Lint + tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -176,6 +176,36 @@ jobs:
 
       - name: Integration tests (P1.7 characterization)
         run: npm run test:integration
+
+  # Runs IN PARALLEL with `checks` (no `needs`), so total CI time = the slower of the two
+  # instead of their sum. The .next/cache restore lets Next reuse compiled output from the
+  # last run (keyed on lockfile; restore-keys falls back to the most recent cache).
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            nextjs-${{ runner.os }}-
 
       - name: Build
         # Next.js's static prerender phase eagerly invokes route handlers
