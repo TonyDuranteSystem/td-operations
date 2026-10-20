@@ -120,9 +120,9 @@ export async function getClientTurnItems(opts: { accountId?: string | null; cont
     if (sds.length === 0) return []
 
     const types = Array.from(new Set(sds.map((s) => s.service_type)))
-    // `client_task_in_list` is not in the generated types until the migration is on production (CI regenerates the types from production and
-    // fails on any difference), so this one query is untyped; add the column to lib/database.types.ts right after the production migration runs.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- column not in the generated types yet (see above)
+    // Written before `client_task_in_list` was in the generated types (the typed chain failed to compile with "type instantiation is
+    // excessively deep"), so this one query stays untyped; the column is in lib/database.types.ts now, so it can be made typed later.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see above
     const { data: stages, error: stagesError } = (await (supabaseAdmin as any)
       .from('pipeline_stages')
       .select('service_type, stage_name, client_label, client_label_it')
