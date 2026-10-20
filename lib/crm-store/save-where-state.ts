@@ -49,8 +49,9 @@ export function needsRepropose(s: WindowState): boolean {
   return s.proposalKey !== key && s.requestedKey !== key
 }
 
-/** A place staff chose by hand is dropped when what the fax is, or which company, changes — NOT when only the file name changes. */
-export function pickedAfterAnswersChange<T>(prev: { purpose: FaxPurpose | null; company: CompanyAnswer }, next: { purpose: FaxPurpose | null; company: CompanyAnswer }, picked: T | null): T | null {
-  const same = prev.purpose === next.purpose && (prev.company === next.company || (typeof prev.company === "object" && typeof next.company === "object" && prev.company?.accountId === next.company?.accountId))
-  return same ? picked : null
+/** "Business › Business › Fax" → "Business › Fax": consecutive repeats of a name in a path are shown once. */
+export function tidyPath(path: string): string {
+  const out: string[] = []
+  for (const seg of path.split(" › ")) if (out[out.length - 1] !== seg) out.push(seg)
+  return out.join(" › ")
 }

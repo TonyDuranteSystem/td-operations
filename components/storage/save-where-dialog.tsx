@@ -20,7 +20,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { FolderPicker } from '@/components/storage/store-dialogs'
 import { trapTabKey, trapTarget } from '@/components/storage/focus-trap'
-import { answersKey, canSave, needsRepropose, pickedAfterAnswersChange, proposalIsCurrent, showsWorking, type CompanyAnswer } from '@/lib/crm-store/save-where-state'
+import { answersKey, canSave, needsRepropose, proposalIsCurrent, showsWorking, tidyPath, type CompanyAnswer } from '@/lib/crm-store/save-where-state'
+import { createOnceGuard } from '@/lib/crm-store/once-guard'
 import type { FaxPurpose } from '@/lib/crm-store/save-where'
 
 export { trapTarget }
@@ -77,7 +78,7 @@ function DialogEffects({ labelledBy }: { labelledBy: string }) {
  * The shell: a modal that CANNOT be dismissed by accident. Deliberately takes no `onClose`, renders no close button, and puts no click
  * handler on the backdrop. Escape is swallowed (so nothing behind it, e.g. a window-level key listener, reacts either). Tab stays inside.
  */
-export function RequiredDialog({ labelledBy, children }: { labelledBy: string; children: React.ReactNode }) {
+export function RequiredDialog({ labelledBy, children }: { labelledBy: string; children?: React.ReactNode }) {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-3 sm:p-4">
       <div
@@ -125,6 +126,7 @@ export function SaveWhereDialog({
   const [company, setCompany] = useState<CompanyAnswer>(null)
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<CompanyHit[]>([])
+  const [moreHits, setMoreHits] = useState(false)
   const [proposal, setProposal] = useState<ResolvedProposalDTO | null>(null)
   const [proposalKey, setProposalKey] = useState<string | null>(null)   // the answers the shown proposal was made for
   const [loading, setLoading] = useState(false)
@@ -135,21 +137,21 @@ export function SaveWhereDialog({
   const [error, setError] = useState<string | null>(null)
   const seq = useRef(0)
   const requestedKey = useRef<string | null>(null)   // the answers of the request already on its way
-  const prevAnswers = useRef<{ purpose: FaxPurpose | null; company: CompanyAnswer }>({ purpose: null, company: null })
   const changeBtn = useRef<HTMLButtonElement>(null)
+  const guard = useRef(createOnceGuard())   // decided at once (a ref): three clicks in the same instant make ONE request
 
   const needsCompany = !!purpose && companyPurposes.includes(purpose)
 
   // company typeahead (only the newest search may fill the list)
   useEffect(() => {
-    if (!needsCompany || company || query.trim().length < 2) { setHits([]); return }
+    if (!needsCompany || company || query.trim().length < 2) { setHits([]); setMoreHits(false); return }
     let cancelled = false   // a newer search (or a closed list) makes this one's answer irrelevant
     const t = setTimeout(async () => {
       try {
         const res = await fetch(`/api/crm-store/save-where/companies?q=${encodeURIComponent(query.trim())}`, { cache: 'no-store' })
-        const d = await res.json().catch(() => ({})) as { companies?: CompanyHit[]; error?: string }
+        const d = await res.json().catch(() => ({})) as { companies?: CompanyHit[]; more?: boolean; error?: string }
         if (!res.ok) throw new Error(d.error || 'Could not search the companies.')
-        if (!cancelled) setHits(d.companies ?? [])
+        if (!cancelled) { setHits(d.companies ?? []); setMoreHits(d.more === true) }
       } catch (e) { if (!cancelled) setError(e instanceof Error ? e.message : 'Could not search the companies.') }
     }, 200)
     return () => { cancelled = true; clearTimeout(t) }
@@ -173,11 +175,8 @@ export function SaveWhereDialog({
     }
   }, [])
 
-  // a new answer → a new proposal (a place staff chose by hand no longer applies to a different fax / company)
+  // a new answer → a new proposal. A place staff chose BY HAND is kept: only the visible "Use the proposal instead" button drops it.
   useEffect(() => {
-    const next = { purpose, company }
-    setPicked((p) => pickedAfterAnswersChange(prevAnswers.current, next, p))
-    prevAnswers.current = next
     if (!purpose) { setProposal(null); setProposalKey(null); requestedKey.current = null; return }
     void propose(purpose, company, name)
     // the file name only matters for a tax return's year — that is handled by the effect below
@@ -203,16 +202,17 @@ export function SaveWhereDialog({
       : null
 
   const decide = async (c: SaveWhereChoice) => {
-    if (busy) return
-    setBusy(true); setError(null)
-    try {
-      const r = await onDecide(c)
-      if (r && r.error) setError(r.error)
-    } catch (e) {
-      setError(e instanceof Error && e.message ? e.message : 'Something went wrong. Please try again.')
-    } finally {
-      setBusy(false)
-    }
+    await guard.current.run(async () => {
+      setBusy(true); setError(null)
+      try {
+        const r = await onDecide(c)
+        if (r && r.error) setError(r.error)
+      } catch (e) {
+        setError(e instanceof Error && e.message ? e.message : 'Something went wrong. Please try again.')
+      } finally {
+        setBusy(false)
+      }
+    })
   }
 
   const save = () => {
@@ -275,6 +275,7 @@ export function SaveWhereDialog({
                   </li>
                 ))}
               </ul>
+              {moreHits && <p className="text-xs text-zinc-500">More companies match. Type more of the name to narrow the list.</p>}
               <button type="button" onClick={() => setCompany('business')} className="text-sm font-medium text-blue-700 hover:underline">Business (not a client)</button>
             </div>
           )}
@@ -292,7 +293,7 @@ export function SaveWhereDialog({
             <p className="break-words text-base font-semibold text-zinc-900 sm:text-lg">{place.path}</p>
             <p className="text-sm text-zinc-600">{place.why}</p>
             {picked && proposal?.state === 'proposed' && (
-              <button type="button" disabled={busy} onClick={() => setPicked(null)} className="mt-2 text-sm font-medium text-blue-700 hover:underline">Back to the proposal</button>
+              <button type="button" disabled={busy} onClick={() => setPicked(null)} className="mt-2 text-sm font-medium text-blue-700 hover:underline">Use the proposal instead</button>
             )}
             {!picked && proposal?.documentType === 'irs_fax' && <p className="mt-2 text-sm text-zinc-600">Document type <span className="ml-1 rounded border border-zinc-300 px-2 py-0.5 font-medium">IRS Fax</span></p>}
           </>
@@ -323,7 +324,7 @@ export function SaveWhereDialog({
       {picking && (
         <FolderPicker
           title="Pick the place" mode="file" chooseOwner allowNewFolder
-          onPick={(folderId, ownerId, path, newFolderName) => { setPicked({ ownerId, folderId, newFolderName: newFolderName ?? null, path }); setPicking(false); setError(null); setTimeout(() => changeBtn.current?.focus(), 0) }}
+          onPick={(folderId, ownerId, path, newFolderName) => { setPicked({ ownerId, folderId, newFolderName: newFolderName ?? null, path: tidyPath(path) }); setPicking(false); setError(null); setTimeout(() => changeBtn.current?.focus(), 0) }}
           onClose={() => { setPicking(false); setTimeout(() => changeBtn.current?.focus(), 0) }}
         />
       )}

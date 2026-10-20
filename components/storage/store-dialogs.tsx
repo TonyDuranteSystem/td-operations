@@ -194,7 +194,7 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
     .sort((a, b) => Number(prefer.has(b.id)) - Number(prefer.has(a.id)))
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onClick={onClose} role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onClick={onClose} role="dialog" aria-modal="true" aria-label={title}>
       <div className="flex max-h-[88vh] w-full max-w-lg flex-col rounded-xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()} onKeyDown={trapTabKey}>
         <div className="mb-2 flex items-center gap-2">
           <h3 className="flex-1 text-base font-semibold">{title}</h3>

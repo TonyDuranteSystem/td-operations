@@ -1,6 +1,6 @@
 /** The decisions behind the save-where window (what the window shows, when Save works) — pure, so they are tested without a browser. */
 import { describe, it, expect } from "vitest"
-import { answersKey, canSave, needsRepropose, pickedAfterAnswersChange, proposalIsCurrent, showsWorking, type WindowState } from "@/lib/crm-store/save-where-state"
+import { answersKey, canSave, needsRepropose, tidyPath, proposalIsCurrent, showsWorking, type WindowState } from "@/lib/crm-store/save-where-state"
 
 const acme = { accountId: "a1", name: "Acme LLC" }
 const base = (over: Partial<WindowState> = {}): WindowState => ({
@@ -52,14 +52,19 @@ describe("needsRepropose — a tax return's year follows the file name, once", (
   })
 })
 
-describe("pickedAfterAnswersChange — a hand-picked place is dropped when the fax or company changes, not the name", () => {
-  const picked = { path: "Business › Fax" }
-  it("same purpose + same company keeps it", () => {
-    expect(pickedAfterAnswersChange({ purpose: "irs_tax_return", company: acme }, { purpose: "irs_tax_return", company: { ...acme } }, picked)).toBe(picked)
+describe("tidyPath", () => {
+  it("shows a repeated name once", () => {
+    expect(tidyPath("Business › Business › Fax")).toBe("Business › Fax")
+    expect(tidyPath("Acme › 3. Tax › 2025")).toBe("Acme › 3. Tax › 2025")
+    expect(tidyPath("A › B › A")).toBe("A › B › A")
   })
-  it("another purpose or company drops it", () => {
-    expect(pickedAfterAnswersChange({ purpose: "irs_tax_return", company: acme }, { purpose: "third_party", company: acme }, picked)).toBeNull()
-    expect(pickedAfterAnswersChange({ purpose: "irs_tax_return", company: acme }, { purpose: "irs_tax_return", company: "business" }, picked)).toBeNull()
-    expect(pickedAfterAnswersChange({ purpose: "irs_tax_return", company: acme }, { purpose: "irs_tax_return", company: null }, picked)).toBeNull()
+})
+
+describe("a hand-picked place is KEPT when the fax or company changes", () => {
+  it("the place stays valid for Save (only the visible 'Use the proposal' button drops it)", () => {
+    // the proposal was made for other answers, the hand-picked place still counts
+    const s = base({ company: { accountId: "a2", name: "B" }, picked: { path: "Business › Fax" } })
+    expect(canSave(s)).toBe(true)
+    expect(showsWorking(s)).toBe(false)
   })
 })

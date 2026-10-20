@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { createOnceGuard } from '@/lib/crm-store/once-guard'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { Loader2, Send, Upload, FileText, CheckCircle2, History } from 'lucide-react'
@@ -68,6 +69,7 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
   const [savedWarn, setSavedWarn] = useState(false)
   // One Send = one fax: the same id travels with every try of THIS fax, so a retry after a lost answer can never fax the IRS twice
   const [sendId, setSendId] = useState(() => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `s-${Date.now()}-${Math.random().toString(16).slice(2)}`))
+  const sendGuard = useRef(createOnceGuard())   // an IRS fax cannot be recalled: one request at a time, decided at once (not at the next render)
   const [asking, setAsking] = useState(false)   // the required "Where should this fax be saved?" window
 
   const COMPANY_PURPOSES: FaxPurpose[] = ['irs_tax_return', 'irs_ein_request']
@@ -92,7 +94,10 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
   }
 
   /** Sends the fax. Returns { error } only when the window should stay open (the chosen place was refused before anything was sent). */
-  const doSend = async (choice: SaveWhereChoice | null): Promise<{ error?: string } | void> => {
+  const doSend = async (choice: SaveWhereChoice | null): Promise<{ error?: string } | void> =>
+    sendGuard.current.run(() => doSendOnce(choice))
+
+  const doSendOnce = async (choice: SaveWhereChoice | null): Promise<{ error?: string } | void> => {
     setSending(true)
     setSent(null)
     try {
