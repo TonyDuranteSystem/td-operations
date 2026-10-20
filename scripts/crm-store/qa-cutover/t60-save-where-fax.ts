@@ -104,7 +104,7 @@ async function main() {
 
     // ── Change place: anywhere (another company's folder, a person's storage, My files)
     const { data: corr } = await sb.from("store_folders").select("id").eq("owner_id", A.ownerId).eq("kind", "correspondence").is("trashed_at", null).limit(1)
-    const r6 = await runChoice({ mode: "save", purpose: "something_else", ownerId: A.ownerId, folderId: corr![0].id, newFolderName: null, fileName: "Letter" }, "letter.pdf", bytes("corr"))
+    const r6 = await runChoice({ proposalOf: null, mode: "save", purpose: "something_else", ownerId: A.ownerId, folderId: corr![0].id, newFolderName: null, fileName: "Letter" }, "letter.pdf", bytes("corr"))
     check("S14 Change place: any folder of a company (Correspondence); type 'Other document'", r6.ok && (await fileRow((r6 as any).filed.fileId)).document_type === "other_document", JSON.stringify(r6))
     const ct = await sb.from("contacts").insert({ full_name: `QA SaveWhere Person ${stamp}`, email: `qa-savewhere-${stamp}@example.com` }).select("id").single()
     if (ct.error) throw new Error(ct.error.message)
@@ -113,18 +113,18 @@ async function main() {
     created.owners.push(personOwner)
     const { data: pfold } = await sb.from("store_folders").select("id, kind").eq("owner_id", personOwner).is("trashed_at", null).neq("kind", "root")
     const pf = (pfold ?? [])[0]
-    const r7 = await runChoice({ mode: "save", purpose: "something_else", ownerId: personOwner, folderId: pf.id, newFolderName: null, fileName: "Note" }, "note.pdf", bytes("person"))
+    const r7 = await runChoice({ proposalOf: null, mode: "save", purpose: "something_else", ownerId: personOwner, folderId: pf.id, newFolderName: null, fileName: "Note" }, "note.pdf", bytes("person"))
     check("S15 Change place: a person's storage", r7.ok && (await docRow((r7 as any).filed.fileId))[0]?.contact_id === ct.data.id, JSON.stringify(r7))
-    const r8 = await runChoice({ mode: "save", purpose: "something_else", ownerId: personOwner, folderId: pf.id, newFolderName: null, fileName: "x" }, "Passport copy.pdf", bytes("pp"))
+    const r8 = await runChoice({ proposalOf: null, mode: "save", purpose: "something_else", ownerId: personOwner, folderId: pf.id, newFolderName: null, fileName: "x" }, "Passport copy.pdf", bytes("pp"))
     check("S16 a passport is refused for a person's / company's storage (plain sentence)", !r8.ok && /person's own paper/.test((r8 as any).error), JSON.stringify(r8))
     // "My files": a login's own private area (the sandbox has no primary-owner login, so the area of an existing login is used)
     const { data: pa } = await sb.from("store_owners").select("id, private_user_id").eq("kind", "private").not("private_user_id", "is", null).limit(1)
     const myFiles = pa![0].id as string
     login.id = pa![0].private_user_id as string; login.ownerOnly = false
     const { data: mtop } = await sb.from("store_folders").select("id").eq("owner_id", myFiles).is("parent_id", null).limit(1)
-    const r9 = await runChoice({ mode: "save", purpose: "something_else", ownerId: myFiles, folderId: mtop![0].id, newFolderName: `QA SaveWhere ${stamp}`, fileName: "Mine" }, "mine.pdf", bytes("mine"))
+    const r9 = await runChoice({ proposalOf: null, mode: "save", purpose: "something_else", ownerId: myFiles, folderId: mtop![0].id, newFolderName: `QA SaveWhere ${stamp}`, fileName: "Mine" }, "mine.pdf", bytes("mine"))
     check("S17 Change place: My files, with a new folder made on the spot (its own login)", r9.ok && (await docRow((r9 as any).filed.fileId)).length === 0, JSON.stringify(r9))
-    const r9b = await D.validateDestination({ mode: "save", purpose: "something_else", ownerId: myFiles, folderId: mtop![0].id, newFolderName: "x", fileName: "Mine" }, D.realDestinationDeps({ id: "00000000-0000-4000-8000-0000000000ff", ownerOnly: false }), "mine.pdf")
+    const r9b = await D.validateDestination({ proposalOf: null, mode: "save", purpose: "something_else", ownerId: myFiles, folderId: mtop![0].id, newFolderName: "x", fileName: "Mine" }, D.realDestinationDeps({ id: "00000000-0000-4000-8000-0000000000ff", ownerOnly: false }), "mine.pdf")
     check("S18 another login cannot save into someone else's My files", !r9b.decision.ok, JSON.stringify(r9b.decision))
 
     // ── personal papers
@@ -138,17 +138,17 @@ async function main() {
     check("S21 a CLOSED company with no storage → refused, the plain sentence (archived)", pB.state === "refused" && pB.why === NO_STORAGE_REASON_SENTENCE.archived, JSON.stringify(pB))
     const pC = await propose("irs_ein_request", { kind: "company", accountId: C.id, name: C.company_name }, "x.pdf")
     check("S22 an open company with no storage and no folder → refused (no_folder)", pC.state === "refused" && pC.why === NO_STORAGE_REASON_SENTENCE.no_folder, JSON.stringify(pC))
-    const wrong = await D.validateDestination({ mode: "save", purpose: "something_else", ownerId: A.ownerId!, folderId: p3b.folderId, newFolderName: null, fileName: "x" }, D.realDestinationDeps(login), "x.pdf")
+    const wrong = await D.validateDestination({ proposalOf: null, mode: "save", purpose: "something_else", ownerId: A.ownerId!, folderId: p3b.folderId, newFolderName: null, fileName: "x" }, D.realDestinationDeps(login), "x.pdf")
     check("S23 WRONG OWNER: a Business folder with the company as owner → refused", !wrong.decision.ok && /not in the place you chose/.test(wrong.decision.error ?? ""), JSON.stringify(wrong.decision))
     const { data: tmpF } = await sb.from("store_folders").insert({ owner_id: A.ownerId, parent_id: corr![0].id, kind: "custom", name: `QA trashed ${stamp}`, trashed_at: new Date().toISOString() }).select("id").single()
-    const tr = await D.validateDestination({ mode: "save", purpose: "something_else", ownerId: A.ownerId!, folderId: tmpF.id, newFolderName: null, fileName: "x" }, D.realDestinationDeps(login), "x.pdf")
+    const tr = await D.validateDestination({ proposalOf: null, mode: "save", purpose: "something_else", ownerId: A.ownerId!, folderId: tmpF.id, newFolderName: null, fileName: "x" }, D.realDestinationDeps(login), "x.pdf")
     check("S24 a TRASHED folder → refused", !tr.decision.ok && /trash/.test(tr.decision.error ?? ""), JSON.stringify(tr.decision))
     await sb.from("store_owners").update({ study_only: true }).eq("id", E.ownerId)
     const { data: ef } = await sb.from("store_folders").select("id").eq("owner_id", E.ownerId).eq("kind", "tax").is("trashed_at", null).limit(1)
-    const st = await D.validateDestination({ mode: "save", purpose: "irs_tax_return", ownerId: E.ownerId!, folderId: ef![0].id, newFolderName: null, fileName: "x" }, D.realDestinationDeps(login), "x.pdf")
+    const st = await D.validateDestination({ proposalOf: null, mode: "save", purpose: "irs_tax_return", ownerId: E.ownerId!, folderId: ef![0].id, newFolderName: null, fileName: "x" }, D.realDestinationDeps(login), "x.pdf")
     check("S25 a STUDY-ONLY company (Drive-only) → refused with the no-storage sentence", !st.decision.ok && st.decision.error === NO_STORAGE_REASON_SENTENCE.no_folder, JSON.stringify(st.decision))
     const root = (await sb.from("store_folders").select("id").eq("owner_id", A.ownerId).is("parent_id", null).limit(1)).data![0].id
-    const rt = await D.validateDestination({ mode: "save", purpose: "something_else", ownerId: A.ownerId!, folderId: root, newFolderName: null, fileName: "x" }, D.realDestinationDeps(login), "x.pdf")
+    const rt = await D.validateDestination({ proposalOf: null, mode: "save", purpose: "something_else", ownerId: A.ownerId!, folderId: root, newFolderName: null, fileName: "x" }, D.realDestinationDeps(login), "x.pdf")
     check("S26 the top folder of a client takes no file", !rt.decision.ok, JSON.stringify(rt.decision))
     const filesAfter = (await sb.from("store_files").select("id").eq("owner_id", E.ownerId)).data ?? []
     check("S27 nothing was written for the refused places", filesAfter.length === 0)
