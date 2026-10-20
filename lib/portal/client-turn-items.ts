@@ -99,10 +99,10 @@ export async function getClientTurnItems(opts: { accountId?: string | null; cont
     const [acct, person] = await Promise.all([
       opts.accountId
         ? supabaseAdmin.from('service_deliveries').select(cols).eq('status', 'active').eq('account_id', opts.accountId).gte('created_at', sinceIso)
-        : Promise.resolve({ data: [] as ClientTurnSd[] }),
+        : Promise.resolve({ data: [] as ClientTurnSd[], error: null }),
       opts.contactId
         ? supabaseAdmin.from('service_deliveries').select(cols).eq('status', 'active').eq('contact_id', opts.contactId).is('account_id', null).gte('created_at', sinceIso)
-        : Promise.resolve({ data: [] as ClientTurnSd[] }),
+        : Promise.resolve({ data: [] as ClientTurnSd[], error: null }),
     ])
     // supabase-js returns errors instead of throwing — say so, or a missing column (migration not yet on this database) hides the lines silently.
     const readError = acct.error?.message ?? person.error?.message
@@ -120,17 +120,20 @@ export async function getClientTurnItems(opts: { accountId?: string | null; cont
     if (sds.length === 0) return []
 
     const types = Array.from(new Set(sds.map((s) => s.service_type)))
-    const { data: stages, error: stagesError } = await supabaseAdmin
+    // `client_task_in_list` is not in the generated types until the migration is on production (CI regenerates the types from production and
+    // fails on any difference), so this one query is untyped; add the column to lib/database.types.ts right after the production migration runs.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- column not in the generated types yet (see above)
+    const { data: stages, error: stagesError } = (await (supabaseAdmin as any)
       .from('pipeline_stages')
       .select('service_type, stage_name, client_label, client_label_it')
       .eq('waiting_on', 'client')
       .eq('client_task_in_list', true)
-      .in('service_type', types)
+      .in('service_type', types)) as { data: ClientTurnStage[] | null; error: { message: string } | null }
     if (stagesError) {
       await reportReadFailure(stagesError.message)
       return []
     }
-    return buildClientTurnItems({ sds, stages: (stages ?? []) as ClientTurnStage[], goLive })
+    return buildClientTurnItems({ sds, stages: stages ?? [], goLive })
   } catch (err) {
     await reportReadFailure(err instanceof Error ? err.message : String(err))
     return []
