@@ -49,6 +49,7 @@ import {
 } from "@/lib/operations/service-types"
 import { assertServiceTypeNotDeprecated, isPerPersonServiceType } from "@/lib/services"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
+import { wantsServiceStartNotice } from "@/lib/operations/service-start-types"
 import { updateTasksBulk } from "@/lib/operations/task"
 import { setAccountRenewalDate, anniversaryForYear } from "@/lib/operations/renewal-dates"
 import { logAction } from "@/lib/mcp/action-log"
@@ -80,6 +81,11 @@ export interface CreateSDParams {
   target_stage_order?: number
   assigned_to?: string
   notes?: string
+  /**
+   * Do NOT tell the client this service started (the S3 "your service has started" chat message + bell + grouped email). Set it for
+   * repairs and backfills of a service the client already paid for long ago — the system must not announce those as new.
+   */
+  skip_client_notice?: boolean
   /** Defaults to today (YYYY-MM-DD). */
   start_date?: string
   /** Obligation due date (YYYY-MM-DD). Renewal SDs need it — a completed
@@ -455,6 +461,18 @@ export async function createSD(
       await askFirstNamesAtCreation(row.id)
     } catch (err) {
       console.warn(`[createSD] first names ask failed (non-fatal) for SD ${row.id}:`, err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  // S3 (workspace-only plan): a service where WE act first tells the client it started — one chat message in the service's own
+  // topic + one bell row that the 5-minute digest groups into a single email. Nothing happens until the go-live switch is set and
+  // only for services created after it; best-effort and idempotent, a failure never rolls back the SD.
+  if (!params.skip_client_notice && wantsServiceStartNotice(row.service_type)) {
+    try {
+      const { announceServiceStarted } = await import("@/lib/operations/service-start-notice")
+      await announceServiceStarted(row.id)
+    } catch (err) {
+      console.error(`[createSD] service start message failed (non-fatal) for SD ${row.id}:`, err instanceof Error ? err.message : String(err))
     }
   }
 

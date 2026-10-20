@@ -1527,6 +1527,7 @@ export async function POST(req: NextRequest) {
                   contact_id,
                   target_stage: "1st Installment Paid",
                   notes: "Created from chain audit fix",
+                  skip_client_notice: true, // a repair of a service the client already paid for — never announced as new
                 }
               : {
                   service_type: pipeline,
@@ -1534,6 +1535,7 @@ export async function POST(req: NextRequest) {
                   account_id,
                   contact_id,
                   notes: "Created from chain audit fix",
+                  skip_client_notice: true, // a repair of a service the client already paid for — never announced as new
                 }
 
           try {
