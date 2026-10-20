@@ -85,23 +85,37 @@ export function initNameChecksFromWizard(data: Record<string, unknown> | null | 
   return out
 }
 
+/** How a client's free-text answer is cut into names: every separator (the Formation default), or lines/semicolons only. */
+export interface ParseNamesOptions {
+  /**
+   * 'all' (default, what Formation has always done): newlines, commas and semicolons.
+   * 'lines': newlines and semicolons only — a comma is part of the name ("Acme Holdings, LLC").
+   */
+  separators?: 'all' | 'lines'
+  /** Most names kept (default 5). */
+  max?: number
+}
+
 /**
  * Parse a client's free-text "new names" response into a clean name list:
- * split on newlines / commas / semicolons, trim, drop empties, de-dupe
- * (case-insensitive), cap at 5. Pure.
+ * split on newlines / commas / semicolons (or only newlines / semicolons, see
+ * `separators`), trim, drop empties, de-dupe (case-insensitive), cap at `max`
+ * (default 5). Pure.
  */
-export function parseProposedNames(text: unknown): string[] {
+export function parseProposedNames(text: unknown, options: ParseNamesOptions = {}): string[] {
   if (typeof text !== 'string') return []
+  const splitter = options.separators === 'lines' ? /[\n;]+/ : /[\n,;]+/
+  const max = Number.isInteger(options.max) && (options.max as number) > 0 ? (options.max as number) : 5
   const seen = new Set<string>()
   const out: string[] = []
-  for (const raw of text.split(/[\n,;]+/)) {
+  for (const raw of text.split(splitter)) {
     const name = raw.trim()
     if (!name) continue
     const key = name.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
     out.push(name)
-    if (out.length >= 5) break
+    if (out.length >= max) break
   }
   return out
 }
@@ -156,6 +170,75 @@ export function addStaffName(
     ok: true,
     checks: [...list, { name, source: 'staff_added', status: 'pending', updated_at: nowIso }],
   }
+}
+
+/**
+ * Append names a CLIENT proposed (a "propose new names" answer). Unlike a plain
+ * push, a name that matches an existing one — dead names included, by the same
+ * `nameDedupeKey` staff-added names use — is skipped, so a refused name can't
+ * come back through the client's answer either. Returns the new list plus the
+ * names actually added. Pure.
+ */
+export function addClientNames(
+  checks: NameCheck[] | null | undefined,
+  names: readonly string[],
+  nowIso: string,
+): { checks: NameCheck[]; added: string[] } {
+  const list = Array.isArray(checks) ? [...checks] : []
+  const keys = new Set(list.map((c) => nameDedupeKey(c.name)))
+  const added: string[] = []
+  for (const raw of names) {
+    const name = typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : ''
+    const key = nameDedupeKey(name)
+    if (!name || !key || keys.has(key) || name.length > MAX_STAFF_NAME_LENGTH) continue
+    if (list.length >= MAX_NAME_CANDIDATES) break
+    keys.add(key)
+    list.push({ name, source: 'client_resubmit', status: 'pending', updated_at: nowIso })
+    added.push(name)
+  }
+  return { checks: list, added }
+}
+
+/**
+ * The statuses each staff action may START from. The staff panel only ever
+ * offers an action on a matching row, but the server used to apply any action
+ * to any row — a stale tab or a hand-made request could send an unchecked name
+ * to the client, re-mark a state-refused name "filed" (which also unlocks the
+ * filed-name advance gate), or file a name the client never accepted.
+ * `mark_sos_rejected` keeps its original rule (accepted or filed).
+ */
+export type GuardedNameAction =
+  | 'mark_available'
+  | 'mark_not_available'
+  | 'send_to_client'
+  | 'mark_filed'
+  | 'mark_sos_rejected'
+  | 'withdraw'
+
+export const NAME_ACTION_FROM: Record<GuardedNameAction, readonly NameCheckStatus[]> = {
+  mark_available: ['pending', 'not_available'],
+  mark_not_available: ['pending', 'available'],
+  send_to_client: ['available'],
+  mark_filed: ['accepted'],
+  mark_sos_rejected: ['accepted', 'filed'],
+  withdraw: ['sent_to_client'],
+}
+
+const NAME_ACTION_PROBLEM: Record<GuardedNameAction, string> = {
+  mark_available: 'Only a name that is still pending (or marked not available) can be marked available.',
+  mark_not_available: 'Only a name that is pending (or available) can be marked not available.',
+  send_to_client: 'Only a name marked available can be sent to the client.',
+  mark_filed: 'Only a name the client accepted can be marked as filed.',
+  mark_sos_rejected: 'Only a name the client accepted (or that was filed) can be marked as refused by the state.',
+  withdraw: 'Only a name that is waiting for the client can be withdrawn.',
+}
+
+/** null when `action` may start from `status`, else a plain-English reason. Pure. */
+export function nameActionProblem(action: GuardedNameAction, status: NameCheckStatus): string | null {
+  const from = NAME_ACTION_FROM[action]
+  // Not a guarded action (add_name / request_new_names, or an unknown one): the caller decides.
+  if (!from) return null
+  return from.includes(status) ? null : NAME_ACTION_PROBLEM[action]
 }
 
 /** True when at least one name has been filed with the SOS (advance gate). */

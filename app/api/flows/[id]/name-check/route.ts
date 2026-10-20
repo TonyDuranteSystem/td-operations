@@ -18,7 +18,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getOrInitNameChecks, handleNameAction, type NameAction } from '@/lib/operations/formation-name-checks'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
-const ACTIONS: NameAction[] = ['mark_available', 'mark_not_available', 'send_to_client', 'mark_filed', 'mark_sos_rejected', 'request_new_names', 'add_name']
+const ACTIONS: NameAction[] = ['mark_available', 'mark_not_available', 'send_to_client', 'mark_filed', 'mark_sos_rejected', 'request_new_names', 'add_name', 'withdraw']
 
 /** Same identity resolution requireStaffRoute() just validated — used here only to attribute the action (actor/actorId), not to gate access. */
 async function currentUser() {

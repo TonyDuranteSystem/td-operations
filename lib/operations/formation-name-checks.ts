@@ -14,7 +14,10 @@ import {
   parseProposedNames,
   allNamesDead,
   addStaffName,
+  addClientNames,
+  nameActionProblem,
   nameDedupeKey,
+  type GuardedNameAction,
   type NameCheck,
   type NameCheckStatus,
 } from '@/lib/flows/name-checks'
@@ -39,6 +42,10 @@ export type NameAction =
   // Staff types a candidate name directly (client sent one by email/chat).
   // Not tied to an existing row; carries `name` instead of an index.
   | 'add_name'
+  // Takes a name back from the client (waiting for an answer that is not coming,
+  // or sent by mistake): sent_to_client → available, and the open approval
+  // request is cancelled so a late answer can no longer flip it.
+  | 'withdraw'
 
 interface SdRow {
   id: string
@@ -51,6 +58,13 @@ interface SdRow {
   created_at: string | null
   stage: string | null
   updated_at: string | null
+  /** active / completed / cancelled … — outward actions refuse a finished case. */
+  status?: string | null
+}
+
+/** A finished case (completed / cancelled) must not message the client or be moved by a stale tab. */
+function isClosedCase(row: SdRow): boolean {
+  return row.status === 'completed' || row.status === 'cancelled'
 }
 
 async function loadSd(sdId: string): Promise<SdRow | null> {
@@ -58,7 +72,7 @@ async function loadSd(sdId: string): Promise<SdRow | null> {
   // selecting it here errors the whole query (and silently empties name_checks).
   // service_type + the date columns feed the flow-chat topic/year (send_to_client).
   const { data } = await sd()
-    .select('id, contact_id, account_id, name_checks, service_type, due_date, stage_entered_at, created_at, stage, updated_at')
+    .select('id, contact_id, account_id, name_checks, service_type, due_date, stage_entered_at, created_at, stage, updated_at, status')
     .eq('id', sdId)
     .maybeSingle()
   return (data as SdRow | null) ?? null
@@ -68,6 +82,8 @@ interface WriteResult {
   ok: boolean
   conflict?: boolean
   error?: string
+  /** The `updated_at` this write stamped — the version the NEXT guarded write must expect. */
+  updatedAt?: string
 }
 
 /**
@@ -77,7 +93,8 @@ interface WriteResult {
  * back as `conflict`. The write error is no longer swallowed.
  */
 async function writeNameChecks(sdId: string, checks: NameCheck[], expectedUpdatedAt?: string | null): Promise<WriteResult> {
-  let q = sd().update({ name_checks: checks, updated_at: new Date().toISOString() }).eq('id', sdId)
+  const stamp = new Date().toISOString()
+  let q = sd().update({ name_checks: checks, updated_at: stamp }).eq('id', sdId)
   if (expectedUpdatedAt) q = q.eq('updated_at', expectedUpdatedAt)
   const { data, error } = await q.select('id')
   if (error) {
@@ -87,7 +104,7 @@ async function writeNameChecks(sdId: string, checks: NameCheck[], expectedUpdate
   if (expectedUpdatedAt && (!Array.isArray(data) || data.length === 0)) {
     return { ok: false, conflict: true, error: 'The names changed while you were working (someone else or the client just acted). Reload the page and try again.' }
   }
-  return { ok: true }
+  return { ok: true, updatedAt: stamp }
 }
 
 /**
@@ -195,10 +212,29 @@ async function sendNameProposalChatMessage(row: SdRow, displayName: string, stat
  * formation wizard submission for the SD's contact, persist, and return.
  */
 export async function getOrInitNameChecks(sdId: string): Promise<NameCheck[]> {
-  const row = await loadSd(sdId)
-  if (!row) return []
-  if (Array.isArray(row.name_checks) && row.name_checks.length > 0) return row.name_checks
+  return (await loadWithChecks(sdId))?.checks ?? []
+}
 
+/**
+ * ONE read of the case: the name list AND the version stamp (`updated_at`) come
+ * from the same row, so a guarded save can never compare against a stamp that is
+ * newer than the list it read (a client answer landing between two reads used to
+ * pass the guard and be silently overwritten). When the list is empty it is
+ * seeded once, then re-read so the stamp matches the seeding write.
+ */
+async function loadWithChecks(sdId: string): Promise<{ row: SdRow; checks: NameCheck[] } | null> {
+  let row = await loadSd(sdId)
+  if (!row) return null
+  if (Array.isArray(row.name_checks) && row.name_checks.length > 0) return { row, checks: row.name_checks }
+  const seeded = await seedChecksFor(row)
+  if (seeded.length === 0) return { row, checks: [] }
+  await writeNameChecks(sdId, seeded)
+  row = (await loadSd(sdId)) ?? row
+  return { row, checks: Array.isArray(row.name_checks) && row.name_checks.length > 0 ? row.name_checks : seeded }
+}
+
+/** First-time candidates from the contact's formation wizard (falling back to the formation form submission). */
+async function seedChecksFor(row: SdRow): Promise<NameCheck[]> {
   let checks: NameCheck[] = []
   if (row.contact_id) {
     const { data: wp } = await supabaseAdmin
@@ -229,7 +265,6 @@ export async function getOrInitNameChecks(sdId: string): Promise<NameCheck[]> {
     }
     checks = initNameChecksFromWizard(wizardData)
   }
-  if (checks.length > 0) await writeNameChecks(sdId, checks)
   return checks
 }
 
@@ -295,6 +330,39 @@ export async function cancelPendingNewNamesRequests(sdId: string): Promise<void>
   }
 }
 
+/**
+ * Cancel ONE still-pending decision request (the approval card of a name staff
+ * withdrew). Only a pending request is touched — an answered one stays as it is.
+ * Retries once, then reports to the error dashboard (same pattern as
+ * cancelPendingNewNamesRequests): a swallowed failure would leave a card on the
+ * client's portal for a name that is no longer waiting.
+ */
+async function cancelDecisionRequestById(requestId: string, sdId: string): Promise<void> {
+  const run = () =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_decision_requests not in generated types
+    (supabaseAdmin as any)
+      .from('client_decision_requests')
+      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+      .eq('id', requestId)
+      .eq('status', 'pending')
+  let { error } = await run()
+  if (error) ({ error } = await run())
+  if (error) {
+    console.error(`cancelDecisionRequestById failed for request ${requestId}:`, error.message)
+    try {
+      const { reportSystemError } = await import('@/lib/system-errors')
+      await reportSystemError({
+        source: 'server',
+        route: 'lib/operations/formation-name-checks.ts:cancelDecisionRequestById',
+        message: `Could not cancel the approval request ${requestId} of a withdrawn name (SD ${sdId}): ${error.message}`,
+        context: { service_delivery_id: sdId, decision_request_id: requestId },
+      })
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
 /** Apply a staff name action; creates decision requests for send/sos-reject. */
 export async function handleNameAction(params: {
   sdId: string
@@ -307,14 +375,14 @@ export async function handleNameAction(params: {
    *  (that column is NOT NULL, so without it the heads-up message is dropped). */
   actorId?: string | null
 }): Promise<NameActionResult> {
-  const row = await loadSd(params.sdId)
-  if (!row) return { ok: false, error: 'Service delivery not found.' }
-
-  const checks = await getOrInitNameChecks(params.sdId)
-  // Fresh read AFTER any first-time seeding: gives the case's current stage and
-  // the version stamp the guarded save below compares against. (If the load
-  // fails the guard is simply skipped — never blocks on a missing stamp.)
-  const fresh = (await loadSd(params.sdId)) ?? row
+  // ONE read: the list and its version stamp come from the same row (and any
+  // first-time seeding is re-read), so the guarded saves below compare against
+  // the version of the list this action actually saw. (If the stamp is missing
+  // the guard is simply skipped — never blocks on a missing stamp.)
+  const loaded = await loadWithChecks(params.sdId)
+  if (!loaded) return { ok: false, error: 'Service delivery not found.' }
+  const { row, checks } = loaded
+  const fresh = row
   const expectedUpdatedAt = fresh.updated_at ?? null
 
   // add_name: staff types a candidate directly. Only while names are being
@@ -337,6 +405,7 @@ export async function handleNameAction(params: {
   // for a fresh set when none of the current names are viable. Handle before the
   // per-name entry lookup (no nameIndex required).
   if (params.action === 'request_new_names') {
+    if (isClosedCase(row)) return { ok: false, error: 'This case is already finished — nothing can be asked of the client.' }
     // Server-side enforcement of the same rule the staff panel's button
     // visibility already follows — previously the API accepted this action
     // unconditionally, which is exactly how the 2026-09-10 Lead Lift LLC
@@ -367,6 +436,18 @@ export async function handleNameAction(params: {
   const entry = checks[params.nameIndex]
   if (!entry) return { ok: false, error: 'Name not found at that index.' }
 
+  // The action must be valid for THIS name's current status (the panel only
+  // offers valid ones, but a stale tab or a hand-made request must not be able
+  // to, e.g., send an unchecked name to the client or re-mark a refused name
+  // "filed" — that also unlocks the filed-name advance gate).
+  const startProblem = nameActionProblem(params.action as GuardedNameAction, entry.status)
+  if (startProblem) return { ok: false, error: startProblem }
+  // Actions that message the client or move the stage never run on a finished case
+  // (the stage revert would otherwise flip a completed case back to active).
+  if ((params.action === 'send_to_client' || params.action === 'mark_sos_rejected') && isClosedCase(row)) {
+    return { ok: false, error: 'This case is already finished — nothing can be sent to the client or reopened from here.' }
+  }
+
   const now = new Date().toISOString()
   const simple = SIMPLE_STATUS[params.action]
   let savedAlready = false
@@ -378,6 +459,15 @@ export async function handleNameAction(params: {
     const state = await resolveState(row)
     // Hero title = the LLC name (append "LLC" if not already in the name).
     const displayName = /llc\b/i.test(entry.name) ? entry.name : `${entry.name} LLC`
+    // 1. RESERVE the name first (guarded save: status → sent_to_client). If the save
+    // conflicts (someone else just acted) nothing has been sent to the client yet.
+    // The old order created the client's card, chat note and bell BEFORE this save,
+    // so a conflict left an orphan card on the client's portal and a retry created a second one.
+    const previousStatus = entry.status
+    entry.status = 'sent_to_client'
+    entry.updated_at = now
+    const reserved = await writeNameChecks(params.sdId, checks, expectedUpdatedAt)
+    if (!reserved.ok) return { ok: false, error: reserved.error }
     const created = await createDecisionRequest({
       service_delivery_id: params.sdId,
       request_type: 'approval',
@@ -393,24 +483,46 @@ export async function handleNameAction(params: {
       },
       created_by: params.actor,
     })
-    if (!created.ok) return { ok: false, error: created.error }
+    if (!created.ok) {
+      // 2a. The card could not be created: undo the reservation (guarded by the
+      // version we just wrote) so the name never sits at "waiting for the client"
+      // with no card behind it. Best effort — reported if it cannot be undone.
+      entry.status = previousStatus
+      entry.updated_at = new Date().toISOString()
+      const undone = await writeNameChecks(params.sdId, checks, reserved.updatedAt)
+      if (!undone.ok) {
+        try {
+          const { reportSystemError } = await import('@/lib/system-errors')
+          await reportSystemError({
+            source: 'server',
+            route: 'lib/operations/formation-name-checks.ts:send_to_client',
+            message: `A name was reserved as "waiting for the client" but the client request could not be created and the reservation could not be undone (SD ${params.sdId}).`,
+            context: { service_delivery_id: params.sdId, name: entry.name },
+          })
+        } catch {
+          /* best-effort */
+        }
+      }
+      return { ok: false, error: created.error }
+    }
+    // 2b. Link the card to the name (the client's answer is matched by this id; the
+    // name's position is only the fallback). Best effort and version-guarded: if the
+    // list changed in between (the client already answered) the link is skipped.
+    entry.decision_request_id = created.id ?? null
+    await writeNameChecks(params.sdId, checks, reserved.updatedAt)
+    savedAlready = true
     // A candidate just went back in front of the client for approval — any
     // earlier "none of your names work, propose new ones" ask for this SD is
     // now stale. Cancel it in the SAME step the replacement is created, so
     // the client is never shown both at once, and (unlike gating this on the
     // earlier mark_available step) never shown neither in between.
     await cancelPendingNewNamesRequests(params.sdId)
-    entry.status = 'sent_to_client'
-    entry.decision_request_id = created.id ?? null
-    entry.updated_at = now
     await sendNameProposalChatMessage(row, displayName, state, params.actorId ?? null)
   } else if (params.action === 'mark_sos_rejected') {
     // Only a name the client accepted or staff filed can be "refused by the
-    // state". A name still waiting on the client could be answered later and
-    // would flip back to accepted; an unchecked one hasn't been tried.
-    if (entry.status !== 'accepted' && entry.status !== 'filed') {
-      return { ok: false, error: 'Only a name the client accepted (or that was filed) can be marked as refused by the state.' }
-    }
+    // state" (enforced above by nameActionProblem). A name still waiting on the
+    // client could be answered later and would flip back to accepted; an
+    // unchecked one hasn't been tried.
     entry.status = 'rejected_by_sos'
     entry.updated_at = now
     // Record the refusal FIRST (guarded), then talk to the client — if the save
@@ -441,6 +553,19 @@ export async function handleNameAction(params: {
       })
       if (!created.ok) return { ok: false, error: `The refusal was recorded, but the request to the client could not be created: ${created.error}. Use "Request New Names from Client".` }
     }
+  } else if (params.action === 'withdraw') {
+    // Take the name back from the client: status first (guarded), then retract the
+    // open approval request — so a late answer to the card can no longer flip the
+    // name (applyNameDecisionResponse ignores an answer for a name that is no
+    // longer waiting, and a cancelled request refuses the answer outright).
+    const requestId = entry.decision_request_id ?? null
+    entry.status = 'available'
+    entry.decision_request_id = null
+    entry.updated_at = now
+    const saved = await writeNameChecks(params.sdId, checks, expectedUpdatedAt)
+    if (!saved.ok) return { ok: false, error: saved.error }
+    savedAlready = true
+    if (requestId) await cancelDecisionRequestById(requestId, params.sdId)
   } else {
     return { ok: false, error: `Unknown action: ${params.action}` }
   }
@@ -491,7 +616,7 @@ export async function applyNameDecisionResponse(
   status: string,
   response: Record<string, unknown>,
 ): Promise<void> {
-  const marker = (req.options as { name_check?: { kind?: string; name_index?: number } } | null)?.name_check
+  const marker = (req.options as { name_check?: { kind?: string; name_index?: number; split?: string; max?: number } } | null)?.name_check
   if (!marker || !req.service_delivery_id) return
 
   // Read-modify-write with a version guard: if staff (or another answer) changed
@@ -504,8 +629,14 @@ export async function applyNameDecisionResponse(
   let ignored = false
 
   for (let attempt = 0; attempt < 3 && !saved && !ignored; attempt++) {
-    const checks = await getOrInitNameChecks(req.service_delivery_id)
-    const fresh = await loadSd(req.service_delivery_id)
+    // ONE read: the list and the stamp the guarded save compares against.
+    const loaded = await loadWithChecks(req.service_delivery_id)
+    if (!loaded) {
+      ignored = true
+      break
+    }
+    let checks = loaded.checks
+    const fresh = loaded.row
     const now = new Date().toISOString()
     rejectedName = null
     rejectionNote = null
@@ -546,9 +677,14 @@ export async function applyNameDecisionResponse(
         }
       }
     } else if (marker.kind === 'new_names') {
-      for (const name of parseProposedNames(response.text)) {
-        checks.push({ name, source: 'client_resubmit', status: 'pending', updated_at: now })
-      }
+      // `split: 'lines'` (set by asks for ONE or a few full names) keeps a comma
+      // inside a name ("Acme Holdings, LLC"); the default splits on commas as it always did.
+      const proposed = parseProposedNames(response.text, {
+        separators: marker.split === 'lines' ? 'lines' : 'all',
+        max: typeof marker.max === 'number' ? marker.max : undefined,
+      })
+      // A name already on the list — dead ones included — does not come back.
+      checks = addClientNames(checks, proposed, now).checks
     }
 
     const w = await writeNameChecks(req.service_delivery_id, checks, fresh?.updated_at ?? null)

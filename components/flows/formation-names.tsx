@@ -108,6 +108,14 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
     if (ok) void act(i, 'mark_sos_rejected', 'rejected_by_sos')
   }
 
+  // Taking a name back removes the confirmation card from the client's portal — confirm first.
+  function withdrawFromClient(c: NameCheck, i: number) {
+    const ok = window.confirm(
+      `Take "${c.name}" back from the client?\n\nThe confirmation request disappears from their portal and the name goes back to Available.`,
+    )
+    if (ok) void act(i, 'withdraw', 'available')
+  }
+
   async function addName() {
     const name = newName.trim()
     if (!name) return
@@ -205,6 +213,9 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
         )
       case 'available':
         return <Btn onClick={() => act(i, 'send_to_client', 'sent_to_client')} variant="primary">Send to Client →</Btn>
+      case 'sent_to_client':
+        // The way out when the client never answers (or it was sent by mistake).
+        return <Btn onClick={() => withdrawFromClient(c, i)}>Withdraw from client</Btn>
       case 'not_available':
         return <Btn onClick={() => act(i, 'mark_available', 'available')}>Mark Available</Btn>
       case 'accepted':
