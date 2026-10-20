@@ -83,7 +83,7 @@ function filedNameOf(checks: unknown): string | null {
 }
 
 /** The history entry of THIS job's change that has not been undone since, or null. */
-function appliedEntry(history: unknown, sdId: string): { old_name?: string; new_name?: string } | null {
+export function appliedEntry(history: unknown, sdId: string): { old_name?: string; new_name?: string } | null {
   const list = Array.isArray(history) ? (history as Array<Record<string, unknown>>) : []
   for (let i = list.length - 1; i >= 0; i--) {
     const e = list[i]

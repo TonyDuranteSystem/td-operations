@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
 import { DecisionCard } from '@/components/portal/decision-card'
 import type { DecisionRequest } from '@/lib/decisions'
 import { useLocale } from '@/lib/portal/use-locale'
@@ -16,6 +17,9 @@ import { useLocale } from '@/lib/portal/use-locale'
 export function PendingDecisions({ locale }: { locale: 'en' | 'it' }) {
   const [requests, setRequests] = useState<DecisionRequest[]>([])
   const { t } = useLocale()
+  // On a flow's own page the card is shown there, under the progress — repeating it up here showed the same "Action required"
+  // card twice (production QA, 2026-10-20). Requests of OTHER services still show.
+  const flowId = usePathname()?.match(/^\/portal\/flows\/([0-9a-f-]{36})/i)?.[1] ?? null
 
   useEffect(() => {
     let cancelled = false
@@ -32,14 +36,18 @@ export function PendingDecisions({ locale }: { locale: 'en' | 'it' }) {
     }
   }, [])
 
-  if (requests.length === 0) return null
+  // Hidden only when the flow page shows EXACTLY that one card; with several open requests on one job (Formation) the page makes only
+  // the newest answerable, so the strip keeps them all.
+  const onThisFlow = flowId ? requests.filter((r) => r.service_delivery_id === flowId) : []
+  const shown = onThisFlow.length === 1 ? requests.filter((r) => r.service_delivery_id !== flowId) : requests
+  if (shown.length === 0) return null
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0 space-y-3">
       <h2 className="px-1 text-sm font-semibold uppercase tracking-wide text-amber-700">
         {t('decisions.actionRequired')}
       </h2>
-      {requests.map((req) => (
+      {shown.map((req) => (
         <DecisionCard key={req.id} request={req} locale={locale} actionable />
       ))}
     </div>

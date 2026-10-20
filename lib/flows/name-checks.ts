@@ -120,6 +120,55 @@ export function parseProposedNames(text: unknown, options: ParseNamesOptions = {
   return out
 }
 
+/**
+ * True when ONE entered name looks like several names run together ("Acme LLC, Acme Group LLC, Acme Capital LLC" on one
+ * line): it carries more than one "LLC". Pure. A comma INSIDE one name ("Acme Holdings, LLC") has a single "LLC" and passes.
+ */
+export function looksLikeSeveralNames(name: string): boolean {
+  return (name.match(/\bL\.?L\.?C\.?(?=\W|$)/gi) ?? []).length > 1
+}
+
+/**
+ * Why a client's "send us your names" answer cannot be used, in plain words for the CLIENT, or null when it can. Run BEFORE
+ * the answer is saved, so a useless answer is refused with a reason and the card stays open — instead of the card turning to
+ * "Thank you" while nothing was added (production QA, 2026-10-20: a comma list became ONE name; names past the third were
+ * dropped; re-typing a refused name added nothing). Pure.
+ *   - nothing usable typed;
+ *   - more names than the request allows;
+ *   - a name over the length limit, or several names run together in one entry;
+ *   - none of the names would be kept (every one is already on the list — dead names included).
+ */
+export type NamesProblemCode = 'empty' | 'too_many' | 'too_long' | 'run_together' | 'repeat'
+
+export function namesAnswerProblemDetail(p: {
+  text: unknown
+  separators?: 'lines' | 'all'
+  max?: number
+  existing: readonly NameCheck[] | null | undefined
+}): { code: NamesProblemCode; message: string } | null {
+  const names = parseProposedNames(p.text, { separators: p.separators, max: 50 })
+  if (names.length === 0) return { code: 'empty', message: 'Please enter at least one company name.' }
+  const max = Number.isInteger(p.max) && (p.max as number) > 0 ? (p.max as number) : undefined
+  if (max !== undefined && names.length > max) return { code: 'too_many', message: `Please send at most ${max} name${max === 1 ? '' : 's'}, one per line.` }
+  if (names.some((n) => n.length > MAX_STAFF_NAME_LENGTH)) return { code: 'too_long', message: `A company name is too long (max ${MAX_STAFF_NAME_LENGTH} characters).` }
+  if (names.some(looksLikeSeveralNames)) return { code: 'run_together', message: 'Please put each company name on its own line (or in its own box).' }
+  const { added } = addClientNames(p.existing as NameCheck[] | null | undefined, names, '')
+  if (added.length === 0) {
+    return {
+      code: 'repeat',
+      message: names.length === 1
+        ? 'That name is a repeat: it is on our list or was refused earlier. Please send a different name.'
+        : 'Those names are repeats: they are on our list or were refused earlier. Please send different names.',
+    }
+  }
+  return null
+}
+
+/** The same check, as the plain sentence only (null = the answer can be used). */
+export function namesAnswerProblem(p: Parameters<typeof namesAnswerProblemDetail>[0]): string | null {
+  return namesAnswerProblemDetail(p)?.message ?? null
+}
+
 /** Max length of one LLC name typed by staff (client messages interpolate it). */
 export const MAX_STAFF_NAME_LENGTH = 120
 /** Max candidates on one case — stops runaway lists. */
