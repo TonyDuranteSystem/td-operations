@@ -15,7 +15,7 @@ vi.mock('@/lib/supabase/server', () => ({ createClient: () => ({ auth: { getUser
 vi.mock('@/lib/auth', () => ({
   isDashboardUser: (u: { app_metadata?: { role?: string } } | null) => !!u && u.app_metadata?.role !== 'client',
 }))
-vi.mock('@/lib/operations/file-renewal', () => ({ fileRenewal: (...a: unknown[]) => fileRenewalMock(...a) }))
+vi.mock('@/lib/operations/file-renewal', async (orig) => ({ ...(await orig<typeof import('@/lib/operations/file-renewal')>()), fileRenewal: (...a: unknown[]) => fileRenewalMock(...a) }))
 
 const pdf = () => new File([new Uint8Array([1, 2, 3])], 'r.pdf', { type: 'application/pdf' })
 
