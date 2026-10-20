@@ -36,7 +36,10 @@ export function PendingDecisions({ locale }: { locale: 'en' | 'it' }) {
     }
   }, [])
 
-  const shown = flowId ? requests.filter((r) => r.service_delivery_id !== flowId) : requests
+  // Hidden only when the flow page shows EXACTLY that one card; with several open requests on one job (Formation) the page makes only
+  // the newest answerable, so the strip keeps them all.
+  const onThisFlow = flowId ? requests.filter((r) => r.service_delivery_id === flowId) : []
+  const shown = onThisFlow.length === 1 ? requests.filter((r) => r.service_delivery_id !== flowId) : requests
   if (shown.length === 0) return null
 
   return (

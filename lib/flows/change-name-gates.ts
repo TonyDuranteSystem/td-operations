@@ -35,7 +35,7 @@ export const NEED_CONFIRMED_NAME =
 export const NEED_FILED_NAME =
   'Mark the confirmed name as filed with the state first (use "Mark as Filed" in the names list).'
 export const NEED_SIGNED_FORM =
-  'The client has not signed the name-change form yet. Send the form for signature and wait until the client has signed it.'
+  'The client has not signed the name-change form yet. Send the form from this job\u2019s own "Prepare the form for signature" panel (a form sent from anywhere else is not linked to this job) and wait until the client has signed it.'
 export const NEED_NAME_APPLIED =
   'The new name has not been applied yet. Use "Apply new name" on this step first — until then the company still has its old name.'
 

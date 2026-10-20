@@ -51,11 +51,13 @@ let delivery: Record<string, unknown>
 let catalog: Array<Record<string, unknown>> = NEW_CATALOG
 let signedEnvelopes = 0
 let accountHistory: unknown[] = []
+let accountName = 'Old Name LLC'
+let esignReadFails = false
 
 function installFrom() {
   const writes: Array<{ table: string; row: unknown }> = []
   vi.mocked(supabaseAdmin.from).mockImplementation(((table: string) => {
-    const result = table === 'service_deliveries' ? delivery : table === 'accounts' ? { is_test: false, name_history: accountHistory } : null
+    const result = table === 'service_deliveries' ? delivery : table === 'accounts' ? { is_test: false, name_history: accountHistory, company_name: accountName } : null
     const list = table === 'pipeline_stages' ? catalog : []
     const chain: Record<string, unknown> = {}
     const self = () => chain
@@ -64,7 +66,7 @@ function installFrom() {
     chain.maybeSingle = () => Promise.resolve({ data: result, error: null })
     chain.update = (row: unknown) => { writes.push({ table, row }); return chain }
     chain.insert = (row: unknown) => { writes.push({ table, row }); return chain }
-    chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ data: list, count: table === 'esign_envelopes' ? signedEnvelopes : undefined, error: null }).then(resolve)
+    chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ data: list, count: table === 'esign_envelopes' && !esignReadFails ? signedEnvelopes : undefined, error: table === 'esign_envelopes' && esignReadFails ? { message: 'db blinked' } : null }).then(resolve)
     return chain
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }) as any)
@@ -84,6 +86,8 @@ beforeEach(() => {
   catalog = NEW_CATALOG
   signedEnvelopes = 0
   accountHistory = []
+  accountName = 'Old Name LLC'
+  esignReadFails = false
 })
 
 describe('changeNameAdvanceProblem (pure)', () => {
@@ -220,6 +224,31 @@ describe('advanceServiceDelivery for a Company Change Name', () => {
     accountHistory = [{ type: 'change', change_id: 'some-other-job' }]
     installFrom()
     expect((await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.oa })).error).toBe(NEED_NAME_APPLIED)
+  })
+
+  it('a company that ALREADY carries the filed name has nothing to apply — the job is not stranded (capitals-only change, Fix spelling instead of Apply)', async () => {
+    sdAt(CHANGE_NAME_STAGES.records, 6, [nc('Acme LLC', 'filed')])
+    accountName = '  ACME   llc '
+    installFrom()
+    const ok = await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.oa, skip_tasks: true }).catch(() => null)
+    expect(ok?.error ?? '').not.toBe(NEED_NAME_APPLIED)
+    // a DIFFERENT current name still needs Apply
+    accountName = 'Old Name LLC'
+    installFrom()
+    expect((await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.oa })).error).toBe(NEED_NAME_APPLIED)
+  })
+
+  it('a failed database read leaves the signed-form lock OFF — never a wrong "the client has not signed"', async () => {
+    sdAt(CHANGE_NAME_STAGES.sign, 3, [nc('A', 'accepted')])
+    esignReadFails = true
+    installFrom()
+    const res = await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.file, skip_tasks: true }).catch(() => null)
+    expect(res?.error ?? '').not.toBe(NEED_SIGNED_FORM)
+  })
+
+  it('the signed-form refusal tells staff WHERE the form must be sent from', () => {
+    expect(NEED_SIGNED_FORM).toMatch(/Prepare the form for signature/)
+    expect(NEED_SIGNED_FORM).toMatch(/not linked to this job/)
   })
 
   it('a second press on the stage the job is already at is a no-op: no write, no notification', async () => {

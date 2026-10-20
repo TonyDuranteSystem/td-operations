@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { namesAnswerProblem, looksLikeSeveralNames, type NameCheck } from '@/lib/flows/name-checks'
+import { namesAnswerProblem, namesAnswerProblemDetail, looksLikeSeveralNames, type NameCheck } from '@/lib/flows/name-checks'
 import { checkNamesAnswerBeforeSaving } from '@/lib/operations/formation-name-checks'
 
 const read = (f: string) => readFileSync(join(process.cwd(), f), 'utf8')
@@ -66,6 +66,25 @@ describe('namesAnswerProblem — a useless "send us your names" answer is refuse
   })
 })
 
+describe('namesAnswerProblemDetail — every refusal carries a CODE the card translates', () => {
+  const ask = { separators: 'lines' as const, max: 3, existing: [nc('Acme LLC', 'not_available')] }
+  it.each([
+    ['empty', { text: '  ' }],
+    ['too_many', { text: 'A LLC\nB LLC\nC LLC\nD LLC' }],
+    ['too_long', { text: `${'A'.repeat(121)} LLC` }],
+    ['run_together', { text: 'Beta LLC, Gamma LLC' }],
+    ['repeat', { text: 'acme' }],
+  ])('%s', (code, extra) => {
+    const d = namesAnswerProblemDetail({ ...ask, ...extra })
+    expect(d?.code).toBe(code)
+    expect(d?.message.length).toBeGreaterThan(10)
+    expect(namesAnswerProblem({ ...ask, ...extra })).toBe(d?.message)
+  })
+  it('null when the answer can be used', () => {
+    expect(namesAnswerProblemDetail({ ...ask, text: 'Gamma LLC' })).toBeNull()
+  })
+})
+
 describe('checkNamesAnswerBeforeSaving — only the Company Change Name asks are checked', () => {
   const req = (name_check: unknown, sd: string | null = 'sd-1') => ({ options: { name_check }, service_delivery_id: sd }) as never
 
@@ -93,7 +112,7 @@ describe('wiring', () => {
     expect(card).toContain("respond({ text: names.join('\\n') })")
     expect(card).toContain('namesMustDiffer')
     const i18n = read('lib/portal/i18n.ts')
-    for (const key of ['nameChoice1', 'nameChoice2', 'nameChoice3', 'nameChoiceNew', 'nameHint1', 'nameHint2', 'needOneName', 'namesMustDiffer']) {
+    for (const key of ['nameChoice1', 'nameChoice2', 'nameChoice3', 'nameChoiceNew', 'nameHint1', 'nameHint2', 'needOneName', 'namesMustDiffer', 'errNamesEmpty', 'errNamesTooMany', 'errNamesTooLong', 'errNamesRunTogether', 'errNamesRepeat']) {
       expect(i18n.split(`'decisionCard.${key}'`).length - 1, key).toBe(2) // English + Italian
     }
     expect(i18n).toContain("'decisionCard.nameChoice1': '1st Choice Company Name'")
@@ -115,15 +134,23 @@ describe('wiring', () => {
     const s = read('components/portal/pending-decisions.tsx')
     expect(s).toContain("usePathname")
     expect(s).toContain('r.service_delivery_id !== flowId')
+    expect(s).toContain('onThisFlow.length === 1') // several open requests on one job keep showing here (Formation)
     expect(s).toContain('shown.map((req)')
   })
 
-  it('the rejection note is a staff-only chat event (the client chat hides messages with the marker)', () => {
+  it('Company Change Name posts NO "Client rejected ..." chat line (the client read it as their own message); Formation keeps it', () => {
     const s = read('lib/operations/formation-name-checks.ts')
-    // eslint-disable-next-line no-template-curly-in-string -- the source text of a template literal, matched verbatim
-    expect(s).toContain('<!-- chat-event: kind=name_rejected src=client_decision_requests:${req.id} -->')
-    // and the client chat really hides marked messages
-    expect(read('lib/portal/chat-scope.ts')).toContain("'<!-- chat-event:'")
+    expect(s).toContain("if (row && nameLoopPolicyFor(row.service_type)?.key === 'change_name') return")
+    // the staff still see the rejection: the names row shows the note, and the What's New note carries it
+    expect(read('components/flows/formation-names.tsx')).toContain('Client note:')
+    expect(read('lib/operations/decision-request.ts')).toContain('emitDecisionRespondedEvent')
+  })
+
+  it('the answer route passes the refusal CODE through, and the card shows a translated sentence for it', () => {
+    expect(read('app/api/portal/decisions/[id]/respond/route.ts')).toContain('...(result.code ? { code: result.code } : {})')
+    const card = read('components/portal/decision-card.tsx')
+    expect(card).toContain('byCode[data.code]')
+    expect(card).toContain('whitespace-pre-line') // an answered card keeps the line breaks of the names
   })
 
   it('the state\'s stamped document is stored with the generic client type, only for Company Change Name at the client-safe step', () => {

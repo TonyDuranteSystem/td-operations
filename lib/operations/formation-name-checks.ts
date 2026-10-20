@@ -15,7 +15,7 @@ import {
   allNamesDead,
   addStaffName,
   addClientNames,
-  namesAnswerProblem,
+  namesAnswerProblemDetail,
   anotherNameInProgress,
   nameActionProblem,
   nameDedupeKey,
@@ -825,14 +825,14 @@ export async function handleNameAction(params: {
 /**
  * Refuse a client's "send us your names" answer BEFORE it is saved when nothing in it can be used (see
  * namesAnswerProblem) — the card then stays open with the reason instead of turning to "Thank you" while the list did not change.
- * Only for the Company Change Name asks (`split: 'lines'`); Formation's own "new names" answers are unchanged. Returns a plain
- * sentence for the client, or null (also when the list cannot be read — never block an answer on a read failure).
+ * Only for the Company Change Name asks (`split: 'lines'`); Formation's own "new names" answers are unchanged. Returns a code plus a plain
+ * sentence for the client (the card translates the code), or null (also when the list cannot be read — never block an answer on a read failure).
  */
-export async function checkNamesAnswerBeforeSaving(req: DecisionRequest, response: Record<string, unknown>): Promise<string | null> {
+export async function checkNamesAnswerBeforeSaving(req: DecisionRequest, response: Record<string, unknown>): Promise<{ code: string; message: string } | null> {
   const marker = (req.options as { name_check?: { kind?: string; split?: string; max?: number } } | null)?.name_check
   if (!marker || marker.kind !== 'new_names' || marker.split !== 'lines' || !req.service_delivery_id) return null
   const loaded = await loadWithChecks(req.service_delivery_id).catch(() => null)
-  return namesAnswerProblem({ text: response.text, separators: 'lines', max: typeof marker.max === 'number' ? marker.max : undefined, existing: loaded?.checks ?? [] })
+  return namesAnswerProblemDetail({ text: response.text, separators: 'lines', max: typeof marker.max === 'number' ? marker.max : undefined, existing: loaded?.checks ?? [] })
 }
 
 /**
@@ -979,15 +979,18 @@ export async function applyNameDecisionResponse(
   if (rejectedName) {
     try {
       const row = await loadSd(req.service_delivery_id)
+      // Company Change Name posts NO chat line: the workspace names row already shows "Client rejected" with the client's note and the
+      // "(client suggested)" tag, and the staff What's New note ("Client responded to ... Rejected") already carries it. The line used
+      // to go into the SAME conversation the client reads, so the client saw this staff note as their own message (production QA,
+      // 2026-10-20). Formation keeps today's behaviour.
+      if (row && nameLoopPolicyFor(row.service_type)?.key === 'change_name') return
       const topic = row ? buildFlowTopic(row.service_type, deriveFlowYear(row)) || null : null
       const base = rejectionNote
         ? `Client rejected "${rejectedName}" — "${rejectionNote}"`
         : `Client rejected "${rejectedName}".`
-      // The chat-event marker keeps this STAFF note out of the client's chat (without it the client saw it as their own
-      // message — production QA, 2026-10-20). Staff still see the rejection, the note and the suggestion on the name row.
-      const message = `${suggestedNewName
+      const message = suggestedNewName
         ? `${base} They suggested "${suggestedNewName}" instead — added to the name list.`
-        : base}\n\n<!-- chat-event: kind=name_rejected src=client_decision_requests:${req.id} -->`
+        : base
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_id not in generated types
       await (supabaseAdmin as any).from('portal_messages').insert({
         account_id: req.account_id ?? null,

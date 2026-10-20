@@ -166,6 +166,8 @@ export interface RespondDecisionResult {
   ok: boolean
   status?: string
   error?: string
+  /** Why a names answer was refused (the portal card shows a translated sentence for it). */
+  code?: string
   auto_advanced?: boolean
 }
 
@@ -212,7 +214,7 @@ export async function respondToDecisionRequest(params: RespondDecisionParams): P
     try {
       const { checkNamesAnswerBeforeSaving } = await import('@/lib/operations/formation-name-checks')
       const problem = await checkNamesAnswerBeforeSaving(req as never, v.response)
-      if (problem) return { ok: false, error: problem }
+      if (problem) return { ok: false, error: problem.message, code: problem.code }
     } catch {
       // non-critical — save the answer as before
     }

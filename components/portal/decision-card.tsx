@@ -46,6 +46,11 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
     nameHint2: translate('decisionCard.nameHint2'),
     needOneName: translate('decisionCard.needOneName'),
     namesMustDiffer: translate('decisionCard.namesMustDiffer'),
+    errNamesEmpty: translate('decisionCard.errNamesEmpty'),
+    errNamesTooMany: translate('decisionCard.errNamesTooMany'),
+    errNamesTooLong: translate('decisionCard.errNamesTooLong'),
+    errNamesRunTogether: translate('decisionCard.errNamesRunTogether'),
+    errNamesRepeat: translate('decisionCard.errNamesRepeat'),
   }
   const opts = (request.options ?? {}) as Record<string, unknown>
   const message = locale === 'it' && request.message_it ? request.message_it : request.message
@@ -92,7 +97,13 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
         body: JSON.stringify({ response: payload }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data.success) throw new Error(data.error || t.error)
+      if (!res.ok || !data.success) {
+        // A refused names answer comes with a CODE: show it in the client's own language (the server sentence is English only).
+        const byCode: Record<string, string> = {
+          empty: t.errNamesEmpty, too_many: t.errNamesTooMany, too_long: t.errNamesTooLong, run_together: t.errNamesRunTogether, repeat: t.errNamesRepeat,
+        }
+        throw new Error((typeof data.code === 'string' && byCode[data.code]) || data.error || t.error)
+      }
       setLocalResponse({ status: data.status ?? 'responded', response: payload })
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : t.error)
@@ -120,7 +131,7 @@ export function DecisionCard({ request, locale, actionable }: DecisionCardProps)
     return (
       <div className="mt-2 rounded-lg bg-zinc-50 px-3 py-2 text-sm text-zinc-700">
         <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">{t.youResponded}</div>
-        <div className="mt-0.5">{line}</div>
+        <div className="mt-0.5 whitespace-pre-line">{line}</div>
         {request.responded_at && (
           <div className="mt-1 text-[11px] text-zinc-400">
             {new Date(request.responded_at).toLocaleString(locale === 'it' ? 'it-IT' : 'en-US')}
