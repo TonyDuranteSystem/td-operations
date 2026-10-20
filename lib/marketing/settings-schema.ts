@@ -29,7 +29,17 @@ export const MARKETING_SETTING_DEFS = {
       { key: "showed", label: "Showed" },
       { key: "paid_call", label: "Paid call" },
       { key: "upsell_won", label: "Upsell won" },
+      { key: "not_in_target", label: "Not in target" },
     ],
+  },
+  /** Which stage each setter outcome moves a lead to. The keys must exist in pipeline_stages (checked when the outcome is saved). */
+  setter_outcome_stages: {
+    schema: z.object({
+      good: z.string().trim().min(1).max(40),
+      not_in_target: z.string().trim().min(1).max(40),
+      call_back: z.string().trim().min(1).max(40),
+    }),
+    fallback: { good: "qualified", not_in_target: "not_in_target", call_back: "contacted" } as { good: string; not_in_target: string; call_back: string },
   },
   /** Why a lead is marked "not in target" (a reason is required). */
   not_in_target_reasons: {

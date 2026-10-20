@@ -24,11 +24,17 @@ export interface LeadRow {
   existing_client: { contact_ids?: string[]; matched_on?: string[]; check_failed?: boolean } | null
   meta_created_time: string | null
   received_at: string
+  claimed_by: string | null
+  claimed_by_label: string | null
+  claimed_at: string | null
+  callback_at: string | null
+  not_in_target_reason: string | null
+  qualification: Array<{ item: string; ticked: boolean }> | null
 }
 
 export interface LeadEventRow { id: number; kind: string; actor: string; data: Record<string, unknown>; created_at: string }
 
-const COLS = "id, team_id, leadgen_id, full_name, email, phone, country, city, answers, campaign_name, adset_name, ad_name, form_id, platform, status, existing_client, meta_created_time, received_at"
+const COLS = "id, team_id, leadgen_id, full_name, email, phone, country, city, answers, campaign_name, adset_name, ad_name, form_id, platform, status, existing_client, meta_created_time, received_at, claimed_by, claimed_by_label, claimed_at, callback_at, not_in_target_reason, qualification"
 
 export async function listTeamLeads(db: Db, teamId: string, limit = 200): Promise<LeadRow[]> {
   const { data } = await db.from("marketing_leads").select(COLS).eq("team_id", teamId).order("received_at", { ascending: false }).limit(limit)
