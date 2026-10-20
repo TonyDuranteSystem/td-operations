@@ -49,6 +49,12 @@ const nextConfig = {
       ],
     },
   },
+  // CI-only speed switches (set by .github/workflows/ci.yml, never on Vercel).
+  // Trace collection alone is ~4 min of the CI build (two routes glob the whole source tree
+  // above) and the output is only used to package a deploy, which CI does not do.
+  outputFileTracing: process.env.CI_SKIP_TRACE !== '1',
+  // Type checking runs as its own parallel CI job instead of inside the build.
+  typescript: { ignoreBuildErrors: process.env.CI_SKIP_TYPECHECK === '1' },
   eslint: {
     // Warnings in MCP tool files should not block production builds.
     // ESLint still runs in pre-commit (lint-staged) and pre-push hooks.

@@ -227,3 +227,32 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: https://ci-dummy.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_ci_dummy_placeholder
           SUPABASE_SERVICE_ROLE_KEY: sb_secret_ci_dummy_placeholder
+          CI_SKIP_TRACE: "1"
+          CI_SKIP_TYPECHECK: "1"
+
+  # Type check moved out of the build so it runs alongside it, not inside it.
+  types:
+    name: Types
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        # tsconfig.ci.json = the app's tsconfig minus tests/ (the build's own type check never
+        # covered tests/, which have 300+ pre-existing errors). Needs the same big heap as the
+        # build script: the default heap runs out of memory on this codebase.
+        run: npx tsc --noEmit -p tsconfig.ci.json
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
