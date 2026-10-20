@@ -4,7 +4,7 @@ import { getGreeting } from '@/lib/greeting'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { getCompanyEmail } from '@/lib/portal/queries'
 import { getAppSetting } from '@/lib/settings'
-import { buildDigestSections, mergeTypeLabels, pickDigestButtonHref } from '@/lib/portal/digest-render'
+import { buildDigestSections, buildDigestHeadline, mergeTypeLabels, pickDigestButtonHref, SERVICE_STARTED_NOTIFICATION_TYPE } from '@/lib/portal/digest-render'
 import { escapeHtml } from '@/lib/html-escape'
 import { NextRequest, NextResponse } from 'next/server'
 import { logCron } from '@/lib/cron-log'
@@ -198,9 +198,27 @@ export async function GET(request: NextRequest) {
       const isItalian = language === 'Italian' || language === 'it'
       const sections = buildDigestSections(emailNotifs, typeLabels, isItalian)
 
-      const introText = isItalian
-        ? 'Hai nuovi aggiornamenti nel tuo portale:'
-        : 'You have new updates in your portal:'
+      // Subject / opening / closing line: the normal digest wording, or the grouped "your services have started" email (S3).
+      // The company in the opening line comes from the "service started" rows ONLY, and only when they all belong to one company — a
+      // client with several companies must never read another company's name here (the first notification of any type is not enough).
+      let startedCompany: string | null = null
+      const startedAccounts = Array.from(new Set(
+        emailNotifs.filter(n => n.type === SERVICE_STARTED_NOTIFICATION_TYPE).map(n => n.account_id).filter((a): a is string => !!a)
+      ))
+      if (startedAccounts.length === 1) {
+        const { data: startedAcct } = await supabaseAdmin
+          .from('accounts')
+          .select('company_name')
+          .eq('id', startedAccounts[0])
+          .maybeSingle()
+        startedCompany = startedAcct?.company_name ?? null
+      }
+      const headline = buildDigestHeadline({
+        types: emailNotifs.map(n => n.type),
+        isItalian,
+        companyName: startedCompany,
+      })
+      const introText = headline.intro
 
       const buttonText = isItalian ? 'Apri Portale' : 'Open Portal'
       // Land on the one place this email is about (chat tab, signing page, …)
@@ -214,25 +232,23 @@ export async function GET(request: NextRequest) {
           </div>
           <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
             <p style="font-size: 15px; color: #111827;">${greeting},</p>
-            <p style="font-size: 14px; color: #4b5563; margin-bottom: 20px;">${introText}</p>
+            <p style="font-size: 14px; color: #4b5563; margin-bottom: 20px;">${escapeHtml(introText)}</p>
             ${sections.join('')}
+            ${headline.closing ? `<p style="font-size: 14px; color: #4b5563; margin: 4px 0 0;">${escapeHtml(headline.closing)}</p>` : ''}
             <div style="margin-top: 24px; text-align: center;">
               <a href="${escapeHtml(buttonHref)}" style="display: inline-block; padding: 12px 32px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px;">
                 ${buttonText}
               </a>
             </div>
             <p style="color: #9ca3af; font-size: 12px; margin-top: 24px; text-align: center;">
-              ${companyName ? `${companyName} -- ` : ''}Tony Durante LLC
+              ${companyName ? `${escapeHtml(companyName)} -- ` : ''}Tony Durante LLC
             </p>
           </div>
         </div>
       `
 
       // Build email subject
-      const totalCount = emailNotifs.length
-      const subject = isItalian
-        ? `${totalCount} nuov${totalCount === 1 ? 'o aggiornamento' : 'i aggiornamenti'} nel tuo portale`
-        : `${totalCount} new update${totalCount === 1 ? '' : 's'} in your portal`
+      const subject = headline.subject
 
       // Send email — skipped entirely if every pending item was push-delivered
       // (e.g. a PWA client whose only updates are new-document alerts).

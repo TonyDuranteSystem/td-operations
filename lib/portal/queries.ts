@@ -1,6 +1,7 @@
 import { isInvoiceHubOnFor } from '@/lib/portal/invoice-hub'
 import { getInvoiceHubSetting } from '@/lib/settings'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { getClientTurnItems } from '@/lib/portal/client-turn-items'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { resolveMailingAddress, formatAddressString, principalOfficeForClient, mailingForClient, shippingForClient, companyOfficialRow } from '@/lib/addresses'
 import { resolveMemberAddress, chooseWholeAddress } from '@/lib/members/member-address'
@@ -1477,7 +1478,7 @@ export async function getTaxTrackerCatalogStages() {
 // ─── Action Items ──────────────────────────────────────
 
 export interface ActionItem {
-  type: 'form' | 'invoice' | 'signature' | 'wizard'
+  type: 'form' | 'invoice' | 'signature' | 'wizard' | 'service'
   title: string
   titleIt: string
   description: string
@@ -1972,6 +1973,11 @@ export async function getPortalActionItems(
     })
   }
 
+  // ── Services waiting on the client (S3, workspace-only plan) ──
+  // One line per active service whose current step is the client's turn AND is switched on for this box. Only services
+  // created after the S3 go-live switch; nothing at all while the switch is unset (lib/portal/client-turn-items.ts).
+  items.push(...(await getClientTurnItems({ accountId, contactId })))
+
   // Sort: red → orange → blue, then by date (oldest first)
   const priorityOrder = { red: 0, orange: 1, blue: 2 }
   items.sort((a, b) => {
@@ -2128,6 +2134,9 @@ export async function getPortalActionItemsByContact(contactId: string): Promise<
       createdAt: inv.created_at,
     })
   }
+
+  // ── Services waiting on the client (S3) — the person's own (contact-scoped) services, e.g. an ITIN at the signing step ──
+  items.push(...(await getClientTurnItems({ contactId })))
 
   // Sort: red → orange → blue, then by date (oldest first)
   const priorityOrder = { red: 0, orange: 1, blue: 2 }

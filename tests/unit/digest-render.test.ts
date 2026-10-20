@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   DEFAULT_TYPE_LABELS,
   mergeTypeLabels,
   buildDigestSections,
   pickDigestButtonHref,
+  buildDigestHeadline,
 } from '@/lib/portal/digest-render'
 
 describe('mergeTypeLabels', () => {
@@ -143,5 +146,78 @@ describe('pickDigestButtonHref', () => {
 
   it('tolerates a trailing slash on the base URL', () => {
     expect(pickDigestButtonHref(['/portal/sign'], `${BASE}/`)).toBe(`${BASE}/portal/sign`)
+  })
+})
+
+describe('service_started section (S3 grouped email)', () => {
+  const labels = mergeTypeLabels(undefined)
+  it('has its own heading in both languages', () => {
+    const items = [
+      { type: 'service_started', title: 'Public Notary — nothing needed from you for now' },
+      { type: 'service_started', title: 'Shipping Service — nothing needed from you for now' },
+    ]
+    const [en] = buildDigestSections(items, labels, false)
+    expect(en).toContain('What we are doing (2)')
+    const [it] = buildDigestSections(items, labels, true)
+    expect(it).toContain('Cosa stiamo facendo noi (2)')
+  })
+})
+
+describe('buildDigestHeadline', () => {
+  it('a normal digest keeps today\'s wording exactly', () => {
+    expect(buildDigestHeadline({ types: ['chat', 'document'], isItalian: false })).toEqual({
+      subject: '2 new updates in your portal',
+      intro: 'You have new updates in your portal:',
+      closing: null,
+    })
+    expect(buildDigestHeadline({ types: ['chat'], isItalian: false }).subject).toBe('1 new update in your portal')
+    expect(buildDigestHeadline({ types: ['chat'], isItalian: true }).subject).toBe('1 nuovo aggiornamento nel tuo portale')
+    expect(buildDigestHeadline({ types: ['chat', 'chat'], isItalian: true })).toEqual({
+      subject: '2 nuovi aggiornamenti nel tuo portale',
+      intro: 'Hai nuovi aggiornamenti nel tuo portale:',
+      closing: null,
+    })
+  })
+
+  it('a digest with a started service is the grouped email: approved subject, opening line with the company, closing line', () => {
+    expect(buildDigestHeadline({ types: ['service', 'service_started', 'service_started'], isItalian: false, companyName: 'Acme Holdings LLC' })).toEqual({
+      subject: 'Your services have started — here is what happens next',
+      intro: 'Here is what has started for Acme Holdings LLC:',
+      closing: 'We will also message you in your portal chat at every step.',
+    })
+    expect(buildDigestHeadline({ types: ['service_started'], isItalian: true, companyName: 'Acme Holdings LLC' })).toEqual({
+      subject: 'I tuoi servizi sono partiti — ecco cosa succede ora',
+      intro: 'Ecco cosa è partito per Acme Holdings LLC:',
+      closing: 'Ti scriveremo anche nella chat del portale a ogni passo.',
+    })
+  })
+
+  it('the activation welcome and a question card may sit in the same email; anything else means the email is about more than a start, so it keeps the normal wording', () => {
+    const grouped = buildDigestHeadline({ types: ['service', 'service_started', 'decision'], isItalian: false, companyName: 'Acme LLC' })
+    expect(grouped.subject).toBe('Your services have started — here is what happens next')
+    for (const other of ['invoice', 'sign_document', 'deadline', 'chat', 'document', 'new_document', 'tax_document_uploaded', 'anything_else']) {
+      const mixed = buildDigestHeadline({ types: ['service_started', other], isItalian: false, companyName: 'Acme LLC' })
+      expect(mixed.subject, other).toBe('2 new updates in your portal')
+      expect(mixed.intro, other).toBe('You have new updates in your portal:')
+      expect(mixed.closing, other).toBeNull()
+    }
+  })
+
+  it('no company: the opening line addresses the client instead', () => {
+    expect(buildDigestHeadline({ types: ['service_started'], isItalian: false, companyName: null }).intro).toBe('Here is what has started for you:')
+    expect(buildDigestHeadline({ types: ['service_started'], isItalian: true, companyName: '  ' }).intro).toBe('Ecco cosa è partito per te:')
+  })
+})
+
+describe('portal digest cron — S3 wiring', () => {
+  const cron = readFileSync(join(process.cwd(), 'app/api/cron/portal-digest/route.ts'), 'utf8')
+  it('the company in the opening line comes from the "service started" rows only, and only when they all belong to ONE company', () => {
+    expect(cron).toContain("emailNotifs.filter(n => n.type === SERVICE_STARTED_NOTIFICATION_TYPE).map(n => n.account_id)")
+    expect(cron).toContain('if (startedAccounts.length === 1) {')
+    expect(cron).toContain('companyName: startedCompany,')
+  })
+  it('the opening line and the footer company name are HTML-escaped (a company name is typed by the client)', () => {
+    expect(cron).toContain('escapeHtml(introText)')
+    expect(cron).toContain('escapeHtml(companyName)')
   })
 })
