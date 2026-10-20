@@ -12525,6 +12525,7 @@ export type Database = {
           client_label: string | null
           client_label_it: string | null
           client_notification_message: string | null
+          client_task_in_list: boolean
           client_visible: boolean
           color: string | null
           completes_service: boolean
@@ -12557,6 +12558,7 @@ export type Database = {
           client_label?: string | null
           client_label_it?: string | null
           client_notification_message?: string | null
+          client_task_in_list?: boolean
           client_visible?: boolean
           color?: string | null
           completes_service?: boolean
@@ -12589,6 +12591,7 @@ export type Database = {
           client_label?: string | null
           client_label_it?: string | null
           client_notification_message?: string | null
+          client_task_in_list?: boolean
           client_visible?: boolean
           color?: string | null
           completes_service?: boolean
