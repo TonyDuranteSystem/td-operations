@@ -15,10 +15,12 @@
  * files are named like "…Signed_for_IRS".
  */
 
-/** Pure: the file name as lowercase words separated by single spaces (also splits camelCase and letter↔digit). */
+/** Pure: the file name as lowercase words separated by single spaces (accents removed; also splits camelCase, ACRONYMName and letter↔digit). */
 export function normalizeFaxName(fileName: string): string {
   return fileName
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")        // "Identità" → "Identita"
     .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")                   // "ITINRossi" → "ITIN Rossi"
     .replace(/([A-Za-z])(\d)/g, "$1 $2")
     .replace(/(\d)([A-Za-z])/g, "$1 $2")
     .replace(/[^A-Za-z0-9]+/g, " ")
@@ -26,11 +28,17 @@ export function normalizeFaxName(fileName: string): string {
     .toLowerCase()
 }
 
-/** Identity and residence papers: they belong to ONE person. Whole words only — "Business License" and "Driver Services" are company papers. */
+/**
+ * Identity and residence papers: they belong to ONE person. Whole words only — "Business License", "Driver Services", "Tax ID" and
+ * "Identity Verification Services" are company papers. English and Italian (Italian clients are common).
+ */
 const IDENTITY = [
-  "passport", "passaporto", "id card", "idcard", "identity card", "identity document", "driver licen[cs]e", "driver s licen[cs]e", "drivers licen[cs]e",
-  "driving licen[cs]e", "carta d identit[a-z]*", "birth cert[a-z]*", "visa", "i 94", "w 7", "itin", "ssn", "social security", "proof of address",
-  "utility bill", "w 8 ben", "8843",
+  "passport", "passaporto", "id card", "idcard", "photo id", "identity card", "identity document", "identity(?! (?:verification|theft|protection|services|access|management))",
+  "driver licen[cs]e", "driver s licen[cs]e", "drivers licen[cs]e", "driving licen[cs]e", "green card", "ead", "residence permit", "ss 5",
+  "carta d? ?identit[a-z]*", "documento d? ?identit[a-z]*", "patente", "codice fiscale", "tessera sanitaria", "permesso di soggiorno",
+  "birth cert[a-z]*", "visa", "i 94", "w 7", "itin", "ssn", "social security", "proof of address", "utility bill", "w 8 ben", "8843",
+  // a lone "ID" (Rossi_ID.pdf) — but not "Tax ID" / "Employer ID" / "Company ID" letters
+  "(?<!tax )(?<!employer )(?<!company )(?<!state )id(?= (?:pdf|jpe?g|png|tiff?|heic|gif)$|$)",
 ]
 /** Forms that carry a person's tax id: SS-4 names a responsible person; 1040 / 1040-NR are an individual's return. */
 const PERSONAL_FORM = ["ss 4", "1040(?: nr| sr| x)?"]
@@ -50,8 +58,8 @@ export function personalKind(fileName: string): PersonalKind {
 }
 
 /**
- * A person's own paper in either sense. CONSERVATIVE: a company return (1120, 1065, 5472 …) is not personal. Used by the
- * "Don't save" copy (a personal paper keeps the bucket copy but is attached to NO company).
+ * A person's own paper in either sense. CONSERVATIVE: a company return (1120, 1065, 5472 …) is not personal. (The internal copy of a
+ * fax is NEVER attached to a company; an identity paper gets no internal copy at all — see the send route.)
  */
 export function looksPersonal(fileName: string): boolean {
   return personalKind(fileName) !== null

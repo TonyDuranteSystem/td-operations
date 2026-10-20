@@ -9,10 +9,11 @@
  * `file_base64` (a source that route already accepts, alongside its
  * Drive-`document_id` path).
  */
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Loader2, Printer } from 'lucide-react'
 import { isValidFaxNo, normalizeFaxNo } from '@/lib/fax/faxage'
 import { fetchStorageFileBytes } from '@/lib/crm-storage/fetch-file'
+import { FAX_INLINE_MAX_BYTES, faxSizeProblem } from '@/lib/fax/staged-upload'
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -43,8 +44,9 @@ export function ShareFaxDialog({
   const [faxNo, setFaxNo] = useState('')
   const [coverMessage, setCoverMessage] = useState('')
   const [sending, setSending] = useState(false)
+  const sendId = useRef(crypto.randomUUID())   // one Send = one fax
 
-  const handleSend = async () => {
+  const handleSend = async (confirmAgain = false) => {
     if (sending) return
     const normalized = normalizeFaxNo(faxNo)
     if (!isValidFaxNo(normalized)) {
@@ -54,16 +56,31 @@ export function ShareFaxDialog({
     setSending(true)
     try {
       const file = await fetchStorageFileBytes(fileId, fileName, mimeType)
-      const file_base64 = await fileToBase64(file)
-      const res = await fetch('/api/tools/fax/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ faxno: normalized, file_base64, file_name: fileName, cover_message: coverMessage.trim() || undefined }),
-      })
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
-        throw new Error(d.error || 'Could not send the fax. Please try again.')
+      const tooBig = faxSizeProblem(file.size)
+      if (tooBig) throw new Error(tooBig)
+      // `already_stored`: the file is ALREADY in the storage — the fax tool must not make a second internal copy of it
+      const payload: Record<string, unknown> = { faxno: normalized, file_name: fileName, already_stored: true, cover_message: coverMessage.trim() || undefined, send_id: sendId.current, confirm_resend: confirmAgain || undefined }
+      if (file.size > FAX_INLINE_MAX_BYTES) {
+        // too big for the request body: straight to the private storage, the server reads it there
+        const signRes = await fetch('/api/tools/fax/upload-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_name: fileName, file_size: file.size }) })
+        const sign = await signRes.json().catch(() => ({}))
+        if (!signRes.ok) throw new Error(sign.error || 'Could not start the upload. Please try again.')
+        const put = await fetch(sign.signedUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
+        if (!put.ok) throw new Error('The file did not finish uploading. Please try again.')
+        payload.staged_path = sign.path
+      } else {
+        payload.file_base64 = await fileToBase64(file)
       }
+      const res = await fetch('/api/tools/fax/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const d = await res.json().catch(() => ({}))
+      if (res.status === 409 && d.recent_duplicate) {
+        // the same file went to this number a few minutes ago: nothing was sent; ask first
+        setSending(false)
+        if (window.confirm(`${d.error}\n\nSend it again anyway?`)) { sendId.current = crypto.randomUUID(); await handleSend(true) }
+        return
+      }
+      if (!res.ok) throw new Error(d.error || 'Could not send the fax. Please try again.')
+      if (d.history_error) onError(String(d.history_error))
       onSent()
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Could not send the fax. Please try again.')
@@ -102,7 +119,7 @@ export function ShareFaxDialog({
         />
       </label>
       <button
-        onClick={() => void handleSend()}
+        onClick={() => void handleSend(false)}
         disabled={sending || !faxNo.trim()}
         className="flex items-center justify-center gap-2 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-40"
       >

@@ -1,6 +1,6 @@
 /**
  * POST /api/crm-store/save-where/propose — the "Where should this be saved?" window asks: given what the fax is and which company,
- * what place do the rules propose, and why? (Antonio 2026-10-20, dev job c43a8b2e.) Staff only. Reads only; saves nothing, makes no folder.
+ * what place do the rules propose, and why? (Antonio 2026-10-20, dev job c43a8b2e.) Staff only. Saves nothing and makes no folder (the only side effect: the Business area itself is opened on first use, as everywhere else).
  * Body: { purpose, accountId?: string, business?: boolean, fileName }
  * Answer: { state: "proposed" | "choose" | "refused", why, path?, ownerId?, folderId?, newFolderName?, documentType? }
  */

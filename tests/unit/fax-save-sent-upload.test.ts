@@ -17,6 +17,10 @@ describe("personalKind / looksPersonal — a person's own paper", () => {
       "Rossi_ITIN.pdf", "RossiITIN.pdf", "Proof of address.pdf", "Proof_of_Address.pdf", "Utility bill May.pdf", "Utility_Bill.pdf", "visa.pdf", "Rossi_visa.pdf",
       "I-94.pdf", "I94_Rossi.pdf", "W-8BEN.pdf", "W8BEN_Rossi.pdf", "8843.pdf", "Form_8843_Rossi.pdf", "SSN card.jpg", "SSN_Rossi.jpg", "Driver license.jpg",
       "Drivers_License_Rossi.jpg", "Driver's License.jpg", "Driving licence.pdf", "Birth certificate.pdf", "Birth_Cert_Rossi.pdf", "Carta d'identità.pdf", "Social Security card.pdf",
+      // Italian + other common forms (bug-hunter round 2)
+      "Carta_Identità.pdf", "Carta d'identità Rossi.pdf", "CartaIdentita_Rossi.pdf", "Documento d'identità.pdf", "Documento_Identita_Rossi.jpg", "Patente_Rossi.jpg", "Codice fiscale.pdf", "Codice_Fiscale_Rossi.pdf",
+      "Tessera sanitaria.pdf", "Permesso di soggiorno.pdf", "Permesso_di_Soggiorno_Rossi.pdf", "Rossi_ID.pdf", "Rossi ID.jpg", "ID.pdf", "Photo_ID.jpg", "PhotoID_Rossi.png", "Identity_Rossi.pdf", "Green card.pdf", "Green_Card_Rossi.pdf",
+      "EAD_Rossi.pdf", "EAD.pdf", "Residence permit.pdf", "Residence_Permit_Rossi.pdf", "SS-5.pdf", "SS5_Rossi.pdf", "ITINRossi.pdf", "SSNRossi.pdf", "ssn_rossi.jpg",
     ]) {
       expect(personalKind(n), n).toBe("identity")
       expect(looksPersonal(n)).toBe(true)
@@ -32,6 +36,8 @@ describe("personalKind / looksPersonal — a person's own paper", () => {
       "2025 Tax Return - Acme International LLC.pdf", "2025_Tax_Return_Acme_Signed_for_IRS.pdf", "1120 2025.pdf", "Form_1120_2025.pdf", "5472.pdf", "Articles of Organization.pdf", "scan0042.pdf",
       "Business License renewal.pdf", "Business_License.pdf", "Driver Services notice.pdf", "Identity Verification Services letter.pdf", "Advisory notice.pdf", "Itinerary 2025.pdf", "Vista Holdings LLC.pdf", "Assessment.pdf",
       "Idaho Annual Report.pdf", "Licensing agreement.pdf", "License Agreement.pdf",
+      "Marketing_2024.pdf", "Tax ID letter.pdf", "Tax_ID_Acme.pdf", "Employer ID notice.pdf", "EIN Letter Acme.pdf", "Read me.pdf", "Ready notice.pdf", "Patent application.pdf",
+      "Fiscal year report.pdf", "Documento di sintesi.pdf", "Carta dei servizi.pdf", "Brand guidelines.pdf", "Identity Verification Services letter.pdf", "Idle time report.pdf",
     ]) {
       expect(personalKind(n), n).toBeNull()
       expect(looksPersonal(n)).toBe(false)

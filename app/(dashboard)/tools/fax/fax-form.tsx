@@ -9,10 +9,11 @@ import { toast } from 'sonner'
 import { SaveWhereDialog, type SaveWhereChoice } from '@/components/storage/save-where-dialog'
 import { FAX_PURPOSES, type FaxPurpose } from '@/lib/crm-store/save-where'
 
-import { FAX_SHARE_MAX_BYTES, FAX_SHARE_MAX_MB } from '@/lib/crm-storage/share-limits'
+import { FAX_INLINE_MAX_BYTES, FAX_UPLOAD_MAX_BYTES, FAX_UPLOAD_MAX_MB, faxSizeProblem } from '@/lib/fax/staged-upload'
 
-// The file travels inside the request as base64 (about 4/3 of its size) and a request may not exceed 4.5 MB — the same 3 MB the storage's own fax uses.
-const MAX_FILE_MB = FAX_SHARE_MAX_MB
+// A file up to 3 MB travels inside the request (base64 + a 4.5 MB request limit); a bigger one is sent DIRECT to the private storage and
+// the server reads it from there (up to 10 MB).
+const MAX_FILE_MB = FAX_UPLOAD_MAX_MB
 
 export interface RecentDocument {
   id: string
@@ -71,12 +72,15 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
   const [sendId, setSendId] = useState(() => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `s-${Date.now()}-${Math.random().toString(16).slice(2)}`))
   const sendGuard = useRef(createOnceGuard())   // an IRS fax cannot be recalled: one request at a time, decided at once (not at the next render)
   const [asking, setAsking] = useState(false)   // the required "Where should this fax be saved?" window
+  const againRef = useRef(false)   // set by "Send it again anyway": the next send carries the confirm
+  const [dupWarning, setDupWarning] = useState<string | null>(null)   // the same file went to this number a few minutes ago
+  const [historyError, setHistoryError] = useState<string | null>(null)
 
   const COMPANY_PURPOSES: FaxPurpose[] = ['irs_tax_return', 'irs_ein_request']
 
   const onFile = (f: File | null) => {
-    if (f && f.size > FAX_SHARE_MAX_BYTES) {
-      toast.error(`This file is too big to fax from here (max ${MAX_FILE_MB} MB). Make it smaller, or fax it from the storage.`)
+    if (f && f.size > FAX_UPLOAD_MAX_BYTES) {
+      toast.error(faxSizeProblem(f.size) ?? `This file is too big to fax (max ${MAX_FILE_MB} MB).`)
       return
     }
     setFile(f)
@@ -93,13 +97,23 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
     void doSend(null)
   }
 
-  /** Sends the fax. Returns { error } only when the window should stay open (the chosen place was refused before anything was sent). */
-  const doSend = async (choice: SaveWhereChoice | null): Promise<{ error?: string } | void> =>
-    sendGuard.current.run(() => doSendOnce(choice))
+  /** The fax of a send that is already sent / running / the same as one a few minutes ago is NEVER sent again without the user's confirm. */
+  const sendAgainAnyway = () => {
+    setDupWarning(null)
+    setSendId(crypto.randomUUID())   // a NEW send, on purpose
+    againRef.current = true
+    if (source === 'upload') { setAsking(true); return }
+    void doSend(null, true)
+  }
 
-  const doSendOnce = async (choice: SaveWhereChoice | null): Promise<{ error?: string } | void> => {
+  /** Sends the fax. Returns { error } only when the window should stay open (the chosen place was refused before anything was sent). */
+  const doSend = async (choice: SaveWhereChoice | null, confirmAgain = false): Promise<{ error?: string } | void> =>
+    sendGuard.current.run(() => { const again = confirmAgain || againRef.current; againRef.current = false; return doSendOnce(choice, again) })
+
+  const doSendOnce = async (choice: SaveWhereChoice | null, confirmAgain: boolean): Promise<{ error?: string } | void> => {
     setSending(true)
     setSent(null)
+    setHistoryError(null)
     try {
       const payload: Record<string, unknown> = {
         faxno,
@@ -107,9 +121,20 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
         reason: reason || undefined,
         cover_message: coverMessage || undefined,
         send_id: sendId,
+        confirm_resend: confirmAgain || undefined,
       }
       if (source === 'upload' && file) {
-        payload.file_base64 = await fileToBase64(file)
+        if (file.size > FAX_INLINE_MAX_BYTES) {
+          // too big for the request body: straight to the private storage; the server reads it there (up to 10 MB)
+          const signRes = await fetch('/api/tools/fax/upload-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_name: file.name, file_size: file.size }) })
+          const sign = await signRes.json().catch(() => ({}))
+          if (!signRes.ok) throw new Error(sign.error || 'Could not start the upload. Please try again.')
+          const put = await fetch(sign.signedUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
+          if (!put.ok) throw new Error('The file did not finish uploading. Please try again.')
+          payload.staged_path = sign.path
+        } else {
+          payload.file_base64 = await fileToBase64(file)
+        }
         payload.file_name = file.name
         payload.save_choice = choice ?? { mode: 'dont_save' }
       } else {
@@ -121,8 +146,14 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
-      if (res.status === 413) throw new Error(`This file is too big to fax from here (max ${MAX_FILE_MB} MB). Make it smaller, or fax it from the storage.`)
+      if (res.status === 413) throw new Error(`This file is too big to send this way. Make it smaller (the most is ${MAX_FILE_MB} MB) and try again.`)
       const data = await res.json().catch(() => ({}))
+      if (res.status === 409 && data.recent_duplicate) {
+        // the same file went to this number a few minutes ago: nothing was sent; the user decides
+        setDupWarning(String(data.error))
+        setAsking(false)
+        return
+      }
       if (res.status === 409 && data.already_sent) {
         // the fax of THIS Send already went out (the answer was lost, or the copy did not finish): never send it again
         setSent(data.already_sent.job_id ? `Job ${data.already_sent.job_id}` : 'Already sent')
@@ -137,7 +168,8 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
         throw new Error(data.error || 'Could not send the fax. Please try again.')
       }
       setSent(data.job_id ? `Job ${data.job_id}` : (data.faxage_response || 'Fax submitted.'))
-      setSavedWarn(!!data.save_failed)
+      setSavedWarn(!!data.save_failed || !!data.history_error)
+      setHistoryError(data.history_error ? String(data.history_error) : null)
       setSavedNote(
         data.save_failed ? `The fax WAS sent — do not send it again. The copy could not be saved where you chose (${data.save_error}), so it is not in the storage. Save it by hand if you need it.`
           : data.saved?.path ? `Saved in: ${data.saved.path}`
@@ -154,6 +186,20 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
     }
   }
 
+  if (dupWarning) {
+    return (
+      <div className="rounded-xl border border-amber-300 bg-amber-50 p-6">
+        <h2 className="font-semibold text-amber-900">This fax was NOT sent</h2>
+        <p className="mt-2 text-sm text-amber-900 break-words">{dupWarning}</p>
+        <div className="mt-4 flex flex-wrap items-center gap-4">
+          <button type="button" onClick={sendAgainAnyway} className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">Send it again anyway</button>
+          <button type="button" onClick={() => setDupWarning(null)} className="text-sm font-medium text-blue-600 hover:text-blue-700">Do not send</button>
+          <Link href="/tools/fax/history" className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-700"><History className="h-3.5 w-3.5" /> View Fax History</Link>
+        </div>
+      </div>
+    )
+  }
+
   if (sent) {
     return (
       <div className="rounded-xl border border-green-200 bg-green-50 p-6">
@@ -164,6 +210,7 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
         <p className="text-sm text-green-700">The fax was submitted to Faxage for delivery.</p>
         <p className="text-xs text-green-600 mt-2 break-words font-mono">{sent}</p>
         {savedNote && <p className={`text-sm mt-2 break-words ${savedWarn ? 'font-medium text-amber-800' : 'text-green-800'}`}>{savedNote}</p>}
+        {historyError && <p role="alert" className="text-sm mt-2 break-words font-medium text-red-700">{historyError}</p>}
         <div className="mt-4 flex items-center gap-4">
           <button
             onClick={() => { setSent(null); setSavedNote(null); setSavedWarn(false); setFile(null); setDocumentId(''); setSendId(crypto.randomUUID()) }}

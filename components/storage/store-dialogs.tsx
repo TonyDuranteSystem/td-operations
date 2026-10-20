@@ -91,13 +91,15 @@ const ownerIcon = (k: string) => (k === 'company' ? Building2 : k === 'person' ?
  * 'folder' = where a FOLDER may go (a top folder is fine; never inside itself). With `chooseOwner` the
  * picker first lists every storage (search), most likely first (`preferOwnerIds`).
  */
-export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, excludeFolderId, currentFolderId, chooseOwner, preferOwnerIds, newPeople, onPickPerson, allowNewFolder, onPick, onClose }: {
+export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, excludeFolderId, currentFolderId, chooseOwner, preferOwnerIds, newPeople, onPickPerson, allowNewFolder, closeOnEscape, onPick, onClose }: {
   title: string; ownerId?: string; ownerLabel?: string; mode: 'file' | 'folder'; excludeFolderId?: string | null; currentFolderId?: string | null
   chooseOwner?: boolean; preferOwnerIds?: string[]
   /** people of the same company who have NO storage yet: picking one gives them one (made when the file moves) */
   newPeople?: Array<{ contactId: string; name: string }>; onPickPerson?: (contactId: string, name: string) => void
   /** shows "+ New folder here": makes a folder inside the chosen folder (or at the top of Business / My files) and chooses it — used by the save-where window */
   allowNewFolder?: boolean
+  /** Escape closes the picker (used inside the required save-where window, whose own Escape does nothing) */
+  closeOnEscape?: boolean
   /** `newFolderName` is set only with `allowNewFolder`: the folder to be MADE inside `folderId` — nothing is created until the caller saves */
   onPick: (folderId: string, ownerId: string, path: string, newFolderName?: string | null) => void; onClose: () => void
 }) {
@@ -194,8 +196,8 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
     .sort((a, b) => Number(prefer.has(b.id)) - Number(prefer.has(a.id)))
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onClick={onClose} role="dialog" aria-modal="true" aria-label={title}>
-      <div className="flex max-h-[88vh] w-full max-w-lg flex-col rounded-xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()} onKeyDown={trapTabKey}>
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onClick={onClose} role="dialog" aria-modal="true" aria-label={title} data-modal-layer="picker">
+      <div className="flex max-h-[88vh] w-full max-w-lg flex-col rounded-xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (closeOnEscape && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); return } trapTabKey(e) }}>
         <div className="mb-2 flex items-center gap-2">
           <h3 className="flex-1 text-base font-semibold">{title}</h3>
           <button type="button" onClick={onClose} aria-label="Close" className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><X className="h-4 w-4" /></button>

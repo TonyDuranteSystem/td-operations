@@ -7,12 +7,16 @@
  *     // ONE of the following two file sources:
  *     file_base64?: string,          // uploaded file (data: URI tolerated)
  *     file_name?: string,            // name for the uploaded file
+ *     staged_path?: string,          // a big upload staged by /api/tools/fax/upload-url (read and removed here)
+ *     already_stored?: boolean,      // the file is ALREADY in the CRM storage ("Fax this file"): no internal copy is made of it
  *     document_id?: string,          // a `documents` row → downloaded from Drive
  *     // optional metadata:
  *     cover_message?: string,        // logged; see note below
  *     recip_name?: string,
  *     account_id?: string,
  *     service_delivery_id?: string,
+ *     send_id?: string,              // one Send = one fax (see lib/fax/send-claim.ts)
+ *     confirm_resend?: boolean,      // the user confirmed sending the same file to the same number again
  *     // upload source only — where the sent file is kept (the "Where should this be saved?" window; dev job c43a8b2e):
  *     save_choice?: { mode: 'save', purpose, ownerId, folderId, newFolderName?, fileName } | { mode: 'dont_save' },
  *   }
@@ -20,7 +24,11 @@
  * The chosen place is CHECKED BEFORE the fax goes out (staff-only, the folder belongs to that owner, not in the trash, the company
  * has live storage and is not being moved …): a place that is not allowed stops the send with a 422 and the plain sentence. Only after
  * a successful send is the file filed there; a filing failure never fails the fax (ONE system error, the old bucket copy is kept).
- * No save_choice (an older caller sending a file that is already stored) = "Don't save": the internal bucket copy only.
+ * No save_choice (an older caller) = "Don't save": the internal bucket copy only (not for an identity paper or My files).
+ *
+ * ONE fax per Send: a CLAIM row is written to the activity log BEFORE Faxage is called (lib/fax/send-claim.ts); it becomes the history
+ * row the moment Faxage accepts, and is completed after the filing. Every lookup / write is checked: a database error before the send
+ * stops it (503, "the fax was NOT sent"); a failure to write the history after the send raises an alarm and is told to staff plainly.
  *
  * Credentials come from env (FAXAGE_USERNAME / FAXAGE_PASSWORD / FAXAGE_COMPANY)
  * — never from the client. The request shaping + response parsing live in
@@ -36,6 +44,7 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 import { NextRequest, NextResponse } from 'next/server'
+import { createHash } from 'crypto'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
@@ -44,6 +53,8 @@ import { sendFax, isValidFaxNo, normalizeFaxNo, DEFAULT_IRS_FAX_NUMBER, stripBas
 import { isStoreStaffUser } from '@/lib/crm-store/access'
 import { parseSaveChoice, validateDestination, verifyProposalStillHolds, realResolveDeps, saveToDestination, realDestinationDeps, realFileDeps, type FiledCopy, type SaveChoiceSave } from '@/lib/crm-store/save-destination'
 import { personalKind } from '@/lib/fax/save-sent-upload'
+import { claimSend, finishClaim, abandonClaim, realClaimDeps, HISTORY_NOT_SAVED_SENTENCE } from '@/lib/fax/send-claim'
+import { isFaxStagingPath, FAX_STAGING_BUCKET, faxSizeProblem } from '@/lib/fax/staged-upload'
 
 const MAX_COVER_LENGTH = 2000
 
@@ -95,6 +106,7 @@ export async function POST(req: NextRequest) {
     ? body.dedupe_service_delivery_id.trim()
     : null
   const confirmResend: boolean = body.confirm_resend === true
+  const sendId: string | null = typeof body.send_id === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(body.send_id) ? body.send_id : null
 
   // Validate the recipient number.
   if (!isValidFaxNo(faxnoRaw)) {
@@ -105,34 +117,10 @@ export async function POST(req: NextRequest) {
   }
   const faxno = normalizeFaxNo(faxnoRaw)
 
-  // One Send = one fax, even when the answer never reaches the screen (QA 2026-10-20). The window sends a `send_id` that stays the same
-  // until the fax is reported sent; if a fax with that id was already accepted by Faxage, it is NEVER sent again.
-  const sendId: string | null = typeof body.send_id === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(body.send_id) ? body.send_id : null
-  if (sendId) {
-    const { data: again } = await supabaseAdmin
-      .from('action_log')
-      .select('created_at, details')
-      .eq('action_type', 'fax_sent')
-      .eq('details->>send_id', sendId)
-      .limit(1)
-      .maybeSingle()
-    if (again) {
-      const d = (again.details as { job_id?: string; save_error?: string | null; filing_status?: string } | null) ?? {}
-      return NextResponse.json(
-        {
-          success: false,
-          already_sent: { at: again.created_at, job_id: d.job_id ?? null, filing_status: d.filing_status ?? null, save_error: d.save_error ?? null },
-          error: 'This fax WAS already sent' + (d.job_id ? ` (job ${d.job_id})` : '') + '. It was not sent again. Check Fax History; if the copy was not saved, save it by hand.',
-        },
-        { status: 409 },
-      )
-    }
-  }
-
   // Double-send guard (opt-in). A prior 'fax_sent' for this flow → block with a
-  // 409 the caller can turn into an explicit "send again?" confirm.
+  // 409 the caller can turn into an explicit "send again?" confirm. A lookup ERROR stops the send (it never fails open).
   if (dedupeSdId && !confirmResend) {
-    const { data: prior } = await supabaseAdmin
+    const { data: prior, error: priorErr } = await supabaseAdmin
       .from('action_log')
       .select('created_at, details')
       .eq('action_type', 'fax_sent')
@@ -140,6 +128,9 @@ export async function POST(req: NextRequest) {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
+    if (priorErr) {
+      return NextResponse.json({ success: false, error: 'Could not check whether this flow was already faxed. The fax was NOT sent. Please try again.' }, { status: 503 })
+    }
     if (prior) {
       const details = (prior.details as { job_id?: string; faxno?: string } | null) ?? {}
       return NextResponse.json(
@@ -153,10 +144,12 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Resolve the file to send: either a selected document (downloaded from Drive)
-  // or an uploaded base64 file from the client.
+  // Resolve the file to send: a selected document, a file already in the storage, a big upload staged by the browser, or a base64 upload.
   let fileBase64 = ''
   let fileName = 'document.pdf'
+  // "Fax this file" from the storage: the file is already stored, so NO internal copy of it is made (a skipped copy is always the safe side)
+  const alreadyStored = body.already_stored === true && !documentId
+  const recordDocId: string | null = documentId   // the documents row the history links to
   // The company comes ONLY from the stored document or from the place staff chose (validated below). An upload's body.account_id is ignored:
   // a forged id must never attach a documents row to some other company.
   let accountId: string | null = documentId && typeof body.account_id === 'string' && body.account_id.trim() ? body.account_id.trim() : null
@@ -202,6 +195,21 @@ export async function POST(req: NextRequest) {
       )
     }
     if (!accountId && doc.account_id) accountId = doc.account_id as string
+  } else if (body.staged_path !== undefined && body.staged_path !== null) {
+    // a big upload the browser sent direct to the private bucket: read it here, remove it at once (the bytes are in memory now)
+    if (!isFaxStagingPath(body.staged_path)) {
+      return NextResponse.json({ success: false, error: 'The uploaded file was not understood. Please choose it again.' }, { status: 400 })
+    }
+    const { data: blob, error: dlErr } = await supabaseAdmin.storage.from(FAX_STAGING_BUCKET).download(body.staged_path)
+    if (dlErr || !blob) {
+      return NextResponse.json({ success: false, error: 'The uploaded file could not be read. Please choose it again.' }, { status: 400 })
+    }
+    const buf = Buffer.from(await blob.arrayBuffer())
+    await supabaseAdmin.storage.from(FAX_STAGING_BUCKET).remove([body.staged_path]).catch(() => {})
+    const tooBig = faxSizeProblem(buf.length)
+    if (tooBig) return NextResponse.json({ success: false, error: tooBig }, { status: 400 })
+    fileBase64 = buf.toString('base64')
+    fileName = typeof body.file_name === 'string' && body.file_name.trim() ? body.file_name.trim() : 'document.pdf'
   } else {
     fileBase64 = typeof body.file_base64 === 'string' ? body.file_base64 : ''
     fileName = typeof body.file_name === 'string' && body.file_name.trim() ? body.file_name.trim() : 'document.pdf'
@@ -212,10 +220,11 @@ export async function POST(req: NextRequest) {
       )
     }
   }
+  const stored = !!documentId || alreadyStored   // not an upload: nothing new to keep
 
-  // Where the sent file is kept (upload source only; a stored document is not copied again). The place is checked NOW, before the fax
+  // Where the sent file is kept (upload source only; a stored file is not copied again). The place is checked NOW, before the fax
   // goes out: a place that is not allowed stops the send and staff are told in the window.
-  const parsedChoice = documentId ? { ok: true, choice: null } : parseSaveChoice(body.save_choice)
+  const parsedChoice = stored ? { ok: true, choice: null } : parseSaveChoice(body.save_choice)
   if (!parsedChoice.ok) {
     return NextResponse.json({ success: false, destination_error: true, error: parsedChoice.error }, { status: 400 })
   }
@@ -242,6 +251,21 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ONE fax per Send: the claim is written BEFORE Faxage is called (see lib/fax/send-claim.ts). A lookup / write error stops the send.
+  const hash = createHash('sha256').update(Buffer.from(stripBase64Prefix(fileBase64), 'base64')).digest('hex')
+  const claimDeps = await realClaimDeps()
+  const claim = await claimSend({
+    sendId, faxno, hash, confirmResend, actor: user?.email || 'dashboard', summary: `Fax to ${faxno} — ${fileName} (sending)`, serviceDeliveryId,
+  }, claimDeps)
+  if (!claim.ok) {
+    return NextResponse.json({
+      success: false, error: claim.error,
+      ...(claim.code === 'already_sent' ? { already_sent: claim.prior } : {}),
+      ...(claim.code === 'recent_duplicate' ? { recent_duplicate: true, already_faxed: claim.prior } : {}),
+      ...(claim.code === 'in_progress' ? { in_progress: true } : {}),
+    }, { status: claim.status })
+  }
+
   // Send via Faxage.
   let result
   try {
@@ -254,8 +278,14 @@ export async function POST(req: NextRequest) {
     })
   } catch (e) {
     console.error('[fax] Faxage request failed (network/parse):', e)
+    const neverLeft = e instanceof Error && e.name === 'FaxRefusedOutsideProductionError'   // refused before any network call: nothing was sent
+    if (neverLeft) {
+      await abandonClaim(claim.claimId!, claimDeps)
+      return NextResponse.json({ success: false, error: e instanceof Error ? e.message : 'Failed to reach the fax service.' }, { status: 502 })
+    }
+    // the outcome is UNKNOWN (the fax may have left): the claim stays, so a retry is stopped until staff have looked in Fax History
     return NextResponse.json(
-      { success: false, error: e instanceof Error ? e.message : 'Failed to reach the fax service.' },
+      { success: false, error: `${e instanceof Error ? e.message : 'Failed to reach the fax service.'} It is not known whether the fax went out: check Fax History and Faxage before sending it again.` },
       { status: 502 },
     )
   }
@@ -263,6 +293,7 @@ export async function POST(req: NextRequest) {
   if (!result.ok) {
     // Log the FULL raw Faxage response so the cause is visible in server logs.
     console.error('[fax] Faxage rejected the request. Raw response:', result.raw, '| faxno:', faxno, '| file:', fileName)
+    await abandonClaim(claim.claimId!, claimDeps)
     // Faxage auth failures come back as "ERR02: Login incorrect" — surface a
     // credentials-specific message instead of a generic "rejected".
     const low = result.raw.toLowerCase()
@@ -273,8 +304,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error }, { status: 502 })
   }
 
-  // THE FAX HAS GONE OUT. Write the history record NOW, before the (slower) filing: if the filing runs out of time, the irreversible
-  // fax is on record, and a second Send with the same send_id is refused above. The record is completed after the filing.
+  // THE FAX HAS GONE OUT. The claim becomes the history row NOW, before the (slower) filing: if the filing runs out of time, the
+  // irreversible fax is on record and a second Send is refused. The row is completed after the filing. Every write is checked.
   const detailsBase: Record<string, unknown> = {
     faxno,
     recip_name: recipName || null,
@@ -282,46 +313,43 @@ export async function POST(req: NextRequest) {
     file_name: fileName,
     job_id: result.jobId,
     cover_message: coverMessage || null,
-    source: documentId ? 'document' : 'upload',
+    source: documentId ? 'document' : alreadyStored ? 'stored_file' : 'upload',
     send_id: sendId,
-    save_choice: documentId ? 'stored_document' : saveChoice ? saveChoice.mode : 'none',
+    content_hash: hash,
+    save_choice: stored ? 'stored_document' : saveChoice ? saveChoice.mode : 'none',
     faxage_response: result.raw.slice(0, 500),
   }
   const ownerFromChoice = toSave?.validated.owner ?? null
   const logAccount = ownerFromChoice?.kind === 'company' ? ownerFromChoice.account_id : accountId
-  let logId: string | null = null
-  try {
-    const { data: logRow } = await supabaseAdmin.from('action_log').insert({
-      actor: user?.email || 'dashboard',
-      action_type: 'fax_sent',
-      table_name: 'documents',
-      record_id: documentId,
-      account_id: logAccount,
-      service_delivery_id: serviceDeliveryId,
-      summary: `Fax sent to ${faxno} — ${fileName}`,
-      details: { ...detailsBase, filing_status: documentId ? 'not_needed' : 'pending' },
-    }).select('id').single()
-    logId = (logRow?.id as string | undefined) ?? null
-  } catch {
-    /* logging is non-blocking */
+  const summary = `Fax sent to ${faxno} — ${fileName}`
+  const actor = user?.email || 'dashboard'
+  const reportHistoryFailure = async (msg: string) => {
+    try {
+      const { reportSystemError } = await import('@/lib/system-errors')
+      await reportSystemError({ source: 'server', route: '/api/tools/fax/send', method: 'POST', message: `A fax WAS sent but its history entry could not be saved — ${msg}`, context: { faxno, fileName, jobId: result.jobId, sendId } })
+    } catch { /* an alarm never fails a sent fax */ }
   }
+  let historyError: string | null = null
+  const first = await finishClaim(claim.claimId!, { actor, account_id: logAccount, service_delivery_id: serviceDeliveryId, summary, record_id: recordDocId, details: { ...detailsBase, filing_status: stored ? 'not_needed' : 'pending' } }, claimDeps)
+  if (first.via === 'none') { historyError = HISTORY_NOT_SAVED_SENTENCE; await reportHistoryFailure(first.error ?? 'unknown') }
+  const historyId = first.id
 
   // Keep the sent UPLOAD. Nothing below can fail the fax.
   //  1. "Save here": file it at the place staff chose (storage writer, type IRS Fax for an IRS fax, hidden from the client).
   //  2. Otherwise ("Don't save", no choice, or filing failed): the internal bucket copy, so Fax History's "View Document" opens it —
-  //     EXCEPT for a person's identity paper and for anything staff put in a private "My files" (they must not become readable by every
-  //     staff login: no copy, no link, and Fax History says so). A place in Business has no CRM row: it gets the bucket copy for the
-  //     link (Business is open to all staff anyway).
+  //     EXCEPT for a person's identity paper, for an SS-4 / 1040 that staff chose to save, and for anything staff put in a private
+  //     "My files" (they must not become readable by every staff login: no copy, no link, and Fax History says so). A place in Business
+  //     has no CRM row: it gets the bucket copy for the link (Business is open to all staff anyway). The copy stores the PATH only —
+  //     no long-lived signed link.
   let uploadedDocId: string | null = null
   let filed: FiledCopy | null = null
   let saveError: string | null = null
-  if (!documentId && fileBase64) {
+  if (!stored && fileBase64) {
     if (toSave) {
       try {
-        const { createHash } = await import('crypto')
         const bytes0 = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
         filed = await saveToDestination(toSave.choice, toSave.validated.owner!, {
-          bytes: bytes0, mimeType: mimeFromName(toSave.validated.finalName), sha256: createHash('sha256').update(bytes0).digest('hex'),
+          bytes: bytes0, mimeType: mimeFromName(toSave.validated.finalName), sha256: hash,
           actor: user?.id ?? null, unlinked: !!toSave.validated.decision.unlinked, finalName: toSave.validated.finalName,
           // no period year: the storage takes it from the year folder the file sits in (a file moved by hand never contradicts its folder)
           periodYear: null,
@@ -337,9 +365,11 @@ export async function POST(req: NextRequest) {
       }
     }
   }
-  const identityPaper = personalKind(fileName) === 'identity' || (!!toSave && personalKind(toSave.validated.finalName) === 'identity')
-  const noCopyReason: 'personal_paper' | 'my_files' | null = identityPaper ? 'personal_paper' : toSave && ownerFromChoice?.kind === 'private' ? 'my_files' : null
-  if (!documentId && fileBase64 && !uploadedDocId && !noCopyReason) {
+  const kinds = [personalKind(fileName), toSave ? personalKind(toSave.validated.finalName) : null]
+  const identityPaper = kinds.includes('identity')
+  const formPaperSaved = !!toSave && kinds.includes('form')
+  const noCopyReason: 'personal_paper' | 'my_files' | null = identityPaper || formPaperSaved ? 'personal_paper' : toSave && ownerFromChoice?.kind === 'private' ? 'my_files' : null
+  if (!stored && fileBase64 && !uploadedDocId && !noCopyReason) {
     try {
       const bytes = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
       const safeName = (fileName.replace(/[^\w.\-]+/g, '_').slice(0, 120)) || 'document.pdf'
@@ -349,15 +379,13 @@ export async function POST(req: NextRequest) {
         .from('onboarding-uploads')
         .upload(storagePath, bytes, { contentType: mime, upsert: false })
       if (!upErr) {
-        const { data: signed } = await supabaseAdmin.storage
-          .from('onboarding-uploads')
-          .createSignedUrl(storagePath, 60 * 60 * 24 * 365) // 1 year
         const { data: docRow } = await supabaseAdmin
           .from('documents')
           .insert({
             file_name: fileName,
             drive_file_id: `storage:${storagePath}`,
-            drive_link: signed?.signedUrl ?? `onboarding-uploads/${storagePath}`,
+            // the PATH only (the preview route reads `storage:` pointers with the service role) — no signed link that stays valid for a year
+            drive_link: `onboarding-uploads/${storagePath}`,
             mime_type: mime,
             file_size: bytes.length,
             status: 'classified',
@@ -376,28 +404,20 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Complete the history record (best-effort).
-  const finalDetails = {
-    ...detailsBase,
-    filing_status: documentId ? 'not_needed' : saveError ? 'failed' : 'done',
-    saved_at_place: filed?.path ?? null,
-    saved_file_id: filed?.fileId ?? null,
-    save_error: saveError,
-    no_copy_reason: noCopyReason,
-    document_id: documentId ?? uploadedDocId,
-  }
-  try {
-    if (logId) {
-      await supabaseAdmin.from('action_log').update({ record_id: documentId ?? uploadedDocId, details: finalDetails }).eq('id', logId)
-    } else {
-      await supabaseAdmin.from('action_log').insert({
-        actor: user?.email || 'dashboard', action_type: 'fax_sent', table_name: 'documents', record_id: documentId ?? uploadedDocId, account_id: logAccount,
-        service_delivery_id: serviceDeliveryId, summary: `Fax sent to ${faxno} — ${fileName}`, details: finalDetails,
-      })
-    }
-  } catch {
-    /* logging is non-blocking */
-  }
+  // Complete the history record (checked, retried once, then inserted anew; an alarm when nothing can be written).
+  const final = await finishClaim(historyId, {
+    actor, account_id: logAccount, service_delivery_id: serviceDeliveryId, summary, record_id: recordDocId ?? uploadedDocId,
+    details: {
+      ...detailsBase,
+      filing_status: stored ? 'not_needed' : saveError ? 'failed' : 'done',
+      saved_at_place: filed?.path ?? null,
+      saved_file_id: filed?.fileId ?? null,
+      save_error: saveError,
+      no_copy_reason: noCopyReason,
+      document_id: recordDocId ?? uploadedDocId,
+    },
+  }, claimDeps)
+  if (final.via === 'none' && !historyError) { historyError = HISTORY_NOT_SAVED_SENTENCE; await reportHistoryFailure(final.error ?? 'unknown') }
 
   return NextResponse.json({
     success: true,
@@ -408,6 +428,7 @@ export async function POST(req: NextRequest) {
     save_error: saveError,
     save_failed: !!saveError,
     no_copy_reason: noCopyReason,
+    history_error: historyError,
   })
 }
 

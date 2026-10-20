@@ -60,7 +60,8 @@ function DialogEffects({ labelledBy }: { labelledBy: string }) {
       }
       node = parent === document.documentElement ? null : parent
     }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation() } }
+    // Escape does nothing — except inside the folder picker, which closes itself (a step INSIDE the window, not the window)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !(e.target as Element | null)?.closest?.('[data-modal-layer="picker"]')) { e.preventDefault(); e.stopPropagation() } }
     const onDown = (e: MouseEvent) => { if (!dlg.contains(e.target as Node)) e.preventDefault() }
     document.addEventListener('keydown', onKey, true)
     document.addEventListener('mousedown', onDown, true)
@@ -185,10 +186,13 @@ export function SaveWhereDialog({
 
   const ws = { purpose, company, name, loading, proposalKey, requestedKey: requestedKey.current, proposalState: proposal?.state ?? null, picked, busy }
 
-  // the year of a tax return comes from the file name: when the name is edited the proposal is made again (after a short pause)
+  // the year of a tax return comes from the file name: when the name is edited the proposal is made again (after a short pause).
+  // The "is a request for these answers already on its way?" question is asked WHEN THE TIMER FIRES (a ref read during render would be stale).
   useEffect(() => {
-    if (!purpose || !needsRepropose({ ...ws })) return
-    const t = setTimeout(() => { void propose(purpose, company, name) }, 350)
+    if (!purpose || !needsRepropose({ ...ws, requestedKey: null })) return
+    const t = setTimeout(() => {
+      if (needsRepropose({ ...ws, requestedKey: requestedKey.current })) void propose(purpose, company, name)
+    }, 350)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, purpose, company, picked, proposalKey, propose])
@@ -305,7 +309,14 @@ export function SaveWhereDialog({
         )}
       </div>
 
-      {error && <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      {error && (
+        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          <span className="min-w-0 flex-1 break-words">{error}</span>
+          {purpose && !proposal && !loading && !busy && (
+            <button type="button" onClick={() => void propose(purpose, company, name)} className="rounded-md border border-red-300 bg-white px-3 py-1 text-sm font-medium text-red-700 hover:bg-red-50">Try again</button>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
         <button type="button" disabled={busy} onClick={() => void decide({ mode: 'dont_save' })} className="min-h-11 rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-50">
@@ -323,7 +334,7 @@ export function SaveWhereDialog({
       {/* inside the window, so the page-behind lock and the focus trap cover it too */}
       {picking && (
         <FolderPicker
-          title="Pick the place" mode="file" chooseOwner allowNewFolder
+          title="Pick the place" mode="file" chooseOwner allowNewFolder closeOnEscape
           onPick={(folderId, ownerId, path, newFolderName) => { setPicked({ ownerId, folderId, newFolderName: newFolderName ?? null, path: tidyPath(path) }); setPicking(false); setError(null); setTimeout(() => changeBtn.current?.focus(), 0) }}
           onClose={() => { setPicking(false); setTimeout(() => changeBtn.current?.focus(), 0) }}
         />
