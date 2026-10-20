@@ -5,12 +5,12 @@ import { hasPermission } from '@/lib/marketing/permissions'
 import { getMarketingSetting } from '@/lib/marketing/settings'
 import { listTeamLeads } from '@/lib/marketing/leads-read'
 import { leadDb } from '@/lib/marketing/meta-leads/service'
-import { clientFlagText, formatWhen, stageLabel, type StageOption } from '@/lib/marketing/lead-view'
+import { clientFlagText, filterLeads, formatWhen, LEAD_SHOW_OPTIONS, parseLeadShow, stageLabel, type StageOption } from '@/lib/marketing/lead-view'
 
 export const dynamic = 'force-dynamic'
 
 /** TD Marketing — the lead inbox (dev job 9aec66fa, Slice 1): every lead from the ads, newest first, for the signed-in person's team only. */
-export default async function MarketingLeads() {
+export default async function MarketingLeads({ searchParams }: { searchParams: Promise<{ show?: string; stage?: string }> }) {
   const g = await resolveMarketingContext()
   if (g.ok === false) redirect('/marketing')
   if (!hasPermission(g.ctx.permissions, 'leads.read')) {
@@ -21,10 +21,23 @@ export default async function MarketingLeads() {
       </main>
     )
   }
-  const [leads, stages] = await Promise.all([
+  const sp = await searchParams
+  const [allLeads, stages] = await Promise.all([
     listTeamLeads(leadDb(), g.ctx.team.id),
     getMarketingSetting('pipeline_stages', g.ctx.team.id) as Promise<StageOption[]>,
   ])
+  const show = parseLeadShow(sp.show)
+  const stage = stages.some(s => s.key === sp.stage) ? (sp.stage as string) : ''
+  const leads = filterLeads(allLeads, { show, stage }, g.ctx.user.id)
+  const href = (next: { show?: string; stage?: string }) => {
+    const q = new URLSearchParams()
+    const sh = next.show ?? show, st = next.stage ?? stage
+    if (sh !== 'all') q.set('show', sh)
+    if (st) q.set('stage', st)
+    const t = q.toString()
+    return t ? `/marketing/leads?${t}` : '/marketing/leads'
+  }
+  const chip = (on: boolean) => `rounded-full border px-3 py-1 text-xs ${on ? 'border-slate-900 bg-slate-900 text-white' : 'bg-white text-slate-600'}`
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
       <Link href="/marketing" className="text-sm text-slate-500">← {g.ctx.team.name}</Link>
@@ -32,8 +45,17 @@ export default async function MarketingLeads() {
         <h1 className="text-2xl font-semibold">Leads</h1>
         <span className="text-sm text-slate-500">{leads.length} {leads.length === 1 ? 'lead' : 'leads'}</span>
       </div>
+      <nav aria-label="Filter leads" className="mt-3 space-y-2">
+        <div className="flex flex-wrap gap-2">
+          {LEAD_SHOW_OPTIONS.map(o => <Link key={o.key} href={href({ show: o.key })} className={chip(show === o.key)}>{o.label}</Link>)}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Link href={href({ stage: '' })} className={chip(stage === '')}>Every stage</Link>
+          {stages.map(st => <Link key={st.key} href={href({ stage: st.key })} className={chip(stage === st.key)}>{st.label}</Link>)}
+        </div>
+      </nav>
       {leads.length === 0 ? (
-        <p className="mt-6 rounded-xl border bg-white p-5 text-sm text-slate-600">No leads yet. New leads from the ads appear here by themselves, within seconds of someone filling in the form.</p>
+        <p className="mt-6 rounded-xl border bg-white p-5 text-sm text-slate-600">{allLeads.length === 0 ? 'No leads yet. New leads from the ads appear here by themselves, within a few minutes of someone filling in the form.' : 'No leads match this filter.'}</p>
       ) : (
         <ul className="mt-4 space-y-2">
           {leads.map(l => {
@@ -50,6 +72,8 @@ export default async function MarketingLeads() {
                     <div className="shrink-0 text-right">
                       <span className="inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs">{stageLabel(stages, l.status)}</span>
                       <p className="mt-1 text-xs text-slate-400">{formatWhen(l.meta_created_time ?? l.received_at)}</p>
+                      {l.callback_at && <p className="mt-1 text-xs font-medium text-sky-700">Call back {formatWhen(l.callback_at)}</p>}
+                      <p className="mt-1 text-xs text-slate-400">{l.claimed_by === null ? 'Not picked' : l.claimed_by === g.ctx.user.id ? 'Picked by you' : `Picked by ${l.claimed_by_label ?? 'a team member'}`}</p>
                     </div>
                   </div>
                   {flag && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-900">{flag}</p>}
