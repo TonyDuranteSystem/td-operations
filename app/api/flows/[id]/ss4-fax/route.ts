@@ -86,7 +86,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   const { data: prior } = await supabaseAdmin
     .from('action_log')
     .select('created_at, details')
-    .eq('action_type', 'fax_sent')
+    .in('action_type', ['fax_sent', 'fax_claim'])   // an unconfirmed send counts too: the panel must not offer a second fax
     .eq('service_delivery_id', serviceDeliveryId)
     .order('created_at', { ascending: false })
     .limit(1)

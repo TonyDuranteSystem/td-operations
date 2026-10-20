@@ -21,7 +21,8 @@
  * the Fax tool uses — so there is one send/idempotency/audit implementation.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createOnceGuard } from '@/lib/crm-store/once-guard'
 import { Printer, Loader2, Eye, CheckCircle2, AlertTriangle, RefreshCw, Send } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -57,6 +58,9 @@ export function Ss4FaxPanel({ serviceDeliveryId }: { serviceDeliveryId: string }
   const [confirming, setConfirming] = useState(false)
   const [sending, setSending] = useState(false)
   const [sentJob, setSentJob] = useState<string | null>(null)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const sendId = useRef(crypto.randomUUID())   // one Send = one fax (the server refuses a second try with the same id)
+  const sendGuard = useRef(createOnceGuard())   // three clicks in one instant = one request
   const [resending, setResending] = useState(false)
 
   const load = useCallback(async () => {
@@ -80,6 +84,11 @@ export function Ss4FaxPanel({ serviceDeliveryId }: { serviceDeliveryId: string }
 
   async function doSend(confirmResend: boolean) {
     if (!state?.package) return
+    await sendGuard.current.run(() => doSendOnce(confirmResend))
+  }
+
+  async function doSendOnce(confirmResend: boolean) {
+    if (!state?.package) return
     setSending(true)
     try {
       const res = await fetch('/api/tools/fax/send', {
@@ -95,6 +104,7 @@ export function Ss4FaxPanel({ serviceDeliveryId }: { serviceDeliveryId: string }
           service_delivery_id: serviceDeliveryId,
           dedupe_service_delivery_id: serviceDeliveryId,
           confirm_resend: confirmResend,
+          send_id: sendId.current,
         }),
       })
       const data = await res.json().catch(() => ({}))
@@ -102,11 +112,13 @@ export function Ss4FaxPanel({ serviceDeliveryId }: { serviceDeliveryId: string }
         // Server double-send guard tripped — surface it and let staff confirm.
         setConfirming(false)
         setState((s) => (s ? { ...s, already_faxed: data.already_faxed } : s))
+        sendId.current = crypto.randomUUID()   // a confirmed re-send is a NEW send, on purpose
         toast.warning('This flow was already faxed. Confirm below to send it again.')
         return
       }
       if (!res.ok || !data.success) throw new Error(data.error || 'Could not send the fax.')
       setSentJob(data.job_id ? String(data.job_id) : 'submitted')
+      setHistoryError(data.history_error ? String(data.history_error) : null)
       setConfirming(false)
       toast.success('Fax submitted to the IRS.')
     } catch (err) {
@@ -213,6 +225,7 @@ export function Ss4FaxPanel({ serviceDeliveryId }: { serviceDeliveryId: string }
         <p className="text-xs text-green-700 mt-1">
           Job <span className="font-mono">{sentJob}</span>. Upload the fax confirmation below to advance the flow.
         </p>
+        {historyError && <p role="alert" className="mt-2 text-xs font-medium text-red-700">{historyError}</p>}
         <button onClick={() => { setSentJob(null); load() }} className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-green-700 hover:text-green-800">
           <RefreshCw className="h-3.5 w-3.5" /> Back to the fax panel
         </button>

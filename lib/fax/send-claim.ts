@@ -13,6 +13,10 @@
  */
 
 export const RECENT_MINUTES = 10
+/** A claim older than this with no result is shown in Fax History as "outcome unknown — check Faxage" (never as sent). */
+export const STUCK_CLAIM_MINUTES = 2
+/** A lookup or write that takes longer than this is treated as an error (the send is stopped, never waited on forever). */
+export const CLAIM_STEP_TIMEOUT_MS = 8000
 
 export interface ClaimRow { id: string; action_type: string; created_at: string; details: Record<string, unknown> | null }
 
@@ -21,6 +25,8 @@ export interface ClaimDeps {
   listBySendId(sendId: string): Promise<{ rows: ClaimRow[]; error: string | null }>
   /** fax_claim / fax_sent rows for this number + file hash since `sinceIso` */
   listRecentSame(faxno: string, hash: string, sinceIso: string): Promise<{ rows: ClaimRow[]; error: string | null }>
+  /** fax_claim rows (still unresolved) for this number + file hash, of ANY age: an unresolved claim never expires on its own */
+  listPendingSame(faxno: string, hash: string): Promise<{ rows: ClaimRow[]; error: string | null }>
   insertClaim(row: Record<string, unknown>): Promise<{ id: string | null; error: string | null }>
   remove(id: string): Promise<{ error: string | null }>
   update(id: string, patch: Record<string, unknown>): Promise<{ error: string | null }>
@@ -37,7 +43,13 @@ export interface ClaimResult {
   prior?: { at: string | null; job_id: string | null; faxno: string | null; filing_status: string | null; save_error: string | null }
 }
 
-const NOT_SENT = ' The fax was NOT sent.'
+const NOT_SENT = ' This attempt was NOT sent.'
+const CHECK_FAXAGE = ' An earlier attempt may have gone out: check Fax History and Faxage before sending again.'
+
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let t: ReturnType<typeof setTimeout>
+  return Promise.race([p, new Promise<T>((r) => { t = setTimeout(() => r(fallback), ms) })]).finally(() => clearTimeout(t))
+}
 
 const priorOf = (r: ClaimRow) => {
   const d = (r.details ?? {}) as Record<string, unknown>
@@ -49,26 +61,34 @@ export async function claimSend(
   deps: ClaimDeps,
 ): Promise<ClaimResult> {
   const since = new Date((i.now ?? new Date()).getTime() - RECENT_MINUTES * 60_000).toISOString()
+  const T = (p: Promise<{ rows: ClaimRow[]; error: string | null }>) => withTimeout(p, CLAIM_STEP_TIMEOUT_MS, { rows: [], error: 'timed out' })
   const others = async (mine: string | null): Promise<{ rows: ClaimRow[]; error: string | null }> => {
     const out: ClaimRow[] = []
+    const add = (rows: ClaimRow[]) => { for (const row of rows) if (!out.some((x) => x.id === row.id)) out.push(row) }
     if (i.sendId) {
-      const r = await deps.listBySendId(i.sendId)
+      const r = await T(deps.listBySendId(i.sendId))
       if (r.error) return { rows: [], error: r.error }
-      out.push(...r.rows)
+      add(r.rows)
     }
+    // "Send it again anyway" overrides only the COMPLETED same-file fingerprint; an UNRESOLVED claim for the same number + file (any age)
+    // still stops the send until staff have looked at Faxage and said what happened.
     if (!i.confirmResend) {
-      const r = await deps.listRecentSame(i.faxno, i.hash, since)
+      const r = await T(deps.listRecentSame(i.faxno, i.hash, since))
       if (r.error) return { rows: [], error: r.error }
-      for (const row of r.rows) if (!out.some((x) => x.id === row.id)) out.push(row)
+      add(r.rows)
     }
+    const p = await T(deps.listPendingSame(i.faxno, i.hash))
+    if (p.error) return { rows: [], error: p.error }
+    add(p.rows)
     return { rows: out.filter((r) => r.id !== mine), error: null }
   }
   const blocked = (rows: ClaimRow[], before: boolean): ClaimResult | null => {
     if (rows.length === 0) return null
     const sent = rows.find((r) => r.action_type === 'fax_sent')
-    const bySend = i.sendId ? rows.some((r) => (r.details as { send_id?: string } | null)?.send_id === i.sendId) : false
     if (sent) {
       const p = priorOf(sent)
+      // which sentence is true depends on HOW this row matched: the same Send (its id), or only the same number + file
+      const bySend = !!i.sendId && (sent.details as { send_id?: string } | null)?.send_id === i.sendId
       return {
         ok: false, status: 409, code: bySend ? 'already_sent' : 'recent_duplicate', prior: p,
         error: bySend
@@ -79,9 +99,17 @@ export async function claimSend(
     return {
       ok: false, status: 409, code: 'in_progress', prior: priorOf(rows[0]),
       error: before
-        ? 'A send of this fax is already running, or it was interrupted. Check Fax History before sending again. The fax was NOT sent now.'
-        : 'Another send of this fax started at the same moment, so this one stepped aside. Check Fax History before sending again. The fax was NOT sent now.',
+        ? `A send of this fax is already running, or it was interrupted before it finished.${NOT_SENT}${CHECK_FAXAGE} If you have checked and it did not go out, mark it as "not sent" in Fax History.`
+        : `Another send of this fax started at the same moment, so this one stepped aside.${NOT_SENT}${CHECK_FAXAGE}`,
     }
+  }
+  /** Removes our own claim when stepping aside; a failed removal is retried once and told (a leftover marker would block this send). */
+  const stepAside = async (id: string): Promise<string> => {
+    for (let k = 0; k < 2; k++) {
+      const r = await withTimeout(deps.remove(id), CLAIM_STEP_TIMEOUT_MS, { error: 'timed out' })
+      if (!r.error) return ''
+    }
+    return ' A leftover marker of this attempt could not be cleared: mark it as "not sent" in Fax History once you have checked Faxage.'
   }
 
   const first = await others(null)
@@ -89,19 +117,19 @@ export async function claimSend(
   const stop = blocked(first.rows, true)
   if (stop) return stop
 
-  const ins = await deps.insertClaim({
+  const ins = await withTimeout(deps.insertClaim({
     actor: i.actor, action_type: 'fax_claim', table_name: 'documents', service_delivery_id: i.serviceDeliveryId, summary: i.summary,
     details: { send_id: i.sendId, faxno: i.faxno, content_hash: i.hash, claim: 'pending' },
-  })
+  }), CLAIM_STEP_TIMEOUT_MS, { id: null, error: 'timed out' })
   if (ins.error || !ins.id) return { ok: false, status: 503, code: 'claim_failed', error: `Could not start this fax safely.${NOT_SENT} Please try again.` }
 
   const second = await others(ins.id)
   if (second.error) {
-    await deps.remove(ins.id)
-    return { ok: false, status: 503, code: 'lookup_failed', error: `Could not check whether this fax was already sent.${NOT_SENT} Please try again.` }
+    const left = await stepAside(ins.id)
+    return { ok: false, status: 503, code: 'lookup_failed', error: `Could not check whether this fax was already sent.${NOT_SENT} Please try again.${left}` }
   }
   const lost = blocked(second.rows, false)
-  if (lost) { await deps.remove(ins.id); return lost }
+  if (lost) { const left = await stepAside(ins.id); return { ...lost, error: `${lost.error}${left}` } }
   return { ok: true, claimId: ins.id }
 }
 
@@ -146,6 +174,10 @@ export async function realClaimDeps(): Promise<ClaimDeps> {
     },
     listRecentSame: async (faxno, hash, sinceIso) => {
       const { data, error } = await supabaseAdmin.from('action_log').select(cols).in('action_type', ['fax_claim', 'fax_sent']).eq('details->>faxno', faxno).eq('details->>content_hash', hash).gte('created_at', sinceIso)
+      return { rows: (data ?? []) as unknown as ClaimRow[], error: msg(error) }
+    },
+    listPendingSame: async (faxno, hash) => {
+      const { data, error } = await supabaseAdmin.from('action_log').select(cols).eq('action_type', 'fax_claim').eq('details->>faxno', faxno).eq('details->>content_hash', hash)
       return { rows: (data ?? []) as unknown as ClaimRow[], error: msg(error) }
     },
     insertClaim: async (row) => {

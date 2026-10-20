@@ -113,10 +113,48 @@ describe('parseFaxageResponse', () => {
     const r = parseFaxageResponse('ok', false)
     expect(r.ok).toBe(false)
   })
+  it('OUTCOME: only an explicit Faxage "no" is a refusal; a gateway error, a timeout or an empty body is UNKNOWN (the job may be queued)', () => {
+    expect(parseFaxageResponse('JobNum: 99', true).outcome).toBe('accepted')
+    expect(parseFaxageResponse('ERR02: Login incorrect', true).outcome).toBe('refused')
+    expect(parseFaxageResponse('ERR02: Login incorrect', false).outcome).toBe('refused')
+    expect(parseFaxageResponse('Error code 500', true).outcome).toBe('refused')
+    expect(parseFaxageResponse('<html>502 Bad Gateway</html>', false).outcome).toBe('unknown')
+    expect(parseFaxageResponse('504 Gateway Timeout', false).outcome).toBe('unknown')
+    expect(parseFaxageResponse('', true).outcome).toBe('unknown')
+    expect(parseFaxageResponse('', false).outcome).toBe('unknown')
+    expect(parseFaxageResponse('ok', false).outcome).toBe('unknown')
+    expect(parseFaxageResponse('', true).ok).toBe(false)
+  })
   it('does not pull a job id out of an error response', () => {
     const r = parseFaxageResponse('Error code 500', true)
     expect(r.ok).toBe(false)
     expect(r.jobId).toBeNull()
+  })
+})
+
+describe('sendFax — what is provably NOT sent', () => {
+  it('a 502 / 504 after the request left is an UNKNOWN outcome, not a refusal', async () => {
+    for (const status of [502, 504]) {
+      const r = await sendFax({ credentials: { username: 'u', company: 'c', password: 'p' }, faxno: '3055551212', fileName: 'a.pdf', fileBase64: 'AAAA' },
+        (async () => new Response('Bad Gateway', { status })) as unknown as typeof fetch)
+      expect(r.ok).toBe(false); expect(r.outcome).toBe('unknown')
+    }
+  })
+  it('an exception while PREPARING the fax is FaxNotSentError (nothing was sent)', async () => {
+    const { FaxNotSentError, isProvablyNotSent } = await import('@/lib/fax/faxage')
+    const bad = { credentials: { username: 'u', company: 'c', password: 'p' }, faxno: '3055551212', fileName: 'a.pdf', get fileBase64(): string { throw new Error('boom') } }
+    await expect(sendFax(bad as never, (async () => new Response('ok')) as unknown as typeof fetch)).rejects.toBeInstanceOf(FaxNotSentError)
+    expect(isProvablyNotSent(new FaxNotSentError('x'))).toBe(true)
+  })
+  it('isProvablyNotSent: DNS / refused connection yes; a reset, a timeout, a random error no', async () => {
+    const { isProvablyNotSent } = await import('@/lib/fax/faxage')
+    const withCode = (code: string) => Object.assign(new Error('fetch failed'), { cause: { code } })
+    expect(isProvablyNotSent(withCode('ENOTFOUND'))).toBe(true)
+    expect(isProvablyNotSent(withCode('ECONNREFUSED'))).toBe(true)
+    expect(isProvablyNotSent(withCode('ECONNRESET'))).toBe(false)
+    expect(isProvablyNotSent(withCode('UND_ERR_HEADERS_TIMEOUT'))).toBe(false)
+    expect(isProvablyNotSent(new Error('socket hang up'))).toBe(false)
+    expect(isProvablyNotSent('x')).toBe(false)
   })
 })
 

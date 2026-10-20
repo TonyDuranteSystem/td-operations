@@ -17,9 +17,13 @@ export function isFaxStagingPath(p: unknown): p is string {
   return typeof p === 'string' && STAGING_PATH.test(p)
 }
 
+/** Only these endings are ever used in the path (a file name must never leak a fragment into it); anything else becomes ".bin". */
+const STAGING_EXTENSIONS = new Set(['pdf', 'png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'webp', 'bmp', 'heic'])
+
 export function faxStagingPathFor(uuid: string, fileName: string): string {
-  const ext = (fileName.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'bin'
-  return `${FAX_STAGING_PREFIX}${uuid}.${ext}`
+  const raw = (fileName.includes('.') ? fileName.split('.').pop() : '') ?? ''
+  const ext = raw.toLowerCase()
+  return `${FAX_STAGING_PREFIX}${uuid}.${STAGING_EXTENSIONS.has(ext) ? ext : 'bin'}`
 }
 
 /** Pure: the plain sentence when a file is too big even for the staged upload (null = fine). */

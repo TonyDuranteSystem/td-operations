@@ -12,7 +12,7 @@ const OWNER = U(1), FOLDER = U(2), BIZ = U(3), BIZROOT = U(4)
 
 const st = vi.hoisted(() => ({
   user: { id: '00000000-0000-4000-8000-0000000000aa', email: 'luca@tonydurante.us', app_metadata: { role: 'team' } } as Record<string, unknown>,
-  logsAtSend: [] as number[], sendCalls: 0, sendOk: true, sendThrows: false as boolean | 'sandbox', errors: [] as string[], actionLog: [] as Array<Record<string, unknown>>, bucketUploads: [] as string[], docInserts: [] as Array<Record<string, unknown>>,
+  logsAtSend: [] as number[], sendCalls: 0, sendOk: true, sendThrows: false as boolean | 'sandbox' | 'notsent', sendUnknown: false, errors: [] as string[], actionLog: [] as Array<Record<string, unknown>>, bucketUploads: [] as string[], docInserts: [] as Array<Record<string, unknown>>,
   storeReads: 0,
   owners: {} as Record<string, unknown>, folders: {} as Record<string, unknown>, companyState: 'store' as string,
   files: new Map<string, { fileId: string; name: string }>(), rows: [] as Array<Record<string, unknown>>, saves: [] as string[], saveThrows: false, logsAtSave: [] as number[],
@@ -22,8 +22,9 @@ vi.mock('@/lib/supabase/server', () => ({ createClient: () => ({ auth: { getUser
 vi.mock('@/lib/auth', () => ({ isDashboardUser: () => true, isOwnerOnly: () => false }))
 vi.mock('@/lib/google-drive', () => ({ downloadFileBinary: async () => { throw new Error('Drive must not be used') } }))
 vi.mock('@/lib/fax/faxage', () => ({
-  sendFax: async () => { if (st.sendThrows === 'sandbox') { const e = new Error('Fax sending is blocked outside production'); e.name = 'FaxRefusedOutsideProductionError'; throw e } if (st.sendThrows) throw new Error('socket hang up'); st.logsAtSend.push(st.actionLog.length); st.sendCalls++; return st.sendOk ? { ok: true, jobId: 'J1', raw: 'ok' } : { ok: false, jobId: null, raw: 'ERR99 bad' } },
-  isValidFaxNo: () => true, normalizeFaxNo: (x: string) => x, DEFAULT_IRS_FAX_NUMBER: '1', stripBase64Prefix: (x: string) => x,
+  isProvablyNotSent: (e: unknown) => e instanceof Error && (e.name === 'FaxRefusedOutsideProductionError' || (((e as { cause?: { code?: string } }).cause?.code) === 'ENOTFOUND')),
+  sendFax: async () => { if (st.sendThrows === 'sandbox') { const e = new Error('Fax sending is blocked outside production'); e.name = 'FaxRefusedOutsideProductionError'; throw e } if (st.sendThrows === 'notsent') { throw Object.assign(new Error('fetch failed'), { cause: { code: 'ENOTFOUND' } }) } if (st.sendThrows) throw new Error('socket hang up'); st.logsAtSend.push(st.actionLog.length); st.sendCalls++; if (st.sendUnknown) return { ok: false, outcome: 'unknown', jobId: null, raw: '502 Bad Gateway' }; return st.sendOk ? { ok: true, outcome: 'accepted', jobId: 'J1', raw: 'ok' } : { ok: false, outcome: 'refused', jobId: null, raw: 'ERR99 bad' } },
+  isValidFaxNo: (x: string) => String(x).replace(/\D/g, '').length >= 10, normalizeFaxNo: (x: string) => x, DEFAULT_IRS_FAX_NUMBER: '1', stripBase64Prefix: (x: string) => x,
 }))
 vi.mock('@/lib/crm-store/document-pointer', () => ({
   parseStorePointer: (p: string) => (p.startsWith('store:') ? p.slice(6) : null), staffOnlyStorePointers: async () => new Set(),
@@ -77,7 +78,7 @@ vi.mock('@/lib/supabase-admin', () => {
     c.maybeSingle = () => { single = true; return c }
     c.eq = (col: string, val: unknown) => { filters.push((r) => String(getCol(r, col)) === String(val)); return c }
     c.in = (col: string, vals: unknown[]) => { filters.push((r) => vals.includes(getCol(r, col))); return c }
-    c.gte = () => c
+    c.gte = (col: string, val: unknown) => { filters.push((r) => String(getCol(r, col)) >= String(val)); return c }
     c.delete = () => { mode = 'delete'; return c }
     c.update = (p: Record<string, unknown>) => { mode = 'update'; patch = p; return c }
     c.insert = (row: Record<string, unknown>) => {
@@ -85,7 +86,7 @@ vi.mock('@/lib/supabase-admin', () => {
       if (table === 'documents') { st.docInserts.push(row) }
       if (table === 'action_log') {
         if (st.logFail.insert || (st.logFail.insertRecordAfterClaim && row.action_type === 'fax_sent')) { c.__insertError = true; return c }
-        const r = { ...row, id: `log-${st.nextLogId++}`, created_at: '2026-10-20T10:00:00Z' }
+        const r = { ...row, id: `log-${st.nextLogId++}`, created_at: new Date().toISOString() }
         st.actionLog.push(r); c.__inserted = r
       } else c.__inserted = { id: 'bucket-doc' }
       return c
@@ -127,7 +128,7 @@ const send = async (extra: Record<string, unknown> = {}) => {
 
 beforeEach(() => {
   st.user = { id: '00000000-0000-4000-8000-0000000000aa', email: 'luca@tonydurante.us', app_metadata: { role: 'team' } }
-  st.sendCalls = 0; st.logsAtSend.length = 0; st.sendOk = true; st.sendThrows = false; st.errors.length = 0; st.actionLog.length = 0; st.bucketUploads.length = 0; st.docInserts.length = 0; st.storeReads = 0
+  st.sendCalls = 0; st.logsAtSend.length = 0; st.sendOk = true; st.sendThrows = false; st.sendUnknown = false; st.errors.length = 0; st.actionLog.length = 0; st.bucketUploads.length = 0; st.docInserts.length = 0; st.storeReads = 0
   st.companyState = 'store'; st.files.clear(); st.rows.length = 0; st.saves.length = 0; st.saveThrows = false; st.logsAtSave.length = 0; st.logFail = { select: false, insert: false, update: 0, updateAll: false, insertRecordAfterClaim: false }; st.nextLogId = 1; st.signedUrls = 0; st.removed.length = 0; st.staged.clear()
   st.owners = {
     [OWNER]: { id: OWNER, kind: 'company', study_only: false, account_id: 'acc-1', contact_id: null, service_delivery_id: null },
@@ -437,5 +438,56 @@ describe('/api/tools/fax/send — copies and sources', () => {
       expect(r.status).toBe(400)
     }
     expect(st.sendCalls).toBe(0)
+  })
+})
+
+describe('/api/tools/fax/send — outcome unknown, proofs of "not sent", the 10-minute window, staged files', () => {
+  it('a 502 / unclear answer from the fax service KEEPS the claim: a retry with the same send_id is stopped, the answer says to check Faxage', async () => {
+    st.sendUnknown = true
+    const r = await send({ save_choice: saveChoice(), send_id: SEND_ID })
+    expect(r.status).toBe(502); expect(r.body.outcome_unknown).toBe(true); expect(r.body.error).toMatch(/NOT known whether the fax went out/); expect(r.body.error).toMatch(/Faxage/)
+    expect(st.actionLog).toHaveLength(1); expect(st.actionLog[0].action_type).toBe('fax_claim')
+    st.sendUnknown = false
+    const again = await send({ save_choice: saveChoice(), send_id: SEND_ID })
+    expect(again.status).toBe(409); expect(again.body.error).toMatch(/earlier attempt may have gone out/)
+    expect(st.sendCalls).toBe(1)   // only the first attempt ever reached the fax service
+  })
+  it('"Send it again anyway" does not get past that unresolved claim either', async () => {
+    st.sendUnknown = true
+    await send({ save_choice: saveChoice(), send_id: SEND_ID })
+    st.sendUnknown = false
+    const r = await send({ save_choice: saveChoice(), send_id: 'send-0002-cccc-dddd', confirm_resend: true })
+    expect(r.status).toBe(409); expect(r.body.in_progress).toBe(true); expect(st.sendCalls).toBe(1)
+  })
+  it('a name that does not resolve (provably nothing sent) releases the claim; so does an explicit refusal', async () => {
+    st.sendThrows = 'notsent'
+    expect((await send({ save_choice: saveChoice(), send_id: SEND_ID })).status).toBe(502)
+    expect(st.actionLog).toEqual([])
+    st.sendThrows = false
+    expect((await send({ save_choice: saveChoice(), send_id: SEND_ID })).body.success).toBe(true)
+  })
+  it('the 10-minute window at route level: a fax of the same file to the same number an hour ago does NOT block; one a minute ago does', async () => {
+    const hash = (await import('crypto')).createHash('sha256').update(Buffer.from('%PDF')).digest('hex')
+    st.actionLog.push({ id: 'old', action_type: 'fax_sent', created_at: new Date(Date.now() - 60 * 60_000).toISOString(), details: { faxno: '3055551212', content_hash: hash, job_id: 'OLD' } })
+    expect((await send({ save_choice: saveChoice() })).body.success).toBe(true)
+    st.actionLog.length = 0
+    st.actionLog.push({ id: 'recent', action_type: 'fax_sent', created_at: new Date(Date.now() - 60_000).toISOString(), details: { faxno: '3055551212', content_hash: hash, job_id: 'RECENT' } })
+    const r = await send({ save_choice: saveChoice() })
+    expect(r.status).toBe(409); expect(r.body.recent_duplicate).toBe(true); expect(r.body.already_faxed.job_id).toBe('RECENT')
+    expect(r.body.error).not.toMatch(/WAS already sent/)
+  })
+  it('a claim that is still unresolved after an hour STILL blocks (it never expires by itself)', async () => {
+    const hash = (await import('crypto')).createHash('sha256').update(Buffer.from('%PDF')).digest('hex')
+    st.actionLog.push({ id: 'stuck', action_type: 'fax_claim', created_at: new Date(Date.now() - 60 * 60_000).toISOString(), details: { faxno: '3055551212', content_hash: hash } })
+    expect((await send({ save_choice: saveChoice() })).status).toBe(409); expect(st.sendCalls).toBe(0)
+  })
+  it('a staged upload is removed on EVERY way out — also when the request is refused before the send', async () => {
+    const path = 'fax-upload/123e4567-e89b-12d3-a456-426614174000.pdf'
+    st.staged.set(path, Buffer.from('%PDF big'))
+    const bad = await send({ faxno: '12', file_base64: undefined, staged_path: path, save_choice: saveChoice() })
+    expect(bad.status).toBe(400); expect(st.removed).toContain(path)
+    st.removed.length = 0
+    const refused = await send({ file_base64: undefined, staged_path: path, save_choice: saveChoice({ ownerId: U(99) }) })
+    expect(refused.status).toBe(422); expect(st.removed).toContain(path)
   })
 })

@@ -145,7 +145,7 @@ export function ShareFileModal({ file, onClose }: { file: ShareableFile; onClose
         ) : mode === 'portal_chat' ? (
           <SharePortalChatPicker fileId={file.id} fileName={file.file_name} onSent={msg => { setDoneMessage(msg); setMode('done') }} onError={setError} />
         ) : mode === 'fax' ? (
-          <ShareFaxDialog fileId={file.id} fileName={file.file_name} mimeType={file.mime_type} onSent={() => { setDoneMessage('Fax sent.'); setMode('done') }} onError={setError} />
+          <ShareFaxDialog fileId={file.id} fileName={file.file_name} mimeType={file.mime_type} onSent={(note) => { setDoneMessage(note ? `Fax sent. ${note}` : 'Fax sent.'); setMode('done') }} onError={setError} />
         ) : null}
       </div>
     </div>

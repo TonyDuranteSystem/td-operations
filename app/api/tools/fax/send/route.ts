@@ -49,7 +49,8 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { downloadFileBinary } from '@/lib/google-drive'
-import { sendFax, isValidFaxNo, normalizeFaxNo, DEFAULT_IRS_FAX_NUMBER, stripBase64Prefix } from '@/lib/fax/faxage'
+import { sendFax, isValidFaxNo, normalizeFaxNo, DEFAULT_IRS_FAX_NUMBER, stripBase64Prefix, isProvablyNotSent } from '@/lib/fax/faxage'
+import type { User } from '@supabase/supabase-js'
 import { isStoreStaffUser } from '@/lib/crm-store/access'
 import { parseSaveChoice, validateDestination, verifyProposalStillHolds, realResolveDeps, saveToDestination, realDestinationDeps, realFileDeps, type FiledCopy, type SaveChoiceSave } from '@/lib/crm-store/save-destination'
 import { personalKind } from '@/lib/fax/save-sent-upload'
@@ -76,7 +77,21 @@ export async function POST(req: NextRequest) {
   if (!isDashboardUser(user)) {
     return NextResponse.json({ success: false, error: 'Dashboard access required' }, { status: 403 })
   }
+  const body = await req.json().catch(() => ({}))
+  // A big upload staged by the browser is removed on EVERY way out of this request (invalid number, missing credentials, a refused place,
+  // a refused fax …), not only after it was read — so a failed Send leaves nothing behind (the browser stages a fresh file per attempt).
+  const staged = isFaxStagingPath(body?.staged_path) ? (body.staged_path as string) : null
+  try {
+    return await handleSend(user, body)
+  } finally {
+    if (staged) {
+      const { error } = await supabaseAdmin.storage.from(FAX_STAGING_BUCKET).remove([staged])
+      if (error) console.error('[fax] could not remove the staged upload', staged, error.message)
+    }
+  }
+}
 
+async function handleSend(user: User | null, body: Record<string, any>): Promise<NextResponse> { // eslint-disable-line @typescript-eslint/no-explicit-any
   const username = process.env.FAXAGE_USERNAME
   const password = process.env.FAXAGE_PASSWORD
   const company = process.env.FAXAGE_COMPANY || username || ''
@@ -87,7 +102,6 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const body = await req.json().catch(() => ({}))
   const faxnoRaw: string = typeof body.faxno === 'string' ? body.faxno : ''
   const documentId: string | null = typeof body.document_id === 'string' && body.document_id.trim()
     ? body.document_id.trim()
@@ -123,7 +137,7 @@ export async function POST(req: NextRequest) {
     const { data: prior, error: priorErr } = await supabaseAdmin
       .from('action_log')
       .select('created_at, details')
-      .eq('action_type', 'fax_sent')
+      .in('action_type', ['fax_sent', 'fax_claim'])
       .eq('service_delivery_id', dedupeSdId)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -205,7 +219,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'The uploaded file could not be read. Please choose it again.' }, { status: 400 })
     }
     const buf = Buffer.from(await blob.arrayBuffer())
-    await supabaseAdmin.storage.from(FAX_STAGING_BUCKET).remove([body.staged_path]).catch(() => {})
     const tooBig = faxSizeProblem(buf.length)
     if (tooBig) return NextResponse.json({ success: false, error: tooBig }, { status: 400 })
     fileBase64 = buf.toString('base64')
@@ -278,18 +291,25 @@ export async function POST(req: NextRequest) {
     })
   } catch (e) {
     console.error('[fax] Faxage request failed (network/parse):', e)
-    const neverLeft = e instanceof Error && e.name === 'FaxRefusedOutsideProductionError'   // refused before any network call: nothing was sent
-    if (neverLeft) {
+    // PROOF that nothing was sent (sandbox refusal, the fax could not be built, the name did not resolve / the connection was refused) releases
+    // the claim; any other error leaves the outcome unknown
+    if (isProvablyNotSent(e)) {
       await abandonClaim(claim.claimId!, claimDeps)
       return NextResponse.json({ success: false, error: e instanceof Error ? e.message : 'Failed to reach the fax service.' }, { status: 502 })
     }
     // the outcome is UNKNOWN (the fax may have left): the claim stays, so a retry is stopped until staff have looked in Fax History
     return NextResponse.json(
-      { success: false, error: `${e instanceof Error ? e.message : 'Failed to reach the fax service.'} It is not known whether the fax went out: check Fax History and Faxage before sending it again.` },
+      { success: false, error: `${e instanceof Error ? e.message : 'Failed to reach the fax service.'} It is not known whether the fax went out: check Fax History and Faxage before sending it again. This attempt stays marked until you say what happened.` },
       { status: 502 },
     )
   }
 
+  const outcome = result.outcome ?? (result.ok ? 'accepted' : 'refused')
+  if (outcome === 'unknown') {
+    // a gateway error / timeout / empty answer: the job may be queued. The claim STAYS (a retry is stopped); staff check Faxage.
+    console.error('[fax] Faxage outcome UNKNOWN. Raw response:', result.raw, '| faxno:', faxno, '| file:', fileName)
+    return NextResponse.json({ success: false, outcome_unknown: true, error: 'The fax service did not give a clear answer, so it is NOT known whether the fax went out. Check Fax History and Faxage before sending it again. This attempt stays marked until you say what happened.' }, { status: 502 })
+  }
   if (!result.ok) {
     // Log the FULL raw Faxage response so the cause is visible in server logs.
     console.error('[fax] Faxage rejected the request. Raw response:', result.raw, '| faxno:', faxno, '| file:', fileName)

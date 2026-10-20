@@ -20,6 +20,8 @@ export interface FaxHistoryRow {
   documentId: string | null
   /** plain words under the file name when there is nothing to open (a private place, a personal paper, a copy that was not saved) */
   noCopyNote: string | null
+  /** a send that was never confirmed as sent: 'sending' (still running) or 'unknown' (stuck — staff must look in Faxage). null = a normal sent fax */
+  claim: 'sending' | 'unknown' | null
   /** Live delivery status persisted from a prior "Check status" (action_log
    *  details.fax_status). Shown on load; null when never checked. */
   savedStatus: {
@@ -79,6 +81,27 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
     }
     return seed
   })
+
+  const [resolved, setResolved] = useState<Record<string, 'not_sent' | 'sent'>>({})
+  const [resolving, setResolving] = useState<string | null>(null)
+  const resolveClaim = async (id: string, outcome: 'not_sent' | 'sent') => {
+    const question = outcome === 'not_sent'
+      ? 'Only say this if you have looked in Faxage and this fax did NOT go out. After this, the same fax can be sent again. Continue?'
+      : 'Only say this if you have looked in Faxage and this fax DID go out. It will then be listed as sent. Continue?'
+    if (!window.confirm(question)) return
+    setResolving(id)
+    try {
+      const res = await fetch('/api/tools/fax/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, outcome }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not save your answer. Please try again.')
+      setResolved(prev => ({ ...prev, [id]: outcome }))
+      toast.success(outcome === 'not_sent' ? 'Marked as not sent.' : 'Marked as sent.')
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not save your answer.')
+    } finally {
+      setResolving(null)
+    }
+  }
 
   const checkStatus = async (jobId: string) => {
     setStatuses(prev => ({ ...prev, [jobId]: { loading: true } }))
@@ -169,7 +192,26 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
                   </span>
                 </td>
                 <td className="px-4 py-3">
-                  {(() => {
+                  {row.claim ? (
+                    resolved[row.id] ? (
+                      <span className="text-xs text-zinc-600">{resolved[row.id] === 'sent' ? 'Marked as sent. Reload to see it listed.' : 'Marked as not sent.'}</span>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                          {row.claim === 'sending' ? 'Sending…' : 'Outcome unknown — check Faxage'}
+                        </span>
+                        {row.claim === 'unknown' && (
+                          <div className="space-y-1">
+                            <p className="max-w-[220px] text-xs text-zinc-500">This was never confirmed as sent. It may or may not have gone out. Look in Faxage, then say what happened.</p>
+                            <div className="flex flex-wrap gap-1">
+                              <button type="button" disabled={resolving === row.id} onClick={() => resolveClaim(row.id, 'not_sent')} className="rounded-md border px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-50">It did NOT go out</button>
+                              <button type="button" disabled={resolving === row.id} onClick={() => resolveClaim(row.id, 'sent')} className="rounded-md border px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-50">It DID go out</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  ) : (() => {
                     // Terminal (delivered/failed) = settled → show the badge, no
                     // button. Pending or never-checked → keep the button so staff
                     // can (re-)check; pending also shows its current badge.

@@ -38,7 +38,8 @@ export function ShareFaxDialog({
   fileId: string
   fileName: string
   mimeType: string | null
-  onSent: () => void
+  /** `note` = something staff must still read after the success (e.g. the history entry could not be saved) */
+  onSent: (note?: string | null) => void
   onError: (message: string) => void
 }) {
   const [faxNo, setFaxNo] = useState('')
@@ -80,8 +81,7 @@ export function ShareFaxDialog({
         return
       }
       if (!res.ok) throw new Error(d.error || 'Could not send the fax. Please try again.')
-      if (d.history_error) onError(String(d.history_error))
-      onSent()
+      onSent(d.history_error ? String(d.history_error) : null)
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Could not send the fax. Please try again.')
     } finally {

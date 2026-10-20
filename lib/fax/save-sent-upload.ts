@@ -37,9 +37,15 @@ const IDENTITY = [
   "driver licen[cs]e", "driver s licen[cs]e", "drivers licen[cs]e", "driving licen[cs]e", "green card", "ead", "residence permit", "ss 5",
   "carta d? ?identit[a-z]*", "documento d? ?identit[a-z]*", "patente", "codice fiscale", "tessera sanitaria", "permesso di soggiorno",
   "birth cert[a-z]*", "visa", "i 94", "w 7", "itin", "ssn", "social security", "proof of address", "utility bill", "w 8 ben", "8843",
-  // a lone "ID" (Rossi_ID.pdf) — but not "Tax ID" / "Employer ID" / "Company ID" letters
-  "(?<!tax )(?<!employer )(?<!company )(?<!state )id(?= (?:pdf|jpe?g|png|tiff?|heic|gif)$|$)",
+  // a lone "ID" ANYWHERE as a whole word (ID_Rossi, Rossi_ID_front, ID front, Rossi_ID_2024.webp) — but not "Tax ID" / "Employer ID" /
+  // "Company ID" letters. A "State ID" IS an identity card. The safe side: a false block only makes staff pick Business / My files /
+  // "Don't save"; a miss would put someone's ID in a company's storage.
+  "(?<!tax )(?<!employer )(?<!company )id",
+  // abbreviations: driver's licence, Italian carta d'identità, residence card / permit without "of"
+  "dl", "ci", "residence card", "permesso soggiorno", "carta soggiorno",
 ]
+/** Long words that also count when GLUED to other text in lower case ("rossipassport.pdf", "cartaidentita.pdf"): matched on the name without spaces. */
+const GLUED_IDENTITY = /(passport|passaporto|identita|patente|soggiorno|codicefiscale|tesserasanitaria|greencard|driverlicen|drivinglicen)/
 /** Forms that carry a person's tax id: SS-4 names a responsible person; 1040 / 1040-NR are an individual's return. */
 const PERSONAL_FORM = ["ss 4", "1040(?: nr| sr| x)?"]
 
@@ -52,7 +58,7 @@ export type PersonalKind = "identity" | "form" | null
 /** Pure: is this file name a person's own paper? "identity" = never in client storage; "form" = saved, but kept off the company's Documents tab. */
 export function personalKind(fileName: string): PersonalKind {
   const n = normalizeFaxName(fileName)
-  if (IDENTITY_RE.test(n)) return "identity"
+  if (IDENTITY_RE.test(n) || GLUED_IDENTITY.test(n.replace(/ /g, ""))) return "identity"
   if (FORM_RE.test(n)) return "form"
   return null
 }

@@ -45,8 +45,17 @@ export interface SendFaxInput {
   recipName?: string
 }
 
+/**
+ * What Faxage's answer proves (bug-hunter round 3): 'accepted' = the job was queued; 'refused' = Faxage EXPLICITLY said no (an ERRnn code,
+ * or an error word in a normal 200 answer) so nothing went out; 'unknown' = anything else — a 502/504 from a gateway after the job may have
+ * been queued, a timeout, an empty or unreadable body. An unknown outcome must NEVER release the send's claim.
+ */
+export type FaxageOutcome = 'accepted' | 'refused' | 'unknown'
+
 export interface FaxageResult {
   ok: boolean
+  /** See {@link FaxageOutcome}. `ok` is true only for 'accepted'. */
+  outcome: FaxageOutcome
   /** Faxage job id when one can be parsed from the response. */
   jobId: string | null
   /** Raw response text (trimmed) for logging / surfacing. */
@@ -98,13 +107,15 @@ export function buildFaxageParams(input: SendFaxInput): URLSearchParams {
 export function parseFaxageResponse(text: string, httpOk: boolean): FaxageResult {
   const raw = (text || '').trim()
   const lower = raw.toLowerCase()
-  const isError =
-    !httpOk ||
-    lower.startsWith('err') ||
-    lower.includes('error') ||
-    lower.includes('invalid') ||
-    lower.includes('fail') ||
-    lower.includes('denied')
+  const errWord = lower.includes('error') || lower.includes('invalid') || lower.includes('fail') || lower.includes('denied')
+  const errCode = /^err\s*\d/.test(lower) || lower.startsWith('err')
+  // 'refused' needs Faxage's own voice: an ERR code (any HTTP status) or an error word in a normal 2xx answer. A non-2xx page ("502 Bad
+  // Gateway", a timeout page) or an empty body proves nothing: the job may be queued.
+  let outcome: FaxageOutcome
+  if (errCode || (httpOk && errWord)) outcome = 'refused'
+  else if (!httpOk || raw === '') outcome = 'unknown'
+  else outcome = 'accepted'
+  const isError = outcome !== 'accepted'
 
   let jobId: string | null = null
   // Prefer a labelled job id ("JobNum: 123", "Job ID 123", "jobid=123").
@@ -117,7 +128,28 @@ export function parseFaxageResponse(text: string, httpOk: boolean): FaxageResult
     if (bare) jobId = bare[1]
   }
 
-  return { ok: !isError, jobId, raw }
+  return { ok: outcome === 'accepted', outcome, jobId, raw }
+}
+
+/** The fax could not even be built / started: provably nothing was sent. */
+export class FaxNotSentError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'FaxNotSentError'
+  }
+}
+
+const NEVER_CONNECTED = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ERR_INVALID_URL'])
+
+/**
+ * Pure: is this error PROOF that nothing reached Faxage? (our own pre-network refusals, a name that does not resolve, a refused connection.)
+ * Anything else — a reset, a timeout, a parse failure after the answer — leaves the outcome unknown.
+ */
+export function isProvablyNotSent(e: unknown): boolean {
+  if (!(e instanceof Error)) return false
+  if (e.name === 'FaxRefusedOutsideProductionError' || e.name === 'FaxNotSentError') return true
+  const code = (e as { code?: unknown }).code ?? ((e as { cause?: { code?: unknown } }).cause?.code)
+  return typeof code === 'string' && NEVER_CONNECTED.has(code)
 }
 
 /** A real fax was attempted from a non-production environment (sandbox, local). */
@@ -143,7 +175,12 @@ export async function sendFax(
   fetchImpl: typeof fetch = fetch,
 ): Promise<FaxageResult> {
   if (fetchImpl === globalThis.fetch && !isProductionDatabase()) throw new FaxRefusedOutsideProductionError()
-  const params = buildFaxageParams(input)
+  let params: URLSearchParams
+  try {
+    params = buildFaxageParams(input)
+  } catch (e) {
+    throw new FaxNotSentError(e instanceof Error ? e.message : 'The fax could not be prepared.')
+  }
   const res = await fetchImpl(FAXAGE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

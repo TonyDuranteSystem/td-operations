@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { faxNoCopyNote } from '@/lib/fax/history-note'
+import { faxNoCopyNote, claimShownAs } from '@/lib/fax/history-note'
 import { redirect } from 'next/navigation'
 import { ArrowLeft, Send } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
@@ -21,8 +21,8 @@ export default async function FaxHistoryPage() {
   // change, which have no stored file to link to.
   const { data: logs } = await supabaseAdmin
     .from('action_log')
-    .select('id, created_at, summary, details, record_id')
-    .eq('action_type', 'fax_sent')
+    .select('id, created_at, summary, details, record_id, action_type')
+    .in('action_type', ['fax_sent', 'fax_claim'])   // a claim = a send that was never confirmed as sent: shown as such, never as sent
     .order('created_at', { ascending: false })
     .limit(200)
 
@@ -54,7 +54,8 @@ export default async function FaxHistoryPage() {
       jobId: (d.job_id as string | null) ?? null,
       source,
       documentId,
-      noCopyNote: faxNoCopyNote({ noCopyReason: (d.no_copy_reason as string | null) ?? null, filingStatus: (d.filing_status as string | null) ?? null, savedAtPlace: (d.saved_at_place as string | null) ?? null }),
+      noCopyNote: l.action_type === 'fax_claim' ? null : faxNoCopyNote({ noCopyReason: (d.no_copy_reason as string | null) ?? null, filingStatus: (d.filing_status as string | null) ?? null, savedAtPlace: (d.saved_at_place as string | null) ?? null, source }),
+      claim: l.action_type === 'fax_claim' ? claimShownAs((l.created_at as string | null) ?? null) : null,
       savedStatus,
     }
   })
