@@ -199,13 +199,13 @@ _Regenerated 2026-10-20. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-20)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-20)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-18)_
-- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-19)_
+- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-20)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-10-20)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-18)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-16)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-16)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-19)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-19)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-20)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-16)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
