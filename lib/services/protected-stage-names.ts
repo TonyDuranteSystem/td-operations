@@ -87,6 +87,7 @@ export const PROTECTED_STAGE_NAMES: ProtectedStageName[] = [
     name: "Submitted to IRS",
     because: "advancing off it is refused if there is no IRS mailing tracking number on file",
   },
+  { name: "Client signs the name-change form", because: "a name change's line in the client's Action Items box opens the Sign Documents page by this step name" },
 ]
 
 const BY_NAME = new Map(PROTECTED_STAGE_NAMES.map(p => [p.name.toLowerCase(), p]))

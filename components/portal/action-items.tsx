@@ -1,6 +1,6 @@
 'use client'
 
-import { FileText, CreditCard, PenLine, CheckCircle2 } from 'lucide-react'
+import { FileText, CreditCard, PenLine, CheckCircle2, ListChecks } from 'lucide-react'
 import type { ActionItem, ActionItemsResult } from '@/lib/portal/queries'
 import { useLocale } from '@/lib/portal/use-locale'
 import { interpolateString } from '@/lib/template-interpolation'
@@ -35,6 +35,7 @@ const TYPE_ICONS = {
   invoice: CreditCard,
   signature: PenLine,
   wizard: FileText,
+  service: ListChecks,
 }
 
 function timeAgo(dateStr: string, t: (key: string) => string): string {
