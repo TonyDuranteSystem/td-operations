@@ -96,7 +96,8 @@ jobs:
           fi
           npm run check:db-contract:live
 
-      - name: Schema types drift (P2.5 — server-side, the gate pre-push can't enforce)
+      - id: types_drift
+        name: Schema types drift (P2.5 — server-side, the gate pre-push can't enforce)
         # The pre-push hook SKIPS this check when the Supabase CLI is offline /
         # unauthenticated (most local pushes), which is how stale lib/database.types.ts
         # reached main (agent_message_party missing slack/code_runner, 2026-06-27).
@@ -124,6 +125,20 @@ jobs:
             exit 1
           fi
           echo "✅ Schema types in sync."
+
+      - name: Keep the regenerated DB types (only when the drift check just failed)
+        # The step above regenerates the files from production and fails when they differ from
+        # the committed ones, but only prints a diffstat — and the Supabase CLI cannot run on a
+        # dev machine without a login. So the regenerated files are saved here as a download
+        # (Actions run page -> Artifacts -> regenerated-db-types): copy both into lib/ and commit.
+        if: ${{ failure() && steps.types_drift.conclusion == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: regenerated-db-types
+          path: |
+            lib/database.types.ts
+            lib/db-check-types.ts
+          retention-days: 7
 
       - name: Block hardcoded client-facing domains
         # Mirrors .husky/pre-push lines 20-39. Only lib/config.ts,

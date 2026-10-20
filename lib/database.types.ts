@@ -431,6 +431,7 @@ export type Database = {
           mailing_link_verified: boolean
           member_count: number | null
           member_structure: string | null
+          name_history: Json
           notes: string | null
           onboarding_date: string | null
           partner_deal: Json | null
@@ -443,6 +444,7 @@ export type Database = {
           portal_auto_created: boolean | null
           portal_created_date: string | null
           portal_tier: string | null
+          previous_name: string | null
           qb_customer_id: string | null
           ra_link_verified: boolean
           ra_renewal_date: string | null
@@ -526,6 +528,7 @@ export type Database = {
           mailing_link_verified?: boolean
           member_count?: number | null
           member_structure?: string | null
+          name_history?: Json
           notes?: string | null
           onboarding_date?: string | null
           partner_deal?: Json | null
@@ -538,6 +541,7 @@ export type Database = {
           portal_auto_created?: boolean | null
           portal_created_date?: string | null
           portal_tier?: string | null
+          previous_name?: string | null
           qb_customer_id?: string | null
           ra_link_verified?: boolean
           ra_renewal_date?: string | null
@@ -621,6 +625,7 @@ export type Database = {
           mailing_link_verified?: boolean
           member_count?: number | null
           member_structure?: string | null
+          name_history?: Json
           notes?: string | null
           onboarding_date?: string | null
           partner_deal?: Json | null
@@ -633,6 +638,7 @@ export type Database = {
           portal_auto_created?: boolean | null
           portal_created_date?: string | null
           portal_tier?: string | null
+          previous_name?: string | null
           qb_customer_id?: string | null
           ra_link_verified?: boolean
           ra_renewal_date?: string | null
@@ -6797,12 +6803,12 @@ export type Database = {
           delivery_detail: string | null
           delivery_status: string | null
           delivery_updated_at: string | null
-          invoice_id: string | null
           first_opened_at: string | null
           from_email: string | null
           gmail_message_id: string | null
           gmail_thread_id: string | null
           id: string
+          invoice_id: string | null
           last_opened_at: string | null
           lead_id: string | null
           offer_token: string | null
@@ -6819,12 +6825,12 @@ export type Database = {
           delivery_detail?: string | null
           delivery_status?: string | null
           delivery_updated_at?: string | null
-          invoice_id?: string | null
           first_opened_at?: string | null
           from_email?: string | null
           gmail_message_id?: string | null
           gmail_thread_id?: string | null
           id?: string
+          invoice_id?: string | null
           last_opened_at?: string | null
           lead_id?: string | null
           offer_token?: string | null
@@ -6841,12 +6847,12 @@ export type Database = {
           delivery_detail?: string | null
           delivery_status?: string | null
           delivery_updated_at?: string | null
-          invoice_id?: string | null
           first_opened_at?: string | null
           from_email?: string | null
           gmail_message_id?: string | null
           gmail_thread_id?: string | null
           id?: string
+          invoice_id?: string | null
           last_opened_at?: string | null
           lead_id?: string | null
           offer_token?: string | null
@@ -7489,6 +7495,8 @@ export type Database = {
           completed_at: string | null
           contact_id: string | null
           created_at: string | null
+          drive_archive_meta: Json
+          drive_archived_at: string | null
           entity_type: string | null
           id: string
           language: string | null
@@ -7514,6 +7522,8 @@ export type Database = {
           completed_at?: string | null
           contact_id?: string | null
           created_at?: string | null
+          drive_archive_meta?: Json
+          drive_archived_at?: string | null
           entity_type?: string | null
           id?: string
           language?: string | null
@@ -7539,6 +7549,8 @@ export type Database = {
           completed_at?: string | null
           contact_id?: string | null
           created_at?: string | null
+          drive_archive_meta?: Json
+          drive_archived_at?: string | null
           entity_type?: string | null
           id?: string
           language?: string | null
@@ -9286,6 +9298,491 @@ export type Database = {
           },
         ]
       }
+      marketing_commission_terms: {
+        Row: {
+          basis: string
+          created_at: string
+          effective_from: string
+          id: string
+          kind: string
+          payee_account_id: string | null
+          person_ref: string
+          seller_pct: number
+          set_by: string | null
+          td_pct: number
+          team_id: string
+        }
+        Insert: {
+          basis?: string
+          created_at?: string
+          effective_from?: string
+          id?: string
+          kind: string
+          payee_account_id?: string | null
+          person_ref?: string
+          seller_pct: number
+          set_by?: string | null
+          td_pct: number
+          team_id: string
+        }
+        Update: {
+          basis?: string
+          created_at?: string
+          effective_from?: string
+          id?: string
+          kind?: string
+          payee_account_id?: string | null
+          person_ref?: string
+          seller_pct?: number
+          set_by?: string | null
+          td_pct?: number
+          team_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_commission_terms_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_invites: {
+        Row: {
+          bundle: string | null
+          created_at: string
+          created_by: string | null
+          created_by_user_id: string | null
+          email_lower: string
+          expires_at: string
+          id: string
+          member_role: string
+          permissions: string[]
+          revoked_at: string | null
+          team_id: string
+          token_hash: string
+          used_at: string | null
+        }
+        Insert: {
+          bundle?: string | null
+          created_at?: string
+          created_by?: string | null
+          created_by_user_id?: string | null
+          email_lower: string
+          expires_at: string
+          id?: string
+          member_role?: string
+          permissions?: string[]
+          revoked_at?: string | null
+          team_id: string
+          token_hash: string
+          used_at?: string | null
+        }
+        Update: {
+          bundle?: string | null
+          created_at?: string
+          created_by?: string | null
+          created_by_user_id?: string | null
+          email_lower?: string
+          expires_at?: string
+          id?: string
+          member_role?: string
+          permissions?: string[]
+          revoked_at?: string | null
+          team_id?: string
+          token_hash?: string
+          used_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_invites_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_lead_events: {
+        Row: {
+          actor: string
+          created_at: string
+          data: Json
+          id: number
+          kind: string
+          lead_id: string
+        }
+        Insert: {
+          actor?: string
+          created_at?: string
+          data?: Json
+          id?: number
+          kind: string
+          lead_id: string
+        }
+        Update: {
+          actor?: string
+          created_at?: string
+          data?: Json
+          id?: number
+          kind?: string
+          lead_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_lead_events_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_leadgen_events: {
+        Row: {
+          ad_id: string | null
+          adgroup_id: string | null
+          attempts: number
+          form_id: string | null
+          id: string
+          last_error: string | null
+          lead_id: string | null
+          leadgen_id: string
+          meta_created_time: string | null
+          page_id: string | null
+          processed_at: string | null
+          received_at: string
+          source: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          ad_id?: string | null
+          adgroup_id?: string | null
+          attempts?: number
+          form_id?: string | null
+          id?: string
+          last_error?: string | null
+          lead_id?: string | null
+          leadgen_id: string
+          meta_created_time?: string | null
+          page_id?: string | null
+          processed_at?: string | null
+          received_at?: string
+          source?: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          ad_id?: string | null
+          adgroup_id?: string | null
+          attempts?: number
+          form_id?: string | null
+          id?: string
+          last_error?: string | null
+          lead_id?: string | null
+          leadgen_id?: string
+          meta_created_time?: string | null
+          page_id?: string | null
+          processed_at?: string | null
+          received_at?: string
+          source?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_leadgen_events_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_leads: {
+        Row: {
+          ad_id: string | null
+          ad_name: string | null
+          adset_id: string | null
+          adset_name: string | null
+          answers: Json
+          campaign_id: string | null
+          campaign_name: string | null
+          city: string | null
+          country: string | null
+          email: string | null
+          existing_client: Json | null
+          form_id: string | null
+          full_name: string | null
+          id: string
+          is_organic: boolean | null
+          leadgen_id: string
+          meta_created_time: string | null
+          page_id: string | null
+          phone: string | null
+          platform: string | null
+          raw: Json | null
+          received_at: string
+          source: string
+          status: string
+          team_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          ad_id?: string | null
+          ad_name?: string | null
+          adset_id?: string | null
+          adset_name?: string | null
+          answers?: Json
+          campaign_id?: string | null
+          campaign_name?: string | null
+          city?: string | null
+          country?: string | null
+          email?: string | null
+          existing_client?: Json | null
+          form_id?: string | null
+          full_name?: string | null
+          id?: string
+          is_organic?: boolean | null
+          leadgen_id: string
+          meta_created_time?: string | null
+          page_id?: string | null
+          phone?: string | null
+          platform?: string | null
+          raw?: Json | null
+          received_at?: string
+          source?: string
+          status?: string
+          team_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          ad_id?: string | null
+          ad_name?: string | null
+          adset_id?: string | null
+          adset_name?: string | null
+          answers?: Json
+          campaign_id?: string | null
+          campaign_name?: string | null
+          city?: string | null
+          country?: string | null
+          email?: string | null
+          existing_client?: Json | null
+          form_id?: string | null
+          full_name?: string | null
+          id?: string
+          is_organic?: boolean | null
+          leadgen_id?: string
+          meta_created_time?: string | null
+          page_id?: string | null
+          phone?: string | null
+          platform?: string | null
+          raw?: Json | null
+          received_at?: string
+          source?: string
+          status?: string
+          team_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_leads_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_meta_connection: {
+        Row: {
+          connected_by: string | null
+          long_lived: boolean
+          obtained_at: string
+          page_id: string
+          page_key_enc: string
+          page_name: string | null
+          updated_at: string
+          user_id: string | null
+          user_name: string | null
+        }
+        Insert: {
+          connected_by?: string | null
+          long_lived?: boolean
+          obtained_at?: string
+          page_id: string
+          page_key_enc: string
+          page_name?: string | null
+          updated_at?: string
+          user_id?: string | null
+          user_name?: string | null
+        }
+        Update: {
+          connected_by?: string | null
+          long_lived?: boolean
+          obtained_at?: string
+          page_id?: string
+          page_key_enc?: string
+          page_name?: string | null
+          updated_at?: string
+          user_id?: string | null
+          user_name?: string | null
+        }
+        Relationships: []
+      }
+      marketing_settings: {
+        Row: {
+          id: string
+          key: string
+          team_id: string | null
+          updated_at: string
+          updated_by: string | null
+          value: Json
+        }
+        Insert: {
+          id?: string
+          key: string
+          team_id?: string | null
+          updated_at?: string
+          updated_by?: string | null
+          value: Json
+        }
+        Update: {
+          id?: string
+          key?: string
+          team_id?: string | null
+          updated_at?: string
+          updated_by?: string | null
+          value?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_settings_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_settings_history: {
+        Row: {
+          changed_at: string
+          changed_by: string | null
+          id: number
+          key: string
+          new_value: Json | null
+          old_value: Json | null
+          team_id: string | null
+        }
+        Insert: {
+          changed_at?: string
+          changed_by?: string | null
+          id?: number
+          key: string
+          new_value?: Json | null
+          old_value?: Json | null
+          team_id?: string | null
+        }
+        Update: {
+          changed_at?: string
+          changed_by?: string | null
+          id?: number
+          key?: string
+          new_value?: Json | null
+          old_value?: Json | null
+          team_id?: string | null
+        }
+        Relationships: []
+      }
+      marketing_team_members: {
+        Row: {
+          bundle: string | null
+          id: string
+          invited_at: string
+          invited_by: string | null
+          joined_at: string | null
+          member_role: string
+          permissions: string[]
+          removed_at: string | null
+          removed_by: string | null
+          status: string
+          team_id: string
+          token_version: number
+          user_id: string
+        }
+        Insert: {
+          bundle?: string | null
+          id?: string
+          invited_at?: string
+          invited_by?: string | null
+          joined_at?: string | null
+          member_role?: string
+          permissions?: string[]
+          removed_at?: string | null
+          removed_by?: string | null
+          status?: string
+          team_id: string
+          token_version?: number
+          user_id: string
+        }
+        Update: {
+          bundle?: string | null
+          id?: string
+          invited_at?: string
+          invited_by?: string | null
+          joined_at?: string | null
+          member_role?: string
+          permissions?: string[]
+          removed_at?: string | null
+          removed_by?: string | null
+          status?: string
+          team_id?: string
+          token_version?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_team_members_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_teams: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          name: string
+          owner_user_id: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          name: string
+          owner_user_id?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          name?: string
+          owner_user_id?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       mcp_tool_counter: {
         Row: {
           calls_since_checkpoint: number
@@ -10144,6 +10641,7 @@ export type Database = {
           member_ownership_pct: number | null
           members: Json | null
           pdf_storage_path: string | null
+          previous_company_name: string | null
           principal_address: string | null
           registered_agent_address: string | null
           registered_agent_name: string | null
@@ -10183,6 +10681,7 @@ export type Database = {
           member_ownership_pct?: number | null
           members?: Json | null
           pdf_storage_path?: string | null
+          previous_company_name?: string | null
           principal_address?: string | null
           registered_agent_address?: string | null
           registered_agent_name?: string | null
@@ -10222,6 +10721,7 @@ export type Database = {
           member_ownership_pct?: number | null
           members?: Json | null
           pdf_storage_path?: string | null
+          previous_company_name?: string | null
           principal_address?: string | null
           registered_agent_address?: string | null
           registered_agent_name?: string | null
@@ -19696,6 +20196,30 @@ export type Database = {
         }
         Relationships: []
       }
+      zz_change_name_8_steps_backup: {
+        Row: {
+          created_at: string
+          data: Json
+          id: number
+          kind: string
+          ref: string | null
+        }
+        Insert: {
+          created_at?: string
+          data: Json
+          id?: number
+          kind: string
+          ref?: string | null
+        }
+        Update: {
+          created_at?: string
+          data?: Json
+          id?: number
+          kind?: string
+          ref?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       service_catalog: {
@@ -20360,6 +20884,10 @@ export type Database = {
         }
         Returns: string
       }
+      archive_meta_merge: {
+        Args: { p_id: string; p_patch: Json; p_table: string }
+        Returns: undefined
+      }
       assign_specific_company_suite: {
         Args: { p_account_id: string; p_actor?: string; p_suite: string }
         Returns: string
@@ -20638,6 +21166,9 @@ export type Database = {
         Args: { p_as_of: string; p_thread_id: string; p_user_id: string }
         Returns: undefined
       }
+      marketing_lock_all_tables: { Args: never; Returns: string[] }
+      marketing_my_owner_team_ids: { Args: never; Returns: string[] }
+      marketing_my_team_ids: { Args: never; Returns: string[] }
       match_decision_memory: {
         Args: {
           filter_domain?: string
@@ -20804,6 +21335,28 @@ export type Database = {
           id: string
           staging_path: string
         }[]
+      }
+      store_apply_name_change: {
+        Args: {
+          p_actor?: string
+          p_change_id: string
+          p_dry_run?: boolean
+          p_new_name: string
+          p_old_name: string
+          p_owner_id: string
+        }
+        Returns: Json
+      }
+      store_apply_name_change_for_account: {
+        Args: {
+          p_account_id: string
+          p_actor?: string
+          p_change_id: string
+          p_dry_run?: boolean
+          p_expected_old_name: string
+          p_new_name: string
+        }
+        Returns: Json
       }
       store_apply_template: {
         Args: {
@@ -21232,6 +21785,7 @@ export type Database = {
         Returns: Json
       }
       store_role_key: { Args: { p_role: string }; Returns: string }
+      store_safe_folder_name: { Args: { p_name: string }; Returns: string }
       store_send_check: {
         Args: {
           p_file_id: string
@@ -21288,6 +21842,24 @@ export type Database = {
       store_type_staff_only: {
         Args: { p_document_type: string }
         Returns: boolean
+      }
+      store_undo_name_change: {
+        Args: {
+          p_actor?: string
+          p_change_id: string
+          p_dry_run?: boolean
+          p_owner_id: string
+        }
+        Returns: Json
+      }
+      store_undo_name_change_for_account: {
+        Args: {
+          p_account_id: string
+          p_actor?: string
+          p_change_id: string
+          p_dry_run?: boolean
+        }
+        Returns: Json
       }
       store_unknown_document_type_names: {
         Args: { p_min: number }
