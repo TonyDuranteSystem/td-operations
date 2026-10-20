@@ -89,6 +89,7 @@ export interface Account {
   entity_type: string | null
   status: string | null
   ein_number: string | null
+  manager_name?: string | null
   filing_id: string | null
   formation_date: string | null
   state_of_formation: string | null

@@ -20,6 +20,7 @@
  * 2. MCP Magic Button (source: undefined) — account_id always provided
  */
 
+import { resolveOaManagerName } from "@/lib/oa/resolve-manager"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { reanchorLeadConversations } from "@/lib/team/reanchor-conversations"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
@@ -941,7 +942,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
                 formation_date: oaAccount.formation_date || today,
                 ein_number: oaAccount.ein_number || null,
                 entity_type: entityType,
-                manager_name: oaContact.full_name,
+                manager_name: await resolveOaManagerName(account_id, oaContact.full_name),
                 member_name: oaContact.full_name,
                 member_address: oaAccount.physical_address || null,
                 member_email: oaContact.email || null,

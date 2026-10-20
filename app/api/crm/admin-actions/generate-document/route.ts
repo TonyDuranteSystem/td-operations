@@ -9,6 +9,8 @@
  *   ...params (varies by action)
  */
 
+import { resolveOaManagerName } from "@/lib/oa/resolve-manager"
+import { resolveSigningSet, describeSigningBlock } from "@/lib/members/signing-set"
 import { NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
@@ -208,12 +210,18 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
   if (entityType === "MMLLC") {
     const { data: memberRows } = await supabaseAdmin
       .from("members")
-      .select("full_name, company_name, email, ownership_pct, member_type, contact_id, address_street, address_city, address_state, address_zip, address_country")
+      .select("full_name, company_name, email, ownership_pct, member_type, contact_id, representative_name, representative_email, address_street, address_city, address_state, address_zip, address_country")
       .eq("account_id", accountId)
       .order("is_primary", { ascending: false })
 
     if (!memberRows?.length) {
       return { error: `"${account.company_name}" is a Multi Member LLC but has no rows in its Members section. Add the members with their real ownership percentages first.` }
+    }
+
+    // Same rule as the client's portal and the signing page (lib/members/signing-set.ts): everyone must be reachable to sign.
+    const signingBlock = describeSigningBlock(resolveSigningSet(memberRows))
+    if (signingBlock.blocked) {
+      return { error: `${signingBlock.staffMessage}. Fix it in the Members section first.` }
     }
 
     const ownershipTotal = memberRows.reduce((s, m) => s + (Number(m.ownership_pct) || 0), 0)
@@ -267,7 +275,7 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
       // server still honored a stale build's cached request. Closed now: the
       // resolver is the only source, matching every other identity field in
       // this codebase. Dev job 9ad76300-6181-4250-a1de-c77f37933f82.
-      manager_name: signerContact.full_name,
+      manager_name: await resolveOaManagerName(accountId, signerContact.full_name),
       member_name: signerContact.full_name,
       member_address: signerContact.residency || null,
       member_email: signerContact.email || null,

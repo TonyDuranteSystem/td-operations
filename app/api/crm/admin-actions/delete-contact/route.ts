@@ -42,7 +42,20 @@ async function getReport(contactId: string): Promise<ReferenceReport> {
   })
   if (error) throw new Error(`reference report failed: ${error.message}`)
   const r = (data ?? {}) as Partial<ReferenceReport>
-  return { total_blocking: r.total_blocking ?? 0, breakdown: r.breakdown ?? {} }
+  const breakdown = { ...(r.breakdown ?? {}) }
+  let total = r.total_blocking ?? 0
+  // A person's storage-owner record is a RESTRICT foreign key, which the database report
+  // does not count — without this the preview said "clean orphan" and the delete then failed.
+  const { count: storeOwnerRows, error: storeOwnerErr } = await supabaseAdmin
+    .from("store_owners")
+    .select("id", { count: "exact", head: true })
+    .eq("contact_id", contactId)
+  if (storeOwnerErr) throw new Error(`storage-owner check failed: ${storeOwnerErr.message}`)
+  if ((storeOwnerRows ?? 0) > 0) {
+    breakdown.store_owners = storeOwnerRows ?? 0
+    total += storeOwnerRows ?? 0
+  }
+  return { total_blocking: total, breakdown }
 }
 
 export async function POST(request: Request) {

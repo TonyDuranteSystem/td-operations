@@ -7,6 +7,7 @@
  *   oa_send    — Send OA link to client via Gmail with tracking
  */
 
+import { resolveOaManagerName, membersMissingEmail } from "@/lib/oa/resolve-manager"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -80,6 +81,10 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
         if (entityType === "MMLLC") {
           if (!params.members || params.members.length < 2) {
             return { content: [{ type: "text" as const, text: `❌ MMLLC requires at least 2 members. Pass members array.` }] }
+          }
+          const noEmail = membersMissingEmail(params.members)
+          if (noEmail.length > 0) {
+            return { content: [{ type: "text" as const, text: `❌ Every member needs an email (it is used to send the agreement for signing). Missing: ${noEmail.join(", ")}.` }] }
           }
           const totalPct = params.members.reduce((sum, m) => sum + m.ownership_pct, 0)
           if (Math.abs(totalPct - 100) > 0.01) {
@@ -229,7 +234,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
             formation_date: formationDate,
             ein_number: ein,
             entity_type: entityType,
-            manager_name: contact.full_name,
+            manager_name: await resolveOaManagerName(params.account_id, contact.full_name),
             member_name: contact.full_name,
             member_address: contact.residency || null,
             member_email: contact.email || null,

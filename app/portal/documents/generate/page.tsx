@@ -150,6 +150,8 @@ export default async function GenerateDocumentsPage({ searchParams }: { searchPa
         entityType: accountDetail.entity_type,
         registeredAgentAddress: accountDetail.registered_agent_address,
         memberCount: (accountDetail as Record<string, unknown>).member_count as number | null ?? null,
+        // A company's own manager (not an owner), when it has one — printed as Manager instead of the signer.
+        managerName: (accountDetail as Record<string, unknown>).manager_name as string | null ?? null,
       }}
       members={mappedMembers}
       history={historyResult.data || []}

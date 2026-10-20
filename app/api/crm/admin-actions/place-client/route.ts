@@ -15,6 +15,7 @@
  *   reason: string — why this placement is happening
  */
 
+import { resolveOaManagerName } from "@/lib/oa/resolve-manager"
 import { NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
@@ -363,7 +364,7 @@ async function createOA(
         formation_date: account.formation_date || today,
         ein_number: account.ein_number || null,
         entity_type: entityType,
-        manager_name: signerContact.full_name,
+        manager_name: await resolveOaManagerName(accountId, signerContact.full_name),
         member_name: signerContact.full_name,
         member_address: signerContact.residency || null,
         member_email: signerContact.email || null,

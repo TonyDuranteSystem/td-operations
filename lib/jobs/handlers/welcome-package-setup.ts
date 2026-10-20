@@ -14,6 +14,7 @@
  * Does NOT send email. Creates a task for Antonio to review + send.
  */
 
+import { resolveOaManagerName } from "@/lib/oa/resolve-manager"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
@@ -308,7 +309,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
           formation_date: account.formation_date || today,
           ein_number: account.ein_number,
           entity_type: entityType,
-          manager_name: signerContact.full_name,
+          manager_name: await resolveOaManagerName(p.account_id, signerContact.full_name),
           member_name: signerContact.full_name,
           member_address: account.physical_address || null,
           member_email: signerContact.email || null,

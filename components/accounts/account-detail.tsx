@@ -277,6 +277,7 @@ function ContactsSection({
   const [searching, setSearching] = useState(false)
   const [linking, setLinking] = useState(false)
   const [selectedRole, setSelectedRole] = useState('owner')
+  const [memberResults, setMemberResults] = useState<{ id: string; full_name: string; email: string | null }[]>([])
   // false = the person sees the company's history only from today (Antonio 2026-10-17); true = they also see the earlier documents
   const [showEarlierDocs, setShowEarlierDocs] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -289,6 +290,7 @@ function ContactsSection({
   const CONTACT_ROLE_OPTIONS = [
     { label: '—', value: '' },
     { label: 'Owner / Sole Member', value: 'owner' },
+    { label: 'Member', value: 'Member' },
     { label: 'Authorized Representative', value: 'authorized_representative' },
     { label: 'Manager', value: 'manager' },
     { label: 'Accountant', value: 'accountant' },
@@ -315,23 +317,45 @@ function ContactsSection({
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query)
-    if (query.length < 2) { setSearchResults([]); return }
+    if (query.length < 2) { setSearchResults([]); setMemberResults([]); return }
     setSearching(true)
     try {
-      const { searchContacts } = await import('@/app/(dashboard)/accounts/actions')
-      const results = await searchContacts(query)
+      const { searchContacts, searchMembersWithoutContact } = await import('@/app/(dashboard)/accounts/actions')
+      const [results, memberHits] = await Promise.all([searchContacts(query), searchMembersWithoutContact(account.id, query)])
+      setMemberResults(memberHits)
       // Filter out contacts already linked
       const linkedIds = new Set(contacts.map(c => c.id))
       setSearchResults(results.filter(r => !linkedIds.has(r.id)))
     } catch {
       setSearchResults([])
+      setMemberResults([])
     } finally {
       setSearching(false)
     }
   }
 
+  const handleLinkMember = async (memberId: string, name: string) => {
+    setLinking(true)
+    try {
+      const { linkMemberAsContact } = await import('@/app/(dashboard)/accounts/actions')
+      const result = await linkMemberAsContact(account.id, memberId)
+      if (result.success) {
+        notifyStorageCheck()
+        toast.success(`${name} is now a contact, linked as member`)
+        setTimeout(() => window.location.reload(), 250)
+      } else {
+        toast.error(result.error ?? 'Could not link the member')
+      }
+    } catch {
+      toast.error('Could not link the member')
+    } finally {
+      setLinking(false)
+    }
+  }
+
   const handleCreateAndLink = async () => {
     if (!searchQuery.trim()) return
+    if (selectedRole === 'Member' && !newEmail.trim()) { toast.error('A member needs an email — it is used to send the Operating Agreement for signing.'); return }
     setCreating(true)
     try {
       const { createAndLinkContact } = await import('@/app/(dashboard)/accounts/actions')
@@ -476,7 +500,7 @@ function ContactsSection({
               className="text-xs border rounded-md px-2 py-1.5 bg-white"
             >
               <option value="owner">Owner</option>
-              <option value="member">Member</option>
+              <option value="Member">Member</option>
               <option value="manager">Manager</option>
               <option value="authorized">Authorized</option>
             </select>
@@ -494,6 +518,27 @@ function ContactsSection({
           {searching && (
             <div className="flex items-center gap-2 text-xs text-zinc-400 py-1">
               <Loader2 className="h-3 w-3 animate-spin" /> Searching...
+            </div>
+          )}
+          {memberResults.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-[11px] font-medium text-zinc-500 uppercase tracking-wide">Company members without a contact</p>
+              <div className="divide-y border rounded-md bg-white max-h-40 overflow-y-auto">
+                {memberResults.map(r => (
+                  <button
+                    key={r.id}
+                    onClick={() => handleLinkMember(r.id, r.full_name)}
+                    disabled={linking}
+                    className="flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-blue-50 transition-colors disabled:opacity-50"
+                  >
+                    <div>
+                      <span className="font-medium">{r.full_name}</span>
+                      <span className="text-xs text-zinc-400 ml-2">{r.email ?? 'no email — add it on the member first'}</span>
+                    </div>
+                    <Plus className="h-3.5 w-3.5 text-blue-600" />
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {searchResults.length > 0 && (
@@ -514,7 +559,7 @@ function ContactsSection({
               ))}
             </div>
           )}
-          {searchQuery.length >= 2 && !searching && searchResults.length === 0 && (
+          {searchQuery.length >= 2 && !searching && searchResults.length === 0 && memberResults.length === 0 && (
             <div className="space-y-2">
               <p className="text-xs text-zinc-400 py-1">No contacts found</p>
               {!showCreateForm ? (
@@ -532,7 +577,7 @@ function ContactsSection({
                     type="email"
                     value={newEmail}
                     onChange={e => setNewEmail(e.target.value)}
-                    placeholder="Email (optional)"
+                    placeholder={selectedRole === 'Member' ? 'Email (required for a member)' : 'Email (optional)'}
                     className="w-full px-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                     autoFocus
                   />
@@ -2534,6 +2579,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           <EditableField icon={Calendar} label="Client Since" value={account.client_since ?? ''} type="date" onSave={makeAccountSaver('client_since')} />
           <EditableField icon={Calendar} label="RA Switch Date" value={account.ra_switch_date ?? ''} type="date" onSave={makeAccountSaver('ra_switch_date')} />
           <EditableField icon={Shield} label="EIN" value={account.ein_number ?? ''} onSave={makeAccountSaver('ein_number')} />
+          <EditableField icon={Users} label="Manager (on the Operating Agreement)" value={account.manager_name ?? ''} onSave={makeAccountSaver('manager_name')} />
           <EditableField icon={Mail} label="Business Email" value={account.communication_email ?? ''} onSave={makeAccountSaver('communication_email')} />
           <EditableField icon={FileText} label="Filing ID" value={account.filing_id ?? ''} onSave={makeAccountSaver('filing_id')} />
           <SuiteAssignedField accountId={account.id} suite={account.suite_number ?? null} isAdmin={_isAdmin} />

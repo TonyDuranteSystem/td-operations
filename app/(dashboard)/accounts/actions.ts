@@ -50,7 +50,7 @@ export async function updateAccountField(
   updatedAt: string
 ): Promise<ActionResult & { warning?: string }> {
   const allowedFields = [
-    'company_name', 'entity_type', 'member_structure', 'member_count', 'account_type', 'status', 'ein_number', 'filing_id',
+    'company_name', 'entity_type', 'member_structure', 'member_count', 'account_type', 'status', 'ein_number', 'filing_id', 'manager_name',
     'state_of_formation', 'formation_date', 'physical_address',
     'registered_agent_provider', 'ra_renewal_date', 'annual_report_due_date', 'ra_switch_date', 'client_since', 'notes',
     'installment_1_amount', 'installment_1_currency',
@@ -355,7 +355,7 @@ export async function getContactLanguage(
   return { language: data.language ?? null, updated_at: data.updated_at }
 }
 
-const ACCOUNT_CONTACT_ROLES = ['', 'owner', 'authorized_representative', 'manager', 'accountant']
+const ACCOUNT_CONTACT_ROLES = ['', 'owner', 'Member', 'member', 'authorized_representative', 'manager', 'accountant']
 
 export async function updateAccountContactRole(
   accountId: string,
@@ -677,6 +677,90 @@ export async function searchContacts(
     .ilike('full_name', `%${query}%`)
     .limit(10)
   return data || []
+}
+
+/** Members of this company who have no contact yet, matching the typed name — so they can be found when adding a contact. */
+export async function searchMembersWithoutContact(
+  accountId: string,
+  query: string,
+): Promise<{ id: string; full_name: string; email: string | null }[]> {
+  const { data: { user: staff } } = await createClient().auth.getUser()
+  if (!staff || !isStaffUser(staff)) return []
+  const q = query.trim()
+  if (q.length < 2) return []
+  const { data } = await supabaseAdmin
+    .from('members')
+    .select('id, full_name, email')
+    .eq('account_id', accountId)
+    .eq('member_type', 'individual')
+    .is('contact_id', null)
+    .ilike('full_name', `%${q.replace(/[%_\\]/g, m => `\\${m}`)}%`)
+    .limit(10)
+  return data || []
+}
+
+/**
+ * Turn a company member into a contact: find-or-create by email + name (the same rule the
+ * formation job uses), link it to the company as Member and to the member row. An email is
+ * REQUIRED — the signing page identifies each signer by email (Antonio, 2026-10-20).
+ */
+export async function linkMemberAsContact(
+  accountId: string,
+  memberId: string,
+): Promise<ActionResult & { contactId?: string }> {
+  const { data: { user: staff } } = await createClient().auth.getUser()
+  if (!staff || !isStaffUser(staff)) return { success: false, error: 'Not allowed.' }
+  const { data: m } = await supabaseAdmin
+    .from('members')
+    .select('id, account_id, full_name, email, contact_id, member_type, address_street, address_city, address_state, address_zip, address_country')
+    .eq('id', memberId)
+    .maybeSingle()
+  if (!m || m.account_id !== accountId) return { success: false, error: 'Member not found on this company' }
+  if (m.member_type !== 'individual') return { success: false, error: 'Only a person can be linked as a contact here' }
+  if (m.contact_id) return { success: false, error: 'This member already has a contact' }
+  if (!(m.email ?? '').trim()) {
+    return { success: false, error: `Add ${m.full_name}'s email on the member first — it is needed to send the Operating Agreement for signing.` }
+  }
+
+  const { resolveMemberContactId } = await import('@/lib/members/resolve-member-contact')
+  const now = new Date().toISOString()
+  const parts = (m.full_name || '').trim().split(/\s+/)
+  const contactId = await resolveMemberContactId({
+    email: m.email,
+    name: m.full_name,
+    first_name: parts[0] || null,
+    last_name: parts.slice(1).join(' ') || null,
+    refresh: {
+      address_line1: m.address_street,
+      address_city: m.address_city,
+      address_state: m.address_state,
+      address_zip: m.address_zip,
+      address_country: m.address_country,
+    },
+    now,
+  })
+  if (!contactId) return { success: false, error: 'Could not create the contact — try again or add it by hand.' }
+
+  const { data: alreadyLinked } = await supabaseAdmin.from('account_contacts').select('contact_id').eq('account_id', accountId).eq('contact_id', contactId).maybeSingle()
+  const saved = await safeAction(async () => {
+    const { error: linkErr } = await supabaseAdmin
+      .from('account_contacts')
+      .upsert({ account_id: accountId, contact_id: contactId, role: 'Member' }, { onConflict: 'account_id,contact_id', ignoreDuplicates: true })
+    if (linkErr) throw new Error(linkErr.message)
+    const { error: memErr } = await supabaseAdmin.from('members').update({ contact_id: contactId, updated_at: now }).eq('id', memberId).is('contact_id', null)
+    if (memErr) throw new Error(memErr.message)
+    // A person added to a company that already has history sees it only from today (Antonio 2026-10-17).
+    if (!alreadyLinked) {
+      const { startHistoryFromNow } = await import('@/lib/portal/history-cutoff')
+      await startHistoryFromNow({ accountId, contactId })
+    }
+    revalidatePath(`/accounts/${accountId}`)
+  }, {
+    action_type: 'update', table_name: 'members', record_id: memberId,
+    summary: `Linked member ${m.full_name} to a contact`,
+    details: { accountId, memberId, contactId },
+  })
+  return saved.success ? { success: true, contactId } : { success: false, error: saved.error }
 }
 
 export async function unlinkContactFromAccount(
