@@ -393,6 +393,11 @@ export async function createSD(
   // ensures retries can't spawn duplicate workflow tasks. Service types
   // with no matching task_workflows row return no_trigger_match (silent).
   let workflowSpawned = false
+  // Company Change Name has NO workflow card by design (its 8 workspace steps and the Calendar are the to-do, see below). Asking the
+  // dispatcher anyway logged "No matching workflow" for EVERY new job — a false red alert and a "1 workflow issue" badge on the
+  // company (production QA, 2026-10-20). The other services keep today's behaviour.
+  const hasWorkflowCard = row.service_type !== "Company Change Name"
+  if (hasWorkflowCard) {
   try {
     const { dispatchWorkflowForSdCreated } = await import(
       "@/lib/tasks/dispatch-workflow-for-event"
@@ -425,6 +430,7 @@ export async function createSD(
       `[createSD] workflow dispatcher failed (non-fatal) for SD ${row.id} (${row.service_type}):`,
       err instanceof Error ? err.message : String(err),
     )
+  }
   }
 
   // New clients live in the new storage from the start (Drive cutover batch B, dev job ad09ea91): a Company Formation case

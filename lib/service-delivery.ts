@@ -35,6 +35,7 @@ import { buildClosureFollowUpCards, WRAP_UP_STAGE_NAME, type ClosureStepTask } f
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
 import { filedName, type NameCheck } from "@/lib/flows/name-checks"
+import { CHANGE_NAME_STAGES } from "@/lib/flows/change-name-stages"
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -470,11 +471,40 @@ export async function advanceServiceDelivery(
       }
     }
     const { changeNameAdvanceProblem } = await import("@/lib/flows/change-name-gates")
+    const stageRefs = stages as Array<{ stage_name: string; stage_order: number }>
+    // The two "did it really happen" facts are looked up ONLY for a forward move that crosses the step they guard.
+    const orderOfStage = (n: string) => stageRefs.find(s => s.stage_name === n)?.stage_order
+    const crosses = (n: string) => { const o = orderOfStage(n); return o !== undefined && fromOrder < o && targetStage.stage_order >= o }
+    let hasSignedForm: boolean | undefined
+    let nameApplied: boolean | undefined
+    if (crosses(CHANGE_NAME_STAGES.file)) {
+      // esign_* tables are not in the generated DB types. A failed read leaves the lock OFF (like the other guards here) —
+      // never a wrong "the client has not signed" because the database blinked.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { count, error } = await (supabaseAdmin as any).from("esign_envelopes").select("id", { count: "exact", head: true }).eq("service_delivery_id", delivery.id).eq("status", "completed")
+      if (!error && typeof count === "number") hasSignedForm = count > 0
+    }
+    if (crosses(CHANGE_NAME_STAGES.oa)) {
+      const { data: acct, error } = delivery.account_id
+        ? await supabaseAdmin.from("accounts").select("name_history, company_name").eq("id", delivery.account_id).maybeSingle()
+        : { data: null, error: null }
+      if (!error && acct) {
+        const { appliedEntry } = await import("@/lib/operations/change-name-apply")
+        const a = acct as { name_history?: unknown; company_name?: string | null }
+        // Applied by this job — or the company ALREADY carries the filed name (the state approved a capitals-only change, or staff
+        // corrected the name with Fix spelling): there is nothing left to apply, so the job must not be stranded at this step.
+        const norm = (v: unknown) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().toLowerCase() : "")
+        const filed = filedName((delivery as { name_checks?: unknown }).name_checks as never)
+        nameApplied = appliedEntry(a.name_history, delivery.id) !== null || (!!filed && norm(filed) === norm(a.company_name))
+      }
+    }
     const problem = changeNameAdvanceProblem({
       checks: (delivery as { name_checks?: unknown }).name_checks as never,
-      stages: stages as Array<{ stage_name: string; stage_order: number }>,
+      stages: stageRefs,
       fromOrder,
       targetOrder: targetStage.stage_order,
+      hasSignedForm,
+      nameApplied,
     })
     if (problem) {
       return {

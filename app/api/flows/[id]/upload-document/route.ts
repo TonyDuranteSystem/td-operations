@@ -34,6 +34,8 @@ import { advanceServiceDelivery } from '@/lib/service-delivery'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { NO_STORAGE_REASON_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 import { parsePrincipalOfficeDecision, applyPrincipalOfficeDecision, type PrincipalOfficeDecision } from '@/lib/operations/principal-office'
+import { isClientSafeFlowDoc } from '@/lib/flows/flow-doc-visibility'
+import { GENERIC_CLIENT_TYPE } from '@/lib/crm-store/save-for-account'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
 // migration but the generated DB types haven't been regenerated yet.
@@ -215,7 +217,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             bytes: buffer,
             mimeType: fileMime,
             folder: (targetSubfolder ? folderKindForDriveSubfolder(targetSubfolder, { kind: 'account' }) : 'company') as 'company' | 'tax' | 'banking' | 'correspondence',
-            documentType: sd.service_type === 'Company Formation' && flowStage ? (FORMATION_UPLOAD_TYPES[flowStage] ?? null) : null,
+            // The state's stamped answer (Company Change Name, "Waiting for the state") is promised to the client and listed on their
+            // flow page; an UNTYPED stored file counts as closed, so without a catalogued type it was listed but answered "Document
+            // not found" when opened (production QA, 2026-10-20). Only this one allow-listed upload gets the generic client type.
+            documentType: sd.service_type === 'Company Formation' && flowStage
+              ? (FORMATION_UPLOAD_TYPES[flowStage] ?? null)
+              : (sd.service_type === 'Company Change Name' && isClientSafeFlowDoc(sd.service_type, flowStage, false) ? GENERIC_CLIENT_TYPE : null),
             callerKey: `flow-upload:${serviceDeliveryId}:${flowStage ?? ''}:${storeNameKey(effectiveName)}`,
             portalVisible: isItinApprovalUpload,
             row: { contact_id: contactId, service_delivery_id: serviceDeliveryId, flow_stage: flowStage, status: 'classified' },

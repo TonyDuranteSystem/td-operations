@@ -359,7 +359,7 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
       {previousStageRow && (
         <GoBackButton
           serviceDeliveryId={serviceDelivery.id}
-          previousStageLabel={previousStageRow.client_label ?? previousStageRow.stage_name}
+          previousStageLabel={previousStageRow.stage_name}
         />
       )}
     </div>

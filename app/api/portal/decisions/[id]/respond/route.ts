@@ -44,7 +44,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!result.ok) {
     // 409 for already-answered/expired; 400 for invalid response shape.
     const conflict = /already|expired|no longer active/i.test(result.error ?? '')
-    return NextResponse.json({ success: false, error: result.error }, { status: conflict ? 409 : 400 })
+    return NextResponse.json({ success: false, error: result.error, ...(result.code ? { code: result.code } : {}) }, { status: conflict ? 409 : 400 })
   }
   return NextResponse.json({ success: true, status: result.status, auto_advanced: result.auto_advanced })
 }

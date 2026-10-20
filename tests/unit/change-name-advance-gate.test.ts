@@ -22,7 +22,7 @@ vi.mock('@/lib/operations/formation-materialize', () => ({
 
 import { advanceServiceDelivery } from '@/lib/service-delivery'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { changeNameAdvanceProblem, NEED_CONFIRMED_NAME, NEED_FILED_NAME } from '@/lib/flows/change-name-gates'
+import { changeNameAdvanceProblem, NEED_CONFIRMED_NAME, NEED_FILED_NAME, NEED_SIGNED_FORM, NEED_NAME_APPLIED } from '@/lib/flows/change-name-gates'
 import { CHANGE_NAME_STAGES, CHANGE_NAME_STAGE_ORDER } from '@/lib/flows/change-name-stages'
 import type { NameCheck } from '@/lib/flows/name-checks'
 
@@ -49,11 +49,15 @@ const OLD_CATALOG = [
 
 let delivery: Record<string, unknown>
 let catalog: Array<Record<string, unknown>> = NEW_CATALOG
+let signedEnvelopes = 0
+let accountHistory: unknown[] = []
+let accountName = 'Old Name LLC'
+let esignReadFails = false
 
 function installFrom() {
   const writes: Array<{ table: string; row: unknown }> = []
   vi.mocked(supabaseAdmin.from).mockImplementation(((table: string) => {
-    const result = table === 'service_deliveries' ? delivery : table === 'accounts' ? { is_test: false } : null
+    const result = table === 'service_deliveries' ? delivery : table === 'accounts' ? { is_test: false, name_history: accountHistory, company_name: accountName } : null
     const list = table === 'pipeline_stages' ? catalog : []
     const chain: Record<string, unknown> = {}
     const self = () => chain
@@ -62,7 +66,7 @@ function installFrom() {
     chain.maybeSingle = () => Promise.resolve({ data: result, error: null })
     chain.update = (row: unknown) => { writes.push({ table, row }); return chain }
     chain.insert = (row: unknown) => { writes.push({ table, row }); return chain }
-    chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ data: list, error: null }).then(resolve)
+    chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ data: list, count: table === 'esign_envelopes' && !esignReadFails ? signedEnvelopes : undefined, error: table === 'esign_envelopes' && esignReadFails ? { message: 'db blinked' } : null }).then(resolve)
     return chain
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }) as any)
@@ -80,6 +84,10 @@ const sdWrites = (w: Array<{ table: string }>) => w.filter((x) => x.table === 's
 beforeEach(() => {
   vi.clearAllMocks()
   catalog = NEW_CATALOG
+  signedEnvelopes = 0
+  accountHistory = []
+  accountName = 'Old Name LLC'
+  esignReadFails = false
 })
 
 describe('changeNameAdvanceProblem (pure)', () => {
@@ -112,6 +120,36 @@ describe('changeNameAdvanceProblem (pure)', () => {
     expect(changeNameAdvanceProblem({ stages, fromOrder: 7, checks: [nc('A', 'filed')], targetOrder: 8 })).toBeNull()
   })
 
+  describe('the signed form must exist before the filing step, and the applied name before the Operating Agreement step', () => {
+    const filed = [nc('A', 'filed')]
+    it('crossing "File the form with the state" needs a completed e-sign envelope', () => {
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 3, checks: filed, targetOrder: 4, hasSignedForm: false })).toBe(NEED_SIGNED_FORM)
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 3, checks: filed, targetOrder: 4, hasSignedForm: true })).toBeNull()
+    })
+    it('a jump from the names straight over the signing and filing steps is refused too (the live QA case)', () => {
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 2, checks: filed, targetOrder: 5, hasSignedForm: false })).toBe(NEED_SIGNED_FORM)
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 2, checks: filed, targetOrder: 5, hasSignedForm: true })).toBeNull()
+    })
+    it('a job already PAST the filing step is not trapped by it (an in-flight job from before the rule)', () => {
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 4, checks: filed, targetOrder: 5, hasSignedForm: false })).toBeNull()
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 5, checks: filed, targetOrder: 6, hasSignedForm: false })).toBeNull()
+    })
+    it('crossing "Client updates the Operating Agreement" needs the new name applied (the button must not skip Apply)', () => {
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 6, checks: filed, targetOrder: 7, nameApplied: false })).toBe(NEED_NAME_APPLIED)
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 6, checks: filed, targetOrder: 7, nameApplied: true })).toBeNull()
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 5, checks: filed, targetOrder: 8, nameApplied: false })).toBe(NEED_NAME_APPLIED) // a jump to Completed
+    })
+    it('a job already at or past the Operating Agreement step is not refused (moving on to Completed, or back)', () => {
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 7, checks: filed, targetOrder: 8, nameApplied: false })).toBeNull()
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 7, checks: filed, targetOrder: 6, nameApplied: false })).toBeNull()
+    })
+    it('left off (undefined) when the facts were not looked up — the older callers and the old catalog keep working', () => {
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 6, checks: filed, targetOrder: 7 })).toBeNull()
+      expect(changeNameAdvanceProblem({ stages, fromOrder: 3, checks: filed, targetOrder: 4 })).toBeNull()
+      expect(changeNameAdvanceProblem({ stages: OLD_CATALOG, fromOrder: 1, checks: [], targetOrder: 5, hasSignedForm: false, nameApplied: false })).toBeNull()
+    })
+  })
+
   it('never refuses a move BACK or sideways', () => {
     expect(changeNameAdvanceProblem({ stages, fromOrder: 5, checks: [], targetOrder: 1 })).toBeNull()
     expect(changeNameAdvanceProblem({ stages, fromOrder: 3, checks: [], targetOrder: 3 })).toBeNull()
@@ -139,6 +177,78 @@ describe('advanceServiceDelivery for a Company Change Name', () => {
     expect(res.success).toBe(false)
     expect(res.error).toBe(NEED_FILED_NAME)
     expect(sdWrites(writes)).toHaveLength(0)
+  })
+
+  it('refuses the filing step while no signed form exists, and lets it through once the client has signed', async () => {
+    sdAt(CHANGE_NAME_STAGES.sign, 3, [nc('A', 'accepted')])
+    let writes = installFrom()
+    const refused = await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.file })
+    expect(refused.success).toBe(false)
+    expect(refused.error).toBe(NEED_SIGNED_FORM)
+    expect(sdWrites(writes)).toHaveLength(0)
+
+    signedEnvelopes = 1
+    writes = installFrom()
+    const ok = await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.file, skip_tasks: true }).catch(() => null)
+    expect(ok?.error ?? '').not.toBe(NEED_SIGNED_FORM)
+  })
+
+  it('refuses a stepper jump from the names over the signing step with no signed form (nothing is written)', async () => {
+    sdAt(CHANGE_NAME_STAGES.check, 2, [nc('A', 'filed')])
+    const writes = installFrom()
+    const res = await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.wait })
+    expect(res.success).toBe(false)
+    expect(res.error).toBe(NEED_SIGNED_FORM)
+    expect(sdWrites(writes)).toHaveLength(0)
+  })
+
+  it('the "Records updated" button cannot skip Apply: refused until this job\'s name change is applied, and not after an undo', async () => {
+    sdAt(CHANGE_NAME_STAGES.records, 6, [nc('A', 'filed')])
+    let writes = installFrom()
+    const refused = await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.oa })
+    expect(refused.success).toBe(false)
+    expect(refused.error).toBe(NEED_NAME_APPLIED)
+    expect(sdWrites(writes)).toHaveLength(0)
+
+    // applied and then undone = not applied
+    accountHistory = [{ type: 'change', change_id: 'sd-cn' }, { type: 'undo', change_id: 'sd-cn' }]
+    writes = installFrom()
+    expect((await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.oa })).error).toBe(NEED_NAME_APPLIED)
+
+    // applied (this job's change, not undone) = allowed past this gate
+    accountHistory = [{ type: 'change', change_id: 'sd-cn' }]
+    writes = installFrom()
+    const ok = await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.oa, skip_tasks: true }).catch(() => null)
+    expect(ok?.error ?? '').not.toBe(NEED_NAME_APPLIED)
+    // a DIFFERENT job's change does not count
+    accountHistory = [{ type: 'change', change_id: 'some-other-job' }]
+    installFrom()
+    expect((await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.oa })).error).toBe(NEED_NAME_APPLIED)
+  })
+
+  it('a company that ALREADY carries the filed name has nothing to apply — the job is not stranded (capitals-only change, Fix spelling instead of Apply)', async () => {
+    sdAt(CHANGE_NAME_STAGES.records, 6, [nc('Acme LLC', 'filed')])
+    accountName = '  ACME   llc '
+    installFrom()
+    const ok = await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.oa, skip_tasks: true }).catch(() => null)
+    expect(ok?.error ?? '').not.toBe(NEED_NAME_APPLIED)
+    // a DIFFERENT current name still needs Apply
+    accountName = 'Old Name LLC'
+    installFrom()
+    expect((await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.oa })).error).toBe(NEED_NAME_APPLIED)
+  })
+
+  it('a failed database read leaves the signed-form lock OFF — never a wrong "the client has not signed"', async () => {
+    sdAt(CHANGE_NAME_STAGES.sign, 3, [nc('A', 'accepted')])
+    esignReadFails = true
+    installFrom()
+    const res = await advanceServiceDelivery({ delivery_id: 'sd-cn', target_stage: CHANGE_NAME_STAGES.file, skip_tasks: true }).catch(() => null)
+    expect(res?.error ?? '').not.toBe(NEED_SIGNED_FORM)
+  })
+
+  it('the signed-form refusal tells staff WHERE the form must be sent from', () => {
+    expect(NEED_SIGNED_FORM).toMatch(/Prepare the form for signature/)
+    expect(NEED_SIGNED_FORM).toMatch(/not linked to this job/)
   })
 
   it('a second press on the stage the job is already at is a no-op: no write, no notification', async () => {
