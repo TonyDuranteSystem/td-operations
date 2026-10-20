@@ -150,14 +150,35 @@ export async function listMembers(teamId: string) {
   return out
 }
 
+function mayManage(actor: Actor): boolean {
+  return actor.kind !== "member" || actor.permissions.includes("team.manage")
+}
+
+/** Invitations still open (not used, not revoked, not expired), newest first. The link itself is never stored, so it cannot be shown again. */
+export async function listOpenInvites(teamId: string) {
+  const { data } = await db().from("marketing_invites").select("id, email_lower, member_role, bundle, permissions, expires_at, created_by, created_at")
+    .eq("team_id", teamId).is("used_at", null).is("revoked_at", null).gt("expires_at", new Date().toISOString()).order("created_at", { ascending: false })
+  return (data ?? []) as Array<{ id: string; email_lower: string; member_role: "owner" | "member"; bundle: string | null; permissions: string[]; expires_at: string; created_by: string | null; created_at: string }>
+}
+
+export async function revokeInvite(input: { teamId: string; inviteId: string; actor: Actor }): Promise<R> {
+  if (!mayManage(input.actor)) return fail("You cannot manage the team.")
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.inviteId)) return fail("That invitation was not found.")
+  const { data: inv } = await db().from("marketing_invites").select("id, member_role, used_at, revoked_at").eq("team_id", input.teamId).eq("id", input.inviteId).maybeSingle()
+  if (!inv || inv.used_at || inv.revoked_at) return fail("That invitation was not found.")
+  if (inv.member_role === "owner" && input.actor.kind !== "admin") return fail("Only Antonio can cancel an owner invitation.")
+  const { data, error } = await db().from("marketing_invites").update({ revoked_at: new Date().toISOString() })
+    .eq("team_id", input.teamId).eq("id", input.inviteId).is("used_at", null).is("revoked_at", null).select("id")
+  if (error) return fail("The change could not be saved. Please try again.")
+  if (!data || data.length === 0) return fail("That invitation was not found.")
+  return { ok: true }
+}
+
 async function loadMember(teamId: string, userId: string) {
   const { data } = await db().from("marketing_team_members").select("*").eq("team_id", teamId).eq("user_id", userId).maybeSingle()
   return data as { user_id: string; member_role: "owner" | "member"; status: string; token_version: number; bundle: string | null; permissions: string[] } | null
 }
 
-function mayManage(actor: Actor): boolean {
-  return actor.kind !== "member" || actor.permissions.includes("team.manage")
-}
 
 export async function removeMember(input: { teamId: string; userId: string; actor: Actor }): Promise<R> {
   if (!mayManage(input.actor)) return fail("You cannot manage the team.")
