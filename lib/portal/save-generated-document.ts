@@ -26,8 +26,6 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { noStorageDecisionFor } from '@/lib/crm-store/no-storage'
-import { uploadBinaryToDrive } from '@/lib/google-drive'
-import { autoSaveDocument } from '@/lib/portal/auto-save-document'
 import { createPortalNotification } from '@/lib/portal/notifications'
 import { isNewDocumentAlertEnabled } from '@/lib/portal/document-alerts'
 import { isItalian } from '@/lib/locale'
@@ -89,34 +87,9 @@ export async function saveSignedGeneratedDocument(
       driveFileId = routed.pointer
       documentId = routed.documentRowId
     } else {
-      // No storage: a company left on its old folder carries on there; everyone else is refused with one plain sentence.
+      // No storage: Stop Drive S2 — nothing is written to Drive; the company is refused with one plain sentence.
       const decision = await noStorageDecisionFor(accountId)
-      if (decision.route === 'refuse') return { success: false, error: decision.sentence, refused: true }
-
-      // 1. Old folder
-      try {
-        const driveFile = await uploadBinaryToDrive(fileName, fileBuffer, mimeType, decision.folderId)
-        driveFileId = driveFile.id as string
-      } catch (err) {
-        return { success: false, error: `Upload failed: ${err instanceof Error ? err.message : String(err)}` }
-      }
-
-      // 2. Portal-visible document record via the canonical path (sets drive_link, confidence, dedups on drive_file_id).
-      const saved = await autoSaveDocument({
-        accountId,
-        contactId,
-        fileName,
-        documentType,
-        category,
-        driveFileId,
-        portalVisible: true,
-      })
-      if (saved.error || !saved.id) {
-        // The file may be orphaned (upload succeeded, record didn't) — the caller surfaces this so ops can see it; per-file
-        // dedup means a retry with the same id won't double-insert.
-        return { success: false, error: `Document record failed: ${saved.error || 'no id'}`, driveFileId }
-      }
-      documentId = saved.id
+      return { success: false, error: decision.sentence, refused: true }
     }
   } catch (err) {
     // a company that is being moved is a plain "try again", not a failure

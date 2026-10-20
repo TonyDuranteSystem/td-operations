@@ -380,38 +380,10 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
   // ─── 9. DRIVE FOLDER + DOCUMENT UPLOAD (NON-CRITICAL) ───
   try {
     const { ensureCompanyFolder } = await import("@/lib/drive-folder-utils")
-    const folderResult = await ensureCompanyFolder(accountId!, companyName, stateOfFormation)
-    result.steps.push(step("drive_folder", folderResult.created ? "ok" : "skipped",
-      folderResult.created ? `Created: ${folderResult.folderId}` : `Already exists: ${folderResult.folderId}`
-    ))
-
-    // Upload wizard files if any. Duplicate-upload guard (LT Program
-    // incident): a re-run must not pile second copies into the folder —
-    // upload names embed a per-upload hash, so name-equality = same object.
-    // Null map (listing failed) → upload everything, never silently omit.
-    const uploads = p.upload_paths || []
-    if (uploads.length > 0 && folderResult.folderId) {
-      const { uploadBinaryToDrive, folderFileNameMap } = await import("@/lib/google-drive")
-      const { supabaseAdmin: sbAdmin } = await import("@/lib/supabase-admin")
-      const existingNames = await folderFileNameMap(folderResult.folderId)
-      for (const path of uploads) {
-        try {
-          const fileName = path.split("/").pop() || path
-          if (existingNames?.has(fileName)) {
-            result.steps.push(step(`doc_copy:${fileName}`, "skipped", `Already on Drive (${existingNames.get(fileName)})`))
-            continue
-          }
-          const { data: fileData } = await sbAdmin.storage.from("onboarding-uploads").download(path)
-          if (fileData) {
-            const buf = Buffer.from(await fileData.arrayBuffer())
-            const driveResult = await uploadBinaryToDrive(fileName, buf, "application/octet-stream", folderResult.folderId) as { id: string; name: string }
-            result.steps.push(step(`doc_copy:${fileName}`, "ok", driveResult.id))
-          }
-        } catch (uploadErr) {
-          result.steps.push(step(`doc_copy:${path}`, "skipped", `Non-critical: ${uploadErr instanceof Error ? uploadErr.message : String(uploadErr)}`))
-        }
-      }
-    }
+    // Stop Drive S2: this never returns a Drive folder — it opens the company's storage when it has none and throws the "store-owned"
+    // refusal handled below (the wizard uploads go to the CRM storage); a closed / moving / frozen company is refused with a staff alarm.
+    await ensureCompanyFolder(accountId!, companyName, stateOfFormation)
+    result.steps.push(step("drive_folder", "error", "Could not open this company's document storage"))
   } catch (e) {
     const { isStoreOwnedRefusal, saveUploadsToStoreForAccount } = await import("@/lib/crm-store/account-uploads")
     if (isStoreOwnedRefusal(e)) {

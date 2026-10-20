@@ -16,9 +16,13 @@
  *
  * Fails CLOSED: if the lookup cannot be read while storage companies exist, the write is refused.
  * The only way through is `runAsStoreBackup`, used by the one-way backup (storage → Drive) and nothing else.
+ *
+ * Stop Drive S2: this per-company check is now a SECOND, deeper layer. The Drive client refuses EVERY write outside the backup
+ * (lib/google-drive-write-scope.ts), so a write never even reaches this check unless it is the backup — which is exempt here. The
+ * state helpers (`companyDocState`, `liveOwner*`, `personFilesInStorage`) are still how callers decide where a file goes.
  */
 
-import { AsyncLocalStorage } from "node:async_hooks"
+import { inStoreBackupScope, runAsStoreBackup } from "../google-drive-write-scope"
 import { driveIdFromUrl } from "./no-storage"
 
 export type CompanyDocState = "drive" | "moving" | "store"
@@ -37,12 +41,9 @@ export function stateFrom(f: { hasLiveOwner: boolean; hasLiveFormationOwner?: bo
   return "drive"
 }
 
-const backupScope = new AsyncLocalStorage<boolean>()
-
-/** The ONE exception: the one-way backup writes a switched company's files INTO its Drive folder (Antonio: backup kept). */
-export function runAsStoreBackup<T>(fn: () => Promise<T>): Promise<T> {
-  return backupScope.run(true, fn)
-}
+// The ONE exception: the one-way backup writes a switched company's files INTO its Drive folder (Antonio: backup kept). The scope itself
+// lives in lib/google-drive-write-scope.ts (the Drive write switch, Stop Drive S2) so the Drive client and this guard share ONE scope.
+export { runAsStoreBackup }
 
 export interface GuardDeps {
   /** Drive folder ids of every company / person that is in state `moving` or `store`. Throws when unreadable. */
@@ -55,7 +56,7 @@ const MAX_DEPTH = 12
 
 /** Pure core (dependencies injected): throws when any target is, or sits inside, a locked company folder. */
 export async function assertTargetsNotSwitched(ids: string[], deps: GuardDeps): Promise<void> {
-  if (backupScope.getStore()) return
+  if (inStoreBackupScope()) return
   const targets = ids.filter(Boolean)
   if (targets.length === 0) return
   const locked = await deps.lockedFolderIds()

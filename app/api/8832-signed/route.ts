@@ -12,7 +12,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
-import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 
 export async function POST(req: NextRequest) {
   try {
@@ -65,28 +64,15 @@ export async function POST(req: NextRequest) {
 
     if (form.account_id) {
       try {
-        // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its signed 8832
-        // saved in the new storage and needs no Drive folder; a company still on Drive carries on exactly as before.
+        // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company in storage has its signed 8832 saved there.
         const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
         const inStorage = (await companyDocState(form.account_id)) !== "drive"
 
-        // Stop Drive (dev job 264bb882, S1d): Drive is written only for a company deliberately left on it (folder, no storage,
-        // not closed). Any other state is an error step + a staff alarm — never "ok", never a silent skip.
-        const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
-        const legacy = inStorage ? null : await legacyDriveForAccount(form.account_id)
-        const legacyFolderId = legacy && legacy.allowed ? legacy.folderId : null
+        // Stop Drive S2: nothing is ever written to Drive. A company with no storage is an error step + a staff alarm —
+        // never "ok", never a silent skip.
+        const { raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
 
-        if (legacyFolderId || inStorage) {
-          let targetFolderId = ""
-          if (!inStorage && legacyFolderId) {
-            const { listFolder } = await import("@/lib/google-drive")
-            const folderResult = await listFolder(legacyFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
-            const companyFolder = folderResult.files?.find(f =>
-              f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
-            )
-            targetFolderId = companyFolder?.id || legacyFolderId
-          }
-
+        if (inStorage) {
           // Download signed PDF from Storage
           const { data: files } = await supabaseAdmin.storage
             .from("signed-8832")
@@ -103,39 +89,17 @@ export async function POST(req: NextRequest) {
               attachmentBytes = new Uint8Array(arrayBuffer)
               const fileData = Buffer.from(arrayBuffer)
 
-              if (inStorage) {
-                // the same key on a re-run is a new VERSION of the same file, never a second copy
-                const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
-                const routed = await saveSignedPdfForAccount({
-                  accountId: form.account_id, fileName: attachmentName, bytes: fileData, label: "Form 8832", category: 1, callerKey: `8832-signed:${form.id}`,
-                })
-                if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its Form 8832 was being saved — nothing was saved.")
-                await supabaseAdmin
-                  .from("form_8832_applications")
-                  .update({ pdf_signed_drive_id: routed.pointer, updated_at: new Date().toISOString() })
-                  .eq("id", form.id)
-                results.push({ step: "drive_upload", status: "ok", detail: `Saved to the new storage: ${routed.pointer}` })
-              } else {
-                const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-                // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
-                const driveResult = await uploadBinaryToDriveUpsert(attachmentName, fileData, "application/pdf", targetFolderId) as { id: string }
-
-                await supabaseAdmin
-                  .from("form_8832_applications")
-                  .update({ pdf_signed_drive_id: driveResult.id, updated_at: new Date().toISOString() })
-                  .eq("id", form.id)
-
-                results.push({ step: "drive_upload", status: "ok", detail: `Uploaded: ${driveResult.id}` })
-
-                await autoSaveDocument({
-                  accountId: form.account_id,
-                  fileName: attachmentName,
-                  documentType: "Form 8832",
-                  category: 1,
-                  driveFileId: driveResult.id,
-                  portalVisible: true,
-                })
-              }
+              // the same key on a re-run is a new VERSION of the same file, never a second copy
+              const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+              const routed = await saveSignedPdfForAccount({
+                accountId: form.account_id, fileName: attachmentName, bytes: fileData, label: "Form 8832", category: 1, callerKey: `8832-signed:${form.id}`,
+              })
+              if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its Form 8832 was being saved — nothing was saved.")
+              await supabaseAdmin
+                .from("form_8832_applications")
+                .update({ pdf_signed_drive_id: routed.pointer, updated_at: new Date().toISOString() })
+                .eq("id", form.id)
+              results.push({ step: "drive_upload", status: "ok", detail: `Saved to the new storage: ${routed.pointer}` })
             } else {
               results.push({ step: "drive_upload", status: "error", detail: "The signed Form 8832 PDF could not be downloaded from Storage — nothing was filed" })
             }
@@ -143,7 +107,9 @@ export async function POST(req: NextRequest) {
             results.push({ step: "drive_upload", status: "error", detail: "The signed Form 8832 PDF was not found in Storage — nothing was filed" })
           }
         } else {
-          const sentence = await raiseDriveWriteRefused({ flow: "8832-signed", accountId: form.account_id, reason: legacy && !legacy.allowed ? legacy.reason : "no_folder", detail: "Form 8832" })
+          const { legacyDriveForAccount } = await import("@/lib/crm-store/legacy-drive")
+          const legacy = await legacyDriveForAccount(form.account_id)
+          const sentence = await raiseDriveWriteRefused({ flow: "8832-signed", accountId: form.account_id, reason: legacy.reason, detail: "Form 8832" })
           results.push({ step: "drive_upload", status: "error", detail: sentence })
         }
       } catch (e) {
@@ -184,7 +150,7 @@ export async function POST(req: NextRequest) {
         ``,
         attachmentBytes
           ? `The signed Form 8832 is attached. Print and mail to the IRS.`
-          : `ACTION REQUIRED: Download the signed Form 8832 from the client's Drive folder.`,
+          : `ACTION REQUIRED: the signed Form 8832 could not be attached and is NOT filed. It is kept in the signing bucket (signed-8832) — add it by hand where it belongs.`,
         ``,
         `Admin Preview: ${APP_BASE_URL}/8832/${form.token}?preview=td`,
       ].join("\n")

@@ -135,13 +135,15 @@ describe("finalizeEsignCompletion — filing", () => {
     expect(state.recorded.filter((r) => r.table === "documents")).toEqual([])
   })
 
-  it("a company left on its old folder: the signed PDF goes there as before, no alarm", async () => {
+  it("a company left on its old folder is frozen (Stop Drive S2): nothing is written to Drive, the signed PDF is still served from its bucket, no alarm", async () => {
     state.companyState = "drive"
-    state.driveMode = "record"
+    state.rows.documents = []
     state.rows.accounts = { company_name: "Acme LLC", status: "Active", drive_folder_id: "OLDFOLDER", gdrive_folder_url: null }
     const { finalizeEsignCompletion } = await import("@/lib/operations/esign")
     await finalizeEsignCompletion("env-1")
-    expect(state.driveCalls).toContain("uploadBinaryToDriveUpsert")
+    expect(state.driveCalls).toEqual([])
+    const ins = state.recorded.find((r) => r.table === "documents" && r.op === "insert")
+    expect(ins?.payload).toMatchObject({ account_id: "acct-1", drive_file_id: "storage:signed-documents/esign/t/signed.pdf" })
     expect(state.alarms).toEqual([])
     expect(state.mails[0]).toContain("is filed in the client's documents")
   })

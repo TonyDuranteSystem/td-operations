@@ -66,13 +66,14 @@ describe("generateIntercompanyForAccount", () => {
     expect(r.success).toBe(true)
     expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
   })
-  it("left-on-Drive company: still filed in Drive", async () => {
+  it("left-on-Drive company is frozen (Stop Drive S2): the plain sentence, nothing written in Drive, ONE alarm", async () => {
     seed("Offboarding", "F-rebis")
     const { generateIntercompanyForAccount } = await import("@/lib/operations/intercompany")
     const r = await generateIntercompanyForAccount("acc-1")
-    expect(r.success).toBe(true)
-    expect(st.driveWrites.join(" ")).toContain("F-rebis")
-    expect(st.alarms).toEqual([])
+    expect(r.success).toBeUndefined()
+    expect(r.error).toMatch(/read-only/)
+    expect(st.driveWrites).toEqual([])
+    expect(st.alarms.map((a) => a.kind)).toEqual(["drive_write_refused"])
   })
 })
 
@@ -96,11 +97,23 @@ describe("fileRenewal (Calendar 'Mark filed')", () => {
     await fileRenewal(params())
     expect(st.driveWrites).toEqual([]); expect(st.driveReads).toEqual([])
   })
-  it("left-on-Drive company: the receipt is still filed in Drive", async () => {
+  it("left-on-Drive company is frozen (Stop Drive S2): the filing fails with the plain sentence, nothing written in Drive", async () => {
     seed("Offboarding", "F-rebis")
     const { fileRenewal } = await import("@/lib/operations/file-renewal")
-    await fileRenewal(params())
-    expect(st.driveWrites.join(" ")).toContain("F-rebis")
-    expect(st.alarms).toEqual([])
+    const r = await fileRenewal(params())
+    expect(r.success).toBe(false)
+    expect(r.error).toMatch(/read-only/)
+    expect(st.driveWrites).toEqual([])
+  })
+})
+
+describe("renewalFailureStatus — a company that cannot receive the receipt is 409, anything else 500", () => {
+  it("maps the refusal sentences and the moving message to 409", async () => {
+    const { renewalFailureStatus } = await import("@/lib/operations/file-renewal")
+    const { NO_STORAGE_REASON_SENTENCE } = await import("@/lib/crm-store/no-storage")
+    for (const s of Object.values(NO_STORAGE_REASON_SENTENCE)) expect(renewalFailureStatus(s)).toBe(409)
+    expect(renewalFailureStatus("This company's files are being moved to the new storage right now — please try again in a few minutes.")).toBe(409)
+    expect(renewalFailureStatus("Account x not found")).toBe(500)
+    expect(renewalFailureStatus(undefined)).toBe(500)
   })
 })

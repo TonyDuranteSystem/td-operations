@@ -19,10 +19,10 @@ describe("formDestinationForAccount", () => {
     const m = mk("account-storage:new", { allowed: false, reason: "no_folder", sentence: "x" })
     expect((await formDestinationForAccount("a2", "banking", m.deps)).ok).toBe(true)
   })
-  it("a company left on Drive -> its own folder", async () => {
-    const m = mk(null, { allowed: true, folderId: "F-rebis" })
-    expect(await formDestinationForAccount("a3", "closure", m.deps)).toEqual({ ok: true, folderId: "F-rebis", via: "legacy-drive" })
-    expect(m.alarm).not.toHaveBeenCalled()
+  it("a company frozen on its old Drive folder -> no destination (Stop Drive S2): the plain sentence and ONE alarm", async () => {
+    const m = mk(null, { allowed: false, reason: "frozen", sentence: "x" })
+    expect(await formDestinationForAccount("a3", "closure", m.deps)).toEqual({ ok: false, reason: "frozen", sentence: "sentence:frozen" })
+    expect(m.alarm).toHaveBeenCalledTimes(1)
   })
   it.each([["archived"], ["no_folder"]] as const)("no destination (%s): the plain sentence comes back and ONE alarm is raised", async (reason) => {
     const m = mk(null, { allowed: false, reason, sentence: "x" })

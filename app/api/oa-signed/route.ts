@@ -22,7 +22,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { CRM_BASE_URL } from "@/lib/config"
-import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { resolveSignedPdfPath, signedPdfPathProblem } from "@/lib/oa/signed-pdf-path"
 import { reportSystemError } from "@/lib/system-errors"
 import { normalizeEntityType } from "@/lib/portal/entity-type"
@@ -196,28 +195,15 @@ export async function POST(req: NextRequest) {
 
       // ─── 3. AUTO-UPLOAD SIGNED PDF TO DRIVE ───
       try {
-        // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its OA saved in
-        // the new storage and needs no Drive folder at all; a company still on Drive carries on exactly as before.
+        // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company in storage has its OA saved there.
         const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
         const inStorage = (await companyDocState(oa.account_id)) !== "drive"
 
-        // Stop Drive (dev job 264bb882, S1d): Drive is written only for a company deliberately left on it (folder, no storage,
-        // not closed). Any other state is an error step + a staff alarm — never "ok", never a silent skip.
+        // Stop Drive S2: nothing is ever written to Drive. A company with no storage is an error step + a staff alarm —
+        // never "ok", never a silent skip (the signed PDF stays safe in the signed-oa bucket).
         const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
-        const legacy = inStorage ? null : await legacyDriveForAccount(oa.account_id)
-        const legacyFolderId = legacy && legacy.allowed ? legacy.folderId : null
 
-        if (legacyFolderId || inStorage) {
-          let targetFolderId = ""
-          if (!inStorage && legacyFolderId) {
-            const { listFolder } = await import("@/lib/google-drive")
-            const folderResult = await listFolder(legacyFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
-            const companyFolder = folderResult.files?.find(f =>
-              f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
-            )
-            targetFolderId = companyFolder?.id || legacyFolderId
-          }
-
+        if (inStorage) {
           // File the document the SERVER recorded — never "whatever is newest in
           // the folder", which is what this used to do. The storage bucket
           // accepts uploads from anyone (its only policy is INSERT for role
@@ -239,31 +225,13 @@ export async function POST(req: NextRequest) {
                 const fileData = Buffer.from(arrayBuffer)
                 const fileName = `Operating Agreement - ${oa.company_name} (Signed).pdf`
 
-                if (inStorage) {
-                  // the same key on a re-run is a new VERSION of the same file, never a second copy
-                  const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
-                  const routed = await saveSignedPdfForAccount({
-                    accountId: oa.account_id, fileName, bytes: fileData, label: "Operating Agreement", category: 1, callerKey: `oa-signed:${oa.id}`, documentType: "operating_agreement",
-                  })
-                  if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its Operating Agreement was being saved — nothing was saved.")
-                  results.push({ step: "drive_upload", status: "ok", detail: `Saved to the new storage: ${routed.pointer}` })
-                } else {
-                  const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-                  // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
-                  const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
-                  results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
-
-                  if (oa.account_id) {
-                    await autoSaveDocument({
-                      accountId: oa.account_id,
-                      fileName,
-                      documentType: 'Operating Agreement',
-                      category: 1,
-                      driveFileId: driveResult.id,
-                      portalVisible: true,
-                    })
-                  }
-                }
+                // the same key on a re-run is a new VERSION of the same file, never a second copy
+                const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+                const routed = await saveSignedPdfForAccount({
+                  accountId: oa.account_id, fileName, bytes: fileData, label: "Operating Agreement", category: 1, callerKey: `oa-signed:${oa.id}`, documentType: "operating_agreement",
+                })
+                if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its Operating Agreement was being saved — nothing was saved.")
+                results.push({ step: "drive_upload", status: "ok", detail: `Saved to the new storage: ${routed.pointer}` })
               } else {
                 const detail = `Recorded PDF not found in Storage: ${resolved.path}`
                 results.push({ step: "drive_upload", status: "error", detail })
@@ -297,7 +265,8 @@ export async function POST(req: NextRequest) {
             })
           }
         } else {
-          const sentence = await raiseDriveWriteRefused({ flow: "oa-signed", accountId: oa.account_id, reason: legacy && !legacy.allowed ? legacy.reason : "no_folder", detail: "Operating Agreement" })
+          const legacy = await legacyDriveForAccount(oa.account_id)
+          const sentence = await raiseDriveWriteRefused({ flow: "oa-signed", accountId: oa.account_id, reason: legacy.reason, detail: "Operating Agreement" })
           results.push({ step: "drive_upload", status: "error", detail: sentence })
         }
       } catch (e) {

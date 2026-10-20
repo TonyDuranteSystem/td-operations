@@ -411,50 +411,7 @@ export async function fileEsignSignedPdf(envelopeId: string): Promise<EsignFilin
     return { filed: false, reason: `storage save failed: ${e instanceof Error ? e.message : String(e)}`, hasStorage }
   }
 
-  // 1b. A company left on its old folder: upload there (not in the sandbox, which has no live Drive).
-  if (process.env.SANDBOX_MODE !== "1") {
-    try {
-      const { noStorageDecisionFor } = await import("@/lib/crm-store/no-storage")
-      const decision = await noStorageDecisionFor(env.owner_account_id)
-      if (decision.route === "drive") {
-        const { data: pdfData } = await supabaseAdmin.storage.from(SIGNED_BUCKET).download(env.signed_pdf_path)
-        if (pdfData) {
-          const buffer = Buffer.from(await pdfData.arrayBuffer())
-          const { uploadBinaryToDriveUpsert, listFolder } = await import("@/lib/google-drive")
-          let targetFolderId: string = decision.folderId
-          try {
-            const contents = await listFolder(decision.folderId)
-            const corr = (contents as Array<{ name: string; id: string }>).find(f => f.name.startsWith("5"))
-            if (corr) targetFolderId = corr.id
-          } catch {
-            /* fall back to the company root folder */
-          }
-          // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
-          const driveResult = await uploadBinaryToDriveUpsert(fileName, buffer, "application/pdf", targetFolderId)
-          const driveFileId = (driveResult as { id?: string })?.id
-          if (driveFileId) {
-            const { autoSaveDocument } = await import("@/lib/portal/auto-save-document")
-            await autoSaveDocument({ accountId: env.owner_account_id, fileName, documentType: env.document_name, category: 5, driveFileId })
-            await db.from("esign_envelopes").update({ signed_pdf_drive_id: driveFileId }).eq("id", env.id)
-            const { updateDocument } = await import("@/lib/operations/document")
-            await updateDocument({
-              drive_file_id: driveFileId,
-              account_id: env.owner_account_id,
-              // autoSaveDocument sets drive_file_id but not drive_link: populate a view URL built from the file id.
-              patch: { portal_visible: true, drive_link: `https://drive.google.com/file/d/${driveFileId}/view` },
-              actor: "system:esign",
-              summary: `Signed e-sign document filed + portal: ${env.document_name}`,
-            })
-            return { filed: true, reason: null, hasStorage }
-          }
-        }
-      }
-    } catch {
-      /* fall through to the bucket-served row */
-    }
-  }
-
-  // 1c. Any other company (or the old folder did not take it): a documents row served from the signed-documents bucket.
+  // 1b. Any other company (Stop Drive S2: nothing is ever written to Drive): a documents row served from the signed-documents bucket.
   // The marker is CLAIMED first (an atomic "set it if still empty"): only the caller that wins the claim writes the row, so the
   // signer's submit and the reconciliation cron can never both insert one. If the row cannot be written the claim is released,
   // so the next run files it.

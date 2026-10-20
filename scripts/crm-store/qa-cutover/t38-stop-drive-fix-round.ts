@@ -54,7 +54,7 @@ async function main() {
   // ── item 8 + decision ──
   check("L1 the lease-regenerate decision: a storage company can receive the copy", (await accountCanReceiveFiles(UX)) === true)
   check("L2 a company with no storage and no folder cannot — decided before any lease row changes", (await accountCanReceiveFiles(TC)) === false)
-  check("L3 a Closed company with a folder is refused; an Active one keeps its folder", decideNoStorage({ status: "Closed", drive_folder_id: "F" }).route === "refuse" && decideNoStorage({ status: "Active", drive_folder_id: "F" }).route === "drive")
+  check("L3 a Closed company with a folder is refused; an Active one with a folder is frozen (refused too, Stop Drive S2)", decideNoStorage({ status: "Closed", drive_folder_id: "F" }).route === "refuse" && decideNoStorage({ status: "Active", drive_folder_id: "F" }).route === "refuse")
 
   // ── item 4: a person with no storage ──
   const { data: c } = await sb.from("contacts").insert({ full_name: `QA Test Person ${tag}`, email: `qa-t38-${tag}@example.com` }).select("id").single()

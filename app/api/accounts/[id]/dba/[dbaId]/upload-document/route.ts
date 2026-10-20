@@ -132,30 +132,14 @@ export async function POST(
       throw e
     }
 
-    let driveFile: { id: string; name: string }
-    if (routed.route === 'store') {
-      driveFile = { id: routed.pointer, name: fileName }
-    } else {
-      // No storage: a company left on its old folder carries on as before; everyone else gets one plain sentence.
+    if (routed.route !== 'store') {
+      // No storage: Stop Drive S2 — nothing is ever written to Drive, so the company gets one plain sentence with the true reason.
       const decision = await noStorageDecisionFor(accountId)
-      if (decision.route === 'refuse') {
-        discardStaged()
-        return NextResponse.json({ success: false, detail: decision.sentence }, { status: NO_STORAGE_STATUS })
-      }
-
-      // 4. Find "1. Company" subfolder (DBA registrations live with company docs).
-      const { listFolderAnyDrive, uploadBinaryToDrive } = await import('@/lib/google-drive')
-      const foldersRes = await listFolderAnyDrive(decision.folderId)
-      const folders = (foldersRes as { files?: Array<{ id: string; name: string; mimeType: string }> }).files ?? []
-      const targetFolder = folders.find(
-        f => f.name === '1. Company' && f.mimeType === 'application/vnd.google-apps.folder',
-      )
-      const uploadFolderId = targetFolder?.id || decision.folderId
-
-      // 5. Upload to Drive.
-      driveFile = await uploadBinaryToDrive(fileName, buffer, fileMime, uploadFolderId) as { id: string; name: string }
+      discardStaged()
+      return NextResponse.json({ success: false, detail: decision.sentence }, { status: NO_STORAGE_STATUS })
     }
-    const sideEffects: string[] = [routed.route === 'store' ? `Saved to the new storage: ${fileName}` : `Uploaded: ${fileName}`]
+    const driveFile: { id: string; name: string } = { id: routed.pointer, name: fileName }
+    const sideEffects: string[] = [`Saved to the new storage: ${fileName}`]
 
     // 6. Insert documents row (idempotent on drive_file_id).
     const { data: existingDoc } = await supabaseAdmin

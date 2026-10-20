@@ -534,3 +534,51 @@ final class FlexibleValuesTests: XCTestCase {
 enum FileDownloaderTestHelper {
     static func sha(_ s: String) -> String { var h = SHA256(); h.update(data: Data(s.utf8)); return h.finalize().map { String(format: "%02x", $0) }.joined() }
 }
+
+/// The shape is the Storage page's: Clients level, people listed in "2. Contacts", and a person's storage opened from a company (Antonio 2026-10-19)
+final class StorageShapeTests: XCTestCase {
+    func testSectionAndGroupIdsRoundTrip() {
+        for id in [ItemID.section("clients"), .section("business"), .group("state:Florida"), .group("one-time"), .owner("o1")] {
+            XCTAssertEqual(ItemID(raw: id.raw), id)
+        }
+        XCTAssertNil(ItemID(raw: "s:"))
+        XCTAssertEqual(ItemID(raw: "s:clients"), .section("clients"))
+    }
+
+    func testPersonEntryAndWhatIsInsideRoundTrip() {
+        let link = ItemID.link(company: "co", folder: "contacts1", target: "person9")
+        XCTAssertEqual(link.raw, "l:co:contacts1:person9")
+        XCTAssertEqual(ItemID(raw: link.raw), link)
+        // a person with no storage of their own
+        XCTAssertEqual(ItemID(raw: "l:co:contacts1:c-777"), .link(company: "co", folder: "contacts1", target: "c-777"))
+        let folder = ItemID.folder(owner: "person9", folder: "fA").shown(via: "co:contacts1:person9")
+        let file = ItemID.file(owner: "person9", file: "fl1").shown(via: "co:contacts1:person9")
+        for id in [folder, file] { XCTAssertEqual(ItemID(raw: id.raw), id) }
+        XCTAssertEqual(folder.underlying, .folder(owner: "person9", folder: "fA"))
+        XCTAssertEqual(file.viaLink, "co:contacts1:person9")
+        XCTAssertNil(ItemID.folder(owner: "o", folder: "f").viaLink)
+    }
+
+    func testTheSamePersonFolderHasADifferentIdUnderEachPlace() {
+        // under People, and under two companies: three places, three ids, ONE real folder
+        let plain = ItemID.folder(owner: "p", folder: "f")
+        let a = plain.shown(via: "c1:k1:p"), b = plain.shown(via: "c2:k2:p")
+        XCTAssertEqual(Set([plain.raw, a.raw, b.raw]).count, 3)
+        XCTAssertEqual(a.underlying, plain); XCTAssertEqual(b.underlying, plain)
+        XCTAssertEqual(plain.shown(via: nil), plain)
+    }
+
+    func testBadIdsAreRefused() {
+        for raw in ["l:co:", "l:::x", "v:|o:x", "v:link|", "v:link|zzz", "l:co:k", ""] { XCTAssertNil(ItemID(raw: raw), raw) }
+    }
+
+    func testListingAnswerReadsThePeopleList() throws {
+        let json = #"{"owner":{"kind":"company","label":"X","closed":false},"folder":{"id":"k","name":"2. Contacts","kind":"contacts","locked":true},"folders":[],"files":[],"people":[{"contactId":"c1","name":"Ann Lee","ownerId":"p1"},{"contactId":"c2","name":"Bo Kim","ownerId":null}]}"#
+        let l = try JSONDecoder().decode(FolderListing.self, from: Data(json.utf8))
+        XCTAssertEqual(l.people?.count, 2)
+        XCTAssertEqual(l.people?[0].ownerId, "p1"); XCTAssertNil(l.people?[1].ownerId)
+        // an older server answer without people still reads
+        let old = #"{"owner":{"kind":"company","label":"X","closed":false},"folder":null,"folders":[],"files":[]}"#
+        XCTAssertNil(try JSONDecoder().decode(FolderListing.self, from: Data(old.utf8)).people)
+    }
+}

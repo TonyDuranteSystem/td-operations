@@ -99,16 +99,18 @@ describe("saveDocumentForContact — a person's own documents", () => {
   }
   const pass = { contactId: "c-1", name: "Passport.pdf", bytes: Buffer.from("pdf"), mimeType: "application/pdf", documentType: "passport", callerKey: "pass:c-1:1" }
 
-  it("a person of a company left on Drive (legacy): the caller carries on with Drive", async () => {
-    const m = mkP(null)
-    expect(await saveDocumentForContact(pass, { ...m.deps, legacyDrive: async () => true })).toEqual({ route: "drive" })
-    expect(m.save).not.toHaveBeenCalled()
-  })
-
-  it("any other person with no storage (a lead, a person of a closed company) gets their OWN storage — never Drive", async () => {
+  it("a person of a company frozen on its old Drive folder (legacy) is NOT sent to Drive (Stop Drive S2): they get their OWN storage like anyone else", async () => {
     const m = mkP(null)
     const ensurePerson = vi.fn(async () => "new-person-owner")
-    const r = await saveDocumentForContact({ ...pass, contactName: "Maria Verdi" }, { ...m.deps, legacyDrive: async () => false, ensurePerson })
+    const r = await saveDocumentForContact(pass, { ...m.deps, ensurePerson })
+    expect(r.route).toBe("store")
+    expect(ensurePerson).toHaveBeenCalledTimes(1)
+  })
+
+  it("any person with no storage (a lead, a person of a closed company) gets their OWN storage — never Drive", async () => {
+    const m = mkP(null)
+    const ensurePerson = vi.fn(async () => "new-person-owner")
+    const r = await saveDocumentForContact({ ...pass, contactName: "Maria Verdi" }, { ...m.deps, ensurePerson })
     expect(r.route).toBe("store")
     expect(ensurePerson).toHaveBeenCalledWith("c-1", "Maria Verdi")
     expect(m.save).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "new-person-owner", folderKind: "personal", documentType: "passport" }))
@@ -117,7 +119,7 @@ describe("saveDocumentForContact — a person's own documents", () => {
   it("a failed storage opening is an ERROR, never a fall-through to Drive", async () => {
     const m = mkP(null)
     const ensurePerson = vi.fn(async () => { throw new Error("storage down") })
-    await expect(saveDocumentForContact(pass, { ...m.deps, legacyDrive: async () => false, ensurePerson })).rejects.toThrow(/storage down/)
+    await expect(saveDocumentForContact(pass, { ...m.deps, ensurePerson })).rejects.toThrow(/storage down/)
     expect(m.save).not.toHaveBeenCalled()
   })
 
@@ -181,10 +183,11 @@ describe("saveDocumentForContact — a person of a switched company", () => {
     expect((await saveDocumentForContact({ ...pass, viaAccountId: "acc-1", contactName: "Mario Rossi" }, m.deps)).route).toBe("store")
   })
 
-  it("the company is still on Drive and the person has no live storage: Drive as before", async () => {
+  it("the company is still on Drive and the person has no live storage: the person gets their OWN storage (Stop Drive S2 — never Drive)", async () => {
     const m = mkC(null, "drive")
-    expect(await saveDocumentForContact({ ...pass, viaAccountId: "acc-1", contactName: "Mario Rossi" }, { ...m.deps, legacyDrive: async () => true })).toEqual({ route: "drive" })
-    expect(m.ensurePerson).not.toHaveBeenCalled()
+    const r = await saveDocumentForContact({ ...pass, viaAccountId: "acc-1", contactName: "Mario Rossi" }, m.deps)
+    expect(r.route).toBe("store")
+    expect(m.ensurePerson).toHaveBeenCalledTimes(1)
   })
 })
 

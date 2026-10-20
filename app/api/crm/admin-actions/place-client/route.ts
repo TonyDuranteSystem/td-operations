@@ -18,7 +18,6 @@
 import { NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
-// createFolder removed — now uses ensureCompanyFolder from drive-folder-utils
 import { createClient } from "@/lib/supabase/server"
 import { canPerform } from "@/lib/permissions"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
@@ -143,13 +142,11 @@ async function createDriveFolder(
   contactName: string | null,
 ): Promise<StepResult> {
   try {
+    // Stop Drive S2: this step never creates a Drive folder. ensureCompanyFolder opens the company's CRM storage when it has none and
+    // then throws the "store-owned" refusal handled below; a closed / moving / frozen company is refused with a staff alarm.
     const { ensureCompanyFolder } = await import("@/lib/drive-folder-utils")
-    const result = await ensureCompanyFolder(accountId, companyName, state, contactName || undefined)
-
-    if (result.created) {
-      return { name: "drive_folder", status: "ok", detail: `Created folder with subfolders (${result.folderId})` }
-    }
-    return { name: "drive_folder", status: "skipped", detail: `Already exists: ${result.folderId}` }
+    await ensureCompanyFolder(accountId, companyName, state, contactName || undefined)
+    return { name: "drive_folder", status: "error", detail: "Could not open this company's document storage" }
   } catch (err) {
     const { isStoreOwnedRefusal } = await import("@/lib/crm-store/account-uploads")
     if (isStoreOwnedRefusal(err)) {

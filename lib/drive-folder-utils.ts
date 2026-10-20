@@ -1,47 +1,25 @@
 /**
- * Shared Google Drive folder utilities for the companies deliberately LEFT on Drive.
+ * Company / person "folder" gates (the file name is historical).
  *
- * Stop Drive (dev job 264bb882, S1d): ensureContactFolder() / ensureCompanyFolder() never create a Drive folder — nor anything
- * inside one. They return the folder a legacy company/person already has (see lib/crm-store/legacy-drive.ts). A company or person
- * with no place for files gets their own CRM storage opened and the caller's storage branch takes over; a closed company is refused
- * with a staff alarm.
+ * Stop Drive S2 (dev job 264bb882): NOTHING is ever written to Google Drive any more, so these functions can no longer hand back a
+ * Drive folder to write into — they never RETURN. They decide the true state and throw the error the caller's storage branch
+ * already understands:
+ *   - a company / person with no storage that is OPEN gets its own CRM storage opened here, and the call throws
+ *     StoreOwnedAccountError / PersonFilesInStorageError (the caller then files into that storage);
+ *   - a company being moved right now, a closed company, and a company frozen on its old Drive folder (REBIS, YBR, Degasper,
+ *     Fresh Legal) are refused with LegacyDriveRefusedError plus a staff alarm (once an hour per cause).
+ * The Drive-folder creation, subfolder creation and contact→company folder migration that used to live here are gone.
  *
  * Used by:
  * - formation-setup.ts (Phase 1)
  * - onboarding-setup.ts (Phase 2 directly)
- * - formation-materialize.ts::materializeFormationCompany (Phase 2 migration,
- *   triggered by the Formation Workspace's Articles-upload flow)
+ * - formation-materialize.ts::materializeFormationCompany
+ * - place-client, tax-return-intake, contact upload routes
  */
-
-import { supabaseAdmin } from '@/lib/supabase-admin'
-
-// ─── Types ─────────────────────────────────────────────────────────────────
-interface DriveItem { id: string; name: string; mimeType: string }
-
-// ─── Helper: lazy import google-drive ──────────────────────────────────────
-async function getDriveHelpers() {
-  const { listFolderAnyDrive, moveFile } = await import('@/lib/google-drive')
-  // Wrap listFolderAnyDrive to return files array (it returns { files: [...] })
-  const listFiles = async (folderId: string): Promise<DriveItem[]> => {
-    const res = await listFolderAnyDrive(folderId)
-    return (res as { files?: DriveItem[] }).files ?? []
-  }
-  return { listFiles, moveFile }
-}
-
-// ─── Helper: the standard subfolders a folder already has (READ ONLY) ──────
-// Callers depend on specific subfolder names (e.g. "2. Contacts"). A missing one is NOT created any more (no Drive writes).
-async function existingSubfolders(folderId: string): Promise<Record<string, string>> {
-  const { listFiles } = await getDriveHelpers()
-  const out: Record<string, string> = {}
-  for (const f of await listFiles(folderId)) {
-    if (f.mimeType === 'application/vnd.google-apps.folder') out[f.name] = f.id
-  }
-  return out
-}
 
 // ─── Phase 1: Contact folder (pre-company) ─────────────────────────────────
 
+/** Never returns (Stop Drive S2): opens the person's own storage and throws PersonFilesInStorageError, or refuses (moving). */
 export async function ensureContactFolder(
   contactId: string,
   contactName: string,
@@ -52,126 +30,52 @@ export async function ensureContactFolder(
     const { assertPersonFilesStillOnDrive } = await import('@/lib/crm-store/person-drive-guard')
     await assertPersonFilesStillOnDrive(contactId)
   }
-  // Stop Drive (dev job 264bb882, S1d): this function NEVER creates a Drive folder (or anything inside one). It hands back the
-  // folder that already exists, and only for a person of a company deliberately left on Drive (folder, no storage, not closed).
-  // Anyone else gets their OWN storage opened and the caller's storage branch takes over (PersonFilesInStorageError) — except a
-  // person of a company being moved right now, who is refused with a staff alarm (a closed company does not stop a person from getting their own storage).
+  // This function NEVER creates a Drive folder and NEVER hands one back. A person gets their OWN storage opened and the caller's
+  // storage branch takes over (PersonFilesInStorageError) — except a person of a company being moved right now, who is refused
+  // with a staff alarm (a closed or frozen company does not stop a person from getting their own storage).
   const { legacyDriveForContact, raiseDriveWriteRefused, LegacyDriveRefusedError } = await import('@/lib/crm-store/legacy-drive')
   const v = await legacyDriveForContact(contactId)
-  if (!v.allowed) {
-    // A closed company is a property of the COMPANY, not of the person: a person whose companies are all closed (a returning client
-    // starting a new formation) gets their own storage like anyone else. Only a company being moved right now is refused.
-    if (v.reason === 'moving') {
-      await raiseDriveWriteRefused({ flow: 'ensureContactFolder', contactId, reason: v.reason, detail: contactName })
-      throw new LegacyDriveRefusedError(v.reason)
-    }
-    const { ensurePersonOwner } = await import('@/lib/crm-store/formation-pilot')
-    await ensurePersonOwner(contactId, contactName || 'Client')
-    const { PersonFilesInStorageError } = await import('@/lib/crm-store/person-drive-guard')
-    throw new PersonFilesInStorageError()
+  if (v.reason === 'moving') {
+    await raiseDriveWriteRefused({ flow: 'ensureContactFolder', contactId, reason: v.reason, detail: contactName })
+    throw new LegacyDriveRefusedError(v.reason)
   }
-  return { folderId: v.folderId as string, created: false, subfolders: await existingSubfolders(v.folderId as string) }
+  const { ensurePersonOwner } = await import('@/lib/crm-store/formation-pilot')
+  await ensurePersonOwner(contactId, contactName || 'Client')
+  const { PersonFilesInStorageError } = await import('@/lib/crm-store/person-drive-guard')
+  throw new PersonFilesInStorageError()
 }
 
 // ─── Phase 2: Company folder (post-company) ────────────────────────────────
 
+/** Never returns (Stop Drive S2): opens an open company's storage and throws StoreOwnedAccountError, or refuses with a staff alarm. */
 export async function ensureCompanyFolder(
   accountId: string,
   companyName: string,
   stateOfFormation: string,
   ownerName?: string,
 ): Promise<{ folderId: string; created: boolean; subfolders: Record<string, string> }> {
-  // A company whose files live in the new store never gets a Drive folder — and never has Drive subfolders
-  // made in an existing one — whichever flow asks (tax intake, onboarding, RA switch, place-client …).
+  // A company whose files live in the new store never gets a Drive folder — whichever flow asks (tax intake, onboarding, RA switch,
+  // place-client …).
   const { assertNotStoreOwnedAccount } = await import('@/lib/crm-store/browse')
   await assertNotStoreOwnedAccount(accountId)
 
-  // Stop Drive (dev job 264bb882, S1d): this function NEVER creates a Drive folder (or anything inside one). It hands back the
-  // folder the company already has — only a company deliberately left on Drive (folder, no storage, not Closed / Cancelled).
-  // A company with NO place for files (created by onboarding, place-client or a standalone tax intake) gets its own storage
-  // opened here and the caller's storage branch takes over (StoreOwnedAccountError); a closed one is refused with a staff alarm.
+  // This function NEVER creates a Drive folder and NEVER hands one back. A company with NO place for files (created by
+  // onboarding, place-client or a standalone tax intake) gets its own storage opened here and the caller's storage branch takes over
+  // (StoreOwnedAccountError); a closed one, one being moved, and one frozen on its old Drive folder are refused with a staff alarm.
   const { legacyDriveForAccount, raiseDriveWriteRefused, LegacyDriveRefusedError } = await import('@/lib/crm-store/legacy-drive')
   const v = await legacyDriveForAccount(accountId)
-  if (!v.allowed) {
-    if (v.reason === 'no_folder') {
-      const { ensureCompanyStorage } = await import('@/lib/crm-store/company-storage')
-      const { StoreOwnedAccountError } = await import('@/lib/crm-store/account-uploads')
-      try {
-        await ensureCompanyStorage(accountId, companyName)
-      } catch (e) {
-        // the buyer's formation already owns a storage: no second one is opened — the company gets THAT one when it is attached
-        if (e instanceof Error && e.name === 'FormationOwnerPendingError') throw new StoreOwnedAccountError("This company's files go to its formation's storage (attached to the company) — it does not get a Google Drive folder.")
-        throw e
-      }
-      throw new StoreOwnedAccountError("This company's files now live in the new CRM storage (opened just now) — it does not get a Google Drive folder.")
+  if (v.reason === 'no_folder') {
+    const { ensureCompanyStorage } = await import('@/lib/crm-store/company-storage')
+    const { StoreOwnedAccountError } = await import('@/lib/crm-store/account-uploads')
+    try {
+      await ensureCompanyStorage(accountId, companyName)
+    } catch (e) {
+      // the buyer's formation already owns a storage: no second one is opened — the company gets THAT one when it is attached
+      if (e instanceof Error && e.name === 'FormationOwnerPendingError') throw new StoreOwnedAccountError("This company's files go to its formation's storage (attached to the company) — it does not get a Google Drive folder.")
+      throw e
     }
-    await raiseDriveWriteRefused({ flow: 'ensureCompanyFolder', accountId, reason: v.reason, detail: [companyName, stateOfFormation, ownerName].filter(Boolean).join(' / ') })
-    throw new LegacyDriveRefusedError(v.reason)
+    throw new StoreOwnedAccountError("This company's files now live in the new CRM storage (opened just now) — it does not get a Google Drive folder.")
   }
-  return { folderId: v.folderId as string, created: false, subfolders: await existingSubfolders(v.folderId as string) }
-}
-
-// ─── Migration: Contact folder → Company folder ────────────────────────────
-
-export async function migrateContactToCompany(
-  contactFolderId: string,
-  companyFolderId: string,
-  contactId?: string,
-): Promise<{ moved: number; errors: string[] }> {
-  const { listFiles, moveFile } = await getDriveHelpers()
-  const result = { moved: 0, errors: [] as string[] }
-
-  // List contact subfolders
-  const contactSubs = await listFiles(contactFolderId)
-  const companySubs = await listFiles(companyFolderId)
-
-  const companySubMap: Record<string, string> = {}
-  for (const f of companySubs) {
-    if (f.mimeType === 'application/vnd.google-apps.folder') {
-      companySubMap[f.name] = f.id
-    }
-  }
-
-  // For each contact subfolder, move its files to the matching company subfolder
-  for (const contactSub of contactSubs) {
-    if (contactSub.mimeType !== 'application/vnd.google-apps.folder') continue
-
-    const targetId = companySubMap[contactSub.name]
-    if (!targetId) {
-      result.errors.push(`No matching company subfolder for "${contactSub.name}"`)
-      continue
-    }
-
-    // List files in this contact subfolder
-    const files = await listFiles(contactSub.id)
-    for (const file of files) {
-      if (file.mimeType === 'application/vnd.google-apps.folder') continue // skip nested folders
-      try {
-        await moveFile(file.id, targetId)
-        result.moved++
-      } catch (err) {
-        result.errors.push(`Failed to move ${file.name}: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-  }
-
-  // After migration, update contact's folder link to company's "2. Contacts" subfolder
-  if (contactId) {
-    const contactsSubfolderId = companySubMap['2. Contacts']
-    if (contactsSubfolderId) {
-      // eslint-disable-next-line no-restricted-syntax -- Drive-folder-link bookkeeping, not client-facing CRM data; central path
-      await supabaseAdmin
-        .from('contacts')
-        .update({
-          drive_folder_id: contactsSubfolderId,
-          gdrive_folder_url: `https://drive.google.com/drive/folders/${contactsSubfolderId}`,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', contactId)
-    } else {
-      console.warn(`[drive-folder-utils] migrateContactToCompany: No "2. Contacts" subfolder in company folder ${companyFolderId} — contact folder link not updated`)
-    }
-  }
-
-  return result
+  await raiseDriveWriteRefused({ flow: 'ensureCompanyFolder', accountId, reason: v.reason, detail: [companyName, stateOfFormation, ownerName].filter(Boolean).join(' / ') })
+  throw new LegacyDriveRefusedError(v.reason)
 }
