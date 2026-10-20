@@ -167,7 +167,7 @@ export async function POST(req: NextRequest) {
         `Company: ${account?.company_name || "Unknown"}`,
         `Signed at: ${new Date().toISOString()}`,
         ``,
-        switched ? `The signed document has been saved in the client's new storage.` : `The signed document has been uploaded to the client's Drive folder.`,
+        switched ? `The signed document has been saved in the client's new storage.` : `The signed document is NOT filed in the CRM storage (this company has no document storage). It is kept in the signing bucket — add it by hand where it belongs.`,
       ].join("\r\n")
       const rawEmail = [
         `From: support@tonydurante.us`,

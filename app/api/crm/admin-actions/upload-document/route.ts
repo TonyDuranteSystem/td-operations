@@ -122,7 +122,9 @@ export async function POST(req: NextRequest) {
       // sentence — nothing is written. (A staff action: the person who clicked is told right here, so no separate alarm.)
       const { legacyDriveForContact, legacyDriveForAccount, LEGACY_REFUSAL_SENTENCE } = await import('@/lib/crm-store/legacy-drive')
       const { data: links } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId).limit(30)
-      const verdicts = [await legacyDriveForContact(contactId)]
+      // a COMPANY document is about the company: the person's own storage must not decide the sentence (a person of a frozen company
+      // can have their own storage, which says nothing about where the company's files live)
+      const verdicts = catInfo.num === 2 || (links ?? []).length === 0 ? [await legacyDriveForContact(contactId)] : []
       for (const l of (links ?? []) as Array<{ account_id: string }>) verdicts.push(await legacyDriveForAccount(l.account_id))
       const reason = verdicts.find((v) => v.reason !== 'no_folder' && v.reason !== 'no_company')
       const why: keyof typeof LEGACY_REFUSAL_SENTENCE = reason ? reason.reason : (links ?? []).length === 0 ? 'no_company' : 'no_folder'

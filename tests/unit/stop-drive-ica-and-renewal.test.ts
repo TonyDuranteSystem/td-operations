@@ -106,3 +106,14 @@ describe("fileRenewal (Calendar 'Mark filed')", () => {
     expect(st.driveWrites).toEqual([])
   })
 })
+
+describe("renewalFailureStatus — a company that cannot receive the receipt is 409, anything else 500", () => {
+  it("maps the refusal sentences and the moving message to 409", async () => {
+    const { renewalFailureStatus } = await import("@/lib/operations/file-renewal")
+    const { NO_STORAGE_REASON_SENTENCE } = await import("@/lib/crm-store/no-storage")
+    for (const s of Object.values(NO_STORAGE_REASON_SENTENCE)) expect(renewalFailureStatus(s)).toBe(409)
+    expect(renewalFailureStatus("This company's files are being moved to the new storage right now — please try again in a few minutes.")).toBe(409)
+    expect(renewalFailureStatus("Account x not found")).toBe(500)
+    expect(renewalFailureStatus(undefined)).toBe(500)
+  })
+})

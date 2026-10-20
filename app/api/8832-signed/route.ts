@@ -150,7 +150,7 @@ export async function POST(req: NextRequest) {
         ``,
         attachmentBytes
           ? `The signed Form 8832 is attached. Print and mail to the IRS.`
-          : `ACTION REQUIRED: Download the signed Form 8832 from the client's Drive folder.`,
+          : `ACTION REQUIRED: the signed Form 8832 could not be attached and is NOT filed. It is kept in the signing bucket (signed-8832) — add it by hand where it belongs.`,
         ``,
         `Admin Preview: ${APP_BASE_URL}/8832/${form.token}?preview=td`,
       ].join("\n")

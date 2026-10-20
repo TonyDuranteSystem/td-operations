@@ -25,6 +25,7 @@ import { anniversaryForYear } from "@/lib/operations/renewal-dates"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { safeAction, type ActionResult } from "@/lib/server-action"
 import { PORTAL_BASE_URL } from "@/lib/config"
+import { NO_STORAGE_REASON_SENTENCE } from "@/lib/crm-store/no-storage"
 import {
   applyPrincipalOfficeDecision,
   type ApplyPrincipalOfficeResult,
@@ -178,6 +179,15 @@ export function buildNotificationContent(
         title: `Annual Report ${stateLabel} Filed`,
         body: `Your Annual Report for ${stateLabel} has been filed for ${year}.`,
       }
+}
+
+/**
+ * HTTP status for a failed filing: a company that cannot receive the receipt (no storage, frozen on its old Drive folder, closed, or being
+ * moved) is a refusal of the request's state — 409 like every other upload route — anything else stays 500.
+ */
+export function renewalFailureStatus(error: string | null | undefined): number {
+  if (!error) return 500
+  return Object.values(NO_STORAGE_REASON_SENTENCE).includes(error) || /files are being moved to the (new|CRM) storage/.test(error) ? 409 : 500
 }
 
 // ─── Main entry ───────────────────────────────────────────
