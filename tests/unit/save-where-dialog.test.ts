@@ -69,6 +69,11 @@ describe('RequiredDialog — cannot be dismissed by accident', () => {
     expect(preventDefault).toHaveBeenCalledOnce(); expect(first.focus).toHaveBeenCalledOnce()
     delete (globalThis as unknown as { document?: unknown }).document
   })
+  it('the page-behind lock (scroll lock, inert, Escape after a backdrop click) is wired in', () => {
+    const names: string[] = []
+    walk(tree, (e) => { if (typeof e.type === 'function') names.push((e.type as { name: string }).name) })
+    expect(names).toContain('DialogEffects')
+  })
   it('takes no onClose prop at all', () => {
     expect(RequiredDialog.length).toBe(1)
     expect(Object.keys((RequiredDialog as unknown as { propTypes?: object }).propTypes ?? {})).toEqual([])

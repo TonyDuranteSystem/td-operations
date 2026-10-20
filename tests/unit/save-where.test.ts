@@ -12,6 +12,16 @@ describe("taxYearFromName — one plausible year, nothing guessed", () => {
     expect(taxYearFromName("Return 2099.pdf", NOW)).toBeNull()
     expect(taxYearFromName("Return 1999.pdf", NOW)).toBeNull()
   })
+  it("a year that is part of a DATE is not the tax year", () => {
+    expect(taxYearFromName("Tax Return signed 2025-10-20.pdf", NOW)).toBeNull()
+    expect(taxYearFromName("Tax Return signed 10.20.2025.pdf", NOW)).toBeNull()
+    expect(taxYearFromName("Tax Return signed Oct 20, 2025.pdf", NOW)).toBeNull()
+    expect(taxYearFromName("Tax Return 20 October 2025.pdf", NOW)).toBeNull()
+    expect(taxYearFromName("Return signed 2025_10_20.pdf", NOW)).toBeNull()
+    expect(taxYearFromName("2024 Tax Return signed 2025-10-20.pdf", NOW)).toBe(2024)
+    expect(taxYearFromName("2025 Tax Return - Acme.pdf", NOW)).toBe(2025)
+    expect(taxYearFromName("Return_2025_Signed_for_IRS.pdf", NOW)).toBe(2025)
+  })
   it("the same year twice is still one year; a number inside a longer number is not a year", () => {
     expect(taxYearFromName("2025 Return 2025 copy.pdf", NOW)).toBe(2025)
     expect(taxYearFromName("Ref 120251.pdf", NOW)).toBeNull()

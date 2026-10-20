@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { faxNoCopyNote } from '@/lib/fax/history-note'
 import { redirect } from 'next/navigation'
 import { ArrowLeft, Send } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
@@ -53,6 +54,7 @@ export default async function FaxHistoryPage() {
       jobId: (d.job_id as string | null) ?? null,
       source,
       documentId,
+      noCopyNote: faxNoCopyNote({ noCopyReason: (d.no_copy_reason as string | null) ?? null, filingStatus: (d.filing_status as string | null) ?? null, savedAtPlace: (d.saved_at_place as string | null) ?? null }),
       savedStatus,
     }
   })

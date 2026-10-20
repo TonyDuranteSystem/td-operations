@@ -94,6 +94,8 @@ export function decideDestination(f: DestinationFacts): Decision {
     // a folder of that name that already exists is simply used (a retry, or two people at once): only the name itself is checked
     const problem = folderNameProblem(f.newFolderName, [])
     if (problem) return no(problem)
+    // a new folder never goes directly under a CLIENT's top folder (the firm's Business / My files tops are fine)
+    if (f.folder.kind === "root" && !isInternalKind(f.owner.kind)) return no("Open one of the folders first. A new folder can't be made at the top of a client's storage.")
   } else if (f.folder.kind === "root") {
     return no("Open one of the folders first. Files go inside a folder, not at the top.")
   }

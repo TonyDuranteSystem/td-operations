@@ -9,6 +9,8 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { trapTabKey } from '@/components/storage/focus-trap'
+import { folderNameProblem } from '@/lib/crm-store/names'
 import { ChevronDown, ChevronRight, Folder, FolderOpen, Loader2, X, Building2, User, Hammer, Briefcase, Lock } from 'lucide-react'
 
 export interface StoreQuestion { enabled: boolean; title: string; choices: Record<string, string> }
@@ -96,9 +98,10 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
   newPeople?: Array<{ contactId: string; name: string }>; onPickPerson?: (contactId: string, name: string) => void
   /** shows "+ New folder here": makes a folder inside the chosen folder (or at the top of Business / My files) and chooses it — used by the save-where window */
   allowNewFolder?: boolean
-  onPick: (folderId: string, ownerId: string, path: string) => void; onClose: () => void
+  /** `newFolderName` is set only with `allowNewFolder`: the folder to be MADE inside `folderId` — nothing is created until the caller saves */
+  onPick: (folderId: string, ownerId: string, path: string, newFolderName?: string | null) => void; onClose: () => void
 }) {
-  const [owner, setOwner] = useState<{ id: string; label: string } | null>(fixedOwner ? { id: fixedOwner, label: ownerLabel ?? '' } : null)
+  const [owner, setOwner] = useState<{ id: string; label: string; kind?: string } | null>(fixedOwner ? { id: fixedOwner, label: ownerLabel ?? '' } : null)
   const [groups, setGroups] = useState<NavGroup[] | null>(null)
   const [search, setSearch] = useState('')
   const [nodes, setNodes] = useState<Record<string, PickFolder[]>>({})
@@ -109,7 +112,8 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
   const [error, setError] = useState<string | null>(null)
   const [chosen, setChosen] = useState<{ id: string; path: string } | null>(null)
   const [newName, setNewName] = useState<string | null>(null)   // null = the "+ New folder here" box is closed
-  const [creating, setCreating] = useState(false)
+  const [pending, setPending] = useState<{ parentId: string; parentPath: string; name: string } | null>(null)   // a folder to be made when the caller saves
+  const [newProblem, setNewProblem] = useState<string | null>(null)
 
   useEffect(() => {
     if (!chooseOwner || owner) return
@@ -130,7 +134,7 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
     }
   }, [])
 
-  useEffect(() => { if (owner) { setNodes({}); setOpen(new Set()); setChosen(null); load(owner.id, null) } }, [owner, load])
+  useEffect(() => { if (owner) { setNodes({}); setOpen(new Set()); setChosen(null); setPending(null); setNewName(null); load(owner.id, null) } }, [owner, load])
 
   const selectable = (f: PickFolder) => {
     if (f.trashed || f.kind === 'contacts' || f.id === excludeFolderId || f.id === currentFolderId) return false
@@ -156,7 +160,7 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
               {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
             </button>
           )}
-          <button type="button" disabled={!ok} onClick={() => setChosen({ id: f.id, path: path.join(' › ') })}
+          <button type="button" disabled={!ok} onClick={() => { setChosen({ id: f.id, path: path.join(' › ') }); setPending(null) }}
             className="flex min-w-0 flex-1 items-center gap-1.5 text-left disabled:cursor-not-allowed disabled:text-zinc-400">
             {isOpen ? <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" /> : <Folder className="h-4 w-4 shrink-0 text-amber-500" />}
             <span className="truncate">{f.name}</span>
@@ -170,24 +174,17 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
     )
   }
 
-  const createFolderHere = async () => {
-    if (!owner || newName === null || creating) return
-    const parentId = chosen?.id ?? rootId
-    if (!parentId) { setError('Open a folder first.'); return }
-    setCreating(true); setError(null)
-    try {
-      const res = await fetch('/api/crm-store/browse/folder/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parentId, name: newName }) })
-      const d = await res.json().catch(() => ({})) as { id?: string; name?: string; error?: string }
-      if (!res.ok || !d.id) throw new Error(d.error || 'The folder could not be created — please try again.')
-      await load(owner.id, parentId)
-      setOpen((o) => new Set(o).add(parentId))
-      setChosen({ id: d.id, path: `${chosen ? chosen.path : owner.label} › ${d.name ?? newName}` })
-      setNewName(null)
-    } catch (e) {
-      setError(e instanceof Error && e.message ? e.message : 'The folder could not be created — please try again.')
-    } finally {
-      setCreating(false)
-    }
+  // "+ New folder here" does NOT create anything: the name is kept and the folder is made only when the caller saves the file
+  // (an abandoned window leaves nothing behind). Never directly under a client's top folder (a folder is needed first).
+  const internalOwner = owner?.kind === 'business' || owner?.kind === 'private'
+  const newParent = chosen ? { id: chosen.id, path: chosen.path } : internalOwner && rootId && owner ? { id: rootId, path: owner.label } : null
+  const acceptNewFolderName = () => {
+    if (!owner || newName === null || !newParent) return
+    const siblings = (nodes[newParent.id] ?? []).filter((k) => !k.trashed).map((k) => k.name)
+    const problem = folderNameProblem(newName, siblings)
+    if (problem) { setNewProblem(problem); return }
+    setPending({ parentId: newParent.id, parentPath: newParent.path, name: newName.replace(/\s+/g, ' ').trim() })
+    setNewName(null); setNewProblem(null)
   }
 
   const q = search.trim().toLowerCase()
@@ -198,7 +195,7 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="flex max-h-[88vh] w-full max-w-lg flex-col rounded-xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="flex max-h-[88vh] w-full max-w-lg flex-col rounded-xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()} onKeyDown={trapTabKey}>
         <div className="mb-2 flex items-center gap-2">
           <h3 className="flex-1 text-base font-semibold">{title}</h3>
           <button type="button" onClick={onClose} aria-label="Close" className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
@@ -221,7 +218,7 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
                 const Icon = ownerIcon(o.kind)
                 return (
                   <li key={o.id}>
-                    <button type="button" onClick={() => setOwner({ id: o.id, label: o.label })} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-zinc-50">
+                    <button type="button" onClick={() => setOwner({ id: o.id, label: o.label, kind: o.kind })} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-zinc-50">
                       <Icon className="h-4 w-4 text-zinc-400" /><span className="min-w-0 flex-1 truncate">{o.label}</span>
                       <span className="text-xs text-zinc-400">{prefer.has(o.id) ? 'suggested · ' : ''}{o.group}</span>
                     </button>
@@ -248,20 +245,23 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
         {allowNewFolder && owner && rootId && (
           <div className="mt-2">
             {newName === null ? (
-              <button type="button" onClick={() => setNewName('')} className="text-sm font-medium text-blue-700 hover:underline">+ New folder here</button>
+              newParent
+                ? <button type="button" onClick={() => { setNewName(''); setNewProblem(null) }} className="text-sm font-medium text-blue-700 hover:underline">+ New folder here</button>
+                : <p className="text-xs text-zinc-500">To make a new folder, open one of the folders first.</p>
             ) : (
-              <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); void createFolderHere() }}>
-                <input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} aria-label="New folder name" placeholder={`New folder inside ${chosen ? chosen.path.split(' › ').pop() : owner.label}`} className="min-w-0 flex-1 rounded-md border border-zinc-300 px-2 py-1.5 text-sm" />
-                <button type="submit" disabled={creating || !newName.trim()} className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50">{creating ? 'Making…' : 'Make folder'}</button>
-                <button type="button" onClick={() => setNewName(null)} className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm">Cancel</button>
+              <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); acceptNewFolderName() }}>
+                <input autoFocus value={newName} onChange={(e) => { setNewName(e.target.value); setNewProblem(null) }} aria-label="New folder name" placeholder={`New folder inside ${newParent ? newParent.path.split(' › ').pop() : owner.label}`} className="min-w-0 flex-1 rounded-md border border-zinc-300 px-2 py-1.5 text-sm" />
+                <button type="submit" disabled={!newName.trim()} className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50">Use this folder</button>
+                <button type="button" onClick={() => { setNewName(null); setNewProblem(null) }} className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm">Cancel</button>
+                {newProblem && <p role="alert" className="w-full text-xs text-red-700">{newProblem}</p>}
               </form>
             )}
           </div>
         )}
         <div className="mt-3 flex items-center gap-2 border-t border-zinc-100 pt-3">
-          <span className="min-w-0 flex-1 truncate text-xs text-zinc-600">{chosen ? chosen.path : 'Choose a folder'}</span>
+          <span className="min-w-0 flex-1 truncate text-xs text-zinc-600">{pending ? `${pending.parentPath} › ${pending.name} (new folder)` : chosen ? chosen.path : 'Choose a folder'}</span>
           <button type="button" onClick={onClose} className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm">Cancel</button>
-          <button type="button" disabled={!chosen || !owner} onClick={() => chosen && owner && onPick(chosen.id, owner.id, chosen.path)}
+          <button type="button" disabled={(!chosen && !pending) || !owner} onClick={() => { if (!owner) return; if (pending) onPick(pending.parentId, owner.id, `${pending.parentPath} › ${pending.name}`, pending.name); else if (chosen) onPick(chosen.id, owner.id, chosen.path) }}
             className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50">Choose this folder</button>
         </div>
       </div>

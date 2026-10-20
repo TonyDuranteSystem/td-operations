@@ -43,8 +43,7 @@ import { downloadFileBinary } from '@/lib/google-drive'
 import { sendFax, isValidFaxNo, normalizeFaxNo, DEFAULT_IRS_FAX_NUMBER, stripBase64Prefix } from '@/lib/fax/faxage'
 import { isStoreStaffUser } from '@/lib/crm-store/access'
 import { parseSaveChoice, validateDestination, verifyProposalStillHolds, realResolveDeps, saveToDestination, realDestinationDeps, realFileDeps, type FiledCopy, type SaveChoiceSave } from '@/lib/crm-store/save-destination'
-import { looksPersonal } from '@/lib/fax/save-sent-upload'
-import { taxYearFromName } from '@/lib/crm-store/save-where'
+import { personalKind } from '@/lib/fax/save-sent-upload'
 
 const MAX_COVER_LENGTH = 2000
 
@@ -106,6 +105,30 @@ export async function POST(req: NextRequest) {
   }
   const faxno = normalizeFaxNo(faxnoRaw)
 
+  // One Send = one fax, even when the answer never reaches the screen (QA 2026-10-20). The window sends a `send_id` that stays the same
+  // until the fax is reported sent; if a fax with that id was already accepted by Faxage, it is NEVER sent again.
+  const sendId: string | null = typeof body.send_id === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(body.send_id) ? body.send_id : null
+  if (sendId) {
+    const { data: again } = await supabaseAdmin
+      .from('action_log')
+      .select('created_at, details')
+      .eq('action_type', 'fax_sent')
+      .eq('details->>send_id', sendId)
+      .limit(1)
+      .maybeSingle()
+    if (again) {
+      const d = (again.details as { job_id?: string; save_error?: string | null; filing_status?: string } | null) ?? {}
+      return NextResponse.json(
+        {
+          success: false,
+          already_sent: { at: again.created_at, job_id: d.job_id ?? null, filing_status: d.filing_status ?? null, save_error: d.save_error ?? null },
+          error: 'This fax WAS already sent' + (d.job_id ? ` (job ${d.job_id})` : '') + '. It was not sent again. Check Fax History; if the copy was not saved, save it by hand.',
+        },
+        { status: 409 },
+      )
+    }
+  }
+
   // Double-send guard (opt-in). A prior 'fax_sent' for this flow → block with a
   // 409 the caller can turn into an explicit "send again?" confirm.
   if (dedupeSdId && !confirmResend) {
@@ -134,7 +157,9 @@ export async function POST(req: NextRequest) {
   // or an uploaded base64 file from the client.
   let fileBase64 = ''
   let fileName = 'document.pdf'
-  let accountId: string | null = typeof body.account_id === 'string' && body.account_id.trim() ? body.account_id.trim() : null
+  // The company comes ONLY from the stored document or from the place staff chose (validated below). An upload's body.account_id is ignored:
+  // a forged id must never attach a documents row to some other company.
+  let accountId: string | null = documentId && typeof body.account_id === 'string' && body.account_id.trim() ? body.account_id.trim() : null
 
   if (documentId) {
     const { data: doc, error: docErr } = await supabaseAdmin
@@ -248,11 +273,45 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error }, { status: 502 })
   }
 
-  // Keep the sent UPLOAD. The fax has already gone out, so nothing below can fail it.
+  // THE FAX HAS GONE OUT. Write the history record NOW, before the (slower) filing: if the filing runs out of time, the irreversible
+  // fax is on record, and a second Send with the same send_id is refused above. The record is completed after the filing.
+  const detailsBase: Record<string, unknown> = {
+    faxno,
+    recip_name: recipName || null,
+    reason: reason || null,
+    file_name: fileName,
+    job_id: result.jobId,
+    cover_message: coverMessage || null,
+    source: documentId ? 'document' : 'upload',
+    send_id: sendId,
+    save_choice: documentId ? 'stored_document' : saveChoice ? saveChoice.mode : 'none',
+    faxage_response: result.raw.slice(0, 500),
+  }
+  const ownerFromChoice = toSave?.validated.owner ?? null
+  const logAccount = ownerFromChoice?.kind === 'company' ? ownerFromChoice.account_id : accountId
+  let logId: string | null = null
+  try {
+    const { data: logRow } = await supabaseAdmin.from('action_log').insert({
+      actor: user?.email || 'dashboard',
+      action_type: 'fax_sent',
+      table_name: 'documents',
+      record_id: documentId,
+      account_id: logAccount,
+      service_delivery_id: serviceDeliveryId,
+      summary: `Fax sent to ${faxno} — ${fileName}`,
+      details: { ...detailsBase, filing_status: documentId ? 'not_needed' : 'pending' },
+    }).select('id').single()
+    logId = (logRow?.id as string | undefined) ?? null
+  } catch {
+    /* logging is non-blocking */
+  }
+
+  // Keep the sent UPLOAD. Nothing below can fail the fax.
   //  1. "Save here": file it at the place staff chose (storage writer, type IRS Fax for an IRS fax, hidden from the client).
-  //  2. Anything else ("Don't save", no choice, or filing failed): the internal bucket copy only, as before, so Fax History's
-  //     "View Document" still opens it. That bucket copy is not CRM storage. A place in Business / My files has no CRM row, so it also
-  //     gets the bucket copy for the History link.
+  //  2. Otherwise ("Don't save", no choice, or filing failed): the internal bucket copy, so Fax History's "View Document" opens it —
+  //     EXCEPT for a person's identity paper and for anything staff put in a private "My files" (they must not become readable by every
+  //     staff login: no copy, no link, and Fax History says so). A place in Business has no CRM row: it gets the bucket copy for the
+  //     link (Business is open to all staff anyway).
   let uploadedDocId: string | null = null
   let filed: FiledCopy | null = null
   let saveError: string | null = null
@@ -264,7 +323,8 @@ export async function POST(req: NextRequest) {
         filed = await saveToDestination(toSave.choice, toSave.validated.owner!, {
           bytes: bytes0, mimeType: mimeFromName(toSave.validated.finalName), sha256: createHash('sha256').update(bytes0).digest('hex'),
           actor: user?.id ?? null, unlinked: !!toSave.validated.decision.unlinked, finalName: toSave.validated.finalName,
-          periodYear: toSave.choice.purpose === 'irs_tax_return' ? taxYearFromName(toSave.validated.finalName) : null,
+          // no period year: the storage takes it from the year folder the file sits in (a file moved by hand never contradicts its folder)
+          periodYear: null,
         }, realFileDeps())
         uploadedDocId = filed.documentRowId
       } catch (e) {
@@ -277,8 +337,9 @@ export async function POST(req: NextRequest) {
       }
     }
   }
-  if (!documentId && fileBase64 && !uploadedDocId) {
-    const personalPaper = looksPersonal(fileName)
+  const identityPaper = personalKind(fileName) === 'identity' || (!!toSave && personalKind(toSave.validated.finalName) === 'identity')
+  const noCopyReason: 'personal_paper' | 'my_files' | null = identityPaper ? 'personal_paper' : toSave && ownerFromChoice?.kind === 'private' ? 'my_files' : null
+  if (!documentId && fileBase64 && !uploadedDocId && !noCopyReason) {
     try {
       const bytes = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
       const safeName = (fileName.replace(/[^\w.\-]+/g, '_').slice(0, 120)) || 'document.pdf'
@@ -300,8 +361,9 @@ export async function POST(req: NextRequest) {
             mime_type: mime,
             file_size: bytes.length,
             status: 'classified',
-            // a personal paper (passport, ID, SS-4, 1040 …) is NEVER listed on a company's Documents tab
-            account_id: personalPaper ? null : accountId,
+            // never attached to a company (the old company-less copy): a client-supplied company id is not trusted, and a personal
+            // paper must never be listed on a company's Documents tab
+            account_id: null,
             portal_visible: false,
             notify_client: false,
           })
@@ -313,48 +375,39 @@ export async function POST(req: NextRequest) {
       /* persistence is best-effort — never fail a sent fax */
     }
   }
-  // A company chosen in the window is certain (staff picked it): it goes on that company's activity feed (the Documents tab is a separate rule).
-  if (filed && toSave?.validated.owner?.kind === 'company') accountId = accountId ?? toSave.validated.owner.account_id
 
-  // Audit trail (best-effort — never fail the send if logging fails).
+  // Complete the history record (best-effort).
+  const finalDetails = {
+    ...detailsBase,
+    filing_status: documentId ? 'not_needed' : saveError ? 'failed' : 'done',
+    saved_at_place: filed?.path ?? null,
+    saved_file_id: filed?.fileId ?? null,
+    save_error: saveError,
+    no_copy_reason: noCopyReason,
+    document_id: documentId ?? uploadedDocId,
+  }
   try {
-    await supabaseAdmin.from('action_log').insert({
-      actor: user?.email || 'dashboard',
-      action_type: 'fax_sent',
-      table_name: 'documents',
-      // record_id points at the viewable document — the selected doc for a
-      // document-source fax, or the just-persisted upload doc. Fax History links
-      // "View Document" whenever record_id is present.
-      record_id: documentId ?? uploadedDocId,
-      account_id: accountId,
-      service_delivery_id: serviceDeliveryId,
-      summary: `Fax sent to ${faxno} — ${fileName}`,
-      details: {
-        faxno,
-        recip_name: recipName || null,
-        reason: reason || null,
-        file_name: fileName,
-        job_id: result.jobId,
-        cover_message: coverMessage || null,
-        source: documentId ? 'document' : 'upload',
-        save_choice: documentId ? 'stored_document' : saveChoice ? saveChoice.mode : 'none',
-        saved_at_place: filed?.path ?? null,
-        saved_file_id: filed?.fileId ?? null,
-        save_error: saveError,
-        document_id: documentId ?? uploadedDocId,
-        faxage_response: result.raw.slice(0, 500),
-      },
-    })
+    if (logId) {
+      await supabaseAdmin.from('action_log').update({ record_id: documentId ?? uploadedDocId, details: finalDetails }).eq('id', logId)
+    } else {
+      await supabaseAdmin.from('action_log').insert({
+        actor: user?.email || 'dashboard', action_type: 'fax_sent', table_name: 'documents', record_id: documentId ?? uploadedDocId, account_id: logAccount,
+        service_delivery_id: serviceDeliveryId, summary: `Fax sent to ${faxno} — ${fileName}`, details: finalDetails,
+      })
+    }
   } catch {
     /* logging is non-blocking */
   }
 
   return NextResponse.json({
     success: true,
+    fax_sent: true,
     job_id: result.jobId,
     faxage_response: result.raw.slice(0, 500),
     saved: filed ? { path: filed.path, name: filed.name, file_id: filed.fileId } : null,
     save_error: saveError,
+    save_failed: !!saveError,
+    no_copy_reason: noCopyReason,
   })
 }
 

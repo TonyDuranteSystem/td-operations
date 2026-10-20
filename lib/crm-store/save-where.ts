@@ -49,9 +49,18 @@ export const BUSINESS_FAX_FOLDER = "Fax"
  */
 export function taxYearFromName(fileName: string, now: Date = new Date()): number | null {
   const years = new Set<number>()
+  // a year that is part of a DATE ("signed 2025-10-20", "10.20.2025", "Oct 20, 2025") is the date of signing, not the tax year
+  const MONTH = "(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*"
+  const noDates = fileName
+    .replace(/(?:^|[^0-9])\d{4}[-/._]\d{1,2}[-/._]\d{1,2}(?![0-9])/g, " ")
+    .replace(/(?:^|[^0-9])\d{1,2}[-/._]\d{1,2}[-/._]\d{4}(?![0-9])/g, " ")
+    .replace(/(?:^|[^0-9])\d{4}[-/._]\d{1,2}(?![-/._0-9])/g, (m0) => (/20[12][0-9][-/._](0?[1-9]|1[0-2])$/.test(m0) ? " " : m0))
+    .replace(new RegExp(`${MONTH}[ ._-]*\\d{1,2}(?:st|nd|rd|th)?,?[ ._-]*20[12][0-9]`, "gi"), " ")
+    .replace(new RegExp(`\\d{1,2}(?:st|nd|rd|th)?[ ._-]*${MONTH},?[ ._-]*20[12][0-9]`, "gi"), " ")
+    .replace(new RegExp(`${MONTH}[ ._-]*20[12][0-9]`, "gi"), " ")
   const re = /(?:^|[^0-9])(20[12][0-9])(?![0-9])/g
   let m: RegExpExecArray | null
-  while ((m = re.exec(fileName))) years.add(Number(m[1]))
+  while ((m = re.exec(noDates))) years.add(Number(m[1]))
   const max = now.getFullYear() + 1
   const ok = Array.from(years).filter((y) => y >= 2015 && y <= max)
   return ok.length === 1 ? ok[0] : null

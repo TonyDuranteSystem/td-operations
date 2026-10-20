@@ -8,7 +8,10 @@ import { toast } from 'sonner'
 import { SaveWhereDialog, type SaveWhereChoice } from '@/components/storage/save-where-dialog'
 import { FAX_PURPOSES, type FaxPurpose } from '@/lib/crm-store/save-where'
 
-const MAX_FILE_MB = 10
+import { FAX_SHARE_MAX_BYTES, FAX_SHARE_MAX_MB } from '@/lib/crm-storage/share-limits'
+
+// The file travels inside the request as base64 (about 4/3 of its size) and a request may not exceed 4.5 MB — the same 3 MB the storage's own fax uses.
+const MAX_FILE_MB = FAX_SHARE_MAX_MB
 
 export interface RecentDocument {
   id: string
@@ -62,13 +65,16 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState<string | null>(null)
   const [savedNote, setSavedNote] = useState<string | null>(null)
+  const [savedWarn, setSavedWarn] = useState(false)
+  // One Send = one fax: the same id travels with every try of THIS fax, so a retry after a lost answer can never fax the IRS twice
+  const [sendId, setSendId] = useState(() => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `s-${Date.now()}-${Math.random().toString(16).slice(2)}`))
   const [asking, setAsking] = useState(false)   // the required "Where should this fax be saved?" window
 
   const COMPANY_PURPOSES: FaxPurpose[] = ['irs_tax_return', 'irs_ein_request']
 
   const onFile = (f: File | null) => {
-    if (f && f.size > MAX_FILE_MB * 1024 * 1024) {
-      toast.error(`File is too large (max ${MAX_FILE_MB} MB).`)
+    if (f && f.size > FAX_SHARE_MAX_BYTES) {
+      toast.error(`This file is too big to fax from here (max ${MAX_FILE_MB} MB). Make it smaller, or fax it from the storage.`)
       return
     }
     setFile(f)
@@ -95,6 +101,7 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
         recip_name: recipName || undefined,
         reason: reason || undefined,
         cover_message: coverMessage || undefined,
+        send_id: sendId,
       }
       if (source === 'upload' && file) {
         payload.file_base64 = await fileToBase64(file)
@@ -109,16 +116,26 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
+      if (res.status === 413) throw new Error(`This file is too big to fax from here (max ${MAX_FILE_MB} MB). Make it smaller, or fax it from the storage.`)
       const data = await res.json().catch(() => ({}))
+      if (res.status === 409 && data.already_sent) {
+        // the fax of THIS Send already went out (the answer was lost, or the copy did not finish): never send it again
+        setSent(data.already_sent.job_id ? `Job ${data.already_sent.job_id}` : 'Already sent')
+        setSavedNote(String(data.error))
+        setSavedWarn(true)
+        setAsking(false)
+        return
+      }
       if (!res.ok || !data.success) {
         // the chosen place was refused BEFORE the fax was sent: nothing went out, the window stays open with the reason
         if (data.destination_error && data.error) return { error: String(data.error) }
         throw new Error(data.error || 'Could not send the fax. Please try again.')
       }
       setSent(data.job_id ? `Job ${data.job_id}` : (data.faxage_response || 'Fax submitted.'))
+      setSavedWarn(!!data.save_failed)
       setSavedNote(
-        data.saved?.path ? `Saved in: ${data.saved.path}`
-          : data.save_error ? `The fax was sent, but the copy could not be saved where you chose (${data.save_error}). It was not filed in the storage.`
+        data.save_failed ? `The fax WAS sent — do not send it again. The copy could not be saved where you chose (${data.save_error}), so it is not in the storage. Save it by hand if you need it.`
+          : data.saved?.path ? `Saved in: ${data.saved.path}`
             : choice && choice.mode === 'save' ? null : source === 'upload' ? "Not saved in the storage (you chose Don't save)." : null,
       )
       setAsking(false)
@@ -141,10 +158,10 @@ export function FaxForm({ recentDocuments, irsNumber }: FaxFormProps) {
         </div>
         <p className="text-sm text-green-700">The fax was submitted to Faxage for delivery.</p>
         <p className="text-xs text-green-600 mt-2 break-words font-mono">{sent}</p>
-        {savedNote && <p className="text-sm text-green-800 mt-2 break-words">{savedNote}</p>}
+        {savedNote && <p className={`text-sm mt-2 break-words ${savedWarn ? 'font-medium text-amber-800' : 'text-green-800'}`}>{savedNote}</p>}
         <div className="mt-4 flex items-center gap-4">
           <button
-            onClick={() => { setSent(null); setSavedNote(null); setFile(null); setDocumentId('') }}
+            onClick={() => { setSent(null); setSavedNote(null); setSavedWarn(false); setFile(null); setDocumentId(''); setSendId(crypto.randomUUID()) }}
             className="text-sm font-medium text-blue-600 hover:text-blue-700"
           >
             Send another fax

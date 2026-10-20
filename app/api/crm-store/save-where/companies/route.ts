@@ -10,7 +10,7 @@ import { denyUnlessStoreStaff } from "../../browse/_auth"
 export async function GET(req: NextRequest) {
   const denied = await denyUnlessStoreStaff()
   if (denied) return denied
-  const q = (req.nextUrl.searchParams.get("q") ?? "").trim().replace(/[%_,()]/g, " ").trim()
+  const q = (req.nextUrl.searchParams.get("q") ?? "").trim().replace(/[%_,()\\]/g, " ").trim()
   if (q.length < 2) return NextResponse.json({ companies: [] })
   const { supabaseAdmin } = await import("@/lib/supabase-admin")
   const { data, error } = await supabaseAdmin.from("accounts").select("id, company_name, status").ilike("company_name", `%${q}%`).order("company_name").limit(15)

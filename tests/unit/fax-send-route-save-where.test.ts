@@ -15,7 +15,7 @@ const st = vi.hoisted(() => ({
   sendCalls: 0, sendOk: true, errors: [] as string[], actionLog: [] as Array<Record<string, unknown>>, bucketUploads: [] as string[], docInserts: [] as Array<Record<string, unknown>>,
   storeReads: 0,
   owners: {} as Record<string, unknown>, folders: {} as Record<string, unknown>, companyState: 'store' as string,
-  files: new Map<string, { fileId: string; name: string }>(), rows: [] as Array<Record<string, unknown>>, saves: [] as string[], saveThrows: false,
+  files: new Map<string, { fileId: string; name: string }>(), rows: [] as Array<Record<string, unknown>>, saves: [] as string[], saveThrows: false, logsAtSave: [] as number[],
 }))
 vi.mock('@/lib/supabase/server', () => ({ createClient: () => ({ auth: { getUser: async () => ({ data: { user: st.user } }) } }) }))
 vi.mock('@/lib/auth', () => ({ isDashboardUser: () => true, isOwnerOnly: () => false }))
@@ -41,6 +41,7 @@ vi.mock('@/lib/crm-store/save-destination', async (orig) => {
   const fd: FileDeps = {
     ensureFolder: async () => U(50),
     save: async (p) => {
+      st.logsAtSave.push(st.actionLog.length)
       if (st.saveThrows) throw new Error('storage down')
       st.saves.push(`${p.documentType}:${p.name}`)
       const have = st.files.get(p.callerKey)
@@ -61,9 +62,25 @@ vi.mock('@/lib/crm-store/save-destination', async (orig) => {
 vi.mock('@/lib/supabase-admin', () => {
   const b = (table: string) => {
     const c: Record<string, unknown> = {}
-    for (const m of ['select', 'eq', 'order', 'limit', 'single', 'maybeSingle']) c[m] = () => c
-    c.insert = (row: Record<string, unknown>) => { if (table === 'action_log') st.actionLog.push(row); if (table === 'documents') st.docInserts.push(row); return { select: () => ({ single: async () => ({ data: { id: 'bucket-doc' } }) }), then: (r: (v: unknown) => unknown) => Promise.resolve({ error: null }).then(r) } }
-    c.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: table === 'documents' ? { id: 'stored-doc', file_name: 'SS-4 package.pdf', drive_file_id: 'store:sf-1', account_id: 'acc-1' } : null, error: null }).then(r)
+    const eqs: Array<[string, unknown]> = []
+    for (const m of ['select', 'order', 'limit', 'single', 'maybeSingle']) c[m] = () => c
+    c.eq = (col: string, val: unknown) => { eqs.push([col, val]); return c }
+    c.insert = (row: Record<string, unknown>) => {
+      if (table === 'action_log') st.actionLog.push(row)
+      if (table === 'documents') st.docInserts.push(row)
+      const id = table === 'action_log' ? 'log-1' : 'bucket-doc'
+      return { select: () => ({ single: async () => ({ data: { id } }) }), then: (r: (v: unknown) => unknown) => Promise.resolve({ error: null }).then(r) }
+    }
+    c.update = (patch: Record<string, unknown>) => ({ eq: async () => { Object.assign(st.actionLog[st.actionLog.length - 1], patch); return { error: null } } })
+    c.then = (r: (v: unknown) => unknown) => {
+      let data: unknown = null
+      if (table === 'documents') data = { id: 'stored-doc', file_name: 'SS-4 package.pdf', drive_file_id: 'store:sf-1', account_id: 'acc-1' }
+      if (table === 'action_log') {
+        const sid = eqs.find(([col]) => col === 'details->>send_id')?.[1]
+        if (sid) data = st.actionLog.find((row) => (row.details as Record<string, unknown> | undefined)?.send_id === sid) ?? null
+      }
+      return Promise.resolve({ data, error: null }).then(r)
+    }
     return c
   }
   return { supabaseAdmin: { from: b, storage: { from: () => ({ upload: async (p: string) => { st.bucketUploads.push(p); return { error: null } }, createSignedUrl: async () => ({ data: { signedUrl: 'https://x' } }) }) } } }
@@ -80,7 +97,7 @@ const send = async (extra: Record<string, unknown> = {}) => {
 beforeEach(() => {
   st.user = { id: '00000000-0000-4000-8000-0000000000aa', email: 'luca@tonydurante.us', app_metadata: { role: 'team' } }
   st.sendCalls = 0; st.sendOk = true; st.errors.length = 0; st.actionLog.length = 0; st.bucketUploads.length = 0; st.docInserts.length = 0; st.storeReads = 0
-  st.companyState = 'store'; st.files.clear(); st.rows.length = 0; st.saves.length = 0; st.saveThrows = false
+  st.companyState = 'store'; st.files.clear(); st.rows.length = 0; st.saves.length = 0; st.saveThrows = false; st.logsAtSave.length = 0
   st.owners = {
     [OWNER]: { id: OWNER, kind: 'company', study_only: false, account_id: 'acc-1', contact_id: null, service_delivery_id: null },
     [BIZ]: { id: BIZ, kind: 'business', study_only: false, account_id: null, contact_id: null, service_delivery_id: null },
@@ -133,12 +150,20 @@ describe("/api/tools/fax/send — Don't save, just send", () => {
     const r = await send()
     expect(r.body.success).toBe(true); expect(st.saves).toEqual([]); expect(st.bucketUploads).toHaveLength(1)
   })
-  it("a personal paper's internal copy is attached to NO company", async () => {
-    await send({ save_choice: { mode: 'dont_save' }, file_name: 'SS-4 Rossi.pdf', account_id: 'acc-1' })
+  it("an SS-4 / 1040 keeps its internal copy but it is attached to NO company; a company paper's copy neither (a forged account_id is ignored)", async () => {
+    await send({ save_choice: { mode: 'dont_save' }, file_name: 'SS-4_Rossi_Signed_for_IRS.pdf', account_id: 'acc-1' })
     expect(st.docInserts[0].account_id).toBeNull()
     st.docInserts.length = 0
-    await send({ save_choice: { mode: 'dont_save' }, file_name: '2025 Tax Return.pdf', account_id: 'acc-1' })
-    expect(st.docInserts[0].account_id).toBe('acc-1')
+    await send({ save_choice: { mode: 'dont_save' }, file_name: '2025 Tax Return.pdf', account_id: 'acc-victim' })
+    expect(st.docInserts[0].account_id).toBeNull()
+    expect(st.actionLog[st.actionLog.length - 1].account_id).toBeNull()
+  })
+  it("an identity paper gets NO internal copy at all (no row, no link), whatever was chosen", async () => {
+    const r = await send({ save_choice: { mode: 'dont_save' }, file_name: 'Passport_Rossi.pdf' })
+    expect(r.body.success).toBe(true); expect(r.body.no_copy_reason).toBe('personal_paper')
+    expect(st.bucketUploads).toEqual([]); expect(st.docInserts).toEqual([])
+    expect(st.actionLog[0].record_id).toBeNull()
+    expect((st.actionLog[0].details as Record<string, unknown>).no_copy_reason).toBe('personal_paper')
   })
 })
 
@@ -215,5 +240,67 @@ describe('/api/tools/fax/send — the one-click EIN fax (a stored document) is u
     expect(st.saves).toEqual([]); expect(st.rows).toEqual([]); expect(st.bucketUploads).toEqual([]); expect(st.docInserts).toEqual([])
     expect(st.actionLog[0]).toMatchObject({ record_id: 'stored-doc' })
     expect((st.actionLog[0].details as Record<string, unknown>).save_choice).toBe('stored_document')
+  })
+})
+
+const SEND_ID = 'send-0001-aaaa-bbbb'
+describe('/api/tools/fax/send — the fax is on record BEFORE the filing, and one Send is one fax', () => {
+  it('the activity record exists when the filing starts, and is completed afterwards', async () => {
+    await send({ save_choice: saveChoice(), send_id: SEND_ID })
+    expect(st.logsAtSave).toEqual([1])
+    expect(st.actionLog).toHaveLength(1)
+    expect(st.actionLog[0].details).toMatchObject({ send_id: SEND_ID, filing_status: 'done', saved_at_place: 'Acme › 3. Tax › 2025' })
+    expect(st.actionLog[0].record_id).toBe('row-1')
+  })
+  it('the filing fails (or the request dies) AFTER the fax went out: a second Send with the same send_id is REFUSED, the fax is not sent twice', async () => {
+    st.saveThrows = true
+    const first = await send({ save_choice: saveChoice(), send_id: SEND_ID })
+    expect(first.body).toMatchObject({ success: true, fax_sent: true, save_failed: true })
+    expect(first.body.save_error).toMatch(/storage down/)
+    expect(st.actionLog[0].details).toMatchObject({ filing_status: 'failed' })
+    st.saveThrows = false
+    const second = await send({ save_choice: saveChoice(), send_id: SEND_ID })
+    expect(second.status).toBe(409); expect(second.body.success).toBe(false)
+    expect(second.body.error).toMatch(/WAS already sent/); expect(second.body.already_sent).toMatchObject({ job_id: 'J1' })
+    expect(st.sendCalls).toBe(1); expect(st.saves).toEqual([])
+  })
+  it('a fax Faxage REFUSED leaves no record, so the same send_id can be tried again', async () => {
+    st.sendOk = false
+    expect((await send({ save_choice: saveChoice(), send_id: SEND_ID })).status).toBe(502)
+    expect(st.actionLog).toEqual([])
+    st.sendOk = true
+    expect((await send({ save_choice: saveChoice(), send_id: SEND_ID })).body.success).toBe(true)
+  })
+  it('a different send_id (a new fax) is not blocked', async () => {
+    await send({ save_choice: saveChoice(), send_id: SEND_ID })
+    expect((await send({ save_choice: saveChoice(), send_id: 'send-0002-cccc-dddd' })).body.success).toBe(true)
+    expect(st.sendCalls).toBe(2)
+  })
+})
+
+describe('/api/tools/fax/send — privacy of what staff put in a private place', () => {
+  const MY = U(8), MYTOP = U(9), MYFOLDER = U(10)
+  beforeEach(() => {
+    st.owners[MY] = { id: MY, kind: 'private', study_only: false, account_id: null, contact_id: null, service_delivery_id: null }
+    st.folders[MYFOLDER] = { id: MYFOLDER, owner_id: MY, kind: 'custom', trashed_at: null }
+    st.folders[MYTOP] = { id: MYTOP, owner_id: MY, kind: 'root', trashed_at: null }
+  })
+  it('My files: filed there, but NO internal copy (no row, no signed link) — Fax History says so', async () => {
+    const r = await send({ save_choice: saveChoice({ purpose: 'something_else', ownerId: MY, folderId: MYFOLDER }) })
+    expect(r.body).toMatchObject({ success: true, no_copy_reason: 'my_files' })
+    expect(st.saves).toHaveLength(1)
+    expect(st.bucketUploads).toEqual([]); expect(st.docInserts).toEqual([])
+    expect(st.actionLog[0].record_id).toBeNull()
+    expect((st.actionLog[0].details as Record<string, unknown>).no_copy_reason).toBe('my_files')
+  })
+  it('My files and the filing FAILS: still no internal copy (the choice was private)', async () => {
+    st.saveThrows = true
+    const r = await send({ save_choice: saveChoice({ purpose: 'something_else', ownerId: MY, folderId: MYFOLDER }) })
+    expect(r.body.save_failed).toBe(true); expect(st.bucketUploads).toEqual([])
+  })
+  it('a company id forged in the body is ignored when the file is filed: the activity record names the place staff chose', async () => {
+    await send({ save_choice: saveChoice(), account_id: 'acc-victim' })
+    expect(st.actionLog[0].account_id).toBe('acc-1')
+    expect(st.rows[0].account_id).toBe('acc-1')
   })
 })

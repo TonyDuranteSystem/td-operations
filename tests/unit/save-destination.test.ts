@@ -76,6 +76,11 @@ describe("decideDestination — a place that is not allowed is refused with ONE 
     expect(decideDestination(okFacts({ ...biz, newFolderName: "Fax" })).ok).toBe(true)
     expect(decideDestination(okFacts({ ...biz, newFolderName: "a/b" })).ok).toBe(false)
   })
+  it("a new folder is never made directly under a client's top folder (Business / My files tops are fine)", () => {
+    const top = { id: FOLDER, ownerId: OWNER, kind: "root", trashed: false }
+    expect(decideDestination(okFacts({ folder: top, newFolderName: "Fax" })).error).toMatch(/top of a client's storage/)
+    expect(decideDestination(okFacts({ folder: { ...top, kind: "tax" }, newFolderName: "2025" })).ok).toBe(true)
+  })
   it("a person's identity paper never goes into a company's or person's storage; Business and My files take it", () => {
     expect(decideDestination(okFacts({ fileName: "Passport.pdf" })).error).toMatch(/person's own paper/)
     expect(decideDestination(okFacts({ owner: { id: OWNER, kind: "person", studyOnly: false, accountId: null, contactId: "c" }, companyState: null, fileName: "W-7.pdf" })).ok).toBe(false)

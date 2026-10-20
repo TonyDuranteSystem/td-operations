@@ -18,6 +18,8 @@ export interface FaxHistoryRow {
   /** documents.id of the original file, when the fax was sent from a stored
    *  document; null for ad-hoc uploads (no persisted file to view). */
   documentId: string | null
+  /** plain words under the file name when there is nothing to open (a private place, a personal paper, a copy that was not saved) */
+  noCopyNote: string | null
   /** Live delivery status persisted from a prior "Check status" (action_log
    *  details.fax_status). Shown on load; null when never checked. */
   savedStatus: {
@@ -159,6 +161,7 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
                       <span className="truncate max-w-[160px]">{row.fileName}</span>
                     </span>
                   )}
+                  {row.noCopyNote && <div className="mt-1 max-w-[220px] text-xs text-zinc-500">{row.noCopyNote}</div>}
                 </td>
                 <td className="px-4 py-3">
                   <span className="block max-w-[160px] truncate text-zinc-700" title={row.reason || undefined}>
