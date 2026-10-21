@@ -4,6 +4,8 @@ import { canAccessAccount } from '@/lib/portal/team/gate'
 import { revalidatePath } from 'next/cache'
 import { NextRequest, NextResponse } from 'next/server'
 import { isSafeRecipient } from '@/lib/portal/invoice-email'
+import { getTeamMemberHistoryView } from '@/lib/portal/viewer-history'
+import { isItemHiddenByCutoff } from '@/lib/documents/history-cutoff'
 
 /**
  * GET /api/portal/customers/[id] — Customer detail + their invoices
@@ -38,12 +40,16 @@ export async function GET(
   const { data: invoices } = canInvoice
     ? await supabaseAdmin
         .from('client_invoices')
-        .select('id, invoice_number, status, currency, total, issue_date')
+        .select('id, invoice_number, status, currency, total, issue_date, created_at')
         .eq('customer_id', id)
         .order('issue_date', { ascending: false })
-    : { data: [] as Array<{ id: string; invoice_number: string; status: string; currency: string; total: number; issue_date: string }> }
+    : { data: [] as Array<{ id: string; invoice_number: string; status: string; currency: string; total: number; issue_date: string; created_at: string }> }
 
-  return NextResponse.json({ customer, invoices: invoices ?? [], can_invoice: canInvoice })
+  // A team member without the "see earlier invoices" option does not get invoices saved before they joined.
+  const view = await getTeamMemberHistoryView({ user, accountId: customer.account_id, kind: 'invoice' })
+  const visible = (invoices ?? []).filter(i => !isItemHiddenByCutoff({ created_at: i.created_at, opened: view.opened.has(i.id) }, view.cutoff, null))
+
+  return NextResponse.json({ customer, invoices: visible.map(({ created_at: _c, ...rest }) => rest), can_invoice: canInvoice })
 }
 
 export async function PATCH(

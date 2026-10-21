@@ -95,7 +95,24 @@ export interface ProvisionDeps {
     created_by: string
   }) => Promise<{ id: string }>
   newToken: () => string
+  /**
+   * A person who is ALREADY a Member / Owner of this company (a contact linked to it, found by email). They get their own
+   * full login with the same rights as the owner; they must never be made a team member with limited, owner-controlled
+   * access (dev job e5d5400d: Victoria / Lead Lift). Optional so older callers and tests keep working.
+   */
+  findCompanyContactByEmail?: (accountId: string, email: string) => Promise<{ name: string | null; role: string | null } | null>
+  /** True when ANY portal login already exists for this email (client, partner, another team member). Optional like the above. */
+  emailHasLogin?: (email: string) => Promise<boolean>
 }
+
+/** The message shown to the owner when they try to add a company member as a team member (Antonio's wording, 2026-10-21). */
+export function companyMemberMessage(c: { name: string | null; role: string | null }): string {
+  const who = c.name ? ` (${c.name}${c.role ? `, ${c.role}` : ''})` : ''
+  return `Stop: this email is linked to a member of this company${who}. Members get their own full login with the same access as you. Please contact support and we will send the login.`
+}
+
+/** The message when the email already has a login of any kind. */
+export const EMAIL_HAS_LOGIN_MESSAGE = 'Stop: this email already has a login in the portal. Please contact support and we will help.'
 
 export interface ProvisionResult {
   ok: boolean
@@ -114,6 +131,14 @@ export async function provisionTeammate(input: TeammateInput, deps: ProvisionDep
 
   if (await deps.usernameTaken(value.username.toLowerCase())) {
     return { ok: false, errors: ['That username is already taken — pick another'] }
+  }
+
+  if (value.email && deps.findCompanyContactByEmail) {
+    const member = await deps.findCompanyContactByEmail(value.accountId, value.email)
+    if (member) return { ok: false, errors: [companyMemberMessage(member)] }
+  }
+  if (value.email && deps.emailHasLogin && (await deps.emailHasLogin(value.email))) {
+    return { ok: false, errors: [EMAIL_HAS_LOGIN_MESSAGE] }
   }
 
   const authEmail = value.email ?? generateTeammateEmail(deps.newToken())

@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
+import { isItemHiddenFromTeamMember } from '@/lib/portal/viewer-history'
 import { NextRequest, NextResponse } from 'next/server'
 import { getInvoiceEmailSenderSetting } from '@/lib/settings'
 import { deliverInvoiceEmail, resolveInvoiceSender, fromAddressFor } from '@/lib/portal/invoice-mailer'
@@ -36,6 +37,10 @@ export async function POST(
   // Access control — default-deny (contacts AND teammates; never skipped).
   if (!(await canAccessAccount(user, invoice.account_id, 'invoices_billing'))) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+  // A team member without the "see earlier invoices" option cannot act on an invoice saved before they joined.
+  if (await isItemHiddenFromTeamMember({ user, accountId: invoice.account_id, kind: 'invoice', itemId: id, createdAt: invoice.created_at })) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
   // Only an invoice that still has something to collect (Sent, Overdue, Partial) can be reminded.

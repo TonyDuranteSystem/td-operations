@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
   validateTeammateInput,
   generateTeammateEmail,
@@ -96,5 +97,68 @@ describe('provisionTeammate', () => {
     const res = await provisionTeammate({ ...valid, password: 'x' }, d)
     expect(res.ok).toBe(false)
     expect(created).toBe(false)
+  })
+})
+
+describe('company members are never made team members (dev job e5d5400d)', () => {
+  const calls: string[] = []
+  const baseDeps = (member: { name: string | null; role: string | null } | null): ProvisionDeps => ({
+    usernameTaken: async () => false,
+    createAuthUser: async () => { calls.push('auth'); return { id: 'u1' } },
+    insertTeamMember: async () => { calls.push('row'); return { id: 't1' } },
+    newToken: () => 'tok',
+    findCompanyContactByEmail: async () => member,
+  })
+  it('refuses when the email belongs to a Member of the company, and creates nothing', async () => {
+    calls.length = 0
+    const r = await provisionTeammate({ ...valid, email: 'victoria@example.com' }, baseDeps({ name: 'Victoria Miglionico', role: 'Member' }))
+    expect(r.ok).toBe(false)
+    expect(r.errors?.[0]).toContain('Stop: this email is linked to a member of this company (Victoria Miglionico, Member)')
+    expect(r.errors?.[0]).toContain('contact support')
+    expect(calls).toEqual([])
+  })
+  it('still creates a team member for someone who is not a member', async () => {
+    calls.length = 0
+    const r = await provisionTeammate({ ...valid, email: 'employee@example.com' }, baseDeps(null))
+    expect(r.ok).toBe(true)
+    expect(calls).toEqual(['auth', 'row'])
+  })
+  it('no email means no check (nothing to match on)', async () => {
+    calls.length = 0
+    const r = await provisionTeammate({ ...valid, email: null }, baseDeps({ name: 'X', role: 'Member' }))
+    expect(r.ok).toBe(true)
+  })
+})
+
+describe('an email that already has a login is refused (dev job e5d5400d)', () => {
+  const calls: string[] = []
+  const deps = (hasLogin: boolean): ProvisionDeps => ({
+    usernameTaken: async () => false,
+    createAuthUser: async () => { calls.push('auth'); return { id: 'u1' } },
+    insertTeamMember: async () => { calls.push('row'); return { id: 't1' } },
+    newToken: () => 'tok',
+    findCompanyContactByEmail: async () => null,
+    emailHasLogin: async () => hasLogin,
+  })
+  it('refuses with a plain message and creates nothing', async () => {
+    calls.length = 0
+    const r = await provisionTeammate({ ...valid, email: 'has-login@example.com' }, deps(true))
+    expect(r.ok).toBe(false)
+    expect(r.errors?.[0]).toBe('Stop: this email already has a login in the portal. Please contact support and we will help.')
+    expect(calls).toEqual([])
+  })
+  it('creates the team member when the email has no login', async () => {
+    calls.length = 0
+    expect((await provisionTeammate({ ...valid, email: 'new@example.com' }, deps(false))).ok).toBe(true)
+    expect(calls).toEqual(['auth', 'row'])
+  })
+  it('no email = no check', async () => {
+    calls.length = 0
+    expect((await provisionTeammate({ ...valid, email: null }, deps(true))).ok).toBe(true)
+  })
+  it('the real wiring checks both the company contact and any login', () => {
+    const src = readFileSync('lib/portal/team/server.ts', 'utf8')
+    expect(src).toContain('emailHasLogin')
+    expect(src).toContain('findCompanyContactByEmail')
   })
 })

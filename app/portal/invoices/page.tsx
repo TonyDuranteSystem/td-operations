@@ -451,7 +451,7 @@ export default async function PortalInvoicesPage({
 
       {/* ── Customers Tab (hub) ── */}
       {activeTab === 'customers' && selectedAccountId && (
-        <CustomersPanel accountId={selectedAccountId} locale={locale} translations={translations} showHeading={false} />
+        <CustomersPanel accountId={selectedAccountId} locale={locale} translations={translations} showHeading={false} invoicesFrom={actor.kind === 'teammate' ? actor.historyStart : null} />
       )}
 
       {/* ── Setup Tab (hub): logo, bank accounts, payment link — the same cards that used to live on Profile ── */}

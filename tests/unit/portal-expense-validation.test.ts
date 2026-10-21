@@ -6,6 +6,7 @@ vi.mock('@/lib/supabase-admin', () => ({ supabaseAdmin: { from: (t: string) => f
 vi.mock('@/lib/supabase/server', () => ({ createClient: () => ({ auth: { getUser: async () => ({ data: { user: { id: 'u', app_metadata: { role: 'client' } } } }) }, from: () => ({ insert: () => Promise.resolve({ error: null }) }) }) }))
 vi.mock('@/lib/portal/team/gate', () => ({ canAccessAccount: vi.fn(async () => true) }))
 vi.mock('@/lib/portal-auth', () => ({ getClientContactId: () => null }))
+vi.mock('@/lib/portal/viewer-history', () => ({ isItemHiddenFromTeamMember: async () => false }))
 vi.mock('@/app/portal/invoices/vendor-actions', () => ({ listVendors: vi.fn(async () => []), createVendor: vi.fn() }))
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 

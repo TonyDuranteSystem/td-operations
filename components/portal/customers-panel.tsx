@@ -14,11 +14,14 @@ export async function CustomersPanel({
   locale,
   translations,
   showHeading = true,
+  invoicesFrom = null,
 }: {
   accountId: string
   locale: Locale
   translations?: Record<string, string>
   showHeading?: boolean
+  /** A team member's start date: invoices saved before it are not counted (null = count all). */
+  invoicesFrom?: string | null
 }) {
   const { data: customers } = await supabaseAdmin
     .from('client_customers')
@@ -28,11 +31,12 @@ export async function CustomersPanel({
 
   const { data: invoiceCounts } = await supabaseAdmin
     .from('client_invoices')
-    .select('customer_id, id')
+    .select('customer_id, id, created_at')
     .eq('account_id', accountId)
 
   const countMap: Record<string, number> = {}
   for (const inv of invoiceCounts ?? []) {
+    if (invoicesFrom && Date.parse(inv.created_at) < Date.parse(invoicesFrom)) continue
     countMap[inv.customer_id] = (countMap[inv.customer_id] || 0) + 1
   }
 

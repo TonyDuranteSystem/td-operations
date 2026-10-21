@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createClient } from '@/lib/supabase/server'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { getClientContactId } from '@/lib/portal-auth'
+import { isItemHiddenFromTeamMember } from '@/lib/portal/viewer-history'
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
 import { listVendors, createVendor } from './vendor-actions'
@@ -42,7 +43,7 @@ async function resolveOrCreateVendorId(accountId: string, name: string): Promise
  * never a teammate. Throws (safeAction turns it into a clean ActionResult)
  * rather than returning a boolean, since every caller must stop on failure.
  */
-async function assertOwnsExpense(exp: { account_id: string | null; contact_id: string | null }): Promise<void> {
+async function assertOwnsExpense(exp: { id?: string; account_id: string | null; contact_id: string | null; created_at?: string | null }, expenseId?: string): Promise<void> {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Unauthorized')
@@ -51,6 +52,10 @@ async function assertOwnsExpense(exp: { account_id: string | null; contact_id: s
   const contactId = getClientContactId(user)
   const hasContactAccess = !exp.account_id && !!contactId && exp.contact_id === contactId
   if (!hasAccountAccess && !hasContactAccess) throw new Error('Access denied')
+  // A team member without the "see earlier invoices and expenses" option cannot act on one saved before they joined.
+  if (hasAccountAccess && !hasContactAccess && exp.account_id && (await isItemHiddenFromTeamMember({ user, accountId: exp.account_id, kind: 'expense', itemId: exp.id ?? expenseId ?? '', createdAt: exp.created_at }))) {
+    throw new Error('Access denied')
+  }
 }
 
 /**
@@ -170,7 +175,7 @@ export async function updateExpense(
   return safeAction(async () => {
     const { data: exp } = await supabaseAdmin
       .from('client_expenses')
-      .select('source, account_id, contact_id')
+      .select('id, source, account_id, contact_id, created_at')
       .eq('id', expenseId)
       .single()
     if (!exp) throw new Error('Expense not found')
@@ -212,7 +217,7 @@ export async function markExpensePaid(expenseId: string, paidDate?: string): Pro
   return safeAction(async () => {
     const { data: exp } = await supabaseAdmin
       .from('client_expenses')
-      .select('source, account_id, contact_id')
+      .select('id, source, account_id, contact_id, created_at')
       .eq('id', expenseId)
       .single()
     if (!exp) throw new Error('Expense not found')
@@ -247,7 +252,7 @@ export async function deleteExpense(expenseId: string): Promise<ActionResult> {
   return safeAction(async () => {
     const { data: exp } = await supabaseAdmin
       .from('client_expenses')
-      .select('source, account_id, contact_id')
+      .select('id, source, account_id, contact_id, created_at')
       .eq('id', expenseId)
       .single()
     if (!exp) throw new Error('Expense not found')

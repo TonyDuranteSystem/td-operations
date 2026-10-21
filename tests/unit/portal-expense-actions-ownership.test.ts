@@ -16,10 +16,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { getUser, canAccessAccount, getClientContactId } = vi.hoisted(() => ({
+const { getUser, canAccessAccount, getClientContactId, hiddenFromTeamMember } = vi.hoisted(() => ({
   getUser: vi.fn(),
   canAccessAccount: vi.fn(),
   getClientContactId: vi.fn(),
+  hiddenFromTeamMember: vi.fn(),
 }))
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -32,6 +33,8 @@ vi.mock('@/lib/supabase/server', () => ({
 vi.mock('@/lib/portal/team/gate', () => ({ canAccessAccount }))
 
 vi.mock('@/lib/portal-auth', () => ({ getClientContactId }))
+
+vi.mock('@/lib/portal/viewer-history', () => ({ isItemHiddenFromTeamMember: hiddenFromTeamMember }))
 
 let expenseRow: { source: string; account_id: string | null; contact_id: string | null } | null = null
 let updateCalled = false
@@ -69,6 +72,8 @@ beforeEach(() => {
   getUser.mockReset()
   canAccessAccount.mockReset()
   getClientContactId.mockReset()
+  hiddenFromTeamMember.mockReset()
+  hiddenFromTeamMember.mockResolvedValue(false)
   expenseRow = null
   updateCalled = false
   deleteCalled = false
@@ -180,5 +185,19 @@ describe('updateExpense / markExpensePaid / deleteExpense — ownership check', 
     const res = await deleteExpense('exp-1')
     expect(res).toMatchObject({ success: false, error: 'Cannot delete TD invoices' })
     expect(deleteCalled).toBe(false)
+  })
+})
+
+describe('team member start date (dev job e5d5400d)', () => {
+  it('denies acting on an expense saved before the team member joined', async () => {
+    getUser.mockResolvedValue({ data: { user: authedUser } })
+    canAccessAccount.mockResolvedValue(true)
+    getClientContactId.mockReturnValue(null)
+    hiddenFromTeamMember.mockResolvedValue(true)
+    expenseRow = { id: 'e1', source: 'manual', account_id: 'my-account', contact_id: null, created_at: '2026-01-01T00:00:00Z' } as never
+    const res = await deleteExpense('e1')
+    expect(res).toMatchObject({ success: false, error: 'Access denied' })
+    expect(deleteCalled).toBe(false)
+    expect(hiddenFromTeamMember).toHaveBeenCalledWith(expect.objectContaining({ kind: 'expense', accountId: 'my-account', itemId: 'e1' }))
   })
 })

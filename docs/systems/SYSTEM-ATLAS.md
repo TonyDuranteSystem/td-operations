@@ -205,7 +205,7 @@ _Regenerated 2026-10-21. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-16)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-16)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-21)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-20)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-21)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-16)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-10-21)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
