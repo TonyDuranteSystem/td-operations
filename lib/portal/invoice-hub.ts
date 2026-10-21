@@ -11,6 +11,8 @@
  * already allows, never grant one). The switch itself is a setting (app_settings.invoice_hub_enabled).
  */
 
+import { hasCapability, type CapabilityFlags } from './team/capabilities'
+
 // ── Roll-out switch ────────────────────────────────────────────────────────────
 
 /** `true`/`false`, or `{ enabled, account_ids? }` for a gradual release to chosen companies. */
@@ -37,6 +39,28 @@ export interface InvoiceTabContext {
   hubOn: boolean
   /** Signed in as the company's own client (not a team member). Customers and Setup are for them. */
   isClient: boolean
+  /**
+   * Signed in as a team member (a colleague added on the Team page): the capabilities the owner granted.
+   * `null`/absent = not a team member. A team member sees Customers with `sales_customers` and Setup with
+   * `invoices_billing` (dev job e5d5400d); nothing else is ever implied.
+   */
+  teammateCapabilities?: CapabilityFlags | null
+}
+
+/** Which hub-only tabs this person may see. ONE rule for the page and the sidebar (never two copies). */
+export function hubAccess(ctx: Pick<InvoiceTabContext, 'hubOn' | 'hasAccount' | 'isClient' | 'teammateCapabilities'>): {
+  customers: boolean
+  setup: boolean
+  /** The hub tab order (Setup, Customers, Sales...) instead of the legacy three tabs. */
+  hubLayout: boolean
+} {
+  if (!ctx.hubOn || !ctx.hasAccount) return { customers: false, setup: false, hubLayout: false }
+  if (ctx.isClient) return { customers: true, setup: true, hubLayout: true }
+  const caps = ctx.teammateCapabilities
+  if (!caps) return { customers: false, setup: false, hubLayout: false }
+  const customers = hasCapability(caps, 'sales_customers')
+  const setup = hasCapability(caps, 'invoices_billing')
+  return { customers, setup, hubLayout: customers || setup }
 }
 
 export interface InvoiceTabDef {
@@ -48,8 +72,8 @@ export interface InvoiceTabDef {
 // Order = order on screen, and it follows the order a client works in: set up, add the people
 // (customers), record sales; add the suppliers (vendors), record expenses.
 export const INVOICE_TABS: InvoiceTabDef[] = [
-  { id: 'setup',     labelKey: 'invoices.tabSetup',     visibleWhen: c => c.hasAccount && c.hubOn && c.isClient },
-  { id: 'customers', labelKey: 'invoices.tabCustomers', visibleWhen: c => c.hasAccount && c.hubOn && c.isClient },
+  { id: 'setup',     labelKey: 'invoices.tabSetup',     visibleWhen: c => hubAccess(c).setup },
+  { id: 'customers', labelKey: 'invoices.tabCustomers', visibleWhen: c => hubAccess(c).customers },
   { id: 'sales',     labelKey: 'invoices.tabSales',     visibleWhen: c => c.hasAccount },
   { id: 'vendors',   labelKey: 'invoices.vendors',      visibleWhen: c => c.hasAccount },
   { id: 'expenses',  labelKey: 'invoices.tabExpenses',  visibleWhen: () => true },
@@ -60,7 +84,7 @@ const LEGACY_ORDER: InvoiceTabId[] = ['sales', 'expenses', 'vendors']
 
 export function visibleInvoiceTabs(ctx: InvoiceTabContext): InvoiceTabDef[] {
   const visible = INVOICE_TABS.filter(t => t.visibleWhen(ctx))
-  if (ctx.hubOn && ctx.isClient) return visible
+  if (hubAccess(ctx).hubLayout) return visible
   return [...visible].sort((a, b) => LEGACY_ORDER.indexOf(a.id) - LEGACY_ORDER.indexOf(b.id))
 }
 

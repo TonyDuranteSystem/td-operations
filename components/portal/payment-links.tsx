@@ -23,7 +23,8 @@ const GATEWAYS = [
   { value: 'other', label: 'Other' },
 ]
 
-export function PaymentLinks({ accountId }: { accountId: string }) {
+/** `readOnly`: a team member who may see the payment links but whose owner did not tick "manage payment links" (the API refuses writes). */
+export function PaymentLinks({ accountId, readOnly = false }: { accountId: string; readOnly?: boolean }) {
   const { t } = useLocale()
   const [links, setLinks] = useState<PaymentLink[]>([])
   const [loading, setLoading] = useState(true)
@@ -133,7 +134,7 @@ export function PaymentLinks({ accountId }: { accountId: string }) {
                 </div>
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                {!link.is_default && (
+                {!readOnly && !link.is_default && (
                   <FastTooltip label={t('payment.setDefault')}>
                     <button onClick={() => handleSetDefault(link.id)} className="p-1.5 text-zinc-400 hover:text-blue-600 rounded" aria-label={t('payment.setDefault')}>
                       <Star className="h-3.5 w-3.5" />
@@ -145,11 +146,13 @@ export function PaymentLinks({ accountId }: { accountId: string }) {
                     <ExternalLink className="h-3.5 w-3.5" />
                   </a>
                 </FastTooltip>
+                {!readOnly && (
                 <FastTooltip label={t('common.delete')}>
                   <button onClick={() => setConfirmingDeleteId(link.id)} className="p-1.5 text-zinc-400 hover:text-red-600 rounded" aria-label={t('common.delete')}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </FastTooltip>
+                )}
               </div>
             </div>
           ))}
@@ -157,7 +160,7 @@ export function PaymentLinks({ accountId }: { accountId: string }) {
       )}
 
       {/* Add new link form */}
-      {showAdd ? (
+      {readOnly ? null : showAdd ? (
         <div className="border rounded-lg p-4 space-y-3 bg-zinc-50">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -209,11 +212,11 @@ export function PaymentLinks({ accountId }: { accountId: string }) {
       )}
 
       {/* What a payment link is and how it works, with a practical example */}
-      <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-2" data-testid="payment-link-howto">
+      {!readOnly && <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-2" data-testid="payment-link-howto">
         <p className="text-sm font-medium text-blue-900">{t('payment.howTitle')}</p>
         <p className="text-xs text-blue-800">{t('payment.howBody')}</p>
         <p className="text-xs text-blue-800">{t('payment.howExample')}</p>
-      </div>
+      </div>}
 
       {confirmingDeleteId && (
         <div

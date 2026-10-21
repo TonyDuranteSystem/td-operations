@@ -28,6 +28,8 @@ export type PortalIdentity =
       displayName: string
       email: string | null
       capabilities: CapabilityFlags
+      /** When the team member was added (their start date for company history unless the owner ticked 'invoice_history'). */
+      createdAt?: string | null
     }
   | { kind: 'none' }
 
@@ -40,6 +42,7 @@ export interface ResolveDeps {
     email: string | null
     capabilities: unknown
     status: string
+    created_at?: string | null
   } | null>
   getContactId: (user: User) => string | null
   getAccountIds: (contactId: string) => Promise<string[]>
@@ -53,7 +56,7 @@ const defaultDeps: ResolveDeps = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data } = await (supabaseAdmin as any)
       .from('portal_team_members')
-      .select('id, account_id, display_name, email, capabilities, status')
+      .select('id, account_id, display_name, email, capabilities, status, created_at')
       .eq('auth_user_id', authUserId)
       .maybeSingle()
     return (data as TeamMemberRow) ?? null
@@ -80,6 +83,7 @@ export async function resolvePortalIdentity(
       displayName: row.display_name,
       email: row.email ?? null,
       capabilities: normalizeCapabilities(row.capabilities),
+      createdAt: row.created_at ?? null,
     }
   }
 

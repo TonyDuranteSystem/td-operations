@@ -8,8 +8,9 @@ import { t } from '@/lib/portal/i18n'
 const side = readFileSync('components/portal/portal-sidebar.tsx', 'utf8')
 
 describe('menu tag for Customers & Invoices', () => {
-  it('only companies that have the new screen (and not teammates) get the tag', () => {
-    expect(side).toMatch(/const invoicesHubOn = !isTeammate && !!navVisibility\?\.invoiceHub/)
+  it('only people the hub rule lets in (clients, and team members by their granted permissions) get the tag', () => {
+    expect(side).toMatch(/const invoicesHubOn = hubRule\.hubLayout/)
+    expect(side).toMatch(/isClient: !isTeammate/)
     expect(side).toMatch(/setShowInvoicesNew\(invoicesHubOn && !onPage && !window\.localStorage\.getItem\(INVOICES_NEW_KEY\)\)/)
   })
   it('it is shown on the invoices menu item, in green, and blinks only when the device allows motion', () => {

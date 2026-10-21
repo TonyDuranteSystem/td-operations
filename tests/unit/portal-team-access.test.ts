@@ -64,7 +64,7 @@ describe('resolvePortalIdentity', () => {
     )
     expect(id).toEqual({
       kind: 'teammate', teamMemberId: 'tm1', accountId: 'a9',
-      displayName: 'Mario', email: null, capabilities: { documents: true },
+      displayName: 'Mario', email: null, capabilities: { documents: true }, createdAt: null,
     })
   })
 

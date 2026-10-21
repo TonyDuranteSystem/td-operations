@@ -25,6 +25,8 @@ export const TEAM_CAPABILITIES = [
   'sales_customers',    // the client's own sales customers list (owner-grantable extra)
   'company_data_form',  // formation/onboarding company data form (owner-grantable extra)
   'announcements',      // portal announcements/notifications (owner-grantable extra)
+  'payment_links',      // add / change / remove the company's invoice payment links (extra, needs invoices_billing)
+  'invoice_history',    // see invoices and expenses saved BEFORE the person joined (extra, needs invoices_billing)
 ] as const
 
 export type TeamCapability = (typeof TEAM_CAPABILITIES)[number]
@@ -45,6 +47,11 @@ export function normalizeCapabilities(input: unknown): CapabilityFlags {
     if (CAPABILITY_SET.has(key) && value === true) {
       out[key as TeamCapability] = true
     }
+  }
+  // Options that hang under Invoices & Billing mean nothing without it.
+  if (!out.invoices_billing) {
+    delete out.payment_links
+    delete out.invoice_history
   }
   return out
 }

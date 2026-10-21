@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { getClientContactId } from '@/lib/portal-auth'
+import { resolveInvoiceActor } from '@/lib/portal/invoice-actor'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
@@ -12,13 +12,19 @@ export default async function NewInvoicePage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/portal/login')
 
-  const contactId = getClientContactId(user)
-  if (!contactId) redirect('/portal')
+  // One identity decision: a team member (even with a contact id on the login) works on their own company
+  // and needs the capability; a client picks among their companies.
+  const actor = await resolveInvoiceActor(user, 'invoices_billing')
+  if (!actor) redirect('/portal')
 
-  const accounts = await getPortalAccounts(contactId)
-  const cookieStore = cookies()
-  const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
-  const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+  let selectedAccountId: string | undefined
+  if (actor.kind === 'teammate') {
+    selectedAccountId = actor.accountId
+  } else {
+    const accounts = await getPortalAccounts(actor.contactId)
+    const cookieAccountId = (await cookies()).get('portal_account_id')?.value
+    selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
+  }
   if (!selectedAccountId) redirect('/portal')
 
   // Fetch customers and templates for this account

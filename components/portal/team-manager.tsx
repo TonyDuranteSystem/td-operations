@@ -5,9 +5,12 @@ import { useRouter } from 'next/navigation'
 
 // Owner-grantable capability toggles (labels for the invite/edit UI).
 // Keys must match lib/portal/team/capabilities.ts.
-const CAPABILITIES: { key: string; label: string; hint?: string }[] = [
+const CAPABILITIES: { key: string; label: string; hint?: string; parent?: string }[] = [
   { key: 'documents', label: 'Documents', hint: 'View documents incl. legal docs (cannot sign)' },
   { key: 'invoices_billing', label: 'Invoices & Billing' },
+  // Options that only make sense once Invoices & Billing is ticked (dev job e5d5400d, Antonio 2026-10-21).
+  { key: 'payment_links', label: 'Can change payment links', hint: 'Add, remove or change the links customers use to pay. Off = they can only see them.', parent: 'invoices_billing' },
+  { key: 'invoice_history', label: 'Can see invoices & expenses from before they joined', hint: 'Off = they only see what is saved from the day you add them.', parent: 'invoices_billing' },
   { key: 'chat', label: 'Chat' },
   { key: 'company_services', label: 'Company & Services' },
   { key: 'bank_applications', label: 'Bank Applications' },
@@ -15,6 +18,13 @@ const CAPABILITIES: { key: string; label: string; hint?: string }[] = [
   { key: 'company_data_form', label: 'Company data form' },
   { key: 'announcements', label: 'Announcements' },
 ]
+
+/** Ticking/unticking one box; unticking a main box also clears the options that hang under it. */
+export function toggleWithChildren(c: Record<string, boolean>, key: string): Record<string, boolean> {
+  const next = { ...c, [key]: !c[key] }
+  if (!next[key]) for (const o of CAPABILITIES) if (o.parent === key) next[o.key] = false
+  return next
+}
 
 export interface Teammate {
   id: string
@@ -65,7 +75,7 @@ export function TeamManager({ accountId, companyName, teammates }: { accountId: 
     setShowInvite(false); resetForm(); router.refresh()
   }
 
-  const toggleCap = (key: string) => setCaps(c => ({ ...c, [key]: !c[key] }))
+  const toggleCap = (key: string) => setCaps(c => toggleWithChildren(c, key))
 
   const saveCaps = async (id: string, next: Record<string, boolean>) => {
     setBusy(true)
@@ -141,8 +151,8 @@ export function TeamManager({ accountId, companyName, teammates }: { accountId: 
               <p className="text-xs font-medium text-zinc-700 mb-1.5">What can this teammate access?</p>
               <div className="grid grid-cols-2 gap-1.5">
                 {CAPABILITIES.map(c => (
-                  <label key={c.key} className="flex items-start gap-2 text-xs text-zinc-700 p-1.5 rounded hover:bg-zinc-50 cursor-pointer">
-                    <input type="checkbox" checked={!!caps[c.key]} onChange={() => toggleCap(c.key)} className="mt-0.5" />
+                  <label key={c.key} className={`flex items-start gap-2 text-xs p-1.5 rounded ${c.parent ? 'col-span-2 ml-6 ' : ''}${c.parent && !caps[c.parent] ? 'text-zinc-300 cursor-not-allowed' : 'text-zinc-700 hover:bg-zinc-50 cursor-pointer'}`}>
+                    <input type="checkbox" checked={!!caps[c.key]} disabled={!!c.parent && !caps[c.parent]} onChange={() => toggleCap(c.key)} className="mt-0.5" />
                     <span><span className="font-medium">{c.label}</span>{c.hint && <span className="block text-[10px] text-zinc-400">{c.hint}</span>}</span>
                   </label>
                 ))}
@@ -200,8 +210,8 @@ function TeammateRow({ t, busy, onSaveCaps, onRevoke, onResetPw }: {
         <div className="border-t pt-2">
           <div className="grid grid-cols-2 gap-1.5">
             {CAPABILITIES.map(c => (
-              <label key={c.key} className="flex items-center gap-2 text-xs text-zinc-700 p-1 cursor-pointer">
-                <input type="checkbox" checked={!!draft[c.key]} onChange={() => setDraft(d => ({ ...d, [c.key]: !d[c.key] }))} />
+              <label key={c.key} className={`flex items-center gap-2 text-xs p-1 ${c.parent ? 'col-span-2 ml-6 ' : ''}${c.parent && !draft[c.parent] ? 'text-zinc-300 cursor-not-allowed' : 'text-zinc-700 cursor-pointer'}`}>
+                <input type="checkbox" checked={!!draft[c.key]} disabled={!!c.parent && !draft[c.parent]} onChange={() => setDraft(d => toggleWithChildren(d, c.key))} />
                 {c.label}
               </label>
             ))}
