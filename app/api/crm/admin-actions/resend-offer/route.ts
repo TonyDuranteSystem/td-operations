@@ -7,6 +7,7 @@
  */
 
 import crypto from "node:crypto"
+import { openPixelImg } from '@/lib/email/open-pixel'
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -65,8 +66,8 @@ export async function POST(request: Request) {
       : "Reminder: documents available in your portal — Tony Durante LLC"
 
     const htmlBody = lang === "it"
-      ? `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px"><p>Ciao ${firstName},</p><p>Ti ricordiamo che hai documenti disponibili nel tuo portale clienti.</p><p><a href="${portalLoginUrl}" style="display:inline-block;padding:12px 24px;background:#1e40af;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Accedi al Portale</a></p><p>Se hai domande, rispondi a questa email.</p><p>— Tony Durante LLC</p><img src="${pixelUrl}" width="1" height="1" style="display:none" /></div>`
-      : `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px"><p>Hi ${firstName},</p><p>This is a reminder that you have documents available in your client portal.</p><p><a href="${portalLoginUrl}" style="display:inline-block;padding:12px 24px;background:#1e40af;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Access Portal</a></p><p>If you have any questions, reply to this email.</p><p>— Tony Durante LLC</p><img src="${pixelUrl}" width="1" height="1" style="display:none" /></div>`
+      ? `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px"><p>Ciao ${firstName},</p><p>Ti ricordiamo che hai documenti disponibili nel tuo portale clienti.</p><p><a href="${portalLoginUrl}" style="display:inline-block;padding:12px 24px;background:#1e40af;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Accedi al Portale</a></p><p>Se hai domande, rispondi a questa email.</p><p>— Tony Durante LLC</p>${openPixelImg(pixelUrl)}</div>`
+      : `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px"><p>Hi ${firstName},</p><p>This is a reminder that you have documents available in your client portal.</p><p><a href="${portalLoginUrl}" style="display:inline-block;padding:12px 24px;background:#1e40af;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Access Portal</a></p><p>If you have any questions, reply to this email.</p><p>— Tony Durante LLC</p>${openPixelImg(pixelUrl)}</div>`
 
     const plainText = lang === "it"
       ? `Ciao ${firstName}, hai documenti disponibili nel tuo portale: ${portalLoginUrl}`

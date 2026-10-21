@@ -326,7 +326,7 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - drive_read_file: Read text files. For PDFs/images, use docai_ocr_file instead.
 
 ### Gmail (9 tools: gmail_*) — PRIMARY EMAIL SYSTEM
-- gmail_send: 📧 PRIMARY — Send email directly via Gmail API. Appears in Sent folder, supports threading (reply_to_message_id), HTML body, open tracking via pixel, Drive file attachments. Use this for ALL client emails.
+- gmail_send: 📧 PRIMARY — Send email directly via Gmail API. Appears in Sent folder, supports threading (reply_to_message_id), HTML body, Drive file attachments (no open-tracking pixel: switched off, Garante consent rule). Use this for ALL client emails.
 - gmail_search: Search inbox. Default: support@tonydurante.us. Use as_user for Antonio's inbox.
 - gmail_read/gmail_read_thread: Read messages/threads. gmail_read now shows attachments with IDs.
 - gmail_read_attachment: Download attachments from emails. Can list attachments, read text files, or save an attachment into a company's CRM storage via save_to_account_id. Workflow: gmail_read → see attachment IDs → gmail_read_attachment(attachment_id, save_to_account_id).
@@ -454,7 +454,7 @@ For any action that may modify, delete, or impact multiple records, or has irrev
 11. Task Overview: ALWAYS use task_tracker (ONE call). NEVER use multiple crm_search_tasks calls. task_tracker returns everything grouped by priority.
 12. Tax Overview: ALWAYS use tax_tracker (ONE call). NEVER use multiple tax_search calls. tax_tracker returns a complete visual dashboard.
 13. Deadline Overview: ALWAYS use deadline_upcoming (ONE call). Returns overdue + this week + upcoming in one response.
-14. Offer Tracking: offer_get returns BOTH portal view tracking (view_count, viewed_at) AND email open tracking (email_tracking array with open_count, first_opened_at, last_opened_at). Use offer_list for bulk status, offer_get for full tracking on a specific offer. NEVER say tracking is unavailable.
+14. Offer Tracking: offer_get returns BOTH portal view tracking (view_count, viewed_at) AND email open tracking (email_tracking array with open_count, first_opened_at, last_opened_at — only for emails sent BEFORE 2026-10-21; the open pixel is switched off, so new emails never record an open, rely on view_count/viewed_at). Use offer_list for bulk status, offer_get for full tracking on a specific offer. NEVER say tracking is unavailable.
 15. NEVER create files (docx, pdf, xlsx) for task/tax/deadline views. ALWAYS display as markdown tables directly in chat. This is faster and more useful.
 
 ## Database Schema — MANDATORY before writing SQL

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { openPixelImg } from '@/lib/email/open-pixel'
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
@@ -492,7 +493,7 @@ Prerequisite: Invoice must exist (created via portal_invoice_create or portal da
         // Generate tracking ID and inject pixel
         const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
         const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
-        const trackedHtml = html + `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
+        const trackedHtml = html + openPixelImg(pixelUrl)
 
         // Send via Gmail
         const { gmailPost } = await import("@/lib/gmail")

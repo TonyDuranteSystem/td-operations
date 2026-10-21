@@ -9,6 +9,7 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { openPixelImg } from '@/lib/email/open-pixel'
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
@@ -52,7 +53,7 @@ function _buildOfferEmail(
   <p>To view the proposal, you will be asked to verify your email address.</p>
   <p>If you have any questions, please don't hesitate to reach out.</p>
   <p style="margin-top: 24px;">Best regards,<br/><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
-</div>${trackingPixelUrl ? `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none" alt="" />` : ""}`
+</div>${openPixelImg(trackingPixelUrl)}`
     : `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
   <p>${greeting},</p>
   <p>Grazie per il tempo dedicato durante la nostra consulenza.</p>
@@ -65,7 +66,7 @@ function _buildOfferEmail(
   <p>Per visualizzare la proposta, ti verrà chiesto di verificare il tuo indirizzo email.</p>
   <p>Per qualsiasi domanda, non esitare a contattarci.</p>
   <p style="margin-top: 24px;">Cordiali saluti,<br/><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
-</div>${trackingPixelUrl ? `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none" alt="" />` : ""}`
+</div>${openPixelImg(trackingPixelUrl)}`
 
   const plainText = language === "en"
     ? `${greeting},\n\nThank you for your time during our consultation.\n\nPlease find your personalized proposal at the following link:\n${offerUrl}\n\nTo view the proposal, you will be asked to verify your email address.\n\nIf you have any questions, please don't hesitate to reach out.\n\nBest regards,\nTony Durante LLC\nsupport@tonydurante.us`
