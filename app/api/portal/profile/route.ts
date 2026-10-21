@@ -115,5 +115,7 @@ export async function POST(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
+  if (updates.full_name !== undefined) await (await import('@/lib/crm-store/person-root-name')).syncPersonRootName(sessionContactId)
+
   return NextResponse.json({ success: true })
 }

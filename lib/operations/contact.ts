@@ -85,6 +85,8 @@ export async function updateContact(params: UpdateContactParams): Promise<Update
 
     const row = data[0]
     const changedFields = Object.keys(params.patch)
+    // The person's storage top folder follows the contact's name (best-effort, never throws).
+    if (params.patch.full_name !== undefined) await (await import("@/lib/crm-store/person-root-name")).syncPersonRootName(row.id)
     logAction({
       actor: params.actor || "system",
       action_type: "update",

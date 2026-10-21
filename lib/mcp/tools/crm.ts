@@ -989,6 +989,11 @@ export function registerCrmTools(server: McpServer) {
           details: { fields_changed: Object.keys(updates), new_values: updates },
         })
 
+        // Post-update hook: the person's storage top folder follows the contact's name (best-effort, never throws).
+        if (table === "contacts" && updates.full_name !== undefined) {
+          await (await import("@/lib/crm-store/person-root-name")).syncPersonRootName(id)
+        }
+
         // Post-update hook: keep the portal LOGIN email in sync with the contact email.
         let loginSyncMsg = ""
         if (table === "contacts" && updates.email) {
