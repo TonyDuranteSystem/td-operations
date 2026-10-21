@@ -3,11 +3,11 @@ export const dynamic = 'force-dynamic'
 import { salesTotals, formatMoneyMap, zeroCurrencyFor, sumExpensesByCurrency } from '@/lib/portal/invoice-totals'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { getClientContactId } from '@/lib/portal-auth'
+import { resolveInvoiceActor } from '@/lib/portal/invoice-actor'
 import { getPortalAccounts, getPortalExpenses, getPortalExpensesByContact } from '@/lib/portal/queries'
 import { filterByHistoryCutoff, isSettledPaymentStatus } from '@/lib/documents/history-cutoff'
 import { getHistoryView } from '@/lib/portal/history-cutoff'
-import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
+import { hasCapability } from '@/lib/portal/team/capabilities'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { InvoiceList } from '@/components/portal/invoice-list'
@@ -21,7 +21,7 @@ import { CustomersPanel } from '@/components/portal/customers-panel'
 import { LogoUpload } from '@/components/portal/logo-upload'
 import { BankAccounts } from '@/components/portal/bank-accounts'
 import { PaymentLinks } from '@/components/portal/payment-links'
-import { visibleInvoiceTabs, resolveInvoiceTab, isInvoiceHubOnFor, evaluateChecklist, missingRequired, type InvoiceTabContext, type InvoiceTabId } from '@/lib/portal/invoice-hub'
+import { hubAccess, visibleInvoiceTabs, resolveInvoiceTab, isInvoiceHubOnFor, evaluateChecklist, missingRequired, type InvoiceTabContext, type InvoiceTabId } from '@/lib/portal/invoice-hub'
 import { GuidedTour } from '@/components/portal/guided-tour'
 import { TourBanner } from '@/components/portal/tour-banner'
 import { FeatureRequestCard } from '@/components/portal/feature-request-card'
@@ -47,11 +47,14 @@ export default async function PortalInvoicesPage({
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/portal/login')
 
-  const contactId = getClientContactId(user)
-  // Teammate (Portal Team Access) — scoped to ONE company; requires 'invoices_billing'.
+  // ONE identity decision (lib/portal/invoice-actor.ts): a team member (even a login that also carries a contact
+  // id) is a team member here, scoped to ONE company, and needs 'invoices_billing' to open this page.
   // Teammates see account-scoped sales/expenses only (no personal/contact expenses).
-  const teammateAccountId = contactId ? null : await getTeammateScopeOrNull(user, 'invoices_billing')
-  if (!contactId && !teammateAccountId) redirect('/portal')
+  const actor = await resolveInvoiceActor(user, 'invoices_billing')
+  if (!actor) redirect('/portal')
+  const contactId = actor.kind === 'contact' ? actor.contactId : null
+  const teammateAccountId = actor.kind === 'teammate' ? actor.accountId : null
+  const teammateCaps = actor.kind === 'teammate' ? actor.capabilities : null
 
   const params = await searchParams
 
@@ -103,7 +106,12 @@ export default async function PortalInvoicesPage({
     hasAccount: !!selectedAccountId,
     hubOn,
     isClient: !!contactId && !partnerAccountId,
+    teammateCapabilities: teammateCaps,
   }
+  const access = hubAccess(tabCtx)
+  // Setup content follows what the server lets this person do (the APIs enforce the same flags).
+  const canEditBank = !teammateCaps || hasCapability(teammateCaps, 'bank_applications')
+  const canEditLogo = !teammateCaps || hasCapability(teammateCaps, 'company_services')
   // Pre-filter to paid when arriving from a receipt email link
   const defaultExpenseFilter: 'all' | 'paid' = params.view === 'paid' ? 'paid' : 'all'
   const locale = getLocale(user)
@@ -135,7 +143,8 @@ export default async function PortalInvoicesPage({
   ])
   // Setup facts (logo, bank account / payment link, a customer with an email). Worked out live every
   // time from the data; never stored. Only for the hub (Customers + Setup tabs).
-  const showHub = tabCtx.hasAccount && tabCtx.hubOn && tabCtx.isClient
+  const showHub = access.hubLayout
+  const isClientHub = showHub && tabCtx.isClient
   const setupFacts = showHub && selectedAccountId
     ? await (async () => {
         const [logoRes, bankRes, linkRes, custRes] = await Promise.all([
@@ -158,10 +167,10 @@ export default async function PortalInvoicesPage({
       })()
     : null
   // The tour and the checklist are DATA (optional catalog rows, built-in defaults): lib/portal/guides/guides.ts.
-  const guides = showHub ? await loadInvoicingGuides() : null
+  const guides = isClientHub ? await loadInvoicingGuides() : null
   const checklist = setupFacts && guides ? evaluateChecklist(guides.checklist.items, setupFacts.facts) : []
   const setupMissing = missingRequired(checklist)
-  const tourPref = showHub && guides ? await getTourPref(user.id, `tour.${guides.tour.id}`) : null
+  const tourPref = isClientHub && guides ? await getTourPref(user.id, `tour.${guides.tour.id}`) : null
   // Staff looking at a client's portal (view-as is read-only) must not be nagged with the welcome prompt every visit.
   const viewingAsClient = !!(await verifyViewAs((await cookies()).get(VIEW_AS_COOKIE)?.value))
   const autopay = autopayResult.data as unknown as { autopay_card_enabled: boolean; autopay_card_last4: string | null } | null
@@ -241,7 +250,7 @@ export default async function PortalInvoicesPage({
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
       {/* Slim "New: take the tour" strip: only while the tour is still being offered to this login (never in view-as) */}
-      {showHub && guides && !viewingAsClient && shouldOfferTour(tourPref, guides.tour) && (
+      {isClientHub && guides && !viewingAsClient && shouldOfferTour(tourPref, guides.tour) && (
         <TourBanner
           tourId={guides.tour.id}
           version={guides.tour.version}
@@ -264,7 +273,7 @@ export default async function PortalInvoicesPage({
               : t('invoices.expensesSubtitle', locale, translations)}
           </p>
         </div>
-        {showHub && guides && (
+        {isClientHub && guides && (
           <GuidedTour
             tourId={guides.tour.id}
             version={guides.tour.version}
@@ -438,6 +447,7 @@ export default async function PortalInvoicesPage({
       {/* ── Setup Tab (hub): logo, bank accounts, payment link — the same cards that used to live on Profile ── */}
       {activeTab === 'setup' && selectedAccountId && setupFacts && (
         <div className="space-y-4" data-testid="invoice-setup">
+          {isClientHub && (
           <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3" data-tour="setup-checklist">
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('invoices.setupChecklist', locale, translations)}</h2>
             <ul className="divide-y">
@@ -452,13 +462,16 @@ export default async function PortalInvoicesPage({
               ))}
             </ul>
           </div>
+          )}
+          {canEditLogo && (
           <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.invoiceLogo', locale, translations)}</h2>
             <LogoUpload accountId={selectedAccountId} currentUrl={setupFacts.logoUrl} />
           </div>
+          )}
           <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4" data-tour="setup-payment">
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.bankDetails', locale, translations)}</h2>
-            <BankAccounts accountId={selectedAccountId} />
+            <BankAccounts accountId={selectedAccountId} readOnly={!canEditBank} />
           </div>
           <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.paymentGateway', locale, translations)}</h2>
@@ -473,7 +486,7 @@ export default async function PortalInvoicesPage({
       )}
 
       {/* Feature ideas (hub clients, every tab) — also the last stop of the guided tour */}
-      {showHub && selectedAccountId && (
+      {isClientHub && selectedAccountId && (
         <FeatureRequestCard
           accountId={selectedAccountId}
           labels={{

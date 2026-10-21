@@ -38,6 +38,7 @@ import { NavItemHint } from './nav-item-hint'
 import type { PortalAccount } from '@/lib/types'
 import type { PortalNavVisibility, InProgressFormation, InProgressOnboarding } from '@/lib/portal/queries'
 import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
+import { hubAccess } from '@/lib/portal/invoice-hub'
 import { hasCapability, teammateNavCapability, type TeamCapability } from '@/lib/portal/team/capabilities'
 
 interface PortalSidebarProps {
@@ -236,7 +237,15 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   // Remembered per company (a client who owns two companies sees it again when the second one gets the screen).
   const INVOICES_NEW_KEY = `td-invoices-hub-new-v2:${selectedAccountId}`
   const [showInvoicesNew, setShowInvoicesNew] = useState(false)
-  const invoicesHubOn = !isTeammate && !!navVisibility?.invoiceHub
+  // Same rule as the Invoices page (lib/portal/invoice-hub.ts hubAccess): a team member gets the hub only through
+  // the capabilities the owner granted.
+  const hubRule = hubAccess({
+    hubOn: !!navVisibility?.invoiceHub,
+    hasAccount: true,
+    isClient: !isTeammate,
+    teammateCapabilities: isTeammate ? (teammateCapabilities as Partial<Record<TeamCapability, boolean>>) : null,
+  })
+  const invoicesHubOn = hubRule.hubLayout
   useEffect(() => {
     try {
       // /portal/billing redirects to /portal/invoices?tab=expenses (TD's own bills): that is not the new screen,
@@ -397,6 +406,8 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
       const cap = teammateNavCapability(item.key)
       if (cap === null) return false
       if (cap === 'always') return true
+      // The hub's Customers tab replaces the separate "My clients" page for a team member who can open the hub.
+      if (item.key === 'nav.myClients' && hubRule.customers && hubRule.setup) return false
       return hasCapability(teammateCapabilities as Partial<Record<TeamCapability, boolean>>, cap)
     }
     if (item.partnerOnly) return isPartner
@@ -476,7 +487,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   const filteredCompanyItems = showCompaniesSection ? companyItems.filter(isItemVisible) : []
   // Companies with the new invoices screen get it right under Overview so it is seen without scrolling.
   const visibleCompanyItems = (() => {
-    if (isTeammate || !navVisibility?.invoiceHub) return filteredCompanyItems
+    if (!invoicesHubOn) return filteredCompanyItems
     const inv = filteredCompanyItems.find(i => i.key === 'nav.invoices')
     if (!inv) return filteredCompanyItems
     const rest = filteredCompanyItems.filter(i => i !== inv)
@@ -507,7 +518,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   // that when the same key renders two different contexts with different
   // real behavior (e.g. the no-company Invoices item — see personalInvoicesItem).
   // The Invoices item is renamed 'Customers & Invoices' once the hub is on for the company (clients only).
-  const invoiceHubNamed = !isTeammate && !!navVisibility?.invoiceHub
+  const invoiceHubNamed = invoicesHubOn
   const navHintText = (item: NavItem) =>
     t(`nav.hint.${item.key === 'nav.invoices' && invoiceHubNamed ? 'invoicesHub' : (item.hintKey ?? item.key.slice(4))}`)
 

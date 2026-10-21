@@ -21,7 +21,8 @@ interface BankAccount {
   show_on_invoice: boolean
 }
 
-export function BankAccounts({ accountId }: { accountId: string }) {
+/** `readOnly`: shown to a team member who may see the bank details but not change them (the API refuses writes without the bank capability). */
+export function BankAccounts({ accountId, readOnly = false }: { accountId: string; readOnly?: boolean }) {
   const { t } = useLocale()
   const [accounts, setAccounts] = useState<BankAccount[]>([])
   const [loading, setLoading] = useState(true)
@@ -121,6 +122,13 @@ export function BankAccounts({ accountId }: { accountId: string }) {
                   <span className="text-sm font-semibold text-zinc-900">{acc.label}</span>
                   <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600">{acc.currency}</span>
                 </div>
+                {readOnly ? (
+                  acc.show_on_invoice && (
+                    <span className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg bg-blue-100 text-blue-700 font-medium">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> <span className="hidden sm:inline">{t('bank.onInvoice')}</span>
+                    </span>
+                  )
+                ) : (
                 <div className="flex items-center gap-1 shrink-0">
                   <FastTooltip label={t('bank.showOnInvoices')}>
                     <button
@@ -142,6 +150,7 @@ export function BankAccounts({ accountId }: { accountId: string }) {
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
+                )}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-xs text-zinc-600">
                 {acc.account_holder && <div><span className="text-zinc-400">{t('bank.holder')}:</span> {acc.account_holder}</div>}
@@ -158,7 +167,7 @@ export function BankAccounts({ accountId }: { accountId: string }) {
       )}
 
       {/* Add new account form */}
-      {showAdd ? (
+      {readOnly ? null : showAdd ? (
         <div className="border rounded-xl p-4 space-y-3 bg-zinc-50">
           <div className="flex items-center gap-3 mb-1">
             <span className="text-sm font-medium text-zinc-700">{t('bank.newAccount')}</span>
@@ -262,7 +271,7 @@ export function BankAccounts({ accountId }: { accountId: string }) {
         </button>
       )}
 
-      <p className="text-xs text-zinc-400">{t('bank.autoNote')}</p>
+      {!readOnly && <p className="text-xs text-zinc-400">{t('bank.autoNote')}</p>}
     </div>
   )
 }
