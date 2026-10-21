@@ -1018,7 +1018,7 @@ export async function saveFormToDrive(
    * turn left step 7's bank-statement parse with nothing to read and produced
    * no P&L/Balance Sheet. Pass the bucket the files were actually uploaded to.
    */
-  opts?: { bucket?: string; resolveBucket?: (path: string) => string; fileNameOf?: (path: string) => string; person?: { contactId: string; viaAccountId?: string | null; name?: string | null } },
+  opts?: { bucket?: string; resolveBucket?: (path: string) => string; fileNameOf?: (path: string) => string; storeSubPath?: string[]; person?: { contactId: string; viaAccountId?: string | null; name?: string | null } },
 ): Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; skipped: string[]; errors: string[] }> {
   // Tax wizard payloads arrive with flattened repeater keys and alias
   // duplicates — normalize them for the accountant PDF (fold member/RPT
@@ -1084,6 +1084,7 @@ export async function saveFormToDrive(
         bucketOf: (path) => (opts?.resolveBucket ? opts.resolveBucket(path) : bucket),
         submissionKey: `${switched.id}:${formType}:${meta.token}`,
         fileNameOf: opts?.fileNameOf,
+        subPath: opts?.storeSubPath,
       })
       return { ...res, errors: [...storeErrors, ...res.errors] }
     }

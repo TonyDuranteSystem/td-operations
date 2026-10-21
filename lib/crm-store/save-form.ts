@@ -142,6 +142,8 @@ export interface FormStoreSpec {
   submissionKey: string
   /** the stored file's name for an upload path (default: the path's last part). The idempotency key still uses the path. */
   fileNameOf?: (path: string) => string
+  /** a company's sub-folder INSIDE the form's top folder ("Bank applications" inside 4. Banking): made once, found after. Company storages only. */
+  subPath?: string[]
 }
 
 export interface FormStoreDeps {
@@ -149,6 +151,8 @@ export interface FormStoreDeps {
   download: (bucket: string, path: string) => Promise<{ bytes: Buffer; mimeType: string | null } | null>
   yearFolder: (taxFolderId: string, year: string) => Promise<string>
   taxFolder: (ownerId: string) => Promise<string>
+  /** the sub-folder chain inside the top folder of that kind (found or made) */
+  subFolder: (ownerId: string, folderKind: string, segments: string[]) => Promise<string>
 }
 
 async function defaultDeps(): Promise<FormStoreDeps> {
@@ -163,6 +167,11 @@ async function defaultDeps(): Promise<FormStoreDeps> {
     },
     yearFolder: ensureYearFolder,
     taxFolder: (ownerId) => pilot.folderOfKind(ownerId, "tax"),
+    subFolder: async (ownerId, folderKind, segments) => {
+      let id = await pilot.folderOfKind(ownerId, folderKind)
+      for (const seg of segments) id = await ensureChildFolder(id, seg)
+      return id
+    },
   }
 }
 
@@ -179,6 +188,16 @@ export async function saveFormToStore(spec: FormStoreSpec, deps?: FormStoreDeps)
     } catch (e) {
       // never fall back to the top folder: abort so the durable job retries (same rule as the Drive path)
       return { ...out, errors: [`Tax-year folder unresolved (aborted to avoid misfiling): ${e instanceof Error ? e.message : String(e)}`] }
+    }
+  }
+
+  // a named sub-folder inside the top folder (a company's "4. Banking › Bank applications")
+  if (!folderId && spec.subPath?.length && spec.target.kind === "account") {
+    try {
+      folderId = await d.subFolder(spec.target.ownerId, folderKind, spec.subPath)
+    } catch (e) {
+      // never fall back to the top folder: abort so the durable job retries (same rule as the tax-year folder)
+      return { ...out, errors: [`Sub-folder unresolved (aborted to avoid misfiling): ${e instanceof Error ? e.message : String(e)}`] }
     }
   }
 
