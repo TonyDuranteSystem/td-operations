@@ -221,3 +221,19 @@ describe('bank applications: Bank applications folder + one passport copy (Anton
     expect(person).toEqual([[PASSPORT]])
   })
 })
+
+describe('every banking upload field is classified (the ID list is a deny-list: an unknown field would go to the company)', () => {
+  it('each file field of the Relay + Payset wizards and the public form is either an ID paper (People) or a known company paper', async () => {
+    const { isIdUpload } = await import('@/lib/forms/file-banking-package')
+    const cfg = await import('@/components/portal/wizard/wizard-configs')
+    const { RELAY_UPLOADS, PAYSET_UPLOADS } = await import('@/lib/types/banking-form')
+    const fields = [...Object.values(cfg.BANKING_PAYSET_FIELDS), ...Object.values(cfg.BANKING_RELAY_FIELDS)].flat().filter((f) => f.type === 'file').map((f) => f.name)
+    const keys = [...fields, ...RELAY_UPLOADS.map((u) => u.key), ...PAYSET_UPLOADS.map((u) => u.key)]
+    const KNOWN_COMPANY = ['proof_of_address', 'business_bank_statement', 'articles_of_organization', 'ein_letter', 'other_documents', 'ss4_form']
+    const unknown = keys.filter((k) => !isIdUpload(`x/${k}_1_a.pdf`) && !KNOWN_COMPANY.includes(k))
+    expect(unknown).toEqual([]) // a new banking upload field: decide whether it is an ID paper (add it to the ID list) or a company paper (add it here)
+    expect(keys.some((k) => isIdUpload(`x/${k}_1_a.pdf`))).toBe(true) // the passport really is recognised
+    for (const k of ['passport_image', 'owner_passport_scan', 'photo_id', 'proof_of_identity', 'residence_permit', 'visa_copy']) expect(isIdUpload(`x/${k}_1_a.pdf`)).toBe(true)
+    for (const k of ['proof_of_address', 'business_bank_statement', 'other_documents']) expect(isIdUpload(`x/${k}_1_a.pdf`)).toBe(false)
+  })
+})
