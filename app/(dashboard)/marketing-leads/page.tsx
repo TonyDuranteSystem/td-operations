@@ -10,6 +10,7 @@ import { loadMasterData } from "@/lib/marketing/master-read"
 import { listTeams } from "@/lib/marketing/settings"
 import { listConnections } from "@/lib/marketing/meta-leads/key-store"
 import { MetaConnectionPanel } from "./meta-connection-panel"
+import { FillDetailsPanel } from "./fill-details-panel"
 
 export const dynamic = "force-dynamic"
 
@@ -29,8 +30,9 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
   const db = leadDb()
   const teams = await listTeams()
   const team = teams.find(t => t.id === sp.team) ?? teams.find(t => t.status === "active") ?? teams[0] ?? null
-  const [leads, evts, connections, master] = await Promise.all([
+  const [leads, noDetails, evts, connections, master] = await Promise.all([
     listAllLeads(db),
+    db.from("marketing_leads").select("id", { count: "exact", head: true }).is("full_name", null).is("email", null).is("phone", null),
     db.from("marketing_leadgen_events").select("status, last_error, updated_at").in("status", ["pending", "failed", "gave_up"]).order("updated_at", { ascending: false }).limit(50),
     listConnections(db, process.env.META_APP_SECRET),
     team ? loadMasterData(db, team.id) : Promise.resolve(null),
@@ -166,6 +168,8 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
         {open.find(e => e.last_error) && <p className="mt-1 text-xs text-slate-500">Latest problem: {open.find(e => e.last_error)?.last_error}</p>}
         <MetaConnectionPanel />
       </section>
+
+      <FillDetailsPanel missing={noDetails.count ?? 0} />
 
       <section>
         <h2 className="mb-2 text-sm font-semibold text-slate-600">All leads, every team ({leads.length} shown)</h2>
