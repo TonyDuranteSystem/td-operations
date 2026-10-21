@@ -38,13 +38,12 @@ describe('signer-invite open tracking', () => {
   // Added 2026-08-03: the signing invite was the one client email we could not
   // answer "did they even look at it" for. A bounce proves non-delivery; nothing
   // proved the opposite.
-  it('embeds the pixel, hidden, when a tracking URL is given', () => {
+  it('adds NO invisible image even when a tracking URL is given (open pixel switched off, Garante consent rule)', () => {
     const url = 'https://app.tonydurante.us/api/track/open/et_123_abc'
     const { raw } = buildSignerInviteEmail({ ...base, trackingPixelUrl: url })
-    expect(raw).toContain(`<img src="${url}"`)
-    expect(raw).toContain('width="1" height="1"')
-    expect(raw).toContain('display:none')
-    // The signing link must still be there — tracking is additive, never a swap.
+    expect(raw).not.toContain('<img')
+    expect(raw).not.toContain('/api/track/open/')
+    // The signing link must still be there.
     expect(raw).toContain(base.signUrl)
   })
 
@@ -56,13 +55,13 @@ describe('signer-invite open tracking', () => {
     expect(without.raw).not.toContain('<img')
   })
 
-  it('escapes the pixel URL so it cannot break out of the attribute', () => {
+  it('a hostile pixel URL cannot inject anything (nothing is emitted at all)', () => {
     const { raw } = buildSignerInviteEmail({
       ...base,
       trackingPixelUrl: 'https://x.test/api/track/open/a"><script>alert(1)</script>',
     })
     expect(raw).not.toContain('<script>')
-    expect(raw).toContain('&quot;')
+    expect(raw).not.toContain('<img')
   })
 
   it('builds the pixel URL from the SAME base as the signing link, never a hardcoded domain', () => {

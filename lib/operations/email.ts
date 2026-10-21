@@ -14,6 +14,7 @@
  */
 
 import { gmailPost, gmailGet, getHeader, type GmailAPIMessage } from "@/lib/gmail"
+import { openPixelImg } from '@/lib/email/open-pixel'
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -320,11 +321,13 @@ export async function sendEmail(
     let htmlBody = body_html
     if (track_opens && trackingId) {
       const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
-      const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
-      if (htmlBody.includes("</body>")) {
-        htmlBody = htmlBody.replace("</body>", `${pixel}</body>`)
-      } else {
-        htmlBody += pixel
+      const pixel = openPixelImg(pixelUrl) // '' while the open pixel is switched off (lib/email/open-pixel.ts)
+      if (pixel) {
+        if (htmlBody.includes("</body>")) {
+          htmlBody = htmlBody.replace("</body>", `${pixel}</body>`)
+        } else {
+          htmlBody += pixel
+        }
       }
     }
 

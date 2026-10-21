@@ -970,6 +970,9 @@ export function registerCrmTools(server: McpServer) {
           }
         }
 
+        const contactNameBefore = table === "contacts" && updates.full_name !== undefined
+          ? await (await import("@/lib/operations/contact-name-follow")).nameBeforeEdit(id)
+          : null
         const { data, error } = await supabaseAdmin
           .from(table)
           .update({ ...updates, updated_at: new Date().toISOString() })
@@ -991,7 +994,7 @@ export function registerCrmTools(server: McpServer) {
 
         // Post-update hook: the person's storage top folder follows the contact's name (best-effort, never throws).
         if (table === "contacts" && updates.full_name !== undefined) {
-          await (await import("@/lib/crm-store/person-root-name")).syncPersonRootName(id)
+          await (await import("@/lib/operations/contact-name-follow")).afterContactNameEdit(id, contactNameBefore)
         }
 
         // Post-update hook: keep the portal LOGIN email in sync with the contact email.

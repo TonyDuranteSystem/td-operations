@@ -8,6 +8,7 @@
  */
 
 import { resolveOaManagerName, membersMissingEmail } from "@/lib/oa/resolve-manager"
+import { openPixelImg } from '@/lib/email/open-pixel'
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -600,7 +601,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
   <p>If you have any questions, please reply to this email or contact us on WhatsApp.</p>
   <p style="margin-top: 24px;">Best regards,<br/><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
 </div>
-<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
+${openPixelImg(pixelUrl)}`
 
             const plainText = `${greeting},
 
@@ -731,7 +732,7 @@ Tony Durante LLC`
   <p>If you have any questions, please reply to this email or contact us on WhatsApp.</p>
   <p style="margin-top: 24px;">Best regards,<br/><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
 </div>
-<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
+${openPixelImg(pixelUrl)}`
 
         const plainText = `${greeting},
 

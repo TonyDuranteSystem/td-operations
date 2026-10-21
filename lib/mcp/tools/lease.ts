@@ -8,6 +8,7 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { openPixelImg } from '@/lib/email/open-pixel'
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
@@ -382,7 +383,7 @@ ${isV2Lease
 
   <p style="margin-top: 24px;">Best regards,<br/><strong>Tony Durante LLC</strong><br/>support@tonydurante.us</p>
 </div>
-<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
+${openPixelImg(pixelUrl)}`
 
         const plainText = `${greeting},
 

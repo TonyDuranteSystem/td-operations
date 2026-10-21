@@ -106,6 +106,7 @@ export async function POST(request: NextRequest) {
   }
 
   updates.updated_at = new Date().toISOString()
+  const nameBefore = updates.full_name !== undefined ? await (await import('@/lib/operations/contact-name-follow')).nameBeforeEdit(sessionContactId) : null
 
   // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
   const { error } = await supabaseAdmin
@@ -115,7 +116,7 @@ export async function POST(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  if (updates.full_name !== undefined) await (await import('@/lib/crm-store/person-root-name')).syncPersonRootName(sessionContactId)
+  if (updates.full_name !== undefined) await (await import('@/lib/operations/contact-name-follow')).afterContactNameEdit(sessionContactId, nameBefore)
 
   return NextResponse.json({ success: true })
 }

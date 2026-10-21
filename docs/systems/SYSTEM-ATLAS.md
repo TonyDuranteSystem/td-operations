@@ -193,15 +193,15 @@ _Regenerated 2026-10-21. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-10-19)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
-- [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-19)_
+- [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-21)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-21)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-21)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-21)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-20)_
-- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-18)_
+- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-21)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-21)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-10-21)_
-- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-18)_
+- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-21)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-16)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-16)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-21)_
