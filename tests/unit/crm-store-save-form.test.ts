@@ -46,6 +46,7 @@ const mk = (over: Partial<FormStoreDeps> = {}) => {
     yearFolder: vi.fn(async (_t, y) => `year-${y}`),
     taxFolder: vi.fn(async () => "tax-folder"),
     subFolder: vi.fn(async (_o, kind, segs) => `${kind}/${segs.join("/")}`),
+    folderOfKey: vi.fn(async () => null),
     ...over,
   }
   return { deps, saved }
@@ -147,7 +148,7 @@ describe("saveFormToStore — a named sub-folder inside the top folder (Bank app
   it("the summary and every upload go into the sub-folder of the matching top folder", async () => {
     const { deps, saved } = mk()
     await saveFormToStore(base({ subfolder: "4. Banking", subPath: ["Bank applications"] }), deps)
-    expect(deps.subFolder).toHaveBeenCalledWith("owner-1", "banking", ["Bank applications"])
+    expect(deps.subFolder).toHaveBeenCalledWith("owner-1", "banking", ["Bank applications"], undefined)
     expect(saved.map((x) => x.folderId)).toEqual(["banking/Bank applications", "banking/Bank applications", "banking/Bank applications"])
   })
   it("an unresolved sub-folder ABORTS: nothing is filed in the top folder", async () => {
@@ -160,5 +161,24 @@ describe("saveFormToStore — a named sub-folder inside the top folder (Bank app
     const { deps } = mk()
     await saveFormToStore(base({ target: { kind: "contact", id: "c-1", ownerId: "owner-p" } as never, subfolder: "4. Banking", subPath: ["Bank applications"] }), deps)
     expect(deps.subFolder).not.toHaveBeenCalled()
+  })
+})
+
+describe("saveFormToStore — lock, replay and custom keys for the Bank applications sub-folder", () => {
+  it("asks for the sub-folder to be LOCKED", async () => {
+    const { deps } = mk()
+    await saveFormToStore(base({ subfolder: "4. Banking", subPath: ["Bank applications"], subPathLock: "bank_applications" }), deps)
+    expect(deps.subFolder).toHaveBeenCalledWith("owner-1", "banking", ["Bank applications"], "bank_applications")
+  })
+  it("a package already (partly) filed stays together: the summary's folder is used, no new sub-folder", async () => {
+    const { deps, saved } = mk({ folderOfKey: vi.fn(async () => "old-4-banking-folder") })
+    await saveFormToStore(base({ subfolder: "4. Banking", subPath: ["Bank applications"] }), deps)
+    expect(deps.subFolder).not.toHaveBeenCalled()
+    expect(saved.every((x) => x.folderId === "old-4-banking-folder")).toBe(true)
+  })
+  it("an upload can use its own idempotency key (built from its bytes)", async () => {
+    const { deps, saved } = mk()
+    await saveFormToStore(base({ summary: null, uploadPaths: ["a/passport_1.pdf"], callerKeyOf: (p, b) => `k:${p}:${b.length}` }), deps)
+    expect(saved[0].callerKey).toBe("k:a/passport_1.pdf:1")
   })
 })

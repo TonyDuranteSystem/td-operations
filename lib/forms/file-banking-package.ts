@@ -18,6 +18,8 @@
  *     the list does not know. A person with only a hidden study-copy storage gets nothing filed and ONE alarm.
  */
 
+import { createHash } from "crypto"
+
 export interface BankingPackageInput {
   flow: string
   /** saveFormToDrive form-config key: banking | banking_payset | banking_relay */
@@ -62,6 +64,8 @@ const ID_NAME = /^(passport|member_passport|owner_passport|selfie|id[_-]|photo[_
 
 /** The sub-folder inside the company's "4. Banking" where a bank application's papers are filed. */
 export const BANK_APPLICATIONS_FOLDER = "Bank applications"
+/** the template slug that LOCKS that folder (like the other fixed folders: no rename, move or delete by hand) */
+export const BANK_APPLICATIONS_LOCK = "bank_applications"
 
 export function isIdUpload(path: string): boolean {
   const name = path.split("/").pop() || ""
@@ -112,7 +116,7 @@ async function defaultDeps(): Promise<BankingPackageDeps> {
     destination: async (accountId, flow) => (await import("@/lib/crm-store/form-destination")).formDestinationForAccount(accountId, flow) as never,
     saveCompany: async (i) => {
       const { saveFormToDrive } = await import("@/lib/form-to-drive")
-      return saveFormToDrive(i.formType, i.data, i.paths, i.folderId, { token: i.token, submittedAt: i.submittedAt, companyName: i.companyName }, { bucket: i.bucket, resolveBucket: (path) => bucketForUpload(path, i.bucket), storeSubPath: [BANK_APPLICATIONS_FOLDER] })
+      return saveFormToDrive(i.formType, i.data, i.paths, i.folderId, { token: i.token, submittedAt: i.submittedAt, companyName: i.companyName }, { bucket: i.bucket, resolveBucket: (path) => bucketForUpload(path, i.bucket), storeSubPath: [BANK_APPLICATIONS_FOLDER], storeSubPathLock: BANK_APPLICATIONS_LOCK })
     },
     personHasPassport: async (contactId) => {
       const { liveOwnerOfContact } = await import("@/lib/crm-store/switched-drive-guard")
@@ -136,6 +140,8 @@ async function defaultDeps(): Promise<BankingPackageDeps> {
       const r = await saveFormToStore({
         target: { kind: "contact", id: i.contactId, ownerId }, subfolder: "2. Contacts", year: null, summary: null,
         uploadPaths: i.paths, bucketOf: (path) => bucketForUpload(path, i.bucket), submissionKey: `${i.contactId}:${i.formType}:${i.token}`,
+        // the SAME scan of a passport sent with two applications at the same moment is ONE file (keyed by the person + the scan's own bytes)
+        callerKeyOf: (path, bytes) => (isPassportUpload(path) ? `bank-passport:${i.contactId}:${createHash("sha256").update(bytes).digest("hex")}` : undefined),
       })
       return { copied: [...r.copied, ...r.skipped], failed: r.failed, errors: r.errors }
     },

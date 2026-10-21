@@ -79,6 +79,14 @@ async function main() {
     check("E1c proof of address + statement + summary are all in 4. Banking > Bank applications", co1.length === 3 && co1.every((f) => f.trail === "4. Banking > Bank applications"), JSON.stringify(co1.map((f) => [f.name, f.trail])))
     check("E1d nothing is shown to the client (published=false), the passport has no AI-reader type guess", co1.every((f) => f.published === false) && pe1.every((f) => f.published === false), JSON.stringify({ co: co1.map((f) => f.published), pe: pe1.map((f) => f.published) }))
 
+    {
+      const { data: ow } = await sb.from("store_owners").select("id").eq("account_id", gw.id).eq("study_only", false).single()
+      const { data: baF } = await sb.from("store_folders").select("id, template_slug, parent_id").eq("owner_id", ow.id).eq("name", "Bank applications").is("trashed_at", null)
+      check("E1e the Bank applications folder is LOCKED (no rename / move / delete by hand)", (baF ?? []).length === 1 && baF[0].template_slug === "bank_applications", JSON.stringify(baF))
+      const { isLockedFolder } = await import("../../../lib/crm-store/structure")
+      check("E1f the system treats it as a fixed folder", isLockedFolder(baF[0]) === true)
+    }
+
     // ── E2: replay + retry job: no copies, no new versions ────────────────────
     const v1 = (await versionCount({ account_id: gw.id })) + (await versionCount({ contact_id: mark }))
     await new Promise((r) => setTimeout(r, 1500))
@@ -165,7 +173,31 @@ async function main() {
     const before8 = await filesOf({ account_id: co8acc.id })
     await fileBankingSubmission(row8, "e2e-replay-old")
     const after8 = await filesOf({ account_id: co8acc.id })
-    check("E8 an old-style filed application that is replayed does not leave TWO summaries", after8.filter((f) => /^Banking_/.test(f.name)).length === 1, JSON.stringify({ before: before8.map((f) => [f.name, f.trail]), after: after8.map((f) => [f.name, f.trail]) }).slice(0, 450))
+    check("E8 an old-style filed application that is replayed does not leave TWO summaries and stays in one folder", after8.filter((f) => /^Banking_/.test(f.name)).length === 1 && new Set(after8.map((f) => f.trail)).size === 1, JSON.stringify({ before: before8.map((f) => [f.name, f.trail]), after: after8.map((f) => [f.name, f.trail]) }).slice(0, 450))
+    // ── E9: the SAME passport scan sent with two applications at the same moment is ONE file ──
+    const zed = await mkContact("Zed"); contacts.push(zed)
+    const co9acc = await mkCompany("PassportRace", [zed]); accounts.push(co9acc.id)
+    const rows9: string[] = []
+    for (const n of ["relay", "payset"]) {
+      const path = await up("onboarding-uploads", `banking_${n}/${zed}/passport_image_${stamp}${n}_same.pdf`)
+      rows9.push(await insertRow({ token: `e2e-p9${n}-${stamp}`, account_id: co9acc.id, contact_id: zed, provider: n, submitted_data: { business_name: co9acc.company_name, passport_image: [path] }, drive_archive_meta: { origin: "wizard", applicant: "submitter" } }))
+    }
+    const rs9 = await Promise.all(rows9.map((id) => fileBankingSubmission(id, "e2e-race9").catch((e) => ({ pkg: { ok: false, errors: [String(e)] } }))))
+    const pe9 = await filesOf({ contact_id: zed })
+    check("E9 the same passport scan with two applications at the same moment: ONE passport file", rs9.every((r) => r.pkg.ok) && pe9.filter((f) => /passport/.test(f.name)).length === 1, JSON.stringify({ ok: rs9.map((r) => r.pkg.ok), errors: rs9.flatMap((r) => r.pkg.errors).slice(0, 2), pe: pe9.map((f) => f.name) }).slice(0, 300))
+
+    // ── E10: a Bank applications folder made by hand (not locked) is locked the next time a package is filed ──
+    const kim = await mkContact("Kim"); contacts.push(kim)
+    const co10acc = await mkCompany("HandMade", [kim]); accounts.push(co10acc.id)
+    const { data: o10 } = await sb.from("store_owners").select("id").eq("account_id", co10acc.id).eq("study_only", false).single()
+    const { data: bk10 } = await sb.from("store_folders").select("id").eq("owner_id", o10.id).eq("kind", "banking").single()
+    const { createFolder } = await import("../../../lib/crm-store/structure")
+    const made = await createFolder(bk10.id, "Bank applications", null)
+    const p10 = await up("onboarding-uploads", `banking_relay/${kim}/proof_of_address_${stamp}_k.pdf`)
+    const row10 = await insertRow({ token: `e2e-h10-${stamp}`, account_id: co10acc.id, contact_id: kim, provider: "relay", submitted_data: { business_name: co10acc.company_name, proof_of_address: [p10] }, drive_archive_meta: { origin: "wizard", applicant: "submitter" } })
+    const r10 = await fileBankingSubmission(row10, "e2e")
+    const { data: f10 } = await sb.from("store_folders").select("id, template_slug").eq("owner_id", o10.id).eq("name", "Bank applications").is("trashed_at", null)
+    check("E10 an existing hand-made Bank applications folder is reused and locked (not a second folder)", r10.pkg.ok && (f10 ?? []).length === 1 && f10[0].id === made.id && f10[0].template_slug === "bank_applications", JSON.stringify({ ok: r10.pkg.ok, f10 }))
   } finally {
     for (const id of bankRows) await sb.from("banking_submissions").update({ status: "cancelled" }).eq("id", id)
     for (const a of accounts) {
