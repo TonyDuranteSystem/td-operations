@@ -2,12 +2,14 @@ import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { isSecureAdmin } from "@/lib/auth"
 import { leadDb } from "@/lib/marketing/meta-leads/service"
-import { listTeams } from "@/lib/marketing/settings"
+import { getMarketingSetting, listTeams } from "@/lib/marketing/settings"
 import { listMembers, listOpenInvites } from "@/lib/marketing/members"
 import { ageText, romeStartOfMonth } from "@/lib/marketing/master-view"
 import { formatWhen } from "@/lib/marketing/lead-view"
 import { roleLabel } from "@/lib/marketing/permission-labels"
 import { TeamControls } from "./team-controls"
+import { ViewAsButtons } from "./view-as-buttons"
+import { viewAsOptions } from "@/lib/marketing/view-as"
 
 export const dynamic = "force-dynamic"
 
@@ -23,18 +25,20 @@ export default async function MarketingTeamsPage() {
   const { data: evData } = await db.from("marketing_lead_events").select("lead_id, kind, actor, data, created_at").gte("created_at", monthStart).limit(20000)
   const events = (evData ?? []) as Array<{ lead_id: string; kind: string; actor: string; data: Record<string, unknown>; created_at: string }>
   const blocks = await Promise.all(teams.map(async t => {
-    const [members, invites, leadIds] = await Promise.all([
+    const [members, invites, leadIds, bundles] = await Promise.all([
       listMembers(t.id), listOpenInvites(t.id),
       db.from("marketing_leads").select("id").eq("team_id", t.id).limit(5000),
+      getMarketingSetting("permission_bundles", t.id) as Promise<Record<string, string[]>>,
     ])
-    return { t, members: members.filter(m => m.status !== "removed"), invites, ids: new Set(((leadIds.data ?? []) as Array<{ id: string }>).map(x => x.id)) }
+    const viewOptions = viewAsOptions(bundles, roleLabel).map(o => ({ key: o.key, as: o.value === "owner" ? "owner" : o.value.bundle, label: o.label }))
+    return { t, viewOptions, members: members.filter(m => m.status !== "removed"), invites, ids: new Set(((leadIds.data ?? []) as Array<{ id: string }>).map(x => x.id)) }
   }))
 
   return (
     <div className="space-y-6 p-6">
       <div><h1 className="text-2xl font-semibold">Teams</h1><p className="text-sm text-slate-500">Who is on each team, and the switch that turns a team on or off.</p></div>
       {teams.length === 0 && <p className="rounded-xl border bg-white p-5 text-sm text-slate-600">There is no team yet.</p>}
-      {blocks.map(({ t, members, invites, ids }) => {
+      {blocks.map(({ t, members, invites, ids, viewOptions }) => {
         const mine = events.filter(e => ids.has(e.lead_id))
         const rows = members.filter(m => m.member_role !== "owner").map(m => {
           const ev = mine.filter(e => e.actor === m.email)
@@ -48,6 +52,7 @@ export default async function MarketingTeamsPage() {
               <h2 className="text-lg font-semibold">{t.name}</h2>
               <span className={`rounded-full px-3 py-1 text-xs font-medium ${PILL[t.status]}`}>{t.status === "active" ? "On" : t.status === "paused" ? "Paused: nobody can work" : "Not switched on yet"}</span>
             </div>
+            <ViewAsButtons teamId={t.id} options={viewOptions} />
             <TeamControls teamId={t.id} status={t.status} hasOwner={members.some(m => m.member_role === "owner")} />
 
             <div>
