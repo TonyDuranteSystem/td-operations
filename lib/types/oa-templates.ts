@@ -20,6 +20,8 @@ export interface OAData {
   company_name: string
   /** When the agreement row was created. Decides which wording of the Manager's authority it carries (see `includesRealEstateAuthority`). */
   created_at?: string | null
+  /** Two-member agreements only. True = each Member may also sign for and bind the Company (Section 2.3). Stored on the agreement row, so it never changes after the fact. Default false = the Manager alone. */
+  members_may_sign?: boolean | null
   /** The company's name before a rename (Company Change Name) — printed as "formerly known as …". Frozen on the agreement. */
   previous_company_name?: string
   state_of_formation: string
@@ -185,6 +187,9 @@ Manager: ${data.manager_name}`,
   }
 }
 
+/** Section 2.3 wording for a two-member agreement whose owners asked that every Member may sign too (Beril LLC, 2026-10-21). */
+const MEMBERS_MAY_SIGN_CLAUSE = "The Manager and each Member, acting alone, may also sign and deliver contracts, deeds, closing documents, and any other instruments in the name and on behalf of the Company, including for real estate transactions, and any such signature shall bind the Company to the same extent as the Manager's signature."
+
 // ─── Members table formatter ─────────────────────────────────
 
 function formatMembersTable(members: OAMember[]): string {
@@ -334,7 +339,7 @@ ${formatMembersTable(members)}
 
 2.2 Limited Liability. No Member shall be personally liable for any debts, obligations, or liabilities of the Company, whether arising in contract, tort, or otherwise, solely by reason of being a member of the Company.
 
-2.3 Management. The Company shall be manager-managed. ${data.manager_name} is hereby designated as the Manager of the Company. The Manager shall have full and exclusive authority to manage the business and affairs of the Company, and shall have all powers available to a manager under the laws of ${stateName}. The Manager may appoint officers, employees, and agents as the Manager deems necessary. No Member, solely by virtue of being a Member, shall have the authority to bind the Company.
+2.3 Management. The Company shall be manager-managed. ${data.manager_name} is hereby designated as the Manager of the Company. The Manager shall have full ${data.members_may_sign ? "" : "and exclusive "}authority to manage the business and affairs of the Company, and shall have all powers available to a manager under the laws of ${stateName}. The Manager may appoint officers, employees, and agents as the Manager deems necessary. ${data.members_may_sign ? MEMBERS_MAY_SIGN_CLAUSE : "No Member, solely by virtue of being a Member, shall have the authority to bind the Company."}
 
 2.4 Compensation. No Member shall receive compensation solely for services as a member of the Company. The Manager may receive reasonable compensation for services rendered to the Company in the capacity of Manager, as determined from time to time.
 

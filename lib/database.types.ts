@@ -10663,6 +10663,7 @@ export type Database = {
           members: Json | null
           pdf_storage_path: string | null
           previous_company_name: string | null
+          members_may_sign: boolean
           principal_address: string | null
           registered_agent_address: string | null
           registered_agent_name: string | null
@@ -10703,6 +10704,7 @@ export type Database = {
           members?: Json | null
           pdf_storage_path?: string | null
           previous_company_name?: string | null
+          members_may_sign?: boolean
           principal_address?: string | null
           registered_agent_address?: string | null
           registered_agent_name?: string | null
@@ -10743,6 +10745,7 @@ export type Database = {
           members?: Json | null
           pdf_storage_path?: string | null
           previous_company_name?: string | null
+          members_may_sign?: boolean
           principal_address?: string | null
           registered_agent_address?: string | null
           registered_agent_name?: string | null
