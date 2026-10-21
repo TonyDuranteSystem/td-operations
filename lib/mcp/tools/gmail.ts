@@ -7,6 +7,7 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { OPEN_PIXEL_OFF_SINCE } from '@/lib/email/open-pixel'
 import { z } from "zod"
 import { SignJWT, importPKCS8 } from "jose"
 import { logAction } from "@/lib/mcp/action-log"
@@ -645,7 +646,7 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
   // ═══════════════════════════════════════
   server.tool(
     "gmail_send",
-    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading, and tracks opens via pixel. PRIMARY email tool for ALL client communications. Supports HTML body for professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking. ATTACHMENTS: Use drive_file_id (singular) to attach a Google Drive file — just pass the file ID from drive_search. The file is downloaded and attached automatically. For multiple files, use drive_file_ids (array). ⚠️ URL INTEGRITY: When body_html contains URLs from other tools (welcome_package_prepare, lease_send, etc.), pass them EXACTLY as received — NEVER remove or modify query parameters (?c=, ?token=, etc.). These are access codes; without them, links break.",
+    "Send an email directly via Gmail API (NOT a draft — sends immediately). Email appears in Gmail Sent folder, supports threading. (The open-tracking pixel is switched off: no new email records opens, see lib/email/open-pixel.ts.) PRIMARY email tool for ALL client communications. Supports HTML body for professional formatting. Returns gmail message_id and thread_id. Optionally link to CRM account/contact/lead for tracking. ATTACHMENTS: Use drive_file_id (singular) to attach a Google Drive file — just pass the file ID from drive_search. The file is downloaded and attached automatically. For multiple files, use drive_file_ids (array). ⚠️ URL INTEGRITY: When body_html contains URLs from other tools (welcome_package_prepare, lease_send, etc.), pass them EXACTLY as received — NEVER remove or modify query parameters (?c=, ?token=, etc.). These are access codes; without them, links break.",
     {
       to: z.string().describe("Recipient email address"),
       subject: z.string().describe("Email subject line"),
@@ -656,7 +657,7 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
       reply_to: z.string().optional().describe("Reply-To address (defaults to From)"),
       reply_to_message_id: z.string().optional().describe("Gmail message ID to reply to (creates thread)"),
       as_user: z.string().optional().describe("Send as (default: support@tonydurante.us)"),
-      track_opens: z.boolean().optional().default(true).describe("Inject open tracking pixel (default: true)"),
+      track_opens: z.boolean().optional().default(true).describe("Kept for compatibility. The open pixel is switched off (lib/email/open-pixel.ts); true still writes the email_tracking record of the send, no image is added."),
       account_id: z.string().optional().describe("Link to CRM account UUID for tracking"),
       contact_id: z.string().optional().describe("Link to CRM contact UUID for tracking"),
       lead_id: z.string().optional().describe("Link to CRM lead UUID for tracking"),
@@ -777,7 +778,7 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
 
         const lines = [`📊 Email Tracking (${data.length} results)`, ""]
         for (const t of data) {
-          const status = t.opened ? `✅ Opened ${t.open_count}x` : "📭 Not opened"
+          const status = t.opened ? `✅ Opened ${t.open_count}x` : (String(t.created_at).slice(0, 10) >= OPEN_PIXEL_OFF_SINCE ? "➖ Opens not tracked (pixel off)" : "📭 Not opened")
           const opened = t.first_opened_at ? ` | First: ${new Date(t.first_opened_at).toLocaleString()}` : ""
           lines.push(`${status} | ${t.recipient} | ${t.subject}${opened}`)
           lines.push(`   Sent: ${new Date(t.created_at).toLocaleString()} | ID: ${t.tracking_id}`)

@@ -20,6 +20,7 @@
  */
 
 import { yearlyFeeMissingReason } from "@/lib/offers/annual-maintenance-wording"
+import { openPixelImg } from '@/lib/email/open-pixel'
 import crypto from "node:crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
@@ -571,7 +572,7 @@ function buildPortalAccessEmail(
   lang: "en" | "it",
   pixelUrl: string,
 ): string {
-  const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
+  const pixel = openPixelImg(pixelUrl)
 
   if (lang === "it") {
     return `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
@@ -648,7 +649,7 @@ export function buildPortalNotificationEmail(
   lang: "en" | "it",
   pixelUrl: string,
 ): string {
-  const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
+  const pixel = openPixelImg(pixelUrl)
   const { title, body, ctaLabel, ctaUrl } = content
   const greeting = lang === "it" ? `Ciao ${firstName},` : `Hi ${firstName},`
   const footer = lang === "it"

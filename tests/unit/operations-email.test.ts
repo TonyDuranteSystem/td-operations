@@ -264,7 +264,7 @@ describe("sendEmail — duplicate detection", () => {
 })
 
 describe("sendEmail — successful send", () => {
-  it("sends with tracking pixel + email_tracking insert + action_log", async () => {
+  it("sends with the email_tracking record + action_log and NO open pixel (switched off)", async () => {
     const { sendEmail } = await import("@/lib/operations/email")
     const result = await sendEmail({
       to: "client@example.com",
@@ -290,13 +290,15 @@ describe("sendEmail — successful send", () => {
     expect(actionLogCalls[0].action_type).toBe("send")
     expect(actionLogCalls[0].account_id).toBe("acct-1")
 
-    // Decode the base64-encoded HTML body part to verify the pixel is injected
+    // Decode the base64-encoded HTML body part to verify NO pixel is injected (open pixel switched off, Garante consent rule)
     const rawB64 = (gmailPostCalls[0].body as { raw: string }).raw
     const mime = Buffer.from(rawB64, "base64url").toString("utf-8")
     const htmlPart = mime.split("Content-Type: text/html")[1]
     const htmlBase64 = htmlPart.match(/\r\n\r\n([A-Za-z0-9+/=]+)/)?.[1] || ""
     const decoded = Buffer.from(htmlBase64, "base64").toString("utf-8")
-    expect(decoded).toContain("/api/track/open/et_")
+    expect(decoded).not.toContain("/api/track/open/")
+    expect(decoded).not.toMatch(/<img[^>]*width="1"/)
+    expect(decoded).toContain("<p>Hi</p>")
   })
 
   it("skips tracking row when track_opens=false", async () => {

@@ -9,6 +9,7 @@
  */
 
 import { gmailPost } from "@/lib/gmail"
+import { openPixelImg } from '@/lib/email/open-pixel'
 
 export interface SignerInviteParams {
   to: string
@@ -60,7 +61,7 @@ export function buildSignerInviteEmail(p: SignerInviteParams): { to: string; sub
   <p style="margin:26px 0"><a href="${p.signUrl}" style="background:#2563eb;color:#ffffff;padding:11px 22px;border-radius:6px;text-decoration:none;font-weight:600">${cta}</a></p>
   <p style="color:#888;font-size:12px">${note}</p>
   <p style="color:#888;font-size:12px;margin-top:24px">Tony Durante LLC</p>
-${p.trackingPixelUrl ? `  <img src="${escapeHtml(p.trackingPixelUrl)}" width="1" height="1" style="display:none" alt="" />` : ""}
+${openPixelImg(p.trackingPixelUrl)}
 </div>`
 
   const raw = [
