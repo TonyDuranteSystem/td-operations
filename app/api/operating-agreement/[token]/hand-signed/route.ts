@@ -302,6 +302,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
         company_name: agreement.company_name,
         created_at: agreement.created_at ?? undefined,
         previous_company_name: agreement.previous_company_name ?? undefined,
+        members_may_sign: agreement.members_may_sign === true,
         state_of_formation: agreement.state_of_formation,
         formation_date: agreement.formation_date,
         ein_number: agreement.ein_number ?? undefined,

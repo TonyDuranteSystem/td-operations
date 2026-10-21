@@ -16,6 +16,7 @@ interface OAAgreement {
   token: string
   company_name: string
   previous_company_name?: string | null
+  members_may_sign?: boolean
   state_of_formation: string
   formation_date: string
   ein_number: string | null
@@ -661,6 +662,7 @@ function OperatingAgreementCodeContent() {
     company_name: oa.company_name,
     created_at: oa.created_at ?? undefined,
     previous_company_name: oa.previous_company_name || undefined,
+    members_may_sign: oa.members_may_sign === true,
     state_of_formation: oa.state_of_formation,
     formation_date: oa.formation_date,
     ein_number: oa.ein_number || undefined,
