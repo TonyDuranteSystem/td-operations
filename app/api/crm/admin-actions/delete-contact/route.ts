@@ -95,6 +95,13 @@ export async function POST(request: Request) {
     const portalUsers = await findAuthUsersByContactId(contact_id)
     const actor = `dashboard:${user?.email?.split("@")[0] ?? "unknown"}`
 
+    // ── Dry-run preview of a MERGE (the person picked the contact to keep) ───
+    if (dry_run && mode === "merge") {
+      const { buildMergePreview } = await import("@/lib/operations/contact-merge-preview")
+      const preview = await buildMergePreview({ loserId: contact_id, winnerId: merge_into_contact_id ?? null, report, portalLoginCount: portalUsers.length })
+      return NextResponse.json({ ok: true, preview })
+    }
+
     // ── Dry-run preview (shown in ConfirmDestructiveDialog) ──────────────────
     if (dry_run) {
       const items = Object.entries(report.breakdown).map(([key, n]) => ({
@@ -147,9 +154,15 @@ export async function POST(request: Request) {
       }
 
       // CRM Store pilot: two people who BOTH have their own new-store storage cannot be merged yet.
-      const { storeMergeBlocker } = await import("@/lib/crm-store/merge-guard")
-      const storeBlock = await storeMergeBlocker(contact_id, merge_into_contact_id)
-      if (storeBlock) return NextResponse.json({ error: storeBlock }, { status: 409 })
+      // The same checks the preview showed (both storages, the same person owning one company twice, an already-merged contact) run again
+      // here, so a merge that the preview refused can never be forced by calling this route directly.
+      const { buildMergePreview } = await import("@/lib/operations/contact-merge-preview")
+      const checked = await buildMergePreview({ loserId: contact_id, winnerId: merge_into_contact_id, report, portalLoginCount: portalUsers.length })
+      if (checked.blocker) return NextResponse.json({ error: checked.blocker }, { status: 409 })
+
+      // The owner records that belong to the merged-away contact will point at the kept one: remember them to give them the kept name.
+      const { memberRowsOf } = await import("@/lib/operations/contact-name-follow")
+      const loserMemberIds = (await memberRowsOf(contact_id).catch(() => [])).map((m) => m.id)
 
       const { data: mergeResult, error: mergeErr } = await supabaseAdmin.rpc("merge_contacts", {
         p_loser: contact_id,
@@ -167,6 +180,18 @@ export async function POST(request: Request) {
       // the folder: make the surviving person's top folder carry the winner's name. Best-effort, never throws.
       const { syncPersonRootName } = await import("@/lib/crm-store/person-root-name")
       await syncPersonRootName(merge_into_contact_id)
+      // ...and the owner records that came over carry the kept contact's name (so the company papers match the person).
+      const { renameMemberRowsForContact } = await import("@/lib/operations/contact-name-follow")
+      await renameMemberRowsForContact(merge_into_contact_id, { onlyIds: loserMemberIds, actor })
+
+      // Never trust the merge silently: the merged-away contact must have NOTHING left pointing at it (its storage included).
+      const left = await getReport(contact_id).catch(() => null)
+      const { count: ownersLeft } = await supabaseAdmin.from("store_owners").select("id", { count: "exact", head: true }).eq("contact_id", contact_id)
+      const leftTotal = (left?.total_blocking ?? 0) + (ownersLeft ?? 0)
+      if (leftTotal > 0) {
+        logAction({ actor, action_type: "merge", table_name: "contacts", record_id: contact_id, summary: `Merge of "${contact.full_name}" into "${target.full_name}" left ${leftTotal} record(s) behind`, details: { left: left?.breakdown, ownersLeft, mergeResult } })
+        return NextResponse.json({ error: `The merge ran, but ${leftTotal} linked record(s) did not move to "${target.full_name}". Do not continue — tell support; nothing was deleted.` }, { status: 500 })
+      }
 
       // Remove the loser's portal login(s) — its email is now blanked, the
       // winner keeps the real login.

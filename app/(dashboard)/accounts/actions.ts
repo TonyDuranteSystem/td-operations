@@ -327,9 +327,10 @@ export async function updateContactField(
     }
 
     // ─── Non-email fields: existing behavior ───
+    const nameBefore = field === 'full_name' ? await (await import('@/lib/operations/contact-name-follow')).nameBeforeEdit(contactId) : null
     const result = await updateWithLock('contacts', contactId, { [field]: value || null }, updatedAt)
     if (!result.success) throw new Error(result.error)
-    if (field === 'full_name') await (await import('@/lib/crm-store/person-root-name')).syncPersonRootName(contactId)
+    if (field === 'full_name') await (await import('@/lib/operations/contact-name-follow')).afterContactNameEdit(contactId, nameBefore)
     if (accountId) revalidatePath(`/accounts/${accountId}`)
   }, {
     action_type: 'update', table_name: 'contacts', record_id: contactId,
