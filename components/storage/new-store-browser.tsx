@@ -142,10 +142,10 @@ function PreviewPanel({ file, onClose, src: srcOverride, title }: { file: File_;
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="flex-1 bg-zinc-50">
+        <div className="min-h-0 flex-1 overflow-auto bg-zinc-50">
           {heic ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={`${src}/picture`} alt={file.name} className="mx-auto h-full max-h-full object-contain" data-testid="heic-view" />
+            <img src={`${src}/picture`} alt={file.name} className="mx-auto block h-auto max-w-full" data-testid="heic-view" />
           ) : simple ? (
             <iframe src={`${src}/view`} title={file.name} sandbox="" className="h-full w-full border-0 bg-white" data-testid="simple-view" />
           ) : !inline ? (
@@ -155,7 +155,7 @@ function PreviewPanel({ file, onClose, src: srcOverride, title }: { file: File_;
             </div>
           ) : isImage ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={src} alt={file.name} className="mx-auto h-full max-h-full object-contain" />
+            <img src={src} alt={file.name} className="mx-auto block h-auto max-w-full" />
           ) : (
             <iframe src={src} title={file.name} className="h-full w-full border-0" />
           )}
