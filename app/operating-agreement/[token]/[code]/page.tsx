@@ -8,6 +8,7 @@ import { normalizeEntityType } from '@/lib/portal/entity-type'
 
 // --- Types -----------------------------------------------
 interface OAAgreement {
+  created_at?: string | null
   // NOTE: no `access_code`, no `member_email`, no `account_id` / `contact_id`.
   // The server strips them — adding one back here means someone re-opened the
   // leak this change closed. See lib/oa/public-view.ts.
@@ -658,6 +659,7 @@ function OperatingAgreementCodeContent() {
   // Generate OA sections from template
   const oaData: OAData = {
     company_name: oa.company_name,
+    created_at: oa.created_at ?? undefined,
     previous_company_name: oa.previous_company_name || undefined,
     state_of_formation: oa.state_of_formation,
     formation_date: oa.formation_date,

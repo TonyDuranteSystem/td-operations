@@ -18,6 +18,8 @@ export interface OAMember {
 
 export interface OAData {
   company_name: string
+  /** When the agreement row was created. Decides which wording of the Manager's authority it carries (see `includesRealEstateAuthority`). */
+  created_at?: string | null
   /** The company's name before a rename (Company Change Name) — printed as "formerly known as …". Frozen on the agreement. */
   previous_company_name?: string
   state_of_formation: string
@@ -139,12 +141,29 @@ function getStateSpecificClauses(state: string, isMM: boolean): OASection[] {
 
 // ─── Initial Resolutions ─────────────────────────────────────
 
+/**
+ * The Manager's authority to sign for real estate transactions was added to the first Initial Resolution on
+ * 2026-10-20 (Antonio). An agreement keeps the wording it was CREATED with — the page, the executed PDF and
+ * the hand-signed copy are all rendered from this template, so changing the text for every existing row would
+ * show a signed agreement words its members never saw. No `created_at` (a live preview) = the current wording.
+ */
+export const REAL_ESTATE_AUTHORITY_FROM = "2026-10-20T13:00:00Z"
+
+export function includesRealEstateAuthority(createdAt: string | null | undefined): boolean {
+  if (!createdAt) return true
+  const t = Date.parse(createdAt)
+  return Number.isNaN(t) ? true : t >= Date.parse(REAL_ESTATE_AUTHORITY_FROM)
+}
+
+const BANK_RESOLUTION_BEFORE = "RESOLVED, that the Manager is authorized to open bank accounts in the name of the Company with such financial institutions as the Manager may determine, and to designate authorized signatories for such accounts;"
+const BANK_AND_REAL_ESTATE_RESOLUTION = "RESOLVED, that the Manager is authorized to open bank accounts in the name of the Company with such financial institutions as the Manager may determine, to designate authorized signatories for such accounts, and to sign and deliver, in the name and on behalf of the Company, contracts, deeds, closing documents, and any other instruments for real estate transactions, including the purchase, sale, lease, or financing of real property or any interest in real property;"
+
 function generateInitialResolutions(data: OAData, stateName: string): OASection {
   return {
     title: "Initial Resolutions of the Manager",
     content: `The undersigned, being the Manager of ${data.company_name}, a ${stateName} limited liability company (the "Company"), hereby adopts the following resolutions effective as of ${data.effective_date}:
 
-RESOLVED, that the Manager is authorized to open bank accounts in the name of the Company with such financial institutions as the Manager may determine, and to designate authorized signatories for such accounts;
+${includesRealEstateAuthority(data.created_at) ? BANK_AND_REAL_ESTATE_RESOLUTION : BANK_RESOLUTION_BEFORE}
 
 RESOLVED, that the Manager is authorized to apply for an Employer Identification Number (EIN) from the Internal Revenue Service on behalf of the Company;
 

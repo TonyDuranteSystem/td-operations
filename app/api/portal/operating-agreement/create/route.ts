@@ -288,7 +288,7 @@ export async function POST(request: NextRequest) {
   // inert row and now five channels point them at a dead page.
   const { data: existingOAs } = await supabaseAdmin
     .from('oa_agreements')
-    .select('id, status, signed_count, company_name')
+    .select('id, status, signed_count, company_name, signed_at')
     .eq('account_id', account_id)
     .order('created_at', { ascending: false })
 
@@ -399,7 +399,9 @@ export async function POST(request: NextRequest) {
     // makes it structural. (Checked production: no account currently holds more
     // than one row and no token is shared, so this is defensive today — it stops
     // the collision arising, rather than repairing one.)
-    const staleIds = existingOAs.filter(o => o.status !== 'signed').map(o => o.id)
+    // An agreement that WAS signed and later voided by staff (e.g. replaced because the owners changed) is a record of an executed
+    // document — it stays too (Antonio 2026-10-20: Beril LLC's single-member agreement). Only never-signed rows are swept.
+    const staleIds = existingOAs.filter(o => o.status !== 'signed' && !o.signed_at).map(o => o.id)
     if (staleIds.length > 0) {
       await supabaseAdmin.from('oa_signatures').delete().in('oa_id', staleIds)
       await supabaseAdmin.from('oa_agreements').delete().in('id', staleIds)
