@@ -132,7 +132,7 @@ describe('wiring', () => {
     expect(sweep).toBeGreaterThan(guarded)
     expect(src.slice(guarded, sweep)).toContain("from('oa_signatures').delete().eq('oa_id', existing.id)")
     // the sweep that follows never deletes a signed agreement
-    expect(src.slice(sweep)).toContain("filter(o => o.status !== 'signed')")
+    expect(src.slice(sweep)).toContain("filter(o => o.status !== 'signed' && !o.signed_at)")
     expect(src).toContain('token: oaToken')
   })
   it('the two staff readers take the NEWEST agreement', () => {
