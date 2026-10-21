@@ -33,14 +33,17 @@ export async function GET(
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
-  // Get invoices for this customer
-  const { data: invoices } = await supabaseAdmin
-    .from('client_invoices')
-    .select('id, invoice_number, status, currency, total, issue_date')
-    .eq('customer_id', id)
-    .order('issue_date', { ascending: false })
+  // The customer's invoices are invoicing data: a team member who may manage customers but not invoices does not get them.
+  const canInvoice = await canAccessAccount(user, customer.account_id, 'invoices_billing')
+  const { data: invoices } = canInvoice
+    ? await supabaseAdmin
+        .from('client_invoices')
+        .select('id, invoice_number, status, currency, total, issue_date')
+        .eq('customer_id', id)
+        .order('issue_date', { ascending: false })
+    : { data: [] as Array<{ id: string; invoice_number: string; status: string; currency: string; total: number; issue_date: string }> }
 
-  return NextResponse.json({ customer, invoices: invoices ?? [] })
+  return NextResponse.json({ customer, invoices: invoices ?? [], can_invoice: canInvoice })
 }
 
 export async function PATCH(

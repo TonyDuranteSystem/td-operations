@@ -43,6 +43,7 @@ interface InvoiceDetail {
   message: string | null
   recurring_frequency?: string | null
   recurring_next_date?: string | null
+  can_edit_customer?: boolean
   email_delivery?: { detail: string | null; to: string | null; at: string | null } | null
   created_at: string
   customer: { name: string; email: string | null; address: string | null; vat_number: string | null } | null
@@ -439,7 +440,7 @@ export default function InvoiceDetailPage() {
       </div>
 
       {invoice.email_delivery && (
-        <InvoiceDeliveryBanner t={t} problem={invoice.email_delivery} customerId={invoice.customer_id} onDownload={handleDownloadPDF} />
+        <InvoiceDeliveryBanner t={t} problem={invoice.email_delivery} customerId={invoice.can_edit_customer === false ? null : invoice.customer_id} onDownload={handleDownloadPDF} />
       )}
 
       <InvoiceSendNotices

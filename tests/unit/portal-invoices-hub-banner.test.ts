@@ -46,8 +46,8 @@ describe('callout under the invoices menu item', () => {
 })
 
 describe('menu position', () => {
-  it('moves the item right under Overview only when the new screen is on and not for teammates', () => {
-    expect(side).toMatch(/if \(isTeammate \|\| !navVisibility\?\.invoiceHub\) return filteredCompanyItems/)
+  it('moves the item right under Overview only when the hub rule lets this person in', () => {
+    expect(side).toMatch(/if \(!invoicesHubOn\) return filteredCompanyItems/)
     expect(side).toMatch(/rest\.splice\(at \+ 1, 0, inv\)/)
   })
 })

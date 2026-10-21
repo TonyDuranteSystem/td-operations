@@ -57,6 +57,7 @@ export default function CustomerDetailPage() {
   const [customer, setCustomer] = useState<Customer | null>(null)
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
+  const [canInvoice, setCanInvoice] = useState(true)
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editData, setEditData] = useState<Customer | null>(null)
@@ -68,6 +69,7 @@ export default function CustomerDetailPage() {
       const data = await res.json()
       setCustomer(data.customer)
       setInvoices(data.invoices ?? [])
+      setCanInvoice(data.can_invoice !== false)
       setEditData(data.customer)
       setLoading(false)
     }
@@ -181,7 +183,8 @@ export default function CustomerDetailPage() {
         )}
       </div>
 
-      {/* Invoices for this customer */}
+      {/* Invoices for this customer (only for people who may use invoicing) */}
+      {canInvoice && (
       <div className="bg-white rounded-xl border shadow-sm p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('invoices.title')} ({invoices.length})</h2>
@@ -208,6 +211,7 @@ export default function CustomerDetailPage() {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }

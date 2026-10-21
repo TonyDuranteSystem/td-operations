@@ -93,6 +93,8 @@ export async function GET(
   return NextResponse.json({
     ...invoice,
     email_delivery: delivery,
+    // The banner's 'Edit customer' link only helps someone who may manage customers (a team member may not).
+    can_edit_customer: await canAccessAccount(user, invoice.account_id, 'sales_customers'),
     customer,
     payment_setup: { hasBankAccount: (bankCount ?? 0) > 0, hasPaymentLink: (linkCount ?? 0) > 0 },
     items: items ?? [],

@@ -81,3 +81,22 @@ describe('source guards: one rule for page, sidebar and new-pages', () => {
     expect(p).toContain('isClientHub')
   })
 })
+
+describe('dead ends closed (bug-hunter round)', () => {
+  const read = (p: string) => readFileSync(p, 'utf8')
+  it('invoice detail API tells the page whether the viewer may edit the customer; the banner link follows it', () => {
+    expect(read('app/api/portal/invoices/[id]/route.ts')).toContain("can_edit_customer: await canAccessAccount(user, invoice.account_id, 'sales_customers')")
+    expect(read('app/portal/invoices/[id]/page.tsx')).toContain('invoice.can_edit_customer === false ? null : invoice.customer_id')
+  })
+  it("customer detail API does not hand a customers-only team member the customer's invoices; page hides the invoices card", () => {
+    const api = read('app/api/portal/customers/[id]/route.ts')
+    expect(api).toContain("canAccessAccount(user, customer.account_id, 'invoices_billing')")
+    expect(api).toContain('can_invoice: canInvoice')
+    expect(read('app/portal/customers/[id]/page.tsx')).toContain('{canInvoice && (')
+  })
+  it('the old customers page uses the same identity decision', () => {
+    const p = read('app/portal/customers/page.tsx')
+    expect(p).toContain("resolveInvoiceActor(user, 'sales_customers')")
+    expect(p).not.toContain('getClientContactId')
+  })
+})
