@@ -4,7 +4,6 @@ import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 import { getInvoiceEmailSenderSetting } from '@/lib/settings'
 import { deliverInvoiceEmail, resolveInvoiceSender, fromAddressFor } from '@/lib/portal/invoice-mailer'
-import { APP_BASE_URL } from '@/lib/config'
 import { getCompanyEmail } from '@/lib/portal/queries'
 import { pdfStatusForSend } from '@/lib/portal/invoice-status'
 import { renderInvoicePdf } from '@/lib/portal/invoice-pdf'
@@ -176,10 +175,10 @@ export async function POST(
   const sender = resolveInvoiceSender(await getInvoiceEmailSenderSetting(), !!process.env.RESEND_API_KEY, invoice.account_id)
   let claimedTrackingId: string | null = null
   try {
-    // Generate tracking ID and inject pixel into HTML
+    // The tracking id names the claim row below (it is the email's record). NO open-tracking picture is added to a client's
+    // invoice email: a per-recipient open pixel needs the recipient's prior consent under the Italian Garante's rules
+    // (deadline 28 Oct 2026) and Resend flags an image hosted off the sending domain. Nothing used the data for client invoices.
     const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
-    const trackedHtml = html + `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
 
     // Build the PDF as it will look once sent, so the customer never receives a DRAFT-stamped file.
     // Built in-process (no HTTP call back to ourselves). If it cannot be built we stop: an invoice
@@ -215,7 +214,7 @@ export async function POST(
       fromName: companyName,
       to: customer.email,
       subject,
-      html: trackedHtml,
+      html,
       replyTo: replyTo ?? undefined,
       attachment: { base64: pdfBase64, filename: `${invoice.invoice_number}.pdf` },
     })

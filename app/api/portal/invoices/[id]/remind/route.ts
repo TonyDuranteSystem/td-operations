@@ -8,7 +8,6 @@ import { esc, headerSafe, isSafeRecipient, recentlyEmailed, overDailyEmailCap } 
 import { getInvoicePaymentLinkUrl } from '@/lib/portal/payment-link-lookup'
 import { getCompanyEmail } from '@/lib/portal/queries'
 import { invoiceStatusRule } from '@/lib/portal/invoice-status'
-import { APP_BASE_URL } from '@/lib/config'
 
 // One reminder per invoice per customer per 12 hours: enough for a genuine follow-up, too tight for spam.
 const REMINDER_WINDOW_SECONDS = 12 * 60 * 60
@@ -141,7 +140,7 @@ export async function POST(
       contact_id: invoice.contact_id || null,
       invoice_id: invoice.id,
     })
-    const trackedHtml = html + `<img src="${APP_BASE_URL}/api/track/open/${trackingId}" width="1" height="1" style="display:none" alt="" />`
+    // No open-tracking picture in a client's reminder email (see the send route for why).
 
     try {
       const sendResult = await deliverInvoiceEmail({
@@ -149,7 +148,7 @@ export async function POST(
         fromName: companyName,
         to: customer.email,
         subject,
-        html: trackedHtml,
+        html,
         replyTo: (invoice.account_id ? await getCompanyEmail(invoice.account_id) : null) ?? undefined,
       })
       if (!claimErr) {
