@@ -4,7 +4,7 @@
  * Not in target or Call back later (the history keeps WHO did it), so a number never depends on a lead's current stage.
  * Calls themselves are not recorded yet, so there is no "called" number: "worked" means the leads he gave an outcome.
  */
-import { romeStartOfDay, romeStartOfMonth, MASTER_TZ, type MasterEvent } from "@/lib/marketing/master-view"
+import { romeStartOfDay, romeStartOfMonth, MASTER_TZ, countsAsWork, type MasterEvent } from "@/lib/marketing/master-view"
 import { isReceived, type SaleRow } from "@/lib/marketing/sales"
 
 export type Period = "today" | "week" | "month" | "all"
@@ -39,7 +39,7 @@ export interface OutcomeRow { leadId: string; actor: string; outcome: Outcome; r
 export function outcomesIn(events: readonly MasterEvent[], from: Date | null): OutcomeRow[] {
   const out: OutcomeRow[] = []
   for (const e of events) {
-    if (e.kind !== "status_changed") continue
+    if (e.kind !== "status_changed" || !countsAsWork(e)) continue
     const o = e.data?.outcome
     if (o !== "good" && o !== "not_in_target" && o !== "call_back") continue
     if (from && new Date(e.created_at).getTime() < from.getTime()) continue

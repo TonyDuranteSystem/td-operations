@@ -18,7 +18,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
   const { id } = await params
   const settings = await loadActionSettings(g.ctx.team.id)
-  const r = await applyLeadAction(leadDb(), g.ctx.team.id, id, parsed.value, { id: g.ctx.user.id, email: g.ctx.user.email, role: g.ctx.role }, settings)
+  const r = await applyLeadAction(leadDb(), g.ctx.team.id, id, parsed.value, { id: g.ctx.user.id, email: g.ctx.user.email, role: g.ctx.role }, settings, new Date(), g.ctx.viewAs !== undefined)
   if (r.ok === false) return NextResponse.json({ error: r.error }, { status: r.status, headers: NO_STORE })
   return NextResponse.json({ ok: true }, { headers: NO_STORE })
 }

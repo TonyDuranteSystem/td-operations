@@ -149,6 +149,13 @@ describe("applyLeadAction (writes)", () => {
     expect(await run(db, "T1", L1, { action: "claim" })).toMatchObject({ ok: false, status: 409 })
     expect(db.rows("marketing_leads")[0].claimed_by).toBe("u-sneaky")
   })
+  it("an action taken while Antonio is viewing as someone is tagged, so it never counts as real work", async () => {
+    const db = setup()
+    await applyLeadAction(db, "T1", L1, { action: "note", note: "hi" }, setter, settings, NOW, true)
+    expect(db.rows("marketing_lead_events").at(-1)).toMatchObject({ kind: "note", data: { text: "hi", via_view_as: true } })
+    await run(db, "T1", L1, { action: "note", note: "real" })
+    expect(db.rows("marketing_lead_events").at(-1)?.data).toEqual({ text: "real" })
+  })
   it("a failed history write is reported, never silent", async () => {
     const db = setup()
     db.failTables.add("marketing_lead_events")

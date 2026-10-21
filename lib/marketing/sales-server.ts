@@ -4,6 +4,7 @@
  * writes with "nothing changed meanwhile" conditions, and writes the lead's history.
  */
 import type { Db } from "@/lib/marketing/meta-leads/ingest"
+import { readPaged } from "@/lib/marketing/paged"
 import { getTeamLead } from "@/lib/marketing/leads-read"
 import { getMarketingSetting, listCommissionTerms } from "@/lib/marketing/settings"
 import { termInForce } from "@/lib/marketing/commission"
@@ -34,7 +35,7 @@ async function addEvent(db: Db, leadId: string, kind: string, actor: string, dat
 
 /** Create a sale row, then the Stripe link for it, then store the link. A Stripe failure marks the row "failed" (it never shows as a live link). */
 export async function createSaleLink(
-  db: Db, ctx: { teamId: string; userId: string; email: string | null }, leadId: string, input: LinkInput, createSession: CreateSession, now = new Date(),
+  db: Db, ctx: { teamId: string; userId: string; email: string | null; viaViewAs?: boolean }, leadId: string, input: LinkInput, createSession: CreateSession, now = new Date(),
 ): Promise<SaleResult<{ saleId: string; url: string }>> {
   const lead = await getTeamLead(db, ctx.teamId, leadId)
   if (!lead) return { ok: false, status: 404, error: "Lead not found." }
@@ -65,7 +66,7 @@ export async function createSaleLink(
     stripe_session_id: made.sessionId, checkout_url: made.checkoutUrl, link_expires_at: made.expiresAt?.toISOString() ?? null, updated_at: now.toISOString(),
   }).eq("id", saleId)
   if (upErr) return { ok: false, status: 500, error: "The link was made but could not be saved. Tell Antonio." }
-  await addEvent(db, lead.id, "payment_link_created", actor, { sale_id: saleId, kind: plan.kind, amount_cents: plan.amountCents, currency: plan.currency, terms_set: snap.seller_cents !== null })
+  await addEvent(db, lead.id, "payment_link_created", actor, { sale_id: saleId, kind: plan.kind, amount_cents: plan.amountCents, currency: plan.currency, terms_set: snap.seller_cents !== null, ...(ctx.viaViewAs ? { via_view_as: true } : {}) })
   return { ok: true, saleId, url: made.checkoutUrl }
 }
 
@@ -98,10 +99,19 @@ async function moveLeadAfterPaid(db: Db, sale: SaleRow) {
     const [map, stages] = await Promise.all([getMarketingSetting("sale_kind_stages", sale.team_id), getMarketingSetting("pipeline_stages", sale.team_id)])
     const stage = stageForPaidSale(sale.kind, map as Record<string, string>, stages as { key: string }[])
     if (!stage) return
-    const { data: lead } = await db.from("marketing_leads").select("status").eq("id", sale.lead_id).eq("team_id", sale.team_id).maybeSingle()
-    if (!lead || lead.status === stage) return
-    await db.from("marketing_leads").update({ status: stage, updated_at: new Date().toISOString() }).eq("id", sale.lead_id).eq("team_id", sale.team_id)
-    await addEvent(db, sale.lead_id, "status_changed", "stripe", { from: lead.status, to: stage, reason: "sale paid" })
+    // Only if the lead is still where we just read it (nothing moved it meanwhile); a promised call back is done once the client has paid. If it moved meanwhile, read again once;
+    // if it still cannot be moved, leave a line in the history so a person knows (the payment itself is already recorded).
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { data: lead } = await db.from("marketing_leads").select("status, callback_at").eq("id", sale.lead_id).eq("team_id", sale.team_id).maybeSingle()
+      if (!lead) return
+      if (lead.status === stage) {
+        if (lead.callback_at) await db.from("marketing_leads").update({ callback_at: null, updated_at: new Date().toISOString() }).eq("id", sale.lead_id).eq("team_id", sale.team_id)
+        return
+      }
+      const { data: moved } = await db.from("marketing_leads").update({ status: stage, callback_at: null, updated_at: new Date().toISOString() }).eq("id", sale.lead_id).eq("team_id", sale.team_id).eq("status", lead.status).select("id")
+      if (moved && moved.length > 0) { await addEvent(db, sale.lead_id, "status_changed", "stripe", { from: lead.status, to: stage, reason: "sale paid" }); return }
+    }
+    await addEvent(db, sale.lead_id, "stage_not_moved", "stripe", { wanted: stage, reason: "the lead was changed at the same moment the payment arrived" })
   } catch (e) {
     console.error("[marketing-sales] could not move the lead after payment:", e instanceof Error ? e.message : e)
   }
@@ -129,10 +139,12 @@ export async function recordDispute(db: Db, paymentIntent: string | null, now = 
 }
 
 export async function listTeamSales(db: Db, teamId: string, opts: { mineUserId?: string; limit?: number } = {}): Promise<SaleRow[]> {
-  let q = db.from("marketing_sales").select(SALE_COLS).eq("team_id", teamId)
-  if (opts.mineUserId) q = q.eq("created_by_user_id", opts.mineUserId)
-  const { data } = await q.order("created_at", { ascending: false }).limit(opts.limit ?? 500)
-  return ((data ?? []) as SaleRow[])
+  const { rows } = await readPaged<SaleRow>((from, to) => {
+    let q = db.from("marketing_sales").select(SALE_COLS).eq("team_id", teamId)
+    if (opts.mineUserId) q = q.eq("created_by_user_id", opts.mineUserId)
+    return q.order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, to)
+  }, opts.limit ?? 500)
+  return rows
 }
 
 export async function listAllSales(db: Db, limit = 1000): Promise<SaleRow[]> {

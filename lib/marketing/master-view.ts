@@ -22,7 +22,12 @@ export interface MasterEvent { lead_id: string; kind: string; actor: string; dat
 export interface MasterMember { email: string | null; role: "owner" | "member"; bundle: string | null; status: string; lastSignInAt: string | null }
 export interface StageOpt { key: string; label: string }
 
+/** A history row that counts as a person's real work: Antonio looking in with "View as" is tagged and never counted. */
+export const countsAsWork = (e: Pick<MasterEvent, "data">): boolean => e.data?.via_view_as !== true
+
 export interface MasterInput {
+  /** the stages a paid sale moves a lead to (the values of the sale_kind_stages setting); default: the built-in one */
+  paidStages?: readonly string[]
   leads: readonly MasterLead[]
   /** history rows since the start of the month (earlier ones are not needed) */
   events: readonly MasterEvent[]
@@ -91,7 +96,8 @@ export function buildMasterView(i: MasterInput): MasterView {
   const dueToday = withCallback.filter(l => new Date(l.callback_at as string).getTime() < dayEnd)
   const late = dueToday.filter(l => new Date(l.callback_at as string).getTime() < nowMs).sort((a, b) => String(a.callback_at).localeCompare(String(b.callback_at)))
 
-  const paidThisMonth = new Set(i.events.filter(e => e.kind === "status_changed" && e.data?.to === "paid_call" && new Date(e.created_at).getTime() >= monthStart).map(e => e.lead_id)).size
+  const paidStages = new Set(i.paidStages?.length ? i.paidStages : ["paid_call"])
+  const paidThisMonth = new Set(i.events.filter(e => e.kind === "status_changed" && typeof e.data?.to === "string" && paidStages.has(e.data.to) && new Date(e.created_at).getTime() >= monthStart).map(e => e.lead_id)).size
 
   const known = new Set(i.stages.map(s => s.key))
   const funnel = i.stages.map(s => ({ key: s.key, label: s.label, count: i.leads.filter(l => l.status === s.key).length }))
@@ -108,11 +114,12 @@ export function buildMasterView(i: MasterInput): MasterView {
   for (const l of flagged.slice(0, 3)) needs.push({ key: "existing_client", tone: "warn", text: `${nameOf(l)} ${l.existing_client?.check_failed ? "could not be checked against TD clients" : "looks like an existing client"}` })
 
   // What each person did today. Events are matched to people by the email stored as the actor.
-  const today = i.events.filter(e => new Date(e.created_at).getTime() >= dayStart)
+  const work = i.events.filter(countsAsWork)
+  const today = work.filter(e => new Date(e.created_at).getTime() >= dayStart)
   const people: PersonRow[] = i.members.filter(m => m.status !== "removed" && m.email).map(m => {
     const mine = today.filter(e => e.actor === m.email)
     const outcome = (o: string) => mine.filter(e => e.kind === "status_changed" && e.data?.outcome === o).length
-    const lastEvent = i.events.filter(e => e.actor === m.email).map(e => e.created_at).sort().pop() ?? null
+    const lastEvent = work.filter(e => e.actor === m.email).map(e => e.created_at).sort().pop() ?? null
     const lastActive = [lastEvent, m.lastSignInAt].filter((x): x is string => !!x).sort().pop() ?? null
     return {
       email: m.email as string, role: m.role === "owner" ? "Owner" : (m.bundle ?? "Member"),

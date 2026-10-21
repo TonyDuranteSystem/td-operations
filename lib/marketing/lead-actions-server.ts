@@ -25,7 +25,7 @@ export function parseLeadAction(body: unknown): { ok: true; value: LeadActionInp
 }
 
 export async function applyLeadAction(
-  db: Db, teamId: string, leadId: string, input: LeadActionInput, actor: Actor, settings: ActionSettings, now = new Date(),
+  db: Db, teamId: string, leadId: string, input: LeadActionInput, actor: Actor, settings: ActionSettings, now = new Date(), viaViewAs = false,
 ): Promise<ActionResult> {
   const lead = await getTeamLead(db, teamId, leadId)
   if (!lead) return { ok: false, status: 404, error: "Lead not found." }
@@ -42,7 +42,7 @@ export async function applyLeadAction(
     if (error) return { ok: false, status: 500, error: "Could not save. Please try again." }
     if (!data || data.length === 0) return { ok: false, status: 409, error: "This lead changed while you were looking at it. Reload the page and try again." }
   }
-  const { error: evErr } = await db.from("marketing_lead_events").insert({ lead_id: lead.id, kind: change.event.kind, actor: actor.email ?? actor.id, data: change.event.data })
+  const { error: evErr } = await db.from("marketing_lead_events").insert({ lead_id: lead.id, kind: change.event.kind, actor: actor.email ?? actor.id, data: viaViewAs ? { ...change.event.data, via_view_as: true } : change.event.data })
   if (evErr) return { ok: false, status: 500, error: "Saved, but the history line could not be written. Tell Antonio." }
   return { ok: true }
 }
