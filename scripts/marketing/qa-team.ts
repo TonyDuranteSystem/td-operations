@@ -79,7 +79,7 @@ async function main() {
     await ctx.addCookies([{ name: base, value: "base64-" + Buffer.from(JSON.stringify(sess), "utf8").toString("base64url"), domain: new URL(BASE).hostname, path: "/", httpOnly: false, secure: false, sameSite: "Lax" }])
   }
   async function session(email: string): Promise<BrowserContext> {
-    const ctx = await browser.newContext({ viewport: { width: 420, height: 900 } })
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } })
     const page = await ctx.newPage()
     await page.goto(`${BASE}/login`, { waitUntil: "networkidle", timeout: 180000 })
     await page.waitForTimeout(2500)

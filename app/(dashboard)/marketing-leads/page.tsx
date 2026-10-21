@@ -2,14 +2,12 @@ import Link from "next/link"
 import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { isSecureAdmin } from "@/lib/auth"
-import { listAllLeads } from "@/lib/marketing/leads-read"
 import { leadDb } from "@/lib/marketing/meta-leads/service"
-import { clientFlagText, formatWhen, stageLabel } from "@/lib/marketing/lead-view"
 import { ageText } from "@/lib/marketing/master-view"
 import { loadMasterData } from "@/lib/marketing/master-read"
 import { listTeams } from "@/lib/marketing/settings"
 import { listConnections } from "@/lib/marketing/meta-leads/key-store"
-import { MetaConnectionPanel } from "./meta-connection-panel"
+import { FillDetailsPanel } from "./fill-details-panel"
 
 export const dynamic = "force-dynamic"
 
@@ -29,18 +27,13 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
   const db = leadDb()
   const teams = await listTeams()
   const team = teams.find(t => t.id === sp.team) ?? teams.find(t => t.status === "active") ?? teams[0] ?? null
-  const [leads, evts, connections, master] = await Promise.all([
-    listAllLeads(db),
-    db.from("marketing_leadgen_events").select("status, last_error, updated_at").in("status", ["pending", "failed", "gave_up"]).order("updated_at", { ascending: false }).limit(50),
+  const [total, noDetails, connections, master] = await Promise.all([
+    db.from("marketing_leads").select("id", { count: "exact", head: true }),
+    db.from("marketing_leads").select("id", { count: "exact", head: true }).is("full_name", null).is("email", null).is("phone", null),
     listConnections(db, process.env.META_APP_SECRET),
     team ? loadMasterData(db, team.id) : Promise.resolve(null),
   ])
-  const teamName = new Map(teams.map(t => [t.id, t.name]))
-  const open = (evts.data ?? []) as Array<{ status: string; last_error: string | null; updated_at: string }>
-  const count = (s: string) => open.filter(e => e.status === s).length
-  const unassigned = leads.filter(l => !l.team_id).length
-  const stages = master?.stages ?? []
-  const connection = [
+    const connection = [
     { label: "App secret", ok: !!process.env.META_APP_SECRET },
     { label: "Webhook verify token", ok: !!process.env.META_WEBHOOK_VERIFY_TOKEN },
     { label: "Page access key", ok: !!process.env.META_PAGE_ACCESS_TOKEN || connections.some(c => c.readable) },
@@ -149,52 +142,9 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
         </>
       )}
 
-      <section className="rounded-xl border bg-white p-4">
-        <h2 className="text-sm font-semibold text-slate-600">Meta connection</h2>
-        <ul className="mt-2 grid gap-1 text-sm sm:grid-cols-2">
-          {connection.map(c => (
-            <li key={c.label} className="flex items-center gap-2">
-              <span className={`inline-block h-2.5 w-2.5 rounded-full ${c.ok ? "bg-emerald-500" : "bg-red-500"}`} />
-              {c.label}: {c.ok ? "set" : "not set"}
-            </li>
-          ))}
-        </ul>
-        <p className="mt-3 text-sm">
-          Waiting to be fetched: <b>{count("pending")}</b> · Failed, will retry: <b>{count("failed")}</b> · Gave up: <b className={count("gave_up") ? "text-red-600" : ""}>{count("gave_up")}</b>
-          {unassigned > 0 && <> · <b className="text-amber-700">{unassigned} lead{unassigned === 1 ? "" : "s"} with no team yet</b></>}
-        </p>
-        {open.find(e => e.last_error) && <p className="mt-1 text-xs text-slate-500">Latest problem: {open.find(e => e.last_error)?.last_error}</p>}
-        <MetaConnectionPanel />
-      </section>
+      <FillDetailsPanel missing={noDetails.count ?? 0} />
 
-      <section>
-        <h2 className="mb-2 text-sm font-semibold text-slate-600">All leads, every team ({leads.length} shown)</h2>
-        {leads.length === 0 ? (
-          <p className="rounded-xl border bg-white p-5 text-sm text-slate-600">No leads yet.</p>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border bg-white">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b bg-slate-50 text-xs text-slate-500">
-                <tr><th className="px-3 py-2">When</th><th className="px-3 py-2">Name</th><th className="px-3 py-2">Contact</th><th className="px-3 py-2">Campaign</th><th className="px-3 py-2">Stage</th><th className="px-3 py-2">Picked by</th><th className="px-3 py-2">Team</th><th className="px-3 py-2">Note</th></tr>
-              </thead>
-              <tbody className="divide-y">
-                {leads.map(l => (
-                  <tr key={l.id}>
-                    <td className="whitespace-nowrap px-3 py-2 text-slate-500">{formatWhen(l.meta_created_time ?? l.received_at)}</td>
-                    <td className="px-3 py-2 font-medium">{l.full_name || "—"}</td>
-                    <td className="px-3 py-2">{[l.phone, l.email].filter(Boolean).join(" · ") || "—"}</td>
-                    <td className="max-w-[16rem] truncate px-3 py-2 text-slate-500">{l.campaign_name || "—"}</td>
-                    <td className="whitespace-nowrap px-3 py-2">{stageLabel(stages, l.status)}{l.callback_at && <span className="block text-xs text-sky-700">Call back {formatWhen(l.callback_at)}</span>}</td>
-                    <td className="px-3 py-2 text-slate-500">{l.claimed_by_label ?? "—"}</td>
-                    <td className="px-3 py-2">{l.team_id ? teamName.get(l.team_id) ?? "Unknown team" : <span className="text-amber-700">Not assigned</span>}</td>
-                    <td className="px-3 py-2 text-xs text-amber-900">{clientFlagText(l.existing_client) ?? ""}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      <p className="text-sm"><Link className="font-medium text-teal-800 underline" href="/marketing-leads/leads">Open all {total.count ?? 0} leads →</Link> to see what each one answered, what the setter wrote, and the full history.</p>
       <p className="text-xs text-slate-400">Each team sees only its own leads at <Link className="underline" href="/marketing/leads">/marketing/leads</Link>.</p>
     </div>
   )

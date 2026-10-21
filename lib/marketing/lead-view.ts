@@ -72,6 +72,8 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
     case "received": return "Lead arrived from the ad"
     case "possible_existing_client": return "Flagged: may already be a TD client"
     case "client_check_failed": return "Could not check whether this is a TD client"
+    case "assigned": return `Assigned to ${typeof data.team_name === "string" ? data.team_name : "a team"}`
+    case "details_filled": return "Name, email and phone filled in from the form answers"
     case "claimed": return "Picked"
     case "released": return "Given back"
     case "note": return `Note: ${typeof data.text === "string" ? data.text : ""}`
@@ -84,4 +86,10 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
     }
     default: return kind
   }
+}
+
+/** A Meta form answer made readable: "servizi_e_consulenze" -> "Servizi e consulenze", "30.000_-_100.000€" -> "30.000 - 100.000€". */
+export function prettyAnswer(v: string): string {
+  const s = v.replace(/_/g, " ").replace(/\s+/g, " ").trim()
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : v
 }

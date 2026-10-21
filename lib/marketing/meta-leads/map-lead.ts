@@ -64,12 +64,48 @@ function clean(v: unknown, max = 500): string | null {
   return s ? s.slice(0, max) : null
 }
 
+/** A form field's name made comparable: lower case, accents removed, every run of other characters becomes one underscore ("E-mail", "e_mail" and "e-mail" are the same field). */
+export function fieldKey(name: string): string {
+  return name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
+}
+
 function firstValue(answers: LeadAnswer[], names: string[]): string | null {
   for (const n of names) {
-    const a = answers.find(x => x.name.toLowerCase() === n)
+    const a = answers.find(x => fieldKey(x.name) === n)
     if (a && a.values[0]) return a.values[0]
   }
   return null
+}
+
+// The form's own field names, English (Meta's standard ones) and Italian (Antonio's forms: "nome_e_cognome", "e-mail", "numero_di_telefono").
+const FULL_NAME = ["full_name", "name", "nome_e_cognome", "nome_cognome", "nome_completo", "cognome_e_nome"]
+const FIRST_NAME = ["first_name", "nome"]
+const LAST_NAME = ["last_name", "cognome"]
+const EMAIL_FIELDS = ["email", "e_mail", "work_email", "email_address", "indirizzo_email", "indirizzo_e_mail"]
+const PHONE_FIELDS = ["phone_number", "phone", "work_phone_number", "numero_di_telefono", "numero_telefono", "telefono", "numero_di_cellulare", "cellulare", "mobile"]
+const COUNTRY_FIELDS = ["country", "paese", "nazione"]
+const CITY_FIELDS = ["city", "citta"]
+const MARK_TEST = /^<test lead/i
+
+export interface Contact { fullName: string | null; email: string | null; phone: string | null; country: string | null; city: string | null }
+
+/**
+ * The person's name, email and phone out of the form answers. Meta's own "Test lead" button fills every field with "<test lead: dummy data for ...>":
+ * such a lead is named "Meta test lead" (so nobody calls it) and its dummy email and phone are not kept.
+ */
+export function extractContact(answers: LeadAnswer[]): Contact {
+  const first = firstValue(answers, FIRST_NAME)
+  const last = firstValue(answers, LAST_NAME)
+  let full = firstValue(answers, FULL_NAME) ?? ([first, last].filter(Boolean).join(" ") || null)
+  if (full && MARK_TEST.test(full.trim())) full = "Meta test lead"
+  const keep = (v: string | null) => (v && MARK_TEST.test(v.trim()) ? null : v)
+  return {
+    fullName: clean(full, 200),
+    email: normalizeEmail(keep(firstValue(answers, EMAIL_FIELDS))),
+    phone: normalizePhone(keep(firstValue(answers, PHONE_FIELDS))),
+    country: clean(keep(firstValue(answers, COUNTRY_FIELDS)), 100),
+    city: clean(keep(firstValue(answers, CITY_FIELDS)), 100),
+  }
 }
 
 export function mapGraphLead(g: GraphLead): MappedLead {
@@ -79,16 +115,14 @@ export function mapGraphLead(g: GraphLead): MappedLead {
       values: (Array.isArray(f?.values) ? f.values : []).map(v => clean(String(v ?? ""), 2000)).filter((x): x is string => !!x),
     }))
     .filter(a => a.name)
-  const first = firstValue(answers, ["first_name"])
-  const last = firstValue(answers, ["last_name"])
-  const full = firstValue(answers, ["full_name", "name"]) ?? ([first, last].filter(Boolean).join(" ") || null)
+  const c = extractContact(answers)
   return {
     leadgenId: String(g.id),
-    fullName: clean(full, 200),
-    email: normalizeEmail(firstValue(answers, ["email", "work_email"])),
-    phone: normalizePhone(firstValue(answers, ["phone_number", "phone", "work_phone_number"])),
-    country: clean(firstValue(answers, ["country"]), 100),
-    city: clean(firstValue(answers, ["city"]), 100),
+    fullName: c.fullName,
+    email: c.email,
+    phone: c.phone,
+    country: c.country,
+    city: c.city,
     answers,
     adId: clean(g.ad_id, 40), adName: clean(g.ad_name, 300),
     adsetId: clean(g.adset_id, 40), adsetName: clean(g.adset_name, 300),

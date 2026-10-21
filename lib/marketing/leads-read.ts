@@ -34,16 +34,16 @@ export interface LeadRow {
 
 export interface LeadEventRow { id: number; kind: string; actor: string; data: Record<string, unknown>; created_at: string }
 
-const COLS = "id, team_id, leadgen_id, full_name, email, phone, country, city, answers, campaign_name, adset_name, ad_name, form_id, platform, status, existing_client, meta_created_time, received_at, claimed_by, claimed_by_label, claimed_at, callback_at, not_in_target_reason, qualification"
+export const LEAD_COLS = "id, team_id, leadgen_id, full_name, email, phone, country, city, answers, campaign_name, adset_name, ad_name, form_id, platform, status, existing_client, meta_created_time, received_at, claimed_by, claimed_by_label, claimed_at, callback_at, not_in_target_reason, qualification"
 
 export async function listTeamLeads(db: Db, teamId: string, limit = 200): Promise<LeadRow[]> {
-  const { data } = await db.from("marketing_leads").select(COLS).eq("team_id", teamId).order("received_at", { ascending: false }).limit(limit)
+  const { data } = await db.from("marketing_leads").select(LEAD_COLS).eq("team_id", teamId).order("received_at", { ascending: false }).limit(limit)
   return (data ?? []) as LeadRow[]
 }
 
 export async function getTeamLead(db: Db, teamId: string, id: string): Promise<LeadRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null
-  const { data } = await db.from("marketing_leads").select(COLS).eq("team_id", teamId).eq("id", id).maybeSingle()
+  const { data } = await db.from("marketing_leads").select(LEAD_COLS).eq("team_id", teamId).eq("id", id).maybeSingle()
   return (data ?? null) as LeadRow | null
 }
 
@@ -54,6 +54,6 @@ export async function leadTimeline(db: Db, leadId: string): Promise<LeadEventRow
 
 /** Antonio's master list: every team's leads, plus those not assigned to a team yet. Admin pages only. */
 export async function listAllLeads(db: Db, limit = 300): Promise<LeadRow[]> {
-  const { data } = await db.from("marketing_leads").select(COLS).order("received_at", { ascending: false }).limit(limit)
+  const { data } = await db.from("marketing_leads").select(LEAD_COLS).order("received_at", { ascending: false }).limit(limit)
   return (data ?? []) as LeadRow[]
 }
