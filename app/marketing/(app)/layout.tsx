@@ -3,6 +3,7 @@ import { modulesFor } from '@/lib/marketing/workspace'
 import { roleLabel } from '@/lib/marketing/permission-labels'
 import { SignOutButton } from './sign-out-button'
 import { WorkspaceNav } from './workspace-nav'
+import { ExitViewButton } from './exit-view-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,6 +16,13 @@ export default async function MarketingAppLayout({ children }: { children: React
   if (g.ok === false) return <>{children}</>
   const { ctx } = g
   return (
+    <div>
+      {ctx.viewAs && (
+        <div className="flex items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900" role="status">
+          <span>Viewing as <b>{ctx.viewAs.label}</b>. You are Antonio: nothing is blocked, and what you do is recorded under your own email.</span>
+          <ExitViewButton />
+        </div>
+      )}
     <div className="flex min-h-screen">
       <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col gap-4 border-r bg-white p-4">
         <div>
@@ -29,6 +37,7 @@ export default async function MarketingAppLayout({ children }: { children: React
         </div>
       </aside>
       <div className="min-w-0 flex-1">{children}</div>
+    </div>
     </div>
   )
 }
