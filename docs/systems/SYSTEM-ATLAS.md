@@ -107,7 +107,7 @@ _Regenerated 2026-10-21 by directory scan._
 - Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
 - API route groups (98)
 - Code modules (84): `accounts` `ai-agent` `archive` `audit` `auth` `billing` `bofa-intake` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `closure` `code-tasks` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `embed` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `forms-hub` `harbor-compliance` `hooks` `inbox` `internal` `itin` `jobs` `leads` `lease` `marketing` `mcp` `media` `members` `messaging` `nav` `new-calendar` `notes` `notifications` `oa` `offers` `open-services` `operations` `partners` `payments` `pdf` `per-record-activity` `portal` `portal-chats` `public-forms` `push` `research` `schemas` `security` `services` `ss4` `storage` `storage-app` `supabase` `system-health` `talk` `tasks` `tax` `td-communication` `team` `theme` `todo-board` `types` `ui` `utils` `windows`
-- Database tables: 287 _(ground truth: `lib/database.types.ts`)_
+- Database tables: 288 _(ground truth: `lib/database.types.ts`)_
 <!-- /GENERATED:surface -->
 
 ## Seed priority — write these deep docs first
@@ -204,7 +204,7 @@ _Regenerated 2026-10-21. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-18)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-16)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-16)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-19)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-21)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-20)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-16)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
