@@ -188,7 +188,7 @@ _Regenerated 2026-10-21. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-10-20)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-19)_
-- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-19)_
+- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-21)_
 - [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-10-20)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-10-19)_
@@ -196,7 +196,7 @@ _Regenerated 2026-10-21. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-19)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-21)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-21)_
-- [formation.md](formation.md) — Company Formation _(verified 2026-10-20)_
+- [formation.md](formation.md) — Company Formation _(verified 2026-10-21)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-20)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-18)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-21)_
