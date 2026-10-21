@@ -59,17 +59,16 @@ export interface BankingPackageResult {
   heldPersonal: string[]
 }
 
-/** The person's ID papers (kept in People only), by the wizard field name at the start of the stored file name ({field}_{unique}_{filename}). */
-const ID_NAME = /^(passport|member_passport|owner_passport|selfie|id[_-]|photo[_-]?id|identity|proof[_-]of[_-]identity|national[_-]?id|driver|drivers[_-]|licen[sc]e|visa|residence[_-]?permit|ssn|itin)/i
+import { isIdFieldName } from "@/lib/crm-store/id-papers"
 
 /** The sub-folder inside the company's "4. Banking" where a bank application's papers are filed. */
 export const BANK_APPLICATIONS_FOLDER = "Bank applications"
 /** the template slug that LOCKS that folder (like the other fixed folders: no rename, move or delete by hand) */
 export const BANK_APPLICATIONS_LOCK = "bank_applications"
 
+/** The person's ID papers (kept in People only), by the wizard field name at the start of the stored file name ({field}_{unique}_{filename}). */
 export function isIdUpload(path: string): boolean {
-  const name = path.split("/").pop() || ""
-  return ID_NAME.test(name)
+  return isIdFieldName(path.split("/").pop() || "")
 }
 
 /** A passport specifically (the one ID paper we do not save again when the person already has one on file). */
