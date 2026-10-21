@@ -15,7 +15,6 @@
 import { cleanNewFileName, folderNameProblem } from "./names"
 import { NO_STORAGE_REASON_SENTENCE } from "./no-storage"
 import { documentTypeFor, proposeFaxPlace, type FaxPurpose, type PlaceProposal, isFaxPurpose, type SaveDocumentType } from "./save-where"
-import { personalKind, type PersonalKind } from "@/lib/fax/save-sent-upload"
 
 export interface SaveChoiceSave {
   mode: "save"
@@ -56,9 +55,6 @@ export function parseSaveChoice(raw: unknown): { ok: boolean; choice: SaveChoice
   return { ok: true, choice: { mode: "save", purpose: r.purpose, ownerId: r.ownerId, folderId: r.folderId, newFolderName: nf, fileName: r.fileName, proposalOf } }
 }
 
-export const IDENTITY_PAPER_SENTENCE =
-  "This looks like a person's own paper (passport, ID, visa, ITIN, proof of address …). It can't be saved in a company's or a person's storage from the Fax tool. Choose Business or My files, or use \"Don't save, just send\"."
-
 export interface DestinationFacts {
   owner: { id: string; kind: string; studyOnly: boolean; accountId: string | null; contactId: string | null } | null
   folder: { id: string; ownerId: string; kind: string; trashed: boolean } | null
@@ -69,14 +65,12 @@ export interface DestinationFacts {
   accessOk: boolean
   newFolderName: string | null
   fileName: string
-  /** the uploaded file's own name: renaming a passport to "doc.pdf" must not get past the personal-paper check */
-  uploadName?: string
 }
 
 const INTERNAL = new Set(["business", "private"])
 export const isInternalKind = (k: string | null | undefined) => !!k && INTERNAL.has(k)
 
-export type Decision = { ok: boolean; error?: string; /** keep the CRM row off the company's Documents tab */ unlinked?: boolean }
+export type Decision = { ok: boolean; error?: string }
 
 /** Pure: may the file go there? ONE plain sentence when not. */
 export function decideDestination(f: DestinationFacts): Decision {
@@ -100,11 +94,8 @@ export function decideDestination(f: DestinationFacts): Decision {
     return no("Open one of the folders first. Files go inside a folder, not at the top.")
   }
   if (!f.fileName.trim()) return no("Enter a file name.")
-  const client = !isInternalKind(f.owner.kind)
-  const kinds = [personalKind(f.fileName), f.uploadName ? personalKind(f.uploadName) : null]
-  const pk: PersonalKind = kinds.includes("identity") ? "identity" : kinds.includes("form") ? "form" : null
-  if (client && pk === "identity") return no(IDENTITY_PAPER_SENTENCE)
-  return { ok: true, unlinked: client && pk === "form" }
+  // No kind of document is refused or treated differently (Antonio 2026-10-21: "no restrictions for any kind of documents").
+  return { ok: true }
 }
 
 export interface OwnerRow { id: string; kind: string; study_only: boolean; account_id: string | null; contact_id: string | null; service_delivery_id: string | null }
@@ -146,7 +137,7 @@ export async function validateDestination(choice: SaveChoiceSave, deps: Destinat
   const decision = decideDestination({
     owner: owner ? { id: owner.id, kind: owner.kind, studyOnly: owner.study_only, accountId: owner.account_id, contactId: owner.contact_id } : null,
     folder: folder ? { id: folder.id, ownerId: folder.owner_id, kind: folder.kind, trashed: !!folder.trashed_at } : null,
-    companyState, noStorageSentence, accessOk, newFolderName: choice.newFolderName, fileName: finalName, uploadName,
+    companyState, noStorageSentence, accessOk, newFolderName: choice.newFolderName, fileName: finalName,
   })
   return { decision, owner, finalName }
 }
@@ -213,7 +204,7 @@ export function saveCallerKey(ownerId: string, folderId: string, name: string, s
 
 /** Files the bytes at the (already validated) place. Throws on any failure — the caller reports it; the fax has already gone out. */
 export async function saveToDestination(
-  choice: SaveChoiceSave, owner: OwnerRow, input: { bytes: Buffer; mimeType: string | null; sha256: string; actor: string | null; unlinked: boolean; finalName: string; periodYear?: number | null },
+  choice: SaveChoiceSave, owner: OwnerRow, input: { bytes: Buffer; mimeType: string | null; sha256: string; actor: string | null; finalName: string; periodYear?: number | null },
   deps: FileDeps,
 ): Promise<FiledCopy> {
   const internal = isInternalKind(owner.kind)
@@ -229,11 +220,10 @@ export async function saveToDestination(
   })
   const path = await deps.pathOf(folderId, owner.id)
   // The firm's own areas (Business, My files) keep the file in the storage only: no CRM row (nobody outside the firm sees it).
-  // A client's storage also lists it in the CRM documents list, hidden from the client — except a person's own form (SS-4, 1040 …),
-  // which is listed against NO company.
+  // A client's storage also lists it in the CRM documents list, hidden from the client (every kind of document, no exception).
   if (internal) return { fileId: w.fileId, documentRowId: null, write: w.status, name: w.name, ownerId: owner.id, folderId, accountId: null, documentType: docType, path }
   try {
-    const links = input.unlinked ? { account: null, contact: null } : await deps.rowLinks(owner)
+    const links = await deps.rowLinks(owner)
     const label = docType ? await deps.documentTypeLabel(docType) : null
     const row = await deps.upsertRow(w.fileId, {
       file_name: w.name, mime_type: input.mimeType, file_size: input.bytes.length, account_id: links.account, contact_id: links.contact,

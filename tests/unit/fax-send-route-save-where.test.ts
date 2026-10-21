@@ -1,7 +1,7 @@
 /**
  * The REAL /api/tools/fax/send route with the "Where should this be saved?" choice (dev job c43a8b2e):
  * the place is checked BEFORE the fax goes out; the fax goes out whatever the choice; "Don't save" keeps today's internal copy;
- * a stored document (the one-click EIN fax) is never copied again; a personal paper is never listed on a company's Documents tab.
+ * a stored document (the one-click EIN fax) is never copied again; no kind of document is treated differently (Antonio 2026-10-21).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
@@ -183,7 +183,7 @@ describe("/api/tools/fax/send — Don't save, just send", () => {
     const r = await send()
     expect(r.body.success).toBe(true); expect(st.saves).toEqual([]); expect(st.bucketUploads).toHaveLength(1)
   })
-  it("an SS-4 / 1040 keeps its internal copy but it is attached to NO company; a company paper's copy neither (a forged account_id is ignored)", async () => {
+  it("the internal copy is attached to NO company, whatever the file is (a forged account_id is ignored)", async () => {
     await send({ save_choice: { mode: 'dont_save' }, file_name: 'SS-4_Rossi_Signed_for_IRS.pdf', account_id: 'acc-1' })
     expect(st.docInserts[0].account_id).toBeNull()
     st.docInserts.length = 0
@@ -191,12 +191,12 @@ describe("/api/tools/fax/send — Don't save, just send", () => {
     expect(st.docInserts[0].account_id).toBeNull()
     expect(st.actionLog[st.actionLog.length - 1].account_id).toBeNull()
   })
-  it("an identity paper gets NO internal copy at all (no row, no link), whatever was chosen", async () => {
+  it("an identity paper is kept in Fax History exactly like any other file (no exception)", async () => {
     const r = await send({ save_choice: { mode: 'dont_save' }, file_name: 'Passport_Rossi.pdf' })
-    expect(r.body.success).toBe(true); expect(r.body.no_copy_reason).toBe('personal_paper')
-    expect(st.bucketUploads).toEqual([]); expect(st.docInserts).toEqual([])
-    expect(st.actionLog[0].record_id).toBeNull()
-    expect((st.actionLog[0].details as Record<string, unknown>).no_copy_reason).toBe('personal_paper')
+    expect(r.body.success).toBe(true); expect(r.body.no_copy_reason).toBeNull()
+    expect(st.bucketUploads).toHaveLength(1); expect(st.docInserts).toHaveLength(1)
+    expect(st.docInserts[0].account_id).toBeNull()
+    expect((st.actionLog[0].details as Record<string, unknown>).no_copy_reason).toBeNull()
   })
 })
 
@@ -212,7 +212,7 @@ describe('/api/tools/fax/send — a place that is not allowed stops BEFORE the f
   it('a company left on Drive / closed (study-only) → the plain sentence', async () => { st.owners[OWNER] = { id: OWNER, kind: 'company', study_only: true, account_id: 'acc-1', contact_id: null, service_delivery_id: null }; await refused({ save_choice: saveChoice() }, 'NO-STORAGE-SENTENCE') })
   it('a company being moved', async () => { st.companyState = 'moving'; await refused({ save_choice: saveChoice() }, /being moved/) })
   it('a company mid-move with no live storage yet hears "moving", not the other sentence', async () => { st.companyState = 'moving'; st.owners[OWNER] = { id: OWNER, kind: 'company', study_only: true, account_id: 'acc-1', contact_id: null, service_delivery_id: null }; await refused({ save_choice: saveChoice() }, /being moved/) })
-  it('a person\'s identity paper into a company', async () => { await refused({ save_choice: saveChoice(), file_name: 'Passport.pdf' }, /person's own paper/); await refused({ save_choice: saveChoice({ fileName: 'doc' }), file_name: 'Passport.pdf' }, /person's own paper/) })
+  it('a person\'s identity paper into a company is NOT refused (no kind of document is restricted)', async () => { const r = await send({ save_choice: saveChoice(), file_name: 'Passport.pdf' }); expect(r.body.success).toBe(true); expect(st.sendCalls).toBe(1) })
   it('the top folder of a client', async () => { st.folders[FOLDER] = { id: FOLDER, owner_id: OWNER, kind: 'root', trashed_at: null }; await refused({ save_choice: saveChoice() }, /Open one of the folders first/) })
   it('not staff of the storage → 403 before the send', async () => {
     st.user = { id: 'x', email: 'p@x', app_metadata: { role: 'partner' } }
@@ -257,11 +257,11 @@ describe('/api/tools/fax/send — when the send or the filing goes wrong', () =>
   })
 })
 
-describe("/api/tools/fax/send — a personal form (SS-4) saved on purpose", () => {
-  it('is filed where staff chose but listed against NO company', async () => {
+describe("/api/tools/fax/send — an SS-4 saved on purpose", () => {
+  it('is filed where staff chose and listed against the company like every other file', async () => {
     const r = await send({ save_choice: saveChoice({ purpose: 'irs_ein_request', fileName: 'SS-4 Acme' }), file_name: 'SS-4 Acme.pdf' })
     expect(r.body.success).toBe(true)
-    expect(st.rows[0]).toMatchObject({ account_id: null, contact_id: null })
+    expect(st.rows[0].account_id).not.toBeNull()
   })
 })
 
@@ -414,11 +414,11 @@ describe('/api/tools/fax/send — copies and sources', () => {
     expect(st.bucketUploads).toHaveLength(1); expect(st.signedUrls).toBe(0)
     expect(String(st.docInserts[0].drive_link)).toMatch(/^onboarding-uploads\/fax-attachments\//)
   })
-  it('an SS-4 saved on purpose whose filing FAILS gets no internal copy either', async () => {
+  it('an SS-4 saved on purpose whose filing FAILS still gets the internal copy, so it stays in Fax History', async () => {
     st.saveThrows = true
     const r = await send({ save_choice: saveChoice({ purpose: 'irs_ein_request', fileName: 'SS-4 Acme' }), file_name: 'SS-4_Acme_Signed_for_IRS.pdf' })
-    expect(r.body).toMatchObject({ save_failed: true, no_copy_reason: 'personal_paper' })
-    expect(st.bucketUploads).toEqual([]); expect(st.docInserts).toEqual([])
+    expect(r.body).toMatchObject({ save_failed: true, no_copy_reason: null })
+    expect(st.bucketUploads).toHaveLength(1); expect(st.docInserts).toHaveLength(1)
   })
   it('"Fax this file" (already_stored): sent from the bytes, NOTHING is copied (no bucket row of a possibly staff-only file), the history says so', async () => {
     const r = await send({ already_stored: true, file_name: 'Staff only.pdf', save_choice: saveChoice() })

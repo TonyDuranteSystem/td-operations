@@ -24,7 +24,7 @@
  * The chosen place is CHECKED BEFORE the fax goes out (staff-only, the folder belongs to that owner, not in the trash, the company
  * has live storage and is not being moved …): a place that is not allowed stops the send with a 422 and the plain sentence. Only after
  * a successful send is the file filed there; a filing failure never fails the fax (ONE system error, the old bucket copy is kept).
- * No save_choice (an older caller) = "Don't save": the internal bucket copy only (not for an identity paper or My files).
+ * No save_choice (an older caller) = "Don't save": the internal bucket copy only (not for My files).
  *
  * ONE fax per Send: a CLAIM row is written to the activity log BEFORE Faxage is called (lib/fax/send-claim.ts); it becomes the history
  * row the moment Faxage accepts, and is completed after the filing. Every lookup / write is checked: a database error before the send
@@ -53,7 +53,6 @@ import { sendFax, isValidFaxNo, normalizeFaxNo, DEFAULT_IRS_FAX_NUMBER, stripBas
 import type { User } from '@supabase/supabase-js'
 import { isStoreStaffUser } from '@/lib/crm-store/access'
 import { parseSaveChoice, validateDestination, verifyProposalStillHolds, realResolveDeps, saveToDestination, realDestinationDeps, realFileDeps, type FiledCopy, type SaveChoiceSave } from '@/lib/crm-store/save-destination'
-import { personalKind } from '@/lib/fax/save-sent-upload'
 import { claimSend, finishClaim, abandonClaim, realClaimDeps, HISTORY_NOT_SAVED_SENTENCE } from '@/lib/fax/send-claim'
 import { isFaxStagingPath, FAX_STAGING_BUCKET, faxSizeProblem } from '@/lib/fax/staged-upload'
 
@@ -372,8 +371,8 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
   // Keep the sent UPLOAD. Nothing below can fail the fax.
   //  1. "Save here": file it at the place staff chose (storage writer, type IRS Fax for an IRS fax, hidden from the client).
   //  2. Otherwise ("Don't save", no choice, or filing failed): the internal bucket copy, so Fax History's "View Document" opens it —
-  //     EXCEPT for a person's identity paper, for an SS-4 / 1040 that staff chose to save, and for anything staff put in a private
-  //     "My files" (they must not become readable by every staff login: no copy, no link, and Fax History says so). A place in Business
+  //     EXCEPT for anything staff put in a private "My files" (it must not become readable by every staff login: no copy, no link,
+  //     and Fax History says so). No kind of document is treated differently (Antonio 2026-10-21). A place in Business
   //     has no CRM row: it gets the bucket copy for the link (Business is open to all staff anyway). The copy stores the PATH only —
   //     no long-lived signed link.
   let uploadedDocId: string | null = null
@@ -385,7 +384,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
         const bytes0 = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
         filed = await saveToDestination(toSave.choice, toSave.validated.owner!, {
           bytes: bytes0, mimeType: mimeFromName(toSave.validated.finalName), sha256: hash,
-          actor: user?.id ?? null, unlinked: !!toSave.validated.decision.unlinked, finalName: toSave.validated.finalName,
+          actor: user?.id ?? null, finalName: toSave.validated.finalName,
           // no period year: the storage takes it from the year folder the file sits in (a file moved by hand never contradicts its folder)
           periodYear: null,
         }, realFileDeps())
@@ -400,10 +399,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
       }
     }
   }
-  const kinds = [personalKind(fileName), toSave ? personalKind(toSave.validated.finalName) : null]
-  const identityPaper = kinds.includes('identity')
-  const formPaperSaved = !!toSave && kinds.includes('form')
-  const noCopyReason: 'personal_paper' | 'my_files' | null = identityPaper || formPaperSaved ? 'personal_paper' : toSave && ownerFromChoice?.kind === 'private' ? 'my_files' : null
+  const noCopyReason: 'my_files' | null = toSave && ownerFromChoice?.kind === 'private' ? 'my_files' : null
   if (!stored && fileBase64 && !uploadedDocId && !noCopyReason) {
     try {
       const bytes = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
@@ -424,8 +420,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
             mime_type: mime,
             file_size: bytes.length,
             status: 'classified',
-            // never attached to a company (the old company-less copy): a client-supplied company id is not trusted, and a personal
-            // paper must never be listed on a company's Documents tab
+            // never attached to a company (the old company-less copy): a client-supplied company id is not trusted
             account_id: null,
             portal_visible: false,
             notify_client: false,

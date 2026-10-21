@@ -117,12 +117,14 @@ describe("the save-where chain (the t60 checks, in memory)", () => {
       expect((await run(m, purpose, co, "Acme 2025 Tax Return", "x.pdf")).proposal.state).toBe("choose")
     }
   })
-  it("a passport is refused for a company; renaming it does not help; an SS-4 is filed but listed on NO company", async () => {
+  it("no kind of document is restricted: a passport and an SS-4 are both filed for a company and listed against it (hidden from the client)", async () => {
     const m = memory(); m.company("acme")
     const co = { kind: "company" as const, accountId: "acme", name: "Acme" }
-    expect((await run(m, "irs_ein_request", co, "EIN", "Passport_Rossi.pdf")).out).toMatchObject({ ok: false })
+    expect((await run(m, "irs_ein_request", co, "EIN", "Passport_Rossi.pdf")).out).toMatchObject({ ok: true })
     const ss4 = await run(m, "irs_ein_request", co, "EIN request", "SS-4_Acme_Signed_for_IRS.pdf")
-    expect(ss4.out!.ok).toBe(true); expect(m.rows[0]).toMatchObject({ account_id: null, contact_id: null })
+    expect(ss4.out!.ok).toBe(true)
+    expect(m.rows).toHaveLength(2)
+    expect(m.rows[1]).toMatchObject({ account_id: "acme", portal_visible: false })
   })
   it("refusals: no storage / mid-move (own sentence), wrong owner, trashed folder, study-only", async () => {
     const m = memory(); const c = m.company("acme")

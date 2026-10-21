@@ -42,7 +42,7 @@ describe("parseSaveChoice — proposalOf", () => {
 })
 
 describe("decideDestination — a place that is not allowed is refused with ONE plain sentence", () => {
-  it("a good place is allowed", () => { expect(decideDestination(okFacts())).toEqual({ ok: true, unlinked: false }) })
+  it("a good place is allowed", () => { expect(decideDestination(okFacts())).toEqual({ ok: true }) })
   it("a place that does not exist / that staff may not open", () => {
     expect(decideDestination(okFacts({ owner: null })).ok).toBe(false)
     expect(decideDestination(okFacts({ accessOk: false })).ok).toBe(false)
@@ -81,18 +81,14 @@ describe("decideDestination — a place that is not allowed is refused with ONE 
     expect(decideDestination(okFacts({ folder: top, newFolderName: "Fax" })).error).toMatch(/top of a client's storage/)
     expect(decideDestination(okFacts({ folder: { ...top, kind: "tax" }, newFolderName: "2025" })).ok).toBe(true)
   })
-  it("a person's identity paper never goes into a company's or person's storage; Business and My files take it", () => {
-    expect(decideDestination(okFacts({ fileName: "Passport.pdf" })).error).toMatch(/person's own paper/)
-    expect(decideDestination(okFacts({ owner: { id: OWNER, kind: "person", studyOnly: false, accountId: null, contactId: "c" }, companyState: null, fileName: "W-7.pdf" })).ok).toBe(false)
-    expect(decideDestination(okFacts({ owner: { id: OWNER, kind: "business", studyOnly: false, accountId: null, contactId: null }, companyState: null, fileName: "Passport.pdf" })).ok).toBe(true)
-  })
-  it("renaming a passport to something harmless does not get past the check (the uploaded name counts too)", () => {
-    expect(decideDestination(okFacts({ fileName: "doc.pdf", uploadName: "Passport.pdf" })).ok).toBe(false)
-    expect(decideDestination(okFacts({ fileName: "doc.pdf", uploadName: "SS-4.pdf" }))).toEqual({ ok: true, unlinked: true })
-  })
-  it("an SS-4 / 1040 is allowed in a company's storage but kept OFF the company's Documents tab (unlinked)", () => {
-    expect(decideDestination(okFacts({ fileName: "SS-4 Acme.pdf" }))).toEqual({ ok: true, unlinked: true })
-    expect(decideDestination(okFacts({ owner: { id: OWNER, kind: "business", studyOnly: false, accountId: null, contactId: null }, companyState: null, fileName: "SS-4.pdf" }))).toEqual({ ok: true, unlinked: false })
+  it("NO kind of document is refused or treated differently, in any place (Antonio 2026-10-21)", () => {
+    const person = { id: OWNER, kind: "person", studyOnly: false, accountId: null, contactId: "c" }
+    const business = { id: OWNER, kind: "business", studyOnly: false, accountId: null, contactId: null }
+    for (const name of ["Passport.pdf", "W-7.pdf", "SS-4 Acme.pdf", "Form 1040-NR.pdf", "Proof of address.pdf", "doc.pdf"]) {
+      expect(decideDestination(okFacts({ fileName: name })), name).toEqual({ ok: true })
+      expect(decideDestination(okFacts({ owner: person, companyState: null, fileName: name })), name).toEqual({ ok: true })
+      expect(decideDestination(okFacts({ owner: business, companyState: null, fileName: name })), name).toEqual({ ok: true })
+    }
   })
 })
 
@@ -154,7 +150,7 @@ function fileDeps(log: string[] = []) {
   return { d, rows, files, log }
 }
 const company: OwnerRow = { id: OWNER, kind: "company", study_only: false, account_id: "acc-1", contact_id: null, service_delivery_id: null }
-const input = { bytes: Buffer.from("%PDF"), mimeType: "application/pdf", sha256: "h1", actor: null, unlinked: false, finalName: "2025 Tax Return.pdf" }
+const input = { bytes: Buffer.from("%PDF"), mimeType: "application/pdf", sha256: "h1", actor: null, finalName: "2025 Tax Return.pdf" }
 
 describe("saveToDestination — files through the storage writer", () => {
   it("a company: type IRS Fax, hidden from the client, listed against the company", async () => {
@@ -185,10 +181,10 @@ describe("saveToDestination — files through the storage writer", () => {
     expect(f.log[1]).toBe(`save:null:${U(77)}:2025 Tax Return.pdf`)
     expect(r.documentRowId).toBeNull(); expect(f.rows).toHaveLength(0)
   })
-  it("an SS-4 / 1040: listed against NO company", async () => {
+  it("an SS-4 / 1040 / identity paper is listed against the company like every other file (hidden from the client)", async () => {
     const f = fileDeps()
-    await saveToDestination(choice, company, { ...input, unlinked: true }, f.d)
-    expect(f.rows[0]).toMatchObject({ account_id: null, contact_id: null })
+    await saveToDestination(choice, company, { ...input, finalName: "SS-4 Acme.pdf" }, f.d)
+    expect(f.rows[0]).toMatchObject({ account_id: "acc-1", portal_visible: false })
   })
   it("saved but not listed → the new file is trashed again and the error is raised", async () => {
     const f = fileDeps(); f.d.upsertRow = async () => { throw new Error("list failed") }
