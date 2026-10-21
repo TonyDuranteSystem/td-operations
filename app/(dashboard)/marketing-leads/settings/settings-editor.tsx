@@ -39,15 +39,22 @@ export function SettingsEditor(p: Props) {
   }
 
   const btn = "rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50"
-  const list = <T extends string | OptionRow>(items: T[], set: (v: T[]) => void, label: string, placeholder: string, blank: T) => (
+  const row = (label: string, i: number, value: string, placeholder: string, onText: (v: string) => void, onRemove: () => void) => (
+    <div key={i} className="flex gap-2">
+      <input aria-label={`${label} ${i + 1}`} className="min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm" value={value} placeholder={placeholder} maxLength={80} onChange={e => onText(e.target.value)} />
+      <button className={btn} aria-label={`Remove ${label} ${i + 1}`} onClick={onRemove}>Remove</button>
+    </div>
+  )
+  const checklistList = (
     <div className="space-y-2">
-      {items.map((it, i) => (
-        <div key={i} className="flex gap-2">
-          <input aria-label={`${label} ${i + 1}`} className="min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm" value={typeof it === "string" ? it : it.label} placeholder={placeholder} maxLength={80} onChange={e => set(items.map((x, j) => (j !== i ? x : (typeof x === "string" ? e.target.value : { ...x, label: e.target.value }) as T)))} />
-          <button className={btn} aria-label={`Remove ${label} ${i + 1}`} onClick={() => set(items.filter((_, j) => j !== i))}>Remove</button>
-        </div>
-      ))}
-      <button className={btn} onClick={() => set([...items, blank])}>Add a line</button>
+      {checklist.map((it, i) => row("Checklist line", i, it, "For example: Has or plans a business", v => setChecklist(checklist.map((x, j) => (j === i ? v : x))), () => setChecklist(checklist.filter((_, j) => j !== i))))}
+      <button className={btn} onClick={() => setChecklist([...checklist, ""])}>Add a line</button>
+    </div>
+  )
+  const reasonsList = (
+    <div className="space-y-2">
+      {reasons.map((r, i) => row("Reason", i, r.label, "For example: Wrong profile", v => setReasons(reasons.map((x, j) => (j === i ? { key: x.key, label: v } : x))), () => setReasons(reasons.filter((_, j) => j !== i))))}
+      <button className={btn} onClick={() => setReasons([...reasons, { key: null, label: "" }])}>Add a line</button>
     </div>
   )
 
@@ -59,14 +66,14 @@ export function SettingsEditor(p: Props) {
       <section className="rounded-xl border bg-white p-4">
         <h2 className="text-sm font-semibold text-slate-600">The &quot;Good&quot; checklist</h2>
         <p className="mb-3 text-sm text-slate-500">What the setter taps on the call before marking a lead Good. Write the questions you want answered. Today it is empty, so the setter sees no ticks.</p>
-        {list<string>(checklist, setChecklist, "Checklist line", "For example: Has or plans a business", "")}
+        {checklistList}
         <button className={`${btn} mt-3 bg-slate-900 text-white`} disabled={busy === "qualification_checklist"} onClick={() => save("qualification_checklist", cleanChecklist(checklist), "Checklist saved. Setters see it on their next lead.")}>Save the checklist</button>
       </section>
 
       <section className="rounded-xl border bg-white p-4">
         <h2 className="text-sm font-semibold text-slate-600">Reasons for &quot;Not in target&quot;</h2>
         <p className="mb-3 text-sm text-slate-500">The setter must pick one when a lead is not a fit. Leads already marked keep their reason when you rename or add lines.</p>
-        {list<OptionRow>(reasons, setReasons, "Reason", "For example: Wrong profile", { key: null, label: "" })}
+        {reasonsList}
         <button className={`${btn} mt-3 bg-slate-900 text-white`} disabled={busy === "not_in_target_reasons"} onClick={() => {
           const built = buildOptions(p.reasons, reasons)
           if (!built) { setError("Keep at least one reason."); return }
