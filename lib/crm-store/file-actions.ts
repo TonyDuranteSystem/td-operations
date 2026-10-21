@@ -3,7 +3,8 @@
  * today (rename, move to another folder, delete), done on the store and kept in step with the CRM documents
  * list the portal reads:
  *   - rename  → the file's name + its CRM row's file_name (today: Drive rename + row rename)
- *   - move    → another folder of the SAME owner; the row's category follows the folder (today: Drive move +
+ *   - move    → another folder of the SAME owner (a person's file may also go to another person of the same company, or
+ *               — never an ID paper — into one of the person's companies: move-to-company.ts); the row's category follows the folder (today: Drive move +
  *               category follows unless kept); a personal document never leaves a person's storage and a
  *               company document never goes into "2. Contacts"
  *   - delete  → the store TRASH (recoverable, legal holds apply) + the CRM row removed so the portal stops
@@ -54,6 +55,11 @@ export async function renameStoreFile(fileId: string, newName: string, actorId: 
   return { name }
 }
 
+async function ownerKindOfFolder(folderId: string): Promise<string | null> {
+  const { data } = await db().from("store_folders").select("store_owners!inner(kind)").eq("id", folderId).maybeSingle()
+  return (data?.store_owners?.kind as string | undefined) ?? null
+}
+
 export async function moveStoreFile(fileId: string, toFolderId: string, actorId: string | null): Promise<{ folderName: string }> {
   const f = await liveFile(fileId)
   const { data: to, error: tErr } = await db().from("store_folders").select("id, owner_id, name, kind, trashed_at").eq("id", toFolderId).maybeSingle()
@@ -62,6 +68,12 @@ export async function moveStoreFile(fileId: string, toFolderId: string, actorId:
   if (to.owner_id !== f.owner_id) {
     // another storage: only person → person of the same company (a company document goes to a person's/company's storage through "Change type")
     if (f.store_owners.kind !== "person") throw new Error("A file can only be moved within the same company's storage. To give a personal document to a person, use its type (Change type…).")
+    // a person's file may also go into one of the person's COMPANIES (never an ID paper): the move-to-company rules
+    if (["company", "formation"].includes((await ownerKindOfFolder(toFolderId)) ?? "")) {
+      const { moveFileToCompany } = await import("./move-to-company")
+      const r = await moveFileToCompany(fileId, toFolderId, actorId)
+      return { folderName: `${r.company} › ${r.folderName}` }
+    }
     const { moveFileToOtherPerson } = await import("./change-person")
     const r = await moveFileToOtherPerson(fileId, toFolderId, actorId)
     return { folderName: `${r.person} › ${r.folderName}` }
