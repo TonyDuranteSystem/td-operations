@@ -15,10 +15,12 @@ interface Props {
   isOwner: boolean
   checklist: string[]
   reasons: Option[]
+  /** after Good / Not in target / Call back: go here (the next lead in the call list) instead of staying on this lead */
+  afterHref?: string
 }
 
 /** The buttons a setter or the owner uses on one lead. Every server answer (including the refusals) is shown as the server wrote it. */
-export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, checklist, reasons }: Props) {
+export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, checklist, reasons, afterHref }: Props) {
   const router = useRouter()
   const [mode, setMode] = useState<Mode>(null)
   const [busy, setBusy] = useState(false)
@@ -41,7 +43,8 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
         throw new Error(d.error || 'Could not save. Please try again.')
       }
       setMode(null); setNote(''); setTicked([]); setReason(''); setWhen('')
-      router.refresh()
+      if (afterHref !== undefined && ['good', 'not_in_target', 'call_back'].includes(String(body.action))) router.push(afterHref)
+      else router.refresh()
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : 'Could not save. Please try again.')
     } finally {
