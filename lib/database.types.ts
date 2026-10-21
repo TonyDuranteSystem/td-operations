@@ -9653,6 +9653,123 @@ export type Database = {
         }
         Relationships: []
       }
+      marketing_sales: {
+        Row: {
+          amount_cents: number
+          checkout_url: string | null
+          created_at: string
+          created_by: string
+          created_by_user_id: string | null
+          currency: string
+          id: string
+          kind: string
+          lead_id: string
+          link_expires_at: string | null
+          needs_attention: string | null
+          note: string | null
+          paid_amount_cents: number | null
+          paid_at: string | null
+          paid_out_at: string | null
+          paid_out_by: string | null
+          paid_out_reference: string | null
+          payee_account_id: string | null
+          refunded_at: string | null
+          refunded_cents: number
+          seller_cents: number | null
+          seller_pct: number | null
+          status: string
+          stripe_payment_intent: string | null
+          stripe_session_id: string | null
+          td_cents: number | null
+          td_pct: number | null
+          team_id: string
+          term_basis: string | null
+          term_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          amount_cents: number
+          checkout_url?: string | null
+          created_at?: string
+          created_by: string
+          created_by_user_id?: string | null
+          currency: string
+          id?: string
+          kind: string
+          lead_id: string
+          link_expires_at?: string | null
+          needs_attention?: string | null
+          note?: string | null
+          paid_amount_cents?: number | null
+          paid_at?: string | null
+          paid_out_at?: string | null
+          paid_out_by?: string | null
+          paid_out_reference?: string | null
+          payee_account_id?: string | null
+          refunded_at?: string | null
+          refunded_cents?: number
+          seller_cents?: number | null
+          seller_pct?: number | null
+          status?: string
+          stripe_payment_intent?: string | null
+          stripe_session_id?: string | null
+          td_cents?: number | null
+          td_pct?: number | null
+          team_id: string
+          term_basis?: string | null
+          term_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          amount_cents?: number
+          checkout_url?: string | null
+          created_at?: string
+          created_by?: string
+          created_by_user_id?: string | null
+          currency?: string
+          id?: string
+          kind?: string
+          lead_id?: string
+          link_expires_at?: string | null
+          needs_attention?: string | null
+          note?: string | null
+          paid_amount_cents?: number | null
+          paid_at?: string | null
+          paid_out_at?: string | null
+          paid_out_by?: string | null
+          paid_out_reference?: string | null
+          payee_account_id?: string | null
+          refunded_at?: string | null
+          refunded_cents?: number
+          seller_cents?: number | null
+          seller_pct?: number | null
+          status?: string
+          stripe_payment_intent?: string | null
+          stripe_session_id?: string | null
+          td_cents?: number | null
+          td_pct?: number | null
+          team_id?: string
+          term_basis?: string | null
+          term_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_sales_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "marketing_sales_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       marketing_settings: {
         Row: {
           id: string

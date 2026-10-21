@@ -17,7 +17,9 @@ import { runActivation } from "@/lib/operations/activate-service"
 import { resolveExternalValue } from "@/lib/catalog/framework"
 import { handleChargeReversal } from "@/lib/operations/credit-reversal"
 import { saveAutopayCard } from "@/lib/operations/card-autopay"
-import { isNonClientPayment, readPaymentKind } from "@/lib/payments/payment-kind"
+import { isNonClientPayment, readPaymentKind, PAYMENT_KIND_MARKETING } from "@/lib/payments/payment-kind"
+import { recordPaidSession, recordRefund, recordDispute } from "@/lib/marketing/sales-server"
+import type { Db } from "@/lib/marketing/meta-leads/ingest"
 
 type StripeClient = ReturnType<typeof StripeConstructor>
 
@@ -35,6 +37,7 @@ interface StripeSession {
   amount_total: number | null
   currency: string | null
   customer_details: { email: string | null; name: string | null } | null
+  payment_status?: string | null
   metadata: Record<string, string> | null
 }
 
@@ -189,6 +192,12 @@ async function handleCheckoutCompleted(session: StripeSession) {
   //     create a client payment row. The webhook_events row above is the record;
   //     the marketing ledger reads it. Absent tag = normal client payment, unchanged.
   if (isNonClientPayment(session.metadata)) {
+    // A marketing payment link: write the sale's ledger BEFORE anything else, and on redelivery too (it is idempotent). If it
+    // throws, answer 500 so Stripe sends the event again; the payment must never be only in the raw event log.
+    if (readPaymentKind(session.metadata) === PAYMENT_KIND_MARKETING) {
+      const r = await recordPaidSession(getSupabase() as unknown as Db, session)
+      console.warn(`[stripe-webhook] ${sessionId}: marketing sale ${r.recorded ? "recorded" : `not recorded (${r.reason})`}`)
+    }
     if (eventErr) {
       // A partial unique index (one row per Stripe session for tagged payments) makes a redelivery
       // fail with 23505: that means the record already exists, so acknowledge it (no second row,
@@ -633,6 +642,11 @@ export async function POST(req: NextRequest) {
         const chargeId = String(
           event.type === "charge.refunded" ? obj.id : (obj.charge ?? obj.id),
         )
+        // A marketing sale (found by its payment id, never by anything typed) gets its refund / dispute recorded; for every other
+        // payment these two calls find nothing and change nothing.
+        const pi = typeof obj.payment_intent === "string" ? obj.payment_intent : null
+        if (event.type === "charge.refunded") await recordRefund(getSupabase() as unknown as Db, pi, Number(obj.amount_refunded) || 0)
+        else await recordDispute(getSupabase() as unknown as Db, pi)
         await handleChargeReversal(chargeId, event.type)
         break
       }

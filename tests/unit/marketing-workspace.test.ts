@@ -31,7 +31,7 @@ describe("modulesFor", () => {
   })
   it("unbuilt screens are marked, built ones are links", () => {
     const m = Object.fromEntries(modulesFor(OWNER).map(x => [x.key, x.built]))
-    expect(m).toMatchObject({ today: true, leads: true, team: true, inbox: false, money: false })
+    expect(m).toMatchObject({ today: true, leads: true, team: true, inbox: false, money: true })
   })
 })
 

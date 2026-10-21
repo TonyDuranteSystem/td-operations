@@ -6,6 +6,7 @@ import { getMarketingSetting } from '@/lib/marketing/settings'
 import { getTeamLead, leadTimeline, listTeamLeads } from '@/lib/marketing/leads-read'
 import { leadDb } from '@/lib/marketing/meta-leads/service'
 import { clientFlagText, filterLeads, formatWhen, LEAD_SHOW_OPTIONS, parseLeadShow, stageLabel, type StageOption } from '@/lib/marketing/lead-view'
+import { loadPaymentLinkView } from '@/lib/marketing/sales-server'
 import { LeadPane } from '../_lead-pane'
 
 export const dynamic = 'force-dynamic'
@@ -36,6 +37,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
   const stage = stages.some(s => s.key === sp.stage) ? (sp.stage as string) : ''
   const leads = filterLeads(all, { show, stage }, g.ctx.user.id)
   const events = selected ? await leadTimeline(db, selected.id) : []
+  const paymentLink = selected && hasPermission(g.ctx.permissions, 'payment_links.create') ? { leadId: selected.id, ...(await loadPaymentLinkView(db, { teamId, userId: g.ctx.user.id }, selected.id)) } : undefined
   const href = (n: Partial<SP>) => {
     const q = new URLSearchParams()
     const m = { show: show !== 'all' ? show : '', stage, lead: sp.lead, ...n }
@@ -76,7 +78,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
         </section>
         <aside className="min-w-0" aria-label="Lead detail">
           {selected ? (
-            <LeadPane lead={selected} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} />
+            <LeadPane lead={selected} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} paymentLink={paymentLink} />
           ) : <div className="rounded-xl border border-dashed p-8 text-sm text-slate-500">Click a lead on the left to see what they answered, what the setter wrote, and everything that happened to it.</div>}
         </aside>
       </div>

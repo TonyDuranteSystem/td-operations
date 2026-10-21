@@ -78,6 +78,11 @@ export const MARKETING_SETTING_DEFS = {
       { key: "upsell", label: "Upsell" },
     ],
   },
+  /** The stage a lead moves to when a sale of each kind is paid. Keys are sale kinds; each value must be a pipeline stage (checked when used: a missing stage never blocks recording the payment). */
+  sale_kind_stages: {
+    schema: z.record(z.string().trim().min(1).max(40), z.string().trim().min(1).max(40)),
+    fallback: { strategic_call: "paid_call", upsell: "upsell_won" } as Record<string, string>,
+  },
   /** Currencies a payment link may use. Antonio's ruling: any amount; the currency list is a setting. */
   allowed_currencies: {
     schema: z.array(z.string().regex(/^[A-Z]{3}$/)).min(1).max(20),

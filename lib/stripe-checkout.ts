@@ -130,3 +130,38 @@ export async function createStripeCheckoutSession(params: {
     }
   }
 }
+
+/**
+ * A card payment link for a marketing sale (TD Marketing). Not an offer: the metadata carries `payment_kind: marketing_sale`, which the
+ * Stripe webhook uses to keep every client-sales effect (CRM lead conversion, portal tier, activation, invoices) out of it. The same
+ * metadata goes on the PaymentIntent so a refund (which only carries the payment) can still find the sale. The link lives 23 hours.
+ */
+export async function createMarketingCheckoutSession(params: {
+  amountCents: number
+  currency: string
+  productName: string
+  clientEmail?: string | null
+  metadata: Record<string, string>
+}): Promise<StripeCheckoutResult & { expiresAt?: Date }> {
+  const stripe = getStripe()
+  if (!stripe) return { success: false, error: "STRIPE_SECRET_KEY not set" }
+  const base = process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"
+  const expiresAtSec = Math.floor(Date.now() / 1000) + 23 * 3600
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      customer_email: params.clientEmail || undefined,
+      line_items: [{ price_data: { currency: params.currency.toLowerCase(), unit_amount: params.amountCents, product_data: { name: params.productName } }, quantity: 1 }],
+      metadata: params.metadata,
+      payment_intent_data: { metadata: params.metadata },
+      expires_at: expiresAtSec,
+      success_url: `${base}/offer/payment-received`,
+      cancel_url: `${base}/offer/payment-not-completed`,
+    })
+    return { success: true, sessionId: session.id, checkoutUrl: session.url || undefined, expiresAt: new Date(expiresAtSec * 1000) }
+  } catch (err) {
+    console.error("[stripe-checkout] marketing link failed:", err)
+    return { success: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
