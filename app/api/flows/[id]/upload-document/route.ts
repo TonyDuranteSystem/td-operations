@@ -272,6 +272,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           bytes: buffer,
           mimeType: fileMime,
           documentType: null,
+          // every ITIN document (a letter, a scan, a form) belongs in the person's ITIN folder, not Personal documents (Antonio 2026-10-21,
+          // Francesco Lussignoli / Jodi's letter); a person storage without an ITIN folder falls back to Personal documents inside the helper
+          folderKind: sd.service_type === 'ITIN' ? 'itin' : undefined,
           callerKey: `flow-upload:${serviceDeliveryId}:${flowStage ?? ''}:${storeNameKey(effectiveName)}`,
           viaAccountId,
           contactName,

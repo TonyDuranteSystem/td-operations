@@ -98,11 +98,13 @@ export async function POST(req: NextRequest) {
       }
       const dt = (documentType as string).toLowerCase()
       const storeType = dt.includes('passport') ? 'passport' : dt.includes('itin') ? 'itin_letter' : /\bein\b/.test(dt) ? 'ein_letter_irs' : null
+      // an ITIN document (a letter, a form …) belongs in the person's ITIN folder; a passport follows the normal rule (Personal documents)
+      const itinFolder: 'itin' | undefined = !dt.includes('passport') && dt.includes('itin') ? 'itin' : undefined
       const callerKey = `staff-contact-upload:${contactId}:${catInfo.num}:${createHash('sha256').update(buffer).digest('hex')}`
       const row = { document_type_name: documentType as string, category: catInfo.num, category_name: category as string, status: 'classified' }
       try {
         const routed = catInfo.num === 2
-          ? await saveDocumentForContact({ contactId, name: fileName, bytes: buffer, mimeType: fileMime, documentType: storeType, callerKey, accountId: linkedAccountId, viaAccountId: switchedViaAccountId ?? linkedAccountId, contactName: (contact.full_name as string | null) ?? null, portalVisible: true, row })
+          ? await saveDocumentForContact({ contactId, name: fileName, bytes: buffer, mimeType: fileMime, documentType: storeType, callerKey, accountId: linkedAccountId, viaAccountId: switchedViaAccountId ?? linkedAccountId, contactName: (contact.full_name as string | null) ?? null, portalVisible: true, row, folderKind: itinFolder })
           : linkedAccountId
             ? await saveDocumentForAccount({
                 accountId: linkedAccountId, name: fileName, bytes: buffer, mimeType: fileMime,
