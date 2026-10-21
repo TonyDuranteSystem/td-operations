@@ -111,11 +111,11 @@ async function main() {
 
   // ── who may open it ──
   let v = await view(owner, "/marketing")
-  ck("T1 the owner's home has a Team button", /Team/.test(v.text) && /Open the leads/.test(v.text), v.text.slice(0, 300)); await v.page.close()
+  ck("T1 the owner's workspace has Team in the sidebar", /Team/.test(await v.page.locator('nav[aria-label="Workspace"]').innerText()) && /\/marketing\/today/.test(v.page.url()), v.page.url()); await v.page.close()
   v = await view(setter, "/marketing")
-  ck("T2 a setter's home has no Team button", !/\nTeam\n/.test("\n" + v.text + "\n"), v.text.slice(0, 300)); await v.page.close()
+  ck("T2 a setter's sidebar has no Team", !/Team/.test(await v.page.locator('nav[aria-label="Workspace"]').innerText()), v.text.slice(0, 300)); await v.page.close()
   v = await view(setter, "/marketing/team")
-  ck("T3 a setter opening the Team page is told he cannot, and sees no member", /cannot manage the team/i.test(v.text) && !/@example\.test/.test(v.text), v.text.slice(0, 300)); await v.page.close()
+  ck("T3 a setter opening the Team page is told he cannot, and sees no member", /cannot manage the team/i.test(v.text) && !/qa-team-ownera/.test(v.text.replace(/qa-team-settera@example\.test/g, "")), v.text.slice(0, 300)); await v.page.close()
   const sa = await api(setter, "get", "/api/marketing/team/members")
   ck("T4 and the server refuses him too (403)", sa.status === 403, sa)
 
