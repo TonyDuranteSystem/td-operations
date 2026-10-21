@@ -38,6 +38,7 @@ export const OA_AGREEMENT_SELECT = [
   "id",
   "token",
   "access_code",
+  "created_at",
   "member_email",
   "company_name",
   "previous_company_name",
@@ -184,6 +185,7 @@ export function toPublicAgreement(row: Row) {
   return {
     id: row.id,
     token: row.token,
+    created_at: row.created_at ?? null,
     company_name: row.company_name,
     previous_company_name: row.previous_company_name ?? null,
     state_of_formation: row.state_of_formation,
