@@ -88,12 +88,12 @@ const submit = async (body: Record<string, unknown> = {}) => {
 const idx = (pred: (r: { table: string; op: string; payload: unknown }) => boolean) => st.recorded.findIndex(pred)
 
 describe('/api/portal/wizard-submit — banking lane', () => {
-  it('company in storage: business -> company, personal -> person, the row and the PDF share one completed_at; fully filed -> marker set', async () => {
+  it('company in storage: every paper -> company, only the passport -> person, the row and the PDF share one completed_at; fully filed -> marker set', async () => {
     expect((await submit()).status).toBe(200)
     await vi.waitFor(() => expect(st.recorded.some((r) => r.table === 'banking_submissions' && typeof (r.payload as Record<string, unknown>).drive_archived_at === 'string')).toBe(true), { timeout: 3000 })
     expect(st.companyCalls).toHaveLength(1)
-    expect(st.companyCalls[0]).toMatchObject({ folderId: 'account-storage:acc-1', paths: [STATEMENT], token: 'tok-s1' })
-    expect(st.personCalls[0]).toMatchObject({ target: { kind: 'contact', id: 'c1' }, uploadPaths: [PASSPORT, PROOF] })
+    expect(st.companyCalls[0]).toMatchObject({ folderId: 'account-storage:acc-1', paths: [PROOF, STATEMENT], token: 'tok-s1' })
+    expect(st.personCalls[0]).toMatchObject({ target: { kind: 'contact', id: 'c1' }, uploadPaths: [PASSPORT] })
     const upd = st.recorded.find((r) => r.table === 'banking_submissions' && r.op === 'update' && (r.payload as Record<string, unknown>).status === 'completed')
     const completedAt = (upd?.payload as Record<string, string>).completed_at
     expect(completedAt).toBeTruthy()
@@ -140,7 +140,7 @@ describe('/api/portal/wizard-submit — banking lane', () => {
     const { archiveFormSubmission } = await import('@/lib/forms/archive-submission')
     await archiveFormSubmission('banking', 's1')
     expect(st.personCalls.map((c) => c.target.id)).toEqual(['memberB', 'memberB'])
-    expect(st.personCalls[1].uploadPaths).toEqual([PASSPORT, PROOF])
+    expect(st.personCalls[1].uploadPaths).toEqual([PASSPORT])
   })
   it('a teammate login (no person of its own) in a company with SEVERAL people: the personal papers are held with ONE alarm, never guessed', async () => {
     st.identity = { kind: 'teammate', accountId: 'acc-1' }

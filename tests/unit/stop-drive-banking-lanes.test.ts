@@ -85,13 +85,13 @@ const post = async () => {
 }
 
 describe('/api/banking-form-completed', () => {
-  it('company in storage with NO Drive folder: business papers to the company, PERSONAL papers to the person, same day-stable key', async () => {
+  it('company in storage with NO Drive folder: every paper to the company (Bank applications), ONLY the passport to the person, same day-stable key', async () => {
     const step = await post()
     expect(step?.status).toBe('ok')
     expect(st.companyCalls).toHaveLength(1)
-    expect(st.companyCalls[0]).toMatchObject({ folderId: 'account-storage:acc-1', paths: [STATEMENT], token: 'tok' })
+    expect(st.companyCalls[0]).toMatchObject({ folderId: 'account-storage:acc-1', paths: [PROOF, STATEMENT], token: 'tok' })
     expect(st.personCalls).toHaveLength(1)
-    expect(st.personCalls[0]).toMatchObject({ target: { kind: 'contact', id: 'c1' }, uploadPaths: [PASSPORT, PROOF] })
+    expect(st.personCalls[0]).toMatchObject({ target: { kind: 'contact', id: 'c1' }, uploadPaths: [PASSPORT] })
     // fully filed: the marker the sweep keys on is set, and the durable job is NOT queued (nothing left to heal)
     expect(st.recorded.some((r) => r.table === 'banking_submissions' && r.op === 'update' && typeof (r.payload as Record<string, unknown>).drive_archived_at === 'string')).toBe(true)
     expect(st.enqueued).toEqual([])
@@ -107,7 +107,7 @@ describe('/api/banking-form-completed', () => {
     const step = await post()
     expect(step?.status).toBe('error')
     expect(st.personCalls).toEqual([])
-    expect(st.companyCalls[0].paths).toEqual([STATEMENT])
+    expect(st.companyCalls[0].paths).toEqual([PROOF, STATEMENT])
     expect(st.pilotAlarms).toEqual(['banking_package_problem'])
   })
   it('company moving (the REAL decision, not a mock): error, nothing filed, no alarm, and the durable job is queued (no pin: it works the destination out again when it runs)', async () => {
@@ -125,7 +125,7 @@ describe('/api/banking-form-completed', () => {
     expect(step?.status).toBe('error')
     expect(st.personCalls).toEqual([])
     expect(st.ensureNames).toEqual([])
-    expect(st.companyCalls[0].paths).toEqual([STATEMENT])
+    expect(st.companyCalls[0].paths).toEqual([PROOF, STATEMENT])
     expect(st.pilotAlarms).toEqual(['banking_package_problem'])
     await post() // replayed: still told only once
     expect(st.pilotAlarms).toEqual(['banking_package_problem'])
@@ -135,12 +135,12 @@ describe('/api/banking-form-completed', () => {
     expect((await post())?.status).toBe('ok')
     expect(st.ensureNames).toEqual(['Maria Rossi'])
   })
-  it('FAIL CLOSED: a new kind of KYC paper the code has never heard of goes to the person, never the company', async () => {
+  it('an ID-type paper (selfie with ID) stays with the person; a certificate (not an ID) goes to the company', async () => {
     const SELFIE = 'banking_relay/c1/selfie_with_id_abc.jpg', CERT = 'banking_relay/c1/tax_residency_certificate_abc.pdf'
     ;(st.rows.banking_submissions as Record<string, unknown>).upload_paths = [SELFIE, CERT, STATEMENT]
     await post()
-    expect(st.companyCalls[0].paths).toEqual([STATEMENT])
-    expect(st.personCalls[0].uploadPaths).toEqual([SELFIE, CERT])
+    expect(st.companyCalls[0].paths).toEqual([CERT, STATEMENT])
+    expect(st.personCalls[0].uploadPaths).toEqual([SELFIE])
   })
   it('a Closed company: error + ONE alarm even when the public endpoint is replayed many times; nothing filed, nothing queued', async () => {
     st.companyState = 'drive'; st.rows.accounts = { status: 'Closed', drive_folder_id: 'F-old', gdrive_folder_url: null, company_name: 'Acme LLC' }
@@ -181,5 +181,43 @@ describe('a destination lookup that FAILS is not "no folder"', () => {
     expect(r).toMatchObject({ ok: false, retryLater: true, enqueueUnpinned: true, pinFolderId: null })
     expect(r.errors[0]).toMatch(/db down/)
     expect(alarms).toHaveLength(1)
+  })
+})
+
+describe('bank applications: Bank applications folder + one passport copy (Antonio 2026-10-21, Gold Waves)', () => {
+  it('only the ID papers are the person\'s; every other paper is the company\'s', async () => {
+    const { splitUploads, isPassportUpload, BANK_APPLICATIONS_FOLDER } = await import('@/lib/forms/file-banking-package')
+    expect(splitUploads([PASSPORT, PROOF, STATEMENT])).toEqual({ personal: [PASSPORT], business: [PROOF, STATEMENT] })
+    expect(splitUploads(['x/driver_license_1_a.jpg', 'x/national_id_1_a.jpg', 'x/other_documents_1_a.pdf']).personal).toEqual(['x/driver_license_1_a.jpg', 'x/national_id_1_a.jpg'])
+    expect(isPassportUpload(PASSPORT)).toBe(true)
+    expect(isPassportUpload('x/driver_license_1_a.jpg')).toBe(false)
+    expect(BANK_APPLICATIONS_FOLDER).toBe('Bank applications')
+  })
+  it('a passport the person already has on file is NOT saved again; the other papers still go to the company', async () => {
+    const { fileBankingPackage } = await import('@/lib/forms/file-banking-package')
+    const company: string[][] = [], person: string[][] = []
+    const r = await fileBankingPackage({ flow: 'x', formType: 'banking_relay', accountId: 'acc-1', contactId: 'c1', submittedData: {}, uploadPaths: [PASSPORT, PROOF], bucket: 'b', token: 't', folderId: 'account-storage:acc-1' }, {
+      destination: async () => ({ ok: true, folderId: 'account-storage:acc-1', via: 'storage' }),
+      saveCompany: async (i) => { company.push(i.paths); return { summaryFileId: null, copied: i.paths, failed: [], errors: [] } },
+      personHasPassport: async () => true,
+      savePerson: async (i) => { person.push(i.paths); return { copied: i.paths, failed: [], errors: [] } },
+      alarm: async () => {}, now: () => new Date('2026-10-21T12:00:00Z'),
+    })
+    expect(r.ok).toBe(true)
+    expect(company).toEqual([[PROOF]])
+    expect(person).toEqual([])
+  })
+  it('no passport on file yet: the passport is saved under People (once), the rest with the company', async () => {
+    const { fileBankingPackage } = await import('@/lib/forms/file-banking-package')
+    const person: string[][] = []
+    const r = await fileBankingPackage({ flow: 'x', formType: 'banking_relay', accountId: 'acc-1', contactId: 'c1', submittedData: {}, uploadPaths: [PASSPORT, PROOF], bucket: 'b', token: 't', folderId: 'account-storage:acc-1' }, {
+      destination: async () => ({ ok: true, folderId: 'account-storage:acc-1', via: 'storage' }),
+      saveCompany: async (i) => ({ summaryFileId: null, copied: i.paths, failed: [], errors: [] }),
+      personHasPassport: async () => false,
+      savePerson: async (i) => { person.push(i.paths); return { copied: i.paths, failed: [], errors: [] } },
+      alarm: async () => {}, now: () => new Date('2026-10-21T12:00:00Z'),
+    })
+    expect(r.ok).toBe(true)
+    expect(person).toEqual([[PASSPORT]])
   })
 })

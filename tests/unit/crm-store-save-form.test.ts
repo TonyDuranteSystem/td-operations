@@ -45,6 +45,7 @@ const mk = (over: Partial<FormStoreDeps> = {}) => {
     download: vi.fn(async () => ({ bytes: Buffer.from("x"), mimeType: "application/pdf" })),
     yearFolder: vi.fn(async (_t, y) => `year-${y}`),
     taxFolder: vi.fn(async () => "tax-folder"),
+    subFolder: vi.fn(async (_o, kind, segs) => `${kind}/${segs.join("/")}`),
     ...over,
   }
   return { deps, saved }
@@ -139,5 +140,25 @@ describe("saveFormToStore — a person's ITIN form goes to the ITIN folder", () 
     const r = await saveFormToStore(base({ target: person, subfolder: "ITIN", uploadPaths: [], summary: { name: "ITIN_Data_X.pdf", bytes: Buffer.from("p"), documentType: null, callerKey: "k" } }), deps)
     expect(calls).toEqual(["itin", "personal"])
     expect(r.errors).toEqual([])
+  })
+})
+
+describe("saveFormToStore — a named sub-folder inside the top folder (Bank applications)", () => {
+  it("the summary and every upload go into the sub-folder of the matching top folder", async () => {
+    const { deps, saved } = mk()
+    await saveFormToStore(base({ subfolder: "4. Banking", subPath: ["Bank applications"] }), deps)
+    expect(deps.subFolder).toHaveBeenCalledWith("owner-1", "banking", ["Bank applications"])
+    expect(saved.map((x) => x.folderId)).toEqual(["banking/Bank applications", "banking/Bank applications", "banking/Bank applications"])
+  })
+  it("an unresolved sub-folder ABORTS: nothing is filed in the top folder", async () => {
+    const { deps, saved } = mk({ subFolder: async () => { throw new Error("boom") } })
+    const r = await saveFormToStore(base({ subfolder: "4. Banking", subPath: ["Bank applications"] }), deps)
+    expect(saved).toEqual([])
+    expect(r.errors[0]).toMatch(/aborted to avoid misfiling/)
+  })
+  it("a person's storage ignores a sub-folder (it has its own layout)", async () => {
+    const { deps } = mk()
+    await saveFormToStore(base({ target: { kind: "contact", id: "c-1", ownerId: "owner-p" } as never, subfolder: "4. Banking", subPath: ["Bank applications"] }), deps)
+    expect(deps.subFolder).not.toHaveBeenCalled()
   })
 })

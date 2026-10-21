@@ -5,9 +5,10 @@
  * they all decide the same way:
  *   - WHERE: a company in storage -> its storage ("account-storage:<id>"); a company left on Drive -> its Drive folder; otherwise
  *     nothing is filed and the caller gets a plain sentence (and, when the company is merely moving, a "try again later").
- *   - WHAT goes WHERE (privacy): the client's PERSONAL papers (passport, ID, proof of address …) go to the PERSON's own storage —
- *     never into the company's folder, where whoever the company is handed to later could see them. The summary PDF and the
- *     business papers go to the company. A company left on Drive keeps everything in its Drive folder, as before.
+ *   - WHAT goes WHERE (Antonio 2026-10-21, Gold Waves): the person's ID papers (passport, ID card, driver's licence) go to the PERSON's own
+ *     storage ONLY — never into the company's folder, and a passport we already have on file for that person is not saved again. EVERY
+ *     other paper the client uploaded (proof of address, bank statement, business papers …) and the summary PDF go to the company, in
+ *     "4. Banking › Bank applications". Nothing is saved in two places. A company left on Drive is no longer written to.
  *   - If a personal paper has no person to be filed under, it is NOT filed (it stays where the client uploaded it) and ONE alarm
  *     is raised.
  *   - Stable: the same submission always uses the same key, and the PDF carries the day (not the minute) and is made without a
@@ -55,18 +56,25 @@ export interface BankingPackageResult {
   heldPersonal: string[]
 }
 
-/** The only papers that belong to the COMPANY (allow-list). Anything else is personal or unknown and never goes to the company. */
-const BUSINESS_NAME = /^(business[_-]|articles|ein[_-]|ss-?4|operating[_-]?agreement|certificate|company[_-]|llc[_-])/i
+/** The person's ID papers (kept in People only), by the wizard field name at the start of the stored file name ({field}_{unique}_{filename}). */
+const ID_NAME = /^(passport|member_passport|selfie|id[_-]|identity|national[_-]?id|driver|drivers[_-]|license|licence)/i
 
-/** A business paper, by the wizard field name at the start of the stored file name ({field}_{unique}_{filename}). */
-export function isBusinessUpload(path: string): boolean {
+/** The sub-folder inside the company's "4. Banking" where a bank application's papers are filed. */
+export const BANK_APPLICATIONS_FOLDER = "Bank applications"
+
+export function isIdUpload(path: string): boolean {
   const name = path.split("/").pop() || ""
-  return BUSINESS_NAME.test(name)
+  return ID_NAME.test(name)
 }
 
-/** Everything that is not a known business paper is treated as the client's personal paper (fail closed). */
+/** A passport specifically (the one ID paper we do not save again when the person already has one on file). */
+export function isPassportUpload(path: string): boolean {
+  return /^(passport|member_passport)/i.test(path.split("/").pop() || "")
+}
+
+/** Kept for the callers that ask "is this the client's own paper": an ID paper. */
 export function isPersonalUpload(path: string): boolean {
-  return !isBusinessUpload(path)
+  return isIdUpload(path)
 }
 
 /** A wizard upload lives in the shared wizard bucket, an external-form upload in the banking bucket: decided per file. */
@@ -76,7 +84,7 @@ export function bucketForUpload(path: string, fallback: string): string {
 
 export function splitUploads(paths: string[]): { personal: string[]; business: string[] } {
   const personal: string[] = [], business: string[] = []
-  for (const p of paths) (isPersonalUpload(p) ? personal : business).push(p)
+  for (const p of paths) (isIdUpload(p) ? personal : business).push(p)
   return { personal, business }
 }
 
@@ -90,6 +98,8 @@ export interface BankingPackageDeps {
     { ok: boolean; folderId?: string; via?: "storage" | "legacy-drive"; reason?: string; sentence?: string }>
   saveCompany: (i: { formType: string; data: Record<string, unknown>; paths: string[]; folderId: string; token: string; submittedAt: string; companyName?: string; bucket: string }) =>
     Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; errors: string[] }>
+  /** the person already has a passport on file in their own storage (live, not in the trash) */
+  personHasPassport?: (contactId: string) => Promise<boolean>
   savePerson: (i: { contactId: string; formType: string; paths: string[]; token: string; bucket: string; name: string }) =>
     Promise<{ copied: string[]; failed: string[]; errors: string[]; blocked?: "no_contact" | "study_only_owner" }>
   alarm: (message: string, context: Record<string, unknown>) => Promise<void>
@@ -101,7 +111,16 @@ async function defaultDeps(): Promise<BankingPackageDeps> {
     destination: async (accountId, flow) => (await import("@/lib/crm-store/form-destination")).formDestinationForAccount(accountId, flow) as never,
     saveCompany: async (i) => {
       const { saveFormToDrive } = await import("@/lib/form-to-drive")
-      return saveFormToDrive(i.formType, i.data, i.paths, i.folderId, { token: i.token, submittedAt: i.submittedAt, companyName: i.companyName }, { bucket: i.bucket, resolveBucket: (path) => bucketForUpload(path, i.bucket) })
+      return saveFormToDrive(i.formType, i.data, i.paths, i.folderId, { token: i.token, submittedAt: i.submittedAt, companyName: i.companyName }, { bucket: i.bucket, resolveBucket: (path) => bucketForUpload(path, i.bucket), storeSubPath: [BANK_APPLICATIONS_FOLDER] })
+    },
+    personHasPassport: async (contactId) => {
+      const { liveOwnerOfContact } = await import("@/lib/crm-store/switched-drive-guard")
+      const ownerId = await liveOwnerOfContact(contactId)
+      if (!ownerId) return false
+      const { supabaseAdmin } = await import("@/lib/supabase-admin")
+      const { data, error } = await supabaseAdmin.from("store_files").select("id").eq("owner_id", ownerId).is("trashed_at", null).eq("state", "live").or("document_type.eq.passport,name.ilike.passport*").limit(1)
+      if (error) throw new Error(`Could not check for an existing passport: ${error.message}`)
+      return (data ?? []).length > 0
     },
     savePerson: async (i) => {
       // the SAME destination rule as every lead-stage form (lead-form-store): the person's live storage (opened on first use, root named
@@ -175,7 +194,11 @@ export async function fileBankingPackage(p: BankingPackageInput, deps?: BankingP
       await hold("no person linked", "no person is linked to this submission")
     } else {
       try {
-        const r = await d.savePerson({ contactId: p.contactId, formType: p.formType, paths: split.personal, token: p.token, bucket: p.bucket, name: p.personName ?? "" })
+        // a passport the person already has on file is NOT saved again (one copy, under People); any other ID paper is still filed
+        let toFile = split.personal
+        if (toFile.some(isPassportUpload) && d.personHasPassport && (await d.personHasPassport(p.contactId))) toFile = toFile.filter((x) => !isPassportUpload(x))
+        if (toFile.length === 0) { out.ok = out.errors.length === 0 && out.failed.length === 0; return out }
+        const r = await d.savePerson({ contactId: p.contactId, formType: p.formType, paths: toFile, token: p.token, bucket: p.bucket, name: p.personName ?? "" })
         if (r.blocked) {
           await hold(r.blocked, r.blocked === "study_only_owner" ? "this person only has a hidden study copy of their storage" : "no person is linked to this submission")
         } else {
