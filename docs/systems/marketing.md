@@ -1,5 +1,5 @@
 # TD Marketing (Rocco's and Ale's sales workspace)
-_Last verified against code: 2026-10-21 (payment links + Money screens built on sandbox; see "Payment links and Money"; team workspace: sidebar, Today, Leads beside the lead, Call list; see its section) — Claude (dev job `9aec66fa`, SANDBOX).
+_Last verified against code: 2026-10-21 (View as for Antonio; payment links + Money screens built on sandbox; see "Payment links and Money"; team workspace: sidebar, Today, Leads beside the lead, Call list; see its section) — Claude (dev job `9aec66fa`, SANDBOX).
 _Earlier: 2026-10-21 (Antonio's CRM section: sub-menu, All leads, Teams, Audit log, Settings; see its section) — Claude (dev job `9aec66fa`, SANDBOX).
 _Earlier: 2026-10-21 (lead details fix: Italian form field names + backfill; see its section) — Claude (dev job `9aec66fa`, SANDBOX).
 _Earlier: 2026-10-20 (master view + CRM menu tab; see its section) — Claude (dev job `9aec66fa`, SANDBOX).
@@ -111,6 +111,12 @@ A separate, confined workspace for Rocco's sales team (Rocco = boss, Ale = his e
 - **Bank feed:** a marketing charge has no `payments` row, so the bank-feed matcher has nothing to pair it with, and Stripe payout deposits are matched to payouts, not charges (`lib/finance/stripe-payouts.ts`). Not changed.
 - **Not built / decisions left:** the seller's company is not named on the screens (terms carry `payee_account_id`, no screen picks it yet). Expired links are shown as "Link expired" from the stored expiry (no expiry webhook). Real-Stripe proof is one live €1 payment on production after shipping (sandbox webhooks are blocked by design).
 - **Proof:** unit `marketing-sales.test.ts` + `marketing-sales-server.test.ts`; real-login `scripts/marketing/qa-money.ts` (laptop width; real Stripe TEST-mode links; signed events fed to the real webhook handler in process).
+
+## View as — Antonio opens the workspace as the owner or a role (sandbox, built 2026-10-21)
+- **What:** CRM > Marketing > Teams has a **View as** row per team: "Team owner (every screen)" plus one button per role in the `permission_bundles` setting (nothing hardcoded). Pressing one sets a short-lived (8h) httpOnly cookie `td_marketing_view_as` = `<team id>:owner` or `<team id>:bundle=<key>` (`lib/marketing/view-as.ts`, route `POST/DELETE /api/marketing-admin/view-as`, strict admin, the role must exist) and opens `/marketing`.
+- **Guard (`lib/marketing/guard.ts`):** ONLY for a strict admin (`isSecureAdmin`) the cookie is honoured: the context is that team, role `owner` (so no "someone else picked it" rule blocks him: "no restrictions"), screens = the chosen role's permissions (owner = all; a bundle = its list; a missing bundle = none). Anyone else carrying the cookie (staff, the real team owner, a setter) is ignored. An admin with no cookie gets a plain message pointing to Teams. Works for every `requireMarketing` API too, so the buttons act for real; history rows carry HIS email (`actor`).
+- **Frame:** an amber banner "Viewing as … You are Antonio: nothing is blocked, and what you do is recorded under your own email" with **Exit view** (clears the cookie, back to Teams). No middleware change (admins already reach `/marketing/*`).
+- **Proof:** unit `marketing-view-as.test.ts`; real-login `scripts/marketing/qa-viewas.ts` (13 checks at laptop width: options, owner view, taking a lead back from a setter recorded under his email, setter view shows only the setter's screens, Exit, and a forged cookie on staff / the real owner is ignored).
 
 ## Gotchas
 - The shared apply script `scripts/apply-migration.js` forces SSL and fails on the private local stack ("server does not support SSL"). Apply with `docker exec -i <db container> psql -U postgres -d postgres < file.sql`.
