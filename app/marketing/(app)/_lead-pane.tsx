@@ -1,4 +1,5 @@
 import { LeadActionPanel } from '@/components/marketing/lead-action-panel'
+import { PaymentLinkPanel, type PaymentLinkProps } from '@/components/marketing/payment-link-panel'
 import { clientFlagText, eventText, formatWhen, prettyAnswer, prettyQuestion, stageLabel, telHref, type StageOption } from '@/lib/marketing/lead-view'
 import type { LeadEventRow, LeadRow } from '@/lib/marketing/leads-read'
 import { hasPermission, type MarketingPermission } from '@/lib/marketing/permissions'
@@ -14,10 +15,12 @@ interface Props {
   myId: string
   /** where to go after Good / Not in target / Call back (the next lead in the call list); empty = stay on this lead */
   afterHref?: string
+  /** the payment-link box; only given to people who may create payment links */
+  paymentLink?: PaymentLinkProps
 }
 
 /** One lead, everything about it, with the buttons: used by the Leads screen and the Call list. A computer-width panel. Team-scoped by whoever loads it. */
-export function LeadPane({ lead, events, stages, reasons, checklist, permissions, isOwner, myId, afterHref }: Props) {
+export function LeadPane({ lead, events, stages, reasons, checklist, permissions, isOwner, myId, afterHref, paymentLink }: Props) {
   const claim = lead.claimed_by === null ? 'free' : lead.claimed_by === myId ? 'me' : 'other'
   const flag = clientFlagText(lead.existing_client)
   const tel = telHref(lead.phone)
@@ -52,6 +55,8 @@ export function LeadPane({ lead, events, stages, reasons, checklist, permissions
         reasons={reasons}
         afterHref={afterHref}
       />
+
+      {paymentLink && <PaymentLinkPanel {...paymentLink} />}
 
       {lead.qualification && lead.qualification.length > 0 && (
         <div className="rounded-xl border bg-white p-5 text-sm">

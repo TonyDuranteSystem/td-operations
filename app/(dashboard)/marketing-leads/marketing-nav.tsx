@@ -9,7 +9,7 @@ const TABS: Array<{ href: string; label: string; soon?: boolean }> = [
   { href: "/marketing-leads/teams", label: "Teams" },
   { href: "/marketing-leads/audit", label: "Audit log" },
   { href: "/marketing-leads/settings", label: "Settings" },
-  { href: "#money", label: "Money", soon: true },
+  { href: "/marketing-leads/money", label: "Money" },
   { href: "#calls", label: "Calls", soon: true },
   { href: "#conversations", label: "Conversations", soon: true },
 ]
