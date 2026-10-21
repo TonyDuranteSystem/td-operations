@@ -51,7 +51,7 @@ async function main() {
   const runChoice = async (choice: any, uploadName: string, b: Buffer) => {
     const v = await D.validateDestination(choice, D.realDestinationDeps(login), uploadName)
     if (!v.decision.ok) return { ok: false as const, error: v.decision.error }
-    const filed = await D.saveToDestination(choice, v.owner!, { bytes: b, mimeType: "application/pdf", sha256: sha(b), actor: null, unlinked: !!v.decision.unlinked, finalName: v.finalName, periodYear: choice.purpose === "irs_tax_return" ? W.taxYearFromName(v.finalName) : null }, D.realFileDeps())
+    const filed = await D.saveToDestination(choice, v.owner!, { bytes: b, mimeType: "application/pdf", sha256: sha(b), actor: null, finalName: v.finalName, periodYear: choice.purpose === "irs_tax_return" ? W.taxYearFromName(v.finalName) : null }, D.realFileDeps())
     created.files.push(filed.fileId)
     return { ok: true as const, filed }
   }
@@ -116,7 +116,7 @@ async function main() {
     const r7 = await runChoice({ proposalOf: null, mode: "save", purpose: "something_else", ownerId: personOwner, folderId: pf.id, newFolderName: null, fileName: "Note" }, "note.pdf", bytes("person"))
     check("S15 Change place: a person's storage", r7.ok && (await docRow((r7 as any).filed.fileId))[0]?.contact_id === ct.data.id, JSON.stringify(r7))
     const r8 = await runChoice({ proposalOf: null, mode: "save", purpose: "something_else", ownerId: personOwner, folderId: pf.id, newFolderName: null, fileName: "x" }, "Passport copy.pdf", bytes("pp"))
-    check("S16 a passport is refused for a person's / company's storage (plain sentence)", !r8.ok && /person's own paper/.test((r8 as any).error), JSON.stringify(r8))
+    check("S16 a passport is saved in a person's storage like any other file (no document type is restricted)", r8.ok, JSON.stringify(r8))
     // "My files": a login's own private area (the sandbox has no primary-owner login, so the area of an existing login is used)
     const { data: pa } = await sb.from("store_owners").select("id, private_user_id").eq("kind", "private").not("private_user_id", "is", null).limit(1)
     const myFiles = pa![0].id as string
@@ -129,9 +129,9 @@ async function main() {
 
     // ── personal papers
     const r10 = await runChoice(asChoice(p2, "irs_ein_request", "SS-4 request"), "SS-4 request.pdf", bytes("ss4"))
-    check("S19 an SS-4 is filed where chosen but listed against NO company", r10.ok && (await docRow((r10 as any).filed.fileId))[0]?.account_id === null, JSON.stringify(r10))
+    check("S19 an SS-4 is filed where chosen and listed against the company like every other file", r10.ok && (await docRow((r10 as any).filed.fileId))[0]?.account_id != null, JSON.stringify(r10))
     const r10b = await runChoice(asChoice(p2, "irs_ein_request", "plain name"), "Passport.pdf", bytes("pp2"))
-    check("S20 renaming a passport does not get it past the check", !r10b.ok, JSON.stringify(r10b))
+    check("S20 a passport is saved in a company's storage like any other file", r10b.ok, JSON.stringify(r10b))
 
     // ── refusals
     const pB = await propose("irs_tax_return", { kind: "company", accountId: B.id, name: B.company_name }, "2025.pdf")
