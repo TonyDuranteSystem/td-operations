@@ -57,6 +57,7 @@ export async function updateContact(params: UpdateContactParams): Promise<Update
     const nowIso = new Date().toISOString()
     const updates: ContactUpdate = { ...params.patch, updated_at: nowIso }
 
+    const nameBefore = params.patch.full_name !== undefined ? await (await import("@/lib/operations/contact-name-follow")).nameBeforeEdit(params.id) : null
     let query = supabaseAdmin.from("contacts").update(updates).eq("id", params.id)
     if (params.expected_updated_at) {
       query = query.eq("updated_at", params.expected_updated_at)
@@ -86,7 +87,7 @@ export async function updateContact(params: UpdateContactParams): Promise<Update
     const row = data[0]
     const changedFields = Object.keys(params.patch)
     // The person's storage top folder follows the contact's name (best-effort, never throws).
-    if (params.patch.full_name !== undefined) await (await import("@/lib/crm-store/person-root-name")).syncPersonRootName(row.id)
+    if (params.patch.full_name !== undefined) await (await import("@/lib/operations/contact-name-follow")).afterContactNameEdit(row.id, nameBefore, params.actor)
     logAction({
       actor: params.actor || "system",
       action_type: "update",

@@ -17,6 +17,7 @@ import { createInvoice } from '@/app/(dashboard)/shared/invoice-actions'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { MergeContactDialog } from '@/components/contacts/merge-contact-dialog'
 import { BackendActivityPanel } from '@/components/shared/backend-activity-panel'
 import { ClientConversationsPanel } from '@/components/conversations/client-conversations-panel'
 import { ActivityFeed } from '@/components/accounts/activity-feed'
@@ -306,6 +307,7 @@ export function ContactDetail({
   const [activeTab, setActiveTab] = useState('overview')
   const [showChainAudit, setShowChainAudit] = useState(false)
   const [showDeleteContact, setShowDeleteContact] = useState(false)
+  const [showMergeContact, setShowMergeContact] = useState(false)
   const [showWhatsApp, setShowWhatsApp] = useState(false)
   const [chatUnread, setChatUnread] = useState(0)
 
@@ -406,11 +408,11 @@ export function ContactDetail({
               Lifecycle Audit
             </button>
           </FastTooltip>
-          <FastTooltip label="Delete this contact (orphans with no linked history) or merge it into the real contact.">
+          <FastTooltip label="Merge this contact into the real one (or delete it if it has no history).">
             <button
-              onClick={() => setShowDeleteContact(true)}
+              onClick={() => setShowMergeContact(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
-              aria-label="Delete this contact (orphans with no linked history) or merge it into the real contact."
+              aria-label="Merge this contact into the real one (or delete it if it has no history)."
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete / Merge
@@ -569,6 +571,13 @@ export function ContactDetail({
           phone={(contact.phone || contact.phone_2 || contact.phone_3 || contact.phone_4) as string}
         />
       )}
+
+      <MergeContactDialog
+        open={showMergeContact}
+        onClose={() => setShowMergeContact(false)}
+        contact={{ id: contact.id, full_name: contact.full_name, email: contact.email ?? null }}
+        onDeleteInstead={() => { setShowMergeContact(false); setShowDeleteContact(true) }}
+      />
 
       <ConfirmDestructiveDialog
         open={showDeleteContact}
