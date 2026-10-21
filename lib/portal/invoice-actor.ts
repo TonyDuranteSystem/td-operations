@@ -12,10 +12,11 @@
 import type { User } from '@supabase/supabase-js'
 import { resolvePortalIdentity, type PortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { hasCapability, type CapabilityFlags, type TeamCapability } from '@/lib/portal/team/capabilities'
+import { teammateHistoryStart } from '@/lib/portal/team/history'
 
 export type InvoiceActor =
   | { kind: 'contact'; contactId: string; accountIds: string[] }
-  | { kind: 'teammate'; accountId: string; capabilities: CapabilityFlags }
+  | { kind: 'teammate'; accountId: string; capabilities: CapabilityFlags; historyStart: string | null }
 
 export interface InvoiceActorDeps {
   resolve: (user: User) => Promise<PortalIdentity>
@@ -36,7 +37,7 @@ export async function resolveInvoiceActor(
   if (identity.kind === 'contact') return { kind: 'contact', contactId: identity.contactId, accountIds: identity.accountIds }
   if (identity.kind === 'teammate') {
     if (capability && !hasCapability(identity.capabilities, capability)) return null
-    return { kind: 'teammate', accountId: identity.accountId, capabilities: identity.capabilities }
+    return { kind: 'teammate', accountId: identity.accountId, capabilities: identity.capabilities, historyStart: teammateHistoryStart(identity) }
   }
   return null
 }

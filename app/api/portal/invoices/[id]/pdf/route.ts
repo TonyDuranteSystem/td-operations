@@ -1,8 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
-import { getClientContactId } from '@/lib/portal-auth'
-import { isItemHiddenFromViewer } from '@/lib/portal/history-cutoff'
+import { isItemHiddenFromUser } from '@/lib/portal/viewer-history'
 import { NextRequest, NextResponse } from 'next/server'
 import { resolvePdfStatus } from '@/lib/portal/invoice-status'
 import { renderInvoicePdf } from '@/lib/portal/invoice-pdf'
@@ -39,7 +38,7 @@ export async function GET(
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
   // A person who joined the company later cannot open an invoice saved before their start date (404, like a missing one).
-  if (await isItemHiddenFromViewer({ accountId: invoice.account_id, contactId: getClientContactId(user), kind: 'invoice', itemId: id, item: { created_at: invoice.created_at } })) {
+  if (await isItemHiddenFromUser({ user, accountId: invoice.account_id, kind: 'invoice', itemId: id, createdAt: invoice.created_at })) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 

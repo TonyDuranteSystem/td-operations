@@ -43,10 +43,10 @@ describe('hubAccess / tabs for team members (dev job e5d5400d)', () => {
 
 describe('resolveInvoiceActor: team member wins, even with a contact id', () => {
   const user = { id: 'u1', app_metadata: {} } as unknown as User
-  const mate: PortalIdentity = { kind: 'teammate', teamMemberId: 't', accountId: 'A1', displayName: 'V', email: null, capabilities: { invoices_billing: true } }
+  const mate: PortalIdentity = { kind: 'teammate', teamMemberId: 't', accountId: 'A1', displayName: 'V', email: null, capabilities: { invoices_billing: true }, createdAt: null }
   const contact: PortalIdentity = { kind: 'contact', contactId: 'C1', accountIds: ['A1', 'A2'] }
   it('teammate with the capability', async () => {
-    expect(await resolveInvoiceActor(user, 'invoices_billing', { resolve: async () => mate })).toEqual({ kind: 'teammate', accountId: 'A1', capabilities: { invoices_billing: true } })
+    expect(await resolveInvoiceActor(user, 'invoices_billing', { resolve: async () => mate })).toEqual({ kind: 'teammate', accountId: 'A1', capabilities: { invoices_billing: true }, historyStart: null })
   })
   it('teammate without the capability is denied', async () => {
     expect(await resolveInvoiceActor(user, 'sales_customers', { resolve: async () => mate })).toBeNull()

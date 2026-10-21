@@ -5,10 +5,14 @@ import type { User } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 import { validatePaymentLinkUrl, pickNewDefault, GATEWAYS, CURRENCIES } from '@/lib/portal/payment-link-rules'
 
-// Default-deny (contacts AND teammates; never skipped). Payment links live under
-// the 'invoices_billing' capability.
+// Default-deny (contacts AND teammates; never skipped). Seeing the links needs 'invoices_billing'; CHANGING them
+// (add / default / delete) needs 'payment_links', which the owner ticks per team member. A link decides where the
+// customer pays, so it is a money-redirect risk just like the bank details (dev job e5d5400d).
 function verifyAccess(user: User, accountId: string) {
   return canAccessAccount(user, accountId, 'invoices_billing')
+}
+async function verifyWriteAccess(user: User, accountId: string) {
+  return (await canAccessAccount(user, accountId, 'invoices_billing')) && (await canAccessAccount(user, accountId, 'payment_links'))
 }
 
 export async function GET(request: NextRequest) {
@@ -50,7 +54,7 @@ export async function POST(request: NextRequest) {
   const { account_id, label, url, gateway, amount, currency, is_default } = body
 
   if (!account_id || !label || !url) return NextResponse.json({ error: 'label, url, account_id required' }, { status: 400 })
-  if (!await verifyAccess(user, account_id)) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  if (!await verifyWriteAccess(user, account_id)) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
 
   const checked = validatePaymentLinkUrl(url)
   if ('error' in checked) return NextResponse.json({ error: checked.error }, { status: 400 })
@@ -92,7 +96,7 @@ export async function PATCH(request: NextRequest) {
   const { id, account_id, is_default } = body
 
   if (!id || !account_id) return NextResponse.json({ error: 'id and account_id required' }, { status: 400 })
-  if (!await verifyAccess(user, account_id)) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  if (!await verifyWriteAccess(user, account_id)) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
 
   if (is_default) {
     // The link must be THIS company's. Checked BEFORE anything is cleared, so a wrong id can never leave the
@@ -117,7 +121,7 @@ export async function DELETE(request: NextRequest) {
   const accountId = url.searchParams.get('account_id')
 
   if (!id || !accountId) return NextResponse.json({ error: 'id and account_id required' }, { status: 400 })
-  if (!await verifyAccess(user, accountId)) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  if (!await verifyWriteAccess(user, accountId)) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
 
   const { data: link } = await supabaseAdmin.from('payment_links').select('id, is_default').eq('id', id).eq('account_id', accountId).maybeSingle()
   if (!link) return NextResponse.json({ error: 'Payment link not found' }, { status: 404 })

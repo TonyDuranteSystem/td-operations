@@ -6,7 +6,7 @@ import { redirect } from 'next/navigation'
 import { resolveInvoiceActor } from '@/lib/portal/invoice-actor'
 import { getPortalAccounts, getPortalExpenses, getPortalExpensesByContact } from '@/lib/portal/queries'
 import { filterByHistoryCutoff, isSettledPaymentStatus } from '@/lib/documents/history-cutoff'
-import { getHistoryView } from '@/lib/portal/history-cutoff'
+import { getHistoryView, getOpenedItemIds } from '@/lib/portal/history-cutoff'
 import { hasCapability } from '@/lib/portal/team/capabilities'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
@@ -112,6 +112,7 @@ export default async function PortalInvoicesPage({
   // Setup content follows what the server lets this person do (the APIs enforce the same flags).
   const canEditBank = !teammateCaps || hasCapability(teammateCaps, 'bank_applications')
   const canEditLogo = !teammateCaps || hasCapability(teammateCaps, 'company_services')
+  const canEditLinks = !teammateCaps || hasCapability(teammateCaps, 'payment_links')
   // Pre-filter to paid when arriving from a receipt email link
   const defaultExpenseFilter: 'all' | 'paid' = params.view === 'paid' ? 'paid' : 'all'
   const locale = getLocale(user)
@@ -183,9 +184,18 @@ export default async function PortalInvoicesPage({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   // A person who joined the company later sees its invoices and expenses only from their start date (dev job d14e823f).
   // Nothing to look up for everyone else: no start date = sees everything. TD invoices still owed stay visible.
-  const [invHistory, expHistory] = selectedAccountId
-    ? await Promise.all([getHistoryView(selectedAccountId, contactId, 'invoice'), getHistoryView(selectedAccountId, contactId, 'expense')])
-    : [{ cutoff: null, opened: new Set<string>() }, { cutoff: null, opened: new Set<string>() }]
+  // A team member follows their own start date (the day they were added) unless the owner ticked "see earlier invoices
+  // and expenses" for them; a client follows the date on their company link.
+  const historyFor = async (kind: 'invoice' | 'expense'): Promise<{ cutoff: string | null; opened: Set<string> }> => {
+    if (!selectedAccountId) return { cutoff: null, opened: new Set<string>() }
+    if (actor.kind === 'teammate') {
+      return actor.historyStart
+        ? { cutoff: actor.historyStart, opened: await getOpenedItemIds(selectedAccountId, kind) }
+        : { cutoff: null, opened: new Set<string>() }
+    }
+    return getHistoryView(selectedAccountId, contactId, kind)
+  }
+  const [invHistory, expHistory] = await Promise.all([historyFor('invoice'), historyFor('expense')])
   const invoices: any[] = filterByHistoryCutoff((salesResult.data ?? []) as any[], invHistory.cutoff, contactId, inv => ({ created_at: inv.created_at, opened: invHistory.opened.has(inv.id) }))
   const visibleAccountExpenses = filterByHistoryCutoff(accountExpenses, expHistory.cutoff, contactId, e => ({
     created_at: e.created_at,
@@ -475,7 +485,7 @@ export default async function PortalInvoicesPage({
           </div>
           <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.paymentGateway', locale, translations)}</h2>
-            <PaymentLinks accountId={selectedAccountId} />
+            <PaymentLinks accountId={selectedAccountId} readOnly={!canEditLinks} />
           </div>
         </div>
       )}
