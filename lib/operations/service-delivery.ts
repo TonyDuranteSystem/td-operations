@@ -387,6 +387,18 @@ export async function createSD(
     throw new Error("[createSD] insert returned null — unexpected dbWrite behavior")
   }
 
+  // ITIN belongs to the person (Antonio 2026-10-21): whoever buys the ITIN gets their own storage (Personal documents + ITIN folders)
+  // at that moment, not at the first upload. The same call every form uses; a hidden study-only copy is never used. Test contacts are
+  // skipped. Best-effort: a failure is logged and NEVER blocks the case (the first upload opens the storage the same way).
+  if (row.service_type === "ITIN" && row.contact_id && !is_test) {
+    try {
+      const { storageDestinationForForm } = await import("@/lib/crm-store/lead-form-store")
+      await storageDestinationForForm({ contactId: row.contact_id })
+    } catch (err) {
+      console.error(`[createSD] ITIN: could not open the person's storage for contact ${row.contact_id} (SD ${row.id}):`, err instanceof Error ? err.message : String(err))
+    }
+  }
+
   // ─── Slice 9: dispatch sd_created workflows ──────────────────────────
   //
   // Auto-spawn workflow tasks for SD-lifecycle workflows (closure_progress,

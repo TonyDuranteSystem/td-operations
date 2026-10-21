@@ -125,6 +125,8 @@ export async function ensurePersonOwner(contactId: string, rootName: string): Pr
   if (error || !ownerId) throw new Error(`store pilot: could not create the person owner — ${error?.message ?? "no id"}`)
   const { error: tErr } = await db().rpc("store_apply_template", { p_owner_id: ownerId, p_template_slug: PERSON_TEMPLATE, p_root_name: storeSafeFolderName(rootName) })
   if (tErr) throw new Error(`store pilot: could not create the personal folders — ${tErr.message}`)
+  // A caller may only know a placeholder ("Member", "New client"): the folder carries the contact's real name from the database.
+  await (await import("./person-root-name")).syncPersonRootName(contactId)
   return ownerId as string
 }
 

@@ -163,6 +163,11 @@ export async function POST(request: Request) {
         )
       }
 
+      // The merge moves the loser's storage to the winner, but the name on the winner did not change, so nothing else would rename
+      // the folder: make the surviving person's top folder carry the winner's name. Best-effort, never throws.
+      const { syncPersonRootName } = await import("@/lib/crm-store/person-root-name")
+      await syncPersonRootName(merge_into_contact_id)
+
       // Remove the loser's portal login(s) — its email is now blanked, the
       // winner keeps the real login.
       let removedLogins = 0
