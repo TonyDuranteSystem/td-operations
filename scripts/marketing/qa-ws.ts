@@ -137,7 +137,7 @@ async function main() {
   const on = await nav(v.page)
   const order = ["Today", "Leads", "Inbox", "WhatsApp", "Chat", "Calls", "Money", "Offers", "Content", "Reports", "Team"]
   const pos = order.map(x => on.indexOf(x))
-  ck("W2 the sidebar lists the owner's screens in the mockup's order; screens not built yet are greyed 'soon'", pos.every((x, i) => x >= 0 && (i === 0 || x > pos[i - 1])) && (on.match(/soon/gi) ?? []).length === 7 && !/Call list|My numbers/.test(on), on)
+  ck("W2 the sidebar lists the owner's screens in the mockup's order; screens not built yet are greyed 'soon'", pos.every((x, i) => x >= 0 && (i === 0 || x > pos[i - 1])) && (on.match(/soon/gi) ?? []).length === 6 && !/Call list|My numbers/.test(on), on)
   const cbs = await rows(v.page, "Call backs due")
   ck("W3 Today: call backs due today, the late one first and flagged late, tomorrow's left out", cbs.length === 2 && /Late Callback/.test(cbs[0]) && /late/.test(cbs[0]) && /Soon Callback/.test(cbs[1]) && !cbs.join().includes("Tomorrow"), cbs)
   const gw = await rows(v.page, "Good leads waiting")
