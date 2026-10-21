@@ -199,7 +199,7 @@ _Regenerated 2026-10-21. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-20)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-20)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-18)_
-- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-20)_
+- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-21)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-10-21)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-18)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-16)_

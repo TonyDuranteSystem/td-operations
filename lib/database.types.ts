@@ -10661,6 +10661,7 @@ export type Database = {
           member_name: string
           member_ownership_pct: number | null
           members: Json | null
+          members_may_sign: boolean
           pdf_storage_path: string | null
           previous_company_name: string | null
           principal_address: string | null
@@ -10701,6 +10702,7 @@ export type Database = {
           member_name: string
           member_ownership_pct?: number | null
           members?: Json | null
+          members_may_sign?: boolean
           pdf_storage_path?: string | null
           previous_company_name?: string | null
           principal_address?: string | null
@@ -10741,6 +10743,7 @@ export type Database = {
           member_name?: string
           member_ownership_pct?: number | null
           members?: Json | null
+          members_may_sign?: boolean
           pdf_storage_path?: string | null
           previous_company_name?: string | null
           principal_address?: string | null
