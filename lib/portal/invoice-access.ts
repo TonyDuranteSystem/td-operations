@@ -20,6 +20,7 @@ import type { User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
+import { isItemHiddenFromTeamMember } from '@/lib/portal/viewer-history'
 import type { TeamCapability } from '@/lib/portal/team/capabilities'
 
 export type AccessResult =
@@ -34,6 +35,8 @@ export interface AccessDeps {
   getUser: () => Promise<User | null>
   canAccess: (user: User | null, accountId: string | null | undefined, capability: TeamCapability) => Promise<boolean>
   loadInvoiceAccount: (invoiceId: string) => Promise<string | null>
+  /** True when a team member's start date hides this invoice (default: looks the invoice up and applies the rule). */
+  hiddenFromTeamMember?: (user: User, accountId: string, invoiceId: string) => Promise<boolean>
 }
 
 const defaultDeps: AccessDeps = {
@@ -45,6 +48,10 @@ const defaultDeps: AccessDeps = {
   loadInvoiceAccount: async (invoiceId) => {
     const { data } = await supabaseAdmin.from('client_invoices').select('account_id').eq('id', invoiceId).maybeSingle()
     return data?.account_id ?? null
+  },
+  hiddenFromTeamMember: async (user, accountId, invoiceId) => {
+    const { data } = await supabaseAdmin.from('client_invoices').select('created_at').eq('id', invoiceId).maybeSingle()
+    return isItemHiddenFromTeamMember({ user, accountId, kind: 'invoice', itemId: invoiceId, createdAt: data?.created_at })
   },
 }
 
@@ -73,6 +80,8 @@ export async function authorizeInvoice(
   const accountId = await deps.loadInvoiceAccount(invoiceId)
   if (!accountId) return { ok: false, error: NOT_FOUND }
   if (!(await deps.canAccess(user, accountId, capability))) return { ok: false, error: NOT_FOUND }
+  // A team member without the "see earlier invoices" option cannot act on an invoice saved before they joined (same answer as a missing one).
+  if (deps.hiddenFromTeamMember && (await deps.hiddenFromTeamMember(user, accountId, invoiceId))) return { ok: false, error: NOT_FOUND }
   return { ok: true, user, accountId }
 }
 

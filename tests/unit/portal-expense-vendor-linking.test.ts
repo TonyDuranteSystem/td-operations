@@ -30,6 +30,7 @@ vi.mock('@/lib/supabase/server', () => ({
 
 vi.mock('@/lib/portal/team/gate', () => ({ canAccessAccount }))
 vi.mock('@/lib/portal-auth', () => ({ getClientContactId: () => null }))
+vi.mock('@/lib/portal/viewer-history', () => ({ isItemHiddenFromTeamMember: async () => false }))
 vi.mock('@/app/portal/invoices/vendor-actions', () => ({ listVendors, createVendor }))
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 

@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
+import { isItemHiddenFromTeamMember } from '@/lib/portal/viewer-history'
 import { isPlausibleEmail } from '@/lib/portal/invoice-send-notices'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -23,13 +24,17 @@ export async function PATCH(
 
   const { data: invoice } = await supabaseAdmin
     .from('client_invoices')
-    .select('account_id, customer_id')
+    .select('account_id, customer_id, created_at')
     .eq('id', id)
     .single()
   if (!invoice) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   if (!(await canAccessAccount(user, invoice.account_id, 'invoices_billing'))) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+  // A team member without the "see earlier invoices" option cannot act on an invoice saved before they joined.
+  if (await isItemHiddenFromTeamMember({ user, accountId: invoice.account_id, kind: 'invoice', itemId: id, createdAt: invoice.created_at })) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
   if (!invoice.customer_id) {
     return NextResponse.json({ error: 'This invoice has no customer.' }, { status: 400 })

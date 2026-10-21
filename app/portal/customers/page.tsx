@@ -40,7 +40,7 @@ export default async function PortalCustomersPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto space-y-4 sm:space-y-6">
-      <CustomersPanel accountId={selectedAccountId} locale={locale} />
+      <CustomersPanel accountId={selectedAccountId} locale={locale} invoicesFrom={actor.kind === 'teammate' ? actor.historyStart : null} />
     </div>
   )
 }

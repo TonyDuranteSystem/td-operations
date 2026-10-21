@@ -34,3 +34,34 @@ export async function isItemHiddenFromUser(
   }
   return false
 }
+
+/**
+ * The start-date view of the company's history for a TEAM MEMBER login only (a client keeps the company-link rule, handled
+ * where it always was). Used by every endpoint that acts on an invoice or expense by id, so a team member without the
+ * "see earlier invoices" option cannot reach an older one through a side door (dev job e5d5400d, bug-hunt round 2).
+ * Not a team member = never hidden here.
+ */
+export async function isItemHiddenFromTeamMember(
+  p: { user: User; accountId: string | null | undefined; kind: HistoryItemKind; itemId: string; createdAt: string | null | undefined },
+  deps: ViewerHistoryDeps = defaults,
+): Promise<boolean> {
+  if (!p.accountId || !p.createdAt) return false
+  const identity = await deps.resolve(p.user)
+  if (identity.kind !== 'teammate') return false
+  const start = teammateHistoryStart(identity)
+  if (!start) return false
+  const opened = await deps.openedIds(p.accountId, p.kind)
+  return isItemHiddenByCutoff({ created_at: p.createdAt, opened: opened.has(p.itemId) }, start, null)
+}
+
+/** Start date + opened items for a team member login (null cutoff for everyone else). Used where a list is built. */
+export async function getTeamMemberHistoryView(
+  p: { user: User; accountId: string; kind: HistoryItemKind },
+  deps: ViewerHistoryDeps = defaults,
+): Promise<{ cutoff: string | null; opened: Set<string> }> {
+  const identity = await deps.resolve(p.user)
+  if (identity.kind !== 'teammate') return { cutoff: null, opened: new Set() }
+  const start = teammateHistoryStart(identity)
+  if (!start) return { cutoff: null, opened: new Set() }
+  return { cutoff: start, opened: await deps.openedIds(p.accountId, p.kind) }
+}
