@@ -144,6 +144,10 @@ export interface FormStoreSpec {
   fileNameOf?: (path: string) => string
   /** a company's sub-folder INSIDE the form's top folder ("Bank applications" inside 4. Banking): made once, found after. Company storages only. */
   subPath?: string[]
+  /** the template slug that LOCKS the last sub-folder (staff cannot rename, move or delete it) */
+  subPathLock?: string
+  /** the idempotency key of one upload when it must not depend on the submission (default: `form-upload:<submissionKey>:<path>`) */
+  callerKeyOf?: (path: string, bytes: Buffer) => string | undefined
 }
 
 export interface FormStoreDeps {
@@ -152,7 +156,9 @@ export interface FormStoreDeps {
   yearFolder: (taxFolderId: string, year: string) => Promise<string>
   taxFolder: (ownerId: string) => Promise<string>
   /** the sub-folder chain inside the top folder of that kind (found or made) */
-  subFolder: (ownerId: string, folderKind: string, segments: string[]) => Promise<string>
+  subFolder: (ownerId: string, folderKind: string, segments: string[], lockSlug?: string) => Promise<string>
+  /** the live file already saved under this key: its folder (a replay keeps the whole package together) */
+  folderOfKey: (callerKey: string) => Promise<string | null>
 }
 
 async function defaultDeps(): Promise<FormStoreDeps> {
@@ -167,10 +173,15 @@ async function defaultDeps(): Promise<FormStoreDeps> {
     },
     yearFolder: ensureYearFolder,
     taxFolder: (ownerId) => pilot.folderOfKind(ownerId, "tax"),
-    subFolder: async (ownerId, folderKind, segments) => {
+    subFolder: async (ownerId, folderKind, segments, lockSlug) => {
       let id = await pilot.folderOfKind(ownerId, folderKind)
-      for (const seg of segments) id = await ensureChildFolder(id, seg)
+      for (let i = 0; i < segments.length; i++) id = await ensureChildFolder(id, segments[i], i === segments.length - 1 ? lockSlug : undefined)
       return id
+    },
+    folderOfKey: async (callerKey) => {
+      const { data, error } = await db().from("store_files").select("folder_id").eq("caller_key", callerKey).is("trashed_at", null).limit(1)
+      if (error) throw new Error(`store: could not look for an earlier copy — ${error.message}`)
+      return ((data ?? [])[0]?.folder_id as string | undefined) ?? null
     },
   }
 }
@@ -194,7 +205,9 @@ export async function saveFormToStore(spec: FormStoreSpec, deps?: FormStoreDeps)
   // a named sub-folder inside the top folder (a company's "4. Banking › Bank applications")
   if (!folderId && spec.subPath?.length && spec.target.kind === "account") {
     try {
-      folderId = await d.subFolder(spec.target.ownerId, folderKind, spec.subPath)
+      // a package that was already (partly) filed — an older submission replayed — stays together in the folder its summary is in
+      const earlier = spec.summary ? await d.folderOfKey(spec.summary.callerKey) : null
+      folderId = earlier ?? (await d.subFolder(spec.target.ownerId, folderKind, spec.subPath, spec.subPathLock))
     } catch (e) {
       // never fall back to the top folder: abort so the durable job retries (same rule as the tax-year folder)
       return { ...out, errors: [`Sub-folder unresolved (aborted to avoid misfiling): ${e instanceof Error ? e.message : String(e)}`] }
@@ -231,7 +244,7 @@ export async function saveFormToStore(spec: FormStoreSpec, deps?: FormStoreDeps)
         got = await d.download(spec.bucketOf(path), path)
       }
       if (!got) { out.failed.push(`${name} (download failed after 3 attempts)`); continue }
-      const w = await saveFile({ ownerId: spec.target.ownerId, folderKind, folderId, name, bytes: got.bytes, mimeType: got.mimeType, documentType: null, callerKey: `form-upload:${spec.submissionKey}:${path}` })
+      const w = await saveFile({ ownerId: spec.target.ownerId, folderKind, folderId, name, bytes: got.bytes, mimeType: got.mimeType, documentType: null, callerKey: spec.callerKeyOf?.(path, got.bytes) ?? `form-upload:${spec.submissionKey}:${path}` })
       if (w.status === "unchanged") out.skipped.push(name)
       else out.copied.push(name)
     } catch (e) {
@@ -244,22 +257,30 @@ export async function saveFormToStore(spec: FormStoreSpec, deps?: FormStoreDeps)
 // ─── Files that are not form summaries: the confirmed tax workbook, workflow task files ───────────────────
 
 /** A sub-folder named `name` directly inside `parentId`: found if it exists, created if not (concurrent runs agree). */
-export async function ensureChildFolder(parentId: string, name: string): Promise<string> {
+export async function ensureChildFolder(parentId: string, name: string, lockSlug?: string): Promise<string> {
   const { cleanFolderName } = await import("./names")
   const clean = cleanFolderName(name)
   const find = async () => {
-    const { data, error } = await db().from("store_folders").select("id").eq("parent_id", parentId).eq("name", clean).is("trashed_at", null).limit(1)
+    const { data, error } = await db().from("store_folders").select("id, template_slug").eq("parent_id", parentId).eq("name", clean).is("trashed_at", null).limit(1)
     if (error) throw new Error(`store: could not read folders — ${error.message}`)
-    return ((data ?? [])[0]?.id as string | undefined) ?? null
+    return ((data ?? [])[0] as { id: string; template_slug: string | null } | undefined) ?? null
+  }
+  // a folder found that should be locked but is not (made by hand, or before the lock existed) is locked now
+  const lockIfNeeded = async (hit: { id: string; template_slug: string | null }) => {
+    if (lockSlug && hit.template_slug === null) {
+      const { error } = await db().from("store_folders").update({ template_slug: lockSlug }).eq("id", hit.id).is("template_slug", null)
+      if (error) throw new Error(`store: could not lock the folder — ${error.message}`)
+    }
+    return hit.id
   }
   const hit = await find()
-  if (hit) return hit
+  if (hit) return lockIfNeeded(hit)
   const { createFolder } = await import("./structure")
   try {
-    return (await createFolder(parentId, clean, null)).id
+    return (await createFolder(parentId, clean, null, "custom", lockSlug ?? null)).id
   } catch (e) {
     const again = await find()
-    if (again) return again
+    if (again) return lockIfNeeded(again)
     throw e
   }
 }

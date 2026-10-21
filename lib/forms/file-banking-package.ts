@@ -13,9 +13,12 @@
  *     is raised.
  *   - Stable: the same submission always uses the same key, and the PDF carries the day (not the minute) and is made without a
  *     creation/modification stamp, so a replay or a retry files the same bytes (recorded "unchanged") instead of piling up versions.
- *   - FAIL CLOSED: only a paper on the short allow-list of BUSINESS documents goes to the company; every other paper (a new field,
- *     an unknown name) is treated as personal. A person with only a hidden study-copy storage gets nothing filed and ONE alarm.
+ *   - The ID list is a DENY-list (an ID paper stays in People); a NEW upload field that is not on it goes to the company. So every
+ *     banking file field must be classified: tests/unit/stop-drive-banking-lanes.test.ts fails when a banking config gains a file field
+ *     the list does not know. A person with only a hidden study-copy storage gets nothing filed and ONE alarm.
  */
+
+import { createHash } from "crypto"
 
 export interface BankingPackageInput {
   flow: string
@@ -57,10 +60,12 @@ export interface BankingPackageResult {
 }
 
 /** The person's ID papers (kept in People only), by the wizard field name at the start of the stored file name ({field}_{unique}_{filename}). */
-const ID_NAME = /^(passport|member_passport|selfie|id[_-]|identity|national[_-]?id|driver|drivers[_-]|license|licence)/i
+const ID_NAME = /^(passport|member_passport|owner_passport|selfie|id[_-]|photo[_-]?id|identity|proof[_-]of[_-]identity|national[_-]?id|driver|drivers[_-]|licen[sc]e|visa|residence[_-]?permit|ssn|itin)/i
 
 /** The sub-folder inside the company's "4. Banking" where a bank application's papers are filed. */
 export const BANK_APPLICATIONS_FOLDER = "Bank applications"
+/** the template slug that LOCKS that folder (like the other fixed folders: no rename, move or delete by hand) */
+export const BANK_APPLICATIONS_LOCK = "bank_applications"
 
 export function isIdUpload(path: string): boolean {
   const name = path.split("/").pop() || ""
@@ -111,14 +116,14 @@ async function defaultDeps(): Promise<BankingPackageDeps> {
     destination: async (accountId, flow) => (await import("@/lib/crm-store/form-destination")).formDestinationForAccount(accountId, flow) as never,
     saveCompany: async (i) => {
       const { saveFormToDrive } = await import("@/lib/form-to-drive")
-      return saveFormToDrive(i.formType, i.data, i.paths, i.folderId, { token: i.token, submittedAt: i.submittedAt, companyName: i.companyName }, { bucket: i.bucket, resolveBucket: (path) => bucketForUpload(path, i.bucket), storeSubPath: [BANK_APPLICATIONS_FOLDER] })
+      return saveFormToDrive(i.formType, i.data, i.paths, i.folderId, { token: i.token, submittedAt: i.submittedAt, companyName: i.companyName }, { bucket: i.bucket, resolveBucket: (path) => bucketForUpload(path, i.bucket), storeSubPath: [BANK_APPLICATIONS_FOLDER], storeSubPathLock: BANK_APPLICATIONS_LOCK })
     },
     personHasPassport: async (contactId) => {
       const { liveOwnerOfContact } = await import("@/lib/crm-store/switched-drive-guard")
       const ownerId = await liveOwnerOfContact(contactId)
       if (!ownerId) return false
       const { supabaseAdmin } = await import("@/lib/supabase-admin")
-      const { data, error } = await supabaseAdmin.from("store_files").select("id").eq("owner_id", ownerId).is("trashed_at", null).eq("state", "live").or("document_type.eq.passport,name.ilike.passport*").limit(1)
+      const { data, error } = await supabaseAdmin.from("store_files").select("id").eq("owner_id", ownerId).is("trashed_at", null).eq("state", "live").or("document_type.eq.passport,name.ilike.passport_*").limit(1)
       if (error) throw new Error(`Could not check for an existing passport: ${error.message}`)
       return (data ?? []).length > 0
     },
@@ -135,6 +140,8 @@ async function defaultDeps(): Promise<BankingPackageDeps> {
       const r = await saveFormToStore({
         target: { kind: "contact", id: i.contactId, ownerId }, subfolder: "2. Contacts", year: null, summary: null,
         uploadPaths: i.paths, bucketOf: (path) => bucketForUpload(path, i.bucket), submissionKey: `${i.contactId}:${i.formType}:${i.token}`,
+        // the SAME scan of a passport sent with two applications at the same moment is ONE file (keyed by the person + the scan's own bytes)
+        callerKeyOf: (path, bytes) => (isPassportUpload(path) ? `bank-passport:${i.contactId}:${createHash("sha256").update(bytes).digest("hex")}` : undefined),
       })
       return { copied: [...r.copied, ...r.skipped], failed: r.failed, errors: r.errors }
     },

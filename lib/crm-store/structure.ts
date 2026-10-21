@@ -250,13 +250,13 @@ async function logFolder(event: string, f: { id: string; owner_id: string; name:
   if (error) console.error(`[crm-store] ${event} not logged for folder ${f.id}: ${error.message}`)
 }
 
-export async function createFolder(parentId: string, name: string, actorId: string | null, kind = "custom"): Promise<{ id: string; name: string }> {
+export async function createFolder(parentId: string, name: string, actorId: string | null, kind = "custom", templateSlug: string | null = null): Promise<{ id: string; name: string }> {
   const p = await folder(parentId)
   if (p.trashed_at) throw new Error("That folder is in the trash.")
   if (p.kind === "contacts") throw new Error("\"2. Contacts\" shows each person's own storage — open the person to add a folder there.")
   const clean = cleanFolderName(name)
   if (await nameTaken(p.owner_id, parentId, clean)) throw new Error(`"${clean}" already exists here.`)
-  const { data, error } = await db().from("store_folders").insert({ owner_id: p.owner_id, parent_id: parentId, kind, name: clean, created_by: actorId }).select("id, name").single()
+  const { data, error } = await db().from("store_folders").insert({ owner_id: p.owner_id, parent_id: parentId, kind, name: clean, created_by: actorId, ...(templateSlug ? { template_slug: templateSlug } : {}) }).select("id, name").single()
   if (error) throw new Error(/name_key|duplicate/i.test(error.message) ? `"${clean}" already exists here.` : `The folder could not be created (${error.message}).`)
   await logFolder("folder_created", { id: data.id, owner_id: p.owner_id, name: clean }, actorId, { parent: parentId })
   return { id: data.id as string, name: data.name as string }
