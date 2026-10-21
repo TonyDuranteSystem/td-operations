@@ -28,7 +28,7 @@ const PROD_STEPS: Record<string, string[]> = {
   DBA: ['Data Collection', 'Application Preparation', 'Publication', 'Filed with State', 'Registered', 'Renewal Due'],
   EIN: ['SS-4 Preparation', 'SS-4 Submitted', 'Awaiting EIN', 'EIN Received'],
   'EIN Change Name': ['File the form 8822-B', 'Ship to the IRS', 'Call the IRS', 'Name Changed'],
-  ITIN: ['Data Collection', 'Document Preparation', 'Client Signing', 'Documents Received', 'CAA Review', 'Submitted to IRS', 'IRS Processing', 'ITIN Approved'],
+  ITIN: ['Data Collection', 'Document Preparation', 'Client Signing', 'Shipped', 'Documents Received', 'CAA Review', 'Submitted to IRS', 'IRS Processing', 'ITIN Approved'],
   'Public Notary': ['Documents Received', 'Notarized', 'Returned to Client'],
   Shipping: ['Preparing Shipment', 'Shipped', 'Delivered'],
   'State Annual Report': ['Upcoming', 'In Progress', 'Completed'],

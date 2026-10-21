@@ -51,6 +51,10 @@ export const PROTECTED_STAGE_NAMES: ProtectedStageName[] = [
     because: "it is how a client's ITIN documents are found and shown in the portal",
   },
   {
+    name: "Shipped",
+    because: "a client saving the courier + tracking number of their signed ITIN package moves the case onto it by name",
+  },
+  {
     name: "Data Collection",
     because: "form completion routes move deliveries off it by name",
   },

@@ -6,7 +6,7 @@
  *   - Workflow path (Slice 5+): finds the active itin_await_client_mailing
  *     workflow task for the contact, marks it Done, fires the catalog
  *     transition (spawns itin_caa_certify_and_mail + advances SD to
- *     Documents Received). This is the system of record going forward.
+ *     Shipped — the client's act; "Documents Received" is the OFFICE's, set by its own button). This is the system of record going forward.
  *   - Legacy fallback: contacts with an ITIN started before Slice 5 won't
  *     have an itin_await_client_mailing task. We fall through to a direct
  *     SD advance (the pre-Slice-5 behavior) so they don't get stuck.
@@ -187,7 +187,7 @@ async function runLegacyMailedAction(contactId: string): Promise<ConfirmItinMail
 
   const result = await advanceServiceDelivery({
     delivery_id: sd.id,
-    target_stage: 'Documents Received',
+    target_stage: 'Shipped',
     actor: 'portal-client',
     notes: 'Client confirmed via portal that signed documents were mailed (legacy path — no workflow task).',
   })
