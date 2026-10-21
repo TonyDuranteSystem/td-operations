@@ -2,7 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getInvoiceArchive } from '@/lib/portal/queries'
-import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
+import { getTeammateScopeOrNull, canAccessAccount } from '@/lib/portal/team/gate'
+import { getTeamMemberHistoryView } from '@/lib/portal/viewer-history'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { DocumentList } from '@/components/portal/document-list'
@@ -256,10 +257,16 @@ export default async function PortalDocumentsPage() {
   // Fetch invoice archive documents
   const invoiceArchiveAll = selectedAccountId ? await getInvoiceArchive(selectedAccountId) : []
   // An invoice PDF follows its invoice / expense: opened by staff together with it.
-  const [archSales, archExp] = selectedAccountId
-    ? await Promise.all([getHistoryView(selectedAccountId, contactId, 'invoice'), getHistoryView(selectedAccountId, contactId, 'expense')])
+  // A team member sees the invoice archive only with 'invoices_billing' (the documents capability alone does not open invoices),
+  // and from their own start date unless the owner ticked "see earlier invoices".
+  const archiveAllowed = contactId ? true : !!selectedAccountId && (await canAccessAccount(user, selectedAccountId, 'invoices_billing'))
+  const archView = (kind: 'invoice' | 'expense') => contactId
+    ? getHistoryView(selectedAccountId!, contactId, kind)
+    : getTeamMemberHistoryView({ user, accountId: selectedAccountId!, kind })
+  const [archSales, archExp] = selectedAccountId && archiveAllowed
+    ? await Promise.all([archView('invoice'), archView('expense')])
     : [{ cutoff: null, opened: new Set<string>() }, { cutoff: null, opened: new Set<string>() }]
-  const invoiceArchive = filterByHistoryCutoff(invoiceArchiveAll, archSales.cutoff, contactId, a => ({
+  const invoiceArchive = !archiveAllowed ? [] : filterByHistoryCutoff(invoiceArchiveAll, archSales.cutoff, contactId, a => ({
     created_at: a.created_at,
     opened: (!!a.sales_invoice_id && archSales.opened.has(a.sales_invoice_id)) || (!!a.expense_id && archExp.opened.has(a.expense_id)),
   }))

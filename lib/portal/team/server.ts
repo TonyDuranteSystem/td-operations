@@ -11,6 +11,8 @@ import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { provisionTeammate, type TeammateInput, type ProvisionDeps } from '@/lib/portal/team/provision'
 import { normalizeCapabilities } from '@/lib/portal/team/capabilities'
+import { findContactIdByEmail } from '@/lib/operations/find-contact-by-email'
+import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { randomUUID } from 'crypto'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -79,6 +81,19 @@ export function provisionDeps(): ProvisionDeps {
       return { id: data.id }
     },
     newToken: () => randomUUID().slice(0, 12),
+    emailHasLogin: async (email) => !!(await findAuthUserByEmail(email)),
+    findCompanyContactByEmail: async (accountId, email) => {
+      const contactId = await findContactIdByEmail(email)
+      if (!contactId) return null
+      const { data } = await sb()
+        .from('account_contacts')
+        .select('role, contacts:contact_id(full_name)')
+        .eq('account_id', accountId)
+        .eq('contact_id', contactId)
+        .maybeSingle()
+      if (!data) return null
+      return { name: data.contacts?.full_name ?? null, role: data.role ?? null }
+    },
   }
 }
 
