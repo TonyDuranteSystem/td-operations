@@ -31,7 +31,9 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/email-bin-purge": "30 4 * * *",
   "/api/cron/email-content-capture": "*/10 * * * *",
   "/api/cron/email-unsnooze": "*/10 * * * *",
-  "/api/sync-drive": "0 */6 * * *",
+  // /api/sync-drive removed 2026-10-22 — Stop Drive S4 (dev job 264bb882, Antonio): it copied the Drive folder "TD Operations" into the
+  // td-operations bucket every 6 h; nothing had changed in that folder since 2026-10-03 and 5 files failed on every run. The route file stays
+  // (it can still be called by hand); the bucket and the Claude connector's storage tools are untouched.
   "/api/sync-airtable": "0 */6 * * *",
   "/api/cron/check-wire-payments": "0 */6 * * *",
   "/api/cron/ra-renewal-check": "0 9 * * *",
