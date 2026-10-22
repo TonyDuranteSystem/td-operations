@@ -6,6 +6,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 const MIN_DIGITS = 4
 const PAGE = 1000
+// Each id adds ~37 characters to the request URL; a broad number ("+39 33") must not build an oversized one.
+export const MAX_PHONE_IDS = 200
 
 export function phoneDigits(value: string | null | undefined): string {
   return (value ?? '').replace(/\D/g, '')
@@ -23,31 +25,50 @@ export function phoneMatches(phone: string | null | undefined, searchDigits: str
   return phoneDigits(phone).includes(searchDigits)
 }
 
-/** Ids of leads whose phone contains the typed number (any formatting). Empty when the text is not a phone. */
+/**
+ * Ids of leads whose phone contains the typed number (any formatting), capped at MAX_PHONE_IDS.
+ * Empty when the text is not a phone. Never throws: if the lookup fails the caller just gets
+ * the normal name/email search.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function findLeadIdsByPhone(supabase: SupabaseClient<any, any, any>, query: string): Promise<string[]> {
   const digits = phoneSearchDigits(query)
   if (!digits) return []
 
-  const ids: string[] = []
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
-      .from('leads')
-      .select('id, phone')
-      .not('phone', 'is', null)
-      .order('id')
-      .range(from, from + PAGE - 1)
-    if (error) throw new Error(error.message)
-    const rows = (data ?? []) as { id: string; phone: string | null }[]
-    for (const r of rows) if (phoneMatches(r.phone, digits)) ids.push(r.id)
-    if (rows.length < PAGE) break
+  try {
+    const ids: string[] = []
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from('leads')
+        .select('id, phone')
+        .not('phone', 'is', null)
+        .order('id')
+        .range(from, from + PAGE - 1)
+      if (error) throw new Error(error.message)
+      const rows = (data ?? []) as { id: string; phone: string | null }[]
+      for (const r of rows) if (phoneMatches(r.phone, digits)) ids.push(r.id)
+      if (ids.length >= MAX_PHONE_IDS) {
+        console.warn(`[leads] phone search "${digits}" matched at least ${MAX_PHONE_IDS} leads — list capped`)
+        return ids.slice(0, MAX_PHONE_IDS)
+      }
+      if (rows.length < PAGE) break
+    }
+    return ids
+  } catch (err) {
+    console.error('[leads] phone search lookup failed — falling back to name/email only:', err)
+    return []
   }
-  return ids
+}
+
+/** Quote a value for a PostgREST filter so ( ) , and quotes in typed text cannot break the filter. */
+export function quoteFilterValue(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 }
 
 /** The `.or()` filter for the leads search box: name, email, and (for phone-looking text) matching phones. */
 export function leadSearchOrFilter(query: string, phoneIds: string[]): string {
-  const parts = [`full_name.ilike.%${query}%`, `email.ilike.%${query}%`]
+  const pattern = quoteFilterValue(`%${query}%`)
+  const parts = [`full_name.ilike.${pattern}`, `email.ilike.${pattern}`]
   if (phoneIds.length > 0) parts.push(`id.in.(${phoneIds.join(',')})`)
   return parts.join(',')
 }
