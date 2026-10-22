@@ -77,7 +77,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/payment-integrity-alarm": "0 9 * * *",
   "/api/cron/tax-reactivation": "30 10 * * *",
   "/api/cron/tax-completion-sweep": "*/30 * * * *",
-  "/api/cron/tax-archive-sweep": "*/15 * * * *",
+  // /api/cron/tax-archive-sweep removed 2026-10-22 — Stop Drive S4 (dev job 264bb882, Antonio). It was in DRY-RUN (report-only, never enqueued or alerted) and found 0 candidates on every run.
   // Payment-plan deals with a referrer/partner that just became fully paid in
   // real cash — flags staff toward the "Release commission" action. State-based
   // sweep, deliberately not a hook on any single payment-confirmation path.
@@ -89,7 +89,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // alternative to full unattended card auto-charging.
   "/api/cron/plan-part-auto-raise": "0 9 * * *",
   "/api/cron/card-autopay-charge": "0 11 * * *",
-  "/api/cron/forms-archive-sweep": "*/15 * * * *",
+  // /api/cron/forms-archive-sweep removed 2026-10-22 — Stop Drive S4 (dev job 264bb882, Antonio). It was in DRY-RUN (report-only, never enqueued or alerted); its one standing candidate (an ITIN submission from 2026-07-24) was already filed in the person's storage, only its archived marker was never set.
   "/api/cron/airwallex-sync": "*/15 * * * *",
   "/api/cron/stripe-sync": "0 */6 * * *",
   "/api/cron/itin-processing-check": "0 9 * * 1",
