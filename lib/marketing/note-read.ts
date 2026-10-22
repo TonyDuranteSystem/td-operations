@@ -4,11 +4,16 @@
  */
 import type { Db } from "@/lib/marketing/meta-leads/ingest"
 import { readPaged } from "@/lib/marketing/paged"
-import { pickLatestNotes, type LatestNote } from "@/lib/marketing/setter-note"
+import { pickLatestMarks, pickLatestNotes, type LatestMark, type LatestNote } from "@/lib/marketing/setter-note"
 
 type Row = { lead_id: string; kind: string; actor: string; data: Record<string, unknown>; created_at: string }
 
 export async function loadLatestNotes(db: Db, leadIds: readonly string[]): Promise<Map<string, LatestNote>> {
+  return (await loadLeadActivity(db, leadIds)).notes
+}
+
+/** For each lead id: its newest written note and who last marked it (one read of the lead's history for both). */
+export async function loadLeadActivity(db: Db, leadIds: readonly string[]): Promise<{ notes: Map<string, LatestNote>; marks: Map<string, LatestMark> }> {
   const ids = Array.from(new Set(leadIds))
   const rows: Row[] = []
   for (let i = 0; i < ids.length; i += 100) {
@@ -16,5 +21,5 @@ export async function loadLatestNotes(db: Db, leadIds: readonly string[]): Promi
     const { rows: got } = await readPaged<Row>((from, to) => db.from("marketing_lead_events").select("lead_id, kind, actor, data, created_at").in("lead_id", chunk).in("kind", ["note", "status_changed"]).order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, to), 5000)
     rows.push(...got)
   }
-  return pickLatestNotes(rows)
+  return { notes: pickLatestNotes(rows), marks: pickLatestMarks(rows) }
 }
