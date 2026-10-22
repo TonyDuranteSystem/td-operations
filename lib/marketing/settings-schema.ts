@@ -63,11 +63,13 @@ export const MARKETING_SETTING_DEFS = {
     schema: z.record(z.string().trim().min(1).max(60), z.array(z.string().trim().min(1).max(60)).max(60)),
     fallback: {
       // calls and filters leads: no payment links, no Money, no export, no team management
-      setter: ["leads.read", "leads.call", "leads.mark", "whatsapp", "chat", "inbox"],
+      setter: ["leads.read", "leads.call", "leads.mark", "leads.worklist", "team.notes", "whatsapp", "chat", "inbox"],
       // ads, video, posts: chat, content, reports; reads leads
       content: ["chat", "inbox", "content.manage", "reports.read", "leads.read"],
       // contacts the leads the setters pass: works them, sends the free-call link, no money screens
-      seller: ["leads.read", "leads.pick", "leads.call", "leads.mark", "whatsapp", "chat", "inbox", "calls.host"],
+      seller: ["leads.read", "leads.pick", "leads.call", "leads.mark", "team.notes", "whatsapp", "chat", "inbox", "calls.host"],
+      // sees everything, changes nothing: for analysing the ads and the team
+      analyst: ["leads.read", "team.activity", "team.notes", "reports.read"],
     } as Record<string, string[]>,
   },
   /** Which kinds of sale carry commission terms. A catalog value, so a new kind is a settings change. */

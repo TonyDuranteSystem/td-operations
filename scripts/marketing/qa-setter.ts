@@ -181,11 +181,11 @@ async function main() {
   await v.page.getByLabel("Has a business").check(); await v.page.getByLabel("Can talk this week").check()
   await v.page.locator("textarea").fill("Ready for the free call")
   await v.page.getByRole("button", { name: "Save" }).click()
-  await v.page.getByText("Checklist from the call").waitFor({ timeout: 60000 })
+  await v.page.getByText(/Good — moved to Qualified/).first().waitFor({ timeout: 60000 })
   const l3b = await lead("3")
   ck("E14 Good saves the ticks (and the untick), the stage, and clears any call-back", l3b.status === "qualified" && JSON.stringify(l3b.qualification) === JSON.stringify([{ item: "Has a business", ticked: true }, { item: "Wants to open an LLC", ticked: false }, { item: "Can talk this week", ticked: true }]), l3b)
   const body = await v.page.locator("body").innerText()
-  ck("E15 the page shows the checklist result and the history in plain English", /✔ Has a business/.test(body) && /✘ Wants to open an LLC/.test(body) && /Good — moved to Qualified — Ready for the free call/.test(body) && /Picked/.test(body), body.slice(0, 1200))
+  ck("E15 the page shows the checklist result and the history in plain English", /Confirmed: Has a business/.test(body) && /Not confirmed: Wants to open an LLC/.test(body) && /Setter's note/.test(body) && /Ready for the free call/.test(body) && /Picked/.test(body), body.slice(0, 1200))
   await v.page.screenshot({ path: `${SHOTS}/qa-setter-good.png`, fullPage: true }); await v.page.close()
 
   // ── give back ──

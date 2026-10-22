@@ -8,12 +8,12 @@
 
 /** Every permission name that exists. A grant naming anything else is refused (a typo must not silently grant nothing). */
 export const MARKETING_PERMISSIONS = [
-  "leads.read", "leads.pick", "leads.call", "leads.mark", "leads.import", "leads.export",
+  "leads.read", "leads.pick", "leads.call", "leads.mark", "leads.worklist", "leads.import", "leads.export",
   "payment_links.create", "money.read",
   "offers.create",
   "calls.host", "calls.recordings",
   "whatsapp", "inbox", "chat",
-  "content.manage", "reports.read",
+  "content.manage", "reports.read", "team.activity", "team.notes",
   "team.manage",
 ] as const
 export type MarketingPermission = (typeof MARKETING_PERMISSIONS)[number]

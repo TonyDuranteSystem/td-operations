@@ -1,3 +1,4 @@
+import { canSeePhone } from '@/lib/marketing/lead-privacy'
 import { redirect } from 'next/navigation'
 import { resolveMarketingContext } from '@/lib/marketing/guard'
 import { hasPermission } from '@/lib/marketing/permissions'
@@ -27,7 +28,7 @@ export default async function MarketingMoney() {
     getMarketingSetting('sale_kinds', teamId) as Promise<{ key: string; label: string }[]>,
     sales.length ? db.from('marketing_leads').select('id, full_name, email, phone').eq('team_id', teamId).in('id', Array.from(new Set(sales.map(s => s.lead_id)))) : Promise.resolve({ data: [] }),
   ])
-  const names = new Map(((leadsRes.data ?? []) as { id: string; full_name: string | null; email: string | null; phone: string | null }[]).map(l => [l.id, l.full_name || l.email || l.phone || 'Unnamed lead']))
+  const names = new Map(((leadsRes.data ?? []) as { id: string; full_name: string | null; email: string | null; phone: string | null }[]).map(l => [l.id, l.full_name || l.email || (canSeePhone(g.ctx.permissions) ? l.phone : null) || 'Unnamed lead']))
   const totals = totalsByCurrency(sales)
   const card = 'rounded-xl border bg-white p-5'
   return (

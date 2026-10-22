@@ -7,7 +7,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { getMarketingSetting } from "@/lib/marketing/settings"
-import { canGrant, validatePermissionList, MARKETING_PERMISSIONS } from "@/lib/marketing/permissions"
+import { canGrant, effectivePermissions, validatePermissionList, MARKETING_PERMISSIONS } from "@/lib/marketing/permissions"
 import { findMarketingAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import {
   GENERIC_INVITE_ERROR, TRY_AGAIN_ERROR, WEAK_PASSWORD_ERROR, hashInviteToken, inviteExpiry, inviteUsable, isEmailTakenError, isOrphanMarketingLogin,
@@ -48,8 +48,10 @@ export async function createInvite(input: {
   if (!team) return fail("Team not found.")
   const bundles = (await getMarketingSetting("permission_bundles", input.teamId)) as Record<string, string[]>
   const bundle = input.bundle ?? null
-  if (memberRole === "member" && (!bundle || !Object.prototype.hasOwnProperty.call(bundles, bundle))) return fail("Pick a role for this person.")
   const extra = input.permissions ?? []
+  // a person's access is their exact list of ticks; a role (bundle) is still accepted as a starting point for older callers
+  if (memberRole === "member" && bundle && !Object.prototype.hasOwnProperty.call(bundles, bundle)) return fail("Unknown role.")
+  if (memberRole === "member" && !bundle && (validatePermissionList(extra).value ?? []).length === 0) return fail("Choose what this person can do.")
   // what the person will hold must be something the granter may give: the bundle's permissions plus the extras
   const requested = [...(bundle ? (bundles[bundle] ?? []) : []), ...extra]
   const check = canGrant({ ...grantParams(input.actor), requested, targetUserId: null })
@@ -220,7 +222,14 @@ export async function updateMemberAccess(input: { teamId: string; userId: string
   const bundle = input.bundle === undefined ? m.bundle : input.bundle
   if (bundle && !Object.prototype.hasOwnProperty.call(bundles, bundle)) return fail("Unknown role.")
   const extra = input.permissions === undefined ? m.permissions : input.permissions
-  const check = canGrant({ ...grantParams(input.actor), requested: [...(bundle ? bundles[bundle] : []), ...extra], targetUserId: input.userId })
+  // nobody is left with no access by accident: removing everything is what Remove or Pause is for
+  if (!bundle && (validatePermissionList(extra).value ?? []).length === 0) return fail("Choose at least one thing this person can do, or use Pause or Remove.")
+  // only what CHANGES has to be within the manager's own access: what the person already holds stays untouched, so a manager can still change an unrelated tick on a person
+  // who holds something the manager lacks; but he can neither give nor take away what he does not hold himself
+  const before = new Set<string>(effectivePermissions({ memberRole: "member", bundle: m.bundle, bundles, extra: m.permissions }))
+  const after = new Set<string>([...(bundle ? bundles[bundle] : []), ...extra].map(String))
+  const changed = [...Array.from(after).filter(p => !before.has(p)), ...Array.from(before).filter(p => !after.has(p))]
+  const check = canGrant({ ...grantParams(input.actor), requested: changed, targetUserId: input.userId })
   if (!check.ok) return fail(check.error ?? "Not allowed.")
   const { error } = await db().from("marketing_team_members").update({ bundle, permissions: validatePermissionList(extra).value ?? [] }).eq("team_id", input.teamId).eq("user_id", input.userId)
   if (error) return fail("The change could not be saved. Please try again.")

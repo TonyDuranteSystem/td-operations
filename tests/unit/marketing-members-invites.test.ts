@@ -54,7 +54,7 @@ vi.mock("@/lib/auth-admin-helpers", () => ({ findMarketingAuthUserByEmail: (e: s
 vi.mock("@/lib/config", () => ({ APP_BASE_URL: "https://app.example" }))
 vi.mock("@/lib/marketing/settings", () => ({ getMarketingSetting: vi.fn(async () => ({ setter: ["leads.read"], seller: ["leads.read", "leads.pick"] })) }))
 
-import { acceptInvite, removeMember, updateMemberAccess, type Actor } from "@/lib/marketing/members"
+import { acceptInvite, createInvite, removeMember, updateMemberAccess, type Actor } from "@/lib/marketing/members"
 
 const TOKEN = "T".repeat(43)
 const PASSWORD = "A-long-enough-password-1"
@@ -204,5 +204,62 @@ describe("updateMemberAccess", () => {
       const r = await updateMemberAccess({ teamId: TEAM, userId: "chiara-1", permissions: bad as unknown as unknown[], actor: owner })
       expect(r).toEqual({ ok: false, error: "Permissions must be a list." })
     }
+  })
+})
+
+describe("exact ticks per person (the access popup)", () => {
+  it("an invitation can carry an exact list with no role; the list is stored as given", async () => {
+    tables.marketing_teams = [{ id: TEAM }]
+    const r = await createInvite({ teamId: TEAM, email: "ale@example.com", bundle: null, permissions: ["leads.read", "reports.read", "team.notes"], actor: owner })
+    expect(r.ok).toBe(true)
+    const inv = tables.marketing_invites.find(i => i.email_lower === "ale@example.com")
+    expect(inv?.bundle ?? null).toBeNull()
+    expect(inv?.permissions).toEqual(["leads.read", "reports.read", "team.notes"])
+  })
+  it("an invitation with no role and no ticks is refused", async () => {
+    tables.marketing_teams = [{ id: TEAM }]
+    const r = await createInvite({ teamId: TEAM, email: "x@example.com", bundle: null, permissions: [], actor: owner })
+    expect(r).toEqual({ ok: false, error: "Choose what this person can do." })
+  })
+  it("the gear can REMOVE one thing: sending the exact list without it, and no role, really removes it", async () => {
+    tables.marketing_team_members.push(member("p-1", { member_role: "member", bundle: "seller", permissions: [] }))
+    const r = await updateMemberAccess({ teamId: TEAM, userId: "p-1", bundle: null, permissions: ["leads.read"], actor: owner })
+    expect(r.ok).toBe(true)
+    const row = tables.marketing_team_members.find(m => m.user_id === "p-1")
+    expect(row?.bundle).toBeNull()
+    expect(row?.permissions).toEqual(["leads.read"])
+  })
+  it("an unknown permission is refused and nothing is saved", async () => {
+    tables.marketing_team_members.push(member("p-2", { member_role: "member", bundle: null, permissions: ["leads.read"] }))
+    const r = await updateMemberAccess({ teamId: TEAM, userId: "p-2", bundle: null, permissions: ["leads.read", "root.everything"], actor: owner })
+    expect(r.ok).toBe(false)
+    expect(tables.marketing_team_members.find(m => m.user_id === "p-2")?.permissions).toEqual(["leads.read"])
+  })
+  it("saving an empty list is refused (use Pause or Remove), never a person with silently no access", async () => {
+    tables.marketing_team_members.push(member("p-3", { member_role: "member", bundle: null, permissions: ["leads.read"] }))
+    const r = await updateMemberAccess({ teamId: TEAM, userId: "p-3", bundle: null, permissions: [], actor: owner })
+    expect(r.ok).toBe(false)
+    expect(tables.marketing_team_members.find(m => m.user_id === "p-3")?.permissions).toEqual(["leads.read"])
+  })
+  it("the new access/activity ticks are real permissions the owner can give", async () => {
+    tables.marketing_team_members.push(member("p-4", { member_role: "member", bundle: null, permissions: ["leads.read"] }))
+    const r = await updateMemberAccess({ teamId: TEAM, userId: "p-4", bundle: null, permissions: ["leads.read", "team.activity", "team.notes", "leads.worklist"], actor: owner })
+    expect(r.ok).toBe(true)
+  })
+})
+
+describe("a manager (not the owner) changes only what he holds himself", () => {
+  const mgr: Actor = { kind: "member", userId: "mgr-1", label: "mgr@td.us", permissions: ["team.manage", "leads.read", "leads.mark", "chat"] }
+  it("he can change an unrelated tick on a person who holds something he lacks; what he lacks stays untouched", async () => {
+    tables.marketing_team_members.push(member("s-1", { member_role: "member", bundle: null, permissions: ["leads.read", "calls.host"] }))
+    const r = await updateMemberAccess({ teamId: TEAM, userId: "s-1", bundle: null, permissions: ["leads.read", "calls.host", "chat"], actor: mgr })
+    expect(r.ok).toBe(true)
+    expect(tables.marketing_team_members.find(m => m.user_id === "s-1")?.permissions).toEqual(["leads.read", "calls.host", "chat"])
+  })
+  it("he cannot give what he lacks, and cannot take away what he lacks", async () => {
+    tables.marketing_team_members.push(member("s-2", { member_role: "member", bundle: null, permissions: ["leads.read", "calls.host"] }))
+    expect((await updateMemberAccess({ teamId: TEAM, userId: "s-2", bundle: null, permissions: ["leads.read", "calls.host", "money.read"], actor: mgr })).ok).toBe(false)
+    expect((await updateMemberAccess({ teamId: TEAM, userId: "s-2", bundle: null, permissions: ["leads.read"], actor: mgr })).ok).toBe(false)
+    expect(tables.marketing_team_members.find(m => m.user_id === "s-2")?.permissions).toEqual(["leads.read", "calls.host"])
   })
 })

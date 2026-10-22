@@ -14834,6 +14834,48 @@ export type Database = {
           },
         ]
       }
+      service_delivery_notes: {
+        Row: {
+          author_name: string
+          author_user_id: string | null
+          body: string
+          created_at: string
+          id: string
+          service_delivery_id: string
+        }
+        Insert: {
+          author_name: string
+          author_user_id?: string | null
+          body: string
+          created_at?: string
+          id?: string
+          service_delivery_id: string
+        }
+        Update: {
+          author_name?: string
+          author_user_id?: string | null
+          body?: string
+          created_at?: string
+          id?: string
+          service_delivery_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "service_delivery_notes_service_delivery_id_fkey"
+            columns: ["service_delivery_id"]
+            isOneToOne: false
+            referencedRelation: "service_deliveries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "service_delivery_notes_service_delivery_id_fkey"
+            columns: ["service_delivery_id"]
+            isOneToOne: false
+            referencedRelation: "v_active_service_deliveries"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       service_settings_history: {
         Row: {
           actor: string

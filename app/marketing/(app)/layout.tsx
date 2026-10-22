@@ -1,6 +1,7 @@
 import { resolveMarketingContext } from '@/lib/marketing/guard'
 import { modulesFor } from '@/lib/marketing/workspace'
-import { roleLabel } from '@/lib/marketing/permission-labels'
+import { accessLabel, type Bundles } from '@/lib/marketing/access'
+import { getMarketingSetting } from '@/lib/marketing/settings'
 import { SignOutButton } from './sign-out-button'
 import { WorkspaceNav } from './workspace-nav'
 import { ExitViewButton } from './exit-view-button'
@@ -15,6 +16,7 @@ export default async function MarketingAppLayout({ children }: { children: React
   const g = await resolveMarketingContext()
   if (g.ok === false) return <>{children}</>
   const { ctx } = g
+  const bundlesSetting = (await getMarketingSetting('permission_bundles', ctx.team.id)) as Bundles
   return (
     <div>
       {ctx.viewAs && (
@@ -32,7 +34,7 @@ export default async function MarketingAppLayout({ children }: { children: React
         <WorkspaceNav items={modulesFor(ctx.permissions)} />
         <div className="mt-auto space-y-2 text-sm">
           <p className="truncate text-slate-500" title={ctx.user.email ?? ''}>{ctx.user.email}</p>
-          <p className="text-xs text-slate-400">{ctx.role === 'owner' ? 'Team owner' : roleLabel(ctx.membership.bundle)}</p>
+          <p className="text-xs text-slate-400">{ctx.role === 'owner' ? 'Team owner' : accessLabel(ctx.permissions, bundlesSetting)}</p>
           <SignOutButton />
         </div>
       </aside>
