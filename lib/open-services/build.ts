@@ -281,6 +281,8 @@ export function classify(input: BuildInput): Classified {
       serviceType: job.service_type,
       name,
       isPerson: !account,
+      accountId: job.account_id ?? null,
+      contactId: job.contact_id ?? null,
       stage,
       stepNo: step ? rank.get(stepKey(step.service_type, step.stage_name)) ?? null : null,
       who,

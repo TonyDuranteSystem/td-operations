@@ -121,6 +121,9 @@ export interface Row {
   /** Company name, or the person's name for a job that belongs to a person. */
   name: string
   isPerson: boolean
+  /** The company and the person the job is tied to (ids only; used to tag a sticky note made from the Calendar). */
+  accountId?: string | null
+  contactId?: string | null
   stage: string
   /** Position of the step in its service's step list (1-based), from the settings — never the job's own copy. */
   stepNo: number | null

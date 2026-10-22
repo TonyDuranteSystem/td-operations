@@ -61,6 +61,11 @@ export interface CalendarRow {
   /** Company name, or the person's name for a job that belongs to a person. */
   name: string
   isPerson: boolean
+  /** The company and the person the job is tied to — lets a sticky note made from the row be tagged. */
+  accountId?: string | null
+  contactId?: string | null
+  /** The team notes on this job (set by the page after the notes are read; absent = none read). */
+  notes?: { count: number; last: { id: string; body: string; authorName: string; createdAt: string } | null } | null
   serviceType: string
   /** The step the job sits on (for a closed job: the step it finished on). */
   stage: string
