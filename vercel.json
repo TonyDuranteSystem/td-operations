@@ -89,14 +89,6 @@
       "schedule": "*/10 * * * *"
     },
     {
-      "path": "/api/cron/drive-gap",
-      "schedule": "*/5 * * * *"
-    },
-    {
-      "path": "/api/cron/drive-pickup",
-      "schedule": "*/5 * * * *"
-    },
-    {
       "path": "/api/cron/account-status-events",
       "schedule": "*/5 * * * *"
     },
