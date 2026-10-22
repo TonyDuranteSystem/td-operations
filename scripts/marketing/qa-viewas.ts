@@ -123,7 +123,7 @@ async function main() {
   v = await view(admin, teamsUrl)
   const section = v.page.locator("section", { hasText: `QA va A ${stamp}` })
   const opts = (await section.getByRole("button").allInnerTexts()).join(" | ")
-  ck("V2 the Teams page offers 'View as' with the team owner and each role from the bundles setting", /Team owner \(every screen\)/.test(opts) && /Setter/.test(opts) && /Content/.test(opts) && /Seller/.test(opts), opts)
+  ck("V2 the Teams page offers 'View as' with the team owner and each role from the bundles setting", /Team owner \(every screen\)/.test(opts) && /Setter/.test(opts) && /Ad person/.test(opts) && /Seller/.test(opts) && /Analyst/.test(opts), opts)
   await section.getByRole("button", { name: "Team owner (every screen)" }).click()
   await v.page.waitForURL(/\/marketing\/today/, { timeout: 90000 })
   const banner = await v.page.getByRole("status").innerText()

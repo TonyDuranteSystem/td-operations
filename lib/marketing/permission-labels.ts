@@ -6,6 +6,7 @@ export const PERMISSION_LABELS: Record<MarketingPermission, string> = {
   "leads.pick": "Pick leads to work on",
   "leads.call": "See phone numbers and call leads",
   "leads.mark": "Mark leads Good, Not in target or Call back",
+  "leads.worklist": "Work the call list and see My numbers",
   "leads.import": "Import old leads",
   "leads.export": "Export lead lists",
   "payment_links.create": "Create payment links",
@@ -18,6 +19,8 @@ export const PERMISSION_LABELS: Record<MarketingPermission, string> = {
   chat: "Use team chat",
   "content.manage": "Manage ads and content",
   "reports.read": "See reports",
+  "team.activity": "See what the team did today",
+  "team.notes": "See other people's notes and rejections",
   "team.manage": "Manage the team",
 }
 
@@ -26,9 +29,13 @@ export function permissionLabel(p: string): string {
   return (PERMISSION_LABELS as Record<string, string>)[p] ?? p
 }
 
+/** The roles Antonio set up, in plain words (a role not listed here is shown from its key). */
+export const ROLE_LABELS: Record<string, string> = { setter: "Setter", seller: "Seller", content: "Ad person", analyst: "Analyst (read only)" }
+
 /** "setter" -> "Setter", "content_creator" -> "Content creator". */
 export function roleLabel(key: string | null | undefined): string {
   if (!key) return "No role"
+  if (ROLE_LABELS[key]) return ROLE_LABELS[key]
   const s = key.replace(/[_-]+/g, " ").trim()
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : key
 }

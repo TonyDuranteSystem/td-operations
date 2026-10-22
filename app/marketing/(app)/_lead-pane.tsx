@@ -3,7 +3,7 @@ import { PaymentLinkPanel, type PaymentLinkProps } from '@/components/marketing/
 import { clientFlagText, eventText, formatWhen, prettyAnswer, prettyQuestion, stageLabel, telHref, type StageOption } from '@/lib/marketing/lead-view'
 import type { LeadEventRow, LeadRow } from '@/lib/marketing/leads-read'
 import { hasPermission, type MarketingPermission } from '@/lib/marketing/permissions'
-import { canSeeNotes, redactLead, redactTimeline } from '@/lib/marketing/lead-privacy'
+import { answersWithoutPhone, canSeeNotes, canSeePhone, redactLead, redactTimeline } from '@/lib/marketing/lead-privacy'
 import { buildSetterNote, personName } from '@/lib/marketing/setter-note'
 import { SetterNoteBlock } from '@/components/marketing/setter-note-block'
 
@@ -26,7 +26,9 @@ interface Props {
 export function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons, checklist, permissions, isOwner, myId, afterHref, paymentLink }: Props) {
   // What the team wrote (notes, the ticks from a call) is read only by people who work the leads; the ad person gets the facts without it.
   const seesNotes = canSeeNotes(permissions)
-  const lead = redactLead(leadIn, seesNotes)
+  const lead0 = redactLead(leadIn, seesNotes)
+  // no phone number (and no phone-looking form answer) in the page for someone who may not see phone numbers
+  const lead = canSeePhone(permissions) ? lead0 : { ...lead0, phone: null, answers: answersWithoutPhone(lead0.answers, permissions) }
   const events = redactTimeline(eventsIn, seesNotes)
   const setterNote = seesNotes ? buildSetterNote(events, reasons) : null
   const claim = lead.claimed_by === null ? 'free' : lead.claimed_by === myId ? 'me' : 'other'

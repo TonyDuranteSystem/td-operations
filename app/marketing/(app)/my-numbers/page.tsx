@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic'
 export default async function MarketingMyNumbers({ searchParams }: { searchParams: Promise<{ period?: string }> }) {
   const g = await resolveMarketingContext()
   if (g.ok === false) redirect('/marketing')
-  if (!hasPermission(g.ctx.permissions, 'leads.mark')) {
+  if (!hasPermission(g.ctx.permissions, 'leads.worklist')) {
     return <main className="mx-auto max-w-xl px-4 py-10"><p className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm">You do not have numbers of your own here. Ask your team owner.</p></main>
   }
   const period = parsePeriod((await searchParams).period)

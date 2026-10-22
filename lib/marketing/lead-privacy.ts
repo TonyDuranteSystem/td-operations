@@ -6,7 +6,25 @@
 import type { LeadEventRow, LeadRow } from "@/lib/marketing/leads-read"
 
 export function canSeeNotes(permissions: readonly string[]): boolean {
-  return permissions.includes("leads.mark") || permissions.includes("leads.pick")
+  return permissions.includes("team.notes")
+}
+
+/** Phone numbers are for the people who call: without "See phone numbers and call leads" the number is not sent to the page at all. */
+export function canSeePhone(permissions: readonly string[]): boolean {
+  return permissions.includes("leads.call")
+}
+
+/** The same rows with the phone number removed when the person may not see it (and the phone-looking form answers). */
+export function withoutPhone<T extends { phone: string | null }>(rows: readonly T[], permissions: readonly string[]): T[] {
+  return canSeePhone(permissions) ? [...rows] : rows.map(r => ({ ...r, phone: null }))
+}
+
+const PHONE_ANSWER = /phone|telefon|cellul|mobile|whatsapp|tel\b/i
+/** Form answers without the ones that are a phone number, when the person may not see phone numbers. */
+const PHONE_VALUE = /(\d[\s().-]?){7,}/
+export function answersWithoutPhone<T extends { name?: string; label?: string; question?: string; values?: readonly string[] }>(answers: readonly T[], permissions: readonly string[]): T[] {
+  // by the question's name, and by what the answer looks like (a long run of digits is a phone number whatever the question is called)
+  return canSeePhone(permissions) ? [...answers] : answers.filter(a => !PHONE_ANSWER.test(`${a.name ?? ""} ${a.label ?? ""} ${a.question ?? ""}`) && !(a.values ?? []).some(v => PHONE_VALUE.test(String(v))))
 }
 
 /** The kinds of history line that are plain facts about a lead; a person who may not read the team's notes sees only these (never money lines, never a kind this list does not know). */

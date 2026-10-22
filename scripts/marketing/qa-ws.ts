@@ -136,16 +136,17 @@ async function main() {
   ck("W1 the owner opening /marketing lands on Today", /\/marketing\/today/.test(v.page.url()), v.page.url())
   const on = await nav(v.page)
   const order = ["Today", "Leads", "Inbox", "WhatsApp", "Chat", "Calls", "Money", "Offers", "Content", "Reports", "Team"]
-  const pos = order.map(x => on.indexOf(x))
-  ck("W2 the sidebar lists the owner's screens in the mockup's order; screens not built yet are greyed 'soon'", pos.every((x, i) => x >= 0 && (i === 0 || x > pos[i - 1])) && (on.match(/soon/gi) ?? []).length === 6 && !/Call list|My numbers/.test(on), on)
+  const pos = order.map(x => (x === "Team" ? on.lastIndexOf(x) : on.indexOf(x)))
+  ck("W2 the sidebar lists the owner's screens in the mockup's order; screens not built yet are greyed 'soon'", pos.every((x, i) => x >= 0 && (i === 0 || x > pos[i - 1])) && (on.match(/soon/gi) ?? []).length === 6, on)
   const cbs = await rows(v.page, "Call backs due")
   ck("W3 Today: call backs due today, the late one first and flagged late, tomorrow's left out", cbs.length === 2 && /Late Callback/.test(cbs[0]) && /late/.test(cbs[0]) && /Soon Callback/.test(cbs[1]) && !cbs.join().includes("Tomorrow"), cbs)
   const gw = await rows(v.page, "Good leads waiting")
   ck("W4 Today: the Good leads nobody picked, longest waiting first, each with Pick this lead; the one a setter holds is not offered", gw.length === 2 && /Good Older/.test(gw[0]) && /Good Newer/.test(gw[1]) && gw.every(x => /Pick this lead/.test(x)) && !gw.join().includes("Good Taken"), gw)
   const mine = await rows(v.page, "My leads")
   ck("W5 Today: 'Your leads' lists the open leads the owner picked (both of them)", mine.length === 2 && mine.some(x => /Owner Own Lead/.test(x)) && mine.some(x => /Taken By Owner New/.test(x)), mine)
-  const team = await v.page.locator('section[aria-label="What the team did today"]').innerText()
-  ck("W6 Today: what the team did today, per person (the setter's Good, the owner's pick)", /qa-ws-settera@example\.test\s+setter\s+1\s+0\s+0\s+0/i.test(team.replace(/\s+/g, " ")) || /qa-ws-settera/.test(team) && /qa-ws-ownera/.test(team), team)
+  const ta = await view(owner, "/marketing/activity")
+  const team = await ta.page.locator('section[aria-label="What the team did today"]').innerText(); await ta.page.close()
+  ck("W6 Team activity page: what the team did today, per person (the setter's Good, the owner's pick)", /Qa Ws Settera\s+setter\s+1\s+0\s+0\s+0/i.test(team.replace(/\s+/g, " ")) || /Qa Ws Settera/.test(team) && /Qa Ws Ownera/.test(team), team)
   await v.page.screenshot({ path: `${SHOTS}/qa-ws-today.png`, fullPage: true })
 
   // ── pick from Today ──
