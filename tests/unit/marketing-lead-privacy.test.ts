@@ -13,8 +13,9 @@ const events = [
 
 describe("who may read the team's notes", () => {
   it("the owner, a seller and a setter may; the ad person (reads leads only) may not; nobody may by default", () => {
-    expect(canSeeNotes(["leads.pick"])).toBe(true)
-    expect(canSeeNotes(["leads.read", "leads.mark"])).toBe(true)
+    expect(canSeeNotes(["leads.read", "team.notes"])).toBe(true)
+    expect(canSeeNotes(["leads.pick"])).toBe(false) // picking or marking does not open the notes: only "See other people's notes" does
+    expect(canSeeNotes(["leads.read", "leads.mark"])).toBe(false)
     expect(canSeeNotes(["chat", "inbox", "content.manage", "reports.read", "leads.read"])).toBe(false)
     expect(canSeeNotes([])).toBe(false)
   })

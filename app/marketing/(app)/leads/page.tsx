@@ -10,6 +10,7 @@ import { loadPaymentLinkView } from '@/lib/marketing/sales-server'
 import { leadIdsWorkedBy } from '@/lib/marketing/events-read'
 import { listMembers } from '@/lib/marketing/members'
 import { personName } from '@/lib/marketing/setter-note'
+import { withoutPhone } from '@/lib/marketing/lead-privacy'
 import { LeadPane } from '../_lead-pane'
 
 export const dynamic = 'force-dynamic'
@@ -30,8 +31,8 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
   const db = leadDb()
   const teamId = g.ctx.team.id
   // "worked by": only a real member's email counts; anything else is ignored
-  const members = sp.by ? await listMembers(teamId) : []
-  const byEmail = sp.by && members.some(x => x.email === sp.by) ? sp.by : ''
+  const members = sp.by && hasPermission(g.ctx.permissions, 'team.activity') ? await listMembers(teamId) : []
+  const byEmail = sp.by && hasPermission(g.ctx.permissions, 'team.activity') && members.some(x => x.email === sp.by) ? sp.by : ''
   const [allRes, stages, reasons, checklist, selected] = await Promise.all([
     byEmail ? Promise.resolve({ rows: [], truncated: false }) : listTeamLeadsCapped(db, teamId, 500),
     getMarketingSetting('pipeline_stages', teamId) as Promise<StageOption[]>,
@@ -44,7 +45,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
   const by = byEmail
   // with a person chosen, the leads come BY ID (everything they worked on, however old); otherwise the newest 500
   const worked = by ? await leadIdsWorkedBy(db, teamId, by) : null
-  const all = worked ? await listTeamLeadsByIds(db, teamId, worked.ids) : allRes.rows
+  const all = withoutPhone(worked ? await listTeamLeadsByIds(db, teamId, worked.ids) : allRes.rows, g.ctx.permissions)
   const cut = worked ? worked.truncated : allRes.truncated
   const leads = filterLeads(all, { show, stage }, g.ctx.user.id)
   const events = selected ? await leadTimeline(db, selected.id) : []

@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest"
 import { callQueue, homeFor, modulesFor, nextInQueue, todayModel, type TodayLead } from "@/lib/marketing/workspace"
 
-const OWNER = ["leads.read", "leads.pick", "leads.call", "leads.mark", "leads.import", "leads.export", "payment_links.create", "money.read", "offers.create", "calls.host", "calls.recordings", "whatsapp", "inbox", "chat", "content.manage", "reports.read", "team.manage"]
-const SETTER = ["leads.read", "leads.call", "leads.mark", "whatsapp", "chat", "inbox"]
+const OWNER = ["leads.worklist", "team.activity", "team.notes", "leads.read", "leads.pick", "leads.call", "leads.mark", "leads.import", "leads.export", "payment_links.create", "money.read", "offers.create", "calls.host", "calls.recordings", "whatsapp", "inbox", "chat", "content.manage", "reports.read", "team.manage"]
+const SETTER = ["leads.read", "leads.call", "leads.mark", "leads.worklist", "team.notes", "whatsapp", "chat", "inbox"]
 const NOW = new Date("2026-10-20T12:00:00Z") // 14:00 in Rome
 const h = (n: number) => new Date(NOW.getTime() + n * 3600_000).toISOString()
 let n = 0
@@ -11,8 +11,8 @@ const lead = (o: Partial<TodayLead> = {}): TodayLead => ({
 })
 
 describe("modulesFor", () => {
-  it("the owner gets every screen of the mockup in its order, with Today and Team", () => {
-    expect(modulesFor(OWNER).map(m => m.key)).toEqual(["today", "leads", "inbox", "whatsapp", "chat", "calls", "money", "offers", "content", "reports", "team"])
+  it("the owner gets every screen of the mockup in its order, with Today, Team activity and Team", () => {
+    expect(modulesFor(OWNER).map(m => m.key)).toEqual(["today", "call-list", "leads", "inbox", "whatsapp", "chat", "calls", "money", "offers", "content", "my-numbers", "activity", "reports", "team"])
   })
   it("a setter gets the Call list, Leads, Chat, Inbox, WhatsApp and My numbers, and no money, no team, no Today", () => {
     const k = modulesFor(SETTER).map(m => m.key)

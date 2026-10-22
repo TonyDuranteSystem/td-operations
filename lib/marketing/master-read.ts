@@ -7,6 +7,8 @@ import { buildMasterView, romeStartOfMonth, type MasterLead, type MasterMember, 
 import { getMarketingSetting } from "@/lib/marketing/settings"
 import { listMembers } from "@/lib/marketing/members"
 import { loadTeamEvents } from "@/lib/marketing/events-read"
+import { effectivePermissions } from "@/lib/marketing/permissions"
+import { accessLabel, type Bundles } from "@/lib/marketing/access"
 import { readPaged } from "@/lib/marketing/paged"
 import { paidStagesFrom } from "@/lib/marketing/workspace"
 
@@ -25,7 +27,7 @@ export interface MasterData {
 }
 
 export async function loadMasterData(db: Db, teamId: string, now = new Date()): Promise<MasterData> {
-  const [leadsRes, noTeamRes, ev, stages, members, cron, stuck, saleStages] = await Promise.all([
+  const [leadsRes, noTeamRes, ev, stages, members, cron, stuck, saleStages, bundles] = await Promise.all([
     readPaged<MasterLead>((from, to) => db.from("marketing_leads").select(LEAD_COLS).eq("team_id", teamId).order("received_at", { ascending: false }).order("id", { ascending: false }).range(from, to), 5000),
     db.from("marketing_leads").select("id", { count: "exact", head: true }).is("team_id", null),
     loadTeamEvents(db, teamId, { since: romeStartOfMonth(now) }),
@@ -34,10 +36,11 @@ export async function loadMasterData(db: Db, teamId: string, now = new Date()): 
     db.from("cron_log").select("executed_at").eq("endpoint", "/api/cron/marketing-lead-retry").order("executed_at", { ascending: false }).limit(1),
     db.from("marketing_leadgen_events").select("id", { count: "exact", head: true }).in("status", ["failed", "gave_up"]),
     getMarketingSetting("sale_kind_stages", teamId) as Promise<Record<string, string>>,
+    getMarketingSetting("permission_bundles", teamId) as Promise<Bundles>,
   ])
   const leads = leadsRes.rows
   const events = ev.events
-  const people: MasterMember[] = members.map(m => ({ email: m.email, role: m.member_role as "owner" | "member", bundle: m.bundle, status: m.status, lastSignInAt: m.last_sign_in_at }))
+  const people: MasterMember[] = members.map(m => ({ email: m.email, role: m.member_role as "owner" | "member", bundle: accessLabel(effectivePermissions({ memberRole: "member", bundle: m.bundle, bundles, extra: m.permissions }), bundles), status: m.status, lastSignInAt: m.last_sign_in_at }))
   return {
     view: buildMasterView({ leads, events, members: people, stages, now, unassignedCount: noTeamRes.count ?? 0, paidStages: paidStagesFrom(saleStages) }),
     stages, leadCount: leads.length, memberCount: people.filter(p => p.status !== "removed").length,

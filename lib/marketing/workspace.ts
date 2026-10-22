@@ -10,7 +10,7 @@ export interface Module { key: string; label: string; href: string; built: boole
 /** Every screen of the approved mockup, in its order, with the permission that opens it. Not-yet-built screens stay on the list, greyed "soon". */
 const CATALOG: Array<{ key: string; label: string; href: string; built: boolean; when: (p: readonly string[]) => boolean }> = [
   { key: "today", label: "Today", href: "/marketing/today", built: true, when: p => p.includes("leads.pick") },
-  { key: "call-list", label: "Call list", href: "/marketing/call-list", built: true, when: p => p.includes("leads.mark") && !p.includes("leads.pick") },
+  { key: "call-list", label: "Call list", href: "/marketing/call-list", built: true, when: p => p.includes("leads.worklist") },
   { key: "leads", label: "Leads", href: "/marketing/leads", built: true, when: p => p.includes("leads.read") },
   { key: "inbox", label: "Inbox", href: "/marketing/inbox", built: false, when: p => p.includes("inbox") },
   { key: "whatsapp", label: "WhatsApp", href: "/marketing/whatsapp", built: false, when: p => p.includes("whatsapp") },
@@ -19,7 +19,8 @@ const CATALOG: Array<{ key: string; label: string; href: string; built: boolean;
   { key: "money", label: "Money", href: "/marketing/money", built: true, when: p => p.includes("money.read") },
   { key: "offers", label: "Offers", href: "/marketing/offers", built: false, when: p => p.includes("offers.create") },
   { key: "content", label: "Content", href: "/marketing/content", built: false, when: p => p.includes("content.manage") },
-  { key: "my-numbers", label: "My numbers", href: "/marketing/my-numbers", built: true, when: p => p.includes("leads.mark") && !p.includes("leads.pick") },
+  { key: "my-numbers", label: "My numbers", href: "/marketing/my-numbers", built: true, when: p => p.includes("leads.worklist") },
+  { key: "activity", label: "Team activity", href: "/marketing/activity", built: true, when: p => p.includes("team.activity") },
   { key: "reports", label: "Reports", href: "/marketing/reports", built: true, when: p => p.includes("reports.read") || p.includes("leads.pick") },
   { key: "team", label: "Team", href: "/marketing/team", built: true, when: p => p.includes("team.manage") },
 ]

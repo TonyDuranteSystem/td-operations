@@ -16,8 +16,8 @@ export const dynamic = 'force-dynamic'
 export default async function MarketingReports({ searchParams }: { searchParams: Promise<{ period?: string }> }) {
   const g = await resolveMarketingContext()
   if (g.ok === false) redirect('/marketing')
-  const seesSetters = hasPermission(g.ctx.permissions, 'leads.pick')
-  if (!hasPermission(g.ctx.permissions, 'reports.read') && !seesSetters) {
+  const seesSetters = hasPermission(g.ctx.permissions, 'team.activity')
+  if (!hasPermission(g.ctx.permissions, 'reports.read') && !hasPermission(g.ctx.permissions, 'leads.pick')) {
     return <main className="mx-auto max-w-xl px-4 py-10"><p className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm">You do not have access to Reports. Ask your team owner.</p></main>
   }
   const period = parsePeriod((await searchParams).period)

@@ -5,6 +5,8 @@ import { leadDb } from "@/lib/marketing/meta-leads/service"
 import { getMarketingSetting, listTeams } from "@/lib/marketing/settings"
 import { listMembers, listOpenInvites } from "@/lib/marketing/members"
 import { ageText, countsAsWork, romeStartOfMonth } from "@/lib/marketing/master-view"
+import { accessLabel } from "@/lib/marketing/access"
+import { effectivePermissions } from "@/lib/marketing/permissions"
 import { loadTeamEvents } from "@/lib/marketing/events-read"
 import { formatWhen } from "@/lib/marketing/lead-view"
 import { roleLabel } from "@/lib/marketing/permission-labels"
@@ -30,14 +32,14 @@ export default async function MarketingTeamsPage() {
       getMarketingSetting("permission_bundles", t.id) as Promise<Record<string, string[]>>,
     ])
     const viewOptions = viewAsOptions(bundles, roleLabel).map(o => ({ key: o.key, as: o.value === "owner" ? "owner" : o.value.bundle, label: o.label }))
-    return { t, viewOptions, members: members.filter(m => m.status !== "removed"), invites, evs: evRes.events.filter(countsAsWork), truncated: evRes.truncated }
+    return { t, bundles, viewOptions, members: members.filter(m => m.status !== "removed"), invites, evs: evRes.events.filter(countsAsWork), truncated: evRes.truncated }
   }))
 
   return (
     <div className="space-y-6 p-6">
       <div><h1 className="text-2xl font-semibold">Teams</h1><p className="text-sm text-slate-500">Who is on each team, and the switch that turns a team on or off.</p></div>
       {teams.length === 0 && <p className="rounded-xl border bg-white p-5 text-sm text-slate-600">There is no team yet.</p>}
-      {blocks.map(({ t, members, invites, evs, viewOptions, truncated }) => {
+      {blocks.map(({ t, bundles, members, invites, evs, viewOptions, truncated }) => {
         const mine = evs
         const rows = members.filter(m => m.member_role !== "owner").map(m => {
           const ev = mine.filter(e => e.actor === m.email)
@@ -61,7 +63,7 @@ export default async function MarketingTeamsPage() {
                 <div className="mt-2 overflow-x-auto"><table className="w-full text-left text-sm">
                   <thead className="border-b text-xs text-slate-500"><tr><th className="py-2 pr-3">Person</th><th className="pr-3">Role</th><th className="pr-3">Status</th><th>Last seen</th></tr></thead>
                   <tbody className="divide-y">{members.map(m => (
-                    <tr key={m.user_id}><td className="py-2 pr-3 font-medium">{m.email ?? "Unknown login"}</td><td className="pr-3">{m.member_role === "owner" ? "Team owner" : roleLabel(m.bundle)}</td><td className="pr-3">{m.status === "paused" ? "Paused" : "Active"}</td><td className="text-slate-500">{m.last_sign_in_at ? `${ageText(Date.now() - new Date(m.last_sign_in_at).getTime())} ago` : "has not signed in yet"}</td></tr>
+                    <tr key={m.user_id}><td className="py-2 pr-3 font-medium">{m.email ?? "Unknown login"}</td><td className="pr-3">{m.member_role === "owner" ? "Team owner" : accessLabel(effectivePermissions({ memberRole: "member", bundle: m.bundle, bundles, extra: m.permissions }), bundles)}</td><td className="pr-3">{m.status === "paused" ? "Paused" : "Active"}</td><td className="text-slate-500">{m.last_sign_in_at ? `${ageText(Date.now() - new Date(m.last_sign_in_at).getTime())} ago` : "has not signed in yet"}</td></tr>
                   ))}</tbody></table></div>
               )}
               {invites.length > 0 && <p className="mt-2 text-sm text-slate-600">Invitations waiting: {invites.map(i => `${i.email_lower} (expires ${formatWhen(i.expires_at)})`).join(", ")}</p>}

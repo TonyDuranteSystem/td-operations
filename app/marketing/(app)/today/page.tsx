@@ -10,7 +10,8 @@ import { ageText, romeStartOfMonth, type StageOpt } from '@/lib/marketing/master
 import { loadTeamEvents } from '@/lib/marketing/events-read'
 import { loadLatestNotes } from '@/lib/marketing/note-read'
 import { clientFlagText, formatWhen, stageLabel } from '@/lib/marketing/lead-view'
-import { personName } from '@/lib/marketing/setter-note'
+import { canSeeNotes, withoutPhone } from '@/lib/marketing/lead-privacy'
+import { personName, type LatestNote } from '@/lib/marketing/setter-note'
 import { paidStagesFrom, todayModel, type OutcomeStages } from '@/lib/marketing/workspace'
 import { PickButton } from './pick-button'
 
@@ -19,8 +20,7 @@ export const dynamic = 'force-dynamic'
 const who = (l: { full_name: string | null; email: string | null; phone: string | null }) => l.full_name || l.email || l.phone || 'Unnamed lead'
 
 /** TD Marketing — Today (dev job 9aec66fa): the owner's home. What is waiting for him right now: call backs, the Good leads nobody has picked yet, his own open leads, and what each person did today. */
-export default async function MarketingToday({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
-  const tab = (await searchParams).tab === 'team' ? 'team' : 'today'
+export default async function MarketingToday() {
   const g = await resolveMarketingContext()
   if (g.ok === false) redirect('/marketing')
   if (!hasPermission(g.ctx.permissions, 'leads.pick')) redirect('/marketing/leads')
@@ -36,34 +36,31 @@ export default async function MarketingToday({ searchParams }: { searchParams: P
     getMarketingSetting('sale_kind_stages', teamId) as Promise<Record<string, string>>,
     getMarketingSetting('not_in_target_reasons', teamId) as Promise<StageOpt[]>,
   ])
-  const leads = leadsRes.rows
+  const leads = withoutPhone(leadsRes.rows, g.ctx.permissions)
   const events = ev.events
   const m = todayModel({
     leads, events, stages, outcomeStages, me: g.ctx.user.id, now, paidStages: paidStagesFrom(saleStages),
     members: members.map(x => ({ email: x.email, role: x.member_role as 'owner' | 'member', bundle: x.bundle, status: x.status, lastSignInAt: x.last_sign_in_at })),
   })
+  const seesTeam = hasPermission(g.ctx.permissions, 'team.activity')
+  const seesNotes = canSeeNotes(g.ctx.permissions)
+  const seesTeamNotes = hasPermission(g.ctx.permissions, 'team.notes')
   // the setter's newest written note, shown on each Good lead's row so Rocco knows why before he opens it
-  const notes = await loadLatestNotes(db, m.goodWaiting.map(l => l.id))
+  const notes = seesNotes ? await loadLatestNotes(db, m.goodWaiting.map(l => l.id)) : new Map<string, LatestNote>()
   const card = 'rounded-xl border bg-white p-5'
   const reasonLabel = (k: string | null) => (k ? reasons.find(r => r.key === k)?.label ?? k : null)
   const late = m.callBacks.filter(c => c.late).length
-  const tabCls = (on: boolean) => `rounded-full border px-4 py-1.5 text-sm ${on ? 'border-slate-900 bg-slate-900 text-white' : 'bg-white text-slate-600'}`
   const parts = [
     `${m.goodWaiting.length} Good ${m.goodWaiting.length === 1 ? 'lead' : 'leads'} waiting for you`,
     `${m.callBacks.length} call ${m.callBacks.length === 1 ? 'back' : 'backs'} today${late ? ` (${late} late)` : ''}`,
     `${m.waitingOver24h.length} new ${m.waitingOver24h.length === 1 ? 'lead' : 'leads'} untouched for over a day`,
-    `${m.rejectedToday.length} rejected today`,
+    ...(seesTeam ? [`${m.rejectedToday.length} rejected today`] : []),
   ]
   return (
     <div className="space-y-6 p-6">
-      <div><h1 className="text-2xl font-semibold">Today</h1><p data-testid="today-summary" className="mt-1 text-sm text-slate-700">{parts.join(' · ')}</p></div>
-      <nav aria-label="Today views" className="flex gap-2">
-        <Link href="/marketing/today" className={tabCls(tab === 'today')}>What is waiting</Link>
-        <Link href="/marketing/today?tab=team" className={tabCls(tab === 'team')}>Team activity</Link>
-      </nav>
+      <div><h1 className="text-2xl font-semibold">Today</h1><p data-testid="today-summary" className="mt-1 text-sm text-slate-700">{parts.join(' · ')}</p>{seesTeam && <p className="mt-1 text-sm"><Link href="/marketing/activity" className="underline">What the team did today →</Link></p>}</div>
       {(ev.truncated || leadsRes.truncated) && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">Some older leads or activity are not counted below because there is too much of it to read at once. Tell Antonio.</p>}
 
-      {tab === 'today' && <>
       <div className="grid gap-6 xl:grid-cols-2">
         <section className={card} aria-label="Call backs due">
           <h2 className="text-sm font-semibold text-slate-600">Call backs due today ({m.callBacks.length})</h2>
@@ -117,34 +114,16 @@ export default async function MarketingToday({ searchParams }: { searchParams: P
         )}
       </section>
 
-      <section className={card} aria-label="Rejected today">
+      {seesTeam && <section className={card} aria-label="Rejected today">
         <h2 className="text-sm font-semibold text-slate-600">Rejected today, for you to look over ({m.rejectedToday.length})</h2>
         {m.rejectedToday.length === 0 ? <p className="mt-3 text-sm text-slate-500">Nobody has marked a lead Not in target today.</p> : (
           <ul className="mt-3 divide-y" data-testid="rejected-today">
             {m.rejectedToday.map(r => (
-              <li key={r.lead.id}><Link href={`/marketing/leads?lead=${r.lead.id}`} className="block py-2"><span className="block truncate font-medium">{who(r.lead)}</span><span className="block text-xs text-slate-500">{personName(r.by)} · {reasonLabel(r.reason) ?? 'no reason given'} · {formatWhen(r.at)}</span>{r.note && <span className="mt-1 line-clamp-2 block break-words text-xs text-slate-700">{r.note}</span>}</Link></li>
+              <li key={r.lead.id}><Link href={`/marketing/leads?lead=${r.lead.id}`} className="block py-2"><span className="block truncate font-medium">{who(r.lead)}</span><span className="block text-xs text-slate-500">{personName(r.by)} · {reasonLabel(r.reason) ?? 'no reason given'} · {formatWhen(r.at)}</span>{r.note && seesTeamNotes && <span className="mt-1 line-clamp-2 block break-words text-xs text-slate-700">{r.note}</span>}</Link></li>
             ))}
           </ul>
         )}
-      </section>
-      </>}
-
-      {tab === 'team' && <>
-      <section className={card} aria-label="What the team did today">
-        <h2 className="text-sm font-semibold text-slate-600">What the team did today</h2>
-        <div className="mt-2 overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b text-xs text-slate-500"><tr><th className="py-2 pr-3">Person</th><th className="pr-3">Role</th><th className="pr-3 text-right">Good</th><th className="pr-3 text-right">Not in target</th><th className="pr-3 text-right">Call backs set</th><th className="pr-3 text-right">Leads picked</th><th>Last active</th></tr></thead>
-            <tbody className="divide-y">
-              {m.people.length === 0 && <tr><td colSpan={7} className="py-3 text-slate-500">Nobody else has joined yet.</td></tr>}
-              {m.people.map(p => (
-                <tr key={p.email}><td className="py-2 pr-3 font-medium"><Link href={`/marketing/leads?by=${encodeURIComponent(p.email)}`} className="underline decoration-slate-300 underline-offset-2 hover:decoration-slate-700" title="See the leads this person worked on">{personName(p.email)}</Link></td><td className="pr-3 capitalize">{p.role}</td><td className="pr-3 text-right font-mono tabular-nums">{p.good}</td><td className="pr-3 text-right font-mono tabular-nums">{p.notInTarget}</td><td className="pr-3 text-right font-mono tabular-nums">{p.callBacks}</td><td className="pr-3 text-right font-mono tabular-nums">{p.picked}</td><td className="text-slate-500">{p.lastActive ? `${ageText(Date.now() - new Date(p.lastActive).getTime())} ago` : 'never'}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      </>}
+      </section>}
     </div>
   )
 }
