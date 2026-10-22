@@ -15,9 +15,11 @@ project = Xcodeproj::Project.new('TDStorage.xcodeproj')
 # Each configuration has its OWN bundle ids and Keychain service/group (suffix), so a sandbox build and a production build can never share
 # tokens: a token is also only valid for the database that made it.
 prod_url = (ENV['TD_PRODUCTION_URL'] || 'https://crm.tonydurante.us').sub(%r{\A(https?:)//}, '\\1/$()/')
+# the sandbox address can be overridden for a test build (TD_SANDBOX_URL=http://localhost:3050 for an update test against the local server)
+sandbox_url = (ENV['TD_SANDBOX_URL'] || 'https://td-operations-sandbox.vercel.app').sub(%r{\A(https?:)//}, '\\1/$()/')
 CONFIGS = {
   'Debug'   => { 'TD_SERVER_URL' => 'http:/$()/localhost:3050',            'ID' => 'com.tonydurante.tdstorage.local',   'SUFFIX' => 'local', 'NAME' => 'TD Storage (test)' },
-  'Sandbox' => { 'TD_SERVER_URL' => 'https:/$()/td-operations-sandbox.vercel.app', 'ID' => 'com.tonydurante.tdstorage.sandbox', 'SUFFIX' => 'sandbox', 'NAME' => 'TD Storage (sandbox)' },
+  'Sandbox' => { 'TD_SERVER_URL' => sandbox_url, 'ID' => (ENV['TD_SANDBOX_ID'] || 'com.tonydurante.tdstorage.sandbox'), 'SUFFIX' => 'sandbox', 'NAME' => 'TD Storage (sandbox)' },
   'Production' => { 'TD_SERVER_URL' => prod_url, 'ID' => 'com.tonydurante.tdstorage', 'SUFFIX' => 'prod', 'NAME' => 'TD Storage' },
 }
 project.build_configurations.each { |c| c.build_settings.clear }

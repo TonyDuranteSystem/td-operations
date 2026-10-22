@@ -3,10 +3,11 @@
  * Publish a new version of the TD Storage Mac app (dev job 1992a087). Signs the zip with the update key in this Mac's keychain (account
  * td-storage), uploads it to the private app-releases bucket and writes the release record the update feed reads (lib/storage-app/release.ts).
  *
- *   npx tsx scripts/storage-app-release.ts --zip <TDStorage.zip> --version 0.2.0 --build 2 [--notes "text"] [--rollout 100] [--min-system 13.0] [--paused]
+ *   npx tsx scripts/storage-app-release.ts --zip <TDStorage.zip> --version 0.2.0 --build 2 [--notes "text"] [--rollout 100] [--min-system 13.0] [--paused] [--republish]
  *
  * Targets the database named by .env.local — the SANDBOX. For production, only on Antonio's word: pass --env-file <file with the production
  * values> --production (without --production a production database is refused, and with it a sandbox one is).
+ * --republish replaces the zip of the SAME build number (a bad upload); a lower number is never allowed.
  * The version number must be higher than the one published before (Sparkle compares the build number: it only ever moves forward).
  */
 import { config } from "dotenv"
@@ -43,7 +44,7 @@ async function main() {
   const db = createClient(url, key, { auth: { persistSession: false } })
   const { data: prev } = await db.from("app_settings").select("value").eq("key", RELEASE_KEY).maybeSingle()
   const before = parseRelease(prev?.value)
-  if (before && build <= before.build) throw new Error(`The build number must go up: ${before.version} is build ${before.build}, this is ${build}.`)
+  if (before && (flag("republish") ? build < before.build : build <= before.build)) throw new Error(`The build number must go up: ${before.version} is build ${before.build}, this is ${build}.`)
 
   const { data: buckets } = await db.storage.listBuckets()
   if (!buckets?.some((b) => b.name === RELEASE_BUCKET)) {
