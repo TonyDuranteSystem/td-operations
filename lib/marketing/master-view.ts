@@ -53,6 +53,10 @@ export function romeStartOfDay(at: Date): Date {
   const startLocal = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate())
   return new Date(startLocal - offsetMs(new Date(startLocal - offsetMs(at))))
 }
+/** Start of the NEXT Rome day: a Rome day is 23, 24 or 25 hours long on the two clock-change days, so "+ 24 h" is wrong then. */
+export function romeStartOfNextDay(at: Date): Date {
+  return romeStartOfDay(new Date(romeStartOfDay(at).getTime() + 30 * 3600_000))
+}
 export function romeStartOfMonth(at: Date): Date {
   const local = new Date(at.getTime() + offsetMs(at))
   const startLocal = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1)
@@ -83,7 +87,7 @@ export function buildMasterView(i: MasterInput): MasterView {
   const nowMs = i.now.getTime()
   const firstStage = i.stages[0]?.key ?? "new"
   const dayStart = romeStartOfDay(i.now).getTime()
-  const dayEnd = dayStart + 24 * HOUR
+  const dayEnd = romeStartOfNextDay(i.now).getTime()
   const monthStart = romeStartOfMonth(i.now).getTime()
 
   const newLast24h = i.leads.filter(l => nowMs - arrivedAt(l) <= 24 * HOUR).length

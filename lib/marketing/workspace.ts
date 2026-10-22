@@ -3,7 +3,7 @@
  * "Today" and "Call list" screens contain. Everything is worked out from the person's permissions and the team's leads, so a new role is a settings change,
  * never a code change. No database here.
  */
-import { buildMasterView, romeStartOfDay, type MasterEvent, type MasterLead, type MasterMember, type PersonRow, type StageOpt } from "@/lib/marketing/master-view"
+import { buildMasterView, romeStartOfDay, romeStartOfNextDay, type MasterEvent, type MasterLead, type MasterMember, type PersonRow, type StageOpt } from "@/lib/marketing/master-view"
 
 export interface Module { key: string; label: string; href: string; built: boolean }
 
@@ -49,7 +49,7 @@ export interface QueueLead extends MasterLead { meta_created_time: string | null
  * oldest first (the one waiting longest is called first). A lead someone else picked is not on the list.
  */
 export function callQueue<T extends QueueLead>(leads: readonly T[], firstStage: string, me: string, now: Date): T[] {
-  const dayEnd = romeStartOfDay(now).getTime() + 24 * 3600_000
+  const dayEnd = romeStartOfNextDay(now).getTime()
   const mineOrFree = (l: T) => l.claimed_by === null || l.claimed_by === me
   const callbacks = leads.filter(l => mineOrFree(l) && dueBy(l, dayEnd)).sort((a, b) => String(a.callback_at).localeCompare(String(b.callback_at)))
   const ids = new Set(callbacks.map(l => l.id))
@@ -65,12 +65,19 @@ export function nextInQueue<T extends { id: string }>(queue: readonly T[], curre
 }
 
 export interface TodayLead extends QueueLead { claimed_at?: string | null }
+/** A lead a setter marked "Not in target" today, for the owner to look over (and, later, to overturn). */
+export interface RejectedToday { lead: TodayLead; by: string; at: string; reason: string | null; note: string }
 export interface TodayModel {
   callBacks: Array<{ lead: TodayLead; late: boolean }>
   goodWaiting: TodayLead[]
+  /** new leads nobody has touched for more than a day, the one waiting longest first */
+  waitingOver24h: TodayLead[]
+  rejectedToday: RejectedToday[]
   mine: TodayLead[]
   people: PersonRow[]
 }
+
+const HOUR_MS = 3600_000
 
 /** The owner's "Today": call backs due (late ones flagged), the Good leads waiting for a pick (longest waiting first), his own open leads, what each person did today. */
 export function todayModel(i: {
@@ -80,7 +87,7 @@ export function todayModel(i: {
   paidStages?: readonly string[]
 }): TodayModel {
   const nowMs = i.now.getTime()
-  const dayEnd = romeStartOfDay(i.now).getTime() + 24 * 3600_000
+  const dayEnd = romeStartOfNextDay(i.now).getTime()
   const callBacks = i.leads.filter(l => dueBy(l, dayEnd) && (l.claimed_by === null || l.claimed_by === i.me))
     .sort((a, b) => String(a.callback_at).localeCompare(String(b.callback_at)))
     .map(lead => ({ lead, late: new Date(lead.callback_at as string).getTime() < nowMs }))
@@ -88,5 +95,20 @@ export function todayModel(i: {
   const done = new Set([i.outcomeStages.not_in_target, ...(i.paidStages?.length ? i.paidStages : ["paid_call", "upsell_won"])])
   const mine = i.leads.filter(l => l.claimed_by === i.me && !done.has(l.status)).sort((a, b) => String(b.claimed_at ?? "").localeCompare(String(a.claimed_at ?? "")))
   const people = buildMasterView({ leads: i.leads, events: i.events, members: i.members, stages: i.stages, now: i.now, paidStages: i.paidStages }).people
-  return { callBacks, goodWaiting, mine, people }
+  const firstStage = i.stages[0]?.key
+  const waitingOver24h = firstStage === undefined ? [] : i.leads.filter(l => l.status === firstStage && l.claimed_by === null && l.callback_at === null && nowMs - arrival(l) > 24 * HOUR_MS).sort((a, b) => arrival(a) - arrival(b))
+  // rejected today: the newest "Not in target" decision of each lead made since midnight (Rome), by a real person, for a lead that is still rejected
+  const dayStart = romeStartOfDay(i.now).getTime()
+  const byLead = new Map(i.leads.map(l => [l.id, l]))
+  const seen = new Set<string>()
+  const rejectedToday: RejectedToday[] = []
+  for (const e of [...i.events].sort((a, b) => b.created_at.localeCompare(a.created_at))) {
+    if (e.kind !== "status_changed" || e.data?.outcome !== "not_in_target" || e.data?.via_view_as === true) continue
+    if (new Date(e.created_at).getTime() < dayStart || seen.has(e.lead_id)) continue
+    seen.add(e.lead_id)
+    const lead = byLead.get(e.lead_id)
+    if (!lead || lead.status !== i.outcomeStages.not_in_target) continue
+    rejectedToday.push({ lead, by: e.actor, at: e.created_at, reason: typeof e.data?.reason === "string" ? e.data.reason : null, note: typeof e.data?.note === "string" ? e.data.note.trim() : "" })
+  }
+  return { callBacks, goodWaiting, waitingOver24h, rejectedToday, mine, people }
 }

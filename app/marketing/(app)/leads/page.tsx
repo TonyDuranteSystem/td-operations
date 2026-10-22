@@ -3,15 +3,18 @@ import { redirect } from 'next/navigation'
 import { resolveMarketingContext } from '@/lib/marketing/guard'
 import { hasPermission } from '@/lib/marketing/permissions'
 import { getMarketingSetting } from '@/lib/marketing/settings'
-import { getTeamLead, leadTimeline, listTeamLeads } from '@/lib/marketing/leads-read'
+import { getTeamLead, leadTimeline, listTeamLeadsByIds, listTeamLeadsCapped } from '@/lib/marketing/leads-read'
 import { leadDb } from '@/lib/marketing/meta-leads/service'
 import { clientFlagText, filterLeads, formatWhen, LEAD_SHOW_OPTIONS, parseLeadShow, stageLabel, type StageOption } from '@/lib/marketing/lead-view'
 import { loadPaymentLinkView } from '@/lib/marketing/sales-server'
+import { leadIdsWorkedBy } from '@/lib/marketing/events-read'
+import { listMembers } from '@/lib/marketing/members'
+import { personName } from '@/lib/marketing/setter-note'
 import { LeadPane } from '../_lead-pane'
 
 export const dynamic = 'force-dynamic'
 
-type SP = { show?: string; stage?: string; lead?: string }
+type SP = { show?: string; stage?: string; lead?: string; by?: string }
 
 /**
  * TD Marketing — Leads (dev job 9aec66fa): the team's one filterable list on the left; the lead you click, with everything about it and the buttons, on the
@@ -26,8 +29,11 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
   const sp = await searchParams
   const db = leadDb()
   const teamId = g.ctx.team.id
-  const [all, stages, reasons, checklist, selected] = await Promise.all([
-    listTeamLeads(db, teamId, 500),
+  // "worked by": only a real member's email counts; anything else is ignored
+  const members = sp.by ? await listMembers(teamId) : []
+  const byEmail = sp.by && members.some(x => x.email === sp.by) ? sp.by : ''
+  const [allRes, stages, reasons, checklist, selected] = await Promise.all([
+    byEmail ? Promise.resolve({ rows: [], truncated: false }) : listTeamLeadsCapped(db, teamId, 500),
     getMarketingSetting('pipeline_stages', teamId) as Promise<StageOption[]>,
     getMarketingSetting('not_in_target_reasons', teamId) as Promise<StageOption[]>,
     getMarketingSetting('qualification_checklist', teamId) as Promise<string[]>,
@@ -35,12 +41,17 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
   ])
   const show = parseLeadShow(sp.show)
   const stage = stages.some(s => s.key === sp.stage) ? (sp.stage as string) : ''
+  const by = byEmail
+  // with a person chosen, the leads come BY ID (everything they worked on, however old); otherwise the newest 500
+  const worked = by ? await leadIdsWorkedBy(db, teamId, by) : null
+  const all = worked ? await listTeamLeadsByIds(db, teamId, worked.ids) : allRes.rows
+  const cut = worked ? worked.truncated : allRes.truncated
   const leads = filterLeads(all, { show, stage }, g.ctx.user.id)
   const events = selected ? await leadTimeline(db, selected.id) : []
   const paymentLink = selected && hasPermission(g.ctx.permissions, 'payment_links.create') ? { leadId: selected.id, ...(await loadPaymentLinkView(db, { teamId, userId: g.ctx.user.id }, selected.id)) } : undefined
   const href = (n: Partial<SP>) => {
     const q = new URLSearchParams()
-    const m = { show: show !== 'all' ? show : '', stage, lead: sp.lead, ...n }
+    const m = { show: show !== 'all' ? show : '', stage, lead: sp.lead, by, ...n }
     for (const [k, v] of Object.entries(m)) if (v) q.set(k, v)
     const t = q.toString()
     return t ? `/marketing/leads?${t}` : '/marketing/leads'
@@ -50,6 +61,8 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
   return (
     <div className="space-y-4 p-6">
       <div className="flex items-baseline justify-between"><h1 className="text-2xl font-semibold">Leads</h1><span className="text-sm text-slate-500">{leads.length} of {all.length}</span></div>
+      {cut && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="list-cut">{by ? 'This person worked on more than we can list at once; the oldest are not shown.' : 'Showing the newest 500 leads. Use the filters, or open a person from Today, to find older ones.'}</p>}
+      {by && <p className="flex items-center gap-2 text-sm" data-testid="worked-by"><span className="rounded-full bg-teal-50 px-3 py-1 text-teal-900">Worked on by {personName(by)}</span><Link href={href({ by: '', lead: '' })} className="text-xs text-slate-500 underline">Show everyone</Link></p>}
       <nav aria-label="Filter leads" className="space-y-2">
         <div className="flex flex-wrap gap-2">{LEAD_SHOW_OPTIONS.map(o => <Link key={o.key} href={href({ show: o.key === 'all' ? '' : o.key, lead: '' })} className={chip(show === o.key)}>{o.label}</Link>)}</div>
         <div className="flex flex-wrap gap-2">

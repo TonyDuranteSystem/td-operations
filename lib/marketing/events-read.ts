@@ -22,3 +22,11 @@ export async function loadTeamEvents(
   }, opts.cap ?? EVENT_CAP)
   return { events: rows.map(({ marketing_leads: _join, ...e }) => { void _join; return e as MasterEvent }), truncated }
 }
+
+/** The ids of the team's leads this person did something to (picked, marked, wrote a note, moved). Used by the Leads list "worked by" filter. */
+export async function leadIdsWorkedBy(db: Db, teamId: string, actor: string): Promise<{ ids: string[]; truncated: boolean }> {
+  const { rows, truncated } = await readPaged<{ lead_id: string; marketing_leads?: unknown }>((from, to) =>
+    db.from("marketing_lead_events").select("lead_id, marketing_leads!inner(team_id)").eq("marketing_leads.team_id", teamId).eq("actor", actor)
+      .in("kind", ["claimed", "status_changed", "note", "released"]).order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, to), EVENT_CAP)
+  return { ids: Array.from(new Set(rows.map(r => r.lead_id))), truncated }
+}
