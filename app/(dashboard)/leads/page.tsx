@@ -7,6 +7,7 @@ import { LeadsClientFilterToggle } from './components/leads-client-filter-toggle
 import { CreateLeadButton } from './components/create-lead-button'
 import type { LeadListItem } from '@/lib/types'
 import { findExistingClientNewCalls } from '@/lib/leads/existing-client-new-calls'
+import { findLeadIdsByPhone, leadSearchOrFilter } from '@/lib/leads/phone-search'
 
 const NEW_CALL_WINDOW_DAYS = 14
 
@@ -37,6 +38,10 @@ export default async function LeadsPage({
   // For table view, use pagination as before
   const isKanban = viewMode === 'kanban'
 
+  // Phone-looking search text also matches phones stored in any format.
+  const phoneIds = query ? await findLeadIdsByPhone(supabase, query) : []
+  const searchFilter = leadSearchOrFilter(query, phoneIds)
+
   let dbQuery = supabase
     .from('leads')
     .select('id, full_name, email, phone, status, source, channel, language, referrer_name, call_date, offer_status, offer_year1_amount, offer_year1_currency, created_at, existing_client_contact_id, offers(status, superseded_by, created_at)', { count: 'exact' })
@@ -55,14 +60,14 @@ export default async function LeadsPage({
       dbQuery = dbQuery.eq('status', statusFilter)
     }
     if (query) {
-      dbQuery = dbQuery.or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
+      dbQuery = dbQuery.or(searchFilter)
     }
     const from = (currentPage - 1) * PAGE_SIZE
     dbQuery = dbQuery.range(from, from + PAGE_SIZE - 1)
   } else {
     // Kanban: fetch all (up to 200), no status filter
     if (query) {
-      dbQuery = dbQuery.or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
+      dbQuery = dbQuery.or(searchFilter)
     }
     dbQuery = dbQuery.range(0, 199)
   }

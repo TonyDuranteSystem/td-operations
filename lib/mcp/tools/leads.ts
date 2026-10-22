@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { findLeadIdsByPhone, leadSearchOrFilter } from "@/lib/leads/phone-search"
 
 export function registerLeadTools(server: McpServer) {
 
@@ -15,9 +16,9 @@ export function registerLeadTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "lead_search",
-    "Search leads by name, status, source, channel, or language. Returns lead name, email, phone, status (New/Call Scheduled/Call Done/Offer Sent/Negotiating/Converted/Lost/Suspended), source, reason, and offer info. Use lead_get for full details including linked call summaries and offers.",
+    "Search leads by name, email, phone number, status, source, channel, or language. Returns lead name, email, phone, status (New/Call Scheduled/Call Done/Offer Sent/Negotiating/Converted/Lost/Suspended), source, reason, and offer info. Use lead_get for full details including linked call summaries and offers.",
     {
-      query: z.string().optional().describe("Search text (matches full_name or email, case-insensitive)"),
+      query: z.string().optional().describe("Search text (matches full_name or email, case-insensitive; a phone number in any format also matches the lead's phone)"),
       status: z.string().optional().describe("Lead status: New, Call Scheduled, Call Done, Offer Sent, Negotiating, Converted, Lost, Suspended"),
       source: z.string().optional().describe("Lead source (e.g., Referral, Website, Social)"),
       channel: z.string().optional().describe("Communication channel"),
@@ -32,7 +33,7 @@ export function registerLeadTools(server: McpServer) {
           .order("created_at", { ascending: false })
           .limit(Math.min(limit || 25, 100))
 
-        if (query) q = q.or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
+        if (query) q = q.or(leadSearchOrFilter(query, await findLeadIdsByPhone(supabaseAdmin, query)))
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (status) q = q.eq("status", status as any)
         if (source) q = q.ilike("source", `%${source}%`)
