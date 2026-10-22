@@ -20,6 +20,7 @@
  */
 
 import { yearlyFeeMissingReason } from "@/lib/offers/annual-maintenance-wording"
+import { offerServicesReadinessProblem } from "@/lib/offers/service-readiness"
 import { openPixelImg } from '@/lib/email/open-pixel'
 import crypto from "node:crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -55,7 +56,7 @@ export async function publishOffer(
   // ─── 1. Fetch and validate offer ───
   const { data: offer, error: fetchError } = await supabaseAdmin
     .from("offers")
-    .select("id, token, client_name, client_email, language, status, access_code, lead_id, account_id, services, recurring_costs, installment_currency")
+    .select("id, token, client_name, client_email, language, status, access_code, lead_id, account_id, services, bundled_pipelines, recurring_costs, installment_currency")
     .eq("token", token)
     .single()
 
@@ -96,6 +97,19 @@ export async function publishOffer(
   // Strict status gate: only 'draft' can be published
   if (offer.status !== "draft") {
     return fail(`Cannot publish: offer is in '${offer.status}' status. Only 'draft' offers can be published.`)
+  }
+
+  // A service created in the Service Catalog screen can be put on an offer before it has any steps,
+  // or after it was switched off — the client would pay and nothing could start. Only services the
+  // old hard-coded list does not know are checked (flexible-offer track, Step 0). Placed after the
+  // draft test so re-sending an already-sent offer still gets the "only drafts" answer.
+  const servicesNotReady = await offerServicesReadinessProblem({
+    services: offer.services,
+    bundledPipelines: offer.bundled_pipelines,
+    packages: (pk as unknown as { packages?: unknown } | null)?.packages ?? null,
+  })
+  if (servicesNotReady) {
+    return fail(`Cannot publish: ${servicesNotReady}`)
   }
 
   // ─── 2. Create or find portal user ───

@@ -173,12 +173,14 @@ export async function getSDByType(displayName: string): Promise<CatalogEntry | n
  * backfill assigned to historical rows. Any change here MUST be applied to
  * the migration in the same PR (or vice versa).
  *
- * Values not in this map intentionally return `null` — callers (currently
- * only `lib/operations/service-delivery.ts::createSD`) treat that as a
- * warning, not an error, so legitimate but unmapped service types
- * (`Support`, `Client Offboarding`, etc.) still produce SDs.
+ * This is the LEGACY list only: the full lookup also includes every service
+ * the catalog defines by its pipeline name (`buildServiceTypeMap`, below).
+ * Types in neither place intentionally resolve to `null` — callers
+ * (`createSD` and the quick-create routes) treat that as a warning, not an
+ * error, so legitimate but unmapped service types (`Support`,
+ * `Client Offboarding`, etc.) still produce SDs.
  */
-const SERVICE_TYPE_TO_SLUG: Record<string, string> = {
+const SERVICE_TYPE_TO_SLUG: Readonly<Record<string, string>> = {
   "State Annual Report": "state_annual_report",
   "CMRA Mailing Address": "cmra",
   "State RA Renewal": "state_ra_renewal",
@@ -203,21 +205,87 @@ const SERVICE_TYPE_TO_SLUG: Record<string, string> = {
   "Certificate of Incumbency": "certificate_of_incumbency",
 }
 
+const LEGACY_SERVICE_TYPES_LOWER: ReadonlySet<string> = new Set(
+  Object.keys(SERVICE_TYPE_TO_SLUG).map((t) => t.toLowerCase()),
+)
+
+/**
+ * True when `serviceType` is one of the service types that existed before the
+ * catalog could describe a service by itself (the hard-coded list above).
+ * Those keep their historical behaviour everywhere; only a type the catalog
+ * alone knows about is a "new service" (flexible-offer track, Step 0).
+ *
+ * Case and surrounding spaces are ignored on purpose: activation matches
+ * service names that way (an offer line "Company formation" has always
+ * worked), so "legacy" must mean the same thing here.
+ */
+export function isLegacyServiceType(serviceType: string): boolean {
+  return LEGACY_SERVICE_TYPES_LOWER.has(serviceType.trim().toLowerCase())
+}
+
+/**
+ * The full `service_deliveries.service_type` → catalog slug map: the legacy
+ * list above PLUS every service the catalog itself defines through its
+ * pipeline name (`metadata.pipeline`) — which is exactly how a service created
+ * in the Service Catalog screen is keyed (its steps and its deliveries are
+ * stored under the pipeline name). Without the second half a brand-new service
+ * was invisible to every tag reader below: it could be sold, but never
+ * recognised as "starts at payment", never linked to its catalog row and never
+ * refused once switched off.
+ *
+ * The legacy list always wins (in any spelling), so no historical type can
+ * change meaning (e.g. "Annual Renewal" stays pointed at its retired entry). When two catalog rows
+ * claim the same pipeline name, an active one is preferred, then the lower
+ * slug — deterministic, and the Service Catalog screen refuses new clashes.
+ * Pure: unit-tested without a database.
+ */
+export function buildServiceTypeMap(entries: readonly CatalogEntry[]): Record<string, string> {
+  const map: Record<string, string> = { ...SERVICE_TYPE_TO_SLUG }
+  const ranked = [...entries].sort((a, b) => {
+    const aActive = a.status === "active" ? 0 : 1
+    const bActive = b.status === "active" ? 0 : 1
+    if (aActive !== bActive) return aActive - bActive
+    return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0
+  })
+  for (const e of ranked) {
+    const raw = e.metadata?.pipeline
+    const pipeline = typeof raw === "string" ? raw.trim() : ""
+    // A catalog row can never take over a legacy name in ANY spelling: a typo such as "ein" must not become
+    // a second, mis-cased "EIN" that activation would then create deliveries under.
+    if (!pipeline || isLegacyServiceType(pipeline) || Object.prototype.hasOwnProperty.call(map, pipeline)) continue
+    map[pipeline] = e.slug
+  }
+  return map
+}
+
 /**
  * Map a `service_deliveries.service_type` TEXT value (e.g. `"EIN"`,
  * `"Banking Fintech"`, `"CMRA Mailing Address"`) to its catalog entry.
  *
  * Used by `createSD` to populate `service_type_entry_id` on insert. Returns
- * `null` for values not in `SERVICE_TYPE_TO_SLUG` — caller decides whether
- * to log/skip/error (today: warn-and-skip).
+ * `null` for values neither in the legacy list nor defined by a catalog row's
+ * pipeline name — caller decides whether to log/skip/error (today:
+ * warn-and-skip).
  */
 export async function getEntryByServiceType(
   serviceType: string,
 ): Promise<CatalogEntry | null> {
-  const slug = SERVICE_TYPE_TO_SLUG[serviceType]
-  if (!slug) return null
   const all = await loadEntries()
+  const map = buildServiceTypeMap(all)
+  if (!Object.prototype.hasOwnProperty.call(map, serviceType)) return null
+  const slug = map[serviceType]
   return all.find((e) => e.slug === slug) ?? null
+}
+
+/** Service-type names (legacy + catalog-defined) whose ACTIVE catalog row carries `tag`. */
+async function activeServiceTypesWithTag(tag: string): Promise<string[]> {
+  const all = await loadEntries()
+  const slugs = new Set(
+    all.filter((e) => e.status === "active" && e.tags.includes(tag)).map((e) => e.slug),
+  )
+  return Object.entries(buildServiceTypeMap(all))
+    .filter(([, slug]) => slugs.has(slug))
+    .map(([serviceType]) => serviceType)
 }
 
 /**
@@ -270,15 +338,7 @@ export async function assertServiceTypeNotDeprecated(
  * 20260521-1605-itin-start-at-wizard-tag migration.
  */
 export async function getStartAtWizardServiceTypes(): Promise<string[]> {
-  const all = await loadEntries()
-  const slugs = new Set(
-    all
-      .filter((e) => e.status === "active" && e.tags.includes("start_at_wizard"))
-      .map((e) => e.slug),
-  )
-  return Object.entries(SERVICE_TYPE_TO_SLUG)
-    .filter(([, slug]) => slugs.has(slug))
-    .map(([serviceType]) => serviceType)
+  return activeServiceTypesWithTag("start_at_wizard")
 }
 
 /**
@@ -292,15 +352,7 @@ export async function getStartAtWizardServiceTypes(): Promise<string[]> {
  * Tagged via scripts/migrations/20260924-2100-closure-start-at-activation.sql.
  */
 export async function getStartAtActivationServiceTypes(): Promise<string[]> {
-  const all = await loadEntries()
-  const slugs = new Set(
-    all
-      .filter((e) => e.status === "active" && e.tags.includes("start_at_activation"))
-      .map((e) => e.slug),
-  )
-  return Object.entries(SERVICE_TYPE_TO_SLUG)
-    .filter(([, slug]) => slugs.has(slug))
-    .map(([serviceType]) => serviceType)
+  return activeServiceTypesWithTag("start_at_activation")
 }
 
 /**
@@ -310,15 +362,7 @@ export async function getStartAtActivationServiceTypes(): Promise<string[]> {
  * the same type must NOT block a new purchase from being created.
  */
 export async function getRepeatableServiceTypes(): Promise<string[]> {
-  const all = await loadEntries()
-  const slugs = new Set(
-    all
-      .filter((e) => e.status === "active" && e.tags.includes("repeatable"))
-      .map((e) => e.slug),
-  )
-  return Object.entries(SERVICE_TYPE_TO_SLUG)
-    .filter(([, slug]) => slugs.has(slug))
-    .map(([serviceType]) => serviceType)
+  return activeServiceTypesWithTag("repeatable")
 }
 
 /**
@@ -330,15 +374,7 @@ export async function getRepeatableServiceTypes(): Promise<string[]> {
  * dev job 9d34e750.
  */
 export async function getContactEligibleServiceTypes(): Promise<string[]> {
-  const all = await loadEntries()
-  const slugs = new Set(
-    all
-      .filter((e) => e.status === "active" && e.tags.includes("contact_eligible"))
-      .map((e) => e.slug),
-  )
-  return Object.entries(SERVICE_TYPE_TO_SLUG)
-    .filter(([, slug]) => slugs.has(slug))
-    .map(([serviceType]) => serviceType)
+  return activeServiceTypesWithTag("contact_eligible")
 }
 
 /**
@@ -360,15 +396,7 @@ export async function getContactEligibleServiceTypes(): Promise<string[]> {
  * uq_itin_sd_active_per_contact (race backstop).
  */
 export async function getPerPersonServiceTypes(): Promise<string[]> {
-  const all = await loadEntries()
-  const slugs = new Set(
-    all
-      .filter((e) => e.status === "active" && e.tags.includes("per_person"))
-      .map((e) => e.slug),
-  )
-  return Object.entries(SERVICE_TYPE_TO_SLUG)
-    .filter(([, slug]) => slugs.has(slug))
-    .map(([serviceType]) => serviceType)
+  return activeServiceTypesWithTag("per_person")
 }
 
 /** True when a single person can hold at most ONE live instance of this service. */

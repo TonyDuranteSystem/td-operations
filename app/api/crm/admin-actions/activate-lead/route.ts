@@ -3,6 +3,7 @@ import type { User } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
+import { offerReadinessProblemForToken } from '@/lib/offers/service-readiness'
 
 export async function POST(req: NextRequest) {
   try {
@@ -45,6 +46,13 @@ export async function POST(req: NextRequest) {
 
     if (!offer) {
       return NextResponse.json({ error: 'No offer found for this lead. Create an offer first.' }, { status: 400 })
+    }
+
+    // This button sends portal credentials for a DRAFT offer without going through publishOffer, so it needs the same
+    // check: a new service with no steps (or switched off) would be paid for and then never start.
+    const servicesNotReady = await offerReadinessProblemForToken(offer.token)
+    if (servicesNotReady) {
+      return NextResponse.json({ error: `Cannot activate: ${servicesNotReady}` }, { status: 400 })
     }
 
     // Check if portal login already exists.

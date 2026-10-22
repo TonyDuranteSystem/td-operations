@@ -204,7 +204,7 @@ _Regenerated 2026-10-22. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-21)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-16)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-22)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-21)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-22)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-21)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-10-21)_
@@ -228,5 +228,5 @@ _Regenerated 2026-10-22. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-10-18)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-10-01)_
 - [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-10-18)_
-- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-10-19)_
+- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-10-22)_
 <!-- /GENERATED:deep-docs -->
