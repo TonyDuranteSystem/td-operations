@@ -6,11 +6,13 @@
 export const PAGE = 1000
 
 export async function readPaged<T>(
-  page: (from: number, to: number) => PromiseLike<{ data: T[] | null }>, cap: number,
+  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error?: { message: string } | null }>, cap: number,
 ): Promise<{ rows: T[]; truncated: boolean }> {
   const out: T[] = []
   while (out.length <= cap) {
-    const { data } = await page(out.length, out.length + PAGE - 1)
+    const { data, error } = await page(out.length, out.length + PAGE - 1)
+    // a failed page must never look like an empty one (a quiet "0 today"): fail loudly instead
+    if (error) throw new Error(`could not read the list: ${error.message}`)
     const got = data ?? []
     out.push(...got)
     if (got.length < PAGE) break

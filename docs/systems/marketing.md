@@ -136,6 +136,13 @@ A separate, confined workspace for Rocco's sales team (Rocco = boss, Ale = his e
 - **History:** a lead's history is read newest first (the 200 newest, shown oldest to newest), long text wraps, names instead of emails, readable money lines (`eventText`).
 - **Proof:** unit tests `marketing-lead-privacy`, `marketing-setter-note` (incl. `readPaged`), `marketing-step1-fixes`, additions to the sales-server and lead-actions tests; real-login `scripts/marketing/qa-notes.ts` (15 checks at laptop width, incl. the ad person's page containing none of the note text, another team's work not counted, 205 history rows, 1300 extra rows counted whole); earlier QA scripts re-run. Bug-Hunter review of the diff done before ship (5 majors found and fixed).
 
+## Build step 3 — Today is Rocco's home (sandbox, built 2026-10-22; plan Addendum E)
+- **No database change.** `/marketing/today` (needs `leads.pick`; setters still go to their Call list). Top: a one-line summary (Good waiting · call backs today (late) · new leads untouched over a day · rejected today). Two views by `?tab=`: **What is waiting** (call backs, Good leads waiting with the setter's note and Pick, new leads untouched for over 24 h — first stage, unpicked, no call back, oldest first, "Rejected today, for you to look over" with who / reason / note, "Your leads") and **Team activity** (the people table, names not emails).
+- `todayModel` (`lib/marketing/workspace.ts`) gained `waitingOver24h` and `rejectedToday` (newest `outcome: not_in_target` decision per lead since Rome midnight, View-as ones left out, only while the lead is still at the Not-in-target stage).
+- **Names in the team table link to `/marketing/leads?by=<email>`**: Leads shows only what that person worked on (`leadIdsWorkedBy` in `events-read.ts`: team-joined, paged; kinds claimed / status_changed / note / released) with a "Worked on by …" badge and "Show everyone". A `by` that is not a member of the team is ignored. The list is read up to 2000 leads when `by` is set (500 otherwise).
+- **Not done here (later steps):** overturn a rejection (step 6), stage-count strip and setter/ad filters (step 4).
+- **Proof:** unit `marketing-today-home.test.ts`; real-login `scripts/marketing/qa-today.ts` (13 checks at laptop width). The Rome-midnight edge is handled in the QA seed (`TODAY_AGO`).
+
 ## Gotchas
 - The shared apply script `scripts/apply-migration.js` forces SSL and fails on the private local stack ("server does not support SSL"). Apply with `docker exec -i <db container> psql -U postgres -d postgres < file.sql`.
 - A rate change is a NEW term row with a later effective date. A sale takes a snapshot of the term when its payment link is created, so old sales never change.
