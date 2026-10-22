@@ -7,7 +7,7 @@ import { cookies } from 'next/headers'
 import { GenerateDocumentsClient } from './generate-documents-client'
 import { formatMemberAddress } from '@/lib/members/member-address'
 import { pickDefaultSs4SignerLink } from '@/lib/operations/ss4-signer'
-import { previousNameForNewOa } from '@/lib/portal/oa-regenerate-guard'
+import { inheritMembersMaySign, previousNameForNewOa } from '@/lib/portal/oa-regenerate-guard'
 
 export const dynamic = 'force-dynamic'
 
@@ -128,13 +128,14 @@ export default async function GenerateDocumentsPage({ searchParams }: { searchPa
       : []
 
   // A renamed company's new Operating Agreement says "formerly known as <the name on its signed one>" — the preview shows what will be saved.
-  const { data: signedOas } = await supabaseAdmin
+  const { data: allOas } = await supabaseAdmin
     .from('oa_agreements')
-    .select('status, company_name')
+    .select('status, company_name, signed_at, members_may_sign')
     .eq('account_id', selectedAccountId)
-    .eq('status', 'signed')
     .order('created_at', { ascending: false })
-  const previousCompanyName = previousNameForNewOa(signedOas ?? [], accountDetail.company_name)
+  const previousCompanyName = previousNameForNewOa((allOas ?? []).filter(o => o.status === 'signed'), accountDetail.company_name)
+  // The unsigned draft this one would replace may say "each Member may also sign" (Section 2.3) — the preview shows the same wording that is saved.
+  const membersMaySign = inheritMembersMaySign(allOas ?? [])
 
   return (
     <GenerateDocumentsClient
@@ -142,6 +143,7 @@ export default async function GenerateDocumentsPage({ searchParams }: { searchPa
         id: selectedAccountId,
         companyName: accountDetail.company_name,
         previousCompanyName,
+        membersMaySign,
         ein: accountDetail.ein_number,
         stateOfFormation: accountDetail.state_of_formation,
         formationDate: accountDetail.formation_date,

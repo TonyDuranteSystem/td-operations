@@ -3,9 +3,10 @@
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-action'
+import { validateNameParts } from '@/lib/contacts/contact-name'
 
 const ALLOWED_FIELDS = [
-  'full_name', 'email', 'email_2', 'phone', 'phone_2', 'phone_3', 'phone_4',
+  'email', 'email_2', 'phone', 'phone_2', 'phone_3', 'phone_4',
   'language', 'citizenship', 'residency',
   'address_line1', 'address_city', 'address_state', 'address_zip', 'address_country',
   'date_of_birth', 'passport_number', 'passport_expiry_date',
@@ -30,6 +31,39 @@ export async function updateContactField(
   }, {
     action_type: 'update', table_name: 'contacts', record_id: contactId,
     summary: `${field} updated`, details: { [field]: value },
+  })
+}
+
+/**
+ * Rename a contact: first name and last name are what the CRM edits, and the full name is built from them in the SAME write, so the three
+ * can never disagree (full_name alone is no longer directly editable). Everything that follows a contact's name still follows — the owner
+ * records that carried the old name and the person's storage folder — exactly as for the old full-name edit.
+ */
+export async function updateContactName(
+  contactId: string,
+  firstName: string,
+  lastName: string,
+  updatedAt: string
+): Promise<ActionResult> {
+  const parts = validateNameParts(firstName, lastName)
+  // (this repo's TS config does not narrow the union by `ok`, so the failure arm is read explicitly)
+  if (parts.ok === false) return { success: false, error: (parts as { ok: false; error: string }).error }
+  const name = parts as { ok: true; first: string; last: string; full: string }
+
+  return safeAction(async () => {
+    const follow = await import('@/lib/operations/contact-name-follow')
+    const nameBefore = await follow.nameBeforeEdit(contactId)
+    const result = await updateWithLock(
+      'contacts', contactId,
+      { first_name: name.first, last_name: name.last || null, full_name: name.full },
+      updatedAt
+    )
+    if (!result.success) throw new Error(result.error)
+    await follow.afterContactNameEdit(contactId, nameBefore)
+    revalidatePath(`/contacts/${contactId}`)
+  }, {
+    action_type: 'update', table_name: 'contacts', record_id: contactId,
+    summary: 'name updated', details: { first_name: name.first, last_name: name.last, full_name: name.full },
   })
 }
 

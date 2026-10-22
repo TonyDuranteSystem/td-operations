@@ -46,6 +46,17 @@ export async function listTeamLeads(db: Db, teamId: string, limit = 200): Promis
   return (await listTeamLeadsCapped(db, teamId, limit)).rows
 }
 
+/** The team's leads with these ids (chunked, newest first). The team filter stays in the query, so another team's id finds nothing. */
+export async function listTeamLeadsByIds(db: Db, teamId: string, ids: readonly string[]): Promise<LeadRow[]> {
+  const out: LeadRow[] = []
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await db.from("marketing_leads").select(LEAD_COLS).eq("team_id", teamId).in("id", ids.slice(i, i + 200))
+    if (error) throw new Error(`could not read the leads: ${error.message}`)
+    out.push(...((data ?? []) as LeadRow[]))
+  }
+  return out.sort((a, b) => (b.received_at ?? "").localeCompare(a.received_at ?? "") || b.id.localeCompare(a.id))
+}
+
 export async function getTeamLead(db: Db, teamId: string, id: string): Promise<LeadRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null
   const { data } = await db.from("marketing_leads").select(LEAD_COLS).eq("team_id", teamId).eq("id", id).maybeSingle()

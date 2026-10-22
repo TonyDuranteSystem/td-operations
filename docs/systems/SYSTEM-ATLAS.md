@@ -106,7 +106,7 @@ _Regenerated 2026-10-22 by directory scan._
 - CRM dashboard pages (56): `accounts` `addresses` `audit` `bofa-intake` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `forms` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `marketing-leads` `new-calendar` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `research` `sandbox-mail` `service-catalog` `services` `storage` `storage-app` `system-health` `tasks` `tax-returns` `td-talk` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
 - Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
 - API route groups (99)
-- Code modules (85): `accounts` `ai-agent` `archive` `audit` `auth` `billing` `bofa-intake` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `closure` `code-tasks` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `embed` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `forms-hub` `harbor-compliance` `hooks` `inbox` `internal` `itin` `job-notes` `jobs` `leads` `lease` `marketing` `mcp` `media` `members` `messaging` `nav` `new-calendar` `notes` `notifications` `oa` `offers` `open-services` `operations` `partners` `payments` `pdf` `per-record-activity` `portal` `portal-chats` `public-forms` `push` `research` `schemas` `security` `services` `ss4` `storage` `storage-app` `supabase` `system-health` `talk` `tasks` `tax` `td-communication` `team` `theme` `todo-board` `types` `ui` `utils` `windows`
+- Code modules (86): `accounts` `ai-agent` `archive` `audit` `auth` `billing` `bofa-intake` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `closure` `code-tasks` `contacts` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `embed` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `forms-hub` `harbor-compliance` `hooks` `inbox` `internal` `itin` `job-notes` `jobs` `leads` `lease` `marketing` `mcp` `media` `members` `messaging` `nav` `new-calendar` `notes` `notifications` `oa` `offers` `open-services` `operations` `partners` `payments` `pdf` `per-record-activity` `portal` `portal-chats` `public-forms` `push` `research` `schemas` `security` `services` `ss4` `storage` `storage-app` `supabase` `system-health` `talk` `tasks` `tax` `td-communication` `team` `theme` `todo-board` `types` `ui` `utils` `windows`
 - Database tables: 288 _(ground truth: `lib/database.types.ts`)_
 <!-- /GENERATED:surface -->
 
@@ -188,7 +188,7 @@ _Regenerated 2026-10-22. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-10-20)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-19)_
-- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-21)_
+- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-22)_
 - [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-10-20)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-10-19)_
@@ -199,7 +199,7 @@ _Regenerated 2026-10-22. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-21)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-20)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-21)_
-- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-21)_
+- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-22)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-10-21)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-21)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-16)_
@@ -212,7 +212,7 @@ _Regenerated 2026-10-22. Every subsystem doc under `docs/systems/` (51 docs), wi
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-10-18)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-10-21)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-10-22)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-10-09)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-09-18)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_

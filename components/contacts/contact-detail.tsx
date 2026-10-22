@@ -39,13 +39,14 @@ import { LifecycleTimeline } from '@/components/lifecycle/timeline'
 import { assembleTimeline } from '@/lib/lifecycle-timeline'
 import { isActivationEffectivelyPaid } from '@/lib/operations/activation-paid'
 import { EditableField } from '@/components/accounts/editable-field'
+import { ContactNameEditor } from '@/components/contacts/contact-name-editor'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { useStoreOwnerForContact, useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
 import { StoreReadOnlyPanel } from '@/components/accounts/store-readonly-panel'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
-import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
+import { updateContactField, updateContactName, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { ResolvePersonalDocument } from '@/components/documents/resolve-personal-document'
@@ -318,6 +319,13 @@ export function ContactDetail({
     return result
   }
 
+  const saveContactName = async (firstName: string, lastName: string) => {
+    const result = await updateContactName(contact.id, firstName, lastName, contact.updated_at)
+    if (result.success) { toast.success('Saved'); router.refresh() }
+    else toast.error(result.error ?? 'Failed')
+    return result
+  }
+
   const activeSds = serviceDeliveries.filter(sd => sd.status === 'active')
 
   // Assemble lifecycle timeline from existing props
@@ -355,11 +363,11 @@ export function ContactDetail({
           </button>
           <div>
             <div className="flex items-center gap-3">
-              <EditableField
-                label=""
-                value={contact.full_name}
-                className="text-2xl font-bold"
-                onSave={makeContactSaver('full_name')}
+              <ContactNameEditor
+                firstName={contact.first_name}
+                lastName={contact.last_name}
+                fullName={contact.full_name}
+                onSave={saveContactName}
               />
               {portalAuth.suspended ? (
                 <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-red-100 text-red-700">
