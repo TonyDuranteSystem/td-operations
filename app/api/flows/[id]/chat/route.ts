@@ -97,7 +97,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     // service_delivery_id; matching on (topic + account) surfaces it here too.
     const { data: sd } = await supabaseAdmin
       .from('service_deliveries')
-      .select('id, service_type, account_id, due_date, stage_entered_at, created_at')
+      .select('id, service_type, account_id, contact_id, due_date, stage_entered_at, created_at')
       .eq('id', serviceDeliveryId)
       .single()
 
@@ -115,9 +115,16 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     // return's thread without hiding the rest. Internal chat-event notes stay
     // excluded, so the room shows exactly what the CLIENT sees — one
     // conversation, one truth.
+    // A job that belongs to a PERSON (no company yet: an ITIN, an in-flight formation) has no account to match on. Without a branch for the
+    // person, the client's own messages (written as the contact, with no company and no job stamp) were invisible here while staff replies —
+    // which are stamped with the contact — landed in a thread they could not see. The contact branch is limited to rows with NO company, so it
+    // can never pull in another company's conversation.
+    const contactId = (sd?.contact_id as string | null | undefined) ?? null
     const orFilter = accountId
       ? `service_delivery_id.eq.${serviceDeliveryId},account_id.eq.${accountId}`
-      : `service_delivery_id.eq.${serviceDeliveryId}`
+      : contactId
+        ? `service_delivery_id.eq.${serviceDeliveryId},and(contact_id.eq.${contactId},account_id.is.null)`
+        : `service_delivery_id.eq.${serviceDeliveryId}`
 
     const { data, error } = (await (supabaseAdmin as unknown as {
       from: (t: string) => {

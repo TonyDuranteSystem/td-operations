@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation'
 import { requireOpenServicesAccess } from '@/lib/open-services/audience'
 import { loadNewCalendarInputs } from '@/lib/new-calendar/load'
 import { buildNewCalendar } from '@/lib/new-calendar/build'
+import { loadNoteSummaries } from '@/lib/job-notes/read'
 import { firstNameOf, greetingWord } from '@/lib/new-calendar/greeting'
 import { parseParams, type RawSearchParams } from '@/lib/new-calendar/params'
 import type { CalendarModel } from '@/lib/new-calendar/types'
@@ -37,6 +38,9 @@ export default async function NewCalendarPage({ searchParams }: { searchParams: 
     if (wantsJobs) {
       const inputs = await loadNewCalendarInputs(access, now)
       model = buildNewCalendar({ ...inputs, now }, params)
+      // The team notes of the rows on screen. Tolerant: if they cannot be read, the Calendar still shows (without notes).
+      const notes = await loadNoteSummaries(model.rows.map(r => r.id))
+      model = { ...model, rows: model.rows.map(r => ({ ...r, notes: notes.get(r.id) ?? null })) }
     }
   } catch (err) {
     failed = true

@@ -31,6 +31,7 @@ import {
 import type { WaitBehaviour } from '@/lib/open-services/types'
 import { workTodayText } from '@/lib/new-calendar/greeting'
 import { RowAction } from '@/components/new-calendar/row-action'
+import { JobNoteCell, JobNotesProvider, MessageClientLink } from '@/components/job-notes/notes-provider'
 import { RefreshButton } from '@/components/new-calendar/refresh-button'
 import { LiveRefresh } from '@/components/new-calendar/live-refresh'
 import { WhatsNewTab } from '@/components/whats-new/whats-new-tab'
@@ -124,7 +125,17 @@ function Row({ row }: { row: CalendarRow }) {
         <span className="font-sans text-zinc-500 min-[1100px]:sr-only">{row.bucket === 'closed' ? 'Finished: ' : 'Days: '}</span><Days row={row} />
       </div>
       <div className="mt-1 text-zinc-700 min-[1100px]:mt-0">{row.next}</div>
-      <div className="mt-3 min-[1100px]:mt-0 min-[1100px]:text-right"><RowAction row={row} /></div>
+      <div className="mt-3 min-[1100px]:mt-0 min-[1100px]:text-right">
+        <RowAction row={row} />
+        <div className="mt-1"><MessageClientLink jobId={row.id} name={row.name} serviceType={row.serviceType} /></div>
+      </div>
+      <div className="mt-2 min-w-0 min-[1100px]:col-span-full min-[1100px]:mt-0">
+        <JobNoteCell
+          target={{ id: row.id, name: row.name, serviceType: row.serviceType, stage: row.stage, accountId: row.accountId ?? null, contactId: row.contactId ?? null }}
+          count={row.notes?.count ?? 0}
+          last={row.notes?.last ?? null}
+        />
+      </div>
     </li>
   )
 }
@@ -219,6 +230,7 @@ function JobsBody({ model, params }: { model: CalendarModel; params: NewCalendar
         </ul>
       )}
 
+      <JobNotesProvider>
       <div className="overflow-hidden rounded-lg border bg-white">
         <div className={`hidden bg-zinc-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 ${GRID}`} aria-hidden="true">
           <div>Client</div><div>Service</div><div>Step now</div><div>{closedView ? 'Finished' : 'Days'}</div><div>Next step</div><div />
@@ -231,6 +243,7 @@ function JobsBody({ model, params }: { model: CalendarModel; params: NewCalendar
           </ul>
         )}
       </div>
+      </JobNotesProvider>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-zinc-600">
         <span>Showing <b className="font-semibold text-foreground">{model.rows.length}</b> of {model.total}</span>
