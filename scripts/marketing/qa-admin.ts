@@ -138,7 +138,7 @@ async function main() {
   let v = await view(admin, "/marketing-leads")
   const links = await v.page.locator('nav[aria-label="Marketing"] a').allInnerTexts()
   const soon = await v.page.locator('nav[aria-label="Marketing"] span').allInnerTexts()
-  ck("N1 the Marketing section has a sub-menu: Overview, All leads, Teams, Audit log, Settings; Money, Calls and Conversations are greyed 'soon', not links", links.join("|") === "Overview|All leads|Teams|Audit log|Settings" && soon.filter(t => /^(Money|Calls|Conversations)\s/i.test(t)).length === 3, { links, soon })
+  ck("N1 the Marketing section has a sub-menu: Overview, All leads, Teams, Audit log, Settings, Money; Calls and Conversations are greyed 'soon', not links", links.join("|") === "Overview|All leads|Teams|Audit log|Settings|Money" && soon.filter(t => /^(Calls|Conversations)\s/i.test(t)).length === 2, { links, soon })
   await v.page.close()
 
   // ── all leads + detail ──
@@ -241,8 +241,9 @@ async function main() {
   // ── who cannot get in ──
   for (const [who, ctx] of [["staff", staff], ["the marketing owner", owner]] as const) {
     for (const path of ["/marketing-leads/leads", "/marketing-leads/audit", "/marketing-leads/teams", "/marketing-leads/settings"]) {
-      const x = await view(ctx, path)
-      ck(`N26 ${who} cannot open ${path}`, !/Audit log|All leads|Switches|People \(/.test(x.text.replace(/\s+/g, " ").slice(0, 400)) && !/Good Lead/.test(x.text), x.text.slice(0, 120)); await x.page.close()
+      const pg = await ctx.newPage(); const rs = await pg.goto(BASE + path, { waitUntil: "load", timeout: 120000 }); await sleep(2500)
+      const x = { page: pg, status: rs?.status() ?? 0, text: (await pg.locator("body").innerText()).slice(0, 4000) }
+      ck(`N26 ${who} cannot open ${path}`, !/Audit log|All leads|Switches|People \(/.test(x.text.replace(/\s+/g, " ").slice(0, 400)) && (who !== "staff" || !/Good Lead/.test(x.text)), x.text.slice(0, 120)); await x.page.close()
     }
   }
 

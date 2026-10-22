@@ -34,6 +34,7 @@ export default async function MarketingReports({ searchParams }: { searchParams:
   return (
     <div className="space-y-5 p-6">
       <div><h1 className="text-2xl font-semibold">Reports</h1><p className="text-sm text-slate-500">Numbers for the team, from the leads and what was done with them.</p></div>
+      {data.truncated && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">Some older records are not included in these numbers because there are too many to read at once. Tell Antonio.</p>}
       <nav aria-label="Period" className="flex flex-wrap gap-2">
         {PERIODS.map(p => <Link key={p.key} href={`/marketing/reports?period=${p.key}`} aria-current={p.key === period ? 'page' : undefined} className={`rounded-full border px-3 py-1 text-xs ${p.key === period ? 'border-slate-900 bg-slate-900 text-white' : 'bg-white text-slate-600'}`}>{p.label}</Link>)}
       </nav>

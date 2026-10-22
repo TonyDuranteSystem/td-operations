@@ -137,11 +137,11 @@ async function main() {
   ck("M2 'New in the last 24 h' counts only leads that arrived in the last day (not the 30 h / 40 h / 80 h ones, and not the team-less lead)", (await num(v.page, "New in the last 24 h")) === "6", await num(v.page, "New in the last 24 h"))
   ck("M3 'Nobody touched, over 24 h' = the two old Newlead rows (30 h and 80 h), and it is red", (await num(v.page, "Nobody touched, over 24 h")) === "2", await num(v.page, "Nobody touched, over 24 h"))
   ck("M4 'Call backs due today' counts the late one and the one later today", (await num(v.page, "Call backs due today")) === "2", await num(v.page, "Call backs due today"))
-  ck("M5 'Paid calls this month' is 0 (nothing has paid yet)", (await num(v.page, "Paid calls this month")) === "0")
+  ck("M5 'Sales paid this month' is 0 (nothing has paid yet)", (await num(v.page, "Sales paid this month")) === "0")
   ck("M6 the funnel shows each stage's count in the pipeline's order", /New\s*\n?\s*6/.test(t.replace(/\n+/g, "\n")) || /New[\s\S]{0,40}6/.test(t), t.slice(300, 900))
   ck("M7 'Needs you' says: 2 untouched (oldest 3 d), the team-less leads, the late call back, the possible existing client", /2 leads untouched for over a day \(oldest: 3 d\)/.test(t) && /leads? that arrived with no team/.test(t) && /Call back with Late Callback is 3 h late/.test(t) && /Anna Vitale looks like an existing client/.test(t), t.slice(500, 1400))
   ck("M8 'What each person did today' counts the setter's three outcomes and the owner's pick, and NOT the old one", /qa-master-settera@example\.test Setter 1 1 1 0/.test(t.replace(/\s+/g, " ")) && /qa-master-ownera@example\.test Owner 0 0 0 1/.test(t.replace(/\s+/g, " ")), t.slice(900, 1800))
-  ck("M9 the Meta connection and the all-leads table are still there, with Stage and Picked by columns", /Meta connection/.test(t) && /Stage/.test(t) && /Picked by/.test(t) && /Qualified/.test(t), t.slice(-900))
+  ck("M9 the funnel and the Needs-you list are on the page (the Meta connection and the all-leads table now live on Settings and All leads)", /Where the leads are/.test(t) && /Needs you/.test(t) && /Qualified/.test(t), t.slice(-900))
   await v.page.screenshot({ path: `${SHOTS}/qa-master-view.png`, fullPage: true }); await v.page.close()
 
   v = await view(admin, "/")

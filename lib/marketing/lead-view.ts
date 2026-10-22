@@ -77,6 +77,12 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
     case "claimed": return "Picked"
     case "released": return "Given back"
     case "note": return `Note: ${typeof data.text === "string" ? data.text : ""}`
+    case "payment_link_created": return "Payment link created"
+    case "payment_received": return "Payment received"
+    case "sale_refunded": return "Sale refunded"
+    case "sale_paid_out": return "Seller's share paid out"
+    case "sale_terms_applied": return "Split applied to the sale"
+    case "stage_not_moved": return "Paid, but the lead could not be moved to the next stage automatically: check it"
     case "status_changed": {
       const to = stageLabel(stages, typeof data.to === "string" ? data.to : null)
       if (data.outcome === "not_in_target") return `Not in target (${reasons.find(r => r.key === data.reason)?.label ?? String(data.reason ?? "")})${note}`

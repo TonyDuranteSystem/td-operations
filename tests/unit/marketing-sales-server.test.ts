@@ -100,6 +100,40 @@ describe("recordPaidSession", () => {
     expect(db.rows("marketing_leads")[0].status).toBe("qualified")
     SETTINGS.sale_kind_stages = { strategic_call: "paid_call", upsell: "upsell_won" }
   })
+  it("a paid lead's promised call back is cleared (it is no longer a 'late call back')", async () => {
+    db.rows("marketing_leads")[0].callback_at = "2026-10-20T09:00:00Z"
+    db.rows("marketing_sales").push(paidSale())
+    await recordPaidSession(asDb(), session())
+    expect(db.rows("marketing_leads")[0]).toMatchObject({ status: "paid_call", callback_at: null })
+  })
+  it("a lead that moved at the same moment gets one more try with the stage it is at now", async () => {
+    db.rows("marketing_sales").push(paidSale())
+    const real = db.from.bind(db)
+    let reads = 0
+    db.from = ((t: string) => { const q = real(t); if (t === "marketing_leads") { const sel = q.maybeSingle.bind(q); q.maybeSingle = (() => sel().then(r => { const seen = r.data ? { ...r.data } : r.data; if (reads++ === 0 && r.data) db.rows("marketing_leads")[0].status = "booked"; return { ...r, data: seen } })) as typeof q.maybeSingle } return q }) as typeof db.from
+    await recordPaidSession(asDb(), session())
+    expect(db.rows("marketing_leads")[0].status).toBe("paid_call")
+    expect(db.rows("marketing_lead_events").map(e => e.kind)).not.toContain("stage_not_moved")
+  })
+  it("if the lead still cannot be moved, a line says so (never silent)", async () => {
+    db.rows("marketing_sales").push(paidSale())
+    const real = db.from.bind(db)
+    db.from = ((t: string) => { const q = real(t); if (t === "marketing_leads") { const sel = q.maybeSingle.bind(q); q.maybeSingle = (() => sel().then(r => { const seen = r.data ? { ...r.data } : r.data; if (r.data) db.rows("marketing_leads")[0].status = db.rows("marketing_leads")[0].status === "booked" ? "showed" : "booked"; return { ...r, data: seen } })) as typeof q.maybeSingle } return q }) as typeof db.from
+    await recordPaidSession(asDb(), session())
+    expect(db.rows("marketing_sales")[0].status).toBe("paid")
+    expect(db.rows("marketing_lead_events").map(e => e.kind)).toContain("stage_not_moved")
+  })
+  it("a lead already at the paid stage still has its leftover call back cleared", async () => {
+    db.rows("marketing_leads")[0].status = "paid_call"
+    db.rows("marketing_leads")[0].callback_at = "2026-10-20T09:00:00Z"
+    db.rows("marketing_sales").push(paidSale())
+    await recordPaidSession(asDb(), session())
+    expect(db.rows("marketing_leads")[0].callback_at).toBeNull()
+  })
+  it("a payment link made while Antonio views as someone is tagged", async () => {
+    await createSaleLink(asDb(), { ...ctx, viaViewAs: true }, LEAD, { kind: "strategic_call", amount: "1000", currency: "EUR" }, ok)
+    expect(db.rows("marketing_lead_events").find(e => e.kind === "payment_link_created")?.data).toMatchObject({ via_view_as: true })
+  })
   it("a database failure while recording is thrown, so Stripe retries the event", async () => {
     db.rows("marketing_sales").push(paidSale())
     const real = db.from.bind(db)

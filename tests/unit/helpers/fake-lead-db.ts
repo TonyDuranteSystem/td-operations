@@ -29,6 +29,7 @@ class Query {
   private payload: Row = {}
   private filters: Array<(r: Row) => boolean> = []
   private lim = Infinity
+  private off = 0
   constructor(private db: FakeDb, private t: string) {}
   select(_cols?: string) { return this }
   insert(row: Row) { this.op = "insert"; this.payload = row; return this }
@@ -40,6 +41,7 @@ class Query {
   ilike(c: string, pat: string) { const re = likeToRegExp(pat); this.filters.push(r => re.test(String(r[c] ?? ""))); return this }
   order() { return this }
   limit(n: number) { this.lim = n; return this }
+  range(from: number, to: number) { this.off = from; this.lim = to - from + 1; return this }
   private run(): Result {
     if (this.db.failTables.has(this.t)) return { data: [], error: { message: `forced failure on ${this.t}` } }
     const all = this.db.rows(this.t)
@@ -52,7 +54,7 @@ class Query {
     }
     const hit = all.filter(r => this.filters.every(f => f(r)))
     if (this.op === "update") { hit.forEach(r => Object.assign(r, this.payload)); return { data: hit, error: null } }
-    return { data: hit.slice(0, this.lim), error: null }
+    return { data: hit.slice(this.off, this.off + this.lim), error: null }
   }
   maybeSingle() { const r = this.run(); return Promise.resolve({ data: r.data[0] ?? null, error: r.error }) }
   single() { const r = this.run(); return Promise.resolve({ data: r.data[0] ?? null, error: r.error ?? (r.data[0] ? null : { message: "no row" }) }) }

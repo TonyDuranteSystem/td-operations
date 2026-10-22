@@ -4,21 +4,22 @@
  */
 import type { Db } from "@/lib/marketing/meta-leads/ingest"
 import type { MasterEvent } from "@/lib/marketing/master-view"
+import { loadTeamEvents } from "@/lib/marketing/events-read"
+import { readPaged } from "@/lib/marketing/paged"
 import { listTeamSales } from "@/lib/marketing/sales-server"
 import type { AdLead } from "@/lib/marketing/numbers"
 import type { SaleRow } from "@/lib/marketing/sales"
 
-export interface NumbersData { leads: AdLead[]; events: MasterEvent[]; sales: SaleRow[] }
+const LEAD_CAP = 5000
+
+/** `truncated` = some leads or history rows were beyond the read limits and are NOT in these numbers: a screen must say so. */
+export interface NumbersData { leads: AdLead[]; events: MasterEvent[]; sales: SaleRow[]; truncated: boolean }
 
 export async function loadNumbersData(db: Db, teamId: string): Promise<NumbersData> {
-  const [leadsRes, evRes, sales] = await Promise.all([
-    db.from("marketing_leads").select("id, ad_name, campaign_name, received_at, meta_created_time").eq("team_id", teamId).order("received_at", { ascending: false }).limit(5000),
-    db.from("marketing_lead_events").select("lead_id, kind, actor, data, created_at").eq("kind", "status_changed").order("created_at", { ascending: false }).limit(20000),
+  const [capped, ev, sales] = await Promise.all([
+    readPaged<AdLead>((from, to) => db.from("marketing_leads").select("id, ad_name, campaign_name, received_at, meta_created_time").eq("team_id", teamId).order("received_at", { ascending: false }).order("id", { ascending: false }).range(from, to), LEAD_CAP),
+    loadTeamEvents(db, teamId, { kinds: ["status_changed"] }),
     listTeamSales(db, teamId, { limit: 2000 }),
   ])
-  const leads = (leadsRes.data ?? []) as AdLead[]
-  const ids = new Set(leads.map(l => l.id))
-  // history rows belong to leads of THIS team only
-  const events = ((evRes.data ?? []) as MasterEvent[]).filter(e => ids.has(e.lead_id))
-  return { leads, events, sales }
+  return { leads: capped.rows, events: ev.events, sales, truncated: capped.truncated || ev.truncated }
 }

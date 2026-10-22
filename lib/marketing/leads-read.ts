@@ -4,6 +4,7 @@
  * Only Antonio's admin page reads across teams (`listAllLeads`).
  */
 import type { Db } from "@/lib/marketing/meta-leads/ingest"
+import { readPaged } from "@/lib/marketing/paged"
 
 export interface LeadRow {
   id: string
@@ -36,9 +37,13 @@ export interface LeadEventRow { id: number; kind: string; actor: string; data: R
 
 export const LEAD_COLS = "id, team_id, leadgen_id, full_name, email, phone, country, city, answers, campaign_name, adset_name, ad_name, form_id, platform, status, existing_client, meta_created_time, received_at, claimed_by, claimed_by_label, claimed_at, callback_at, not_in_target_reason, qualification"
 
+/** Newest first, read in pages (the database cuts one answer at 1000 rows); `truncated` = there are more leads than `limit`. */
+export async function listTeamLeadsCapped(db: Db, teamId: string, limit = 200): Promise<{ rows: LeadRow[]; truncated: boolean }> {
+  return readPaged<LeadRow>((from, to) => db.from("marketing_leads").select(LEAD_COLS).eq("team_id", teamId).order("received_at", { ascending: false }).order("id", { ascending: false }).range(from, to), limit)
+}
+
 export async function listTeamLeads(db: Db, teamId: string, limit = 200): Promise<LeadRow[]> {
-  const { data } = await db.from("marketing_leads").select(LEAD_COLS).eq("team_id", teamId).order("received_at", { ascending: false }).limit(limit)
-  return (data ?? []) as LeadRow[]
+  return (await listTeamLeadsCapped(db, teamId, limit)).rows
 }
 
 export async function getTeamLead(db: Db, teamId: string, id: string): Promise<LeadRow | null> {
@@ -48,8 +53,9 @@ export async function getTeamLead(db: Db, teamId: string, id: string): Promise<L
 }
 
 export async function leadTimeline(db: Db, leadId: string): Promise<LeadEventRow[]> {
-  const { data } = await db.from("marketing_lead_events").select("id, kind, actor, data, created_at").eq("lead_id", leadId).order("created_at", { ascending: true }).limit(200)
-  return (data ?? []) as LeadEventRow[]
+  // The newest 200 (a cap must never drop the latest note), shown oldest to newest.
+  const { data } = await db.from("marketing_lead_events").select("id, kind, actor, data, created_at").eq("lead_id", leadId).order("created_at", { ascending: false }).limit(200)
+  return ((data ?? []) as LeadEventRow[]).reverse()
 }
 
 /** Antonio's master list: every team's leads, plus those not assigned to a team yet. Admin pages only. */

@@ -27,7 +27,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const parsed = body.safeParse(await req.json().catch(() => null))
   if (!parsed.success) return NextResponse.json({ error: "That request is not valid. Reload the page and try again." }, { status: 400, headers: NO_STORE })
   const { id } = await params
-  const r = await createSaleLink(leadDb(), { teamId: g.ctx.team.id, userId: g.ctx.user.id, email: g.ctx.user.email }, id, { ...parsed.data, amount: parsed.data.amount ?? "" }, liveSession)
+  const r = await createSaleLink(leadDb(), { teamId: g.ctx.team.id, userId: g.ctx.user.id, email: g.ctx.user.email, viaViewAs: g.ctx.viewAs !== undefined }, id, { ...parsed.data, amount: parsed.data.amount ?? "" }, liveSession)
   if (r.ok === false) return NextResponse.json({ error: r.error, needsConfirm: r.needsConfirm === true }, { status: r.status, headers: NO_STORE })
   return NextResponse.json({ ok: true, saleId: r.saleId, url: r.url }, { headers: NO_STORE })
 }

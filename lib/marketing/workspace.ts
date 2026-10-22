@@ -34,6 +34,11 @@ export function homeFor(perms: readonly string[]): string | null {
 }
 
 export interface OutcomeStages { good: string; not_in_target: string; call_back: string }
+
+/** The stages a paid sale moves a lead to: the values of the sale_kind_stages setting, without repeats. */
+export function paidStagesFrom(map: Record<string, string> | null | undefined): string[] {
+  return Array.from(new Set(Object.values(map ?? {}).filter((v): v is string => typeof v === "string" && v !== "")))
+}
 const dueBy = (l: { callback_at: string | null }, limit: number) => l.callback_at !== null && new Date(l.callback_at).getTime() < limit
 const arrival = (l: { meta_created_time: string | null; received_at: string }) => new Date(l.meta_created_time ?? l.received_at).getTime()
 
@@ -71,6 +76,8 @@ export interface TodayModel {
 export function todayModel(i: {
   leads: readonly TodayLead[]; events: readonly MasterEvent[]; members: readonly MasterMember[]; stages: readonly StageOpt[]
   outcomeStages: OutcomeStages; me: string; now: Date
+  /** stages that mean "a sale was paid" (from the settings); default: the built-in two */
+  paidStages?: readonly string[]
 }): TodayModel {
   const nowMs = i.now.getTime()
   const dayEnd = romeStartOfDay(i.now).getTime() + 24 * 3600_000
@@ -78,8 +85,8 @@ export function todayModel(i: {
     .sort((a, b) => String(a.callback_at).localeCompare(String(b.callback_at)))
     .map(lead => ({ lead, late: new Date(lead.callback_at as string).getTime() < nowMs }))
   const goodWaiting = i.leads.filter(l => l.status === i.outcomeStages.good && l.claimed_by === null).sort((a, b) => arrival(a) - arrival(b))
-  const done = new Set([i.outcomeStages.not_in_target, "paid_call", "upsell_won"])
+  const done = new Set([i.outcomeStages.not_in_target, ...(i.paidStages?.length ? i.paidStages : ["paid_call", "upsell_won"])])
   const mine = i.leads.filter(l => l.claimed_by === i.me && !done.has(l.status)).sort((a, b) => String(b.claimed_at ?? "").localeCompare(String(a.claimed_at ?? "")))
-  const people = buildMasterView({ leads: i.leads, events: i.events, members: i.members, stages: i.stages, now: i.now }).people
+  const people = buildMasterView({ leads: i.leads, events: i.events, members: i.members, stages: i.stages, now: i.now, paidStages: i.paidStages }).people
   return { callBacks, goodWaiting, mine, people }
 }

@@ -3,6 +3,9 @@ import { PaymentLinkPanel, type PaymentLinkProps } from '@/components/marketing/
 import { clientFlagText, eventText, formatWhen, prettyAnswer, prettyQuestion, stageLabel, telHref, type StageOption } from '@/lib/marketing/lead-view'
 import type { LeadEventRow, LeadRow } from '@/lib/marketing/leads-read'
 import { hasPermission, type MarketingPermission } from '@/lib/marketing/permissions'
+import { canSeeNotes, redactLead, redactTimeline } from '@/lib/marketing/lead-privacy'
+import { buildSetterNote, personName } from '@/lib/marketing/setter-note'
+import { SetterNoteBlock } from '@/components/marketing/setter-note-block'
 
 interface Props {
   lead: LeadRow
@@ -20,7 +23,12 @@ interface Props {
 }
 
 /** One lead, everything about it, with the buttons: used by the Leads screen and the Call list. A computer-width panel. Team-scoped by whoever loads it. */
-export function LeadPane({ lead, events, stages, reasons, checklist, permissions, isOwner, myId, afterHref, paymentLink }: Props) {
+export function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons, checklist, permissions, isOwner, myId, afterHref, paymentLink }: Props) {
+  // What the team wrote (notes, the ticks from a call) is read only by people who work the leads; the ad person gets the facts without it.
+  const seesNotes = canSeeNotes(permissions)
+  const lead = redactLead(leadIn, seesNotes)
+  const events = redactTimeline(eventsIn, seesNotes)
+  const setterNote = seesNotes ? buildSetterNote(events, reasons) : null
   const claim = lead.claimed_by === null ? 'free' : lead.claimed_by === myId ? 'me' : 'other'
   const flag = clientFlagText(lead.existing_client)
   const tel = telHref(lead.phone)
@@ -45,6 +53,8 @@ export function LeadPane({ lead, events, stages, reasons, checklist, permissions
         {where.length > 0 && <p className="mt-3 text-xs text-slate-400">{where.join(' › ')}</p>}
       </div>
 
+      {setterNote && <SetterNoteBlock note={setterNote} ticks={lead.qualification} />}
+
       <LeadActionPanel
         leadId={lead.id}
         canPick={hasPermission(permissions, 'leads.pick')}
@@ -57,13 +67,6 @@ export function LeadPane({ lead, events, stages, reasons, checklist, permissions
       />
 
       {paymentLink && <PaymentLinkPanel {...paymentLink} />}
-
-      {lead.qualification && lead.qualification.length > 0 && (
-        <div className="rounded-xl border bg-white p-5 text-sm">
-          <h3 className="text-sm font-semibold text-slate-600">Checklist from the call</h3>
-          <ul className="mt-2 space-y-1">{lead.qualification.map(q => <li key={q.item}>{q.ticked ? '✔' : '✘'} {q.item}</li>)}</ul>
-        </div>
-      )}
 
       <div className="rounded-xl border bg-white p-5 text-sm">
         <h3 className="text-sm font-semibold text-slate-600">What they answered on the form</h3>
@@ -84,7 +87,7 @@ export function LeadPane({ lead, events, stages, reasons, checklist, permissions
         <ol className="mt-2 space-y-1.5">
           {events.map(e => (
             <li key={e.id} className="flex justify-between gap-3 rounded-lg border px-3 py-2">
-              <span>{eventText(e.kind, e.data, stages, reasons)}{e.actor !== 'system' && <span className="text-slate-400"> · {e.actor}</span>}</span>
+              <span className="min-w-0 whitespace-pre-wrap break-words">{eventText(e.kind, e.data, stages, reasons)}{e.actor !== 'system' && <span className="text-slate-400"> · {personName(e.actor)}{e.data?.via_view_as === true ? ' (viewing as)' : ''}</span>}</span>
               <span className="shrink-0 text-xs text-slate-400">{formatWhen(e.created_at)}</span>
             </li>
           ))}
