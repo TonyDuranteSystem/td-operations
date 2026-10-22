@@ -5,9 +5,10 @@
 import Link from "next/link"
 import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
-import { isAdmin } from "@/lib/auth"
+import { isAdmin, isOwnerOnly } from "@/lib/auth"
 import { canSeeInstallPage } from "@/lib/storage-app/install-access"
 import { loadRelease } from "@/lib/storage-app/release"
+import { ReleasePanel } from "./release-panel"
 
 export const dynamic = "force-dynamic"
 
@@ -23,6 +24,7 @@ export default async function StorageAppInstallPage() {
   if (!user || !(await canSeeInstallPage(user))) redirect("/")
   const release = await loadRelease()
   const admin = isAdmin(user)
+  const owner = isOwnerOnly(user)
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6 lg:p-8">
       <div>
@@ -51,6 +53,8 @@ export default async function StorageAppInstallPage() {
           <p className="text-sm text-zinc-600">No version of the app is published yet.</p>
         )}
       </div>
+
+      {owner && <ReleasePanel current={release ? { version: release.version, build: release.build, enabled: release.enabled, rolloutPercent: release.rolloutPercent } : null} />}
 
       <div className="rounded-lg border bg-white p-5">
         <h2 className="text-sm font-semibold text-zinc-800">How to install</h2>
