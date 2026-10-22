@@ -78,3 +78,24 @@ export function previousNameForNewOa(existing: ReadonlyArray<NewestOaForNameChan
   return null
 }
 
+
+export interface OaForMembersMaySign {
+  status: string | null
+  signed_at?: string | null
+  members_may_sign?: boolean | null
+}
+
+/**
+ * Whether a NEW agreement keeps "each Member may also sign" (Section 2.3). The setting lives on the agreement row, and generating again
+ * replaces the unsigned draft with a new row — so without this the new row started with the setting off and the owners' wording was lost
+ * (Beril LLC, 2026-10-22). It follows the NEWEST agreement that is still a draft (never signed, not voided): that is the one being replaced,
+ * and the portal preview reads the same rule so what the client previews is what is saved. A signed agreement never decides: its wording is
+ * its own. `existing` is newest first. Pure.
+ */
+export function inheritMembersMaySign(existing: ReadonlyArray<OaForMembersMaySign>): boolean {
+  for (const o of existing) {
+    if (o.status === 'signed' || o.status === 'voided' || o.signed_at) continue
+    return o.members_may_sign === true
+  }
+  return false
+}
