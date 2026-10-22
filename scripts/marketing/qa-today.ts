@@ -162,11 +162,11 @@ async function main() {
   await link.click(); await v.page.waitForURL(/by=/, { timeout: 60000 }); await v.page.waitForLoadState("networkidle")
   const filtered = await body(v.page)
   ck("T8 the filtered Leads list shows only what she worked on (Good Waiting A, Rejected Today ...), says whose, and not a lead she never touched", /Worked on by Qa Td Settera/.test(filtered) && /Good Waiting A/.test(filtered) && /Rejected Today/.test(filtered) && !/Fresh Lead/.test(filtered) && !/Stale One/.test(filtered) && !/Other Team Stale/.test(filtered), filtered.slice(0, 600))
-  await v.page.getByRole("link", { name: "Show everyone" }).click(); await v.page.waitForURL(u => !u.search.includes("by="), { timeout: 60000 }); await v.page.waitForLoadState("networkidle")
-  ck("T9 'Show everyone' removes the filter", /Fresh Lead/.test(await body(v.page)) && (await v.page.getByTestId("worked-by").count()) === 0); await v.page.close()
+  await v.page.getByTestId("clear-filters").click(); await v.page.waitForURL(u => !u.search.includes("by="), { timeout: 60000 }); await v.page.waitForLoadState("networkidle")
+  ck("T9 'Clear all' removes the filter", /Fresh Lead/.test(await body(v.page)) && (await v.page.getByTestId("applied").count()) === 0); await v.page.close()
 
   v = await view(owner, `/marketing/leads?by=${encodeURIComponent("nobody@example.test")}`)
-  ck("T10 a 'by' that is not a member of the team is ignored (full list, no filter badge)", (await v.page.getByTestId("worked-by").count()) === 0 && /Fresh Lead/.test(await body(v.page))); await v.page.close()
+  ck("T10 a 'by' that is not a member of the team is ignored (full list, no filter badge)", (await v.page.getByTestId("applied").count()) === 0 && /Fresh Lead/.test(await body(v.page))); await v.page.close()
   v = await view(owner, `/marketing/leads?by=${encodeURIComponent(em("setterA"))}`)
   ck("T11 another team's work by the same person never shows in this team's filter", !/Other Team Stale/.test(await body(v.page))); await v.page.close()
 

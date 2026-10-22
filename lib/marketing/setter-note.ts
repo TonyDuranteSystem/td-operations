@@ -78,3 +78,16 @@ export function pickLatestNotes(events: ReadonlyArray<Pick<LeadEventRow, "kind" 
   }
   return best
 }
+
+export interface LatestMark { outcome: OutcomeKind; by: string; at: string }
+
+/** For each lead id: who gave it its latest outcome (Good / Not in target / Call back), and when. Antonio's "View as" rows are not the team's work and are left out. */
+export function pickLatestMarks(events: ReadonlyArray<Pick<LeadEventRow, "kind" | "actor" | "data" | "created_at"> & { lead_id: string }>): Map<string, LatestMark> {
+  const best = new Map<string, LatestMark>()
+  for (const e of events) {
+    if (e.kind !== "status_changed" || e.data?.via_view_as === true || !isOutcome(e.data?.outcome)) continue
+    const cur = best.get(e.lead_id)
+    if (!cur || e.created_at > cur.at) best.set(e.lead_id, { outcome: e.data.outcome as OutcomeKind, by: personName(e.actor), at: e.created_at })
+  }
+  return best
+}
