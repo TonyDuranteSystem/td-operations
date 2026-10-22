@@ -51,6 +51,7 @@ interface Props {
     companyName: string
     /** Company Change Name: printed in the new Operating Agreement as "formerly known as …" */
     previousCompanyName?: string | null
+    membersMaySign?: boolean
     ein: string | null
     stateOfFormation: string | null
     formationDate: string | null
@@ -828,6 +829,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 account={{
                   companyName: account.companyName,
                   previousCompanyName: account.previousCompanyName ?? null,
+                  membersMaySign: account.membersMaySign ?? false,
                   ein: account.ein,
                   stateOfFormation: account.stateOfFormation,
                   formationDate: account.formationDate,

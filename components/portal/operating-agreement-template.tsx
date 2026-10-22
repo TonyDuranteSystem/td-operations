@@ -23,6 +23,8 @@ interface OAAccount {
   companyName: string
   /** Company Change Name: the name before the rename, printed as "formerly known as …" (same rule as the saved agreement). */
   previousCompanyName?: string | null
+  /** Two-member agreements: each Member may also sign for the Company (Section 2.3) — the same setting the saved agreement carries. */
+  membersMaySign?: boolean
   ein: string | null
   stateOfFormation: string | null
   formationDate: string | null
@@ -51,6 +53,7 @@ const OperatingAgreementTemplate = forwardRef<HTMLDivElement, Props>(
     const oaData: OAData = useMemo(() => ({
       company_name: account.companyName,
       previous_company_name: account.previousCompanyName || undefined,
+      members_may_sign: account.membersMaySign === true,
       state_of_formation: account.stateOfFormation || 'Florida',
       formation_date: account.formationDate || effectiveDate,
       ein_number: account.ein ?? undefined,

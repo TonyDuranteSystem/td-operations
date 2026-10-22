@@ -36,7 +36,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
-import { hasCollectedSignatures, isNameChangeNewVersion, previousNameForNewOa, uniqueOaToken } from '@/lib/portal/oa-regenerate-guard'
+import { hasCollectedSignatures, inheritMembersMaySign, isNameChangeNewVersion, previousNameForNewOa, uniqueOaToken } from '@/lib/portal/oa-regenerate-guard'
 import { OA_SUPPORTED_STATES, normalizeOAState } from '@/lib/types/oa-templates'
 import { APP_BASE_URL } from '@/lib/config'
 import { notifyClientActionRequired } from '@/lib/portal/action-required'
@@ -288,7 +288,7 @@ export async function POST(request: NextRequest) {
   // inert row and now five channels point them at a dead page.
   const { data: existingOAs } = await supabaseAdmin
     .from('oa_agreements')
-    .select('id, status, signed_count, company_name, signed_at')
+    .select('id, status, signed_count, company_name, signed_at, members_may_sign')
     .eq('account_id', account_id)
     .order('created_at', { ascending: false })
 
@@ -441,6 +441,9 @@ export async function POST(request: NextRequest) {
   // A renamed company's new agreement says "formerly known as <the name on its signed one>" (frozen on the row; null for every other company).
   const previousCompanyName = previousNameForNewOa(existingOAs ?? [], account.company_name as string)
 
+  // A replaced draft that said "each Member may also sign" keeps saying it (Beril LLC): the new row inherits the setting.
+  const membersMaySign = isMMLC && inheritMembersMaySign(existingOAs ?? [])
+
   // ── 7. INSERT OA_AGREEMENTS ──
   const { data: oa, error: insertErr } = await supabaseAdmin
     .from('oa_agreements')
@@ -448,6 +451,7 @@ export async function POST(request: NextRequest) {
       token: oaToken,
       // not in the generated types until the column reaches production (migration 20261019-1600)
       ...(previousCompanyName ? { previous_company_name: previousCompanyName } : {}),
+      members_may_sign: membersMaySign,
       account_id,
       contact_id: signerContactId,
       company_name: account.company_name,
