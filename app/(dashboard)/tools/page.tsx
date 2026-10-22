@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { isAdmin, isDashboardUser } from '@/lib/auth'
+import { canSeeInstallPage } from '@/lib/storage-app/install-access'
 import {
   Activity,
   AlertTriangle,
@@ -13,6 +14,7 @@ import {
   Printer,
   PenLine,
   FileSpreadsheet,
+  HardDriveDownload,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -22,6 +24,8 @@ interface ToolTile {
   description: string
   icon: LucideIcon
   adminOnly?: boolean
+  /** shown only to admins and the staff on the TD Storage Mac-app allow-list */
+  storageInstallOnly?: boolean
   comingSoon?: boolean
   /** Optional secondary action links rendered as buttons at the bottom of the card. */
   links?: { label: string; href: string }[]
@@ -54,6 +58,13 @@ const TOOLS: ToolTile[] = [
     href: '/tools/pnl',
     description: 'Run the tax-financials review for any client — upload statements + prior-year return, review, and download the P&L and Balance Sheet.',
     icon: FileSpreadsheet,
+  },
+  {
+    name: 'TD Storage install',
+    href: '/tools/storage-app',
+    description: 'Install the TD Storage Mac app — the CRM storage as a folder in Finder. Updates itself after the first install.',
+    icon: HardDriveDownload,
+    storageInstallOnly: true,
   },
   {
     name: 'System Health',
@@ -112,7 +123,8 @@ export default async function ToolsPage() {
   }
   const admin = isAdmin(user)
 
-  const visible = TOOLS.filter(t => !t.adminOnly || admin)
+  const showInstall = await canSeeInstallPage(user)
+  const visible = TOOLS.filter(t => (!t.adminOnly || admin) && (!t.storageInstallOnly || showInstall))
 
   return (
     <div className="p-6 lg:p-8 space-y-6">

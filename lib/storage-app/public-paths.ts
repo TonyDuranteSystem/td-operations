@@ -15,3 +15,9 @@ export const STORAGE_APP_PUBLIC_PATHS: readonly string[] = [
   "/api/storage-app/upload-slot",
   "/api/storage-app/save",
 ]
+
+/**
+ * The ONE route outside /api/storage-app that is public: the update feed (no client data; the app installs only what our key signed).
+ * Exact path, same reasoning as above. tests/unit/storage-app-release.test.ts keeps it in step with the route file.
+ */
+export const STORAGE_APP_RELEASE_PUBLIC_PATHS: readonly string[] = ["/api/storage-app-release/appcast.xml"]

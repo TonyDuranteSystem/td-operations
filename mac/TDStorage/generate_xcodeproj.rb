@@ -26,7 +26,7 @@ project.add_build_configuration('Production', :release)                         
 
 common = {
   'SWIFT_VERSION' => '5.0', 'MACOSX_DEPLOYMENT_TARGET' => '13.0', 'CODE_SIGN_STYLE' => 'Automatic',
-  'ENABLE_HARDENED_RUNTIME' => 'YES', 'GENERATE_INFOPLIST_FILE' => 'NO', 'CURRENT_PROJECT_VERSION' => '1', 'MARKETING_VERSION' => '0.1.0',
+  'ENABLE_HARDENED_RUNTIME' => 'YES', 'GENERATE_INFOPLIST_FILE' => 'NO', 'CURRENT_PROJECT_VERSION' => (ENV['TD_BUILD'] || '1'), 'MARKETING_VERSION' => (ENV['TD_VERSION'] || '0.1.0'),
   'SDKROOT' => 'macosx', 'CLANG_ENABLE_MODULES' => 'YES', 'ENABLE_USER_SCRIPT_SANDBOXING' => 'YES',
 }
 project.build_configurations.each do |c|
@@ -69,6 +69,19 @@ ext.add_file_references(core_files + ext_files)
     c.build_settings['SKIP_INSTALL'] = 'YES' if t == ext
   end
 end
+
+# Sparkle 2 (automatic updates), embedded and signed with the app. Folder = the official 2.10.0 release kept in td-operations-builds (override: SPARKLE_DIR).
+SPARKLE_DIR = ENV['SPARKLE_DIR'] || File.expand_path('~/Developer/td-operations-builds/sparkle-2.10.0')
+raise "Sparkle.framework not found in #{SPARKLE_DIR}" unless File.directory?(File.join(SPARKLE_DIR, 'Sparkle.framework'))
+sparkle = project.frameworks_group.new_reference(File.join(SPARKLE_DIR, 'Sparkle.framework'))
+sparkle.source_tree = 'SOURCE_ROOT'
+sparkle.path = File.join(SPARKLE_DIR, 'Sparkle.framework')
+app.frameworks_build_phase.add_file_reference(sparkle, true)
+fw_phase = app.new_copy_files_build_phase('Embed Frameworks')
+fw_phase.dst_subfolder_spec = '10' # Frameworks
+fw_bf = fw_phase.add_file_reference(sparkle, true)
+fw_bf.settings = { 'ATTRIBUTES' => ['CodeSignOnCopy', 'RemoveHeadersOnCopy'] }
+app.build_configurations.each { |c| c.build_settings['FRAMEWORK_SEARCH_PATHS'] = ['$(inherited)', SPARKLE_DIR] }
 
 # the Finder extension rides inside the app
 app.add_dependency(ext)
