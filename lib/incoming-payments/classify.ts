@@ -104,6 +104,18 @@ export interface PayerMatch {
   marketingLeads: Array<{ id: string; name: string }>
 }
 
+/** An open invoice the payer could have paid (Phase 3 "Paid an invoice"). Whole units. */
+export interface OpenInvoice {
+  paymentId: string
+  invoiceNumber: string
+  description: string
+  amountDue: number
+  currency: "EUR" | "USD"
+  dueDate: string | null
+  status: string
+}
+
 export interface WaitingRow extends WaitingPayment {
   match: PayerMatch
+  invoices: OpenInvoice[]
 }

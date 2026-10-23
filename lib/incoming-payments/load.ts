@@ -10,6 +10,8 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { INCOMING_PAYMENTS_SINCE, pickWaiting, type PayerMatch, type WaitingPayment, type WaitingRow } from "@/lib/incoming-payments/classify"
+import { loadOpenInvoicesForPayer } from "@/lib/incoming-payments/invoice-payment"
+import { getMarketingSetting } from "@/lib/marketing/settings"
 
 // The table is not in the generated types yet (it arrives with the next types regeneration).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -71,7 +73,7 @@ export async function loadWaitingPayments(): Promise<WaitingRow[]> {
   const waiting = pickWaiting(events, { sessionIds, stripeIds })
 
   const rows: WaitingRow[] = []
-  for (const w of waiting) rows.push({ ...w, match: await matchesFor(w.email) })
+  for (const w of waiting) rows.push({ ...w, match: await matchesFor(w.email), invoices: await loadOpenInvoicesForPayer(w.email) })
   return rows
 }
 
@@ -98,5 +100,47 @@ async function matchesFor(email: string | null): Promise<PayerMatch> {
     leads: ((leads.data ?? []) as Array<{ id: string; full_name: string | null; status: string | null }>).map((l) => ({ id: l.id, name: l.full_name ?? "", status: String(l.status ?? "") })),
     contacts: ((contacts.data ?? []) as Array<{ id: string; full_name: string | null }>).map((c) => ({ id: c.id, name: c.full_name ?? "" })),
     marketingLeads: mktMissing ? [] : ((mkt.data ?? []) as Array<{ id: string; full_name: string | null }>).map((m) => ({ id: m.id, name: m.full_name ?? "" })),
+  }
+}
+
+/** A TD Marketing lead staff can pick for a "Marketing sale", with the kinds of sale its team offers. */
+export interface MarketingLeadChoice {
+  id: string
+  name: string
+  email: string | null
+  teamId: string | null
+  kinds: Array<{ key: string; label: string }>
+}
+
+/**
+ * Search the marketing leads by name or email (staff type a few letters). `available: false` = this database has no marketing tables
+ * (only "table does not exist" counts; any other failure throws). A lead with no team cannot take a sale and says so (teamId null).
+ */
+export async function searchMarketingLeads(q: string): Promise<{ available: boolean; leads: MarketingLeadChoice[] }> {
+  // Only letters, digits, spaces and the few marks a name or email holds survive: nothing typed can become a filter operator or a wildcard.
+  // (ASCII letters/digits/marks, plus any character from code 192 up = accented letters and other scripts; the project's TS target has no /u regex flag.)
+  const term = Array.from(q).filter((ch) => /[A-Za-z0-9@.+\- ]/.test(ch) || ch.charCodeAt(0) >= 192).join("").trim().slice(0, 80)
+  if (term.length < 2) return { available: true, leads: [] }
+  const like = `%${term}%`
+  const { data, error } = await db()
+    .from("marketing_leads")
+    .select("id, full_name, email, team_id")
+    .or(`full_name.ilike.${like},email.ilike.${like}`)
+    .order("received_at", { ascending: false })
+    .limit(8)
+  if (error) {
+    if (error.code === "PGRST205" || error.code === "42P01") return { available: false, leads: [] }
+    throw new Error(`incoming-payments: could not search the marketing leads: ${error.message}`)
+  }
+  const rows = (data ?? []) as Array<{ id: string; full_name: string | null; email: string | null; team_id: string | null }>
+  const kindsByTeam = new Map<string, Array<{ key: string; label: string }>>()
+  for (const r of rows) {
+    if (r.team_id && !kindsByTeam.has(r.team_id)) {
+      kindsByTeam.set(r.team_id, (await getMarketingSetting("sale_kinds", r.team_id)) as Array<{ key: string; label: string }>)
+    }
+  }
+  return {
+    available: true,
+    leads: rows.map((r) => ({ id: r.id, name: r.full_name ?? "", email: r.email, teamId: r.team_id, kinds: r.team_id ? kindsByTeam.get(r.team_id) ?? [] : [] })),
   }
 }

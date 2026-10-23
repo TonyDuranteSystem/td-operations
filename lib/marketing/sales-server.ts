@@ -94,7 +94,7 @@ export async function recordPaidSession(db: Db, session: { id: string; payment_i
 }
 
 /** The lead moves to the stage for its kind of sale. Failing here never undoes the recorded payment. */
-async function moveLeadAfterPaid(db: Db, sale: SaleRow) {
+export async function moveLeadAfterPaid(db: Db, sale: Pick<SaleRow, "id" | "team_id" | "lead_id" | "kind">) {
   try {
     const [map, stages] = await Promise.all([getMarketingSetting("sale_kind_stages", sale.team_id), getMarketingSetting("pipeline_stages", sale.team_id)])
     const stage = stageForPaidSale(sale.kind, map as Record<string, string>, stages as { key: string }[])

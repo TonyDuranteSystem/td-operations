@@ -195,13 +195,13 @@ _Regenerated 2026-10-23. Every subsystem doc under `docs/systems/` (52 docs), wi
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-21)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-21)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-22)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-23)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-21)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-23)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-21)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-23)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-22)_
-- [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-10-21)_
+- [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-10-23)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-23)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-16)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-23)_
@@ -211,9 +211,9 @@ _Regenerated 2026-10-23. Every subsystem doc under `docs/systems/` (52 docs), wi
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-10-22)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
-- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-10-18)_
+- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-10-23)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-10-22)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-10-23)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-10-09)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-10-23)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
@@ -228,6 +228,6 @@ _Regenerated 2026-10-23. Every subsystem doc under `docs/systems/` (52 docs), wi
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-10-22)_
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-10-18)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-10-01)_
-- [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-10-18)_
+- [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-10-23)_
 - [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-10-19)_
 <!-- /GENERATED:deep-docs -->

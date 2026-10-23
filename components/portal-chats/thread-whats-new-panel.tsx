@@ -36,6 +36,7 @@ export const EVENT_KEY_LABELS: Record<string, string> = {
   wizard_submitted: 'Form',
   members_updated: 'Members',
   person_left: 'Left',
+  unlabelled_payment_waiting: 'Payment to confirm',
   installment_2_paid: 'Tax gate',
   account_status_changed: 'Status',
   contact_updated: 'Contact',

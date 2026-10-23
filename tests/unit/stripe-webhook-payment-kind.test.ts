@@ -51,6 +51,8 @@ vi.mock("@/lib/operations/payment", () => ({ reconcilePaymentByInvoiceNumber: (.
 vi.mock("@/lib/finance/card-fee-booking", () => ({ bookCardFee: vi.fn(async () => ({ outcome: "ok" })) }))
 vi.mock("@/lib/finance/card-fee-issues", () => ({ raiseCardFeeOverageIssue: vi.fn(), raiseActivationFailedIssue: vi.fn() }))
 
+const notifyParked = vi.fn(async () => ({ emitted: false }))
+vi.mock("@/lib/incoming-payments/notify", () => ({ notifyUnlabelledPayment: (...a: unknown[]) => notifyParked(...(a as [])) }))
 const recordLink = vi.fn(async () => undefined)
 vi.mock("@/lib/incoming-payments/link-payment", () => ({ recordPaidCallFromSession: (...a: unknown[]) => recordLink(...(a as [])) }))
 
@@ -96,7 +98,7 @@ beforeEach(() => {
   tables.contacts = [{ id: "c1", account_contacts: [{ account_id: "a1" }] }]
   tables.leads = [{ id: "lead-1" }]
   tables.pending_activations = [{ id: "pa-1", offer_token: "tok", lead_id: "lead-1", portal_invoice_id: null }]
-  runActivation.mockClear(); upgradePortalTier.mockClear(); reconcile.mockClear(); recordLink.mockReset(); recordLink.mockResolvedValue(undefined)
+  runActivation.mockClear(); upgradePortalTier.mockClear(); reconcile.mockClear(); recordLink.mockReset(); recordLink.mockResolvedValue(undefined); notifyParked.mockClear()
   process.env.STRIPE_WEBHOOK_SECRET = SECRET
   process.env.NEXT_PUBLIC_SUPABASE_URL = "http://localhost"
   process.env.SUPABASE_SERVICE_ROLE_KEY = "x"
@@ -194,6 +196,12 @@ describe("Stripe webhook — a payment with NO label at all waits for confirmati
     expect(upgradePortalTier).not.toHaveBeenCalled()
     expect(runActivation).not.toHaveBeenCalled()
     expect(reconcile).not.toHaveBeenCalled()
+    expect(notifyParked).toHaveBeenCalledTimes(1) // a known client also gets a line in What's New (best effort)
+  })
+
+  it("a labelled payment never posts the 'Payment to confirm' note", async () => {
+    await send({ offer_token: "tok", client_email: "payer@example.com", contract_type: "onboarding" })
+    expect(notifyParked).not.toHaveBeenCalled()
   })
 
   it("the payer's email alone cannot convert a lead or consume an activation", async () => {
