@@ -140,7 +140,7 @@ export default async function GenerateDocumentsPage({ searchParams }: { searchPa
 
   // The Attestation of Beneficial Ownership card: built from the company's own records; null when they cannot support it yet.
   const attestationResult = await prepareAttestationForClient(selectedAccountId, contactId)
-  if (!attestationResult.ok) console.warn(`[generate-documents] attestation unavailable for ${selectedAccountId}: ${attestationResult.reason}`)
+  if (attestationResult.kind === 'unavailable') console.warn(`[generate-documents] attestation unavailable for ${selectedAccountId}: ${attestationResult.reason}`)
 
   return (
     <GenerateDocumentsClient
@@ -162,7 +162,7 @@ export default async function GenerateDocumentsPage({ searchParams }: { searchPa
       }}
       members={mappedMembers}
       history={historyResult.data || []}
-      attestation={attestationResult.ok ? { input: attestationResult.input, signerName: attestationResult.signerName, youAreSigner: attestationResult.youAreSigner } : null}
+      attestation={attestationResult.kind === 'ready' ? { input: attestationResult.input, signerName: attestationResult.signerName, youAreSigner: attestationResult.youAreSigner } : null}
     />
   )
 }

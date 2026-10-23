@@ -368,8 +368,8 @@ export async function sendOwnershipAttestationForSignature(
 
 /** What the client's own Generate Documents page needs to show and sign the attestation. */
 export type ClientAttestation =
-  | { ok: true; input: Omit<OwnershipAttestationInput, "dateLine">; signerName: string; youAreSigner: boolean }
-  | { ok: false; reason: string }
+  | { kind: "ready"; input: Omit<OwnershipAttestationInput, "dateLine">; signerName: string; youAreSigner: boolean }
+  | { kind: "unavailable"; reason: string }
 
 /**
  * The same data as the staff button, for the signed-in client's company. `youAreSigner` is true only when the person looking at
@@ -378,8 +378,8 @@ export type ClientAttestation =
  */
 export async function prepareAttestationForClient(accountId: string, viewerContactId: string | null): Promise<ClientAttestation> {
   const assembled = await loadAttestation(accountId, new Date().toISOString().slice(0, 10))
-  if (assembled.error) return { ok: false, reason: assembled.error }
+  if (assembled.error) return { kind: "unavailable", reason: assembled.error }
   const { dateLine: _unused, ...rest } = assembled.input
   void _unused
-  return { ok: true, input: rest, signerName: assembled.signer.name, youAreSigner: !!viewerContactId && assembled.signer.contactId === viewerContactId }
+  return { kind: "ready", input: rest, signerName: assembled.signer.name, youAreSigner: !!viewerContactId && assembled.signer.contactId === viewerContactId }
 }
