@@ -7,6 +7,8 @@
  *                               system must not deduct it a second time ("revenue only, history kept").
  *   recorded_elsewhere          this payment is already in the books some other way (or is not a client payment): nothing is
  *                               written except the note saying so, and it leaves the waiting list.
+ *   marketing_sale   (Phase 3)  it was a TD Marketing sale: written to marketing's own ledger (marketing-sale.ts); no client record.
+ *   invoice_paid     (Phase 3)  it paid an existing open invoice of the payer (invoice-payment.ts, the normal settle engine).
  *
  * Nothing about the money is taken from the browser: the amount, currency, payer and Stripe ids are re-read from the saved
  * Stripe event. The lead is NEVER converted and no client record is tagged: a paid call is not a sale (R094).
@@ -19,12 +21,15 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { recordPaidCall } from "@/lib/operations/paid-call-credit"
 import { loadWaitingPaymentBySession } from "@/lib/incoming-payments/load"
 import type { WaitingPayment } from "@/lib/incoming-payments/classify"
+import { recordMarketingSaleFromPayment } from "@/lib/incoming-payments/marketing-sale"
+import { payInvoiceFromPayment } from "@/lib/incoming-payments/invoice-payment"
+import { retireUnlabelledPaymentNote } from "@/lib/portal/chat-events"
 
 // The table is not in the generated types yet (it arrives with the next types regeneration).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => supabaseAdmin as any
 
-export const RESOLUTIONS = ["paid_call", "paid_call_already_deducted", "recorded_elsewhere"] as const
+export const RESOLUTIONS = ["paid_call", "paid_call_already_deducted", "recorded_elsewhere", "marketing_sale", "invoice_paid"] as const
 export type Resolution = (typeof RESOLUTIONS)[number]
 
 export function isResolution(v: unknown): v is Resolution {
@@ -56,10 +61,15 @@ export async function settlePayment(input: {
   leadId?: string | null
   note?: string | null
   actor: string
+  /** marketing_sale: the TD Marketing lead and the kind of sale (a key of that team's sale_kinds setting). */
+  marketingLeadId?: string | null
+  saleKind?: string | null
+  /** invoice_paid: the payments row of the invoice that was paid. */
+  invoicePaymentId?: string | null
 }): Promise<ConfirmResult> {
   const { payment, resolution, actor } = input
   const sessionId = payment.sessionId
-  const note = (input.note ?? "").trim().slice(0, 1000) || null
+  let note = (input.note ?? "").trim().slice(0, 1000) || null
   const leadId = input.leadId ? String(input.leadId).trim() : null
 
   let contactId: string | null = null
@@ -69,7 +79,17 @@ export async function settlePayment(input: {
   let creditNumber: string | null | undefined
   let leadForNote: { id: string; notes: string | null } | null = null
 
-  if (resolution !== "recorded_elsewhere") {
+  if (resolution === "marketing_sale") {
+    const m = await recordMarketingSaleFromPayment({ payment, marketingLeadId: String(input.marketingLeadId ?? ""), kind: String(input.saleKind ?? ""), actor })
+    if (!m.ok) return { ok: false, status: m.status ?? 500, error: m.error ?? "Could not record the marketing sale." }
+    note = [note, `Marketing lead ${input.marketingLeadId}${m.leadName ? ` (${m.leadName})` : ""}, kind ${input.saleKind}, sale ${m.saleId ?? "already recorded"}.`].filter(Boolean).join(" ").slice(0, 1000)
+  } else if (resolution === "invoice_paid") {
+    const p = await payInvoiceFromPayment({ payment, invoicePaymentId: String(input.invoicePaymentId ?? ""), actor })
+    if (!p.ok) return { ok: false, status: p.status ?? 500, error: p.error ?? "Could not settle the invoice." }
+    invoiceId = p.paymentId ?? null
+    invoiceNumber = p.invoiceNumber
+    note = [note, `Paid ${p.invoiceNumber}${p.partial ? " (part payment)" : ""}.`].filter(Boolean).join(" ").slice(0, 1000)
+  } else if (resolution !== "recorded_elsewhere") {
     // The person: the lead staff picked, else the payer. Identity is the EMAIL (never the card holder's name).
     let email = payment.email
     let name = payment.name
@@ -135,6 +155,9 @@ export async function settlePayment(input: {
     await supabaseAdmin.from("leads").update({ notes: leadForNote.notes ? `${leadForNote.notes}\n${line}` : line }).eq("id", leadForNote.id)
   }
 
+  // The "Payment to confirm" note in What's New (posted when the payment was parked) is done with: take it off the list. Best effort.
+  if (!insErr) await retireUnlabelledPaymentNote({ sessionId, deletedBy: null }).catch(() => undefined)
+
   return { ok: true, resolution, alreadySettled: false, invoiceNumber, creditNumber, contactId: contactId ?? undefined }
 }
 
@@ -144,6 +167,9 @@ export async function confirmIncomingPayment(input: {
   leadId?: string | null
   note?: string | null
   actor: string
+  marketingLeadId?: string | null
+  saleKind?: string | null
+  invoicePaymentId?: string | null
 }): Promise<ConfirmResult> {
   const { sessionId } = input
   if (!SESSION_ID_RE.test(sessionId)) return { ok: false, status: 400, error: "That is not a Stripe payment id." }
@@ -170,5 +196,5 @@ export async function confirmIncomingPayment(input: {
     return { ok: false, status: 404, error: "This payment is not waiting for confirmation (it may carry a label, or it is not in the saved Stripe events)." }
   }
 
-  return settlePayment({ payment, resolution, leadId, note, actor: input.actor })
+  return settlePayment({ payment, resolution, leadId, note, actor: input.actor, marketingLeadId: input.marketingLeadId, saleKind: input.saleKind, invoicePaymentId: input.invoicePaymentId })
 }

@@ -1,4 +1,5 @@
 # TD Marketing (Rocco's and Ale's sales workspace)
+_Last verified against code: 2026-10-23 — Claude (dev job `40a58d9a`, SANDBOX): `moveLeadAfterPaid` is now exported from `lib/marketing/sales-server.ts`; the Calendar's **Payments to confirm** "Marketing sale" choice (`lib/incoming-payments/marketing-sale.ts`) writes an already-paid `marketing_sales` row for a payment that arrived through an UNLABELLED Stripe link (split = the term in force on the day of payment, team-owned, no client payment row) and reuses it; see `incoming-payments.md`._
 _Last verified against code: 2026-10-21 (My numbers + Reports; View as for Antonio; payment links + Money screens built on sandbox; see "Payment links and Money"; team workspace: sidebar, Today, Leads beside the lead, Call list; see its section) — Claude (dev job `9aec66fa`, SANDBOX).
 _Earlier: 2026-10-21 (Antonio's CRM section: sub-menu, All leads, Teams, Audit log, Settings; see its section) — Claude (dev job `9aec66fa`, SANDBOX).
 _Earlier: 2026-10-21 (lead details fix: Italian form field names + backfill; see its section) — Claude (dev job `9aec66fa`, SANDBOX).

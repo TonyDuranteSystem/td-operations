@@ -20,6 +20,7 @@ import { saveAutopayCard } from "@/lib/operations/card-autopay"
 import { isNonClientPayment, readPaymentKind, PAYMENT_KIND_MARKETING, PAYMENT_KIND_PAID_CALL } from "@/lib/payments/payment-kind"
 import { recordPaidCallFromSession } from "@/lib/incoming-payments/link-payment"
 import { isUnlabelledPayment } from "@/lib/incoming-payments/classify"
+import { notifyUnlabelledPayment } from "@/lib/incoming-payments/notify"
 import { recordPaidSession, recordRefund, recordDispute } from "@/lib/marketing/sales-server"
 import type { Db } from "@/lib/marketing/meta-leads/ingest"
 
@@ -231,6 +232,8 @@ async function handleCheckoutCompleted(session: StripeSession) {
       throw new Error(`stripe webhook: could not save unlabelled payment ${sessionId}: ${eventErr.message}`)
     }
     console.warn(`[stripe-webhook] ${sessionId}: no label on the payment — client effects skipped, waiting for confirmation in the Calendar`)
+    // If the payer is a known client, also say so in What's New on that client (best effort: never fails the webhook).
+    await notifyUnlabelledPayment(session)
     return
   }
 
