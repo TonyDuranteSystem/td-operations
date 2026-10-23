@@ -1,15 +1,49 @@
 import SwiftUI
 import FileProvider
 import AppKit
+import Sparkle
+import ServiceManagement
 
 @main
 struct TDStorageApp: App {
     @StateObject private var model = AppModel()
+    // Automatic updates (Sparkle 2): the app asks the CRM's update feed at every start and then hourly (the CRM can change the pace), downloads a
+    // newer signed version by itself and installs it + reopens once the app is idle. Nobody has to do anything. Which version is offered
+    // (or none: paused / gradual roll-out) is decided by the CRM, never by the app.
+    private static let gate = UpdateGate()
+    private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: TDStorageApp.gate, userDriverDelegate: nil)
+    init() {
+        let u = updater.updater
+        TDStorageApp.gate.updater = u
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { u.checkForUpdatesInBackground() }
+    }
     var body: some Scene {
         WindowGroup("TD Storage") {
-            ContentView().environmentObject(model).frame(minWidth: 420, minHeight: 300).task { await model.start() }
+            ContentView().environmentObject(model).frame(minWidth: 420, minHeight: 300)
+                .task { await model.start(); TDStorageApp.gate.setInterval(minutes: model.updateCheckMinutes) }
         }
         .windowResizability(.contentSize)
+    }
+}
+
+/// Sparkle's delegate: installs a downloaded update right away (and reopens the app) instead of waiting for the app to be quit, and tells the
+/// CRM which Mac is asking (the CRM uses it for gradual roll-outs). The check pace is the CRM's `updateCheckMinutes` setting (never below an hour).
+final class UpdateGate: NSObject, SPUUpdaterDelegate {
+    weak var updater: SPUUpdater?
+    func setInterval(minutes: Double?) {
+        guard let m = minutes, m >= 60, let u = updater else { return }
+        u.updateCheckInterval = m * 60
+    }
+    func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { immediateInstallHandler() }
+        return true
+    }
+    func feedParameters(for updater: SPUUpdater, sendingSystemProfile sendingProfile: Bool) -> [[String: String]] {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let store = KeychainTokenStore(service: info["TDKeychainService"] as? String ?? "td-storage", accessGroup: info["TDKeychainGroup"] as? String)
+        var out: [[String: String]] = []
+        if let d = store.load()?.deviceId { out.append(["key": "device", "value": d]) }
+        return out
     }
 }
 
@@ -26,6 +60,8 @@ final class AppModel: ObservableObject {
     @Published var state: SignInState = .checking
     @Published var fileVaultOK = true
     @Published var browserProblem: String?
+    /// how often the CRM wants this Mac to look for a new version (nil until the CRM has said)
+    @Published var updateCheckMinutes: Double?
     /// FileVault is NO LONGER required (Antonio, 2026-10-17: the Mac mini is a server and must restart its services by itself, so its disk
     /// stays unencrypted). Instead the CRM tells every Mac to remove its copy of an opened file after 15 minutes (2 minutes for passports,
     /// IDs and ITIN papers). The app only shows a note when FileVault is off.
@@ -44,6 +80,7 @@ final class AppModel: ObservableObject {
 
     var deviceName: String { Host.current().localizedName ?? "This Mac" }
     var serverLabel: String { baseURL.host ?? "" }
+    var versionLabel: String { "\(info["CFBundleShortVersionString"] as? String ?? "?") (\(info["CFBundleVersion"] as? String ?? "?"))" }
 
     func start() async {
         fileVaultOK = FileVaultCheck.isOn()
@@ -54,7 +91,9 @@ final class AppModel: ObservableObject {
         startLeaseWatch()
         do {
             let me = try await api.whoami()
+            updateCheckMinutes = me.updateCheckMinutes
             state = .signedIn(me.email ?? "signed in")
+            enableStartAtLogin()
             do { try await register() } catch {
                 let ns = error as NSError
                 state = .problem("Signed in, but macOS would not add TD Storage to Finder (\(ns.domain) \(ns.code): \(ns.localizedDescription)).")
@@ -77,6 +116,8 @@ final class AppModel: ObservableObject {
             let code = try await flow.waitForCode()
             _ = try await api.exchange(code: code, verifier: verifier, redirectURI: started.redirectURI)
             let me = try await api.whoami()      // the CRM answered: the 24-hour lease starts
+            updateCheckMinutes = me.updateCheckMinutes
+            enableStartAtLogin()
             try await register()
             startLeaseWatch()
             state = .signedIn(me.email ?? "signed in")
@@ -136,7 +177,18 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func register() async throws { try await NSFileProviderManager.add(domain) }
+    /// The app must be running for updates to arrive, so it starts by itself when the person logs in (a small window; macOS lists it under Login Items).
+    private func enableStartAtLogin() { try? SMAppService.mainApp.register() }
+
+    /// Adds TD Storage to Finder. When a NEW version changes how Finder is laid out (the Info key TDLayoutVersion), the location is made again once,
+    /// because Finder remembers the order it first saw (see docs/systems/storage-app.md) — so an update never needs anyone to sign out and in.
+    private func register() async throws {
+        let layout = (info["TDLayoutVersion"] as? String) ?? "0"
+        let key = "td.layoutRegistered"
+        if let seen = UserDefaults.standard.string(forKey: key), seen != layout { try? await NSFileProviderManager.remove(domain) }
+        try await NSFileProviderManager.add(domain)
+        UserDefaults.standard.set(layout, forKey: key)
+    }
 
     private func wipe() async {
         leaseTimer?.invalidate()

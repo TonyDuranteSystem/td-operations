@@ -39,7 +39,7 @@ struct ContentView: View {
                 Label("FileVault is off on this Mac. Copies of opened files are removed after 15 minutes (passports, IDs and ITIN papers after 2).", systemImage: "exclamationmark.shield").font(.caption).foregroundStyle(.orange)
             }
             Spacer(minLength: 0)
-            Text("Server: \(model.serverLabel) · This Mac: \(model.deviceName)").font(.caption).foregroundStyle(.tertiary)
+            Text("Version \(model.versionLabel) · updates itself · Server: \(model.serverLabel) · This Mac: \(model.deviceName)").font(.caption).foregroundStyle(.tertiary)
         }
         .padding(24)
     }
