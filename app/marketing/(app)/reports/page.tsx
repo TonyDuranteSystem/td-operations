@@ -7,6 +7,9 @@ import { leadDb } from '@/lib/marketing/meta-leads/service'
 import { loadNumbersData } from '@/lib/marketing/numbers-read'
 import { PERIODS, adTable, outcomesIn, parsePeriod, periodStart, reasonCounts, setterTable } from '@/lib/marketing/numbers'
 
+import { getLang } from '@/lib/marketing/lang'
+import { makeT } from '@/lib/marketing/i18n'
+
 export const dynamic = 'force-dynamic'
 
 /**
@@ -16,9 +19,10 @@ export const dynamic = 'force-dynamic'
 export default async function MarketingReports({ searchParams }: { searchParams: Promise<{ period?: string }> }) {
   const g = await resolveMarketingContext()
   if (g.ok === false) redirect('/marketing')
+  const t = makeT(getLang())
   const seesSetters = hasPermission(g.ctx.permissions, 'team.activity')
   if (!hasPermission(g.ctx.permissions, 'reports.read') && !hasPermission(g.ctx.permissions, 'leads.pick')) {
-    return <main className="mx-auto max-w-xl px-4 py-10"><p className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm">You do not have access to Reports. Ask your team owner.</p></main>
+    return <main className="mx-auto max-w-xl px-4 py-10"><p className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm">{t('You do not have access to Reports. Ask your team owner.')}</p></main>
   }
   const period = parsePeriod((await searchParams).period)
   const from = periodStart(period, new Date())
@@ -33,40 +37,40 @@ export default async function MarketingReports({ searchParams }: { searchParams:
   const card = 'rounded-xl border bg-white p-5'
   return (
     <div className="space-y-5 p-6">
-      <div><h1 className="text-2xl font-semibold">Reports</h1><p className="text-sm text-slate-500">Numbers for the team, from the leads and what was done with them.</p></div>
-      {data.truncated && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">Some older records are not included in these numbers because there are too many to read at once. Tell Antonio.</p>}
-      <nav aria-label="Period" className="flex flex-wrap gap-2">
-        {PERIODS.map(p => <Link key={p.key} href={`/marketing/reports?period=${p.key}`} aria-current={p.key === period ? 'page' : undefined} className={`rounded-full border px-3 py-1 text-xs ${p.key === period ? 'border-slate-900 bg-slate-900 text-white' : 'bg-white text-slate-600'}`}>{p.label}</Link>)}
+      <div><h1 className="text-2xl font-semibold">{t('Reports')}</h1><p className="text-sm text-slate-500">{t('Numbers for the team, from the leads and what was done with them.')}</p></div>
+      {data.truncated && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{t('Some older records are not included in these numbers because there are too many to read at once. Tell Antonio.')}</p>}
+      <nav aria-label={t('Period')} className="flex flex-wrap gap-2">
+        {PERIODS.map(p => <Link key={p.key} href={`/marketing/reports?period=${p.key}`} aria-current={p.key === period ? 'page' : undefined} className={`rounded-full border px-3 py-1 text-xs ${p.key === period ? 'border-slate-900 bg-slate-900 text-white' : 'bg-white text-slate-600'}`}>{t(p.label)}</Link>)}
       </nav>
 
-      <section aria-label="Why leads were not in target" className={card}>
-        <h2 className="text-sm font-semibold text-slate-600">Why leads were not in target</h2>
-        {why.length === 0 ? <p className="mt-2 text-sm text-slate-500">No lead was marked Not in target in this period.</p> : (
+      <section aria-label={t('Why leads were not in target')} className={card}>
+        <h2 className="text-sm font-semibold text-slate-600">{t('Why leads were not in target')}</h2>
+        {why.length === 0 ? <p className="mt-2 text-sm text-slate-500">{t('No lead was marked Not in target in this period.')}</p> : (
           <ul className="mt-3 space-y-2 text-sm">{why.map(w => (
-            <li key={w.label} className="flex items-center gap-3"><span className="w-56 shrink-0 truncate text-slate-600">{w.label}</span>
+            <li key={w.label} className="flex items-center gap-3"><span className="w-56 shrink-0 truncate text-slate-600">{t(w.label)}</span>
               <span className="h-3 flex-1 overflow-hidden rounded-full bg-slate-100"><span className="block h-3 rounded-full bg-rose-500" style={{ width: `${Math.round((w.n / max) * 100)}%` }} /></span>
               <span className="w-8 text-right font-mono tabular-nums">{w.n}</span></li>
           ))}</ul>
         )}
       </section>
 
-      <section aria-label="Leads by ad" className={card}>
-        <h2 className="text-sm font-semibold text-slate-600">Leads by ad</h2>
-        <p className="mt-1 text-xs text-slate-500">Leads that arrived in this period, and what became of them. The cost of each ad is not here yet: ad spend is not connected to this system.</p>
-        {ads.length === 0 ? <p className="mt-2 text-sm text-slate-500">No leads arrived in this period.</p> : (
+      <section aria-label={t('Leads by ad')} className={card}>
+        <h2 className="text-sm font-semibold text-slate-600">{t('Leads by ad')}</h2>
+        <p className="mt-1 text-xs text-slate-500">{t('Leads that arrived in this period, and what became of them. The cost of each ad is not here yet: ad spend is not connected to this system.')}</p>
+        {ads.length === 0 ? <p className="mt-2 text-sm text-slate-500">{t('No leads arrived in this period.')}</p> : (
           <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide text-slate-500"><tr><th className="py-2 pr-4">Ad</th><th className="pr-4 text-right">Leads</th><th className="pr-4 text-right">Good</th><th className="pr-4 text-right">Not in target</th><th className="text-right">Paid</th></tr></thead>
-            <tbody className="divide-y">{ads.map(a => <tr key={a.ad}><td className="py-2 pr-4">{a.ad}</td><td className="pr-4 text-right font-mono tabular-nums">{a.leads}</td><td className="pr-4 text-right font-mono tabular-nums">{a.good}</td><td className="pr-4 text-right font-mono tabular-nums">{a.notInTarget}</td><td className="text-right font-mono tabular-nums">{a.paid}</td></tr>)}</tbody>
+            <thead className="text-xs uppercase tracking-wide text-slate-500"><tr><th className="py-2 pr-4">{t('Ad')}</th><th className="pr-4 text-right">{t('Leads')}</th><th className="pr-4 text-right">{t('Good')}</th><th className="pr-4 text-right">{t('Not in target')}</th><th className="text-right">{t('Paid')}</th></tr></thead>
+            <tbody className="divide-y">{ads.map(a => <tr key={a.ad}><td className="py-2 pr-4">{t(a.ad)}</td><td className="pr-4 text-right font-mono tabular-nums">{a.leads}</td><td className="pr-4 text-right font-mono tabular-nums">{a.good}</td><td className="pr-4 text-right font-mono tabular-nums">{a.notInTarget}</td><td className="text-right font-mono tabular-nums">{a.paid}</td></tr>)}</tbody>
           </table></div>
         )}
       </section>
 
       {seesSetters && (
-        <section aria-label="Setters" className={card}>
-          <h2 className="text-sm font-semibold text-slate-600">Setters</h2>
-          {setters.length === 0 ? <p className="mt-2 text-sm text-slate-500">Nobody marked a lead in this period.</p> : (
+        <section aria-label={t('Setters')} className={card}>
+          <h2 className="text-sm font-semibold text-slate-600">{t('Setters')}</h2>
+          {setters.length === 0 ? <p className="mt-2 text-sm text-slate-500">{t('Nobody marked a lead in this period.')}</p> : (
             <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-slate-500"><tr><th className="py-2 pr-4">Person</th><th className="pr-4 text-right">Marked</th><th className="pr-4 text-right">Good</th><th className="pr-4 text-right">Not in target</th><th className="pr-4 text-right">Good rate</th><th className="text-right">Paid a call</th></tr></thead>
+              <thead className="text-xs uppercase tracking-wide text-slate-500"><tr><th className="py-2 pr-4">{t('Person')}</th><th className="pr-4 text-right">{t('Marked')}</th><th className="pr-4 text-right">{t('Good')}</th><th className="pr-4 text-right">{t('Not in target')}</th><th className="pr-4 text-right">{t('Good rate')}</th><th className="text-right">{t('Paid a call')}</th></tr></thead>
               <tbody className="divide-y">{setters.map(s => <tr key={s.actor}><td className="py-2 pr-4">{s.actor}</td><td className="pr-4 text-right font-mono tabular-nums">{s.worked}</td><td className="pr-4 text-right font-mono tabular-nums">{s.good}</td><td className="pr-4 text-right font-mono tabular-nums">{s.notInTarget}</td><td className="pr-4 text-right font-mono tabular-nums">{s.goodRatePct === null ? '—' : `${s.goodRatePct}%`}</td><td className="text-right font-mono tabular-nums">{s.paidLeads}</td></tr>)}</tbody>
             </table></div>
           )}

@@ -63,11 +63,11 @@ export function romeStartOfMonth(at: Date): Date {
   return new Date(startLocal - offsetMs(new Date(startLocal - offsetMs(at))))
 }
 
-export function ageText(ms: number): string {
+export function ageText(ms: number, dayUnit = "d"): string {
   const h = Math.floor(ms / HOUR)
   if (h < 1) return `${Math.max(1, Math.floor(ms / 60000))} min`
   if (h < 48) return `${h} h`
-  return `${Math.floor(h / 24)} d`
+  return `${Math.floor(h / 24)} ${dayUnit}`
 }
 
 export interface NeedsItem { key: "untouched" | "unassigned" | "late_callbacks" | "existing_client"; text: string; tone: "bad" | "warn" }

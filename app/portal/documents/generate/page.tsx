@@ -8,6 +8,7 @@ import { GenerateDocumentsClient } from './generate-documents-client'
 import { formatMemberAddress } from '@/lib/members/member-address'
 import { pickDefaultSs4SignerLink } from '@/lib/operations/ss4-signer'
 import { inheritMembersMaySign, previousNameForNewOa } from '@/lib/portal/oa-regenerate-guard'
+import { prepareAttestationForClient } from '@/lib/operations/ownership-attestation'
 
 export const dynamic = 'force-dynamic'
 
@@ -137,6 +138,10 @@ export default async function GenerateDocumentsPage({ searchParams }: { searchPa
   // The unsigned draft this one would replace may say "each Member may also sign" (Section 2.3) — the preview shows the same wording that is saved.
   const membersMaySign = inheritMembersMaySign(allOas ?? [])
 
+  // The Attestation of Beneficial Ownership card: built from the company's own records; null when they cannot support it yet.
+  const attestationResult = await prepareAttestationForClient(selectedAccountId, contactId)
+  if (attestationResult.kind === 'unavailable') console.warn(`[generate-documents] attestation unavailable for ${selectedAccountId}: ${attestationResult.reason}`)
+
   return (
     <GenerateDocumentsClient
       account={{
@@ -157,6 +162,7 @@ export default async function GenerateDocumentsPage({ searchParams }: { searchPa
       }}
       members={mappedMembers}
       history={historyResult.data || []}
+      attestation={attestationResult.kind === 'ready' ? { input: attestationResult.input, signerName: attestationResult.signerName, youAreSigner: attestationResult.youAreSigner } : null}
     />
   )
 }

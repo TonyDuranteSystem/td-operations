@@ -4,6 +4,8 @@
  * setter is not a member of the team (Antonio looking in with "View as") belongs to nobody: it shows in "Everyone" only. No database here.
  */
 import { personName } from "@/lib/marketing/setter-note"
+import { localeFor, makeT, type TFn } from "@/lib/marketing/i18n"
+import type { Lang } from "@/lib/marketing/templates"
 import { ageText, romeStartOfDay, romeStartOfNextDay } from "@/lib/marketing/master-view"
 
 export interface CalLead { id: string; full_name: string | null; email: string | null; ad_name: string | null; claimed_by: string | null; callback_at: string | null }
@@ -11,7 +13,12 @@ export interface CalLead { id: string; full_name: string | null; email: string |
 export interface CalEvent { lead_id: string; actor: string; created_at: string; data: Record<string, unknown> }
 export interface CalMember { user_id: string; email: string | null; status?: string }
 
+/** A call booked with the seller (the newest "appointment" row of a lead that is not cancelled). */
+export interface CalAppointment { lead: Pick<CalLead, "id" | "full_name" | "email" | "ad_name" | "claimed_by">; at: string; actor: string }
+
 export interface CalItem {
+  /** "callback" = the setter promised to call back; "appointment" = a call booked with the seller */
+  kind: "callback" | "appointment"
   leadId: string
   name: string
   at: string
@@ -44,7 +51,7 @@ export const romeZoneName = (d: Date): string => (fmtZone.formatToParts(d).find(
 const fmtKey = new Intl.DateTimeFormat("en-CA", { timeZone: ROME, year: "numeric", month: "2-digit", day: "2-digit" })
 export const romeTime = (iso: string): string => fmtTime.format(new Date(iso))
 export const romeDayKey = (d: Date): string => fmtKey.format(d)
-export const romeDayLabel = (d: Date): string => fmtDay.format(d).replace(",", "")
+export const romeDayLabel = (d: Date, lang: Lang = "en"): string => (lang === "en" ? fmtDay : new Intl.DateTimeFormat(localeFor(lang), { timeZone: ROME, weekday: "short", day: "numeric", month: "short" })).format(d).replace(",", "").replace(/\.$/, "")
 
 /** Who set each lead's current call back: the actor of the lead's NEWEST "call back" row, a View-as row included (if Antonio changed the time while looking in, it is his, not the earlier setter's). Returns the actor's email. */
 export function latestSetters(events: readonly CalEvent[]): Map<string, { actor: string; at: string }> {
@@ -74,7 +81,14 @@ export function buildAgenda(i: {
   /** a user id, or "all" */
   ownerId: string
   now: Date; days: number
+  /** calls booked with the seller; only the ones still ahead are listed */
+  appointments?: readonly CalAppointment[]
+  /** the language of the day names and "3 h late" (default English) */
+  lang?: Lang
 }): Agenda {
+  const lang: Lang = i.lang ?? "en"
+  const t = makeT(lang)
+  const dayUnit = lang === "it" ? "g" : "d"
   const nowMs = i.now.getTime()
   const setters = latestSetters(i.events)
   const windowEnd = (() => { let d = romeStartOfDay(i.now); for (let k = 0; k < i.days; k++) d = romeStartOfNextDay(d); return d.getTime() })()
@@ -88,10 +102,21 @@ export function buildAgenda(i: {
     const at = new Date(l.callback_at).getTime()
     if (!(at < windowEnd)) { beyond++; continue }
     items.push({
-      leadId: l.id, name: l.full_name || l.email || "Unnamed lead", at: l.callback_at, time: romeTime(l.callback_at), ad: l.ad_name, dateLabel: romeDayLabel(new Date(l.callback_at)),
-      lateBy: at < nowMs ? `${ageText(nowMs - at)} late` : null, ownerId,
+      kind: "callback", leadId: l.id, name: l.full_name || l.email || t("Unnamed lead"), at: l.callback_at, time: romeTime(l.callback_at), ad: l.ad_name, dateLabel: romeDayLabel(new Date(l.callback_at), lang),
+      lateBy: at < nowMs ? t("{age} late", { age: ageText(nowMs - at, dayUnit) }) : null, ownerId,
       setByMember: setter !== null && i.members.some(m => m.email !== null && m.email.toLowerCase() === setter.toLowerCase() && m.status !== "removed"),
       setBy: setter ? personName(setter) : null, late: at < nowMs,
+    })
+  }
+  for (const a of i.appointments ?? []) {
+    const at = new Date(a.at).getTime()
+    if (Number.isNaN(at) || at < nowMs) continue // a call that has happened is history, not agenda
+    const ownerId = callBackOwner(a.lead, a.actor, i.members)
+    if (i.ownerId !== "all" && ownerId !== i.ownerId) continue
+    if (!(at < windowEnd)) { beyond++; continue }
+    items.push({
+      kind: "appointment", leadId: a.lead.id, name: a.lead.full_name || a.lead.email || t("Unnamed lead"), at: a.at, time: romeTime(a.at), ad: a.lead.ad_name, dateLabel: romeDayLabel(new Date(a.at), lang),
+      lateBy: null, ownerId, setByMember: i.members.some(m => m.email !== null && m.email.toLowerCase() === a.actor.toLowerCase() && m.status !== "removed"), setBy: personName(a.actor), late: false,
     })
   }
   items.sort((a, b) => a.at.localeCompare(b.at))
@@ -101,17 +126,18 @@ export function buildAgenda(i: {
   for (const it of items.filter(x => !x.late)) {
     const d = new Date(it.at)
     const key = romeDayKey(d)
-    if (!byDay.has(key)) byDay.set(key, { key, label: relativeDay(d, i.now), items: [] })
+    if (!byDay.has(key)) byDay.set(key, { key, label: relativeDay(d, i.now, lang), items: [] })
     byDay.get(key)!.items.push(it)
   }
   return { late, lateMore: lateAll.length - late.length, days: Array.from(byDay.values()), beyond }
 }
 
 /** "Today · Thu 22 Oct", "Tomorrow · Fri 23 Oct", "Mon 26 Oct". */
-export function relativeDay(d: Date, now: Date): string {
+export function relativeDay(d: Date, now: Date, lang: Lang = "en"): string {
+  const t: TFn = makeT(lang)
   const k = romeDayKey(d)
   const today = romeDayKey(now)
   const tomorrow = romeDayKey(romeStartOfNextDay(now))
-  const base = romeDayLabel(d)
-  return k === today ? `Today · ${base}` : k === tomorrow ? `Tomorrow · ${base}` : base
+  const base = romeDayLabel(d, lang)
+  return k === today ? `${t("Today")} · ${base}` : k === tomorrow ? `${t("Tomorrow")} · ${base}` : base
 }

@@ -23,6 +23,11 @@ export const leadActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("good"), ticked: z.array(z.string().max(200)).max(60).default([]), note: note.optional() }),
   z.object({ action: z.literal("not_in_target"), reason: z.string().trim().min(1).max(40), note: note.optional() }),
   z.object({ action: z.literal("call_back"), callbackAt: z.string().min(10).max(40), note: note.optional() }),
+  // reaching out (the team's sheet: "WhatsApp sent / no WhatsApp", "NR + date", the booked call)
+  z.object({ action: z.literal("whatsapp"), state: z.enum(["sent", "no_wa"]), template: z.string().trim().max(60).optional(), note: note.optional() }),
+  z.object({ action: z.literal("no_answer"), via: z.enum(["whatsapp", "call"]).default("call"), note: note.optional() }),
+  // at = a day and time; null cancels the booked call
+  z.object({ action: z.literal("appointment"), at: z.string().min(10).max(40).nullable(), note: note.optional() }),
 ])
 export type LeadActionInput = z.infer<typeof leadActionSchema>
 
@@ -45,6 +50,23 @@ export type Plan = { ok: true; change: PlannedChange } | { ok: false; status: 40
 const fail = (status: 400 | 409, error: string): Plan => ({ ok: false, status, error })
 const MAX_AHEAD_MS = 180 * 24 * 3600 * 1000
 const GRACE_MS = 5 * 60 * 1000
+
+const keyIndex = (stages: readonly Option[], k: string) => stages.findIndex(x => x.key === k)
+
+/** "Contacted" has one meaning: the FIRST reach-out moves a brand-new lead out of the first stage (to the stage the team uses for "contacted"); a lead already further along is left where it is. */
+function movedToContacted(lead: LeadFacts, s: ActionSettings): Record<string, unknown> {
+  const first = s.stages[0]?.key
+  const target = s.outcomeStages.call_back
+  return first && lead.status === first && target && target !== first && keyIndex(s.stages, target) >= 0 ? { status: target } : {}
+}
+
+/** A booked call moves the lead to the "booked" stage when the team has one and the lead is not already there, past it, or out of target. */
+function movedToBooked(lead: LeadFacts, s: ActionSettings): Record<string, unknown> {
+  const booked = keyIndex(s.stages, "booked")
+  const cur = keyIndex(s.stages, lead.status)
+  if (booked < 0 || lead.status === s.outcomeStages.not_in_target || (cur >= 0 && cur >= booked)) return {}
+  return { status: "booked" }
+}
 
 export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: Actor, s: ActionSettings, now: Date): Plan {
   const mine = lead.claimed_by === actor.id
@@ -96,6 +118,32 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
       return { ok: true, change: {
         patch: { status: target, not_in_target_reason: input.reason, callback_at: null },
         event: { kind: "status_changed", data: { from: lead.status, to: target, outcome: "not_in_target", reason: input.reason, note: input.note ?? null } },
+      } }
+    }
+
+    case "whatsapp": {
+      return { ok: true, change: {
+        patch: movedToContacted(lead, s),
+        event: { kind: "whatsapp", data: { state: input.state, template: input.template ?? null, note: input.note ?? null } },
+      } }
+    }
+
+    case "no_answer": {
+      return { ok: true, change: {
+        patch: movedToContacted(lead, s),
+        event: { kind: "attempt", data: { result: "no_answer", via: input.via, note: input.note ?? null } },
+      } }
+    }
+
+    case "appointment": {
+      if (input.at === null) return { ok: true, change: { patch: {}, event: { kind: "appointment", data: { at: null, note: input.note ?? null } } } }
+      const at = new Date(input.at)
+      if (Number.isNaN(at.getTime())) return fail(400, "Pick a valid day and time.")
+      if (at.getTime() < now.getTime() - GRACE_MS) return fail(400, "That time has already passed. Pick a day and time in the future.")
+      if (at.getTime() > now.getTime() + MAX_AHEAD_MS) return fail(400, "That is too far away. Pick a day within the next six months.")
+      return { ok: true, change: {
+        patch: movedToBooked(lead, s),
+        event: { kind: "appointment", data: { at: at.toISOString(), note: input.note ?? null } },
       } }
     }
 
