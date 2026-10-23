@@ -172,6 +172,9 @@ describe("the two registration points must agree", () => {
       // MCP session only (callerIsOwner + MY_FILES_DROP_ENABLED); the in-CRM assistant acts for any staff member and carries no
       // owner identity, so it must never reach the private area through the generic bridge.
       "MyFilesDrop",
+      // the My files ACCESS tools (2026-10-23) read and change the owner's PRIVATE My files: owner-signed-in MCP session only
+      // (callerIsOwner + MY_FILES_ACCESS_ENABLED). Same reason as the drop: the in-CRM assistant has no owner identity and must never reach it.
+      "MyFilesAccess",
     ])
     const missing = Array.from(onServer).filter((n) => !onBridge.has(n) && !BRIDGE_EXEMPT.has(n))
     expect(missing, `registered with the server but unreachable via the bridge: ${missing.join(", ")}`).toEqual([])
