@@ -57,3 +57,26 @@ export async function reconcileRecentLeads(deps: IngestDeps = liveDeps(), pageId
   }
   return out
 }
+
+/** The real wiring of the history import (live Meta, the live database). */
+export async function liveImportDeps(): Promise<import("@/lib/marketing/meta-leads/import-history").ImportDeps> {
+  const { listFormLeadsPage } = await import("@/lib/marketing/meta-leads/graph")
+  const { MASTER_TZ } = await import("@/lib/marketing/master-view")
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: MASTER_TZ, year: "numeric", month: "2-digit", day: "2-digit" })
+  const db = leadDb()
+  return {
+    ingest: liveDeps(), pageIds: configuredPageIds(),
+    listForms: (pageId) => listPageForms(pageId),
+    listLeadsPage: (formId, after, pageId) => listFormLeadsPage(formId, after, undefined, pageId),
+    alreadyHeld: async (ids) => {
+      const held = new Set<string>()
+      for (let i = 0; i < ids.length; i += 100) {
+        const { data, error } = await db.from("marketing_leads").select("leadgen_id").in("leadgen_id", ids.slice(i, i + 100))
+        if (error) throw new Error(`lead lookup: ${error.message}`)
+        for (const r of (data ?? []) as Array<{ leadgen_id: string }>) held.add(String(r.leadgen_id))
+      }
+      return held
+    },
+    dayOf: (d) => fmt.format(d), now: () => new Date(), budgetMs: 40_000,
+  }
+}
