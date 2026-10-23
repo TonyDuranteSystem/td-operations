@@ -233,7 +233,6 @@ export async function generateOwnershipAttestationForAccount(
       accountId, fileName, bytes: Buffer.from(pdfBytes), label: "Attestation of Beneficial Ownership", category: 4,
       // staff send it to the client by hand when needed — nothing becomes visible or notifies by accident
       portalVisible: false,
-      actor: opts.actor ?? "crm-admin",
       // regenerating is a new VERSION of one file, never a second copy
       callerKey: `ownership-attestation:${accountId}`,
     })
