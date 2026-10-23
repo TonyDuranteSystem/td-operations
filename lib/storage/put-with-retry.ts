@@ -20,9 +20,18 @@ export interface PutTarget {
   path?: string
 }
 
-export type PutOutcome =
-  | { ok: true; path?: string; attempts: number }
-  | { ok: false; status: number | null; message: string; attempts: number }
+/**
+ * Deliberately a FLAT shape, not a union on `ok`: this repo compiles with `strict: false`, where narrowing a union by a
+ * boolean literal does not work (the build failed on `put.message` after `if (!put.ok)`). `message` is '' and `status`
+ * null on success; `path` is only set on success.
+ */
+export interface PutOutcome {
+  ok: boolean
+  path?: string
+  status: number | null
+  message: string
+  attempts: number
+}
 
 export interface PutWithRetryOptions {
   /** called before EVERY attempt: returns a fresh link (and path). May throw. */
@@ -88,7 +97,7 @@ export async function putFileWithRetry(opts: PutWithRetryOptions): Promise<PutOu
         headers: { 'Content-Type': opts.contentType || (opts.file as File).type || 'application/octet-stream' },
         body: opts.file,
       })
-      if (res.ok) return { ok: true, path: target.path, attempts: attempt }
+      if (res.ok) return { ok: true, path: target.path, status: res.status, message: '', attempts: attempt }
       status = res.status
       if (!isRetryableStatus(status)) return { ok: false, status, message: putFailureMessage(status, attempt), attempts: attempt }
     } catch (e) {
