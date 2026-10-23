@@ -129,6 +129,27 @@ describe('notifyClientsOfNewDocument', () => {
     expect(arg.title).toBe('Nuovo documento disponibile') // Italian
   })
 
+  it('posts the automatic chat line by default, and NOT when the caller passes chat:false (the eye pop-up decides)', async () => {
+    const mk = () => {
+      const docs = chain({
+        single: { id: 'd', file_name: 'OA.pdf', account_id: 'acct-1', contact_id: null, category: 1, portal_visible: true, notify_client: true, client_notified_at: null },
+        updated: { id: 'd' },
+      })
+      const msgs = chain({})
+      mockTables({ documents: docs, portal_messages: msgs, account_contacts: chain({ list: [{ role: 'owner', contacts: { language: 'en' } }] }) })
+      return msgs
+    }
+    const withChat = mk()
+    await notifyClientsOfNewDocument('d')
+    expect(withChat.insert).toHaveBeenCalledTimes(1)
+
+    const noChat = mk()
+    const r = await notifyClientsOfNewDocument('d', { chat: false })
+    expect(r).toEqual({ notified: true }) // the notification still goes out
+    expect(createPortalNotification).toHaveBeenCalled()
+    expect(noChat.insert).not.toHaveBeenCalled()
+  })
+
   it('does not notify twice when the claim is lost (race)', async () => {
     mockTables({
       documents: chain({

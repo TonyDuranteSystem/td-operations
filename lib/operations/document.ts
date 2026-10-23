@@ -68,6 +68,12 @@ export interface UpdateDocumentParams {
    * document with you" event.
    */
   clientAlert?: boolean
+  /**
+   * false = still send the notification + push, but do NOT post the automatic
+   * "a new document was added" chat message (the staff eye pop-up asks instead).
+   * Default true (unchanged for every other path).
+   */
+  clientChat?: boolean
 }
 
 export interface UpdateDocumentResult {
@@ -302,7 +308,7 @@ export async function updateDocument(
 
     // Fire the client alert for rows that actually transitioned hidden→visible.
     // Fire-and-forget: alert delivery must never fail the document write.
-    fireNewDocumentAlerts(data.map((r) => r.id).filter((id) => wasHiddenIds.has(id)))
+    fireNewDocumentAlerts(data.map((r) => r.id).filter((id) => wasHiddenIds.has(id)), { chat: params.clientChat })
 
     return {
       success: true,
@@ -418,13 +424,13 @@ export async function updateDocumentsBulk(
  * notify_client, locale, push, digest eligibility, and the optional chat
  * message. Never throws.
  */
-function fireNewDocumentAlerts(documentIds: string[]): void {
+function fireNewDocumentAlerts(documentIds: string[], opts: { chat?: boolean } = {}): void {
   if (documentIds.length === 0) return
   import("@/lib/portal/document-alerts")
     .then(({ notifyClientsOfNewDocument }) =>
       Promise.all(
         documentIds.map((id) =>
-          notifyClientsOfNewDocument(id).catch((e) =>
+          notifyClientsOfNewDocument(id, opts).catch((e) =>
             console.warn(
               `[operations/document] new-document alert failed for ${id}:`,
               e instanceof Error ? e.message : String(e)

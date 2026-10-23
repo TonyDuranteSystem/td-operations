@@ -48,6 +48,7 @@ import { StoreReadOnlyPanel } from '@/components/accounts/store-readonly-panel'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
 import { updateContactField, updateContactName, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
+import { useShareMessagePrompt, suppressesAutoChat, type ShareDecision } from '@/components/storage/use-share-message-prompt'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { ResolvePersonalDocument } from '@/components/documents/resolve-personal-document'
 import { isUnresolvedPersonalDocument } from '@/lib/documents/visibility-guard'
@@ -3073,6 +3074,9 @@ function ContactDocumentsTab({
   const [ocrRunning, setOcrRunning] = useState<string | null>(null)
   const [ocrViewDocId, setOcrViewDocId] = useState<string | null>(null)
   const [togglingVis, setTogglingVis] = useState<string | null>(null)
+  const router = useRouter()
+  // the "tell the client?" pop-up when this eye makes a hidden document visible (shared with the other eyes)
+  const { decide: decideShare, sendChat: sendShareChat, dialog: shareDialog } = useShareMessagePrompt()
   const [activeDocScope, setActiveDocScope] = useState<string>('personal')
   const activeCompanyId = activeDocScope === 'personal' ? '' : activeDocScope
   const activeCompanyStore = useStoreOwnerForAccount(activeCompanyId, !!personStoreId && activeCompanyId !== '')
@@ -3125,16 +3129,25 @@ function ContactDocumentsTab({
     }
     setTogglingVis(doc.id)
     try {
-      const result = await toggleDocumentPortalVisibility(doc.id, !doc.portal_visible)
+      // Showing a hidden document: ask whether to tell the client in chat BEFORE anything changes (Cancel = nothing changes)
+      let decision: ShareDecision | null = null
+      if (!doc.portal_visible) {
+        decision = await decideShare([{ id: doc.id, name: doc.file_name, source: 'document' }])
+        if (decision.kind === 'cancel') { setTogglingVis(null); return }
+      }
+      const result = await toggleDocumentPortalVisibility(doc.id, !doc.portal_visible, undefined, suppressesAutoChat(decision) ? { suppressChat: true } : undefined)
       if (result.success) {
         toast.success(`Portal visibility ${!doc.portal_visible ? 'enabled' : 'disabled'}`)
-        window.location.reload()
+        // the page reloads below — a failed message must stay on screen (its Retry button would die with the reload)
+        const chatOk = decision?.kind === 'send' ? await sendShareChat(decision.pick, [doc.file_name]) : true
+        if (chatOk) window.location.reload()
+        else { setTogglingVis(null); router.refresh() }
       } else {
         toast.error(result.error || 'Failed to update visibility')
         setTogglingVis(null)
       }
-    } catch {
-      toast.error('Network error')
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'Network error')
       setTogglingVis(null)
     }
   }
@@ -3419,6 +3432,7 @@ function ContactDocumentsTab({
 
   return (
     <div className="space-y-6">
+      {shareDialog}
       <div className="flex items-center justify-between">
         {/* a tab shown from the new storage carries its own file count */}
         <p className="text-sm text-muted-foreground">{personStoreId && (activeDocScope === 'personal' || companyScopeInStore) ? '' : `${scopedDocuments.length} documents`}</p>

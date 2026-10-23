@@ -746,7 +746,7 @@ async function readIdentityIntoContact(contactId: string, slug: string, bytes: B
  * a never-visible draft), then the CRM documents row(s) the portal reads today — through the shared share
  * step, so the client's "new document" alert and the audit log work exactly as for any other share.
  */
-export async function setClientVisibility(fileId: string, visible: boolean, actorId: string | null = null, opts: { refusePersonal?: boolean } = {}): Promise<{ visible: boolean; crmRowsUpdated: number }> {
+export async function setClientVisibility(fileId: string, visible: boolean, actorId: string | null = null, opts: { refusePersonal?: boolean; suppressChat?: boolean } = {}): Promise<{ visible: boolean; crmRowsUpdated: number }> {
   const { storePointer } = await import("./document-pointer")
   const { isUnresolvedPersonalDocument, UNRESOLVED_PERSONAL_DOC_MESSAGE } = await import("@/lib/documents/visibility-guard")
   const { data: f, error: fErr } = await db().from("store_files").select("document_type, state, published, needs_review_at, store_owners!inner(kind)").eq("id", fileId).maybeSingle()
@@ -794,7 +794,7 @@ export async function setClientVisibility(fileId: string, visible: boolean, acto
     const { updateDocument } = await import("@/lib/operations/document")
     for (const r of (rows ?? []) as { id: string; portal_visible: boolean }[]) {
       if (r.portal_visible === visible) { crmRowsUpdated++; continue } // already so — nothing to change or undo
-      const u = await updateDocument({ id: r.id, patch: { portal_visible: visible } } as never)
+      const u = await updateDocument({ id: r.id, patch: { portal_visible: visible }, ...(opts.suppressChat ? { clientChat: false } : {}) } as never)
       if (!u.success) throw new Error(u.error || "The CRM list could not be updated.")
       changed.push(r.id)
       crmRowsUpdated++

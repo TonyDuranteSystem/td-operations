@@ -64,7 +64,10 @@ export async function isNewDocumentAlertEnabled(): Promise<boolean> {
  * a document that already has client_notified_at set is skipped, so retries /
  * re-saves never double-notify. Safe to call fire-and-forget from upload paths.
  */
-export async function notifyClientsOfNewDocument(documentId: string): Promise<{ notified: boolean; reason?: string }> {
+export async function notifyClientsOfNewDocument(
+  documentId: string,
+  opts: { chat?: boolean } = {},
+): Promise<{ notified: boolean; reason?: string }> {
   if (!(await isNewDocumentAlertEnabled())) return { notified: false, reason: 'feature_disabled' }
 
   const { data: doc } = await db
@@ -122,7 +125,8 @@ export async function notifyClientsOfNewDocument(documentId: string): Promise<{ 
   try {
     // Never for a personal document (passport/ID/ITIN…): the company chat is read by every
     // member, so even the file name would leak — its owner already got the alert above.
-    if (doc.account_id && doc.category !== PERSONAL_CATEGORY && (await isNewDocumentChatEnabled())) {
+    // opts.chat === false: the caller (the staff "eye" pop-up) decides whether and what to tell the client in chat.
+    if (opts.chat !== false && doc.account_id && doc.category !== PERSONAL_CATEGORY && (await isNewDocumentChatEnabled())) {
       const { error: chatError } = await db.from('portal_messages').insert({
         account_id: doc.account_id,
         contact_id: doc.contact_id || null,
@@ -146,7 +150,7 @@ export async function isNewDocumentChatEnabled(): Promise<boolean> {
 }
 
 /** Resolve the notification language from the contact, else the account owner, else English. */
-async function resolveDocLocale(accountId: string | null, contactId: string | null): Promise<'en' | 'it'> {
+export async function resolveDocLocale(accountId: string | null, contactId: string | null): Promise<'en' | 'it'> {
   if (contactId) {
     const { data } = await supabaseAdmin.from('contacts').select('language').eq('id', contactId).single()
     // contacts.language is free text ("Italian", not "it"). The old strict pair

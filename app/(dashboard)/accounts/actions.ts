@@ -531,7 +531,10 @@ export async function toggleDocumentPortalVisibility(
     // resolving the same document concurrently gets a clear conflict instead
     // of silently overwriting the first person's answer.
     expectedUpdatedAt?: string
-  }
+  },
+  // The staff eye pop-up decides whether/what to tell the client in chat: true = no AUTOMATIC chat line (the portal
+  // notification + push still go out). Default false = every other caller keeps the automatic line.
+  opts?: { suppressChat?: boolean }
 ): Promise<ActionResult> {
   return safeAction(async () => {
     // Write goes through updateDocument() which owns the action_log entry
@@ -584,6 +587,7 @@ export async function toggleDocumentPortalVisibility(
       actor,
       summary: `Portal visibility ${visible ? 'enabled' : 'disabled'}`,
       expected_updated_at: resolution?.expectedUpdatedAt,
+      ...(opts?.suppressChat ? { clientChat: false } : {}),
     })
     if (!result.success) {
       if (result.outcome === 'stale') {
