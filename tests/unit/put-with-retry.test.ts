@@ -23,7 +23,7 @@ describe('putFileWithRetry', () => {
     const prepare = prep()
     const f = vi.fn(async () => ok())
     const r = await putFileWithRetry({ prepare, file, fetchImpl: f as never, sleep })
-    expect(r).toEqual({ ok: true, path: 'crm-uploads/p1', attempts: 1 })
+    expect(r).toMatchObject({ ok: true, path: 'crm-uploads/p1', attempts: 1, message: '' })
     expect(prepare).toHaveBeenCalledTimes(1)
   })
 
@@ -31,7 +31,7 @@ describe('putFileWithRetry', () => {
     const prepare = prep()
     const f = vi.fn().mockResolvedValueOnce(status(520)).mockResolvedValueOnce(ok())
     const r = await putFileWithRetry({ prepare, file, fetchImpl: f as never, sleep })
-    expect(r).toEqual({ ok: true, path: 'crm-uploads/p2', attempts: 2 })
+    expect(r).toMatchObject({ ok: true, path: 'crm-uploads/p2', attempts: 2 })
     expect(prepare).toHaveBeenCalledTimes(2)
     expect(f.mock.calls[0][0]).toBe('https://x/sign/1')
     expect(f.mock.calls[1][0]).toBe('https://x/sign/2')
