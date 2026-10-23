@@ -36,6 +36,8 @@ import { RefreshButton } from '@/components/new-calendar/refresh-button'
 import { LiveRefresh } from '@/components/new-calendar/live-refresh'
 import { WhatsNewTab } from '@/components/whats-new/whats-new-tab'
 import { WhatsNewCount } from '@/components/whats-new/whats-new-count'
+import { PaymentsToConfirmTab } from '@/components/incoming-payments/payments-tab'
+import type { WaitingRow } from '@/lib/incoming-payments/classify'
 
 const BASE = '/new-calendar'
 const hrefFor = (p: NewCalendarParams) => `${BASE}${toQueryString(p)}`
@@ -278,9 +280,19 @@ function JobsBody({ model, params }: { model: CalendarModel; params: NewCalendar
   )
 }
 
+/** The number of payments waiting, in red when there is any (money that nobody has accounted for). Nothing when it could not be read. */
+function PaymentsCount({ payments }: { payments: WaitingRow[] | null }) {
+  if (!payments) return null
+  return (
+    <span className={`ml-1 rounded-full px-2 py-0.5 font-mono text-xs ${payments.length > 0 ? 'bg-red-100 text-red-700' : 'bg-zinc-100 text-zinc-600'}`}>
+      {payments.length}
+    </span>
+  )
+}
+
 /** `model` is null on the What's New tab: that tab does not use the Open services data, so the page does not load it (and a failed
  *  Open services read can never hide the news). */
-export function NewCalendarView({ model, params, greeting }: { model: CalendarModel | null; params: NewCalendarParams; greeting: string }) {
+export function NewCalendarView({ model, params, greeting, payments }: { model: CalendarModel | null; params: NewCalendarParams; greeting: string; payments: WaitingRow[] | null }) {
   return (
     <div className="space-y-4 p-6 lg:p-8">
       <LiveRefresh />
@@ -296,7 +308,7 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
 
       <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
         Every open job, with its step and who the next move belongs to. <b>Open workspace</b> opens the job in a window: act there, and this list updates by itself.
-        What&apos;s New is where you tick a client&apos;s note <b>Handled</b>. Renewals, annual reports and Mark Filed are on the third tab.
+        What&apos;s New is where you tick a client&apos;s note <b>Handled</b>. Payments to confirm lists Stripe payments nobody has said what they were for. Renewals, annual reports and Mark Filed are on the last tab.
       </div>
 
       <nav className="flex gap-1 border-b text-sm" aria-label="Calendar pages">
@@ -318,6 +330,15 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
             What&apos;s New <WhatsNewCount />
           </Link>
         )}
+        {params.tab === 'payments' ? (
+          <span className="-mb-px border-b-2 border-blue-600 px-3 py-2 font-semibold text-foreground" aria-current="page">
+            Payments to confirm <PaymentsCount payments={payments} />
+          </span>
+        ) : (
+          <Link href={hrefFor(withTab(params, 'payments'))} prefetch={false} className="-mb-px border-b-2 border-transparent px-3 py-2 text-zinc-600 hover:text-foreground">
+            Payments to confirm <PaymentsCount payments={payments} />
+          </Link>
+        )}
         <Link href="/calendar" prefetch={false} className="-mb-px border-b-2 border-transparent px-3 py-2 text-zinc-600 hover:text-foreground">
           Renewals &amp; annual reports →
         </Link>
@@ -325,6 +346,8 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
 
       {params.tab === 'news' ? (
         <WhatsNewTab />
+      ) : params.tab === 'payments' ? (
+        <PaymentsToConfirmTab rows={payments} />
       ) : model ? (
         <JobsBody model={model} params={params} />
       ) : null}

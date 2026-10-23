@@ -21,6 +21,11 @@ export interface CalendlyPayment {
   /** The Stripe CHARGE id (ch_…). Resolved to a PaymentIntent before stamping. */
   chargeId: string
   provider: string
+  /**
+   * The Stripe PaymentIntent id when the caller ALREADY has it (a payment confirmed from the Calendar's waiting list carries one
+   * in its saved event). Then `recordPaidCall` stamps it directly instead of resolving it from a charge id it does not have.
+   */
+  paymentIntentId?: string | null
 }
 
 /** Extract a SUCCESSFUL paid-booking payment, or null for free/failed bookings. */
