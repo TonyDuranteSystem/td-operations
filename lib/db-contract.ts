@@ -211,6 +211,11 @@ export const NOT_A_VOCABULARY = new Set([
   // is a value list (Storage check notes, PR #694, dev job ad09ea91), present in the sandbox but not in the committed production snapshot.
   // At the NEXT full `npm run snapshot:constraints`, MOVE it into CONSTRAINT_CONTRACTS with its code-side list and delete this line.
   "storage_check_notes_kind_check",
+  // TEMPORARY (2026-10-23, CI "Sandbox still enforces what production enforces" red on PR 800, dev job 40a58d9a): `incoming_payment_resolutions_resolution_check`
+  // is a value list (paid_call / paid_call_already_deducted / recorded_elsewhere = `RESOLUTIONS` in lib/incoming-payments/confirm.ts), present in the sandbox and
+  // created in production by migration 20261023-1200 (Antonio runs it BEFORE merging), but not in the committed PRODUCTION snapshot until that is next fully
+  // regenerated. At the NEXT full `npm run snapshot:constraints`, MOVE it into CONSTRAINT_CONTRACTS with its code-side list and delete this line.
+  "incoming_payment_resolutions_resolution_check",
   // TEMPORARY (2026-10-12, CI "Sandbox still enforces what production enforces" went red on every build): these 13 ARE
   // value lists, not shape rules — they were added by features shipped after the last full `npm run snapshot:constraints`
   // and were never registered. Checked against production 2026-10-12: it holds all of them EXCEPT the three pwa_events_*
