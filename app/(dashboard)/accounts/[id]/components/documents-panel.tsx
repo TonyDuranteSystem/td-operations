@@ -46,6 +46,7 @@ interface DocumentsPanelProps {
   onGenerateSS4: () => void
   /** Provided only for multi-member accounts with a treasury company member. */
   onGenerateIntercompany?: () => void
+  onGenerateAttestation?: () => void
   onRegenLease: (leaseId: string, data: { signedAt?: string | null; termStartDate?: string | null; termEndDate?: string | null }) => void
 }
 
@@ -68,7 +69,7 @@ function formatDate(d: string | null | undefined): string {
   }
 }
 
-export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, onGenerateLease, onGenerateSS4, onGenerateIntercompany, onRegenLease }: DocumentsPanelProps) {
+export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, onGenerateLease, onGenerateSS4, onGenerateIntercompany, onGenerateAttestation, onRegenLease }: DocumentsPanelProps) {
   const router = useRouter()
   const [statuses, setStatuses] = useState<DocumentStatuses | null>(null)
   const [loading, setLoading] = useState(true)
@@ -254,6 +255,16 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
       canGenerate: true,
       canSend: false,
       onGenerate: onGenerateIntercompany,
+    }] : []),
+    // Attestation of Beneficial Ownership is generate-on-demand too: one generic page, built from the
+    // Members section (or the single owner) — each run files a new version in the company's storage.
+    ...(onGenerateAttestation ? [{
+      key: 'attestation',
+      label: 'Attestation of Beneficial Ownership',
+      data: null,
+      canGenerate: true,
+      canSend: false,
+      onGenerate: onGenerateAttestation,
     }] : []),
     {
       key: 'relay',
@@ -469,7 +480,7 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
                 ) : (
                   <>
                     <span className="text-xs text-muted-foreground">
-                      {doc.key === 'intercompany' ? 'Generated from CRM data' : 'Not created'}
+                      {doc.key === 'intercompany' || doc.key === 'attestation' ? 'Generated from CRM data' : 'Not created'}
                     </span>
                     {doc.canGenerate && doc.onGenerate && (
                       <button

@@ -1,5 +1,5 @@
 /**
- * Admin Action: Generate Document (OA, Lease, SS-4) or Send Document
+ * Admin Action: Generate Document (OA, Lease, SS-4, Intercompany, Ownership Attestation) or Send Document
  *
  * POST /api/crm/admin-actions/generate-document
  *
@@ -777,6 +777,17 @@ export async function POST(request: Request) {
         if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
         const { generateIntercompanyForAccount } = await import("@/lib/operations/intercompany")
         const result = await generateIntercompanyForAccount(account_id, {
+          effective_date: params.effective_date as string | undefined,
+          actor: "crm-admin",
+        })
+        if (result.error) return NextResponse.json({ error: result.error }, { status: 400 })
+        return NextResponse.json(result)
+      }
+
+      case "generate_ownership_attestation": {
+        if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
+        const { generateOwnershipAttestationForAccount } = await import("@/lib/operations/ownership-attestation")
+        const result = await generateOwnershipAttestationForAccount(account_id, {
           effective_date: params.effective_date as string | undefined,
           actor: "crm-admin",
         })
