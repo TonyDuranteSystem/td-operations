@@ -135,7 +135,10 @@ export async function ingestLeadgenEvent(deps: IngestDeps, ev: LeadgenEvent, sou
         team_id: teamId, leadgen_id: ev.leadgenId, page_id: ev.pageId, form_id: mapped.formId ?? ev.formId,
         ad_id: mapped.adId ?? ev.adId, ad_name: mapped.adName, adset_id: mapped.adsetId, adset_name: mapped.adsetName,
         campaign_id: mapped.campaignId, campaign_name: mapped.campaignName, platform: mapped.platform, is_organic: mapped.isOrganic,
-        meta_created_time: mapped.metaCreatedTime ?? ev.createdTime, full_name: mapped.fullName, email: mapped.email, phone: mapped.phone,
+        meta_created_time: mapped.metaCreatedTime ?? ev.createdTime,
+        // a lead re-read later (a missed notification, the history import) sits in the list where it arrived, not where we found it
+        ...(source === "reconcile" && (mapped.metaCreatedTime ?? ev.createdTime) ? { received_at: mapped.metaCreatedTime ?? ev.createdTime } : {}),
+        full_name: mapped.fullName, email: mapped.email, phone: mapped.phone,
         country: mapped.country, city: mapped.city, answers: mapped.answers, raw: graph, status: "new", existing_client: client,
       }).select("id").single()
       if (ins.error && ins.error.code !== "23505") throw ins.error
