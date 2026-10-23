@@ -53,13 +53,13 @@ export function PaymentsToConfirmTab({ rows }: { rows: WaitingRow[] | null }) {
                   {r.match.leads.length > 0 && <>Lead with this email: {r.match.leads.map(l => `${l.name || 'Unnamed'} (${l.status})`).join(', ')}. </>}
                   {r.match.contacts.length > 0 && <>Client contact with this email: {r.match.contacts.map(c => c.name || 'Unnamed').join(', ')}. </>}
                   {r.match.marketingLeads.length > 0 && (
-                    <b className="text-amber-800">This email is also a TD Marketing lead ({r.match.marketingLeads.map(m => m.name || 'Unnamed').join(', ')}): marketing sales follow marketing&apos;s own rules, so do not record it here as a paid call. </b>
+                    <b className="text-amber-800">This email is also a TD Marketing lead ({r.match.marketingLeads.map(m => m.name || 'Unnamed').join(', ')}): choose <i>Marketing sale</i> (marketing sales follow marketing&apos;s own rules), not a paid call. </b>
                   )}
                   {r.match.leads.length === 0 && r.match.contacts.length === 0 && r.match.marketingLeads.length === 0 && <>No lead, client or marketing lead has this email.</>}
                 </p>
 
                 <div className="mt-3">
-                  <ConfirmActions sessionId={r.sessionId} amountText={amountText} leads={r.match.leads} />
+                  <ConfirmActions sessionId={r.sessionId} amount={r.amount} currency={r.currency} amountText={amountText} leads={r.match.leads} invoices={r.invoices} searchSeed={r.name || r.email || ''} />
                 </div>
               </li>
             )

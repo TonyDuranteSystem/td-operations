@@ -2,7 +2,8 @@
  * POST /api/crm/admin-actions/incoming-payments/confirm
  *
  * Staff say what an unlabelled Stripe payment was (Calendar → Payments to confirm). Body:
- *   { session_id, resolution: "paid_call" | "paid_call_already_deducted" | "recorded_elsewhere", lead_id?, note? }
+ *   { session_id, resolution: "paid_call" | "paid_call_already_deducted" | "recorded_elsewhere" | "marketing_sale" | "invoice_paid",
+ *     lead_id?, note?, marketing_lead_id? + sale_kind? (marketing_sale), invoice_payment_id? (invoice_paid) }
  * The money (amount, currency, payer, Stripe ids) is re-read server-side from the saved Stripe event — never from this body.
  * Same permission as Confirm Payment. See lib/incoming-payments/confirm.ts.
  */
@@ -32,6 +33,9 @@ export async function POST(request: Request) {
     resolution: body.resolution,
     leadId: typeof body.lead_id === "string" ? body.lead_id : null,
     note: typeof body.note === "string" ? body.note : null,
+    marketingLeadId: typeof body.marketing_lead_id === "string" ? body.marketing_lead_id : null,
+    saleKind: typeof body.sale_kind === "string" ? body.sale_kind : null,
+    invoicePaymentId: typeof body.invoice_payment_id === "string" ? body.invoice_payment_id : null,
     actor,
   })
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
