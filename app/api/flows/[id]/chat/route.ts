@@ -29,6 +29,8 @@ import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { pickChatSenderName } from '@/lib/portal/chat-sender-name'
 import { deriveFlowYear, buildFlowTopic } from '@/lib/flows/resolve-flows'
+import { chooseFlowMessageTopic } from '@/lib/flows/flow-chat-topic'
+import { openTopicsOf } from '@/lib/portal/chat-topics'
 import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
 
 const MAX_MESSAGE_LENGTH = 5000
@@ -155,9 +157,21 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       )
     }
 
+    // The topic chooser in the Calendar window: this job's own topic (the default) + the chat's other open topics.
+    // Best-effort — the chooser still works with just the default if the list cannot be read.
+    let topics: string[] = []
+    try {
+      if (accountId) topics = await openTopicsOf({ accountId })
+      else if (contactId) topics = await openTopicsOf({ contactId })
+    } catch {
+      topics = []
+    }
+
     return NextResponse.json({
       success: true,
       messages: (data ?? []).map((r) => flatten(r, { serviceDeliveryId, topic })),
+      default_topic: topic,
+      topics,
     })
   } catch (e) {
     return NextResponse.json(
@@ -221,8 +235,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // never reaches the client's contact-scoped portal thread (lost message).
     if (!contactId) contactId = (sd.contact_id as string | null) ?? null
 
-    // Topic is auto-set to the flow name (e.g. "Tax Return 2025").
-    const topic = buildFlowTopic(sd.service_type, deriveFlowYear(sd)) || null
+    // Topic defaults to the flow name (e.g. "Tax Return 2025"). Staff may choose another open topic of this chat or type a new one
+    // (Calendar "Message client", Luca 2026-10-23): a typed name that matches an existing topic reuses its spelling. The message is
+    // still stamped with this job (service_delivery_id) so the client's replies thread back here whatever the topic.
+    const defaultTopic = buildFlowTopic(sd.service_type, deriveFlowYear(sd)) || null
+    let existingTopics: string[] = []
+    if (typeof body.topic === 'string' && body.topic.trim()) {
+      try {
+        if (sd.account_id) existingTopics = await openTopicsOf({ accountId: sd.account_id as string })
+        else if (contactId) existingTopics = await openTopicsOf({ contactId })
+      } catch {
+        existingTopics = []
+      }
+    }
+    const topic = chooseFlowMessageTopic({ requested: body.topic, defaultTopic, existing: existingTopics })
 
     const admin = supabaseAdmin as unknown as UntypedChat
     const { data: inserted, error } = await admin

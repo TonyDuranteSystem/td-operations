@@ -12,26 +12,13 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { PERSONAL_CATEGORY } from "@/lib/documents/visibility-guard"
 import { storePointer } from "@/lib/crm-store/document-pointer"
 import { resolveDocLocale } from "@/lib/portal/document-alerts"
+import { openTopicsOf } from "@/lib/portal/chat-topics"
 import { DEFAULT_DOCUMENT_TOPIC, type ShareTarget, type ShareContext } from "@/lib/portal/document-share-text"
 
 export { DEFAULT_DOCUMENT_TOPIC, buildDocumentShareMessage } from "@/lib/portal/document-share-text"
 export type { ShareTarget, ShareContext } from "@/lib/portal/document-share-text"
 
 interface DocRow { id: string; file_name: string | null; category: number | null; account_id: string | null; contact_id: string | null }
-
-/** Open (non-deleted) topics of one chat, newest first, distinct. */
-async function topicsOf(scope: { accountId: string } | { contactId: string }): Promise<string[]> {
-  let q = supabaseAdmin.from("portal_messages").select("topic, created_at").is("deleted_at", null).not("topic", "is", null)
-  q = "accountId" in scope ? q.eq("account_id", scope.accountId) : q.is("account_id", null).eq("contact_id", scope.contactId)
-  const { data } = await q.order("created_at", { ascending: false }).limit(300)
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const r of (data ?? []) as { topic: string | null }[]) {
-    const t = (r.topic ?? "").trim()
-    if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); out.push(t) }
-  }
-  return out
-}
 
 /**
  * Who a message about this store file may go to. A personal document (passport, ID, ITIN…) is NEVER askable:
@@ -91,13 +78,13 @@ async function contextFromRows(docs: DocRow[]): Promise<ShareContext> {
   for (const id of accountIds) {
     const a = accounts.get(id)
     if (!a) continue
-    targets.push({ key: `company:${id}`, kind: "company", accountId: id, contactId: null, label: a.name, closed: a.closed, isDefault: id === doc.account_id, topics: await topicsOf({ accountId: id }) })
+    targets.push({ key: `company:${id}`, kind: "company", accountId: id, contactId: null, label: a.name, closed: a.closed, isDefault: id === doc.account_id, topics: await openTopicsOf({ accountId: id }) })
   }
   let personLabel: string | null = null
   if (doc.contact_id) {
     const { data: c } = await supabaseAdmin.from("contacts").select("full_name").eq("id", doc.contact_id).maybeSingle()
     personLabel = (c?.full_name as string | undefined) ?? "the person"
-    targets.push({ key: `person:${doc.contact_id}`, kind: "person", accountId: null, contactId: doc.contact_id, label: `${personLabel} — personal chat`, closed: false, isDefault: !doc.account_id, topics: await topicsOf({ contactId: doc.contact_id }) })
+    targets.push({ key: `person:${doc.contact_id}`, kind: "person", accountId: null, contactId: doc.contact_id, label: `${personLabel} — personal chat`, closed: false, isDefault: !doc.account_id, topics: await openTopicsOf({ contactId: doc.contact_id }) })
   }
   if (targets.length === 0) return { askable: false, reason: "no_recipient", fileName }
 
