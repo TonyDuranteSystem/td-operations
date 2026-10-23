@@ -29,6 +29,8 @@ import { allFolderPaths, filterPlainDrop, isInternalOwnerKind, itemsFromFileList
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
+import { putFileWithRetry } from '@/lib/storage/put-with-retry'
+import { resolveDropPreset, type DropPreset } from '@/lib/crm-store/drop-preset'
 import { useShareMessagePrompt } from './use-share-message-prompt'
 import { buildDocumentShareMessage } from '@/lib/portal/document-share-text'
 import { ChangePersonDialog } from './change-person-dialog'
@@ -890,11 +892,18 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       }
       const file = item.file
       const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
-      const storagePath = `${STAGING_PREFIX}${ownerId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safe}`
-      const sig = await postJson<{ signedUrl?: string }>('/api/storage/upload', { bucket: 'onboarding-uploads', path: storagePath, contentType: file.type }, 'Could not prepare the upload.')
-      if (!sig.signedUrl) return { outcome: 'failed', message: 'Could not prepare the upload.' }
-      const put = await fetch(sig.signedUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
-      if (!put.ok) return { outcome: 'failed', message: `The file could not be sent (status ${put.status}).` }
+      // each try asks for a fresh link and a fresh staging path (a connection blip no longer fails the upload)
+      const put = await putFileWithRetry({
+        file,
+        prepare: async () => {
+          const path = `${STAGING_PREFIX}${ownerId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safe}`
+          const sig = await postJson<{ signedUrl?: string }>('/api/storage/upload', { bucket: 'onboarding-uploads', path, contentType: file.type }, 'Could not prepare the upload.')
+          if (!sig.signedUrl) throw new Error('Could not prepare the upload.')
+          return { signedUrl: sig.signedUrl, path }
+        },
+      })
+      if (!put.ok) return { outcome: 'failed', message: put.message }
+      const storagePath = put.path as string
       const r = await postJson<{ write: string }>('/api/crm-store/browse/upload', { ownerId, folderId: into.id, storagePath, fileName: file.name, mimeType: file.type }, 'The file could not be saved.')
       return { outcome: r.write === 'unchanged' ? 'unchanged' : 'saved' }
     } catch (e) {
@@ -970,7 +979,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   }
 
   /** Files or a whole folder chosen for a company's folder — from a drop OR from the Upload box's pickers — go to the same typed upload. */
-  const startDrop = async (folder: Fold, found: { file: File; path: string[] }[]) => {
+  const startDrop = async (folder: Fold, found: { file: File; path: string[] }[], preset?: DropPreset) => {
     // "2. Contacts" needs its people for "Whose documents?" even when the folder is closed in the tree
     if (folder.kind === 'contacts' && !loaded[folder.id]) {
       try {
@@ -983,7 +992,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     if (folder.kind === 'contacts' && found.some((x) => x.path.length)) { toast.error('A whole folder can’t go into "2. Contacts" — open the person and drop it into one of their folders.'); return }
     const typed = typesForFolder(folder, types ?? (await loadTypes()))
     const def = defaultTypeFor(folder, typed)
-    setDrop({ folder, person: '', items: found.map(({ file, path }) => ({ file, path, type: def, name: '', status: 'waiting' })) })
+    // what the Upload panel already knows (type, person, name) is kept — it is not asked a second time
+    const r = resolveDropPreset(preset, { allowedTypeSlugs: typed.map((t) => t.slug), defaultType: def, folderIsContacts: folder.kind === 'contacts', fileCount: found.length })
+    setDrop({ folder, person: r.person, items: found.map(({ file, path }) => ({ file, path, type: r.type, name: r.name, status: 'waiting' })) })
   }
 
   const runDrop = async () => {
@@ -1615,12 +1626,20 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       }
       // the save
       const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
-      const storagePath = `${STAGING_PREFIX}${target.ownerId}/${Date.now()}_${safe}`
-      const sig = await postJson<{ signedUrl?: string }>('/api/storage/upload',
-        { bucket: 'onboarding-uploads', path: storagePath, contentType: file.type }, 'Could not prepare the upload — please try again.')
-      if (!sig.signedUrl) throw new Error('Could not prepare the upload — please try again.')
-      const put = await fetch(sig.signedUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
-      if (!put.ok) throw new Error(`The file could not be sent (status ${put.status}) — please try again.`)
+      // each try asks for a fresh link and a fresh staging path (a connection blip no longer fails the upload)
+      const put = await putFileWithRetry({
+        file,
+        prepare: async () => {
+          const path = `${STAGING_PREFIX}${target.ownerId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safe}`
+          const sig = await postJson<{ signedUrl?: string }>('/api/storage/upload',
+            { bucket: 'onboarding-uploads', path, contentType: file.type }, 'Could not prepare the upload — please try again.')
+          if (!sig.signedUrl) throw new Error('Could not prepare the upload — please try again.')
+          return { signedUrl: sig.signedUrl, path }
+        },
+        onRetry: ({ attempt, of }) => toast.message(`Connection problem — trying again (${attempt + 1} of ${of})…`),
+      })
+      if (!put.ok) throw new Error(put.message)
+      const storagePath = put.path as string
       const r = await postJson<{ write: string; name: string; visible: boolean; identity?: string | null }>('/api/crm-store/browse/upload', {
         ownerId: target.ownerId, folderId: target.folder.id, storagePath, fileName: file.name, mimeType: file.type, documentType: upType,
         displayName: displayName || undefined, visible: upVisible && !needsReview, periodYear, filingAnswer, needsReview,
@@ -2312,7 +2331,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                       return { file, path: withPath && rel.includes('/') ? rel.split('/').slice(0, -1) : [] }
                     })
                     setUploadOpen(false)
-                    void startDrop(target, found)
+                    void startDrop(target, found, { type: upType, person: upPerson, name: upName })
                   }
                   return (
                     <>
