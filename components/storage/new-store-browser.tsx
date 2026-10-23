@@ -29,6 +29,8 @@ import { allFolderPaths, filterPlainDrop, isInternalOwnerKind, itemsFromFileList
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
+import { useShareMessagePrompt } from './use-share-message-prompt'
+import { buildDocumentShareMessage } from '@/lib/portal/document-share-text'
 import { ChangePersonDialog } from './change-person-dialog'
 import { DriveImportDialog } from './drive-import-dialog'
 import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keepBothName } from '@/lib/crm-store/names'
@@ -312,6 +314,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [dragFile, setDragFile] = useState<{ id: string; from: string | null } | null>(null)
   const [dropOn, setDropOn] = useState<string | null>(null)
   const [asking, setAsking] = useState<Asking | null>(null)
+  // the "tell the client?" pop-up shown when the eye makes hidden files visible (shared with the other eyes)
+  const { decide: decideShare, sendChat: sendShareChat, dialog: shareDialog } = useShareMessagePrompt()
   const [picking, setPicking] = useState<Picking | null>(null)
   // "Shared with staff": the owners tick who may open each file; staff see "Shared with me"
   const [sharing, setSharing] = useState<File_ | null>(null)
@@ -632,8 +636,16 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           [{ key: 'owner_only', label: `${questions?.show_personal_data?.choices.owner_only ?? 'Show it to'} ${who} only`, tone: 'primary' }, { key: 'keep_hidden' }])
         if (a !== 'owner_only' && a !== '__default__') return
       }
-      await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: !f.clientVisible }, 'Could not change who can see this file — please try again.')
+      const showing = !f.clientVisible
+      // Showing a hidden file: ask whether to tell the client in chat (a personal document is never asked — its owner
+      // already gets the private notification, and a chat line could reach every member). Cancel = nothing changes.
+      const decision = showing ? await decideShare([{ id: f.id, name: f.name }]) : null
+      if (decision?.kind === 'cancel') return
+      // the automatic "new document" chat line is off for the eye: the pop-up decided (the notification still goes out)
+      await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: showing, ...(showing ? { suppressChat: true } : {}) }, 'Could not change who can see this file — please try again.')
       toast.success(f.clientVisible ? `"${f.name}" is now hidden from the client` : `"${f.name}" is now visible to the client`)
+      // the message first, then the (slower) refresh — the automatic chat line is off, so nothing else tells the client
+      if (decision?.kind === 'send') await sendShareChat(decision.pick, [f.name])
       await refreshAll()
     } catch (e) {
       toast.error(errMsg(e, 'Could not change who can see this file.'))
@@ -1104,15 +1116,28 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     let targets = list
     let hideAfterMove = false
     let moveTo: { folderId: string; path: string } | null = null
+    let shareDecision: Awaited<ReturnType<typeof decideShare>> | null = null
     if (action === 'show') {
       // the counts are from what is on screen; each file is checked again on the server when it is done
       const ok = list.filter((f) => !f.clientVisible && bulkShowable(f))
       const already = list.filter((f) => f.clientVisible).length
       const skip = list.length - ok.length - already
-      const a = await ask('bulk_show', `Show ${ok.length} ${ok.length === 1 ? 'file' : 'files'} to the client?`,
-        <p>{ok.length} will be shown{already ? `; ${already} already shown` : ''}{skip ? `; ${skip} can't be shown in a group and are skipped (personal documents one by one from their own button; staff-only, "Needs review", untyped or unlinked files not at all)` : ''}.</p>,
-        [{ key: 'go', label: `Show ${ok.length}`, tone: 'primary', disabled: ok.length === 0 }, { key: 'cancel', label: 'Cancel' }])
-      if (a !== 'go' && a !== '__default__') return
+      const counts = `${ok.length} will be shown${already ? `; ${already} already shown` : ''}${skip ? `; ${skip} can't be shown in a group and are skipped (personal documents one by one from their own button; staff-only, "Needs review", untyped or unlinked files not at all)` : ''}.`
+      // ONE pop-up for the whole selection when every file goes to the same chat; otherwise the old confirmation
+      // (the client gets the portal notification only — no chat line is sent for a mixed selection)
+      let decision: Awaited<ReturnType<typeof decideShare>> = { kind: 'show_only', reason: 'mixed' }
+      if (ok.length > 0) {
+        try { decision = await decideShare(ok.map((f) => ({ id: f.id, name: f.name })), counts) }
+        catch (e) { toast.error(errMsg(e, 'Could not work out who the message can go to — please try again.')); return }
+      }
+      if (decision.kind === 'cancel') return
+      if (decision.kind === 'show_only') {
+        const a = await ask('bulk_show', `Show ${ok.length} ${ok.length === 1 ? 'file' : 'files'} to the client?`,
+          <p>{counts}{decision.reason === 'mixed' ? ' These files belong to different chats, so no chat message is offered — the client gets the portal notification only.' : ''}</p>,
+          [{ key: 'go', label: `Show ${ok.length}`, tone: 'primary', disabled: ok.length === 0 }, { key: 'cancel', label: 'Cancel' }])
+        if (a !== 'go' && a !== '__default__') return
+      }
+      shareDecision = decision
       targets = ok
     } else if (action === 'hide') {
       // a file its workspace always shows can't be hidden from here — skipped, and said so
@@ -1149,10 +1174,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setBulkBusy(true)
     let ok = 0
     const failed: string[] = []
+    const shownNames: string[] = []
+    // the pop-up decided the chat message for these files; with no pop-up (mixed selection) the old automatic line stays
+    const suppressChat = shareDecision !== null && shareDecision.kind !== 'show_only'
     for (const f of targets) {
       try {
         // group: true → the server refuses a personal document (shown one by one, with its question)
-        if (action === 'show') await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: true, group: true }, 'Could not show it.')
+        if (action === 'show') { await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: true, group: true, ...(suppressChat ? { suppressChat: true } : {}) }, 'Could not show it.'); shownNames.push(f.name) }
         if (action === 'hide') await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: false }, 'Could not hide it.')
         if (action === 'delete') await postJson(`/api/crm-store/browse/file/${f.id}/delete`, {}, 'Could not delete it.')
         if (action === 'move' && moveTo) {
@@ -1170,6 +1198,16 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     toast.success(`${ok} ${ok === 1 ? 'file' : 'files'} ${verb}`)
     if (failed.length) toast.error(`Not done: ${failed.slice(0, 5).join('; ')}${failed.length > 5 ? ' …' : ''}`)
     setSelectedFiles(new Map())
+    // ONE message for the whole selection, naming only the files that actually became visible — sent BEFORE the slower refresh
+    if (action === 'show' && shareDecision?.kind === 'send' && shownNames.length > 0) {
+      const d = shareDecision
+      if (failed.length === 0) await sendShareChat(d.pick, shownNames)
+      else {
+        // a partial result: the typed message may name files that did not become visible — never send it unseen
+        const partial = { ...d.pick, message: buildDocumentShareMessage(d.locale, shownNames) }
+        toast.warning(`${shownNames.length} shown, ${failed.length} not — no message was sent yet.`, { duration: 20000, action: { label: `Send message for the ${shownNames.length} shown`, onClick: () => { void sendShareChat(partial, shownNames) } } })
+      }
+    }
     await refreshAll()
     if (filterKind) void openFilter(filterKind)
   }
@@ -2338,6 +2376,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       )}
       {previewVersion && <PreviewPanel file={previewVersion.file} src={previewVersion.src} viewSrc={previewVersion.viewSrc} title={previewVersion.title} onClose={() => setPreviewVersion(null)} />}
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
+      {shareDialog}
       {asking && (
         <QuestionDialog q={questions?.[asking.slug]} fallbackTitle={asking.fallbackTitle}
           onClose={() => { const r = asking.resolve; setAsking(null); r('cancel') }}
