@@ -9,14 +9,21 @@
 	<key>CFBundleName</key><string>TD Storage</string>
 	<key>CFBundleDisplayName</key><string>TD Storage</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>0.1.0</string>
-	<key>CFBundleVersion</key><string>1</string>
+	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>TDServerURL</key><string>$(TD_SERVER_URL)</string>
 	<key>TDDomainName</key><string>$(TD_DOMAIN_NAME)</string>
 	<key>TDKeychainService</key><string>$(TD_KEYCHAIN_SERVICE)</string>
 	<key>TDKeychainGroup</key><string>$(TD_KEYCHAIN_GROUP)</string>
+	<key>TDLayoutVersion</key><string>3</string>
+	<key>SUFeedURL</key><string>$(TD_SERVER_URL)/api/storage-app-release/appcast.xml</string>
+	<key>SUPublicEDKey</key><string>QyZK2Ugq/n7g5wnBwo0YzjQUo7PVjdINdK4KXxWyYu0=</string>
+	<key>SUEnableInstallerLauncherService</key><true/>
+	<key>SUEnableAutomaticChecks</key><true/>
+	<key>SUAutomaticallyUpdate</key><true/>
+	<key>SUScheduledCheckInterval</key><integer>3600</integer>
 	<key>NSAppTransportSecurity</key>
 	<dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict>

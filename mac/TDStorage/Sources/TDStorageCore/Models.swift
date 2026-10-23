@@ -14,8 +14,8 @@ public struct TokenPair: Codable, Equatable {
 
 public struct WhoAmI: Codable, Equatable {
     public var userId: String; public var email: String?; public var role: String?; public var owner: Bool; public var deviceId: String
-    /// the two values the CRM's settings row gives the Mac (older servers do not send them)
-    public var leaseHours: Double?; public var resyncMinutes: Double?
+    /// the values the CRM's settings row gives the Mac (older servers do not send them)
+    public var leaseHours: Double?; public var resyncMinutes: Double?; public var updateCheckMinutes: Double?
 }
 
 public struct NavOwner: Codable, Equatable, Hashable {

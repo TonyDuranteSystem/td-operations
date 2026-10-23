@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
+import { pushSubscriptionScope } from '@/lib/portal/team/push-scope'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -26,8 +28,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid subscription' }, { status: 400 })
   }
 
-  // Access control
-  const contactId = getClientContactId(user)
+  // Access control. A TEAM MEMBER is checked as one (their own company, and only with the chat permission): push is sent per
+  // company, so a device subscribed to another company's alerts would receive its message previews (dev job e5d5400d).
+  const identity = await resolvePortalIdentity(user)
+  const scope = pushSubscriptionScope(identity, account_id ?? null)
+  if (!scope.allowed) return NextResponse.json({ error: scope.error ?? 'Access denied' }, { status: 403 })
+  const contactId = identity.kind === 'teammate' ? null : getClientContactId(user)
   if (contactId && account_id) {
     const accountIds = await getClientAccountIds(contactId)
     if (!accountIds.includes(account_id)) {
@@ -46,7 +52,7 @@ export async function POST(request: NextRequest) {
     .from('push_subscriptions')
     .insert({
       user_id: user.id,
-      account_id: account_id || null,
+      account_id: scope.accountId ?? (account_id || null),
       contact_id: contactId || null,
       endpoint: subscription.endpoint,
       p256dh: subscription.keys.p256dh,

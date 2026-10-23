@@ -23,6 +23,7 @@ import {
   ResetOfferDialog,
   DeletePortalUserDialog,
 } from './delete-lead-dialog'
+import { CreatePaymentLink } from '@/components/incoming-payments/create-payment-link'
 
 interface OfferData {
   token: string
@@ -443,6 +444,9 @@ export function LeadActions({
             </button>
           )}
         </div>
+
+        {/* A Stripe link with a free amount (paid call, or something else that waits in Calendar → Payments to confirm) */}
+        <CreatePaymentLink leadId={leadId} leadEmail={leadEmail} leadLanguage={leadLanguage} />
 
         {/* Offer exists hint */}
         {hasOffer && !isConverted && (

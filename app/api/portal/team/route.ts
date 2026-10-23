@@ -35,10 +35,8 @@ export async function POST(request: NextRequest) {
 
   const result = await createTeammate({
     accountId,
-    username: String(body.username ?? ''),
-    displayName: body.display_name ?? null,
-    password: String(body.password ?? ''),
-    email: body.email ?? null,
+    username: body.username ? String(body.username) : null,
+    displayName: String(body.display_name ?? ''),
     capabilities: body.capabilities,
     createdByContactId: adminContactId,
     disclaimerAccepted: body.disclaimer_accepted === true,
@@ -47,5 +45,6 @@ export async function POST(request: NextRequest) {
   if (!result.ok) {
     return NextResponse.json({ error: (result.errors ?? ['Could not create team member']).join('; ') }, { status: 400 })
   }
-  return NextResponse.json({ ok: true, team_member_id: result.teamMemberId })
+  // The password is shown to the owner ONCE (handover message); it is never stored in readable form.
+  return NextResponse.json({ ok: true, team_member_id: result.teamMemberId, username: result.username, password: result.password })
 }

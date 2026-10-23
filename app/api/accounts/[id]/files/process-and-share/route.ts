@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { processFile } from '@/lib/mcp/tools/doc'
 import { updateDocument } from '@/lib/operations/document'
-import { isUnresolvedPersonalDocument, UNRESOLVED_PERSONAL_DOC_MESSAGE } from '@/lib/documents/visibility-guard'
+import { isUnresolvedPersonalDocument, UNRESOLVED_PERSONAL_DOC_MESSAGE, PERSONAL_CATEGORY } from '@/lib/documents/visibility-guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
@@ -40,7 +40,9 @@ export async function POST(
     return NextResponse.json({ error: 'Dashboard access required' }, { status: 403 })
   }
 
-  const { fileId } = await request.json()
+  const { fileId, suppressChat } = await request.json()
+  // the staff eye pop-up decides the chat message: true = no AUTOMATIC chat line (notification + push still go out)
+  const clientChat = suppressChat === true ? false : undefined
   if (!fileId) {
     return NextResponse.json({ error: 'fileId is required' }, { status: 400 })
   }
@@ -88,6 +90,7 @@ export async function POST(
         summary: existingDoc.status === 'error'
           ? 'Portal visibility enabled (existing record — reprocess queued)'
           : 'Portal visibility enabled (existing record)',
+        clientChat,
       })
 
       if (!updateResult.success) {
@@ -105,6 +108,7 @@ export async function POST(
         portalVisible: true,
         fileName: existingDoc.file_name,
         type: 'existing',
+        personal: existingDoc.category === PERSONAL_CATEGORY,
         reprocessQueued: existingDoc.status === 'error',
       })
     }
@@ -139,12 +143,17 @@ export async function POST(
       return NextResponse.json({ error: UNRESOLVED_PERSONAL_DOC_MESSAGE }, { status: 409 })
     }
 
-    await updateDocument({
+    const shareResult = await updateDocument({
       id: doc.id,
       patch: { portal_visible: true },
       actor: `dashboard:${user.email ?? 'staff'}`,
       summary: 'Portal visibility enabled (process-and-share)',
+      clientChat,
     })
+    // never report "shared" when the document did not become visible — the staff pop-up sends its message on this answer
+    if (!shareResult.success) {
+      return NextResponse.json({ error: shareResult.error || 'Failed to update document visibility' }, { status: 500 })
+    }
 
     return NextResponse.json({
       success: true,
@@ -152,6 +161,7 @@ export async function POST(
       portalVisible: true,
       fileName: result.fileName,
       type: result.type,
+      personal: doc.category === PERSONAL_CATEGORY,
     })
   } catch (err) {
     console.error('[process-and-share] Error:', err)

@@ -99,3 +99,22 @@ export function prettyAnswer(v: string): string {
   const s = v.replace(/_/g, " ").replace(/\s+/g, " ").trim()
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : v
 }
+
+
+const HOUR = 3600_000
+export interface RowFacts { waiting: { text: string; late: boolean } | null; ad: string | null }
+
+/**
+ * The extra facts on a Leads row. A new lead nobody has touched shows how long it has been waiting (red after a day); a lead somebody has picked or worked shows none: it is not waiting.
+ * `ad` is the ad it came from, or null when the form came with no ad name.
+ */
+export function rowFacts(l: { status: string; claimed_by: string | null; callback_at: string | null; ad_name: string | null; meta_created_time: string | null; received_at: string }, firstStage: string | undefined, nowMs: number): RowFacts {
+  const arrived = new Date(l.meta_created_time ?? l.received_at).getTime()
+  const waitingNow = firstStage !== undefined && l.status === firstStage && l.claimed_by === null && l.callback_at === null
+  const ms = Math.max(0, nowMs - arrived)
+  const text = ms < HOUR ? `${Math.max(1, Math.round(ms / 60_000))} min` : ms < 48 * HOUR ? `${Math.round(ms / HOUR)} h` : `${Math.round(ms / (24 * HOUR))} d`
+  return { waiting: waitingNow ? { text, late: ms > 24 * HOUR } : null, ad: l.ad_name }
+}
+
+/** "Good" / "Not in target" / "Call back" for a mark, in the words the buttons use. */
+export const markWords = (o: "good" | "not_in_target" | "call_back"): string => (o === "good" ? "Good" : o === "not_in_target" ? "Not in target" : "Call back")

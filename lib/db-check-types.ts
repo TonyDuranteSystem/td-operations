@@ -136,6 +136,9 @@ export type FormationSubmissionsLanguage = "en" | "it"
 /** formation_submissions.status — CHECK constraint */
 export type FormationSubmissionsStatus = "pending" | "sent" | "opened" | "completed" | "reviewed"
 
+/** incoming_payment_resolutions.resolution — CHECK constraint */
+export type IncomingPaymentResolutionsResolution = "paid_call" | "paid_call_already_deducted" | "recorded_elsewhere"
+
 /** internal_thread_state.status — CHECK constraint */
 export type InternalThreadStateStatus = "todo" | "in_progress" | "waiting" | "handled"
 

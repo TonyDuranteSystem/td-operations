@@ -69,6 +69,8 @@ describe("privacy boundary — the drop is not reachable from any HTTP route or 
     const root = process.cwd()
     const importers = [...walk(join(root, "app")), ...walk(join(root, "lib")), ...walk(join(root, "components"))].filter((f) => {
       if (f.endsWith("lib/crm-store/my-files-drop.ts") || f.endsWith("lib/crm-store/my-files-drop-rules.ts") || f.endsWith("lib/crm-store/my-files-drop-drive.ts")) return false
+      // the owner-only ACCESS tools (2026-10-23) reuse the drop's PURE rules (names, types, size) and nothing else; their own boundary is pinned in mcp-my-files-access-tool.test.ts
+      if (f.endsWith("lib/crm-store/my-files-access.ts") || f.endsWith("lib/mcp/tools/my-files-access.ts")) return false
       return /from\s+["'][^"']*my-files-drop/.test(readFileSync(f, "utf8"))
     }).map((f) => f.replace(root + "/", ""))
     expect(importers.sort()).toEqual(["app/api/[transport]/route.ts", "lib/mcp/tools/my-files-drop.ts"])

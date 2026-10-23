@@ -1,5 +1,5 @@
 /**
- * GET /api/crm-store/browse/file/<id>/view — a "simplified view" of the file's CURRENT version for the storage screen (2026-10-02):
+ * GET /api/crm-store/browse/file/<id>/view — a "simplified view" of the file's current version (or, with ?version=<id>, one OLDER saved copy of it) for the storage screen (2026-10-02):
  * Word → readable page, Excel → tables, Markdown / CSV / JSON … → text. One self-contained HTML page, served with a CSP that forbids
  * every script and a sandbox, so a hostile document cannot run anything. Same staff + storage-access checks as the plain file route;
  * nothing is written anywhere. Anything else (PDF and pictures have their own viewer; PowerPoint, old .doc/.xls) is a 415 → download.
@@ -17,15 +17,18 @@ const HEADERS: Record<string, string> = {
   "Cache-Control": "private, no-store",
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await denyUnlessStoreStaff()
   if (denied) return denied
   const noAccess = await denyUnlessAreaAccess({ fileId: params.id }, { allowSharedRead: true })
   if (noAccess) return noAccess
   try {
-    const { readFileForStaff } = await import("@/lib/crm-store/browse")
+    const { readFileForStaff, readVersionForStaff } = await import("@/lib/crm-store/browse")
     const v = await import("@/lib/crm-store/view-html")
-    const f = await readFileForStaff(params.id)
+    // an older saved copy: the same checks as the file itself (area access above), and the version must belong to THIS file
+    const versionId = req.nextUrl.searchParams.get("version")
+    if (versionId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(versionId)) return NextResponse.json({ error: "Bad version." }, { status: 400 })
+    const f = versionId ? await readVersionForStaff(params.id, versionId) : await readFileForStaff(params.id)
     const kind = v.viewKindFor(f.name, f.mimeType)
     if (!kind) return NextResponse.json({ error: "This kind of file cannot be shown here — download it instead." }, { status: 415 })
     if (f.bytes.length > v.VIEW_MAX_BYTES[kind]) return NextResponse.json({ error: `This file is too large to show here (${Math.round(f.bytes.length / 1048576)} MB) — download it instead.` }, { status: 413 })

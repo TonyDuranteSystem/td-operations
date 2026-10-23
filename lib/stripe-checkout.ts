@@ -145,7 +145,8 @@ export async function createMarketingCheckoutSession(params: {
 }): Promise<StripeCheckoutResult & { expiresAt?: Date }> {
   const stripe = getStripe()
   if (!stripe) return { success: false, error: "STRIPE_SECRET_KEY not set" }
-  const base = process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"
+  // trim(): the sandbox copy of this variable ends in a stray newline, which Stripe rejects as "Not a valid URL".
+  const base = (process.env.NEXT_PUBLIC_APP_URL || "").trim() || "https://app.tonydurante.us"
   const expiresAtSec = Math.floor(Date.now() / 1000) + 23 * 3600
   try {
     const session = await stripe.checkout.sessions.create({

@@ -16,6 +16,7 @@ import { ResolvePersonalDocument } from '@/components/documents/resolve-personal
 import { isUnresolvedPersonalDocument } from '@/lib/documents/visibility-guard'
 import { useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
 import { StoreReadOnlyPanel } from './store-readonly-panel'
+import { useShareMessagePrompt, suppressesAutoChat, type ShareDecision } from '@/components/storage/use-share-message-prompt'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -101,6 +102,8 @@ function FileRow({
   const [portalVisible, setPortalVisible] = useState(docInfo?.portalVisible ?? false)
   const [togglingVisibility, setTogglingVisibility] = useState(false)
   const [showResolver, setShowResolver] = useState(false)
+  // the "tell the client?" pop-up when this eye makes a hidden file visible (shared with the other eyes)
+  const { decide: decideShare, sendChat: sendShareChat, dialog: shareDialog } = useShareMessagePrompt()
   const menuRef = useRef<HTMLDivElement>(null)
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hasThumbnail = !!file.thumbnailLink
@@ -144,16 +147,26 @@ function FileRow({
     }
     setTogglingVisibility(true)
     try {
+      // Showing a hidden file: ask whether to tell the client in chat BEFORE anything changes (Cancel = nothing changes).
+      // A file with no CRM row yet is only known by its company, so the pop-up cannot tell if it is a personal document —
+      // the message is only sent after, and only if the processed document turns out not to be personal.
+      let decision: ShareDecision | null = null
+      if (!portalVisible) {
+        decision = await decideShare([docInfo?.docId ? { id: docInfo.docId, name: file.name, source: 'document' } : { id: accountId, name: file.name, source: 'account' }])
+        if (decision.kind === 'cancel') return
+      }
+      const suppressChat = suppressesAutoChat(decision)
       if (docInfo?.docId) {
         // Already processed — just toggle visibility
         const { toggleDocumentPortalVisibility } = await import('@/app/(dashboard)/accounts/actions')
         const newVisible = !portalVisible
-        const result = await toggleDocumentPortalVisibility(docInfo.docId, newVisible)
+        const result = await toggleDocumentPortalVisibility(docInfo.docId, newVisible, undefined, suppressChat ? { suppressChat: true } : undefined)
         if (result.success) {
           setPortalVisible(newVisible)
           toast.success(`Portal visibility ${newVisible ? 'enabled' : 'disabled'}`)
           // Invalidate cache so docMap reflects new state on next page visit
           onRefresh()
+          if (decision?.kind === 'send') await sendShareChat(decision.pick, [file.name])
         } else {
           toast.error(result.error || 'Failed to toggle visibility')
         }
@@ -162,7 +175,7 @@ function FileRow({
         const res = await fetch(`/api/accounts/${accountId}/files/process-and-share`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileId: file.id }),
+          body: JSON.stringify({ fileId: file.id, ...(suppressChat ? { suppressChat: true } : {}) }),
         })
         // A server-side timeout/crash can return a non-JSON body — don't let
         // that throw and fall through to the generic catch-all below (R099).
@@ -171,12 +184,16 @@ function FileRow({
           setPortalVisible(true)
           toast.success('Document processed and shared with client')
           onRefresh()
+          if (decision?.kind === 'send') {
+            if ((data as { personal?: boolean }).personal) toast.info('This turned out to be a personal document, so no chat message was sent — its owner got the private notification.')
+            else await sendShareChat(decision.pick, [file.name])
+          }
         } else {
           toast.error(data.error || `Failed to process document (server error ${res.status})`)
         }
       }
-    } catch {
-      toast.error('Failed to toggle visibility')
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'Failed to toggle visibility')
     } finally {
       setTogglingVisibility(false)
     }
@@ -184,6 +201,7 @@ function FileRow({
 
   return (
     <div className="flex flex-wrap items-center gap-2 px-3 py-2 hover:bg-zinc-50 transition-colors group text-sm">
+      {shareDialog}
 
       {/* File icon with thumbnail hover */}
       <div

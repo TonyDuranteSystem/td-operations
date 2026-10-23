@@ -8,7 +8,7 @@ import { verifyMfaRememberDevice, MFA_RD_COOKIE } from '@/lib/auth/mfa-remember-
 import { isSandboxBlockedWebhook } from '@/lib/sandbox-webhook-guard'
 import { isClientAllowedApiPath } from '@/lib/auth/client-api-allowlist'
 import { isKnownAuthRole, isMarketingRole, isMarketingAllowedPath, MARKETING_HOME } from '@/lib/auth/role-door'
-import { STORAGE_APP_PUBLIC_PATHS } from '@/lib/storage-app/public-paths'
+import { STORAGE_APP_PUBLIC_PATHS, STORAGE_APP_RELEASE_PUBLIC_PATHS } from '@/lib/storage-app/public-paths'
 
 // --- Public paths (no auth required) ---
 const PUBLIC_PREFIXES = [
@@ -200,6 +200,7 @@ function isPublicPath(pathname: string): boolean {
   // token, the rest by `withDevice`, which fails closed). EXACT paths only (dev job 1992a087, Antonio's OK 2026-10-17) — a prefix
   // would make every future route under /api/storage-app public AND skip the staff two-step-login check below.
   if (STORAGE_APP_PUBLIC_PATHS.includes(pathname)) return true
+  if (STORAGE_APP_RELEASE_PUBLIC_PATHS.includes(pathname)) return true   // the app's update feed (exact path; see lib/storage-app/release.ts)
   return PUBLIC_PREFIXES.some(prefix => pathname.startsWith(prefix))
 }
 
