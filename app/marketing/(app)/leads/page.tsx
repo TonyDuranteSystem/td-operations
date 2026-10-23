@@ -10,6 +10,7 @@ import { loadPaymentLinkView } from '@/lib/marketing/sales-server'
 import { leadIdsWorkedBy } from '@/lib/marketing/events-read'
 import { listMembers } from '@/lib/marketing/members'
 import { personName } from '@/lib/marketing/setter-note'
+import { contactChips, EMPTY_CONTACT } from '@/lib/marketing/contact-state'
 import { canSeeNotes, withoutPhone } from '@/lib/marketing/lead-privacy'
 import { loadLeadActivity } from '@/lib/marketing/note-read'
 import { FilterMenu } from '@/components/marketing/filter-menu'
@@ -78,7 +79,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
   const applied = [stageName && `Stage: ${stageName}`, show !== 'all' && showName, ad && `Ad: ${ad === NO_AD ? 'No ad name' : ad}`, by && `Worked on by ${personName(by)}`].filter(Boolean) as string[]
   // the setter's name, the mark and the one-line note are for people who may read the team's notes
   const seesNotes = canSeeNotes(g.ctx.permissions)
-  const activity = seesNotes && leads.length > 0 ? await loadLeadActivity(db, leads.map(l => l.id)) : null
+  const activity = leads.length > 0 ? await loadLeadActivity(db, leads.map(l => l.id)) : null
   const nowMs = Date.now()
   const events = selected ? await leadTimeline(db, selected.id) : []
   const paymentLink = selected && hasPermission(g.ctx.permissions, 'payment_links.create') ? { leadId: selected.id, ...(await loadPaymentLinkView(db, { teamId, userId: g.ctx.user.id }, selected.id)) } : undefined
@@ -131,8 +132,9 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
             <ul className="divide-y">
               {leads.map(l => {
                 const f = rowFacts(l, stages[0]?.key, nowMs)
-                const mark = activity?.marks.get(l.id)
-                const note = activity?.notes.get(l.id)
+                const mark = seesNotes ? activity?.marks.get(l.id) : undefined
+                const note = seesNotes ? activity?.notes.get(l.id) : undefined
+                const chips = activity ? contactChips(activity.contact.get(l.id) ?? EMPTY_CONTACT, iso => formatWhen(iso)) : []
                 return (
                   <li key={l.id}>
                     <Link href={href({ lead: l.id })} className={`block px-4 py-3 ${l.id === sp.lead ? 'bg-teal-50' : 'hover:bg-slate-50'}`}>
@@ -147,6 +149,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
                         {l.callback_at && <span className="text-sky-700"> · Call back {formatWhen(l.callback_at)}</span>}
                       </p>
                       {(f.ad || mark) && <p className="mt-0.5 truncate text-xs text-slate-500">{f.ad}{mark && <span data-testid="row-mark">{f.ad ? ' · ' : ''}Marked {markWords(mark.outcome).toLowerCase()} by {mark.by}</span>}</p>}
+                      {chips.length > 0 && <p className="mt-1 flex flex-wrap gap-1" data-testid="row-chips">{chips.map(c => <span key={c.key} className={`rounded-full border px-2 py-0.5 text-[11px] ${c.tone === 'ok' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : c.tone === 'warn' ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-sky-200 bg-sky-50 text-sky-800'}`}>{c.text}</span>)}</p>}
                       {note && <p className="mt-0.5 truncate text-xs text-slate-700" data-testid="row-note">{note.text}</p>}
                       {clientFlagText(l.existing_client) && <p className="mt-1 text-xs text-amber-800">Existing TD client? Check before selling.</p>}
                     </Link>
@@ -158,7 +161,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
         </section>
         <aside className="min-w-0" aria-label="Lead detail">
           {selected ? (
-            <LeadPane lead={selected} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} paymentLink={paymentLink} />
+            <LeadPane lead={selected} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} paymentLink={paymentLink} />
           ) : <div className="rounded-xl border border-dashed p-8 text-sm text-slate-500">Click a lead on the left to see what they answered, what the setter wrote, and everything that happened to it.</div>}
         </aside>
       </div>

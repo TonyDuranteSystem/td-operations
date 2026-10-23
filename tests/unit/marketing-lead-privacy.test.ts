@@ -51,3 +51,19 @@ describe("redactLead", () => {
     expect(redactLead(lead, true).qualification).toEqual(lead.qualification)
   })
 })
+
+describe("reaching-out rows for someone who may not read the notes", () => {
+  it("the facts stay (WhatsApp, no answer, booked call) and the written note inside them goes", () => {
+    const rows = [
+      { id: 1, kind: "whatsapp", actor: "a@x.com", created_at: "2026-10-20T10:00:00Z", data: { state: "sent", note: "she asked for a call tomorrow" } },
+      { id: 2, kind: "attempt", actor: "a@x.com", created_at: "2026-10-20T11:00:00Z", data: { result: "no_answer", via: "call", note: "voicemail" } },
+      { id: 3, kind: "appointment", actor: "a@x.com", created_at: "2026-10-20T12:00:00Z", data: { at: "2026-10-26T09:00:00.000Z", note: "ask for the VAT number" } },
+      { id: 4, kind: "note", actor: "a@x.com", created_at: "2026-10-20T13:00:00Z", data: { text: "private" } },
+    ] as never
+    const out = redactTimeline(rows, false)
+    expect(out.map(e => e.kind)).toEqual(["whatsapp", "attempt", "appointment"])
+    for (const e of out) expect(JSON.stringify(e.data)).not.toMatch(/call tomorrow|voicemail|VAT/)
+    expect(out[2].data.at).toBe("2026-10-26T09:00:00.000Z")
+    expect(redactTimeline(rows, true)).toHaveLength(4)
+  })
+})

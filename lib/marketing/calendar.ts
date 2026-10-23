@@ -11,7 +11,12 @@ export interface CalLead { id: string; full_name: string | null; email: string |
 export interface CalEvent { lead_id: string; actor: string; created_at: string; data: Record<string, unknown> }
 export interface CalMember { user_id: string; email: string | null; status?: string }
 
+/** A call booked with the seller (the newest "appointment" row of a lead that is not cancelled). */
+export interface CalAppointment { lead: Pick<CalLead, "id" | "full_name" | "email" | "ad_name" | "claimed_by">; at: string; actor: string }
+
 export interface CalItem {
+  /** "callback" = the setter promised to call back; "appointment" = a call booked with the seller */
+  kind: "callback" | "appointment"
   leadId: string
   name: string
   at: string
@@ -74,6 +79,8 @@ export function buildAgenda(i: {
   /** a user id, or "all" */
   ownerId: string
   now: Date; days: number
+  /** calls booked with the seller; only the ones still ahead are listed */
+  appointments?: readonly CalAppointment[]
 }): Agenda {
   const nowMs = i.now.getTime()
   const setters = latestSetters(i.events)
@@ -88,10 +95,21 @@ export function buildAgenda(i: {
     const at = new Date(l.callback_at).getTime()
     if (!(at < windowEnd)) { beyond++; continue }
     items.push({
-      leadId: l.id, name: l.full_name || l.email || "Unnamed lead", at: l.callback_at, time: romeTime(l.callback_at), ad: l.ad_name, dateLabel: romeDayLabel(new Date(l.callback_at)),
+      kind: "callback", leadId: l.id, name: l.full_name || l.email || "Unnamed lead", at: l.callback_at, time: romeTime(l.callback_at), ad: l.ad_name, dateLabel: romeDayLabel(new Date(l.callback_at)),
       lateBy: at < nowMs ? `${ageText(nowMs - at)} late` : null, ownerId,
       setByMember: setter !== null && i.members.some(m => m.email !== null && m.email.toLowerCase() === setter.toLowerCase() && m.status !== "removed"),
       setBy: setter ? personName(setter) : null, late: at < nowMs,
+    })
+  }
+  for (const a of i.appointments ?? []) {
+    const at = new Date(a.at).getTime()
+    if (Number.isNaN(at) || at < nowMs) continue // a call that has happened is history, not agenda
+    const ownerId = callBackOwner(a.lead, a.actor, i.members)
+    if (i.ownerId !== "all" && ownerId !== i.ownerId) continue
+    if (!(at < windowEnd)) { beyond++; continue }
+    items.push({
+      kind: "appointment", leadId: a.lead.id, name: a.lead.full_name || a.lead.email || "Unnamed lead", at: a.at, time: romeTime(a.at), ad: a.lead.ad_name, dateLabel: romeDayLabel(new Date(a.at)),
+      lateBy: null, ownerId, setByMember: i.members.some(m => m.email !== null && m.email.toLowerCase() === a.actor.toLowerCase() && m.status !== "removed"), setBy: personName(a.actor), late: false,
     })
   }
   items.sort((a, b) => a.at.localeCompare(b.at))

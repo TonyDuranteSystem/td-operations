@@ -1,0 +1,88 @@
+/**
+ * The messages the team sends, by topic (pure; TD Marketing, dev job 9aec66fa). The defaults live HERE, in Italian and English, so they exist from day one with no database
+ * step; a team can override any of them by key in the `message_templates` setting (the setting wins). Placeholders: {name} (first name), {setter} (who writes), {when} (the booked call).
+ * `whatsappLink` makes the wa.me address that opens WhatsApp with the message already typed — it never sends anything: the person presses Send, then records it.
+ */
+export type Lang = "it" | "en"
+export interface TemplateDef { key: string; label: Record<Lang, string>; text: Record<Lang, string> }
+
+export const DEFAULT_TEMPLATES: readonly TemplateDef[] = [
+  {
+    key: "first_contact", label: { it: "Primo contatto", en: "First contact" },
+    text: {
+      it: "Buongiorno {name}, sono {setter}, collaboratrice di Tony Durante e Rocco 👋\nLa contatto in seguito alla sua richiesta di informazioni sui nostri servizi dedicati alle attività imprenditoriali e societarie negli Stati Uniti.\nPrima di proporle un eventuale appuntamento telefonico con un nostro consulente, vorrei comprendere meglio la sua esigenza, così da capire come possiamo esserle concretamente utili.\nPosso chiederle se ha già una società negli USA oppure se sta valutando di aprirne una?\nLa ringrazio e resto a disposizione.",
+      en: "Hello {name}, this is {setter}, working with Tony Durante and Rocco 👋\nI'm contacting you about your request for information on our services for business and company matters in the United States.\nBefore proposing a phone call with one of our consultants, I'd like to understand your needs better, so we can be truly useful to you.\nMay I ask whether you already have a company in the USA, or are thinking of opening one?\nThank you, I remain at your disposal.",
+    },
+  },
+  {
+    key: "no_answer", label: { it: "Nessuna risposta (secondo messaggio)", en: "No answer (second message)" },
+    text: {
+      it: "Buongiorno {name}, sono {setter} di Tony Durante. Le avevo scritto riguardo alla sua richiesta sui servizi per la società negli Stati Uniti. Quando le è comodo, mi dica pure un giorno e un orario e la richiamo volentieri. Grazie!",
+      en: "Hello {name}, this is {setter} from Tony Durante. I wrote to you about your request on our US company services. Whenever it suits you, tell me a day and time and I'll gladly call you back. Thank you!",
+    },
+  },
+  {
+    key: "questionnaire", label: { it: "Domande veloci", en: "A few quick questions" },
+    text: {
+      it: "Buongiorno {name}, per prepararle una proposta su misura mi servono tre informazioni: 1) che attività ha, 2) dove risiede oggi, 3) entro quando vorrebbe partire. Mi basta una breve risposta qui. Grazie, {setter}",
+      en: "Hello {name}, to prepare a tailored proposal I need three things: 1) what business you run, 2) where you live today, 3) when you'd like to start. A short reply here is enough. Thank you, {setter}",
+    },
+  },
+  {
+    key: "appointment_confirm", label: { it: "Conferma appuntamento", en: "Appointment confirmation" },
+    text: {
+      it: "Buongiorno {name}, le confermo la telefonata con il nostro consulente: {when}. La chiameremo noi. Se deve spostarla, mi scriva pure qui. A presto, {setter}",
+      en: "Hello {name}, I confirm your call with our consultant: {when}. We will call you. If you need to move it, just write to me here. See you soon, {setter}",
+    },
+  },
+  {
+    key: "appointment_reminder", label: { it: "Promemoria (giorno prima)", en: "Reminder (day before)" },
+    text: {
+      it: "Buongiorno {name}, le ricordo la telefonata di domani con il nostro consulente: {when}. Ci sarà? Grazie, {setter}",
+      en: "Hello {name}, a reminder of tomorrow's call with our consultant: {when}. Will you be available? Thank you, {setter}",
+    },
+  },
+  {
+    key: "material", label: { it: "Invio materiale", en: "Sending material" },
+    text: {
+      it: "Buongiorno {name}, come promesso le invio il materiale informativo sui nostri servizi. Lo guardi con calma e, se ha domande, scriva pure qui. {setter}",
+      en: "Hello {name}, as promised I'm sending you the information material on our services. Take your time, and if you have questions just write here. {setter}",
+    },
+  },
+  {
+    key: "nurture", label: { it: "Ricontatto più avanti", en: "Follow up later" },
+    text: {
+      it: "Buongiorno {name}, spero stia bene. Mi ero ripromessa di risentirla: se oggi è un buon momento per riparlare della sua società negli Stati Uniti, ne sarei felice. {setter}",
+      en: "Hello {name}, I hope you're well. I promised to get back to you: if now is a good time to talk again about your US company, I'd be glad to. {setter}",
+    },
+  },
+]
+
+export interface TemplateView { key: string; label: string; text: string }
+
+/** The templates in one language: the defaults, with the team's own text (by key) winning. A team-only key is added with its key as the label. */
+export function templatesFor(lang: Lang, overrides: Record<string, string> = {}): TemplateView[] {
+  const out: TemplateView[] = DEFAULT_TEMPLATES.map(t => ({ key: t.key, label: t.label[lang], text: overrides[t.key] ?? t.text[lang] }))
+  for (const [k, v] of Object.entries(overrides)) if (!out.some(t => t.key === k)) out.push({ key: k, label: k, text: v })
+  return out
+}
+
+/** "Mario Rossi" -> "Mario"; "Rossi, Mario" is left alone; an empty name -> "" so the greeting stays natural. */
+export function firstName(full: string | null | undefined): string {
+  const f = (full ?? "").trim().split(/\s+/)[0] ?? ""
+  return f.length > 40 ? f.slice(0, 40) : f
+}
+
+/** Fill {name} {setter} {when}; a placeholder with no value becomes empty, a stray double space/comma-space is tidied. */
+export function fillTemplate(text: string, v: { name?: string | null; setter?: string | null; when?: string | null }): string {
+  return text.replace(/\{name\}/g, v.name ?? "").replace(/\{setter\}/g, v.setter ?? "").replace(/\{when\}/g, v.when ?? "")
+    .replace(/[ \t]{2,}/g, " ").replace(/ ([,.!?])/g, "$1").replace(/Buongiorno ,/g, "Buongiorno,").replace(/Hello ,/g, "Hello,")
+}
+
+/** wa.me address for a phone number ("+39 333 111 2233", "0039 333…") with the text typed in; null when the number is not usable. */
+export function whatsappLink(phone: string | null | undefined, text: string): string | null {
+  let d = (phone ?? "").replace(/[^\d]/g, "")
+  if ((phone ?? "").trim().startsWith("00") || d.startsWith("00")) d = d.replace(/^00/, "")
+  if (d.length < 8 || d.length > 15) return null
+  return `https://wa.me/${d}?text=${encodeURIComponent(text)}`
+}

@@ -1,0 +1,95 @@
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { contactChips, type ContactState } from '@/lib/marketing/contact-state'
+import { fillTemplate, firstName, whatsappLink, type TemplateView } from '@/lib/marketing/templates'
+import { formatWhen } from '@/lib/marketing/lead-view'
+
+interface Props {
+  leadId: string
+  /** whether this person may record anything on the lead (marked + not someone else's) */
+  canAct: boolean
+  contact: ContactState
+  leadName: string | null
+  /** null when the person may not see phone numbers or the lead has none */
+  phone: string | null
+  setterName: string
+  templates: TemplateView[]
+}
+
+const btn = 'rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50'
+const TONE = { ok: 'bg-emerald-50 text-emerald-800 border-emerald-200', warn: 'bg-amber-50 text-amber-800 border-amber-200', info: 'bg-sky-50 text-sky-800 border-sky-200' } as const
+
+/** The daily reaching-out: the WhatsApp with the message typed in, "sent / no WhatsApp / no answer", and the booked call. Every server answer is shown as the server wrote it. */
+export function ContactPanel({ leadId, canAct, contact, leadName, phone, setterName, templates }: Props) {
+  const router = useRouter()
+  const firstKey = contact.whatsapp === 'sent' || contact.attempts > 0 ? 'no_answer' : 'first_contact'
+  const [tplKey, setTplKey] = useState(templates.some(t => t.key === firstKey) ? firstKey : templates[0]?.key ?? '')
+  const [edited, setEdited] = useState<string | null>(null)
+  const [when, setWhen] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const tpl = templates.find(t => t.key === tplKey)
+  const whenText = contact.appointmentAt ? formatWhen(contact.appointmentAt) : when ? formatWhen(new Date(when).toISOString()) : ''
+  const message = edited ?? (tpl ? fillTemplate(tpl.text, { name: firstName(leadName), setter: setterName, when: whenText }) : '')
+  const link = whatsappLink(phone, message)
+  const chips = contactChips(contact, iso => formatWhen(iso))
+
+  async function send(body: Record<string, unknown>) {
+    setBusy(true); setError(null)
+    try {
+      const res = await fetch(`/api/marketing/leads/${leadId}/action`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Could not save. Please try again.') }
+      setWhen('')
+      router.refresh()
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : 'Could not save. Please try again.')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <section className="rounded-xl border bg-white p-4" data-testid="contact-panel">
+      <h2 className="text-sm font-semibold text-slate-600">Reaching out</h2>
+      <div className="mt-2 flex flex-wrap gap-1.5" aria-label="What has been done">
+        {chips.length === 0 ? <span className="text-sm text-slate-500">Not contacted yet.</span> : chips.map(c => <span key={c.key} className={`rounded-full border px-2.5 py-0.5 text-xs ${TONE[c.tone]}`}>{c.text}</span>)}
+      </div>
+
+      {canAct && (
+        <>
+          <div className="mt-4 space-y-2 text-sm">
+            <label className="block">
+              <span className="text-slate-500">Message</span>
+              <select className="mt-1 w-full rounded-lg border px-3 py-2" value={tplKey} onChange={e => { setTplKey(e.target.value); setEdited(null) }} data-testid="template-select">
+                {templates.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+              </select>
+            </label>
+            <textarea className="w-full rounded-lg border px-3 py-2" rows={6} value={message} onChange={e => setEdited(e.target.value)} aria-label="Message text" data-testid="message-text" />
+            {edited !== null && <button type="button" className="text-xs text-slate-500 underline" onClick={() => setEdited(null)}>Back to the saved wording</button>}
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            {link
+              ? <a className={`${btn} bg-emerald-600 text-white`} href={link} target="_blank" rel="noopener noreferrer" data-testid="open-whatsapp">Open WhatsApp with this message</a>
+              : <span className="self-center text-xs text-slate-500">{phone ? 'This number cannot be used for WhatsApp.' : 'No phone number to write to.'}</span>}
+            <button className={btn} disabled={busy} onClick={() => send({ action: 'whatsapp', state: 'sent', template: tplKey || undefined })}>I sent it</button>
+            <button className={btn} disabled={busy} onClick={() => send({ action: 'whatsapp', state: 'no_wa' })}>No WhatsApp</button>
+            <button className={btn} disabled={busy} onClick={() => send({ action: 'no_answer', via: 'call' })}>No answer</button>
+          </div>
+          <p className="mt-1 text-xs text-slate-400">WhatsApp opens with the message typed in — you press Send there, then &quot;I sent it&quot; here.</p>
+
+          <div className="mt-4 border-t pt-3 text-sm">
+            <p className="text-slate-500">Call with the seller {contact.appointmentAt ? <b className="text-slate-900">· booked {formatWhen(contact.appointmentAt)}</b> : null}</p>
+            <div className="mt-2 flex flex-wrap items-end gap-2">
+              <input type="datetime-local" className="rounded-lg border px-3 py-2" value={when} onChange={e => setWhen(e.target.value)} aria-label="Day and time of the call" data-testid="appointment-when" />
+              <button className={`${btn} bg-slate-900 text-white`} disabled={busy || !when} onClick={() => send({ action: 'appointment', at: new Date(when).toISOString() })}>{contact.appointmentAt ? 'Move the call' : 'Book the call'}</button>
+              {contact.appointmentAt && <button className={btn} disabled={busy} onClick={() => send({ action: 'appointment', at: null })}>Cancel the call</button>}
+            </div>
+          </div>
+        </>
+      )}
+      {error && <p role="alert" className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p>}
+    </section>
+  )
+}

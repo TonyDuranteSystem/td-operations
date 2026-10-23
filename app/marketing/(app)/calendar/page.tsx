@@ -37,7 +37,7 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
   const days = WINDOWS.includes(Number(sp.days)) ? Number(sp.days) : 14
   const now = new Date()
   const data = await loadCalendarData(db, teamId)
-  const agenda = buildAgenda({ leads: data.leads, events: data.events, members: members.map(m => ({ user_id: m.user_id, email: m.email, status: m.status })), ownerId: who, now, days })
+  const agenda = buildAgenda({ leads: data.leads, events: data.events, members: members.map(m => ({ user_id: m.user_id, email: m.email, status: m.status })), ownerId: who, now, days, appointments: data.appointments })
   // a line of the setter's note under each call back, for people who may read the team's notes
   const shown = [...agenda.late, ...agenda.days.flatMap(d => d.items)]
   const notes = canSeeNotes(perms) && shown.length > 0 ? (await loadLeadActivity(db, shown.map(i => i.leadId))).notes : null
@@ -55,11 +55,11 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
   const lateCount = agenda.late.length + agenda.lateMore
   const total = due + agenda.late.length
   const row = (it: CalItem) => (
-    <li key={it.leadId}>
+    <li key={`${it.leadId}-${it.kind}`}>
       <Link href={`/marketing/leads?lead=${it.leadId}`} className={`grid grid-cols-[3.5rem_minmax(0,1fr)] items-start gap-3 rounded-lg border bg-white px-3 py-2.5 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-900 ${it.late ? 'border-red-300' : ''}`} data-testid="cal-item">
         <span className="font-mono text-sm font-medium tabular-nums">{it.time}</span>
         <span className="min-w-0">
-          <span className="block truncate text-sm font-medium">{it.name}</span>
+          <span className="block truncate text-sm font-medium">{it.name}{it.kind === 'appointment' && <span className="ml-2 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-normal text-sky-800">Call with the seller</span>}</span>
           <span className="block truncate text-xs text-slate-500">
             {it.late && <span className="font-medium text-red-700">{it.dateLabel} · {it.lateBy} · </span>}
             {[it.ad, seesAll || previewAll ? (it.setBy ? `set by ${it.setBy}${it.setByMember ? '' : ' (not on the team)'}` : 'who set it is not recorded') : null].filter(Boolean).join(' · ')}
@@ -72,7 +72,7 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
   return (
     <div className="space-y-4 p-6">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div><h1 className="text-2xl font-semibold">Calendar</h1><p className="text-sm text-slate-500" data-testid="cal-sub">Call backs, by day. {seesAll ? (who === 'all' ? 'Call backs for everyone' : `Call backs for ${personName(members.find(m => m.user_id === who)?.email)}`) : 'Your call backs'} · {due} due in the next {days} days{lateCount > 0 ? `, ${lateCount} late` : ''}</p></div>
+        <div><h1 className="text-2xl font-semibold">Calendar</h1><p className="text-sm text-slate-500" data-testid="cal-sub">Call backs and booked calls, by day. {seesAll ? (who === 'all' ? 'Call backs for everyone' : `Call backs for ${personName(members.find(m => m.user_id === who)?.email)}`) : 'Your call backs'} · {due} due in the next {days} days{lateCount > 0 ? `, ${lateCount} late` : ''}</p></div>
         {seesAll && members.length > 0 && (
           <nav aria-label="Whose calendar" className="flex flex-wrap items-center gap-2" data-testid="cal-picker">
             <span className="text-xs text-slate-500">Whose:</span>

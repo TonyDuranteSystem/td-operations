@@ -10,6 +10,7 @@ import { formatWhen, type StageOption } from '@/lib/marketing/lead-view'
 import { callQueue, nextInQueue } from '@/lib/marketing/workspace'
 import { withoutPhone } from '@/lib/marketing/lead-privacy'
 import { LeadPane } from '../_lead-pane'
+import { personName } from '@/lib/marketing/setter-note'
 
 export const dynamic = 'force-dynamic'
 
@@ -66,7 +67,7 @@ export default async function MarketingCallList({ searchParams }: { searchParams
         </section>
         <aside className="min-w-0" aria-label="Lead to call">
           {selected ? (
-            <LeadPane lead={selected} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} afterHref={afterHref} />
+            <LeadPane lead={selected} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} afterHref={afterHref} />
           ) : <div className="rounded-xl border border-dashed p-8 text-sm text-slate-500">{queue.length === 0 ? 'The list is empty. Good work.' : 'Pick a lead on the left.'}</div>}
         </aside>
       </div>

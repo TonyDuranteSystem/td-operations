@@ -6,6 +6,11 @@ import { hasPermission, type MarketingPermission } from '@/lib/marketing/permiss
 import { answersWithoutPhone, canSeeNotes, canSeePhone, redactLead, redactTimeline } from '@/lib/marketing/lead-privacy'
 import { buildSetterNote, personName } from '@/lib/marketing/setter-note'
 import { SetterNoteBlock } from '@/components/marketing/setter-note-block'
+import { ContactPanel } from '@/components/marketing/contact-panel'
+import { contactState } from '@/lib/marketing/contact-state'
+import { templatesFor } from '@/lib/marketing/templates'
+import { getLang } from '@/lib/marketing/lang'
+import { getMarketingSetting } from '@/lib/marketing/settings'
 
 interface Props {
   lead: LeadRow
@@ -20,10 +25,12 @@ interface Props {
   afterHref?: string
   /** the payment-link box; only given to people who may create payment links */
   paymentLink?: PaymentLinkProps
+  /** the name the messages are signed with (the person using the screen) */
+  myName?: string
 }
 
 /** One lead, everything about it, with the buttons: used by the Leads screen and the Call list. A computer-width panel. Team-scoped by whoever loads it. */
-export function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons, checklist, permissions, isOwner, myId, afterHref, paymentLink }: Props) {
+export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons, checklist, permissions, isOwner, myId, afterHref, paymentLink, myName }: Props) {
   // What the team wrote (notes, the ticks from a call) is read only by people who work the leads; the ad person gets the facts without it.
   const seesNotes = canSeeNotes(permissions)
   const lead0 = redactLead(leadIn, seesNotes)
@@ -34,6 +41,11 @@ export function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons, chec
   const claim = lead.claimed_by === null ? 'free' : lead.claimed_by === myId ? 'me' : 'other'
   const flag = clientFlagText(lead.existing_client)
   const tel = telHref(lead.phone)
+  // what has been tried to reach the lead, and the messages the team sends (the team's own wording wins over the built-in ones)
+  const contact = contactState(events)
+  const overrides = lead.team_id ? ((await getMarketingSetting('message_templates', lead.team_id)) as Record<string, string>) : {}
+  const templates = templatesFor(getLang(), overrides)
+  const canAct = hasPermission(permissions, 'leads.mark') && !(claim === 'other' && !isOwner)
   const where = [lead.campaign_name, lead.adset_name, lead.ad_name].filter(Boolean)
   return (
     <div className="space-y-4">
@@ -56,6 +68,8 @@ export function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons, chec
       </div>
 
       {setterNote && <SetterNoteBlock note={setterNote} ticks={lead.qualification} />}
+
+      <ContactPanel leadId={lead.id} canAct={canAct} contact={contact} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} setterName={myName ?? ''} templates={templates} />
 
       <LeadActionPanel
         leadId={lead.id}
