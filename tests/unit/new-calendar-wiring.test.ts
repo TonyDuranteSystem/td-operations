@@ -171,7 +171,8 @@ describe("the What's New tab", () => {
 
   it("the news tab does not load the Open services data, and a failed jobs read still leaves a way to the news", () => {
     const page = stripComments(read(PAGE))
-    expect(page).toContain("const wantsJobs = params.tab !== 'news'")
+    // only the jobs tab loads the Open services data (the news and payments tabs do not)
+    expect(page).toContain("const wantsJobs = params.tab === 'jobs'")
     expect(page).toContain("if (wantsJobs) {")
     expect(page).toContain("/new-calendar?tab=news")
     expect(view).toContain("model: CalendarModel | null")

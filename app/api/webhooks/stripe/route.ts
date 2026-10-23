@@ -17,7 +17,9 @@ import { runActivation } from "@/lib/operations/activate-service"
 import { resolveExternalValue } from "@/lib/catalog/framework"
 import { handleChargeReversal } from "@/lib/operations/credit-reversal"
 import { saveAutopayCard } from "@/lib/operations/card-autopay"
-import { isNonClientPayment, readPaymentKind, PAYMENT_KIND_MARKETING } from "@/lib/payments/payment-kind"
+import { isNonClientPayment, readPaymentKind, PAYMENT_KIND_MARKETING, PAYMENT_KIND_PAID_CALL } from "@/lib/payments/payment-kind"
+import { recordPaidCallFromSession } from "@/lib/incoming-payments/link-payment"
+import { isUnlabelledPayment } from "@/lib/incoming-payments/classify"
 import { recordPaidSession, recordRefund, recordDispute } from "@/lib/marketing/sales-server"
 import type { Db } from "@/lib/marketing/meta-leads/ingest"
 
@@ -198,6 +200,12 @@ async function handleCheckoutCompleted(session: StripeSession) {
       const r = await recordPaidSession(getSupabase() as unknown as Db, session)
       console.warn(`[stripe-webhook] ${sessionId}: marketing sale ${r.recorded ? "recorded" : `not recorded (${r.reason})`}`)
     }
+    // A paid call paid through a link made from the CRM lead page: the link says what it is, so record it now (paid call + credit),
+    // BEFORE the redelivery check, exactly like the marketing ledger above (idempotent; a failure answers 500 so Stripe retries).
+    if (readPaymentKind(session.metadata) === PAYMENT_KIND_PAID_CALL) {
+      await recordPaidCallFromSession(session)
+      console.warn(`[stripe-webhook] ${sessionId}: paid-call link payment recorded`)
+    }
     if (eventErr) {
       // A partial unique index (one row per Stripe session for tagged payments) makes a redelivery
       // fail with 23505: that means the record already exists, so acknowledge it (no second row,
@@ -210,6 +218,19 @@ async function handleCheckoutCompleted(session: StripeSession) {
       throw new Error(`stripe webhook: could not record tagged payment ${sessionId}: ${eventErr.message}`)
     }
     console.warn(`[stripe-webhook] ${sessionId}: payment_kind=${readPaymentKind(session.metadata)} — non-client payment, client effects skipped`)
+    return
+  }
+
+  // 1c. A payment with NO label at all (a link made by hand in the Stripe Dashboard, e.g. a Strategic Call link): we do not
+  //     know what it is, so it changes nothing — no lead conversion, no tier change, no pending activation, no payment row.
+  //     The saved event above is the record; the Calendar's "Payments to confirm" tab lists it until staff say what it was
+  //     (dev job 40a58d9a — Ranieri's €397 call payment used to convert his lead and was never recorded).
+  if (isUnlabelledPayment(session)) {
+    if (eventErr && eventErr.code !== "23505") {
+      // Not saved = it would never reach the waiting list: answer 500 so Stripe sends the event again.
+      throw new Error(`stripe webhook: could not save unlabelled payment ${sessionId}: ${eventErr.message}`)
+    }
+    console.warn(`[stripe-webhook] ${sessionId}: no label on the payment — client effects skipped, waiting for confirmation in the Calendar`)
     return
   }
 

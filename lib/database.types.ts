@@ -7876,6 +7876,64 @@ export type Database = {
         }
         Relationships: []
       }
+      incoming_payment_resolutions: {
+        Row: {
+          contact_id: string | null
+          credit_payment_id: string | null
+          invoice_payment_id: string | null
+          lead_id: string | null
+          note: string | null
+          resolution: string
+          resolved_at: string
+          resolved_by: string
+          stripe_session_id: string
+        }
+        Insert: {
+          contact_id?: string | null
+          credit_payment_id?: string | null
+          invoice_payment_id?: string | null
+          lead_id?: string | null
+          note?: string | null
+          resolution: string
+          resolved_at?: string
+          resolved_by: string
+          stripe_session_id: string
+        }
+        Update: {
+          contact_id?: string | null
+          credit_payment_id?: string | null
+          invoice_payment_id?: string | null
+          lead_id?: string | null
+          note?: string | null
+          resolution?: string
+          resolved_at?: string
+          resolved_by?: string
+          stripe_session_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "incoming_payment_resolutions_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "incoming_payment_resolutions_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+          {
+            foreignKeyName: "incoming_payment_resolutions_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       internal_messages: {
         Row: {
           attachment_name: string | null

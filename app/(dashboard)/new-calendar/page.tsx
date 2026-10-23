@@ -10,6 +10,8 @@ import { parseParams, type RawSearchParams } from '@/lib/new-calendar/params'
 import type { CalendarModel } from '@/lib/new-calendar/types'
 import { NewCalendarView } from '@/components/new-calendar/new-calendar-view'
 import { LiveRefresh } from '@/components/new-calendar/live-refresh'
+import { loadWaitingPayments } from '@/lib/incoming-payments/load'
+import type { WaitingRow } from '@/lib/incoming-payments/classify'
 
 /**
  * New Calendar (dev job 40235e3c, child of be7da01a): the day-by-day work list the team opens every morning — what is on us,
@@ -31,9 +33,18 @@ export default async function NewCalendarPage({ searchParams }: { searchParams: 
 
   // The What's New tab does not use the Open services data: skip the (heavy) load there, so a failed Open services read
   // can never hide the news, and every refresh of the news tab stays cheap.
-  const wantsJobs = params.tab !== 'news'
+  const wantsJobs = params.tab === 'jobs'
   let model: CalendarModel | null = null
   let failed = false
+  // Payments that arrived with no label and wait for staff to say what they were. Read on EVERY tab (the tab shows a count), but
+  // tolerant: if it cannot be read the Calendar still opens; only the payments tab itself says so (never an empty "nothing waiting").
+  let payments: WaitingRow[] | null = null
+  try {
+    payments = await loadWaitingPayments()
+  } catch (err) {
+    console.error('[new-calendar] payments to confirm could not be read:', err)
+    Sentry.captureException(err, { tags: { area: 'new-calendar-payments' } })
+  }
   try {
     if (wantsJobs) {
       const inputs = await loadNewCalendarInputs(access, now)
@@ -70,5 +81,5 @@ export default async function NewCalendarPage({ searchParams }: { searchParams: 
     )
   }
 
-  return <NewCalendarView model={model} params={params} greeting={greeting} />
+  return <NewCalendarView model={model} params={params} greeting={greeting} payments={payments} />
 }

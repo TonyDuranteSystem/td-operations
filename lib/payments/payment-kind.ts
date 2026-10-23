@@ -26,6 +26,13 @@ export const PAYMENT_KIND_SERVICE_SALE = "service_sale"
 /** A payment taken through the marketing workspace's payment link. */
 export const PAYMENT_KIND_MARKETING = "marketing_sale"
 
+/**
+ * A paid strategy call, paid through a link created from the CRM lead page (incoming-payments Phase 2). Like every non-service kind it
+ * keeps the client sales machinery out (no lead conversion, no tier, no activation), but the webhook then RECORDS it: the Paid
+ * "Strategic Call" invoice + the deductible credit (lib/incoming-payments/confirm.ts `settlePayment`).
+ */
+export const PAYMENT_KIND_PAID_CALL = "paid_call"
+
 type Meta = Record<string, string | null | undefined> | null | undefined
 
 /** The raw tag value, trimmed; null when there is no tag. */

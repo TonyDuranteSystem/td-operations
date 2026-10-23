@@ -97,7 +97,10 @@ export async function recordPaidCall(params: {
    * second invoice or a second credit.
    */
   manual?: {
+    /** The key the invoice and the credit are filed under: a bank-feed row id, or `stripe-session:<id>` for a waiting Stripe payment. */
     feedId: string
+    /** What the payment is called in the note ("bank transaction" by default). */
+    sourceLabel?: string
     /**
      * "Revenue only, history kept" (Antonio's ruling): the call is recorded and
      * the credit note is written, but born with nothing left on it. Nothing is
@@ -136,7 +139,7 @@ export async function recordPaidCall(params: {
     mark_as_paid: true,
     payment_method: "Stripe",
     notes: manual
-      ? `Paid strategy call — attached by hand from bank transaction ${manual.feedId}.`
+      ? `Paid strategy call — attached by hand from ${manual.sourceLabel ?? "bank transaction"} ${manual.feedId}.`
       : `Paid strategy call (Calendly booking, charge ${payment.chargeId}).`,
     idempotency_key: keyFor("invoice"),
     // A paid row must never absorb credits — it is revenue, not a bill.
@@ -146,7 +149,7 @@ export async function recordPaidCall(params: {
   // 2. Stamp the payment-intent id so the bank-feed matcher's certain-link tier
   //    can tie the payout row to this invoice when it arrives (days later).
   let paymentIntentStamped = false
-  const pi = await paymentIntentIdForCharge(payment.chargeId)
+  const pi = payment.paymentIntentId || (await paymentIntentIdForCharge(payment.chargeId))
   if (pi) {
     // eslint-disable-next-line no-restricted-syntax -- matcher-link bookkeeping on the invoice row we just created; not a client/tier field.
     const { error } = await supabaseAdmin
@@ -161,15 +164,26 @@ export async function recordPaidCall(params: {
 
   // 3. The credit note — what makes the fee deductible. Negative line ⇒ the
   //    invoice helper mints a CN- number and this row becomes available credit.
-  const credit = await createTDInvoice({
+  // A redelivery after the credit was ACTIVATED: createTDInvoice's own idempotency lookup skips rows whose status is "Credit" (that
+  // status is on its dead-invoice list), so it would try to insert the same key again and fail with a duplicate-key error — which
+  // made Stripe/Calendly redeliveries of an already-recorded payment throw. An activated credit with this key IS the answer: reuse it.
+  const activated = await supabaseAdmin
+    .from("payments")
+    .select("id, invoice_number")
+    .eq("idempotency_key", keyFor("credit"))
+    .eq("invoice_status", "Credit")
+    .limit(1)
+    .maybeSingle()
+  const reused = (activated.data as { id: string; invoice_number: string | null } | null) ?? null
+  const credit = reused ? { paymentId: reused.id, invoiceNumber: reused.invoice_number ?? "" } : await createTDInvoice({
     contact_id: contact.id,
     // NO account_id here on purpose — see the note above.
     line_items: [{ description: `Credit — ${description}`, unit_price: -payment.amount, quantity: 1 }],
     currency: payment.currency,
     notes: creditBornUsed
-      ? `Paid call booked as revenue — not deductible. Recorded so the client's history shows they paid for a call (bank transaction ${manual?.feedId}).`
+      ? `Paid call booked as revenue — not deductible. Recorded so the client's history shows they paid for a call (${manual?.sourceLabel ?? "bank transaction"} ${manual?.feedId}).`
       : manual
-        ? `Deductible from the client's next service purchase (paid call attached by hand from bank transaction ${manual.feedId}).`
+        ? `Deductible from the client's next service purchase (paid call attached by hand from ${manual.sourceLabel ?? "bank transaction"} ${manual.feedId}).`
         : `Deductible from the client's next service purchase (paid call, charge ${payment.chargeId}).`,
     idempotency_key: keyFor("credit"),
     skip_credit_netting: true,
@@ -185,13 +199,15 @@ export async function recordPaidCall(params: {
   // by its idempotency key on re-delivery, and this update runs again. It only
   // ever re-asserts a NOT-yet-activated row, so a partially consumed credit is
   // never reset to full.
-  // eslint-disable-next-line no-restricted-syntax -- credit-note bookkeeping on the row just created (same sanctioned class as issueReferralCreditNote).
-  const { error: creditErr } = await supabaseAdmin
-    .from("payments")
-    .update({ invoice_status: "Credit", credit_remaining: creditBornUsed ? 0 : payment.amount })
-    .eq("id", credit.paymentId)
-    .neq("invoice_status", "Credit")
-  if (creditErr) throw new Error(`paid-call: credit note activation failed: ${creditErr.message}`)
+  if (!reused) {
+    // eslint-disable-next-line no-restricted-syntax -- credit-note bookkeeping on the row just created (same sanctioned class as issueReferralCreditNote).
+    const { error: creditErr } = await supabaseAdmin
+      .from("payments")
+      .update({ invoice_status: "Credit", credit_remaining: creditBornUsed ? 0 : payment.amount })
+      .eq("id", credit.paymentId)
+      .neq("invoice_status", "Credit")
+    if (creditErr) throw new Error(`paid-call: credit note activation failed: ${creditErr.message}`)
+  }
 
   return {
     contactId: contact.id,

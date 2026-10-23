@@ -51,6 +51,9 @@ vi.mock("@/lib/operations/payment", () => ({ reconcilePaymentByInvoiceNumber: (.
 vi.mock("@/lib/finance/card-fee-booking", () => ({ bookCardFee: vi.fn(async () => ({ outcome: "ok" })) }))
 vi.mock("@/lib/finance/card-fee-issues", () => ({ raiseCardFeeOverageIssue: vi.fn(), raiseActivationFailedIssue: vi.fn() }))
 
+const recordLink = vi.fn(async () => undefined)
+vi.mock("@/lib/incoming-payments/link-payment", () => ({ recordPaidCallFromSession: (...a: unknown[]) => recordLink(...(a as [])) }))
+
 import { POST } from "@/app/api/webhooks/stripe/route"
 import { NextRequest } from "next/server"
 
@@ -93,7 +96,7 @@ beforeEach(() => {
   tables.contacts = [{ id: "c1", account_contacts: [{ account_id: "a1" }] }]
   tables.leads = [{ id: "lead-1" }]
   tables.pending_activations = [{ id: "pa-1", offer_token: "tok", lead_id: "lead-1", portal_invoice_id: null }]
-  runActivation.mockClear(); upgradePortalTier.mockClear(); reconcile.mockClear()
+  runActivation.mockClear(); upgradePortalTier.mockClear(); reconcile.mockClear(); recordLink.mockReset(); recordLink.mockResolvedValue(undefined)
   process.env.STRIPE_WEBHOOK_SECRET = SECRET
   process.env.NEXT_PUBLIC_SUPABASE_URL = "http://localhost"
   process.env.SUPABASE_SERVICE_ROLE_KEY = "x"
@@ -176,5 +179,87 @@ describe("Stripe webhook — normal client payment is unchanged", () => {
     tables.pending_activations = []
     await send({ invoice_number: "INV-000123", client_email: "payer@example.com" })
     expect(reconcile).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("Stripe webhook — a payment with NO label at all waits for confirmation (dev job 40a58d9a, Ranieri)", () => {
+  it("changes nothing: no lead conversion, no client lookup, no activation, no payment row, no tier", async () => {
+    const res = await send({})
+    expect(res.status).toBe(200)
+    expect(wrote("webhook_events", "insert")).toBe(true) // the record the Calendar's waiting list is read from
+    expect(touched("leads")).toBe(false)
+    expect(touched("contacts")).toBe(false)
+    expect(touched("pending_activations")).toBe(false)
+    expect(touched("payments")).toBe(false)
+    expect(upgradePortalTier).not.toHaveBeenCalled()
+    expect(runActivation).not.toHaveBeenCalled()
+    expect(reconcile).not.toHaveBeenCalled()
+  })
+
+  it("the payer's email alone cannot convert a lead or consume an activation", async () => {
+    const res = await send({ client_email: "payer@example.com" })
+    // client_email is not one of our labels (the offer checkout always adds source/offer_token/lead_id with it)
+    expect(res.status).toBe(200)
+    expect(touched("leads")).toBe(false)
+    expect(touched("pending_activations")).toBe(false)
+  })
+
+  it("answers 500 when the event cannot be saved, so Stripe sends it again and it can never silently vanish", async () => {
+    eventInsertError = { code: "08006", message: "connection lost" }
+    const res = await send({})
+    expect(res.status).toBe(500)
+    expect(touched("leads")).toBe(false)
+  })
+
+  it("a redelivery (unique violation) is acknowledged", async () => {
+    eventInsertError = { code: "23505", message: "duplicate key" }
+    const res = await send({})
+    expect(res.status).toBe(200)
+    expect(touched("leads")).toBe(false)
+  })
+
+  it("our own offer checkout label (source) keeps the normal client flow", async () => {
+    const res = await send({ source: "td-operations", offer_token: "", lead_id: "lead-1", client_email: "payer@example.com", contract_type: "onboarding" })
+    expect(res.status).toBe(200)
+    expect(wrote("leads", "update")).toBe(true)
+  })
+})
+
+describe("Stripe webhook — a paid call paid through a CRM-made link (payment_kind=paid_call, Phase 2)", () => {
+  it("records the paid call itself and still changes no client record", async () => {
+    const res = await send({ payment_kind: "paid_call", crm_lead_ref: "lead-1", client_email: "payer@example.com" })
+    expect(res.status).toBe(200)
+    expect(recordLink).toHaveBeenCalledTimes(1)
+    expect(touched("leads")).toBe(false)               // the webhook itself never converts or edits the lead
+    expect(touched("pending_activations")).toBe(false)
+    expect(touched("payments")).toBe(false)            // the invoice/credit are written by the shared recorder, not here
+    expect(upgradePortalTier).not.toHaveBeenCalled()
+    expect(runActivation).not.toHaveBeenCalled()
+  })
+
+  it("a failed recording answers 500 so Stripe sends the event again (the payment cannot live only in the event log)", async () => {
+    recordLink.mockRejectedValue(new Error("contact creation failed"))
+    const res = await send({ payment_kind: "paid_call" })
+    expect(res.status).toBe(500)
+  })
+
+  it("on a redelivery the recording runs again BEFORE the 'already saved' acknowledgement (it is idempotent), so a failed first attempt is healed", async () => {
+    eventInsertError = { code: "23505", message: "duplicate key" }
+    const res = await send({ payment_kind: "paid_call" })
+    expect(res.status).toBe(200)
+    expect(recordLink).toHaveBeenCalledTimes(1)
+  })
+
+  it("other tagged kinds (marketing, unknown) never reach the paid-call recorder", async () => {
+    await send({ payment_kind: "something_else" })
+    expect(recordLink).not.toHaveBeenCalled()
+  })
+
+  it("the 'other' link carries no label: it waits like any unlabelled payment and records nothing", async () => {
+    const res = await send({ crm_lead_ref: "lead-1", client_email: "payer@example.com" })
+    expect(res.status).toBe(200)
+    expect(recordLink).not.toHaveBeenCalled()
+    expect(touched("leads")).toBe(false)
+    expect(touched("payments")).toBe(false)
   })
 })
