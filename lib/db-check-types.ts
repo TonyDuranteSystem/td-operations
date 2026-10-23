@@ -137,7 +137,7 @@ export type FormationSubmissionsLanguage = "en" | "it"
 export type FormationSubmissionsStatus = "pending" | "sent" | "opened" | "completed" | "reviewed"
 
 /** incoming_payment_resolutions.resolution — CHECK constraint */
-export type IncomingPaymentResolutionsResolution = "paid_call" | "paid_call_already_deducted" | "recorded_elsewhere"
+export type IncomingPaymentResolutionsResolution = "paid_call" | "paid_call_already_deducted" | "recorded_elsewhere" | "marketing_sale" | "invoice_paid"
 
 /** internal_thread_state.status — CHECK constraint */
 export type InternalThreadStateStatus = "todo" | "in_progress" | "waiting" | "handled"
@@ -153,6 +153,30 @@ export type InvoiceReminderLogSource = "auto" | "manual"
 
 /** journal_entries.status — CHECK constraint */
 export type JournalEntriesStatus = "draft" | "posted" | "void"
+
+/** marketing_commission_terms.basis — CHECK constraint */
+export type MarketingCommissionTermsBasis = "amount_paid" | "net_of_fees"
+
+/** marketing_invites.member_role — CHECK constraint */
+export type MarketingInvitesMemberRole = "owner" | "member"
+
+/** marketing_leadgen_events.source — CHECK constraint */
+export type MarketingLeadgenEventsSource = "webhook" | "reconcile"
+
+/** marketing_leadgen_events.status — CHECK constraint */
+export type MarketingLeadgenEventsStatus = "pending" | "done" | "failed" | "gave_up"
+
+/** marketing_sales.status — CHECK constraint */
+export type MarketingSalesStatus = "link_created" | "paid" | "refunded" | "partly_refunded" | "failed" | "expired"
+
+/** marketing_team_members.member_role — CHECK constraint */
+export type MarketingTeamMembersMemberRole = "owner" | "member"
+
+/** marketing_team_members.status — CHECK constraint */
+export type MarketingTeamMembersStatus = "active" | "paused" | "removed"
+
+/** marketing_teams.status — CHECK constraint */
+export type MarketingTeamsStatus = "draft" | "active" | "paused"
 
 /** member_info_requests.status — CHECK constraint */
 export type MemberInfoRequestsStatus = "pending" | "submitted" | "applied" | "dismissed"

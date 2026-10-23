@@ -55,6 +55,7 @@ export type ChatEventKind =
   | "installment_2_paid" // the 2nd annual installment was paid — the tax-return gate is lifted (staff-only; replaces the retired accountant email)
   | "account_status_changed" // a company's status changed (Active/Suspended/Offboarding/Closed/Cancelled) — staff-only note (Antonio 2026-10-17)
   | "person_left" // STAFF removed a person from a company (Antonio 2026-10-17: every notification goes in the Calendar) — exception to "client actions only"
+  | "unlabelled_payment_waiting" // a Stripe payment with no label arrived from a known client and waits for staff in Calendar → Payments to confirm (dev job 40a58d9a)
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -988,4 +989,53 @@ export async function emitSecondInstallmentPaidEvent(p: {
     source: { table: "accounts", id: `${p.accountId}:installment_2:${p.year}` },
     event_kind: "installment_2_paid",
   })
+}
+
+/**
+ * A Stripe payment that carries no label arrived from someone who is a known client (contact or company) and was PARKED: nothing was
+ * recorded or changed; it waits in Calendar → Payments to confirm (dev job 40a58d9a, Phase 3). This puts a line in What's New on that
+ * client so the money is not missed. Staff-only like every note; idempotent per Stripe session (Stripe redelivers events). A payer who
+ * is not a known client has no thread to post on — the Calendar tab's red count is the notice then.
+ */
+export async function emitUnlabelledPaymentWaitingEvent(p: {
+  sessionId: string
+  contactId?: string | null
+  accountId?: string | null
+  payerName: string | null
+  amountText: string
+}): Promise<EmitResult> {
+  const who = p.payerName?.trim() || "A client"
+  return emitClientChatEvent({
+    contact_id: p.contactId ?? null,
+    account_id: p.accountId ?? null,
+    topic: "Payment to confirm",
+    message: [
+      `${who} paid ${p.amountText} through a Stripe link that says nothing about what it is for.`,
+      "Nothing was recorded or changed. Open Calendar → Payments to confirm and say what it was.",
+    ].join("\n"),
+    source: { table: "stripe_checkout_sessions", id: p.sessionId },
+    event_kind: "unlabelled_payment_waiting",
+  })
+}
+
+/** The payment was dealt with in Payments to confirm: take its What's New note off the list (soft delete, same rule as the other retire helpers). */
+export async function retireUnlabelledPaymentNote(params: { sessionId: string; deletedBy?: string | null }): Promise<{ retired: number }> {
+  const marker = buildMarker({ table: "stripe_checkout_sessions", id: params.sessionId }, "unlabelled_payment_waiting")
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("portal_messages")
+      .update({ deleted_at: new Date().toISOString(), deleted_by: params.deletedBy ?? SYSTEM_ACTOR_ID })
+      .eq("sender_type", "system")
+      .like("message", `%${marker}%`)
+      .is("deleted_at", null)
+      .select("id")
+    if (error) {
+      console.error(`[retireUnlabelledPaymentNote] could not retire the note for ${params.sessionId}:`, error.message)
+      return { retired: 0 }
+    }
+    return { retired: (data ?? []).length }
+  } catch (err) {
+    console.error(`[retireUnlabelledPaymentNote] non-fatal for ${params.sessionId}:`, err instanceof Error ? err.message : String(err))
+    return { retired: 0 }
+  }
 }

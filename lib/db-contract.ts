@@ -216,6 +216,19 @@ export const NOT_A_VOCABULARY = new Set([
   // created in production by migration 20261023-1200 (Antonio runs it BEFORE merging), but not in the committed PRODUCTION snapshot until that is next fully
   // regenerated. At the NEXT full `npm run snapshot:constraints`, MOVE it into CONSTRAINT_CONTRACTS with its code-side list and delete this line.
   "incoming_payment_resolutions_resolution_check",
+  // TEMPORARY (2026-10-23, CI "Sandbox still enforces what production enforces" red on PR 805, dev job 40a58d9a): the sandbox database had no TD Marketing
+  // tables; the six marketing migrations (20261017-1900 ... 20261021-1500, all already run in production) were applied to it so the Marketing sale choice
+  // could be tested for real. These 8 ARE value lists (team/member/lead/sale status and role words written by lib/marketing/*), present in the sandbox and
+  // production but not in the committed PRODUCTION snapshot until it is next fully regenerated. At the NEXT full `npm run snapshot:constraints`, MOVE each
+  // into CONSTRAINT_CONTRACTS with its code-side list and delete these lines.
+  "marketing_commission_terms_basis_check",
+  "marketing_invites_member_role_check",
+  "marketing_leadgen_events_source_check",
+  "marketing_leadgen_events_status_check",
+  "marketing_sales_status_check",
+  "marketing_team_members_member_role_check",
+  "marketing_team_members_status_check",
+  "marketing_teams_status_check",
   // TEMPORARY (2026-10-12, CI "Sandbox still enforces what production enforces" went red on every build): these 13 ARE
   // value lists, not shape rules — they were added by features shipped after the last full `npm run snapshot:constraints`
   // and were never registered. Checked against production 2026-10-12: it holds all of them EXCEPT the three pwa_events_*
