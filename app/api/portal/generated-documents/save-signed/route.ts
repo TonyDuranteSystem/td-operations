@@ -39,8 +39,9 @@ export async function POST(request: NextRequest) {
   const documentType = (form.get('document_type') as string | null) || 'Generated Document'
   const documentTypeKey = (form.get('document_type_key') as string | null) || ''
   const fileName = (form.get('file_name') as string | null) || (file?.name ?? 'document.pdf')
-  // Tax statements file under Tax (3); everything else self-signed is Company (1).
-  const category = documentTypeKey === 'tax_statement' ? 3 : 1
+  // Tax statements file under Tax (3); the beneficial-ownership attestation is a bank document, so Banking (4);
+  // everything else self-signed is Company (1).
+  const category = documentTypeKey === 'tax_statement' ? 3 : documentTypeKey === 'ownership_attestation' ? 4 : 1
 
   if (!file || !accountId) {
     return NextResponse.json({ error: 'file and account_id are required' }, { status: 400 })

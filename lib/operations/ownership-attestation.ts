@@ -181,7 +181,7 @@ export interface GenerateAttestationResult {
   owners?: Array<{ name: string; pct: number }>
 }
 
-async function loadAttestation(accountId: string, effectiveDate: string): Promise<AssembleAttestationResult> {
+export async function loadAttestation(accountId: string, effectiveDate: string): Promise<AssembleAttestationResult> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
   const { data: account } = await db
@@ -364,4 +364,22 @@ export async function sendOwnershipAttestationForSignature(
     details: { owners: input.owners.map(o => `${o.fullName} ${o.ownershipPct}%`), source: "crm-button" },
   })
   return { success: true, envelope_id: envelope.id, signer_name: signer.name, channel, owners: input.owners.map(o => ({ name: o.fullName, pct: o.ownershipPct })) }
+}
+
+/** What the client's own Generate Documents page needs to show and sign the attestation. */
+export type ClientAttestation =
+  | { ok: true; input: Omit<OwnershipAttestationInput, "dateLine">; signerName: string; youAreSigner: boolean }
+  | { ok: false; reason: string }
+
+/**
+ * The same data as the staff button, for the signed-in client's company. `youAreSigner` is true only when the person looking at
+ * the screen is the company's signer: the page prints that person's name under the signature line, so nobody else may sign it.
+ * `reason` is staff-facing wording (what to fix in the records); the client page shows a plain localized sentence instead.
+ */
+export async function prepareAttestationForClient(accountId: string, viewerContactId: string | null): Promise<ClientAttestation> {
+  const assembled = await loadAttestation(accountId, new Date().toISOString().slice(0, 10))
+  if (assembled.error) return { ok: false, reason: assembled.error }
+  const { dateLine: _unused, ...rest } = assembled.input
+  void _unused
+  return { ok: true, input: rest, signerName: assembled.signer.name, youAreSigner: !!viewerContactId && assembled.signer.contactId === viewerContactId }
 }

@@ -3,7 +3,7 @@
  * (Distribution Resolution + Tax Statement)
  */
 
-export type GeneratedDocumentType = 'distribution_resolution' | 'tax_statement' | 'operating_agreement'
+export type GeneratedDocumentType = 'distribution_resolution' | 'tax_statement' | 'operating_agreement' | 'ownership_attestation'
 
 export type EntityCategory = 'SMLLC' | 'MMLLC' | 'Corporation'
 
