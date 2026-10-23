@@ -132,7 +132,7 @@ const OwnershipAttestationTemplate = forwardRef<HTMLDivElement, OwnershipAttesta
         </p>
 
         {/* Signature block */}
-        <div style={{ display: 'grid', gridTemplateColumns: '150px 240px', rowGap: '18px', alignItems: 'end' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '150px 240px', rowGap: '16px', alignItems: 'end' }}>
           <div style={{ fontWeight: 'bold' }}>Signed by:</div>
           <div style={{ borderBottom: '1px solid #111', height: '44px', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
             {signatureImage && (
@@ -141,9 +141,9 @@ const OwnershipAttestationTemplate = forwardRef<HTMLDivElement, OwnershipAttesta
             )}
           </div>
           <div style={{ fontWeight: 'bold' }}>Name:</div>
-          <div style={{ borderBottom: '1px solid #111', paddingLeft: '4px' }}>{signerName}</div>
+          <div style={{ borderBottom: '1px solid #111', padding: '0 4px 7px', lineHeight: '1.2' }}>{signerName}</div>
           <div style={{ fontWeight: 'bold' }}>Position:</div>
-          <div style={{ borderBottom: '1px solid #111', paddingLeft: '4px' }}>{signerPosition}</div>
+          <div style={{ borderBottom: '1px solid #111', padding: '0 4px 7px', lineHeight: '1.2' }}>{signerPosition}</div>
         </div>
       </div>
     )
