@@ -9,9 +9,11 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { INCOMING_PAYMENTS_SINCE, pickWaiting, type PayerMatch, type WaitingPayment, type WaitingRow } from "@/lib/incoming-payments/classify"
+import { INCOMING_PAYMENTS_SINCE, pickWaiting, type MarketingLeadChoice, type MarketingSuggestion, type PayerMatch, type WaitingPayment, type WaitingRow } from "@/lib/incoming-payments/classify"
+import { nameSignificantWords } from "@/lib/finance/feed-signals"
+import { getMarketingSetting, listCommissionTerms } from "@/lib/marketing/settings"
+import { snapshotForSale } from "@/lib/marketing/sales"
 import { loadOpenInvoicesForPayer } from "@/lib/incoming-payments/invoice-payment"
-import { getMarketingSetting } from "@/lib/marketing/settings"
 
 // The table is not in the generated types yet (it arrives with the next types regeneration).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -73,7 +75,10 @@ export async function loadWaitingPayments(): Promise<WaitingRow[]> {
   const waiting = pickWaiting(events, { sessionIds, stripeIds })
 
   const rows: WaitingRow[] = []
-  for (const w of waiting) rows.push({ ...w, match: await matchesFor(w.email), invoices: await loadOpenInvoicesForPayer(w.email) })
+  for (const w of waiting) {
+    const match = await matchesFor(w.email, w.name)
+    rows.push({ ...w, match, invoices: await loadOpenInvoicesForPayer(w.email), marketingSuggestion: await marketingSuggestionFor(w, match) })
+  }
   return rows
 }
 
@@ -81,15 +86,18 @@ export async function countWaitingPayments(): Promise<number> {
   return (await loadWaitingPayments()).length
 }
 
-async function matchesFor(email: string | null): Promise<PayerMatch> {
+export async function matchesFor(email: string | null, payerName: string | null = null): Promise<PayerMatch> {
   const empty: PayerMatch = { leads: [], contacts: [], marketingLeads: [] }
-  if (!email) return empty
+  if (!email) {
+    // No email on the payment: the only evidence left is the name (suggestions only).
+    return { ...empty, marketingLeads: await marketingLeadsByName(payerName, []) }
+  }
   // ilike with the address as-is would treat % and _ as wildcards: escape them so only this exact address matches.
   const exact = email.replace(/[\\%_]/g, (c) => `\\${c}`)
   const [leads, contacts, mkt] = await Promise.all([
     supabaseAdmin.from("leads").select("id, full_name, status").ilike("email", exact).limit(5),
     supabaseAdmin.from("contacts").select("id, full_name").ilike("email", exact).limit(5),
-    supabaseAdmin.from("marketing_leads").select("id, full_name").ilike("email", exact).limit(5),
+    supabaseAdmin.from("marketing_leads").select("id, full_name, email, team_id").ilike("email", exact).limit(5),
   ])
   for (const r of [leads, contacts]) if (r.error) throw new Error(`incoming-payments: could not look up the payer: ${r.error.message}`)
   // The marketing workspace's tables are not installed on every database (the sandbox has none): ONLY "that table does not exist"
@@ -99,17 +107,89 @@ async function matchesFor(email: string | null): Promise<PayerMatch> {
   return {
     leads: ((leads.data ?? []) as Array<{ id: string; full_name: string | null; status: string | null }>).map((l) => ({ id: l.id, name: l.full_name ?? "", status: String(l.status ?? "") })),
     contacts: ((contacts.data ?? []) as Array<{ id: string; full_name: string | null }>).map((c) => ({ id: c.id, name: c.full_name ?? "" })),
-    marketingLeads: mktMissing ? [] : ((mkt.data ?? []) as Array<{ id: string; full_name: string | null }>).map((m) => ({ id: m.id, name: m.full_name ?? "" })),
+    marketingLeads: mktMissing ? [] : await withNameMatches((await toChoices((mkt.data ?? []) as MarketingLeadRow[])).map((c) => ({ ...c, via: "email" as const })), payerName),
   }
 }
 
-/** A TD Marketing lead staff can pick for a "Marketing sale", with the kinds of sale its team offers. */
-export interface MarketingLeadChoice {
-  id: string
-  name: string
-  email: string | null
-  teamId: string | null
-  kinds: Array<{ key: string; label: string }>
+/** Email matches first, then lead names that look like the payer's name (never repeating a lead already listed). */
+async function withNameMatches(byEmail: MarketingLeadChoice[], payerName: string | null): Promise<MarketingLeadChoice[]> {
+  const byName = await marketingLeadsByName(payerName, byEmail.map((c) => c.id))
+  return [...byEmail, ...byName]
+}
+
+/**
+ * Marketing leads whose NAME shares significant words with the payer's name ("Stella Germani M" ~ "Monica Germani": Germani). SUGGESTIONS
+ * ONLY — a wrong name match once settled the wrong client in the bank feed, so these are labelled "similar name", ranked by shared words, capped
+ * at 5, and never pre-selected. Words come from the same tokenizer the bank feed uses (accents folded, short and stop words dropped), so only
+ * [a-z0-9] reaches the filter: nothing typed can become an operator or a wildcard. A missing marketing table = no suggestions.
+ */
+export async function marketingLeadsByName(payerName: string | null, excludeIds: string[]): Promise<MarketingLeadChoice[]> {
+  const words = payerName ? nameSignificantWords(payerName) : []
+  if (words.length === 0) return []
+  const { data, error } = await db()
+    .from("marketing_leads")
+    .select("id, full_name, email, team_id")
+    .or(words.map((w) => `full_name.ilike.%${w}%`).join(","))
+    .order("received_at", { ascending: false })
+    .limit(30)
+  if (error) {
+    if (error.code === "PGRST205" || error.code === "42P01") return []
+    throw new Error(`incoming-payments: could not look up marketing leads by name: ${error.message}`)
+  }
+  const skip = new Set(excludeIds)
+  const ranked = ((data ?? []) as MarketingLeadRow[])
+    .filter((r) => !skip.has(r.id))
+    .map((r) => ({ r, shared: nameSignificantWords(r.full_name ?? "").filter((w) => words.includes(w)).length }))
+    .filter((x) => x.shared > 0)
+    .sort((a, b) => b.shared - a.shared)
+    .slice(0, 5)
+    .map((x) => x.r)
+  return (await toChoices(ranked)).map((c) => ({ ...c, via: "name" as const }))
+}
+
+/**
+ * "Looks like a marketing sale": exactly ONE marketing lead has the payer's email and sits on a team that offers the usual call kind. Returns a
+ * PREVIEW of the split in force on the day of payment (the same rule the confirm step applies). null = no clear suggestion; nothing is recorded.
+ */
+export async function marketingSuggestionFor(w: WaitingPayment, match: PayerMatch): Promise<MarketingSuggestion | null> {
+  const byEmail = match.marketingLeads.filter((l) => l.via === "email")
+  if (byEmail.length !== 1) return null
+  const lead = byEmail[0]
+  if (!lead.teamId) return null
+  const kind = lead.kinds.find((k) => k.key === "strategic_call")
+  if (!kind) return null
+  const [{ data: team, error }, terms] = await Promise.all([
+    db().from("marketing_teams").select("name").eq("id", lead.teamId).maybeSingle(),
+    listCommissionTerms(lead.teamId),
+  ])
+  if (error) throw new Error(`incoming-payments: could not read the marketing team: ${error.message}`)
+  const paidAt = new Date(w.paidAt)
+  const snap = snapshotForSale(terms, { teamId: lead.teamId, kind: kind.key, personRef: null, amountCents: Math.round(w.amount * 100), at: Number.isNaN(paidAt.getTime()) ? new Date() : paidAt })
+  const termSet = snap.seller_cents !== null && snap.td_cents !== null
+  return {
+    leadId: lead.id,
+    leadName: lead.name,
+    teamName: (team as { name?: string } | null)?.name ?? "the marketing team",
+    kind: kind.key,
+    kindLabel: kind.label,
+    currency: w.currency,
+    termSet,
+    sellerAmount: termSet ? (snap.seller_cents as number) / 100 : null,
+    tdAmount: termSet ? (snap.td_cents as number) / 100 : null,
+  }
+}
+
+interface MarketingLeadRow { id: string; full_name: string | null; email: string | null; team_id: string | null }
+
+/** Rows -> picker choices, each with the kinds of sale ITS team offers (read once per team). */
+async function toChoices(rows: MarketingLeadRow[]): Promise<MarketingLeadChoice[]> {
+  const kindsByTeam = new Map<string, Array<{ key: string; label: string }>>()
+  for (const r of rows) {
+    if (r.team_id && !kindsByTeam.has(r.team_id)) {
+      kindsByTeam.set(r.team_id, (await getMarketingSetting("sale_kinds", r.team_id)) as Array<{ key: string; label: string }>)
+    }
+  }
+  return rows.map((r) => ({ id: r.id, name: r.full_name ?? "", email: r.email, teamId: r.team_id, kinds: r.team_id ? kindsByTeam.get(r.team_id) ?? [] : [] }))
 }
 
 /**
@@ -132,15 +212,5 @@ export async function searchMarketingLeads(q: string): Promise<{ available: bool
     if (error.code === "PGRST205" || error.code === "42P01") return { available: false, leads: [] }
     throw new Error(`incoming-payments: could not search the marketing leads: ${error.message}`)
   }
-  const rows = (data ?? []) as Array<{ id: string; full_name: string | null; email: string | null; team_id: string | null }>
-  const kindsByTeam = new Map<string, Array<{ key: string; label: string }>>()
-  for (const r of rows) {
-    if (r.team_id && !kindsByTeam.has(r.team_id)) {
-      kindsByTeam.set(r.team_id, (await getMarketingSetting("sale_kinds", r.team_id)) as Array<{ key: string; label: string }>)
-    }
-  }
-  return {
-    available: true,
-    leads: rows.map((r) => ({ id: r.id, name: r.full_name ?? "", email: r.email, teamId: r.team_id, kinds: r.team_id ? kindsByTeam.get(r.team_id) ?? [] : [] })),
-  }
+  return { available: true, leads: await toChoices((data ?? []) as MarketingLeadRow[]) }
 }

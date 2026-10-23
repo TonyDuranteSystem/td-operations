@@ -55,7 +55,7 @@ import { recordMarketingSaleFromPayment } from "@/lib/incoming-payments/marketin
 import { payInvoiceFromPayment } from "@/lib/incoming-payments/invoice-payment"
 import { notifyUnlabelledPayment } from "@/lib/incoming-payments/notify"
 import { settlePayment, RESOLUTIONS } from "@/lib/incoming-payments/confirm"
-import { searchMarketingLeads } from "@/lib/incoming-payments/load"
+import { searchMarketingLeads, matchesFor, marketingLeadsByName, marketingSuggestionFor } from "@/lib/incoming-payments/load"
 
 const LEAD = "22222222-2222-4222-8222-222222222222"
 const INV = "33333333-3333-4333-8333-333333333333"
@@ -251,5 +251,95 @@ describe("searchMarketingLeads", () => {
     expect(r.available).toBe(true)
     expect(r.leads[0]).toMatchObject({ id: LEAD, teamId: "team-1", kinds: [{ key: "strategic_call", label: "Strategic call" }, { key: "upsell", label: "Upsell" }] })
     expect(r.leads[1]).toMatchObject({ teamId: null, kinds: [] })
+  })
+})
+
+describe("matchesFor — marketing leads that share the payer's email are offered straight to the Marketing sale picker", () => {
+  it("finds the lead by EMAIL even when the card carries another name (Stella on the card, Monica on the lead), with her team's kinds", async () => {
+    tables.leads = []
+    tables.contacts = []
+    tables.marketing_leads = [{ id: LEAD, full_name: "Monica Germani", email: "monicagermani2025@gmail.com", team_id: "team-1" }]
+    const m = await matchesFor("monicagermani2025@gmail.com")
+    expect(m.marketingLeads).toEqual([
+      { id: LEAD, name: "Monica Germani", email: "monicagermani2025@gmail.com", teamId: "team-1", via: "email", kinds: [{ key: "strategic_call", label: "Strategic call" }, { key: "upsell", label: "Upsell" }] },
+    ])
+  })
+  it("a lead with no team comes back with no kinds (the picker says to assign it to a team first)", async () => {
+    tables.leads = []
+    tables.contacts = []
+    tables.marketing_leads = [{ id: "l9", full_name: "No Team", email: "n@x.com", team_id: null }]
+    expect((await matchesFor("n@x.com")).marketingLeads).toEqual([{ id: "l9", name: "No Team", email: "n@x.com", teamId: null, via: "email", kinds: [] }])
+  })
+  it("no email on the payment = no suggestions", async () => {
+    expect(await matchesFor(null)).toEqual({ leads: [], contacts: [], marketingLeads: [] })
+  })
+})
+
+describe("marketing lead suggestions by NAME (suggestions only) and the 'Looks like a marketing sale' preview", () => {
+  it("a payer whose card name shares a significant word with a lead is offered as a 'similar name' (Stella Germani M ~ Monica Germani), never as an email match", async () => {
+    tables.leads = []
+    tables.contacts = []
+    tables.marketing_leads = [{ id: LEAD, full_name: "Monica Germani", email: "monicagermani2025@gmail.com", team_id: "team-1" }, { id: "l2", full_name: "Unrelated Person", email: "u@x.com", team_id: "team-1" }]
+    const out = await marketingLeadsByName("Stella Germani M", [])
+    expect(out.map(c => c.id)).toEqual([LEAD])
+    expect(out[0]).toMatchObject({ via: "name", name: "Monica Germani", teamId: "team-1" })
+  })
+  it("ranks by how many words are shared, caps at 5, and skips leads already listed by email", async () => {
+    tables.marketing_leads = [
+      { id: "a", full_name: "Rossi Mario", email: null, team_id: "t" },
+      { id: "b", full_name: "Mario Rossi Bianchi", email: null, team_id: "t" },
+      { id: "c", full_name: "Rossi Anna", email: null, team_id: "t" },
+      { id: "d", full_name: "Rossi Luca", email: null, team_id: "t" },
+      { id: "e", full_name: "Rossi Paolo", email: null, team_id: "t" },
+      { id: "f", full_name: "Rossi Carlo", email: null, team_id: "t" },
+    ]
+    const out = await marketingLeadsByName("Mario Rossi", ["c"])
+    expect(out.length).toBe(5)
+    expect(out.map(c => c.id)).not.toContain("c")
+    expect(["a", "b"]).toContain(out[0].id) // the two that share both words come first
+    expect(["a", "b"]).toContain(out[1].id)
+  })
+  it("no usable name (empty, or only short/stop words) = no suggestions, and the filter only ever sees [a-z0-9] words", async () => {
+    expect(await marketingLeadsByName(null, [])).toEqual([])
+    expect(await marketingLeadsByName("A M", [])).toEqual([])
+    tables.marketing_leads = []
+    await marketingLeadsByName("Rossi,(x).or(id.eq.1)%", [])
+    expect(orArgs[0]).toMatch(/^(full_name\.ilike\.%[a-z0-9]+%)(,full_name\.ilike\.%[a-z0-9]+%)*$/)
+  })
+  it("matchesFor with no email still tries the name", async () => {
+    tables.marketing_leads = [{ id: LEAD, full_name: "Monica Germani", email: "m@x.com", team_id: "team-1" }]
+    const m = await matchesFor(null, "Stella Germani M")
+    expect(m.marketingLeads.map(c => c.via)).toEqual(["name"])
+  })
+  it("matchesFor lists the email match first, then name matches, each marked", async () => {
+    tables.leads = []
+    tables.contacts = []
+    tables.marketing_leads = [{ id: LEAD, full_name: "Monica Germani", email: "monicagermani2025@gmail.com", team_id: "team-1" }]
+    const m = await matchesFor("monicagermani2025@gmail.com", "Stella Germani M")
+    // the same lead is listed once, as an email match (the name pass skips what the email pass already found)
+    expect(m.marketingLeads.map(c => [c.id, c.via])).toEqual([[LEAD, "email"]])
+  })
+
+  const waiting = { sessionId: "cs_live_abc12345", paymentIntentId: "pi_1", paymentLinkId: null, amount: 397, currency: "EUR" as const, email: "m@x.com", name: "Stella Germani M", paidAt: "2026-10-23T11:59:45Z" }
+  const emailLead = (over: Record<string, unknown> = {}) => ({ id: LEAD, name: "Monica Germani", email: "m@x.com", teamId: "team-1", via: "email" as const, kinds: [{ key: "strategic_call", label: "Strategic call" }, { key: "upsell", label: "Upsell" }], ...over })
+  const term = { id: "t1", team_id: "team-1", kind: "strategic_call", person_ref: "team", effective_from: "2026-10-21", seller_pct: 80, td_pct: 20, basis: "amount_paid", payee_account_id: null }
+
+  it("exactly one email-matched lead on a team = a suggestion with the split in force on the payment day (80/20 of EUR 397 = 317.60 / 79.40)", async () => {
+    tables.marketing_teams = [{ name: "Rocco's sales team" }]
+    listTerms.mockResolvedValue([term])
+    const s = await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead()] })
+    expect(s).toMatchObject({ leadId: LEAD, leadName: "Monica Germani", teamName: "Rocco's sales team", kind: "strategic_call", kindLabel: "Strategic call", currency: "EUR", termSet: true, sellerAmount: 317.6, tdAmount: 79.4 })
+  })
+  it("a term that starts AFTER the payment is not used (terms not set, amounts null)", async () => {
+    tables.marketing_teams = [{ name: "T" }]
+    listTerms.mockResolvedValue([{ ...term, effective_from: "2026-10-25" }])
+    expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead()] })).toMatchObject({ termSet: false, sellerAmount: null, tdAmount: null })
+  })
+  it("no suggestion when two leads share the email, the only match is by name, the lead has no team, or the team has no strategic_call kind", async () => {
+    tables.marketing_teams = [{ name: "T" }]
+    expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead(), emailLead({ id: "l2" })] })).toBeNull()
+    expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead({ via: "name" })] })).toBeNull()
+    expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead({ teamId: null, kinds: [] })] })).toBeNull()
+    expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead({ kinds: [{ key: "upsell", label: "Upsell" }] })] })).toBeNull()
   })
 })

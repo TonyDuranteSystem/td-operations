@@ -12,17 +12,9 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import type { OpenInvoice } from '@/lib/incoming-payments/classify'
+import type { MarketingLeadChoice, MarketingSuggestion, OpenInvoice } from '@/lib/incoming-payments/classify'
 
 type Resolution = 'paid_call' | 'paid_call_already_deducted' | 'recorded_elsewhere' | 'marketing_sale' | 'invoice_paid'
-
-interface MarketingLeadChoice {
-  id: string
-  name: string
-  email: string | null
-  teamId: string | null
-  kinds: Array<{ key: string; label: string }>
-}
 
 interface Props {
   sessionId: string
@@ -33,7 +25,11 @@ interface Props {
   leads: Array<{ id: string; name: string; status: string }>
   /** The payer's open invoices (for "An invoice was paid"). */
   invoices: OpenInvoice[]
-  /** What to type in the marketing-lead search first (the payer's name or email). */
+  /** Marketing leads that share the payer's email: offered straight away in the Marketing sale picker (the card may carry another name). */
+  suggestedMarketingLeads: MarketingLeadChoice[]
+  /** "Looks like a marketing sale": exactly one lead has the payer's email; carries a preview of the split. null = no clear suggestion. */
+  marketingSuggestion: MarketingSuggestion | null
+  /** What to type in the marketing-lead search when nothing was suggested: the payer's EMAIL first (it is what a lead and a payment share), else the name. */
   searchSeed: string
 }
 
@@ -66,10 +62,10 @@ const CHOICES: Array<{ key: Resolution; label: string; explain: (amount: string)
 ]
 
 function money(n: number, cur: string) {
-  return `${cur === 'EUR' ? '€' : '$'}${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
+  return `${cur === 'EUR' ? '€' : '$'}${n.toLocaleString('en-US', { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 })}`
 }
 
-export function ConfirmActions({ sessionId, amount, currency, amountText, leads, invoices, searchSeed }: Props) {
+export function ConfirmActions({ sessionId, amount, currency, amountText, leads, invoices, suggestedMarketingLeads, marketingSuggestion, searchSeed }: Props) {
   const router = useRouter()
   const [pick, setPick] = useState<Resolution | null>(null)
   const [leadId, setLeadId] = useState<string>(leads[0]?.id ?? '')
@@ -78,12 +74,17 @@ export function ConfirmActions({ sessionId, amount, currency, amountText, leads,
   const [error, setError] = useState<string | null>(null)
 
   // marketing sale
+  // A sale kind to start on: the usual one for a paid call when the team offers it, else the first.
+  const defaultKind = (l: MarketingLeadChoice) => l.kinds.find(k => k.key === 'strategic_call')?.key ?? l.kinds[0]?.key ?? ''
+  // When exactly one lead shares the payer's email it is already picked (staff can still choose another from a search).
+  const emailLeads = suggestedMarketingLeads.filter(l => l.via !== 'name')
+  const only = emailLeads.length === 1 && emailLeads[0].teamId ? emailLeads[0] : null
   const [q, setQ] = useState(searchSeed)
   const [searching, setSearching] = useState(false)
-  const [found, setFound] = useState<MarketingLeadChoice[] | null>(null)
+  const [found, setFound] = useState<MarketingLeadChoice[] | null>(suggestedMarketingLeads.length > 0 ? suggestedMarketingLeads : null)
   const [mktAvailable, setMktAvailable] = useState(true)
-  const [mktLead, setMktLead] = useState<MarketingLeadChoice | null>(null)
-  const [kind, setKind] = useState('')
+  const [mktLead, setMktLead] = useState<MarketingLeadChoice | null>(only)
+  const [kind, setKind] = useState(only ? defaultKind(only) : '')
 
   // invoice
   const [invoiceId, setInvoiceId] = useState('')
@@ -108,6 +109,17 @@ export function ConfirmActions({ sessionId, amount, currency, amountText, leads,
     setPick(key)
     setError(null)
     if (key === 'marketing_sale' && found === null && searchSeed.trim().length >= 2) void search(searchSeed)
+  }
+
+  // The one-glance suggestion: opens the Marketing sale panel with that lead and kind already chosen. Still needs "Confirm" (nothing is recorded by this click).
+  function useSuggestion() {
+    if (!marketingSuggestion) return
+    const lead = suggestedMarketingLeads.find(l => l.id === marketingSuggestion.leadId)
+    if (!lead) return
+    setPick('marketing_sale')
+    setMktLead(lead)
+    setKind(marketingSuggestion.kind)
+    setError(null)
   }
 
   function usable(inv: OpenInvoice): string | null {
@@ -172,6 +184,26 @@ export function ConfirmActions({ sessionId, amount, currency, amountText, leads,
         </label>
       )}
 
+      {marketingSuggestion && pick !== 'marketing_sale' && (
+        <div className="rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900">
+          <p>
+            <b>Looks like a marketing sale</b> — {marketingSuggestion.leadName} ({marketingSuggestion.teamName}) has this email.{' '}
+            {marketingSuggestion.termSet && marketingSuggestion.sellerAmount !== null && marketingSuggestion.tdAmount !== null
+              ? <>As a {marketingSuggestion.kindLabel}, the split in force on the day it was paid gives <b>{money(marketingSuggestion.sellerAmount, marketingSuggestion.currency)}</b> to the seller&apos;s company and <b>{money(marketingSuggestion.tdAmount, marketingSuggestion.currency)}</b> to TD.</>
+              : <>No split is set for a {marketingSuggestion.kindLabel} on that day, so it would be recorded as &quot;terms not set&quot;.</>}
+          </p>
+          <button
+            type="button"
+            onClick={useSuggestion}
+            disabled={busy}
+            className="mt-2 rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-800"
+          >
+            Record as marketing sale
+          </button>
+          <span className="ml-2 text-xs text-emerald-800">You still press Confirm on the next step.</span>
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-2">
         {CHOICES.map(c => (
           <button
@@ -219,11 +251,13 @@ export function ConfirmActions({ sessionId, amount, currency, amountText, leads,
                           type="radio"
                           name={`mkt-${sessionId}`}
                           checked={mktLead?.id === l.id}
-                          onChange={() => { setMktLead(l); setKind(l.kinds[0]?.key ?? '') }}
+                          onChange={() => { setMktLead(l); setKind(defaultKind(l)) }}
                           className="mt-1"
                         />
                         <span>
                           {l.name || 'Unnamed'} <span className="text-xs text-zinc-500">{l.email ?? 'no email'}</span>
+                          {l.via === 'email' && <span className="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-800">same email</span>}
+                          {l.via === 'name' && <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-900">similar name — check it is the same person</span>}
                           {!l.teamId && <span className="ml-1 text-xs text-amber-800">— not on a team yet: assign it to a team in TD Marketing first</span>}
                         </span>
                       </label>
