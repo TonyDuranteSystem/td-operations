@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, Send } from 'lucide-react'
+import { normalizeTopic, resolveTypedTopic, topicChoices } from '@/lib/portal/document-share-text'
 
 interface FlowChatProps {
   /** Either this (the normal case, backs /api/flows/[id]/chat) or apiPath
@@ -44,6 +45,11 @@ export function FlowChat({ serviceDeliveryId, apiPath, label }: FlowChatProps) {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Which topic the next message goes under (Calendar "Message client", Luca 2026-10-23). Only shown when the route says what the
+  // job's own topic is (the onboarding pre-review route has no topics, so it stays as it was).
+  const [topicInfo, setTopicInfo] = useState<{ defaultTopic: string | null; topics: string[] } | null>(null)
+  const [pickedTopic, setPickedTopic] = useState<string | null>(null) // null = the job's own topic
+  const [newTopic, setNewTopic] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -53,6 +59,9 @@ export function FlowChat({ serviceDeliveryId, apiPath, label }: FlowChatProps) {
         throw new Error(data.error || 'Could not load messages.')
       }
       setMessages(data.messages ?? [])
+      if (data.default_topic !== undefined) {
+        setTopicInfo({ defaultTopic: (data.default_topic as string | null) ?? null, topics: Array.isArray(data.topics) ? (data.topics as string[]) : [] })
+      }
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not load messages.')
     } finally {
@@ -69,6 +78,13 @@ export function FlowChat({ serviceDeliveryId, apiPath, label }: FlowChatProps) {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages])
 
+  // The topic to send under, or null = let the server use the job's own topic. A typed name wins over a picked chip.
+  const typedTopic = normalizeTopic(newTopic)
+  const chosenTopic = topicInfo
+    ? (typedTopic ? resolveTypedTopic(typedTopic, [topicInfo.defaultTopic ?? '', ...topicInfo.topics].filter(Boolean)) : pickedTopic)
+    : null
+  const effectiveTopic = topicInfo ? (chosenTopic ?? topicInfo.defaultTopic) : null
+
   async function send() {
     const text = draft.trim()
     if (!text || sending) return
@@ -78,7 +94,7 @@ export function FlowChat({ serviceDeliveryId, apiPath, label }: FlowChatProps) {
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, ...(chosenTopic ? { topic: chosenTopic } : {}) }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data.success === false) {
@@ -86,6 +102,11 @@ export function FlowChat({ serviceDeliveryId, apiPath, label }: FlowChatProps) {
       }
       setMessages((prev) => [...prev, data.message])
       setDraft('')
+      // back to the job's own topic for the next message, and a topic just created is now one of the chat's open topics
+      setPickedTopic(null)
+      setNewTopic('')
+      const sentTopic = (data.message?.topic as string | null | undefined) ?? null
+      if (sentTopic) setTopicInfo((t) => (t && !t.topics.some((x) => x.trim().toLowerCase() === sentTopic.trim().toLowerCase()) ? { ...t, topics: [sentTopic, ...t.topics] } : t))
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not send the message.')
     } finally {
@@ -157,6 +178,37 @@ export function FlowChat({ serviceDeliveryId, apiPath, label }: FlowChatProps) {
       {error && <p className="text-sm text-red-600 mb-2">{error}</p>}
 
       <div className="space-y-2">
+        {topicInfo && (
+          <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2">
+            <p className="text-xs text-zinc-600">
+              This message goes to: <strong className="text-zinc-900">{effectiveTopic ?? 'the general chat (no topic)'}</strong>
+              {!chosenTopic && topicInfo.defaultTopic ? " — this job's topic" : ''}
+            </p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {topicChoices(topicInfo.defaultTopic ?? '', topicInfo.topics).map((t) => {
+                const selected = !typedTopic && (pickedTopic ?? topicInfo.defaultTopic) === t
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => { setPickedTopic(t === topicInfo.defaultTopic ? null : t); setNewTopic('') }}
+                    className={`max-w-[200px] truncate rounded-full border px-2.5 py-1 text-xs ${selected ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-300 text-zinc-700 hover:bg-white'}`}
+                  >
+                    {t}
+                  </button>
+                )
+              })}
+              <input
+                value={newTopic}
+                onChange={(e) => setNewTopic(e.target.value)}
+                maxLength={100}
+                placeholder="…or type a new topic"
+                aria-label="New topic"
+                className="min-w-[10rem] flex-1 rounded-md border border-zinc-300 px-2 py-1 text-xs"
+              />
+            </div>
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <textarea
             value={draft}
