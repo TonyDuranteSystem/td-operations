@@ -48,7 +48,7 @@ import { StoreReadOnlyPanel } from '@/components/accounts/store-readonly-panel'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
 import { updateContactField, updateContactName, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
-import { useShareMessagePrompt, suppressesAutoChat, type ShareDecision } from '@/components/storage/use-share-message-prompt'
+import { useShareMessagePrompt, suppressesAutoChat, isSilentShow, type ShareDecision } from '@/components/storage/use-share-message-prompt'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { ResolvePersonalDocument } from '@/components/documents/resolve-personal-document'
 import { isUnresolvedPersonalDocument } from '@/lib/documents/visibility-guard'
@@ -3135,7 +3135,7 @@ function ContactDocumentsTab({
         decision = await decideShare([{ id: doc.id, name: doc.file_name, source: 'document' }])
         if (decision.kind === 'cancel') { setTogglingVis(null); return }
       }
-      const result = await toggleDocumentPortalVisibility(doc.id, !doc.portal_visible, undefined, suppressesAutoChat(decision) ? { suppressChat: true } : undefined)
+      const result = await toggleDocumentPortalVisibility(doc.id, !doc.portal_visible, undefined, suppressesAutoChat(decision) ? { suppressChat: true, ...(isSilentShow(decision) ? { silent: true } : {}) } : undefined)
       if (result.success) {
         toast.success(`Portal visibility ${!doc.portal_visible ? 'enabled' : 'disabled'}`)
         // the page reloads below — a failed message must stay on screen (its Retry button would die with the reload)

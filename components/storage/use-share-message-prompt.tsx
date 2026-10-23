@@ -82,4 +82,7 @@ export function useShareMessagePrompt(): {
 }
 
 /** The pop-up answered (show with no automatic chat line) — otherwise the automatic line stays as it was. */
+/** "Show only" in the pop-up: the file is shown with NO client alert at all (no notification, no push, no chat). */
+export const isSilentShow = (d: ShareDecision | null): boolean => d?.kind === 'just_show'
+
 export const suppressesAutoChat = (d: ShareDecision | null): boolean => d?.kind === 'just_show' || d?.kind === 'send'

@@ -3,8 +3,8 @@
 /**
  * The staff "eye" pop-up: asked when a hidden document is about to be shown to the client.
  *
- * Three ways out: "Send message" (show it + tell the client in chat), "No, just show it" (show it; the client gets the
- * portal notification only), "Cancel" / Escape / click outside (do nothing — the file stays hidden). Closing NEVER sends.
+ * Three ways out: "Send message" (show it + tell the client in chat; the portal notification goes out too), "Show only"
+ * (show it and tell the client NOTHING — no notification, no push, no chat), "Cancel" / Escape / click outside (do nothing — the file stays hidden). Closing NEVER sends.
  *
  * Who it goes to comes from the document's own owner (pre-selected, never guessed); the person's other open companies
  * and the personal chat are the other choices. A closed company cannot be picked. Default topic is "Documents".
@@ -85,7 +85,7 @@ export function ShareMessageDialog({ fileNames, ctx, note, onResult }: { fileNam
         </div>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-sm">
-          <p className="break-words text-zinc-600"><strong>{fileNames[0]}</strong>{fileNames.length > 1 ? ` and ${fileNames.length - 1} more` : ''} will be shown to the client either way. The client always gets the portal notification.</p>
+          <p className="break-words text-zinc-600"><strong>{fileNames[0]}</strong>{fileNames.length > 1 ? ` and ${fileNames.length - 1} more` : ''} will be shown to the client either way. <strong>Show only</strong> tells the client nothing (no notification, no message); <strong>Send message</strong> posts your message in chat and the client also gets the portal notification.</p>
           {note && <p className="text-xs text-zinc-500">{note}</p>}
 
           <div>
@@ -98,7 +98,7 @@ export function ShareMessageDialog({ fileNames, ctx, note, onResult }: { fileNam
                 </button>
               ))}
             </div>
-            {!target && <p className="mt-1.5 text-[11px] text-amber-700">Pick who the message goes to, or choose &quot;No, just show it&quot;.</p>}
+            {!target && <p className="mt-1.5 text-[11px] text-amber-700">Pick who the message goes to, or choose &quot;Show only&quot;.</p>}
             {target?.kind === 'company' && <p className="mt-1.5 text-[11px] text-amber-700">Visible to everyone in {target.label}.</p>}
           </div>
 
@@ -140,7 +140,7 @@ export function ShareMessageDialog({ fileNames, ctx, note, onResult }: { fileNam
 
         <div className="flex flex-wrap items-center justify-end gap-2 border-t px-4 py-3">
           <button type="button" onClick={() => onResult({ action: 'cancel' })} className="rounded-md px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100">Cancel</button>
-          <button type="button" disabled={busy} onClick={() => { setBusy(true); onResult({ action: 'just_show' }) }} className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-50">No, just show it</button>
+          <button type="button" disabled={busy} onClick={() => { setBusy(true); onResult({ action: 'just_show' }) }} className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-800 hover:bg-zinc-50 disabled:opacity-50">Show only — no notification</button>
           <button type="button" disabled={!canSend} onClick={send} className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40">{busy ? 'Sending…' : 'Send message'}</button>
         </div>
       </div>

@@ -534,7 +534,8 @@ export async function toggleDocumentPortalVisibility(
   },
   // The staff eye pop-up decides whether/what to tell the client in chat: true = no AUTOMATIC chat line (the portal
   // notification + push still go out). Default false = every other caller keeps the automatic line.
-  opts?: { suppressChat?: boolean }
+  // silent: true = show it with NO client alert at all (no notification, no push, no chat) — the pop-up's "Show only".
+  opts?: { suppressChat?: boolean; silent?: boolean }
 ): Promise<ActionResult> {
   return safeAction(async () => {
     // Write goes through updateDocument() which owns the action_log entry
@@ -588,6 +589,7 @@ export async function toggleDocumentPortalVisibility(
       summary: `Portal visibility ${visible ? 'enabled' : 'disabled'}`,
       expected_updated_at: resolution?.expectedUpdatedAt,
       ...(opts?.suppressChat ? { clientChat: false } : {}),
+      ...(opts?.silent ? { clientAlert: false } : {}),
     })
     if (!result.success) {
       if (result.outcome === 'stale') {
