@@ -117,13 +117,14 @@ function Badge({ tone, children }: { tone: 'green' | 'gray' | 'amber' | 'red' | 
   return <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${t}`}>{children}</span>
 }
 
-function PreviewPanel({ file, onClose, src: srcOverride, title }: { file: File_; onClose: () => void; src?: string; title?: string }) {
+function PreviewPanel({ file, onClose, src: srcOverride, title, viewSrc }: { file: File_; onClose: () => void; src?: string; title?: string; viewSrc?: string }) {
   const src = srcOverride ?? `/api/crm-store/browse/file/${file.id}`
   const mime = (file.mimeType ?? '').split(';')[0].trim().toLowerCase()
   const inline = INLINE_TYPES.has(mime)
   const isImage = inline && mime.startsWith('image/')
   // Word / Excel / Markdown / CSV … open as a simplified, script-free page made by the server (the current version only)
-  const simple = !inline && !srcOverride && viewKindFor(file.name, file.mimeType) !== null
+  // (an older saved copy is shown the same way through its own view address)
+  const simple = !inline && (!srcOverride || !!viewSrc) && viewKindFor(file.name, file.mimeType) !== null
   // an iPhone photo (HEIC/HEIF) is shown through the picture route, which converts it to a JPEG for the screen
   const heic = !inline && !srcOverride && (/\.(heic|heif)$/i.test(file.name) || /^image\/hei[cf]/i.test(mime))
   useEffect(() => {
@@ -147,7 +148,7 @@ function PreviewPanel({ file, onClose, src: srcOverride, title }: { file: File_;
             // eslint-disable-next-line @next/next/no-img-element
             <img src={`${src}/picture`} alt={file.name} className="mx-auto block h-auto max-w-full" data-testid="heic-view" />
           ) : simple ? (
-            <iframe src={`${src}/view`} title={file.name} sandbox="" className="h-full w-full border-0 bg-white" data-testid="simple-view" />
+            <iframe src={viewSrc ?? `${src}/view`} title={file.name} sandbox="" className="h-full w-full border-0 bg-white" data-testid="simple-view" />
           ) : !inline ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-zinc-600">
               <p>This kind of file cannot be shown inside the CRM.</p>
@@ -265,7 +266,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [ocrDocId, setOcrDocId] = useState<string | null>(null)
   const [versionsFor, setVersionsFor] = useState<string | null>(null)
   const [versions, setVersions] = useState<{ id: string; versionNo: number; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null }[] | null>(null)
-  const [previewVersion, setPreviewVersion] = useState<{ file: File_; src: string; title: string } | null>(null)
+  const [previewVersion, setPreviewVersion] = useState<{ file: File_; src: string; title: string; viewSrc: string } | null>(null)
   const [busyFiles, setBusyFiles] = useState<Set<string>>(new Set())
   const [types, setTypes] = useState<DocType[] | null>(null)
   const [questions, setQuestions] = useState<Record<string, StoreQuestion> | null>(null)
@@ -1699,7 +1700,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                         {v.current && <Badge tone="green">current</Badge>}
                         <span className="flex-1" />
                         <button type="button" className="text-blue-700 hover:underline"
-                          onClick={() => { setVersionsFor(null); setPreviewVersion({ file: { ...f, mimeType: v.mimeType ?? f.mimeType }, src: `/api/crm-store/browse/file/${f.id}/versions?open=${v.id}`, title: `${f.name} — version ${v.versionNo}${v.current ? ' (current)' : ''}` }) }}>
+                          onClick={() => { setVersionsFor(null); setPreviewVersion({ file: { ...f, mimeType: v.mimeType ?? f.mimeType }, src: `/api/crm-store/browse/file/${f.id}/versions?open=${v.id}`, viewSrc: `/api/crm-store/browse/file/${f.id}/view?version=${v.id}`, title: `${f.name} — version ${v.versionNo}${v.current ? ' (current)' : ''}` }) }}>
                           View
                         </button>
                       </div>
@@ -2335,7 +2336,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           queue={Array.from(new Set([aiFile, ...visibleFileIds.filter((id) => ai.marks[id] && (ai.marks[id].mark === 'look' || ai.marks[id].mark === 'conflict'))]))}
           onChanged={() => { void refreshAll(); void ai.reload(visibleFileIds) }} onOpenFile={setAiFile} />
       )}
-      {previewVersion && <PreviewPanel file={previewVersion.file} src={previewVersion.src} title={previewVersion.title} onClose={() => setPreviewVersion(null)} />}
+      {previewVersion && <PreviewPanel file={previewVersion.file} src={previewVersion.src} viewSrc={previewVersion.viewSrc} title={previewVersion.title} onClose={() => setPreviewVersion(null)} />}
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
       {asking && (
         <QuestionDialog q={questions?.[asking.slug]} fallbackTitle={asking.fallbackTitle}
