@@ -10,6 +10,8 @@ import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { listTeammates } from '@/lib/portal/team/server'
 import { TeamManager, type Teammate } from '@/components/portal/team-manager'
 import { cookies } from 'next/headers'
+import { PORTAL_BASE_URL } from '@/lib/config'
+import { getLocale } from '@/lib/portal/i18n'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,7 +40,10 @@ export default async function PortalTeamPage() {
   const companyName = accounts.find(a => a.id === accountId)?.company_name ?? 'Your company'
   const teammates = (await listTeammates(accountId)) as Teammate[]
 
-  return <TeamManager accountId={accountId} companyName={companyName} teammates={teammates} />
+  // The handover message defaults to the owner's language (an Italian owner writes to Italian colleagues).
+  const defaultLang = getLocale(user) === 'it' ? 'it' : 'en'
+
+  return <TeamManager accountId={accountId} companyName={companyName} teammates={teammates} loginUrl={`${PORTAL_BASE_URL}/portal/login`} defaultLang={defaultLang} />
 }
 
 function NotAvailable() {

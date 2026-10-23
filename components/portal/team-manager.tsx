@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { buildHandoverMessage, type HandoverLang } from '@/lib/portal/team/handover'
 
 // Owner-grantable capability toggles (labels for the invite/edit UI).
 // Keys must match lib/portal/team/capabilities.ts.
@@ -46,33 +47,40 @@ async function api(path: string, method: string, body: Record<string, unknown>):
   }
 }
 
-export function TeamManager({ accountId, companyName, teammates }: { accountId: string; companyName: string; teammates: Teammate[] }) {
+export function TeamManager({ accountId, companyName, teammates, loginUrl, defaultLang = 'en' }: { accountId: string; companyName: string; teammates: Teammate[]; loginUrl: string; defaultLang?: HandoverLang }) {
   const router = useRouter()
   const [showInvite, setShowInvite] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  // invite form
+  // invite form: no email and no password (the system makes the password; the colleague signs in with the username)
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
-  const [password, setPassword] = useState('')
-  const [email, setEmail] = useState('')
   const [caps, setCaps] = useState<Record<string, boolean>>({})
   const [disclaimer, setDisclaimer] = useState(false)
 
+  // The message the owner copies and sends himself, shown ONCE after creating a team member or resetting a password.
+  const [handover, setHandover] = useState<{ kind: 'new' | 'reset'; displayName: string; username: string; password: string } | null>(null)
+  const [handoverLang, setHandoverLang] = useState<HandoverLang>(defaultLang)
+  const [copied, setCopied] = useState(false)
+
   const resetForm = () => {
-    setUsername(''); setDisplayName(''); setPassword(''); setEmail(''); setCaps({}); setDisclaimer(false); setError('')
+    setUsername(''); setDisplayName(''); setCaps({}); setDisclaimer(false); setError('')
   }
 
   const submitInvite = async () => {
     setError(''); setBusy(true)
     const r = await api('/api/portal/team', 'POST', {
-      account_id: accountId, username, display_name: displayName, password, email: email || null,
+      account_id: accountId, username: username || null, display_name: displayName,
       capabilities: caps, disclaimer_accepted: disclaimer,
     })
     setBusy(false)
     if (!r.ok) { setError(r.error || 'Could not create team member'); return }
-    setShowInvite(false); resetForm(); router.refresh()
+    const d = (r.data ?? {}) as { username?: string; password?: string }
+    setShowInvite(false)
+    setHandover({ kind: 'new', displayName, username: d.username ?? username, password: d.password ?? '' })
+    setCopied(false)
+    resetForm(); router.refresh()
   }
 
   const toggleCap = (key: string) => setCaps(c => toggleWithChildren(c, key))
@@ -95,13 +103,14 @@ export function TeamManager({ accountId, companyName, teammates }: { accountId: 
   }
 
   const resetPw = async (id: string, name: string) => {
-    const pw = prompt(`New password for ${name} (min 8 characters):`)
-    if (!pw) return
+    if (!confirm(`Reset ${name}'s password? Their current password stops working at once and you get a new one to send them.`)) return
     setBusy(true)
-    const r = await api(`/api/portal/team/${id}/reset-password`, 'POST', { account_id: accountId, password: pw })
+    const r = await api(`/api/portal/team/${id}/reset-password`, 'POST', { account_id: accountId })
     setBusy(false)
     if (!r.ok) { setError(r.error || 'Reset failed'); return }
-    alert('Password updated. Share the new password with your teammate.')
+    const d = (r.data ?? {}) as { username?: string; password?: string }
+    setHandover({ kind: 'reset', displayName: name, username: d.username ?? '', password: d.password ?? '' })
+    setCopied(false)
   }
 
   const active = teammates.filter(t => t.status === 'active')
@@ -120,6 +129,11 @@ export function TeamManager({ accountId, companyName, teammates }: { accountId: 
 
       {error && <div className="p-3 rounded-lg bg-red-50 border border-red-100 text-sm text-red-700">{error}</div>}
 
+      <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs leading-relaxed text-blue-900 space-y-1" data-testid="team-notice">
+        <p><span className="font-semibold">Chat alerts.</span> Team members have no email in the portal, for their privacy and security. They receive chat alerts <span className="font-semibold">only through the app on their phone</span>: ask each colleague to install the app and tap &ldquo;Enable notifications&rdquo; (the message you copy after adding them explains how). Without it, only you and the other members of the company get the email alert.</p>
+        <p><span className="font-semibold">Owners and members of the company</span> must not be added here. They get their own full login with the same access as you: contact support and we will send it.</p>
+      </div>
+
       {/* List */}
       <div className="bg-white rounded-xl border divide-y">
         {active.length === 0 ? (
@@ -136,15 +150,13 @@ export function TeamManager({ accountId, companyName, teammates }: { accountId: 
             <h3 className="text-sm font-semibold text-zinc-900">Add team member — {companyName}</h3>
 
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Username (login)"><input value={username} onChange={e => setUsername(e.target.value)} className={inputCls} placeholder="e.g. mario.rossi" /></Field>
               <Field label="Display name"><input value={displayName} onChange={e => setDisplayName(e.target.value)} className={inputCls} placeholder="Mario Rossi" /></Field>
-              <Field label="Password"><input value={password} onChange={e => setPassword(e.target.value)} className={inputCls} placeholder="min 8 characters" /></Field>
-              <Field label="Email (optional)"><input value={email} onChange={e => setEmail(e.target.value)} className={inputCls} placeholder="name@company.com" /></Field>
+              <Field label="Username (optional)"><input value={username} onChange={e => setUsername(e.target.value)} className={inputCls} placeholder="suggested from the name" /></Field>
             </div>
 
             <p className="text-[11px] leading-relaxed text-zinc-500">
               <span className="font-medium text-zinc-600">Display name</span> is shown on this teammate&apos;s chat messages so your team can see who&apos;s writing.{' '}
-              <span className="font-medium text-zinc-600">Email is optional</span> — add it only if you want this teammate to receive email notifications of new messages (and be able to reset their own password). Leave it blank for in-portal access only.
+              <span className="font-medium text-zinc-600">No email and no password to type:</span> we create the login and a temporary password, and show you a message to copy and send. The colleague signs in with the username and chooses their own password the first time.
             </p>
 
             <div>
@@ -168,6 +180,50 @@ export function TeamManager({ accountId, companyName, teammates }: { accountId: 
               <button onClick={() => setShowInvite(false)} disabled={busy} className="h-9 px-3 rounded-lg border text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50">Cancel</button>
               <button onClick={submitInvite} disabled={busy || !disclaimer} className="h-9 px-4 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
                 {busy ? 'Creating…' : 'Create team member'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Handover: shown ONCE after creating a team member or resetting a password. The owner copies it and sends it himself. */}
+      {handover && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-testid="team-handover">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-5 space-y-3 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-zinc-900">
+              {handover.kind === 'new' ? `${handover.displayName} is added` : `New password for ${handover.displayName}`}
+            </h3>
+            <p className="text-xs text-zinc-600">
+              Copy this message and send it to {handover.displayName.split(' ')[0] || 'them'} (WhatsApp, text or email).
+              <span className="font-semibold"> The password is shown only now</span> — if you lose it, use Reset password to make a new one.
+            </p>
+            <div className="flex gap-1.5">
+              {(['en', 'it'] as const).map(l => (
+                <button key={l} onClick={() => { setHandoverLang(l); setCopied(false) }}
+                  className={`text-xs px-2.5 py-1 rounded border ${handoverLang === l ? 'bg-zinc-900 text-white border-zinc-900' : 'hover:bg-zinc-50'}`}>
+                  {l === 'en' ? 'English' : 'Italiano'}
+                </button>
+              ))}
+            </div>
+            <textarea
+              readOnly
+              rows={13}
+              value={buildHandoverMessage({ lang: handoverLang, kind: handover.kind, displayName: handover.displayName, companyName, loginUrl, username: handover.username, password: handover.password })}
+              className="w-full text-xs font-mono rounded-lg border border-zinc-200 bg-zinc-50 p-3"
+              onFocus={e => e.currentTarget.select()}
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={async () => {
+                  const text = buildHandoverMessage({ lang: handoverLang, kind: handover.kind, displayName: handover.displayName, companyName, loginUrl, username: handover.username, password: handover.password })
+                  try { await navigator.clipboard.writeText(text); setCopied(true) } catch { setCopied(false) }
+                }}
+                className="h-9 px-3 rounded-lg border text-sm text-zinc-700 hover:bg-zinc-50"
+              >
+                {copied ? 'Copied ✓' : 'Copy message'}
+              </button>
+              <button onClick={() => setHandover(null)} className="h-9 px-4 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800">
+                Done
               </button>
             </div>
           </div>
@@ -198,7 +254,7 @@ function TeammateRow({ t, busy, onSaveCaps, onRevoke, onResetPw }: {
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-medium text-zinc-900 truncate">{t.display_name} <span className="text-zinc-400 font-normal">@{t.username}</span></p>
-          <p className="text-xs text-zinc-500 truncate">{t.email || 'no email — in-portal only'} · {granted.length ? granted.join(', ') : 'no access granted'}</p>
+          <p className="text-xs text-zinc-500 truncate">{granted.length ? granted.join(', ') : 'no access granted'}</p>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <button onClick={() => { setDraft(t.capabilities || {}); setEditing(e => !e) }} className="text-xs px-2 py-1 rounded border hover:bg-zinc-50">Edit</button>

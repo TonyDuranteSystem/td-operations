@@ -384,7 +384,9 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     return pathname.startsWith(hrefPath)
   }
 
-  const fullName = user.user_metadata?.full_name?.trim() ?? ''
+  // A team member's login has no email to show (it is a hidden internal address): their own name is stored as display_name.
+  const meta = (user.user_metadata ?? {}) as { full_name?: string; display_name?: string }
+  const fullName = String(meta.full_name ?? meta.display_name ?? '').trim()
   const displayName = fullName || user.email?.split('@')[0] || 'User'
 
   // Locale-aware section labels — used by the Personal / Companies headers.

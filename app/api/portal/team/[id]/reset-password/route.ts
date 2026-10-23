@@ -1,6 +1,6 @@
 /**
  * Portal Team Access — owner-managed password reset for a teammate.
- *   POST /api/portal/team/[id]/reset-password   body: { account_id, password }
+ *   POST /api/portal/team/[id]/reset-password   body: { account_id }  → the system makes the new password and returns it ONCE
  */
 import { createClient } from '@/lib/supabase/server'
 import { assertAccountAdmin, resetTeammatePassword } from '@/lib/portal/team/server'
@@ -19,8 +19,8 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   if (!adminContactId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   try {
-    await resetTeammatePassword(params.id, accountId, String(body.password ?? ''))
-    return NextResponse.json({ ok: true })
+    const r = await resetTeammatePassword(params.id, accountId)
+    return NextResponse.json({ ok: true, username: r.username, password: r.password })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Reset failed' }, { status: 400 })
   }

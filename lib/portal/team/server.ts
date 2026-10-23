@@ -11,8 +11,7 @@ import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { provisionTeammate, type TeammateInput, type ProvisionDeps } from '@/lib/portal/team/provision'
 import { normalizeCapabilities } from '@/lib/portal/team/capabilities'
-import { findContactIdByEmail } from '@/lib/operations/find-contact-by-email'
-import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
+import { generatePassword } from '@/lib/portal/team/credentials'
 import { randomUUID } from 'crypto'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -81,18 +80,18 @@ export function provisionDeps(): ProvisionDeps {
       return { id: data.id }
     },
     newToken: () => randomUUID().slice(0, 12),
-    emailHasLogin: async (email) => !!(await findAuthUserByEmail(email)),
-    findCompanyContactByEmail: async (accountId, email) => {
-      const contactId = await findContactIdByEmail(email)
-      if (!contactId) return null
+    // A Member / Owner of this company with the same name: they get their own full login, never a team login.
+    findCompanyMemberByName: async (accountId, displayName) => {
+      const wanted = displayName.trim().toLowerCase().replace(/\s+/g, ' ')
       const { data } = await sb()
         .from('account_contacts')
         .select('role, contacts:contact_id(full_name)')
         .eq('account_id', accountId)
-        .eq('contact_id', contactId)
-        .maybeSingle()
-      if (!data) return null
-      return { name: data.contacts?.full_name ?? null, role: data.role ?? null }
+      for (const row of (data ?? []) as Array<{ role: string | null; contacts: { full_name: string | null } | null }>) {
+        const name = (row.contacts?.full_name ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+        if (name && name === wanted) return { name: row.contacts?.full_name ?? null, role: row.role ?? null }
+      }
+      return null
     },
   }
 }
@@ -118,11 +117,10 @@ export async function listTeammates(accountId: string) {
 export async function updateTeammate(
   id: string,
   accountId: string,
-  patch: { capabilities?: unknown; email?: string | null; display_name?: string },
+  patch: { capabilities?: unknown; display_name?: string },
 ) {
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() }
   if (patch.capabilities !== undefined) update.capabilities = normalizeCapabilities(patch.capabilities)
-  if (patch.email !== undefined) update.email = patch.email
   if (patch.display_name !== undefined) update.display_name = patch.display_name
   const { error } = await sb()
     .from('portal_team_members')
@@ -152,19 +150,27 @@ export async function revokeTeammate(id: string, accountId: string) {
   return { ok: true }
 }
 
-/** Owner-managed password reset (no email needed). Scoped to the account. */
-export async function resetTeammatePassword(id: string, accountId: string, newPassword: string) {
-  if (!newPassword || newPassword.length < 8) throw new Error('Password must be at least 8 characters')
+/**
+ * Owner-managed password reset, no email involved. The SYSTEM makes the new password and returns it ONCE for the handover
+ * message; the colleague must choose their own at the next login. Scoped to the account.
+ */
+export async function resetTeammatePassword(id: string, accountId: string): Promise<{ ok: true; username: string; password: string }> {
   const { data: row } = await sb()
     .from('portal_team_members')
-    .select('auth_user_id, status')
+    .select('auth_user_id, username, status')
     .eq('id', id)
     .eq('account_id', accountId)
     .maybeSingle()
   if (!row) throw new Error('Team member not found')
-  const { error } = await supabaseAdmin.auth.admin.updateUserById(row.auth_user_id, { password: newPassword })
+  if (row.status !== 'active') throw new Error('This team member has been removed')
+  const { data: existing } = await supabaseAdmin.auth.admin.getUserById(row.auth_user_id)
+  const password = generatePassword()
+  const { error } = await supabaseAdmin.auth.admin.updateUserById(row.auth_user_id, {
+    password,
+    user_metadata: { ...(existing?.user?.user_metadata ?? {}), must_change_password: true },
+  })
   if (error) throw new Error(error.message)
-  return { ok: true }
+  return { ok: true, username: row.username, password }
 }
 
 /**

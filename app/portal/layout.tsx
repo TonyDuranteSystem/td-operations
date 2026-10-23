@@ -88,6 +88,7 @@ export default async function PortalLayout({
     const tmSelectedAccountId = tmAccount?.id ?? ''
     const tmTier = tmAccount?.portal_tier ?? 'active'
     const tmSuspended = tmAccount?.status === 'Suspended'
+    const tmCanChat = identity.capabilities.chat === true
     const [tmActiveServices, tmNavVisibility, tmTranslations] = tmSelectedAccountId
       ? await Promise.all([getPortalActiveServices(tmSelectedAccountId), getPortalNavVisibility(tmSelectedAccountId), loadTranslationsForLocale(tmLocale)])
       : [[] as string[], await getContactOnlyNavVisibility(), await loadTranslationsForLocale(tmLocale)]
@@ -101,6 +102,8 @@ export default async function PortalLayout({
             silently excluded them (caught in review). */}
         <PortalWakeRefresh />
         <LocaleProvider locale={tmLocale} translations={tmTranslations}>
+          {/* The owner hands the first password over by message: the colleague must choose their own at first login. */}
+          <PasswordGate mustChangePassword={!!user.user_metadata?.must_change_password} />
           <div className="flex h-screen bg-gradient-to-br from-slate-50 to-blue-50/30">
             <PortalSidebar
               user={user}
@@ -122,10 +125,24 @@ export default async function PortalLayout({
               <div className="px-4 pt-4 sm:px-6 lg:px-8">
                 <OfficeClock />
               </div>
+              {/* Team members have no email: chat alerts reach them ONLY through the installed app. So a team member who may
+                  see chat gets the same notification switch and install prompts as a client (dev job e5d5400d). */}
+              {tmCanChat && tmSelectedAccountId && (
+                <div className="hidden lg:flex items-center justify-end gap-3 px-8 pt-4">
+                  <PushToggle accountId={tmSelectedAccountId} compact />
+                </div>
+              )}
               {tmSuspended && tmAccount ? (
                 <SuspendedGuard companyName={tmAccount.company_name}>{children}</SuspendedGuard>
-              ) : children}
+              ) : (
+                <>
+                  <DashboardInstallBanner />
+                  {tmCanChat && tmSelectedAccountId && <EnablePushCard accountId={tmSelectedAccountId} />}
+                  {children}
+                </>
+              )}
             </main>
+            <PwaInstallPrompt />
           </div>
         </LocaleProvider>
       </Providers>
