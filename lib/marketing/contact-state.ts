@@ -6,6 +6,8 @@
  *   appointment { at: ISO | null }                               a call booked with the seller; at = null cancels it
  * "Contacted" has ONE definition: a WhatsApp was sent, or somebody tried (an attempt), or an outcome was recorded.
  */
+import { makeT, type TFn } from "@/lib/marketing/i18n"
+
 export interface ContactEvent { lead_id?: string; kind: string; actor?: string; created_at: string; data: Record<string, unknown> }
 
 export interface ContactState {
@@ -56,11 +58,11 @@ export function contactStates(events: readonly (ContactEvent & { lead_id: string
 }
 
 /** Short words for a list row: "WhatsApp ✓", "No WhatsApp", "No answer ×3", "Call 27 Oct 11:00". Empty when nothing happened yet. */
-export function contactChips(s: ContactState, fmtWhen: (iso: string) => string): Array<{ key: string; text: string; tone: "ok" | "warn" | "info" }> {
+export function contactChips(s: ContactState, fmtWhen: (iso: string) => string, t: TFn = makeT("en")): Array<{ key: string; text: string; tone: "ok" | "warn" | "info" }> {
   const chips: Array<{ key: string; text: string; tone: "ok" | "warn" | "info" }> = []
-  if (s.whatsapp === "sent") chips.push({ key: "wa", text: "WhatsApp ✓", tone: "ok" })
-  else if (s.whatsapp === "no_wa") chips.push({ key: "wa", text: "No WhatsApp", tone: "warn" })
-  if (s.attempts > 0) chips.push({ key: "nr", text: `No answer ×${s.attempts}`, tone: "warn" })
-  if (s.appointmentAt) chips.push({ key: "appt", text: `Call ${fmtWhen(s.appointmentAt)}`, tone: "info" })
+  if (s.whatsapp === "sent") chips.push({ key: "wa", text: t("WhatsApp ✓"), tone: "ok" })
+  else if (s.whatsapp === "no_wa") chips.push({ key: "wa", text: t("No WhatsApp"), tone: "warn" })
+  if (s.attempts > 0) chips.push({ key: "nr", text: t("No answer ×{n}", { n: s.attempts }), tone: "warn" })
+  if (s.appointmentAt) chips.push({ key: "appt", text: t("Call {when}", { when: fmtWhen(s.appointmentAt) }), tone: "info" })
   return chips
 }
