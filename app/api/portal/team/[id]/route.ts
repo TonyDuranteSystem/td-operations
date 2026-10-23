@@ -1,6 +1,6 @@
 /**
  * Portal Team Access — edit + revoke a teammate (account-admin only).
- *   PATCH  /api/portal/team/[id]   body: { account_id, capabilities?, email?, display_name? }
+ *   PATCH  /api/portal/team/[id]   body: { account_id, capabilities?, display_name? }
  *   DELETE /api/portal/team/[id]   body: { account_id }  → revoke + ban login
  */
 import { createClient } from '@/lib/supabase/server'
@@ -22,7 +22,6 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
   try {
     await updateTeammate(params.id, accountId, {
       capabilities: body.capabilities,
-      email: body.email,
       display_name: body.display_name,
     })
     return NextResponse.json({ ok: true })
