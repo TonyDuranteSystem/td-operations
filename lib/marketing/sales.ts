@@ -5,7 +5,9 @@
  */
 import { splitCents, termInForce, shareBase, type CommissionTerm } from "@/lib/marketing/commission"
 
-export type SaleStatus = "link_created" | "paid" | "refunded" | "partly_refunded" | "failed" | "expired"
+import { SALE_STATUSES } from "@/lib/marketing/vocabularies"
+
+export type SaleStatus = (typeof SALE_STATUSES)[number]
 
 export interface SaleRow {
   id: string

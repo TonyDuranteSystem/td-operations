@@ -163,6 +163,20 @@ export const NOT_A_VOCABULARY = new Set([
   // SEND_MODES (already exported from lib/messaging/wabridge-outbox.ts) and delete these two lines. Tracked on dev job e23343a6.
   "wa_bridge_state_send_mode_check",
   "wa_outbox_status_check",
+  // TEMPORARY (2026-10-23, TD Marketing — dev job 9aec66fa): these 8 ARE value lists, not shape rules. They cannot be registered
+  // in CONSTRAINT_CONTRACTS yet: the committed PRODUCTION snapshot does not hold the marketing tables until Antonio runs the
+  // marketing migrations (20261017-1900, 20261018-0110, 20261019-1000, 20261021-1500) in production, and registering them first
+  // fails "PRODUCTION accepts every value the code can write". The code-side lists already exist in lib/marketing/vocabularies.ts
+  // (and TEAM_STATUSES in lib/marketing/team-status.ts). Once production has the migrations and the snapshot is refreshed,
+  // MOVE all 8 into CONSTRAINT_CONTRACTS using those lists and delete these lines.
+  "marketing_commission_terms_basis_check",
+  "marketing_invites_member_role_check",
+  "marketing_leadgen_events_source_check",
+  "marketing_leadgen_events_status_check",
+  "marketing_sales_status_check",
+  "marketing_team_members_member_role_check",
+  "marketing_team_members_status_check",
+  "marketing_teams_status_check",
   // CRM Store shape rules (2026-09-29): which combination of owner kind, company, person, formation case and
   // login a storage owner may carry, and which lifecycle overlay fits which kind. Not value lists.
   "store_owners_shape",
