@@ -11,7 +11,7 @@ import { formatMcpChatSenderLabel } from "@/lib/portal/chat-sender-name"
 import { contactThreadOrFilter, multiMemberAccountIds } from "@/lib/portal/thread-scope"
 import { isContactLinkedToAccount, resolveAdminReplyContact } from "@/lib/portal/admin-send-scope"
 import { downloadFileBinaryForSend, getFileMetadata } from "@/lib/google-drive"
-import { buildChatAttachmentPath } from "@/lib/portal/chat-attachment-path"
+import { buildChatAttachmentPath, decodeBase64Attachment } from "@/lib/portal/chat-attachment-path"
 import { guessMimeType } from "@/lib/mcp/tools/drive"
 import { validateChatAttachment } from "@/lib/portal/chat-attachment"
 import { buildPortalChatLink } from "@/lib/portal/chat-link"
@@ -1009,18 +1009,19 @@ TOPIC (2026-09-23): the portal chat is organized into topic tabs (e.g. "Mailing 
 
   server.tool(
     "portal_chat_attach_file",
-    `Move a file that already exists in Drive, Gmail, a URL, or Supabase Storage into the SAME public storage the portal chat's own attachments use, and return a link ready to pass into portal_chat_send's "attachments" array. This does NOT send anything — call portal_chat_send afterward with the returned url/name/mime_type/size.
+    `Move a file that already exists in Drive, Gmail, a URL, or Supabase Storage — or a small file you generated yourself (sent as base64) — into the SAME public storage the portal chat's own attachments use, and return a link ready to pass into portal_chat_send's "attachments" array. This does NOT send anything — call portal_chat_send afterward with the returned url/name/mime_type/size.
 
 Use this to hand a client a file we generated or already hold (a P&L export, a signed agreement, a document from Drive) directly in a chat message, without depending on that file's Drive sharing permissions — the destination bucket is public by design, exactly like the files clients themselves upload in chat.
 
 Workflow for a Drive file: source='drive' + file_id. Google-native files (Docs/Sheets/Slides) are exported automatically (Sheets→xlsx, Docs/Slides→pdf).
 Workflow for a Gmail attachment: source='gmail' + message_id + attachment_id.
 Workflow for a URL: source='url' + url.
+Workflow for a file you just generated locally (e.g. a PDF made in a Claude Code session): source='base64' + content_base64 + filename. Max 2MB — for anything bigger host it at a link and use source='url'.
 Workflow for Supabase Storage: source='supabase_storage' + storage_path — reads from the SAME public "assets" bucket this tool writes to (e.g. a raw chat-attachment path a client already uploaded to). Cannot read any other bucket — TD's onboarding/banking/ITIN upload buckets hold sensitive intake documents and were deliberately locked down; this tool never reaches them.
 
 Requires account_id or contact_id — whichever thread the file is headed to — since that determines the storage folder. Max 20MB — this tool holds the whole file in memory for the copy (unlike the client's own 100MB browser-to-storage upload, which never touches server memory), but 20MB comfortably covers any real document (scans, PDFs, spreadsheets) with margin to spare.`,
     {
-      source: z.enum(["drive", "gmail", "url", "supabase_storage"]).describe("Where to get the file: 'drive' = Google Drive file, 'gmail' = Gmail attachment, 'url' = download from URL, 'supabase_storage' = a path already inside the public 'assets' bucket"),
+      source: z.enum(["drive", "gmail", "url", "supabase_storage", "base64"]).describe("Where to get the file: 'drive' = Google Drive file, 'gmail' = Gmail attachment, 'url' = download from URL, 'supabase_storage' = a path already inside the public 'assets' bucket, 'base64' = the file's bytes sent inline (small files, max 2MB)"),
       account_id: z.string().uuid().optional().describe("Account UUID for the LLC thread the file is headed to. At least one of account_id or contact_id required."),
       contact_id: z.string().uuid().optional().describe("Contact UUID for the person-level thread the file is headed to. At least one of account_id or contact_id required."),
       filename: z.string().optional().describe("Override filename (auto-detected from source if omitted)"),
@@ -1029,8 +1030,9 @@ Requires account_id or contact_id — whichever thread the file is headed to —
       attachment_id: z.string().optional().describe("Gmail attachment ID from message parts (required when source='gmail')"),
       url: z.string().optional().describe("Direct download URL (required when source='url')"),
       storage_path: z.string().optional().describe("Path inside the public 'assets' bucket (required when source='supabase_storage')"),
+      content_base64: z.string().optional().describe("The file's bytes, base64-encoded (required when source='base64'; filename is also required). Max 2MB."),
     },
-    async ({ source, account_id, contact_id, filename, file_id, message_id, attachment_id, url, storage_path }) => {
+    async ({ source, account_id, contact_id, filename, file_id, message_id, attachment_id, url, storage_path, content_base64 }) => {
       try {
         if (!account_id && !contact_id) {
           return { content: [{ type: "text" as const, text: "Error: account_id or contact_id is required — it determines which client's chat storage folder the file lands in." }] }
@@ -1116,6 +1118,17 @@ Requires account_id or contact_id — whichever thread the file is headed to —
             finalFilename = new URL(url).pathname.split("/").pop() || `download-${Date.now()}`
           }
           mimeType = res.headers.get("content-type") || guessMimeType(finalFilename)
+        } else if (source === "base64") {
+          if (!content_base64 || !filename) {
+            return { content: [{ type: "text" as const, text: "Error: content_base64 and filename are both required when source='base64'." }] }
+          }
+          const decoded = decodeBase64Attachment(content_base64)
+          if ("error" in decoded) {
+            return { content: [{ type: "text" as const, text: `Error: ${decoded.error}` }] }
+          }
+          buffer = decoded.buffer
+          finalFilename = filename
+          mimeType = guessMimeType(filename)
         } else {
           if (!storage_path) {
             return { content: [{ type: "text" as const, text: "Error: storage_path is required when source='supabase_storage'." }] }
