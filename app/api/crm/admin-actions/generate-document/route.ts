@@ -795,6 +795,20 @@ export async function POST(request: Request) {
         return NextResponse.json(result)
       }
 
+      case "send_ownership_attestation": {
+        if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
+        const { sendOwnershipAttestationForSignature } = await import("@/lib/operations/ownership-attestation")
+        const { chooseLinkBase, originFromHeaders } = await import("@/lib/esign/link-base")
+        const baseUrl = chooseLinkBase(originFromHeaders(n => request.headers.get(n)), process.env.VERCEL_ENV === "production")
+        const result = await sendOwnershipAttestationForSignature(account_id, {
+          effective_date: params.effective_date as string | undefined,
+          actor: "crm-admin",
+          baseUrl,
+        })
+        if (result.error) return NextResponse.json({ error: result.error }, { status: 400 })
+        return NextResponse.json(result)
+      }
+
       case "send_oa": {
         if (!params.token) return NextResponse.json({ error: "Missing token" }, { status: 400 })
         const result = await sendOA(params.token)

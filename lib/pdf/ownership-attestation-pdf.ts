@@ -63,7 +63,25 @@ function line(page: PDFPage, x1: number, y1: number, x2: number, y2: number) {
   page.drawLine({ start: { x: x1, y: y1 }, end: { x: x2, y: y2 }, thickness: 1, color: BLACK })
 }
 
+/** Where the signer's box sits, as fractions of the page with a TOP-LEFT origin (the e-sign engine's stored form). */
+export interface AttestationSignatureField {
+  page_index: number
+  pos_x: number
+  pos_y: number
+  width: number
+  height: number
+}
+
+export interface BuiltOwnershipAttestation {
+  bytes: Uint8Array
+  signature: AttestationSignatureField
+}
+
 export async function generateOwnershipAttestationPDF(input: OwnershipAttestationInput): Promise<Uint8Array> {
+  return (await buildOwnershipAttestation(input)).bytes
+}
+
+export async function buildOwnershipAttestation(input: OwnershipAttestationInput): Promise<BuiltOwnershipAttestation> {
   if (input.owners.length < 1 || input.owners.length > 4) {
     throw new Error('An attestation needs between 1 and 4 owners.')
   }
@@ -153,12 +171,24 @@ export async function generateOwnershipAttestationPDF(input: OwnershipAttestatio
     ['Name:', input.signerName],
     ['Position:', input.signerPosition],
   ]
+  let signature: AttestationSignatureField | null = null
   for (const [label, value] of rows) {
+    if (!signature) {
+      // the box sits just above the first (blank) line, so the signature lands on it
+      const boxH = 26
+      signature = {
+        page_index: 0,
+        pos_x: lineX1 / PAGE_W,
+        pos_y: (PAGE_H - (y - 3 + boxH)) / PAGE_H,
+        width: (lineX2 - lineX1) / PAGE_W,
+        height: boxH / PAGE_H,
+      }
+    }
     page.drawText(label, { x: labelX, y, size: 10.5, font: bold })
     line(page, lineX1, y - 3, lineX2, y - 3)
     if (value) page.drawText(value, { x: lineX1 + 4, y: y + 1, size: 10.5, font: regular })
     y -= 30
   }
 
-  return pdf.save()
+  return { bytes: await pdf.save(), signature: signature as AttestationSignatureField }
 }

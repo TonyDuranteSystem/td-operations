@@ -3,7 +3,7 @@ import {
   assembleOwnershipAttestation, formatLongDate, nationalityLabel,
   type AttestationAccount, type AttestationMember, type AttestationContact,
 } from "@/lib/operations/ownership-attestation"
-import { generateOwnershipAttestationPDF } from "@/lib/pdf/ownership-attestation-pdf"
+import { generateOwnershipAttestationPDF, buildOwnershipAttestation } from "@/lib/pdf/ownership-attestation-pdf"
 
 const account: AttestationAccount = {
   id: "a1", company_name: "Test Co LLC", state_of_formation: "New Mexico",
@@ -44,6 +44,14 @@ describe("assembleOwnershipAttestation", () => {
     expect(r.input?.signerPosition).toBe("Sole Member / Owner")
     expect(r.input?.registeredIn).toBe("New Mexico, United States")
     expect(r.input?.contactEmail).toBe("ann@example.com")
+  })
+  it("names the signer (flagged signer first) with a contact and email", () => {
+    const r = run(
+      [member({ ownership_pct: 50, is_signer: false }), member({ id: "m2", full_name: "Bob Two", ownership_pct: 50, is_primary: false, is_signer: true, contact_id: "c2", email: "m-bob@example.com" })],
+      [contact(), contact({ id: "c2", full_name: "Bob Two", email: "bob@example.com" })],
+    )
+    expect(r.signer).toEqual({ contactId: "c2", name: "Bob Two", email: "bob@example.com" })
+    expect(r.input?.signerName).toBe("Bob Two")
   })
   it("two owners: only those with 25% or more appear (Aumianna shape 99/1)", () => {
     const r = run(
@@ -105,5 +113,16 @@ describe("generateOwnershipAttestationPDF", () => {
   it("prints non-Latin names without crashing", async () => {
     const bytes = await generateOwnershipAttestationPDF({ ...base, owners: [owner("Łukasz Ñandú Ħ", 100)] })
     expect(bytes.length).toBeGreaterThan(1000)
+  })
+  it("reports a signature box on page 1, inside the page, above the blank 'Signed by' line", async () => {
+    for (const owners of [[owner("A", 100)], [owner("A", 40), owner("B", 30), owner("C", 30)]]) {
+      const { signature } = await buildOwnershipAttestation({ ...base, owners })
+      expect(signature.page_index).toBe(0)
+      expect(signature.pos_x).toBeGreaterThan(0)
+      expect(signature.pos_x + signature.width).toBeLessThanOrEqual(1)
+      expect(signature.pos_y).toBeGreaterThan(0.5) // lower half of the page
+      expect(signature.pos_y + signature.height).toBeLessThanOrEqual(1)
+      expect(signature.width).toBeGreaterThan(0.2)
+    }
   })
 })

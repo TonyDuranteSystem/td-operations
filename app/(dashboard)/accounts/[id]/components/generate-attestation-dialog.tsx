@@ -2,7 +2,7 @@
 
 import { useState, useTransition, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ShieldCheck, Loader2, X, CheckCircle2, FileText } from 'lucide-react'
+import { ShieldCheck, Loader2, X, CheckCircle2, FileText, Send } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface GenerateAttestationDialogProps {
@@ -20,7 +20,9 @@ function todayISO() {
  * Generate an Attestation of Beneficial Ownership — one generic page (no bank name) listing every
  * individual who owns 25% or more. Owners, percentages, birth dates and nationalities are read from
  * the CRM; if anything is missing or does not add up, generation stops and says what to fix.
- * The file is saved in the company's storage and is NOT shown to the client or sent to them.
+ * Two ways out: "Generate and send to sign" (the normal path — the signer gets it in the portal's Sign Documents and,
+ * once signed, it is filed in the company's documents), or "Generate copy only" (an internal, unsigned copy that is not
+ * shown to the client and notifies nobody).
  */
 export function GenerateAttestationDialog({
   open, onClose, accountId, companyName,
@@ -28,39 +30,43 @@ export function GenerateAttestationDialog({
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [effectiveDate, setEffectiveDate] = useState(todayISO())
+  const [confirmSend, setConfirmSend] = useState(false)
   const [result, setResult] = useState<{
     file_name?: string
     owners?: Array<{ name: string; pct: number }>
+    sentTo?: string
   } | null>(null)
 
   useEffect(() => {
     if (open) {
       setResult(null)
+      setConfirmSend(false)
       setEffectiveDate(todayISO())
     }
   }, [open])
 
   if (!open) return null
 
-  const handleGenerate = () => {
+  const run = (action: 'generate_ownership_attestation' | 'send_ownership_attestation') => {
     startTransition(async () => {
       try {
         const res = await fetch('/api/crm/admin-actions/generate-document', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            action: 'generate_ownership_attestation',
+            action,
             account_id: accountId,
             effective_date: effectiveDate,
           }),
         })
         const data = await res.json().catch(() => ({}))
         if (!res.ok) {
+          setConfirmSend(false)
           toast.error(data.error || 'Failed to generate the attestation')
           return
         }
-        setResult({ file_name: data.file_name, owners: data.owners })
-        toast.success(`Attestation created for ${companyName}`)
+        setResult({ file_name: data.file_name, owners: data.owners, sentTo: data.signer_name })
+        toast.success(action === 'send_ownership_attestation' ? `Attestation sent to ${data.signer_name} to sign` : `Attestation created for ${companyName}`)
         router.refresh()
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : 'Error generating the attestation — please try again.')
@@ -87,15 +93,25 @@ export function GenerateAttestationDialog({
               <div className="flex items-start gap-2">
                 <CheckCircle2 className="h-5 w-5 mt-0.5 text-emerald-600" />
                 <div className="space-y-1">
-                  <p className="text-sm font-medium">Attestation created</p>
+                  <p className="text-sm font-medium">{result.sentTo ? `Sent to ${result.sentTo} to sign` : 'Attestation created'}</p>
                   <p className="text-xs text-zinc-600">
                     {companyName}: {(result.owners ?? []).map(o => `${o.name} (${o.pct}%)`).join(', ')}
                   </p>
                   <p className="text-xs text-zinc-500">
-                    Saved in the company&apos;s Banking folder. It is not shown to the client and nothing was sent — attach it to a chat message when it is needed.
+                    {result.sentTo
+                      ? 'They will find it under Sign Documents in the portal and are notified. Once signed, the signed copy is filed in the company\'s documents, where they can see and download it.'
+                      : 'Unsigned internal copy saved in the company\'s Banking folder. It is not shown to the client and nobody was notified.'}
                   </p>
                 </div>
               </div>
+            </div>
+          ) : confirmSend ? (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 space-y-1">
+              <p className="text-sm font-medium text-amber-900">Send to the client to sign?</p>
+              <p className="text-xs text-amber-800">
+                This sends the attestation for {companyName} to the company&apos;s signer to sign in the client portal
+                (Sign Documents) and notifies them. Once they sign, the signed copy is filed in the company&apos;s documents.
+              </p>
             </div>
           ) : (
             <>
@@ -108,7 +124,7 @@ export function GenerateAttestationDialog({
                   One generic page for any bank: every individual with 25% or more, read from the CRM (Members section,
                   or the single owner), with date of birth and nationality from their contact record. If anything is
                   missing or the percentages do not add up to 100%, generation stops and tells you what to fix.
-                  The signature line is left blank.
+                  The signature line is left blank for the signer.
                 </p>
               </div>
               <div>
@@ -129,18 +145,40 @@ export function GenerateAttestationDialog({
             <button onClick={onClose} className="px-4 py-2 text-sm font-medium rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200">
               Done
             </button>
+          ) : confirmSend ? (
+            <>
+              <button onClick={() => setConfirmSend(false)} disabled={isPending} className="px-4 py-2 text-sm font-medium text-zinc-600 hover:text-zinc-800">
+                Back
+              </button>
+              <button
+                onClick={() => run('send_ownership_attestation')}
+                disabled={isPending}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                Yes, send to sign
+              </button>
+            </>
           ) : (
             <>
               <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-zinc-600 hover:text-zinc-800">
                 Cancel
               </button>
               <button
-                onClick={handleGenerate}
+                onClick={() => run('generate_ownership_attestation')}
+                disabled={isPending}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 disabled:opacity-50"
+              >
+                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                Generate copy only
+              </button>
+              <button
+                onClick={() => setConfirmSend(true)}
                 disabled={isPending}
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
               >
-                {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                Generate Attestation
+                <Send className="h-4 w-4" />
+                Generate and send to sign
               </button>
             </>
           )}

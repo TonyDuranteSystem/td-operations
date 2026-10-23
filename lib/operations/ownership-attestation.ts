@@ -84,9 +84,15 @@ export interface AssembleAttestationParams {
   effectiveDate: string
 }
 
+export interface AttestationSigner {
+  contactId: string | null
+  name: string
+  email: string | null
+}
+
 export type AssembleAttestationResult =
-  | { input: OwnershipAttestationInput; error?: undefined }
-  | { input?: undefined; error: string }
+  | { input: OwnershipAttestationInput; signer: AttestationSigner; error?: undefined }
+  | { input?: undefined; signer?: undefined; error: string }
 
 export function assembleOwnershipAttestation(params: AssembleAttestationParams): AssembleAttestationResult {
   const { account, members, contacts, effectiveDate } = params
@@ -150,7 +156,9 @@ export function assembleOwnershipAttestation(params: AssembleAttestationParams):
   const signerContact = signer.contact_id ? contactById.get(signer.contact_id) : undefined
   const sole = individuals.length === 1 && companies.length === 0
 
+  const signerName = signer.full_name ?? signerContact?.full_name ?? owners[0].fullName
   return {
+    signer: { contactId: signer.contact_id, name: signerName, email: signerContact?.email || signer.email || null },
     input: {
       companyName: name,
       registeredIn: `${account.state_of_formation}, United States`,
@@ -158,7 +166,7 @@ export function assembleOwnershipAttestation(params: AssembleAttestationParams):
       contactEmail: account.communication_email || signer.email || signerContact?.email || null,
       dateLine: formatLongDate(effectiveDate) ?? effectiveDate,
       owners,
-      signerName: signer.full_name ?? signerContact?.full_name ?? owners[0].fullName,
+      signerName,
       signerPosition: sole ? "Sole Member / Owner" : "Member",
     },
   }
@@ -173,10 +181,7 @@ export interface GenerateAttestationResult {
   owners?: Array<{ name: string; pct: number }>
 }
 
-export async function generateOwnershipAttestationForAccount(
-  accountId: string,
-  opts: { effective_date?: string; actor?: string } = {},
-): Promise<GenerateAttestationResult> {
+async function loadAttestation(accountId: string, effectiveDate: string): Promise<AssembleAttestationResult> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
   const { data: account } = await db
@@ -219,8 +224,15 @@ export async function generateOwnershipAttestationForAccount(
     contacts = (contactRows ?? []) as AttestationContact[]
   }
 
+  return assembleOwnershipAttestation({ account: account as AttestationAccount, members, contacts, effectiveDate })
+}
+
+export async function generateOwnershipAttestationForAccount(
+  accountId: string,
+  opts: { effective_date?: string; actor?: string } = {},
+): Promise<GenerateAttestationResult> {
   const effectiveDate = opts.effective_date || new Date().toISOString().slice(0, 10)
-  const assembled = assembleOwnershipAttestation({ account: account as AttestationAccount, members, contacts, effectiveDate })
+  const assembled = await loadAttestation(accountId, effectiveDate)
   if (assembled.error) return { error: assembled.error }
 
   const pdfBytes = await generateOwnershipAttestationPDF(assembled.input)
@@ -263,4 +275,93 @@ export async function generateOwnershipAttestationForAccount(
   const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
   const legacy = await legacyDriveForAccount(accountId)
   return { error: await raiseDriveWriteRefused({ flow: "ownership-attestation", accountId, reason: legacy.reason, detail: fileName }) }
+}
+
+export interface SendAttestationResult {
+  success?: boolean
+  error?: string
+  envelope_id?: string
+  signer_name?: string
+  /** how the signer was reached: "portal" (shows in Sign Documents + notified) or "email" (direct signing link) */
+  channel?: "portal" | "email"
+  owners?: Array<{ name: string; pct: number }>
+}
+
+/**
+ * Build the attestation and send it to the company's signer to sign in the client portal (Sign Documents).
+ * When the signer finishes, the e-sign engine files the signed copy in the company's documents, where the client
+ * can see and download it. Nothing is saved as an unsigned copy here. One open request per company at a time.
+ */
+export async function sendOwnershipAttestationForSignature(
+  accountId: string,
+  opts: { effective_date?: string; actor?: string; baseUrl: string },
+): Promise<SendAttestationResult> {
+  const effectiveDate = opts.effective_date || new Date().toISOString().slice(0, 10)
+  const assembled = await loadAttestation(accountId, effectiveDate)
+  if (assembled.error) return { error: assembled.error }
+  const { input, signer } = assembled
+  if (!signer.contactId && !signer.email) {
+    return { error: `${signer.name} has no linked contact and no email, so there is no way to reach them. Fix that first.` }
+  }
+  if (!signer.email) {
+    return { error: `${signer.name} has no email on their contact record. Add it first so they can be notified.` }
+  }
+
+  const documentName = `Attestation of Beneficial Ownership - ${input.companyName}`
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  const { isTerminalEnvelopeStatus, TERMINAL_ENVELOPE_STATUSES } = await import("@/lib/esign/envelope-status")
+  const { data: open } = await db
+    .from("esign_envelopes")
+    .select("id, status")
+    .eq("owner_account_id", accountId)
+    .eq("document_name", documentName)
+    .not("status", "in", `(${TERMINAL_ENVELOPE_STATUSES.join(",")})`)
+    .limit(1)
+  if (open && open.length > 0 && !isTerminalEnvelopeStatus(open[0].status)) {
+    return { error: `An attestation for "${input.companyName}" is already waiting for ${signer.name} to sign. Void it in the E-Sign tool first if it must be replaced.` }
+  }
+
+  const { buildOwnershipAttestation } = await import("@/lib/pdf/ownership-attestation-pdf")
+  const built = await buildOwnershipAttestation(input)
+
+  const { createEsignEnvelope } = await import("@/lib/operations/esign")
+  let envelope
+  try {
+    envelope = await createEsignEnvelope({
+      document_name: documentName,
+      description: "Confirms who owns 25% or more of the company.",
+      pdfBuffer: Buffer.from(built.bytes),
+      fileName: `${documentName}.pdf`.replace(/[^A-Za-z0-9 ._-]/g, ""),
+      pageCount: 1,
+      fields: [{ field_type: "signature", ...built.signature, required: true, signer_index: 0 }],
+      signers: [{ name: signer.name, email: signer.email, contact_id: signer.contactId, role_label: input.signerPosition }],
+      owner_account_id: accountId,
+      contact_id: signer.contactId,
+      origin: "staff",
+      routing_order: "sequential",
+      created_by: opts.actor ?? "crm-admin",
+      baseUrl: opts.baseUrl,
+    })
+  } catch (err) {
+    return { error: `Could not create the signing request: ${err instanceof Error ? err.message : String(err)}` }
+  }
+
+  const { dispatchSignerDelivery } = await import("@/lib/esign/dispatch-delivery")
+  const channel = await dispatchSignerDelivery({ signerId: envelope.signers[0].id, baseUrl: opts.baseUrl, createdBy: opts.actor ?? "crm-admin" })
+  if (channel === "none") {
+    return { error: `The signing request was created but ${signer.name} could not be reached. Open it in the E-Sign tool to send it by hand.`, envelope_id: envelope.id }
+  }
+  await db.from("esign_envelopes").update({ status: "sent", updated_at: new Date().toISOString() }).eq("id", envelope.id)
+
+  logAction({
+    actor: opts.actor ?? "crm-admin",
+    action_type: "create",
+    table_name: "esign_envelopes",
+    record_id: envelope.id,
+    account_id: accountId,
+    summary: `Sent Attestation of Beneficial Ownership for ${input.companyName} to ${signer.name} to sign (${channel})`,
+    details: { owners: input.owners.map(o => `${o.fullName} ${o.ownershipPct}%`), source: "crm-button" },
+  })
+  return { success: true, envelope_id: envelope.id, signer_name: signer.name, channel, owners: input.owners.map(o => ({ name: o.fullName, pct: o.ownershipPct })) }
 }
