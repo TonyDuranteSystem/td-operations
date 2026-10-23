@@ -1,4 +1,6 @@
 /** Small pure helpers for showing a lead (client-safe; TD Marketing, dev job 9aec66fa). */
+import { makeT, type TFn } from "@/lib/marketing/i18n"
+
 export interface StageOption { key: string; label: string }
 
 /** The label of a pipeline stage; an unknown key is shown as itself so a lead is never displayed blank. */
@@ -14,22 +16,22 @@ export function prettyQuestion(name: string): string {
 }
 
 /** "19 Oct 2026, 10:15" in a fixed zone so every viewer sees the same time for the same lead. */
-export function formatWhen(iso: string | null | undefined, timeZone = "Europe/Rome"): string {
+export function formatWhen(iso: string | null | undefined, timeZone = "Europe/Rome", locale = "en-GB"): string {
   if (!iso) return "—"
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return "—"
-  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone, hour12: false }).format(d)
+  return new Intl.DateTimeFormat(locale, { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone, hour12: false }).format(d)
 }
 
 export interface ExistingClientFlag { contact_ids?: string[]; matched_on?: string[]; check_failed?: boolean }
 
 /** A short plain-English note when the lead looks like (or may be) an existing TD client; null when nothing to say. */
-export function clientFlagText(flag: ExistingClientFlag | null | undefined): string | null {
+export function clientFlagText(flag: ExistingClientFlag | null | undefined, t: TFn = makeT("en")): string | null {
   if (!flag) return null
-  if (flag.check_failed) return "We could not check whether this person is already a TD client. Ask before selling."
+  if (flag.check_failed) return t("We could not check whether this person is already a TD client. Ask before selling.")
   if (flag.contact_ids?.length) {
-    const how = (flag.matched_on ?? []).map(m => (m === "email" ? "email" : m === "phone" ? "phone number" : m)).join(" and ")
-    return `Looks like an existing TD client (same ${how || "details"}). Do not cold-sell; check with Antonio first.`
+    const how = (flag.matched_on ?? []).map(m => (m === "email" ? t("email") : m === "phone" ? t("phone number") : m)).join(t(" and "))
+    return t("Looks like an existing TD client (same {how}). Do not cold-sell; check with Antonio first.", { how: how || t("details") })
   }
   return null
 }
@@ -66,29 +68,33 @@ export function filterLeads<T extends FilterableLead>(leads: readonly T[], f: { 
 }
 
 /** Plain-English line for a history row. Unknown kinds show their own name so nothing is ever hidden. */
-export function eventText(kind: string, data: Record<string, unknown>, stages: readonly StageOption[], reasons: readonly StageOption[]): string {
+export function eventText(kind: string, data: Record<string, unknown>, stages: readonly StageOption[], reasons: readonly StageOption[], t: TFn = makeT("en"), locale = "en-GB"): string {
+  const fw = (iso: string | null) => formatWhen(iso, "Europe/Rome", locale)
   const note = typeof data.note === "string" && data.note ? ` — ${data.note}` : ""
   switch (kind) {
-    case "received": return "Lead arrived from the ad"
-    case "possible_existing_client": return "Flagged: may already be a TD client"
-    case "client_check_failed": return "Could not check whether this is a TD client"
-    case "assigned": return `Assigned to ${typeof data.team_name === "string" ? data.team_name : "a team"}`
-    case "details_filled": return "Name, email and phone filled in from the form answers"
-    case "claimed": return "Picked"
-    case "released": return "Given back"
-    case "note": return `Note: ${typeof data.text === "string" ? data.text : ""}`
-    case "payment_link_created": return "Payment link created"
-    case "payment_received": return "Payment received"
-    case "sale_refunded": return "Sale refunded"
-    case "sale_paid_out": return "Seller's share paid out"
-    case "sale_terms_applied": return "Split applied to the sale"
-    case "stage_not_moved": return "Paid, but the lead could not be moved to the next stage automatically: check it"
+    case "received": return t("Lead arrived from the ad")
+    case "possible_existing_client": return t("Flagged: may already be a TD client")
+    case "client_check_failed": return t("Could not check whether this is a TD client")
+    case "assigned": return t("Assigned to {team}", { team: typeof data.team_name === "string" ? data.team_name : t("a team") })
+    case "details_filled": return t("Name, email and phone filled in from the form answers")
+    case "claimed": return t("Picked")
+    case "released": return t("Given back")
+    case "note": return t("Note: {text}", { text: typeof data.text === "string" ? data.text : "" })
+    case "whatsapp": return `${data.state === "no_wa" ? t("No WhatsApp on this number") : t("WhatsApp sent")}${note}`
+    case "attempt": return `${t("No answer ({via})", { via: data.via === "whatsapp" ? "WhatsApp" : t("call") })}${note}`
+    case "appointment": return data.at ? `${t("Call booked for {when}", { when: fw(typeof data.at === "string" ? data.at : null) })}${note}` : `${t("Booked call cancelled")}${note}`
+    case "payment_link_created": return t("Payment link created")
+    case "payment_received": return t("Payment received")
+    case "sale_refunded": return t("Sale refunded")
+    case "sale_paid_out": return t("Seller's share paid out")
+    case "sale_terms_applied": return t("Split applied to the sale")
+    case "stage_not_moved": return t("Paid, but the lead could not be moved to the next stage automatically: check it")
     case "status_changed": {
-      const to = stageLabel(stages, typeof data.to === "string" ? data.to : null)
-      if (data.outcome === "not_in_target") return `Not in target (${reasons.find(r => r.key === data.reason)?.label ?? String(data.reason ?? "")})${note}`
-      if (data.outcome === "call_back") return `Call back on ${formatWhen(typeof data.callback_at === "string" ? data.callback_at : null)}${note}`
-      if (data.outcome === "good") return `Good — moved to ${to}${note}`
-      return `Moved to ${to}${note}`
+      const to = t(stageLabel(stages, typeof data.to === "string" ? data.to : null))
+      if (data.outcome === "not_in_target") return `${t("Not in target ({reason})", { reason: t(reasons.find(r => r.key === data.reason)?.label ?? String(data.reason ?? "")) })}${note}`
+      if (data.outcome === "call_back") return `${t("Call back on {when}", { when: fw(typeof data.callback_at === "string" ? data.callback_at : null) })}${note}`
+      if (data.outcome === "good") return `${t("Good — moved to {to}", { to })}${note}`
+      return `${t("Moved to {to}", { to })}${note}`
     }
     default: return kind
   }
