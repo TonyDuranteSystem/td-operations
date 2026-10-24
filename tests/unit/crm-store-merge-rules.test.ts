@@ -45,10 +45,11 @@ describe("mergeBlockReason — which ticked files may be merged", () => {
   it("Antonio 2026-10-24: one file from Business and one from My files can be merged", () => {
     expect(mergeBlockReason([biz(), mine()])).toBeNull()
   })
-  it("any firm storage kind added later mixes the same way (nothing is named in the rule)", () => {
-    expect(mergeBlockReason([biz(), f({ ownerKey: "mkt-1", ownerKind: "marketing" }), mine()])).toBeNull()
+  it("three firm storages' files can be merged together", () => {
+    expect(mergeBlockReason([biz(), mine(), biz({ ownerKey: "biz-2" })])).toBeNull()
   })
-  it("a storage whose kind is unknown is NOT trusted as a firm storage", () => {
+  it("a storage whose kind is unknown or unregistered is NOT trusted as a firm storage", () => {
     expect(mergeBlockReason([biz(), f({ ownerKey: "x", ownerKind: undefined })])).toMatch(/SAME company or person/)
+    expect(mergeBlockReason([biz(), f({ ownerKey: "x", ownerKind: "somethingnew" })])).toMatch(/SAME company or person/)
   })
 })
