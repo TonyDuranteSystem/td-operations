@@ -15,6 +15,7 @@ import { SwRegister } from '@/components/dashboard/sw-register'
 import { RealtimeNotifications } from '@/components/dashboard/realtime-notifications'
 import { ClearAllToasts } from '@/components/dashboard/clear-all-toasts'
 import { UiEventListener } from '@/components/dashboard/ui-event-listener'
+import { ConnectionWatcher } from '@/components/dashboard/connection-watcher'
 import { DashboardPullToRefresh } from '@/components/dashboard/pull-to-refresh'
 import StickyNotesLayer from '@/components/dashboard/sticky-notes-layer'
 import CaptureLayer from '@/components/captures/capture-layer'
@@ -200,6 +201,7 @@ export default async function DashboardLayout({
       <ChromeOnly><RealtimeNotifications /></ChromeOnly>
       <ChromeOnly><ClearAllToasts /></ChromeOnly>
       <UiEventListener />
+      <ConnectionWatcher />
       <ChromeOnly><DashboardPullToRefresh /></ChromeOnly>
       <ShellFrame sandbox={isSandbox}>
         <ChromeOnly>
