@@ -61,7 +61,7 @@ export default async function MarketingActivity() {
               {m.people.length === 0 && <tr><td colSpan={7} className="py-3 text-slate-500">{t('Nobody else has joined yet.')}</td></tr>}
               {m.people.map(p => (
                 <tr key={p.email}>
-                  <td className="py-2 pr-3 font-medium"><Link href={`/marketing/leads?by=${encodeURIComponent(p.email)}`} className="underline decoration-slate-300 underline-offset-2 hover:decoration-slate-700" title={t('See the leads this person worked on')}>{personName(p.email)}</Link></td>
+                  <td className="py-2 pr-3 font-medium"><Link href={`/marketing/leads?by=${encodeURIComponent(p.email)}`} className="underline decoration-slate-300 underline-offset-2 hover:decoration-slate-500" title={t('See the leads this person worked on')}>{personName(p.email)}</Link></td>
                   <td className="pr-3">{tLabel(p.role)}</td><td className="pr-3 text-right font-mono tabular-nums">{p.good}</td><td className="pr-3 text-right font-mono tabular-nums">{p.notInTarget}</td><td className="pr-3 text-right font-mono tabular-nums">{p.callBacks}</td><td className="pr-3 text-right font-mono tabular-nums">{p.picked}</td>
                   <td className="text-slate-500">{p.lastActive ? t('{age} ago', { age: ageText(Date.now() - new Date(p.lastActive).getTime(), lang === 'it' ? 'g' : 'd') }) : t('never')}</td>
                 </tr>

@@ -23,6 +23,7 @@ export function searchDigits(clean: string): string | null {
 export function searchFilter(clean: string, canSeePhone: boolean): string {
   const parts = [`full_name.ilike.%${clean}%`, `email.ilike.%${clean}%`]
   const d = searchDigits(clean)
-  if (d && canSeePhone) parts.push(`phone.ilike.%${d.split("").join("%")}%`)
+  // a phone number is typed with no letters: an email like mario1985@gmail.com or "Studio 2025" must not also match every phone that has those digits spread out
+  if (d && canSeePhone && !/[A-Za-z\u00C0-\u024F@]/.test(clean)) parts.push(`phone.ilike.%${d.split("").join("%")}%`)
   return parts.join(",")
 }

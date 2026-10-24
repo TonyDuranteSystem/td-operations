@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react'
 import { useT } from '@/components/marketing/lang-provider'
 import { LeadChat } from '@/components/marketing/lead-chat'
-import { OPEN_TAB_MESSAGE } from '@/lib/marketing/lead-windows'
+import { FRAME_FOCUS, OPEN_TAB_MESSAGE, WINDOW_STATE_MESSAGE } from '@/lib/marketing/lead-windows'
+import { setFrameHidden } from '@/lib/marketing/frame-visibility'
 
 /**
  * Inside a lead window (dev job 9aec66fa, Addendum G): the two tabs, Lead and Chat. The lead page (a server-rendered block) is passed in and stays mounted while the chat is
@@ -18,14 +19,24 @@ export function LeadWindowTabs({ leadId, chatOn, initialTab, initialUnread, chil
   // the board asks this window to show a tab (a notification or the Messages list opened an already-open lead): same page, nothing reloaded, nothing typed is lost
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      const d = e.data as { type?: string; tab?: string } | null
-      if (e.origin !== window.location.origin || !d || d.type !== OPEN_TAB_MESSAGE) return
+      const d = e.data as { type?: string; tab?: string; hidden?: boolean } | null
+      if (e.origin !== window.location.origin || e.source !== window.parent || !d) return
+      if (d.type === WINDOW_STATE_MESSAGE) { setFrameHidden(d.hidden === true); return }
+      if (d.type !== OPEN_TAB_MESSAGE) return
       if (d.tab === 'chat' && chatOn) setTab('chat')
       else if (d.tab === 'lead') setTab('lead')
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
   }, [chatOn])
+
+  // a click inside this window brings it to the front of the board's other windows
+  useEffect(() => {
+    if (window.parent === window) return
+    const toFront = () => window.parent.postMessage({ type: FRAME_FOCUS, leadId }, window.location.origin)
+    window.addEventListener('pointerdown', toFront, { capture: true, passive: true })
+    return () => window.removeEventListener('pointerdown', toFront, { capture: true })
+  }, [leadId])
 
   useEffect(() => {
     if (!chatOn) return

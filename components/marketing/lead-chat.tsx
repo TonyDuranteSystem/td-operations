@@ -5,6 +5,7 @@ import { Loader2, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { isBeingViewed } from '@/lib/talk/window-front'
+import { isFrameHidden } from '@/lib/marketing/frame-visibility'
 import { uploadLeadAttachment } from '@/lib/marketing/lead-chat-upload'
 import {
   dayLabel, matchMessages, mergeSnapshot, messageSignature, parseTypingSignal, shouldAnnounceTyping, snippet, tickStateAll, timeLabel, TYPING_EXPIRES_MS,
@@ -67,7 +68,7 @@ export function LeadChat({ leadId }: { leadId: string }) {
 
   const load = useCallback(async (opts: { silent?: boolean } = {}) => {
     try {
-      const r = await fetch(`${API}/${leadId}${isBeingViewed() ? '' : '?mark_read=0'}`)
+      const r = await fetch(`${API}/${leadId}${isBeingViewed() && !isFrameHidden() ? '' : '?mark_read=0'}`)
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(tRef.current(d.error || 'Could not load this chat.')) }
       const d = await r.json()
       const incoming = (d.messages ?? []) as TalkMessage[]

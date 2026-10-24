@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useT } from '@/components/marketing/lang-provider'
 import type { BoardRole } from '@/lib/marketing/board'
 import {
-  DOCK_H, EMPTY_WINDOWS, FRAME_CHANGED, OPEN_TAB_MESSAGE, TITLEBAR_H, WINDOW_H, WINDOW_W, closeWindow, focusWindow, frontWindowId, minimizeWindow, moveWindow, openWindow, windowSrc,
+  DOCK_H, EMPTY_WINDOWS, FRAME_CHANGED, FRAME_FOCUS, OPEN_TAB_MESSAGE, WINDOW_STATE_MESSAGE, isLeadId, TITLEBAR_H, WINDOW_H, WINDOW_W, closeWindow, focusWindow, frontWindowId, minimizeWindow, moveWindow, openWindow, windowSrc,
   type Viewport, type WindowTab, type WindowsState,
 } from '@/lib/marketing/lead-windows'
 
@@ -46,6 +46,8 @@ export function LeadWindowsHost({ defaultRole, roles, chatOn, children }: { defa
   const [dragging, setDragging] = useState(false)
   const vpRef = useRef<Viewport>({ w: 1280, h: 800 })
   const drag = useRef<{ id: string; dx: number; dy: number } | null>(null)
+  // the board each window's page was opened with: changing the board later must not reload (and so empty) the windows already open
+  const frameRoles = useRef(new Map<string, string>())
 
   // the board this person last chose (only when he may use both)
   const rolesKey = roles.join(',')
@@ -58,7 +60,7 @@ export function LeadWindowsHost({ defaultRole, roles, chatOn, children }: { defa
   }, [])
 
   const open = useCallback((c: { id: string; name: string }, tab?: WindowTab) => {
-    setWins(s => openWindow(s, { id: c.id, name: c.name || '…', tab }, vpRef.current))
+    setWins(s => openWindow(s, { id: c.id, name: c.name, tab }, vpRef.current))
     // a lead that is already open stays as it is (nothing typed is lost); the page inside is told to switch tab
     if (tab) setTimeout(() => {
       const frame = document.querySelector<HTMLIFrameElement>(`iframe[data-lead="${CSS.escape(c.id)}"]`)
@@ -70,16 +72,19 @@ export function LeadWindowsHost({ defaultRole, roles, chatOn, children }: { defa
   const handled = useRef(new Set<string>())
   useEffect(() => {
     const id = params.get('open') ?? params.get('lead') ?? params.get('chat')
+    // the address is clean again: the next tap on a notification for the same lead must open it again
+    if (!id) { handled.current.clear(); return }
     const tab: WindowTab | undefined = params.get('chat') && chatOn ? 'chat' : undefined
-    if (!id || !/^[0-9a-f-]{36}$/i.test(id) || handled.current.has(id + (tab ?? ''))) return
+    if (!isLeadId(id) || handled.current.has(id + (tab ?? ''))) return
     handled.current.add(id + (tab ?? ''))
-    open({ id, name: t('Lead') }, tab)
+    vpRef.current = { w: window.innerWidth, h: window.innerHeight }
+    open({ id, name: '' }, tab)
     try {
       const u = new URL(window.location.href)
       for (const k of ['open', 'lead', 'chat']) u.searchParams.delete(k)
       window.history.replaceState(null, '', u.pathname + (u.search || ''))
     } catch { /* the address is only cosmetic */ }
-  }, [params, chatOn, open, t])
+  }, [params, chatOn, open])
 
   useEffect(() => {
     const measure = () => { vpRef.current = { w: window.innerWidth, h: window.innerHeight } }
@@ -88,7 +93,15 @@ export function LeadWindowsHost({ defaultRole, roles, chatOn, children }: { defa
     // a save inside a lead window: read the leads again so the screen behind shows it (waits a moment so several saves in a row make one read)
     let timer: ReturnType<typeof setTimeout> | undefined
     const onMessage = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin || (e.data as { type?: string } | null)?.type !== FRAME_CHANGED) return
+      const d = e.data as { type?: string; leadId?: string } | null
+      if (e.origin !== window.location.origin || !d) return
+      if (d.type === FRAME_FOCUS && typeof d.leadId === 'string') {
+        // a click inside a window's page brings that window to the front (the title bar was the only way before)
+        const id = d.leadId
+        setWins(s => (frontWindowId(s) === id || !s.list.some(w => w.id === id) ? s : focusWindow(s, id)))
+        return
+      }
+      if (d.type !== FRAME_CHANGED) return
       clearTimeout(timer)
       timer = setTimeout(() => router.refresh(), 400)
     }
@@ -119,26 +132,39 @@ export function LeadWindowsHost({ defaultRole, roles, chatOn, children }: { defa
 
   const api = useMemo<Api>(() => ({ open, role, roles, setRole }), [open, role, roles, setRole])
   const front = frontWindowId(wins)
+  // tell every window page whether the person can see it (minimized or behind another window): a chat nobody is looking at must not mark messages as read
+  const sendState = useCallback((id: string, hidden: boolean) => {
+    document.querySelector<HTMLIFrameElement>(`iframe[data-lead="${CSS.escape(id)}"]`)?.contentWindow?.postMessage({ type: WINDOW_STATE_MESSAGE, hidden }, window.location.origin)
+  }, [])
+  useEffect(() => {
+    const ids = new Set(wins.list.map(w => w.id))
+    Array.from(frameRoles.current.keys()).forEach(k => { if (!ids.has(k)) frameRoles.current.delete(k) })
+    wins.list.forEach(w => sendState(w.id, w.minimized || front !== w.id))
+  }, [wins, front, sendState])
   return (
     <Ctx.Provider value={api}>
-      {children}
+      {/* room under the page for the bar at the bottom, so the last row is never behind it */}
+      <div style={{ paddingBottom: wins.list.length > 0 ? DOCK_H : 0 }}>{children}</div>
       {wins.list.map(w => {
         // a minimized window is only hidden, not removed: what was typed in it, and an upload in flight, are still there when it comes back
-        const src = windowSrc(w.id, w.srcTab, role)
+        if (!frameRoles.current.has(w.id)) frameRoles.current.set(w.id, role)
+        const src = windowSrc(w.id, w.srcTab, frameRoles.current.get(w.id))
+        const title = w.name || t('Lead')
+        const rank = wins.list.filter(o => o.z < w.z).length
         return (
-          <div key={w.id} role="dialog" aria-label={w.name} data-testid="lead-window" data-lead={w.id}
+          <div key={w.id} role="dialog" aria-label={title} data-testid="lead-window" data-lead={w.id}
             className={`fixed flex flex-col overflow-hidden rounded-xl border bg-white shadow-2xl ${front === w.id ? 'border-slate-500' : 'border-slate-300'}`}
-            style={{ display: w.minimized ? 'none' : undefined, left: w.x, top: w.y, zIndex: 40 + w.z, width: WINDOW_W, height: Math.min(WINDOW_H, Math.max(320, vpRef.current.h - w.y - DOCK_H - 8)) }}
+            style={{ display: w.minimized ? 'none' : undefined, left: w.x, top: w.y, zIndex: 40 + rank, width: WINDOW_W, height: Math.min(WINDOW_H, Math.max(320, vpRef.current.h - w.y - DOCK_H - 8)) }}
             onPointerDownCapture={() => { if (front !== w.id) setWins(s => focusWindow(s, w.id)) }}>
             <div className="flex shrink-0 cursor-move select-none items-center justify-between gap-2 border-b bg-slate-100 px-3 text-sm font-medium" style={{ height: TITLEBAR_H, touchAction: 'none' }}
               onPointerDown={e => onDown(e, w.id, w.x, w.y)}>
-              <span className="min-w-0 truncate">{w.name}</span>
+              <span className="min-w-0 truncate">{title}</span>
               <span className="flex shrink-0 gap-1">
                 <button type="button" aria-label={t('Minimize')} data-testid="win-min" onClick={() => setWins(s => minimizeWindow(s, w.id))} className="rounded px-2 py-0.5 text-lg leading-none hover:bg-slate-200">−</button>
                 <button type="button" aria-label={t('Close')} data-testid="win-close" onClick={() => setWins(s => closeWindow(s, w.id))} className="rounded px-2 py-0.5 text-lg leading-none hover:bg-slate-200">×</button>
               </span>
             </div>
-            {src ? <iframe key={w.id} data-lead={w.id} title={w.name} src={src} className="min-h-0 w-full flex-1 border-0 bg-slate-50" style={dragging ? { pointerEvents: 'none' } : undefined} /> : null}
+            {src ? <iframe key={w.id} data-lead={w.id} title={title} src={src} onLoad={() => sendState(w.id, w.minimized || front !== w.id)} className="min-h-0 w-full flex-1 border-0 bg-slate-50" style={dragging ? { pointerEvents: 'none' } : undefined} /> : null}
           </div>
         )
       })}
@@ -148,7 +174,7 @@ export function LeadWindowsHost({ defaultRole, roles, chatOn, children }: { defa
           <span className="text-slate-400">{t('Windows')}</span>
           {wins.list.map(w => (
             <span key={w.id} className={`flex items-center overflow-hidden rounded-full border ${w.minimized ? 'bg-white' : 'bg-slate-100'}`}>
-              <button type="button" onClick={() => setWins(s => (w.minimized ? openWindow(s, { id: w.id, name: w.name }, vpRef.current) : focusWindow(s, w.id)))} className="max-w-[10rem] truncate px-3 py-1 hover:bg-slate-50" data-testid="dock-item">{w.name}</button>
+              <button type="button" onClick={() => setWins(s => (w.minimized ? openWindow(s, { id: w.id, name: w.name }, vpRef.current) : focusWindow(s, w.id)))} className="max-w-[10rem] truncate px-3 py-1 hover:bg-slate-50" data-testid="dock-item">{w.name || t('Lead')}</button>
               <button type="button" aria-label={t('Close')} onClick={() => setWins(s => closeWindow(s, w.id))} className="px-2 py-1 text-slate-400 hover:text-slate-900">×</button>
             </span>
           ))}

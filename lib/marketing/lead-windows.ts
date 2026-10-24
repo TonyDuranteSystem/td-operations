@@ -61,6 +61,7 @@ export function frontWindowId(s: WindowsState): string | null {
 }
 /** A window page address: only a lead id that is a plain uuid is ever put in an address. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const isLeadId = (id: string): boolean => UUID.test(id)
 export function windowSrc(id: string, tab: WindowTab = "lead", role?: string): string | null {
   if (!UUID.test(id)) return null
   const q = new URLSearchParams()
@@ -71,3 +72,7 @@ export function windowSrc(id: string, tab: WindowTab = "lead", role?: string): s
 }
 /** What the board tells a window page to do when its lead is opened again from a notification or the Messages list. */
 export const OPEN_TAB_MESSAGE = "tdm-open-tab"
+/** What the board tells a window page about itself: `hidden` = minimized or behind another window (so its chat does not mark messages read). */
+export const WINDOW_STATE_MESSAGE = "tdm-window-state"
+/** What a window page tells the board when the person clicks inside it: bring this window to the front. */
+export const FRAME_FOCUS = "tdm-frame-focus"

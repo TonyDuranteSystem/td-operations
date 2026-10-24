@@ -6,6 +6,9 @@ import { SEARCH_LIMIT, cleanSearch, searchDigits, searchFilter } from "@/lib/mar
 import { parseTheme, DEFAULT_THEME } from "@/lib/marketing/theme"
 import { columnsFor } from "@/lib/marketing/board"
 import { IT } from "@/lib/marketing/i18n-it"
+import { isLeadId, openWindow, closeWindow, EMPTY_WINDOWS } from "@/lib/marketing/lead-windows"
+import { isFrameHidden, setFrameHidden } from "@/lib/marketing/frame-visibility"
+import { modulesFor } from "@/lib/marketing/workspace"
 
 describe("the sidebar order a person chose", () => {
   const items = ["board", "cal", "chat", "leads"].map(key => ({ key }))
@@ -41,6 +44,9 @@ describe("the search bar", () => {
   it("a phone filter is added only for numbers of 4+ digits and only for people who may see phone numbers", () => {
     expect(searchDigits("+39 335 12")).toBe("3933512")
     expect(searchDigits("ab 12")).toBeNull()
+    // an email or a name with digits in it is not a phone number: no loose phone match that would push the real lead out
+    expect(searchFilter("mario1985@gmail.com", true)).not.toContain("phone")
+    expect(searchFilter("Studio 2025", true)).not.toContain("phone")
     expect(searchFilter("Mario", true)).toBe("full_name.ilike.%Mario%,email.ilike.%Mario%")
     expect(searchFilter("335 123", true)).toContain("phone.ilike.%3%3%5%1%2%3%")
     expect(searchFilter("335 123", false)).not.toContain("phone")
@@ -83,5 +89,34 @@ describe("the seller's board words", () => {
     const labels = columnsFor("seller").map(c => c.label)
     expect(labels).toEqual(["Booked calls", "To book with you", "After the call", "Paid"])
     for (const l of labels) expect(IT[l], l).toBeTruthy()
+  })
+})
+
+describe("review fixes (bug hunt on PR 823)", () => {
+  const ID = "0b0e6a1c-3d5f-4c3a-9a47-5a1d2f7e8b90"
+  it("only a real uuid is a lead id (a string of 36 hyphens is not)", () => {
+    expect(isLeadId(ID)).toBe(true)
+    expect(isLeadId("-".repeat(36))).toBe(false)
+    expect(isLeadId("0b0e6a1c-3d5f-4c3a-9a47-5a1d2f7e8b9")).toBe(false)
+  })
+  it("a window opened with no name keeps a real name already known, and a closed one can be opened again", () => {
+    const vp = { w: 1400, h: 900 }
+    let s = openWindow(EMPTY_WINDOWS, { id: ID, name: "Mario Rossi" }, vp)
+    s = openWindow(s, { id: ID, name: "", tab: "chat" }, vp)
+    expect(s.list[0].name).toBe("Mario Rossi")
+    expect(s.list[0].tab).toBe("chat")
+    s = closeWindow(s, ID)
+    s = openWindow(s, { id: ID, name: "" }, vp)
+    expect(s.list).toHaveLength(1)
+  })
+  it("a window page starts visible and follows what the board tells it", () => {
+    expect(isFrameHidden()).toBe(false)
+    setFrameHidden(true)
+    expect(isFrameHidden()).toBe(true)
+    setFrameHidden(false)
+  })
+  it("the Chat entry needs both the chat and the right to read leads (the page needs both)", () => {
+    expect(modulesFor(["chat"]).some(m => m.key === "chat")).toBe(false)
+    expect(modulesFor(["chat", "leads.read"]).some(m => m.key === "chat")).toBe(true)
   })
 })

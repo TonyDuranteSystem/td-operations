@@ -250,17 +250,26 @@ export async function downloadFile(path: string): Promise<Blob | null> {
 }
 
 /** How many unread messages I have in each lead of my team (leads with none are left out). */
-export async function unreadByLead(ctx: MarketingContext): Promise<Map<string, number>> {
+export const unreadByLead = (ctx: MarketingContext): Promise<Map<string, number>> => unreadFor(ctx.team.id, ctx.user.id)
+
+/** Only messages from the last 90 days are counted as unread (the number is recomputed on every screen, so it must not grow with the whole history). */
+export const UNREAD_LOOKBACK_DAYS = 90
+const CHAT_ROW_CAP = 5000
+
+async function unreadFor(teamId: string, userId: string): Promise<Map<string, number>> {
   const d = db()
-  const [{ data: reads }, { data: msgs }] = await Promise.all([
-    d.from("marketing_lead_chat_reads").select("lead_id, last_read_at").eq("user_id", ctx.user.id).eq("team_id", ctx.team.id),
-    d.from("marketing_lead_messages").select("lead_id, sender_id, created_at, deleted_at").eq("team_id", ctx.team.id).neq("sender_id", ctx.user.id).is("deleted_at", null).order("created_at", { ascending: false }).limit(5000),
+  const since = new Date(Date.now() - UNREAD_LOOKBACK_DAYS * 86_400_000).toISOString()
+  const [{ data: reads, error: e1 }, { data: msgs, error: e2 }] = await Promise.all([
+    d.from("marketing_lead_chat_reads").select("lead_id, last_read_at").eq("user_id", userId).eq("team_id", teamId),
+    d.from("marketing_lead_messages").select("lead_id, sender_id, created_at, deleted_at").eq("team_id", teamId).neq("sender_id", userId).is("deleted_at", null).gte("created_at", since).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP),
   ])
+  // a failed read is a zero on the screen; at least leave a trace in the server log
+  if (e1 || e2) console.error("[marketing] unread count failed:", (e1 ?? e2)?.message)
   const readAt = new Map(((reads ?? []) as Array<{ lead_id: string; last_read_at: string }>).map(r => [r.lead_id, r.last_read_at]))
   const by = new Map<string, Array<{ sender_id: string; created_at: string; deleted_at: string | null }>>()
   for (const m of (msgs ?? []) as Array<{ lead_id: string; sender_id: string; created_at: string; deleted_at: string | null }>) by.set(m.lead_id, [...(by.get(m.lead_id) ?? []), m])
   const out = new Map<string, number>()
-  for (const [lead, list] of Array.from(by)) { const n = unreadCount(list, ctx.user.id, readAt.get(lead) ?? null); if (n > 0) out.set(lead, n) }
+  for (const [lead, list] of Array.from(by)) { const n = unreadCount(list, userId, readAt.get(lead) ?? null); if (n > 0) out.set(lead, n) }
   return out
 }
 
@@ -269,12 +278,19 @@ export interface Conversation { leadId: string; name: string; last: string; last
 /** Every lead of my team that has a chat: the newest line, who wrote it, and my unread number. Newest first. */
 export async function listConversations(ctx: MarketingContext): Promise<Conversation[]> {
   const d = db()
-  const { data: msgs } = await d.from("marketing_lead_messages").select(`${MESSAGE_COLS}, lead_id`).eq("team_id", ctx.team.id).order("created_at", { ascending: false }).limit(3000)
+  const { data: msgs } = await d.from("marketing_lead_messages").select(`${MESSAGE_COLS}, lead_id`).eq("team_id", ctx.team.id).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP)
   const newest = new Map<string, ChatMessageRow & { lead_id: string }>()
   for (const m of (msgs ?? []) as Array<ChatMessageRow & { lead_id: string }>) if (!newest.has(m.lead_id)) newest.set(m.lead_id, m)
   if (newest.size === 0) return []
-  const [unread, { data: leads }] = await Promise.all([unreadByLead(ctx), d.from("marketing_leads").select("id, full_name, email").eq("team_id", ctx.team.id).in("id", Array.from(newest.keys()))])
-  const nameOf = new Map(((leads ?? []) as Array<{ id: string; full_name: string | null; email: string | null }>).map(l => [l.id, l.full_name || l.email || "Lead"]))
+  // the lead names, a hundred at a time (hundreds of ids in one request make the address too long and the whole lookup fails)
+  const ids = Array.from(newest.keys())
+  const chunks: string[][] = []
+  for (let i = 0; i < ids.length; i += 100) chunks.push(ids.slice(i, i + 100))
+  const [unread, ...found] = await Promise.all([unreadByLead(ctx), ...chunks.map(c => d.from("marketing_leads").select("id, full_name, email").eq("team_id", ctx.team.id).in("id", c))])
+  const failed = found.find(f => f.error)
+  if (failed?.error) console.error("[marketing] chat list names failed:", failed.error.message)
+  const leads = found.flatMap(f => (f.data ?? []) as Array<{ id: string; full_name: string | null; email: string | null }>)
+  const nameOf = new Map(leads.map(l => [l.id, l.full_name || l.email || "Lead"]))
   return Array.from(newest.values()).map(m => ({ leadId: m.lead_id, name: nameOf.get(m.lead_id) ?? "Lead", last: previewLine({ message: m.message, attachments: m.attachments, deleted_at: m.deleted_at }), lastAt: m.created_at, lastBy: m.sender_id === ctx.user.id ? "" : m.sender_name, unread: unread.get(m.lead_id) ?? 0 }))
     .sort((a, b) => (b.unread > 0 ? 1 : 0) - (a.unread > 0 ? 1 : 0) || b.lastAt.localeCompare(a.lastAt))
 }

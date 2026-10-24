@@ -92,7 +92,7 @@ export function LeadBoard({ cards, truncated }: { cards: BoardCard[]; truncated:
             <tbody className="divide-y">
               {[...cards].sort((a, b) => b.arrivedMs - a.arrivedMs).map(c => (
                 <tr key={c.id} className="cursor-pointer hover:bg-slate-50" onClick={() => open(c)} data-lead={c.id}>
-                  <td className="px-3 py-2 font-medium">{c.name}{c.unread > 0 && <span className="ml-2 rounded-full bg-red-600 px-1.5 text-[11px] font-semibold text-white">{c.unread}</span>}<span className="block text-xs font-normal text-slate-500">{c.phone ?? ''}</span></td>
+                  <td className="px-3 py-2 font-medium"><button type="button" onClick={e => { e.stopPropagation(); open(c) }} className="text-left font-medium hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-500">{c.name}</button>{c.unread > 0 && <span className="ml-2 rounded-full bg-red-600 px-1.5 text-[11px] font-semibold text-white">{c.unread}</span>}<span className="block text-xs font-normal text-slate-500">{c.phone ?? ''}</span></td>
                   <td className="px-3"><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">{t(c.stageLabel)}</span></td>
                   <td className="px-3"><span className="flex flex-wrap gap-1">{c.chips.map(ch => <span key={ch.key} className={`rounded-full border px-2 py-0.5 text-[11px] ${TONE[ch.tone]}`}>{ch.text}</span>)}</span></td>
                   <td className="px-3 text-xs text-slate-500">{c.filledIn}</td>

@@ -40,7 +40,7 @@ export function LeadSearch() {
       <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder={t('Search a lead: name, email or phone')} aria-label={t('Search leads')} data-testid="lead-search"
         className="h-9 w-full rounded-lg border bg-white px-3 text-sm outline-none focus:border-slate-500" />
       {hits !== null && (
-        <ul className="absolute left-0 right-0 top-10 z-30 max-h-80 overflow-y-auto rounded-lg border bg-white shadow-lg" data-testid="search-results">
+        <ul className="absolute left-0 right-0 top-10 z-[300] max-h-80 overflow-y-auto rounded-lg border bg-white shadow-lg" data-testid="search-results">
           {hits.length === 0
             ? <li className="px-3 py-3 text-sm text-slate-500">{busy ? t('Searching…') : t('No lead found.')}</li>
             : hits.map(h => (
