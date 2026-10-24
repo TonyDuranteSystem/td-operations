@@ -1144,18 +1144,56 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setMergeList(picked.map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, size: f.size })))
   }
 
+  /** Save the merged PDF into the chosen folder of My files / Business (no document type there — the same rules as a plain upload). */
+  const uploadMergedInternal = async () => {
+    if (!mergedFile) return
+    const target = folderOptions().find((o) => o.f.id === upFolder)?.f
+    if (!target || target.trashed || target.locked || target.kind === 'root') { toast.error('Choose the folder first.'); return }
+    if (mergedFile.ownerId !== (ownerIdRef.current ?? '')) { setMergedFile(null); toast.error('This merged file was made in another storage — merge it again here.'); return }
+    const oid = folderOwner.current.get(target.id) ?? ownerId
+    if (!oid) return
+    const file = mergedFile.file
+    const fileName = finalUploadName(file.name, upName)
+    const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
+    setUploading(true)
+    try {
+      const put = await putFileWithRetry({
+        file,
+        prepare: async () => {
+          const path = `${STAGING_PREFIX}${oid}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safe}`
+          const sig = await postJson<{ signedUrl?: string }>('/api/storage/upload', { bucket: 'onboarding-uploads', path, contentType: file.type }, 'Could not prepare the upload.')
+          if (!sig.signedUrl) throw new Error('Could not prepare the upload.')
+          return { signedUrl: sig.signedUrl, path }
+        },
+        onRetry: ({ attempt, of }) => toast.message(`Connection problem — trying again (${attempt + 1} of ${of})…`),
+      })
+      if (!put.ok) throw new Error(put.message)
+      const r = await postJson<{ write: string; name: string }>('/api/crm-store/browse/upload', { ownerId: oid, folderId: target.id, storagePath: put.path as string, fileName, mimeType: file.type }, 'The merged file could not be saved — please try again.')
+      toast.success(r.write === 'versioned' ? `"${r.name}" saved as a new version (the old copy is under Versions)` : r.write === 'unchanged' ? `"${r.name}" is identical to the current copy — nothing changed` : `"${r.name}" saved in ${target.name}`)
+      setMergedFile(null)
+      setUploadOpen(false)
+      await refreshAll([target.id])
+    } catch (e) {
+      toast.error(errMsg(e, 'The merged file could not be saved — please try again.'))
+    } finally {
+      setUploading(false)
+    }
+  }
+
   /** The merged PDF is ready: it goes through the NORMAL upload (folder, document type, name and show choice are the person's). */
   const finishMerge = async (file: File, pageCounts: number[], orderedIds: string[]) => {
     const first = selectedFiles.get(orderedIds[0] ?? '') ?? Array.from(selectedFiles.values())[0]
     const pages = pageCounts.reduce((a, b) => a + b, 0)
     setMergeList(null)
-    if (isInternalOwnerKind(ownerKind)) {                                  // My files / Business: the plain upload window (no type there)
-      if (!viewFolder || viewFolder.kind === 'root') { toast.error('Open the folder the merged file should go into, then merge again.'); return }
-      const { items, skipped, folders } = filterPlainDrop(itemsFromFileList([{ file }]))
-      plainFolders.current = new Map()
-      setPlain({ folder: viewFolder, items, skipped, folders })
+    if (isInternalOwnerKind(ownerKind)) {
+      // My files / Business: the same bar and Preview, and the person picks ANY folder of this storage (no document type exists there)
+      const opts = folderOptions().filter((o) => !o.f.locked && o.f.kind !== 'root')
+      const startFolder = first?.folderId && opts.some((o) => o.f.id === first.folderId) ? first.folderId : (viewFolder && opts.some((o) => o.f.id === viewFolder.id) ? viewFolder.id : undefined)
+      await openUpload(startFolder)
+      setUpName(baseName(file.name))
+      setMergedFile({ file, pages, ownerId: ownerIdRef.current ?? ownerId ?? '' })
       setSelectedFiles(new Map())
-      toast.success(`Merged into one PDF (${pages} pages) — upload it below.`)
+      toast.success(`Merged into one PDF (${pages} pages) — choose the folder and the name, then upload.`)
       return
     }
     // start in the first file's folder only when the Folder list really offers it (a person's top folder is not in that list)
@@ -2360,7 +2398,29 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
           {!browseOn && allFilesView()}
 
-          {uploadOpen && isInternalOwnerKind(ownerKind) && viewFolder && (
+          {uploadOpen && isInternalOwnerKind(ownerKind) && mergedFile && (
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm" onClick={(e) => e.stopPropagation()} data-testid="merged-file-ready">
+              <Layers className="h-4 w-4 shrink-0 text-blue-600" />
+              <span className="font-medium text-blue-900">Merged file ready:</span>
+              <span className="text-xs text-zinc-500">{mergedFile.pages} pages · {fmtSize(mergedFile.file.size)}</span>
+              <span className="flex-1" />
+              <div className="flex w-full flex-wrap items-center gap-2">
+                <select value={upFolder} onChange={(e) => setUpFolder(e.target.value)} disabled={uploading} data-testid="merged-internal-folder" className="max-w-xs rounded-md border border-zinc-200 bg-white px-2 py-1">
+                  <option value="">Folder…</option>
+                  {folderOptions().filter((o) => !o.f.locked && o.f.kind !== 'root').map(({ f, depth }) => <option key={f.id} value={f.id}>{`${'  '.repeat(depth)}${f.name}`}</option>)}
+                </select>
+                <input value={upName} onChange={(e) => setUpName(e.target.value)} disabled={uploading} placeholder="Name" className="w-72 rounded-md border border-zinc-200 bg-white px-2 py-1" />
+                <span className="flex-1" />
+                <button type="button" onClick={() => setMergedPreviewOpen(true)} data-testid="preview-merged"
+                  className="rounded-md border border-blue-300 bg-white px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50">Preview</button>
+                <button type="button" disabled={uploading || !folderOptions().some((o) => o.f.id === upFolder)} onClick={uploadMergedInternal} data-testid="upload-merged"
+                  className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40">Upload merged file</button>
+                <button type="button" disabled={uploading} onClick={() => { setMergedFile(null); setUploadOpen(false) }} className="text-xs text-zinc-600 hover:underline">Discard</button>
+              </div>
+              {!folderOptions().some((o) => o.f.id === upFolder) && <span className="w-full text-xs text-blue-800">Choose the folder above (only folders you have opened in the tree are listed), then upload.</span>}
+            </div>
+          )}
+          {uploadOpen && isInternalOwnerKind(ownerKind) && viewFolder && !mergedFile && (
             <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm" onClick={(e) => e.stopPropagation()} data-testid="plain-upload-box">
               <span className="text-zinc-700">Into <strong>{viewFolder.name}</strong>:</span>
               <label className="cursor-pointer rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50">Choose files
