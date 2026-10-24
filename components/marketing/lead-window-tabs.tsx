@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useT } from '@/components/marketing/lang-provider'
 import { LeadChat } from '@/components/marketing/lead-chat'
+import { OPEN_TAB_MESSAGE } from '@/lib/marketing/lead-windows'
 
 /**
  * Inside a lead window (dev job 9aec66fa, Addendum G): the two tabs, Lead and Chat. The lead page (a server-rendered block) is passed in and stays mounted while the chat is
@@ -13,6 +14,18 @@ export function LeadWindowTabs({ leadId, chatOn, initialTab, initialUnread, chil
   const t = useT()
   const [tab, setTab] = useState<'lead' | 'chat'>(chatOn ? initialTab : 'lead')
   const [unread, setUnread] = useState(initialUnread)
+
+  // the board asks this window to show a tab (a notification or the Messages list opened an already-open lead): same page, nothing reloaded, nothing typed is lost
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const d = e.data as { type?: string; tab?: string } | null
+      if (e.origin !== window.location.origin || !d || d.type !== OPEN_TAB_MESSAGE) return
+      if (d.tab === 'chat' && chatOn) setTab('chat')
+      else if (d.tab === 'lead') setTab('lead')
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [chatOn])
 
   useEffect(() => {
     if (!chatOn) return

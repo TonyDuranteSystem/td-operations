@@ -40,7 +40,7 @@ export function TalkComposer({
   onTyping?: (kind: TypingKind) => void
   disabled?: boolean
 }) {
-  const { t } = useTalkI18n()
+  const { t, ts } = useTalkI18n()
   const [text, setText] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
@@ -178,7 +178,7 @@ export function TalkComposer({
           {mode.kind === 'reply' ? <CornerUpLeft className="h-4 w-4 shrink-0 text-zinc-500" /> : <Pencil className="h-4 w-4 shrink-0 text-zinc-500" />}
           <span className="min-w-0 flex-1">
             <span className="block text-xs font-semibold text-[#BE1E2D]">{mode.kind === 'reply' ? t('Replying to {who}', { who: mode.who === 'yourself' ? t('yourself') : mode.who }) : t('Editing message')}</span>
-            <span className="block truncate text-[13px] text-zinc-600">{t(snippet(mode.message, 70))}</span>
+            <span className="block truncate text-[13px] text-zinc-600">{ts(snippet(mode.message, 70))}</span>
           </span>
           <button type="button" aria-label={t('Cancel')} onClick={onCancelMode} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-zinc-500 active:bg-zinc-200">
             <X className="h-4 w-4" />

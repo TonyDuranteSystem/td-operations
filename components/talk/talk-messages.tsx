@@ -67,7 +67,7 @@ function Bubble({
   onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
   voiceApi?: string
 }) {
-  const { t } = useTalkI18n()
+  const { t, ts } = useTalkI18n()
   const atts = (m.attachments ?? []).filter(a => a && a.url)
   const deleted = !!m.deleted_at
   const quote = quotedPreview(m, byId)
@@ -140,7 +140,7 @@ function Bubble({
                 className="block w-full rounded-lg border-l-4 border-[#BE1E2D] bg-black/5 px-2 py-1 text-left"
               >
                 {quote.sender_name && <span className="block text-xs font-semibold text-[#BE1E2D]">{quote.sender_name}</span>}
-                <span className="block truncate text-[13px] text-zinc-600">{t(quote.text)}</span>
+                <span className="block truncate text-[13px] text-zinc-600">{ts(quote.text)}</span>
               </button>
             )}
             {atts.map((a, i) => <Attachment key={`${a.url}-${i}`} a={a} messageId={m.id} index={i} voiceApi={voiceApi} />)}

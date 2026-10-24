@@ -22,16 +22,17 @@ export async function sendMarketingPush(teamId: string, userIds: readonly string
     webpush.setVapidDetails("mailto:support@tonydurante.us", pub, priv)
     const { data } = await db().from("marketing_push_subscriptions").select("id, endpoint, p256dh, auth_key").eq("team_id", teamId).in("user_id", ids)
     let sent = 0, failed = 0
-    for (const s of (data ?? []) as Array<{ id: string; endpoint: string; p256dh: string; auth_key: string }>) {
+    // all at once, each with its own time limit: one slow or dead address must not hold up the others
+    await Promise.allSettled(((data ?? []) as Array<{ id: string; endpoint: string; p256dh: string; auth_key: string }>).map(async s => {
       try {
-        await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth_key } }, JSON.stringify(payload))
+        await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth_key } }, JSON.stringify(payload), { timeout: 8000 })
         sent++
       } catch (e) {
         failed++
         const code = (e as { statusCode?: number })?.statusCode
         if (typeof code === "number" && DEAD.has(code)) await db().from("marketing_push_subscriptions").delete().eq("id", s.id)
       }
-    }
+    }))
     return { sent, failed }
   } catch {
     return { sent: 0, failed: 0 }

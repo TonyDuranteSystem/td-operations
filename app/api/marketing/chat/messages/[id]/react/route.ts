@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
-import { requireMarketing } from "@/lib/marketing/guard"
-import { NO_STORE, toggleReaction } from "@/lib/marketing/lead-chat-server"
+import { NO_STORE, requireChatAccess, toggleReaction } from "@/lib/marketing/lead-chat-server"
 
 /** POST /api/marketing/chat/messages/[id]/react { emoji } — toggle my reaction. */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const g = await requireMarketing("chat")
+  const g = await requireChatAccess()
   if (g.res) return g.res
   const { id } = await params
   const body = (await req.json().catch(() => ({}))) as { emoji?: unknown }

@@ -22,7 +22,7 @@ export function TalkMessageSheet({
   onEdit: () => void
   onDelete: () => void
 }) {
-  const { t } = useTalkI18n()
+  const { t, ts } = useTalkI18n()
   const [confirming, setConfirming] = useState(false)
   const mine = reactionSummary(message.reactions, meId).filter(p => p.mine).map(p => p.emoji)
   const hasText = !!(message.message ?? '').trim()
@@ -43,7 +43,7 @@ export function TalkMessageSheet({
       <button type="button" aria-label={t('Close')} onClick={onClose} className="absolute inset-0 bg-black/40" />
       <div className="relative rounded-t-2xl bg-white pb-[max(env(safe-area-inset-bottom),12px)] shadow-xl">
         <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-zinc-300" />
-        <p className="truncate px-5 pb-1 pt-3 text-xs text-zinc-400">{t(snippet(message, 60))}</p>
+        <p className="truncate px-5 pb-1 pt-3 text-xs text-zinc-400">{ts(snippet(message, 60))}</p>
         {confirming ? (
           <div className="px-5 pb-3 pt-1">
             <p className="mb-3 text-[16px] text-zinc-900">{t('Delete this message for everyone?')}</p>

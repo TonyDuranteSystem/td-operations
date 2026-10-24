@@ -15,7 +15,7 @@ import { personName } from "@/lib/marketing/setter-note"
 import type { Bundles } from "@/lib/marketing/access"
 import { sendMarketingPush } from "@/lib/marketing/push"
 import {
-  BUCKET, SIGNED_URL_SECONDS, checkEdit, isInvolved, checkEmoji, checkSend, chatUrlFor, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, pushRecipients, toTalkMessage, unreadCount,
+  BUCKET, SIGNED_URL_SECONDS, URL_CACHE_SECONDS, checkEdit, isInvolved, checkEmoji, checkSend, chatUrlFor, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, pushRecipients, toTalkMessage, unreadCount,
   type ChatMessageRow, type ChatReaction, type StoredAttachment,
 } from "@/lib/marketing/lead-chat"
 
@@ -38,8 +38,28 @@ export async function openChat(leadId: string): Promise<{ ctx: MarketingContext;
   return { ctx: g.ctx, lead }
 }
 
-/** The team's people who may use the chat (active, with the chat permission), as ids and names — the ones the ticks and the notifications are about. */
-export async function chatMembers(teamId: string): Promise<Array<{ id: string; name: string; permissions: string[]; status: string }>> {
+/** For the chat routes that are not about one lead: the same two permissions as `openChat` (the chat AND the right to read leads), so a list of conversations never shows more than the leads would. */
+export async function requireChatAccess(): Promise<{ ctx: MarketingContext; res?: undefined } | { res: NextResponse; ctx?: undefined }> {
+  const g = await requireMarketing("chat")
+  if (g.res) return { res: g.res }
+  if (!hasPermission(g.ctx.permissions, "leads.read")) return { res: json({ error: "You are not allowed to do this.", code: "NO_PERMISSION" }, 403) }
+  return { ctx: g.ctx }
+}
+
+type ChatMember = { id: string; name: string; permissions: string[]; status: string }
+const MEMBER_CACHE_MS = 60_000
+const memberCache = new Map<string, { at: number; list: ChatMember[] }>()
+
+/** The team's people who may use the chat (not removed, with the chat permission), as ids and names — the ones the ticks and the notifications are about. Kept for a minute: the chat asks every few seconds and each member costs a call to the login service. */
+export async function chatMembers(teamId: string): Promise<ChatMember[]> {
+  const hit = memberCache.get(teamId)
+  if (hit && Date.now() - hit.at < MEMBER_CACHE_MS) return hit.list
+  const list = await loadChatMembers(teamId)
+  memberCache.set(teamId, { at: Date.now(), list })
+  return list
+}
+
+async function loadChatMembers(teamId: string): Promise<ChatMember[]> {
   const bundles = (await getMarketingSetting("permission_bundles", teamId)) as Bundles
   const rows = await listMembers(teamId)
   return rows
@@ -48,12 +68,24 @@ export async function chatMembers(teamId: string): Promise<Array<{ id: string; n
     .filter(m => m.permissions.includes("chat"))
 }
 
+const urlCache = new Map<string, { at: number; url: string }>()
+
+/** Signed links for these files. The same link is handed out for URL_CACHE_SECONDS (fewer calls to storage, and the audio player is not reloaded by every refresh); a new one is signed after that. */
 async function signUrls(paths: readonly string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>()
-  const uniq = Array.from(new Set(paths))
-  if (uniq.length === 0) return out
-  const { data } = await db().storage.from(BUCKET).createSignedUrls(uniq, SIGNED_URL_SECONDS)
-  for (const r of (data ?? []) as Array<{ path: string | null; signedUrl: string | null }>) if (r.path && r.signedUrl) out.set(r.path, r.signedUrl)
+  const now = Date.now()
+  const missing: string[] = []
+  for (const p of Array.from(new Set(paths))) {
+    const hit = urlCache.get(p)
+    if (hit && now - hit.at < URL_CACHE_SECONDS * 1000) out.set(p, hit.url)
+    else missing.push(p)
+  }
+  if (missing.length === 0) return out
+  const { data } = await db().storage.from(BUCKET).createSignedUrls(missing, SIGNED_URL_SECONDS)
+  for (const r of (data ?? []) as Array<{ path: string | null; signedUrl: string | null }>) {
+    if (r.path && r.signedUrl) { out.set(r.path, r.signedUrl); urlCache.set(r.path, { at: now, url: r.signedUrl }) }
+  }
+  if (urlCache.size > 5000) for (const k of Array.from(urlCache.keys()).slice(0, 1000)) urlCache.delete(k)
   return out
 }
 
@@ -78,11 +110,12 @@ export async function loadChat(ctx: MarketingContext, leadId: string, markRead: 
   if (markRead) await markLeadRead(ctx, leadId)
   const me = ctx.user.id
   // the ticks wait for the people who work the leads (the setter, the seller), not for the ad person who only watches
-  const memberIds = members.filter(m => isInvolved(m.permissions)).map(m => m.id).filter(id => id !== me)
+  // (a paused person is not waited for: his ticks would never turn blue)
+  const memberIds = members.filter(m => m.status === "active" && isInvolved(m.permissions)).map(m => m.id).filter(id => id !== me)
   return {
     me,
     messages: await shape(rows, (reacts ?? []) as ChatReaction[]),
-    members: members.filter(m => isInvolved(m.permissions)).map(m => ({ id: m.id, name: m.name })),
+    members: members.filter(m => m.status === "active" && isInvolved(m.permissions)).map(m => ({ id: m.id, name: m.name })),
     // the ticks: how far every OTHER person who can chat has read / received it
     member_ids: memberIds,
     member_reads: ((reads ?? []) as Array<{ user_id: string; last_read_at: string }>).filter(r => r.user_id !== me),
@@ -128,8 +161,13 @@ export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body
   try {
     const members = await chatMembers(ctx.team.id)
     const to = pushRecipients(members.map(m => ({ user_id: m.id, status: m.status, permissions: m.permissions })), ctx.user.id)
-    const leadName = lead.full_name || lead.email || lead.phone || "Lead"
-    void sendMarketingPush(ctx.team.id, to, { title: `${senderName} · ${leadName}`, body: previewLine({ message: c.message, attachments: c.attachments, deleted_at: null }), url: chatUrlFor(lead.id), tag: `chat-${lead.id}` })
+    // a lead with no name is shown by its email, never its phone number (a notification can sit on a lock screen)
+    const leadName = lead.full_name || lead.email || "Lead"
+    // WAIT for the notifications (a function may be stopped as soon as it has answered), but never longer than a few seconds: a slow phone service must not hold up the sender
+    await Promise.race([
+      sendMarketingPush(ctx.team.id, to, { title: `${senderName} · ${leadName}`, body: previewLine({ message: c.message, attachments: c.attachments, deleted_at: null }), url: chatUrlFor(lead.id), tag: `chat-${lead.id}` }),
+      new Promise(resolve => setTimeout(resolve, 4000)),
+    ])
   } catch { /* the message is already saved */ }
   return { ok: true, message }
 }
@@ -170,9 +208,12 @@ export async function toggleReaction(ctx: MarketingContext, id: string, emojiIn:
   const m = await messageInTeam(ctx, id)
   if (!m || m.deleted_at) return { ok: false, error: "Message not found", status: 404 }
   const d = db()
-  const { data: had } = await d.from("marketing_lead_message_reactions").select("emoji").eq("message_id", id).eq("user_id", ctx.user.id).eq("emoji", emoji).maybeSingle()
-  if (had) await d.from("marketing_lead_message_reactions").delete().eq("message_id", id).eq("user_id", ctx.user.id).eq("emoji", emoji)
-  else await d.from("marketing_lead_message_reactions").upsert({ message_id: id, user_id: ctx.user.id, user_name: personName(ctx.user.email ?? ""), emoji }, { onConflict: "message_id,user_id,emoji" })
+  // try to add; if it is already there (the primary key says so) take it away — two quick taps can never both "add"
+  const { error: addErr } = await d.from("marketing_lead_message_reactions").insert({ message_id: id, user_id: ctx.user.id, user_name: personName(ctx.user.email ?? ""), emoji })
+  if (addErr) {
+    if ((addErr as { code?: string }).code !== "23505") return { ok: false, error: "Could not react.", status: 500 }
+    await d.from("marketing_lead_message_reactions").delete().eq("message_id", id).eq("user_id", ctx.user.id).eq("emoji", emoji)
+  }
   const { data } = await d.from("marketing_lead_message_reactions").select("message_id, user_id, user_name, emoji").eq("message_id", id)
   return { ok: true, reactions: ((data ?? []) as ChatReaction[]).map(r => ({ emoji: r.emoji, reactor_id: r.user_id, reactor_name: r.user_name })) }
 }
@@ -232,8 +273,8 @@ export async function listConversations(ctx: MarketingContext): Promise<Conversa
   const newest = new Map<string, ChatMessageRow & { lead_id: string }>()
   for (const m of (msgs ?? []) as Array<ChatMessageRow & { lead_id: string }>) if (!newest.has(m.lead_id)) newest.set(m.lead_id, m)
   if (newest.size === 0) return []
-  const [unread, { data: leads }] = await Promise.all([unreadByLead(ctx), d.from("marketing_leads").select("id, full_name, email, phone").eq("team_id", ctx.team.id).in("id", Array.from(newest.keys()))])
-  const nameOf = new Map(((leads ?? []) as Array<{ id: string; full_name: string | null; email: string | null; phone: string | null }>).map(l => [l.id, l.full_name || l.email || l.phone || "Lead"]))
+  const [unread, { data: leads }] = await Promise.all([unreadByLead(ctx), d.from("marketing_leads").select("id, full_name, email").eq("team_id", ctx.team.id).in("id", Array.from(newest.keys()))])
+  const nameOf = new Map(((leads ?? []) as Array<{ id: string; full_name: string | null; email: string | null }>).map(l => [l.id, l.full_name || l.email || "Lead"]))
   return Array.from(newest.values()).map(m => ({ leadId: m.lead_id, name: nameOf.get(m.lead_id) ?? "Lead", last: previewLine({ message: m.message, attachments: m.attachments, deleted_at: m.deleted_at }), lastAt: m.created_at, lastBy: m.sender_id === ctx.user.id ? "" : m.sender_name, unread: unread.get(m.lead_id) ?? 0 }))
     .sort((a, b) => (b.unread > 0 ? 1 : 0) - (a.unread > 0 ? 1 : 0) || b.lastAt.localeCompare(a.lastAt))
 }

@@ -10,7 +10,7 @@ import { clientFlagText, formatWhen, stageLabel, type StageOption } from '@/lib/
 import { canSeeNotes, withoutPhone } from '@/lib/marketing/lead-privacy'
 import { loadLeadActivity } from '@/lib/marketing/note-read'
 import { contactChips, EMPTY_CONTACT } from '@/lib/marketing/contact-state'
-import { boardRole, type BoardCard } from '@/lib/marketing/board'
+import { availableBoardRoles, boardRole, type BoardCard } from '@/lib/marketing/board'
 import { LeadBoard } from '@/components/marketing/lead-board'
 import { listConversations, unreadByLead } from '@/lib/marketing/lead-chat-server'
 
@@ -65,7 +65,7 @@ export default async function MarketingBoard({ searchParams }: { searchParams: P
   return (
     <div className="space-y-4 p-6 pb-20">
       <div><h1 className="text-2xl font-semibold">{t('Board')}</h1><p className="mt-1 text-sm text-slate-500">{t('Click a lead to open it in a window. You can keep up to three open.')}</p></div>
-      <LeadBoard role={boardRole(g.ctx.permissions)} cards={cards} truncated={res.truncated} chatOn={chatOn} conversations={conversations} openChatId={sp.chat && /^[0-9a-f-]{36}$/i.test(sp.chat) ? sp.chat : null} />
+      <LeadBoard role={boardRole(g.ctx.permissions)} roles={availableBoardRoles(g.ctx.permissions)} cards={cards} truncated={res.truncated} chatOn={chatOn} conversations={conversations} openChatId={sp.chat && /^[0-9a-f-]{36}$/i.test(sp.chat) ? sp.chat : null} />
     </div>
   )
 }

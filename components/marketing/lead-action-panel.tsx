@@ -1,5 +1,6 @@
 'use client'
 
+import { romeLocalToIso } from '@/lib/marketing/rome-time'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useT } from '@/components/marketing/lang-provider'
@@ -95,7 +96,7 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
           )}
           {mode === 'call_back' && (
             <label className="block">
-              <span className="text-slate-500">{t('Day and time to call back')}</span>
+              <span className="text-slate-500">{t('Day and time to call back (Rome time)')}</span>
               <input type="datetime-local" className="mt-1 w-full rounded-lg border px-3 py-2" value={when} onChange={e => setWhen(e.target.value)} />
             </label>
           )}
@@ -110,7 +111,7 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
               const n = note.trim() || undefined
               if (mode === 'good') return send({ action: 'good', ticked, note: n })
               if (mode === 'not_in_target') return send({ action: 'not_in_target', reason, note: n })
-              if (mode === 'call_back') return send({ action: 'call_back', callbackAt: new Date(when).toISOString(), note: n })
+              if (mode === 'call_back') return send({ action: 'call_back', callbackAt: romeLocalToIso(when) ?? '', note: n })
               return send({ action: 'note', note: n })
             }}
           >
