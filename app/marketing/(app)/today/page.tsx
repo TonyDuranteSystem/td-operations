@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { LeadLink } from '@/components/marketing/lead-link'
 import { redirect } from 'next/navigation'
 import { resolveMarketingContext } from '@/lib/marketing/guard'
 import { hasPermission } from '@/lib/marketing/permissions'
@@ -74,7 +75,7 @@ export default async function MarketingToday() {
             <ul className="mt-3 divide-y">
               {m.callBacks.map(({ lead, late }) => (
                 <li key={lead.id} className="flex items-center justify-between gap-3 py-2">
-                  <Link href={`/marketing/leads?lead=${lead.id}`} className="min-w-0"><span className="block truncate font-medium">{who(lead)}</span><span className="block text-xs text-slate-500">{lead.phone ?? t('No phone')}</span></Link>
+                  <LeadLink leadId={lead.id} name={who(lead)} className="min-w-0"><span className="block truncate font-medium">{who(lead)}</span><span className="block text-xs text-slate-500">{lead.phone ?? t('No phone')}</span></LeadLink>
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${late ? 'bg-red-50 text-red-700' : 'bg-sky-50 text-sky-800'}`}>{late ? t('{age} late', { age: age(now.getTime() - new Date(lead.callback_at as string).getTime()) }) : fw(lead.callback_at)}</span>
                 </li>
               ))}
@@ -88,7 +89,7 @@ export default async function MarketingToday() {
             <ul className="mt-3 divide-y">
               {m.goodWaiting.map(l => (
                 <li key={l.id} className="flex items-center justify-between gap-3 py-3">
-                  <Link href={`/marketing/leads?lead=${l.id}`} className="min-w-0"><span className="block truncate font-medium">{who(l)}</span><span className="block text-xs text-slate-500">{t('{phone} · waiting {age}', { phone: l.phone ?? t('No phone'), age: age(now.getTime() - new Date(l.meta_created_time ?? l.received_at).getTime()) })}</span>{clientFlagText(l.existing_client, t) && <span className="block text-xs text-amber-800">{t('Existing TD client? Check first.')}</span>}{notes.get(l.id) && <span className="mt-1 line-clamp-2 block break-words text-xs text-slate-700" data-testid="good-note"><b>{notes.get(l.id)?.by}:</b> {notes.get(l.id)?.text}</span>}</Link>
+                  <LeadLink leadId={l.id} name={who(l)} className="min-w-0"><span className="block truncate font-medium">{who(l)}</span><span className="block text-xs text-slate-500">{t('{phone} · waiting {age}', { phone: l.phone ?? t('No phone'), age: age(now.getTime() - new Date(l.meta_created_time ?? l.received_at).getTime()) })}</span>{clientFlagText(l.existing_client, t) && <span className="block text-xs text-amber-800">{t('Existing TD client? Check first.')}</span>}{notes.get(l.id) && <span className="mt-1 line-clamp-2 block break-words text-xs text-slate-700" data-testid="good-note"><b>{notes.get(l.id)?.by}:</b> {notes.get(l.id)?.text}</span>}</LeadLink>
                   <PickButton leadId={l.id} />
                 </li>
               ))}
@@ -102,7 +103,7 @@ export default async function MarketingToday() {
         {m.mine.length === 0 ? <p className="mt-3 text-sm text-slate-500">{t('You have not picked a lead yet. Pick one from the Good leads above.')}</p> : (
           <ul className="mt-3 divide-y">
             {m.mine.map(l => (
-              <li key={l.id}><Link href={`/marketing/leads?lead=${l.id}`} className="flex items-center justify-between gap-3 py-2"><span className="min-w-0"><span className="block truncate font-medium">{who(l)}</span><span className="block text-xs text-slate-500">{l.phone ?? t('No phone')}</span></span><span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs">{t(stageLabel(stages, l.status))}</span></Link></li>
+              <li key={l.id}><LeadLink leadId={l.id} name={who(l)} className="flex items-center justify-between gap-3 py-2"><span className="min-w-0"><span className="block truncate font-medium">{who(l)}</span><span className="block text-xs text-slate-500">{l.phone ?? t('No phone')}</span></span><span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs">{t(stageLabel(stages, l.status))}</span></LeadLink></li>
             ))}
           </ul>
         )}
@@ -113,7 +114,7 @@ export default async function MarketingToday() {
         {m.waitingOver24h.length === 0 ? <p className="mt-3 text-sm text-slate-500">{t('Every new lead has been looked at within a day.')}</p> : (
           <ul className="mt-3 divide-y" data-testid="waiting-over-24h">
             {m.waitingOver24h.slice(0, 25).map(l => (
-              <li key={l.id}><Link href={`/marketing/leads?lead=${l.id}`} className="flex items-center justify-between gap-3 py-2"><span className="min-w-0"><span className="block truncate font-medium">{who(l)}</span><span className="block text-xs text-slate-500">{l.phone ?? t('No phone')}</span></span><span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700">{t('waiting {age}', { age: age(now.getTime() - new Date(l.meta_created_time ?? l.received_at).getTime()) })}</span></Link></li>
+              <li key={l.id}><LeadLink leadId={l.id} name={who(l)} className="flex items-center justify-between gap-3 py-2"><span className="min-w-0"><span className="block truncate font-medium">{who(l)}</span><span className="block text-xs text-slate-500">{l.phone ?? t('No phone')}</span></span><span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700">{t('waiting {age}', { age: age(now.getTime() - new Date(l.meta_created_time ?? l.received_at).getTime()) })}</span></LeadLink></li>
             ))}
             {m.waitingOver24h.length > 25 && <li className="py-2 text-xs text-slate-500">{t('…and {n} more, in Leads.', { n: m.waitingOver24h.length - 25 })}</li>}
           </ul>
@@ -125,7 +126,7 @@ export default async function MarketingToday() {
         {m.rejectedToday.length === 0 ? <p className="mt-3 text-sm text-slate-500">{t('Nobody has marked a lead Not in target today.')}</p> : (
           <ul className="mt-3 divide-y" data-testid="rejected-today">
             {m.rejectedToday.map(r => (
-              <li key={r.lead.id}><Link href={`/marketing/leads?lead=${r.lead.id}`} className="block py-2"><span className="block truncate font-medium">{who(r.lead)}</span><span className="block text-xs text-slate-500">{personName(r.by)} · {reasonLabel(r.reason) ? t(reasonLabel(r.reason) as string) : t('no reason given')} · {fw(r.at)}</span>{r.note && seesTeamNotes && <span className="mt-1 line-clamp-2 block break-words text-xs text-slate-700">{r.note}</span>}</Link></li>
+              <li key={r.lead.id}><LeadLink leadId={r.lead.id} name={who(r.lead)} className="block py-2"><span className="block truncate font-medium">{who(r.lead)}</span><span className="block text-xs text-slate-500">{personName(r.by)} · {reasonLabel(r.reason) ? t(reasonLabel(r.reason) as string) : t('no reason given')} · {fw(r.at)}</span>{r.note && seesTeamNotes && <span className="mt-1 line-clamp-2 block break-words text-xs text-slate-700">{r.note}</span>}</LeadLink></li>
             ))}
           </ul>
         )}

@@ -6,8 +6,8 @@
 import type { TFn } from "@/lib/marketing/i18n"
 
 export type BoardRole = "setter" | "seller"
-export type BoardView = "pipeline" | "cards" | "list" | "messages"
-export const BOARD_VIEWS: readonly BoardView[] = ["pipeline", "cards", "list", "messages"]
+export type BoardView = "pipeline" | "cards" | "list"
+export const BOARD_VIEWS: readonly BoardView[] = ["pipeline", "cards", "list"]
 export const parseBoardView = (v: unknown): BoardView => (BOARD_VIEWS as readonly string[]).includes(v as string) ? (v as BoardView) : "pipeline"
 
 /** A person who sells: creates payment links, hosts the calls or picks leads (the seller bundle has no money permission, so the money permission alone is not the test). */
@@ -49,8 +49,8 @@ const SETTER_COLUMNS: readonly BoardColumn[] = [
 ]
 const SELLER_COLUMNS: readonly BoardColumn[] = [
   { key: "booked", label: "Booked calls", stages: ["booked"] },
-  { key: "passed", label: "Passed to you", stages: ["qualified"] },
-  { key: "with_me", label: "In progress with you", stages: ["showed"] },
+  { key: "passed", label: "To book with you", stages: ["qualified"] },
+  { key: "with_me", label: "After the call", stages: ["showed"] },
   { key: "paid", label: "Paid", stages: ["paid_call", "upsell_won"] },
 ]
 

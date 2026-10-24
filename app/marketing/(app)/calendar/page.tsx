@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { LeadLink } from '@/components/marketing/lead-link'
 import { redirect } from 'next/navigation'
 import { resolveMarketingContext } from '@/lib/marketing/guard'
 import { hasPermission } from '@/lib/marketing/permissions'
@@ -60,7 +61,7 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
   const total = due + agenda.late.length
   const row = (it: CalItem) => (
     <li key={`${it.leadId}-${it.kind}`}>
-      <Link href={`/marketing/leads?lead=${it.leadId}`} className={`grid grid-cols-[3.5rem_minmax(0,1fr)] items-start gap-3 rounded-lg border bg-white px-3 py-2.5 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-900 ${it.late ? 'border-red-300' : ''}`} data-testid="cal-item">
+      <LeadLink leadId={it.leadId} name={it.name} className={`grid grid-cols-[3.5rem_minmax(0,1fr)] items-start gap-3 rounded-lg border bg-white px-3 py-2.5 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-500 ${it.late ? 'border-red-300' : ''}`} testId="cal-item">
         <span className="font-mono text-sm font-medium tabular-nums">{it.time}</span>
         <span className="min-w-0">
           <span className="block truncate text-sm font-medium">{it.name}{it.kind === 'appointment' && <span className="ml-2 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-normal text-sky-800">{t('Call with the seller')}</span>}</span>
@@ -70,7 +71,7 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
           </span>
           {notes?.get(it.leadId)?.text && <span className="mt-0.5 line-clamp-2 block break-words text-xs text-slate-700">{notes?.get(it.leadId)?.text}</span>}
         </span>
-      </Link>
+      </LeadLink>
     </li>
   )
   return (

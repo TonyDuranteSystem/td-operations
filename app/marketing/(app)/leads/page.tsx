@@ -5,10 +5,9 @@ import { hasPermission } from '@/lib/marketing/permissions'
 import { getMarketingSetting } from '@/lib/marketing/settings'
 import { getLang } from '@/lib/marketing/lang'
 import { localeFor, makeT } from '@/lib/marketing/i18n'
-import { countLeads, countLeadsByStage, getTeamLead, leadTimeline, listAdNames, listTeamLeadsByIds, listTeamLeadsCapped, NO_AD } from '@/lib/marketing/leads-read'
+import { countLeads, countLeadsByStage, listAdNames, listTeamLeadsByIds, listTeamLeadsCapped, NO_AD } from '@/lib/marketing/leads-read'
 import { leadDb } from '@/lib/marketing/meta-leads/service'
 import { clientFlagText, filterLeads, formatWhen, LEAD_SHOW_OPTIONS, markWords, parseLeadShow, rowFacts, stageLabel, type StageOption } from '@/lib/marketing/lead-view'
-import { loadPaymentLinkView } from '@/lib/marketing/sales-server'
 import { leadIdsWorkedBy } from '@/lib/marketing/events-read'
 import { listMembers } from '@/lib/marketing/members'
 import { personName } from '@/lib/marketing/setter-note'
@@ -16,11 +15,11 @@ import { contactChips, EMPTY_CONTACT } from '@/lib/marketing/contact-state'
 import { canSeeNotes, withoutPhone } from '@/lib/marketing/lead-privacy'
 import { loadLeadActivity } from '@/lib/marketing/note-read'
 import { FilterMenu } from '@/components/marketing/filter-menu'
-import { LeadPane } from '../_lead-pane'
+import { LeadLink } from '@/components/marketing/lead-link'
 
 export const dynamic = 'force-dynamic'
 
-type SP = { show?: string; stage?: string; lead?: string; by?: string; ad?: string }
+type SP = { show?: string; stage?: string; by?: string; ad?: string }
 
 /**
  * TD Marketing — Leads (dev job 9aec66fa): the team's one filterable list on the left; the lead you click, with everything about it and the buttons, on the
@@ -43,12 +42,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
   const members = hasPermission(g.ctx.permissions, 'team.activity') ? await listMembers(teamId) : []
   const peopleOptions = members.filter(m => m.status !== 'removed' && m.email).map(m => ({ email: m.email as string }))
   const byEmail = sp.by && hasPermission(g.ctx.permissions, 'team.activity') && members.some(x => x.email === sp.by) ? sp.by : ''
-  const [stages, reasons, checklist, selected] = await Promise.all([
-    getMarketingSetting('pipeline_stages', teamId) as Promise<StageOption[]>,
-    getMarketingSetting('not_in_target_reasons', teamId) as Promise<StageOption[]>,
-    getMarketingSetting('qualification_checklist', teamId) as Promise<string[]>,
-    sp.lead ? getTeamLead(db, teamId, sp.lead) : Promise.resolve(null),
-  ])
+  const stages = (await getMarketingSetting('pipeline_stages', teamId)) as StageOption[]
   const show = parseLeadShow(sp.show)
   const stage = stages.some(s => s.key === sp.stage) ? (sp.stage as string) : ''
   const by = byEmail
@@ -86,11 +80,9 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
   const seesNotes = canSeeNotes(g.ctx.permissions)
   const activity = leads.length > 0 ? await loadLeadActivity(db, leads.map(l => l.id)) : null
   const nowMs = Date.now()
-  const events = selected ? await leadTimeline(db, selected.id) : []
-  const paymentLink = selected && hasPermission(g.ctx.permissions, 'payment_links.create') ? { leadId: selected.id, ...(await loadPaymentLinkView(db, { teamId, userId: g.ctx.user.id }, selected.id)) } : undefined
   const href = (n: Partial<SP>) => {
     const q = new URLSearchParams()
-    const m = { show: show !== 'all' ? show : '', stage, lead: sp.lead, by, ad, ...n }
+    const m = { show: show !== 'all' ? show : '', stage, by, ad, ...n }
     for (const [k, v] of Object.entries(m)) if (v) q.set(k, v)
     const t = q.toString()
     return t ? `/marketing/leads?${t}` : '/marketing/leads'
@@ -110,22 +102,22 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
       )}
       <nav aria-label={t('Filter leads')} className="space-y-2">
         <div className="flex flex-wrap items-center gap-2" data-testid="stage-strip" role="group" aria-label={t('Stages')}>
-          <Link href={href({ stage: '', lead: '' })} className={chip(stage === '')} aria-current={stage === '' ? 'true' : undefined}>{t('Any stage')} <b className="ml-1 font-semibold">{totalInStrip}</b></Link>
-          {stages.map(st => <Link key={st.key} href={href({ stage: st.key, lead: '' })} className={chip(stage === st.key, (counts.get(st.key) ?? 0) === 0)} data-stage={st.key} aria-current={stage === st.key ? 'true' : undefined}>{t(st.label)} <b className="ml-1 font-semibold">{counts.get(st.key) ?? 0}</b></Link>)}
+          <Link href={href({ stage: '' })} className={chip(stage === '')} aria-current={stage === '' ? 'true' : undefined}>{t('Any stage')} <b className="ml-1 font-semibold">{totalInStrip}</b></Link>
+          {stages.map(st => <Link key={st.key} href={href({ stage: st.key })} className={chip(stage === st.key, (counts.get(st.key) ?? 0) === 0)} data-stage={st.key} aria-current={stage === st.key ? 'true' : undefined}>{t(st.label)} <b className="ml-1 font-semibold">{counts.get(st.key) ?? 0}</b></Link>)}
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <div className="flex flex-wrap gap-2" role="group" aria-label={t('Whose')}>{LEAD_SHOW_OPTIONS.map(o => <Link key={o.key} href={href({ show: o.key === 'all' ? '' : o.key, lead: '' })} className={chip(show === o.key)} aria-current={show === o.key ? 'true' : undefined}>{o.key === 'all' ? t('All leads') : t(o.label)}</Link>)}</div>
+          <div className="flex flex-wrap gap-2" role="group" aria-label={t('Whose')}>{LEAD_SHOW_OPTIONS.map(o => <Link key={o.key} href={href({ show: o.key === 'all' ? '' : o.key })} className={chip(show === o.key)} aria-current={show === o.key ? 'true' : undefined}>{o.key === 'all' ? t('All leads') : t(o.label)}</Link>)}</div>
           {adList.length > 0 && (
             <FilterMenu label={t('Ad')} testId="ad-filter" current={ad ? (ad === NO_AD ? t('No ad name') : ad) : t('Any ad')}
-              options={[{ label: t('Any ad'), href: href({ ad: '', lead: '' }), on: !ad }, ...adList.map(a => ({ label: `${a.name === NO_AD ? t('No ad name') : a.name} (${a.count})`, href: href({ ad: a.name, lead: '' }), on: ad === a.name }))]} />
+              options={[{ label: t('Any ad'), href: href({ ad: '' }), on: !ad }, ...adList.map(a => ({ label: `${a.name === NO_AD ? t('No ad name') : a.name} (${a.count})`, href: href({ ad: a.name }), on: ad === a.name }))]} />
           )}
           {hasPermission(g.ctx.permissions, 'team.activity') && peopleOptions.length > 0 && (
             <FilterMenu label={t('Worked on by')} testId="person-filter" current={by ? personName(by) : t('Anyone')}
-              options={[{ label: t('Anyone'), href: href({ by: '', lead: '' }), on: !by }, ...peopleOptions.map(p => ({ label: personName(p.email), href: href({ by: p.email, lead: '' }), on: by === p.email }))]} />
+              options={[{ label: t('Anyone'), href: href({ by: '' }), on: !by }, ...peopleOptions.map(p => ({ label: personName(p.email), href: href({ by: p.email }), on: by === p.email }))]} />
           )}
         </div>
       </nav>
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+      <div>
         <section className="min-w-0 rounded-xl border bg-white" aria-label={t('Lead list')}>
           {leads.length === 0 ? (
             <div className="p-5 text-sm text-slate-600" data-testid="empty">
@@ -142,7 +134,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
                 const chips = activity ? contactChips(activity.contact.get(l.id) ?? EMPTY_CONTACT, iso => fw(iso), t) : []
                 return (
                   <li key={l.id}>
-                    <Link href={href({ lead: l.id })} className={`block px-4 py-3 ${l.id === sp.lead ? 'bg-teal-50' : 'hover:bg-slate-50'}`}>
+                    <LeadLink leadId={l.id} name={l.full_name || l.email || l.phone || t('Unnamed lead')} className="block px-4 py-3 hover:bg-slate-50" testId="lead-row">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0"><p className="truncate font-medium">{l.full_name || l.email || l.phone || t('Unnamed lead')}</p><p className="truncate text-xs text-slate-500">{[l.phone, l.email].filter(Boolean).join(' · ') || t('No contact details')}</p></div>
                         <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs">{t(stageLabel(stages, l.status))}</span>
@@ -157,18 +149,13 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
                       {chips.length > 0 && <p className="mt-1 flex flex-wrap gap-1" data-testid="row-chips">{chips.map(c => <span key={c.key} className={`rounded-full border px-2 py-0.5 text-[11px] ${c.tone === 'ok' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : c.tone === 'warn' ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-sky-200 bg-sky-50 text-sky-800'}`}>{c.text}</span>)}</p>}
                       {note && <p className="mt-0.5 truncate text-xs text-slate-700" data-testid="row-note">{note.text}</p>}
                       {clientFlagText(l.existing_client) && <p className="mt-1 text-xs text-amber-800">{t('Existing TD client? Check before selling.')}</p>}
-                    </Link>
+                    </LeadLink>
                   </li>
                 )
               })}
             </ul>
           )}
         </section>
-        <aside className="min-w-0" aria-label={t('Lead detail')}>
-          {selected ? (
-            <LeadPane lead={selected} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} viewingAs={!!g.ctx.viewAs} paymentLink={paymentLink} />
-          ) : <div className="rounded-xl border border-dashed p-8 text-sm text-slate-500">{t('Click a lead on the left to see what they answered, what the setter wrote, and everything that happened to it.')}</div>}
-        </aside>
       </div>
     </div>
   )
