@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Copy, CornerUpLeft, Pencil, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useTalkI18n } from '@/components/talk/talk-i18n'
 import { REACTION_EMOJIS, canDelete, canEdit, reactionSummary, snippet, type TalkMessage } from '@/lib/talk/chat-model'
 
 /**
@@ -21,6 +22,7 @@ export function TalkMessageSheet({
   onEdit: () => void
   onDelete: () => void
 }) {
+  const { t } = useTalkI18n()
   const [confirming, setConfirming] = useState(false)
   const mine = reactionSummary(message.reactions, meId).filter(p => p.mine).map(p => p.emoji)
   const hasText = !!(message.message ?? '').trim()
@@ -38,16 +40,16 @@ export function TalkMessageSheet({
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col justify-end" data-testid="talk-sheet" role="dialog" aria-modal="true">
-      <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black/40" />
+      <button type="button" aria-label={t('Close')} onClick={onClose} className="absolute inset-0 bg-black/40" />
       <div className="relative rounded-t-2xl bg-white pb-[max(env(safe-area-inset-bottom),12px)] shadow-xl">
         <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-zinc-300" />
-        <p className="truncate px-5 pb-1 pt-3 text-xs text-zinc-400">{snippet(message, 60)}</p>
+        <p className="truncate px-5 pb-1 pt-3 text-xs text-zinc-400">{t(snippet(message, 60))}</p>
         {confirming ? (
           <div className="px-5 pb-3 pt-1">
-            <p className="mb-3 text-[16px] text-zinc-900">Delete this message for everyone?</p>
+            <p className="mb-3 text-[16px] text-zinc-900">{t('Delete this message for everyone?')}</p>
             <div className="flex gap-3">
-              <button type="button" onClick={() => setConfirming(false)} className="flex-1 rounded-xl border border-zinc-200 py-3 text-[16px] text-zinc-800 active:bg-zinc-50">Cancel</button>
-              <button type="button" onClick={onDelete} data-testid="talk-delete-confirm" className="flex-1 rounded-xl bg-red-600 py-3 text-[16px] font-semibold text-white active:opacity-80">Delete</button>
+              <button type="button" onClick={() => setConfirming(false)} className="flex-1 rounded-xl border border-zinc-200 py-3 text-[16px] text-zinc-800 active:bg-zinc-50">{t('Cancel')}</button>
+              <button type="button" onClick={onDelete} data-testid="talk-delete-confirm" className="flex-1 rounded-xl bg-red-600 py-3 text-[16px] font-semibold text-white active:opacity-80">{t('Delete')}</button>
             </div>
           </div>
         ) : (
@@ -59,17 +61,17 @@ export function TalkMessageSheet({
                     key={e}
                     type="button"
                     onClick={() => onReact(e)}
-                    aria-label={`React ${e}`}
+                    aria-label={t('React {emoji}', { emoji: e })}
                     data-testid={`talk-react-${e}`}
                     className={cn('flex h-12 w-12 items-center justify-center rounded-full text-2xl active:bg-zinc-100', mine.includes(e) && 'bg-zinc-200')}
                   >{e}</button>
                 ))}
               </div>
             )}
-            {!message.deleted_at && <Row icon={<CornerUpLeft className="h-5 w-5" />} label="Reply" onClick={onReply} testId="talk-act-reply" />}
-            {hasText && !message.deleted_at && <Row icon={<Copy className="h-5 w-5" />} label="Copy text" onClick={onCopy} testId="talk-act-copy" />}
-            {canEdit(message, meId) && <Row icon={<Pencil className="h-5 w-5" />} label="Edit" onClick={onEdit} testId="talk-act-edit" />}
-            {canDelete(message, meId) && <Row icon={<Trash2 className="h-5 w-5" />} label="Delete" onClick={() => setConfirming(true)} danger testId="talk-act-delete" />}
+            {!message.deleted_at && <Row icon={<CornerUpLeft className="h-5 w-5" />} label={t('Reply')} onClick={onReply} testId="talk-act-reply" />}
+            {hasText && !message.deleted_at && <Row icon={<Copy className="h-5 w-5" />} label={t('Copy text')} onClick={onCopy} testId="talk-act-copy" />}
+            {canEdit(message, meId) && <Row icon={<Pencil className="h-5 w-5" />} label={t('Edit')} onClick={onEdit} testId="talk-act-edit" />}
+            {canDelete(message, meId) && <Row icon={<Trash2 className="h-5 w-5" />} label={t('Delete')} onClick={() => setConfirming(true)} danger testId="talk-act-delete" />}
           </>
         )}
       </div>

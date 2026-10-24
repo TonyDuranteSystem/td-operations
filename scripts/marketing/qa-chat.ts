@@ -74,6 +74,14 @@ async function main() {
   await hydrated(s)
   ck("the lead window has a Lead and a Chat tab, the Chat one open", (await s.locator('[data-testid="tab-chat"]').getAttribute("aria-selected")) === "true")
 
+  // the chat screen speaks the person's language: Italian by default, English with the switch
+  ck("the chat screen is in Italian by default", (await s.locator('[data-testid="talk-input"]').getAttribute("placeholder")) === "Messaggio")
+  await s.evaluate(async () => { await fetch("/api/marketing/lang", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lang: "en" }) }) })
+  await s.reload({ waitUntil: "networkidle" }); await s.waitForSelector('[data-testid="lead-chat"]'); await hydrated(s)
+  ck("…and in English after the switch", (await s.locator('[data-testid="talk-input"]').getAttribute("placeholder")) === "Message")
+  await s.evaluate(async () => { await fetch("/api/marketing/lang", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lang: "it" }) }) })
+  await s.reload({ waitUntil: "networkidle" }); await s.waitForSelector('[data-testid="lead-chat"]'); await hydrated(s)
+
   // 1. text
   await s.fill('[data-testid="talk-input"]', "Rocco, in target: vuole partire entro un mese.")
   await s.click('[data-testid="talk-send"]')
@@ -105,6 +113,7 @@ async function main() {
 
   // 4. seller replies (quote), reacts, edits, deletes
   await sf.locator('[data-testid="talk-msg-theirs"]').first().click({ button: "right" })
+  ck("the message menu is in Italian", (await sf.locator('[data-testid="talk-act-reply"]').innerText()).includes("Rispondi"))
   await sf.locator('[data-testid="talk-act-reply"]').click()
   await sf.locator('[data-testid="talk-input"]').fill("Perfetto, lo chiamo lunedì.")
   await sf.locator('[data-testid="talk-send"]').click()
@@ -161,7 +170,7 @@ async function main() {
   await sf.locator('[data-testid="talk-msg-mine"]').first().click({ button: "right" })
   await sf.locator('[data-testid="talk-act-delete"]').click()
   await sf.locator('[data-testid="talk-delete-confirm"]').click()
-  await sf.getByText("This message was deleted").first().waitFor({ timeout: 20000 })
+  await sf.getByText("Questo messaggio è stato eliminato").first().waitFor({ timeout: 20000 }) // (the chat is in Italian by default)
   ck("a deleted message leaves a note, and the row is kept for the record", (await db.query("select count(*)::int n from marketing_lead_messages where lead_id=$1 and deleted_at is not null", [lead.id])).rows[0].n === 1)
 
   // 8. the setter's own message cannot be deleted by the other person's api call (author or owner only) — the seller IS the owner here, so check a non-owner path with the setter deleting the seller's

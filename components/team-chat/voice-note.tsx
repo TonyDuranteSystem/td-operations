@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { transcriptLines, type VoiceTranscript } from '@/lib/team/voice-text'
+import { useTalkI18n } from '@/components/talk/talk-i18n'
 
 /**
  * A voice note you can play right where it is, with a "Show text" button (dev job c1e326dd). Used by TD Talk and the CRM
@@ -27,6 +28,7 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
   /** Where the repair and "Show text" calls go: `<apiBase>/<message id>/flatten|transcribe`. Team Chat / TD Talk by default; the marketing lead chat passes its own. */
   apiBase?: string
 }) {
+  const { t } = useTalkI18n()
   const [fetched, setFetched] = useState<VoiceTranscript | null>(null)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -57,11 +59,11 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ index }),
       })
       const d = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(d.error || 'Could not turn this voice note into text. Please try again.')
+      if (!r.ok) throw new Error(t(d.error || 'Could not turn this voice note into text. Please try again.'))
       setFetched(d.transcript as VoiceTranscript)
       setOpen(true)
     } catch (err) {
-      setError(err instanceof Error && err.message ? err.message : 'Could not turn this voice note into text. Please try again.')
+      setError(err instanceof Error && err.message ? err.message : t('Could not turn this voice note into text. Please try again.'))
     } finally { setBusy(false) }
   }
 
@@ -77,15 +79,15 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
         className={`flex items-center gap-1 self-start text-xs underline ${muted}`}
       >
         {busy && <Loader2 className="h-3 w-3 animate-spin" />}
-        {busy ? 'Reading the voice note…' : transcript && open ? 'Hide text' : 'Show text'}
+        {busy ? t('Reading the voice note…') : transcript && open ? t('Hide text') : t('Show text')}
       </button>
       {error && <p className="text-xs text-red-600" data-testid="voice-text-error">{error}</p>}
       {transcript && open && (
         <div className={`rounded-lg px-2 py-1.5 text-sm ${tone === 'dark' ? 'bg-white/10' : 'bg-zinc-100'}`} data-testid="voice-text">
           {transcriptLines(transcript).map(l => (
-            <p key={l.label} className="whitespace-pre-wrap break-words"><span className={`text-[10px] uppercase tracking-wide ${muted}`}>{l.label}</span><br />{l.text}</p>
+            <p key={l.label} className="whitespace-pre-wrap break-words"><span className={`text-[10px] uppercase tracking-wide ${muted}`}>{t(l.label)}</span><br />{l.text}</p>
           ))}
-          <p className={`mt-1 text-[10px] ${muted}`}>Machine text — it can be wrong.</p>
+          <p className={`mt-1 text-[10px] ${muted}`}>{t('Machine text — it can be wrong.')}</p>
         </div>
       )}
     </div>

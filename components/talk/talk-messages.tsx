@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Check, CheckCheck, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { VoiceNote } from '@/components/team-chat/voice-note'
+import { useTalkI18n } from '@/components/talk/talk-i18n'
 import {
   formatSize, groupByDay, isAudio, isImage, linkify, nameColorFor, quotedPreview, reactionSummary, timeLabel,
   type Tick, type TalkAttachment, type TalkMessage,
@@ -11,6 +12,7 @@ import {
 
 /** One attachment inside a bubble: a voice note you can play, a photo you can open, or a file you can download. */
 function Attachment({ a, messageId, index, voiceApi }: { a: TalkAttachment; messageId: string; index: number; voiceApi?: string }) {
+  const { t } = useTalkI18n()
   const [broken, setBroken] = useState(false)
   if (isAudio(a) && !broken) {
     return <VoiceNote messageId={messageId} index={index} url={a.url} transcript={a.transcript} flat={a.flat} flattenedAt={a.flattened_at} onBroken={() => setBroken(true)} apiBase={voiceApi} />
@@ -37,8 +39,8 @@ function Attachment({ a, messageId, index, voiceApi }: { a: TalkAttachment; mess
       className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white/70 px-3 py-2 text-sm text-zinc-800"
     >
       <FileText className="h-5 w-5 shrink-0 text-zinc-500" />
-      <span className="min-w-0 flex-1 truncate">{a.name || 'File'}</span>
-      <span className="shrink-0 text-xs text-zinc-500">{isAudio(a) ? 'Open' : formatSize(a.size)}</span>
+      <span className="min-w-0 flex-1 truncate">{a.name || t('File')}</span>
+      <span className="shrink-0 text-xs text-zinc-500">{isAudio(a) ? t('Open') : formatSize(a.size)}</span>
     </a>
   )
 }
@@ -65,6 +67,7 @@ function Bubble({
   onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
   voiceApi?: string
 }) {
+  const { t } = useTalkI18n()
   const atts = (m.attachments ?? []).filter(a => a && a.url)
   const deleted = !!m.deleted_at
   const quote = quotedPreview(m, byId)
@@ -115,7 +118,7 @@ function Bubble({
         {!deleted && (
           <button
             type="button"
-            aria-label="Message options"
+            aria-label={t('Message options')}
             onClick={() => onMenu(m)}
             className="absolute -top-2 right-1 hidden rounded-full bg-white p-1 text-zinc-500 shadow md:group-hover:block"
           >
@@ -123,7 +126,7 @@ function Bubble({
           </button>
         )}
         {deleted ? (
-          <p className="text-sm italic text-zinc-400">This message was deleted</p>
+          <p className="text-sm italic text-zinc-400">{t('This message was deleted')}</p>
         ) : (
           <div className="space-y-1.5">
             {showSender && !mine && (
@@ -137,7 +140,7 @@ function Bubble({
                 className="block w-full rounded-lg border-l-4 border-[#BE1E2D] bg-black/5 px-2 py-1 text-left"
               >
                 {quote.sender_name && <span className="block text-xs font-semibold text-[#BE1E2D]">{quote.sender_name}</span>}
-                <span className="block truncate text-[13px] text-zinc-600">{quote.text}</span>
+                <span className="block truncate text-[13px] text-zinc-600">{t(quote.text)}</span>
               </button>
             )}
             {atts.map((a, i) => <Attachment key={`${a.url}-${i}`} a={a} messageId={m.id} index={i} voiceApi={voiceApi} />)}
@@ -145,14 +148,14 @@ function Bubble({
           </div>
         )}
         <div className="mt-0.5 flex items-center justify-end gap-1 text-[11px] text-zinc-500">
-          {m.edited_at && !deleted && <span>edited</span>}
+          {m.edited_at && !deleted && <span>{t('edited')}</span>}
           <span>{timeLabel(m.created_at)}</span>
           {mine && !deleted && (
             tick === 'seen'
-              ? <CheckCheck className="h-3.5 w-3.5 text-sky-600" aria-label="Seen" data-testid="talk-tick-seen" />
+              ? <CheckCheck className="h-3.5 w-3.5 text-sky-600" aria-label={t('Seen')} data-testid="talk-tick-seen" />
               : tick === 'delivered'
-                ? <CheckCheck className="h-3.5 w-3.5 text-zinc-400" aria-label="Delivered" data-testid="talk-tick-delivered" />
-                : <Check className="h-3.5 w-3.5 text-zinc-400" aria-label="Sent" data-testid="talk-tick-sent" />
+                ? <CheckCheck className="h-3.5 w-3.5 text-zinc-400" aria-label={t('Delivered')} data-testid="talk-tick-delivered" />
+                : <Check className="h-3.5 w-3.5 text-zinc-400" aria-label={t('Sent')} data-testid="talk-tick-sent" />
           )}
         </div>
         {pills.length > 0 && !deleted && (
@@ -193,6 +196,7 @@ export function TalkMessages({
   /** Where a voice note's "Show text" goes (the lead chat passes its own); default = Team Chat. */
   voiceApi?: string
 }) {
+  const { t, day } = useTalkI18n()
   const boxRef = useRef<HTMLDivElement>(null)
   const openedRef = useRef<string | null>(null)
   const lastCountRef = useRef(0)
@@ -232,15 +236,15 @@ export function TalkMessages({
   return (
     <div ref={boxRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-zinc-100 px-3 py-3" data-testid="talk-messages">
       {loading && messages.length === 0 ? (
-        <p className="py-10 text-center text-sm text-zinc-400">Loading…</p>
+        <p className="py-10 text-center text-sm text-zinc-400">{t('Loading…')}</p>
       ) : groups.length === 0 ? (
-        <p className="py-10 text-center text-sm text-zinc-400">No messages yet. Say hello.</p>
+        <p className="py-10 text-center text-sm text-zinc-400">{t('No messages yet. Say hello.')}</p>
       ) : (
         <div className="space-y-2.5">
           {groups.map(g => (
             <div key={g.key} className="space-y-1.5">
               <div className="sticky top-0 z-[1] flex justify-center py-1">
-                <span className="rounded-full bg-white/90 px-3 py-0.5 text-xs font-medium text-zinc-500 shadow-sm">{g.label}</span>
+                <span className="rounded-full bg-white/90 px-3 py-0.5 text-xs font-medium text-zinc-500 shadow-sm">{day(g.label, g.messages[0].created_at)}</span>
               </div>
               {g.messages.map(m => (
                 <Bubble key={m.id} m={m} mine={m.sender_id === meId} tick={m.sender_id === meId ? tickOf(m) : 'sent'} showSender={showSender} meId={meId} byId={byId}

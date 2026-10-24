@@ -22,7 +22,9 @@ function walk(dir: string, out: string[] = []): string[] {
   return out
 }
 const root = process.cwd()
-const files = [...walk(join(root, "app/marketing")), ...walk(join(root, "components/marketing")), ...walk(join(root, "lib/marketing"))].filter(f => !f.endsWith("i18n-it.ts") && !f.endsWith("lib/marketing/i18n.ts"))
+// the chat screen is TD Talk's own (components/talk/*, the voice note): its words go through a swappable translator (components/talk/talk-i18n.tsx), so they are checked here too
+const TALK_SCREEN = ["components/talk/talk-messages.tsx", "components/talk/talk-composer.tsx", "components/talk/talk-sheet.tsx", "components/team-chat/voice-note.tsx"].map(f => join(root, f))
+const files = [...walk(join(root, "app/marketing")), ...walk(join(root, "components/marketing")), ...walk(join(root, "lib/marketing")), ...TALK_SCREEN].filter(f => !f.endsWith("i18n-it.ts") && !f.endsWith("lib/marketing/i18n.ts"))
 
 /** Every `t("…")`, `t('…')` or `t(`…`)` with a plain string in the screens and in the lib helpers they call. */
 function used(): Array<{ file: string; text: string }> {
