@@ -12,6 +12,7 @@ import type { StageOption } from '@/lib/marketing/lead-view'
 import { FrameChangeNotifier } from '@/components/marketing/frame-change-notifier'
 import { LeadWindowTabs } from '@/components/marketing/lead-window-tabs'
 import { unreadByLead } from '@/lib/marketing/lead-chat-server'
+import { resolveBoardRole } from '@/lib/marketing/board'
 import { LeadPane } from '../../(app)/_lead-pane'
 
 export const dynamic = 'force-dynamic'
@@ -22,7 +23,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
  * TD Marketing — one lead on its own bare page, to be shown inside a floating window on the board (dev job 9aec66fa, Addendum G). No menu, no frame: just the lead's page.
  * Same guard as every marketing page; the lead is read for the guard's team only, so another team's lead id finds nothing.
  */
-export default async function MarketingLeadWindow({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
+export default async function MarketingLeadWindow({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; role?: string }> }) {
   const lang = getLang()
   const t = makeT(lang)
   const { id } = await params
@@ -49,7 +50,7 @@ export default async function MarketingLeadWindow({ params, searchParams }: { pa
     <LangProvider lang={lang}>
       <FrameChangeNotifier />
       <LeadWindowTabs leadId={lead.id} chatOn={chatOn} initialTab={sp.tab === 'chat' ? 'chat' : 'lead'} initialUnread={unread}>
-        <LeadPane lead={lead} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} viewingAs={!!g.ctx.viewAs} paymentLink={paymentLink} />
+        <LeadPane role={resolveBoardRole(g.ctx.permissions, sp.role)} lead={lead} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} viewingAs={!!g.ctx.viewAs} paymentLink={paymentLink} />
       </LeadWindowTabs>
     </LangProvider>
   )

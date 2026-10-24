@@ -11,11 +11,13 @@ import {
 } from '@/lib/marketing/board'
 import type { Conversation } from '@/lib/marketing/lead-chat-server'
 import {
-  DOCK_H, EMPTY_WINDOWS, FRAME_CHANGED, TITLEBAR_H, WINDOW_H, WINDOW_W, closeWindow, focusWindow, frontWindowId, minimizeWindow, moveWindow, openWindow, windowSrc,
+  DOCK_H, EMPTY_WINDOWS, FRAME_CHANGED, OPEN_TAB_MESSAGE, TITLEBAR_H, WINDOW_H, WINDOW_W, closeWindow, focusWindow, frontWindowId, minimizeWindow, moveWindow, openWindow, windowSrc,
   type Viewport, type WindowTab, type WindowsState,
 } from '@/lib/marketing/lead-windows'
 
 const VIEW_KEY = 'tdm_board_view'
+const ROLE_KEY = 'tdm_board_role'
+const ROLE_LABEL: Record<BoardRole, string> = { seller: "Seller's board", setter: "Setter's board" }
 const VIEW_LABEL: Record<BoardView, string> = { pipeline: 'Pipeline', cards: 'Cards', list: 'List', messages: 'Messages' }
 /** a new chat message shows on the board within this long (the board reads the leads again while it is on screen) */
 const REFRESH_MS = 15_000
@@ -29,15 +31,23 @@ function readView(): BoardView {
  * TD Marketing — the lead board (dev job 9aec66fa, Addendum G): Pipeline | Cards | List, and a click on a lead opens it in a floating window (max 3, drag, minimize,
  * close) instead of a new page. A window shows the lead's own page in a frame, so it has exactly the buttons and the privacy of the lead page itself.
  */
-export function LeadBoard({ role, cards, truncated, chatOn, conversations, openChatId }: { role: BoardRole; cards: BoardCard[]; truncated: boolean; chatOn: boolean; conversations: Conversation[]; openChatId: string | null }) {
+export function LeadBoard({ role: defaultRole, roles, cards, truncated, chatOn, conversations, openChatId }: { role: BoardRole; roles: BoardRole[]; cards: BoardCard[]; truncated: boolean; chatOn: boolean; conversations: Conversation[]; openChatId: string | null }) {
   const t = useT()
   const lang = useLang()
   const router = useRouter()
   const [view, setView] = useState<BoardView>('pipeline')
+  // a person who may use both boards (the team owner) picks one and it is remembered; everybody else has just the one
+  const [role, setRole] = useState<BoardRole>(defaultRole)
   const [wins, setWins] = useState<WindowsState>(EMPTY_WINDOWS)
   const [dragging, setDragging] = useState(false)
   const vpRef = useRef<Viewport>({ w: 1280, h: 800 })
   const drag = useRef<{ id: string; dx: number; dy: number } | null>(null)
+
+  // the board this person last chose (only when he may use both)
+  const rolesKey = roles.join(',')
+  useEffect(() => {
+    try { const saved = window.localStorage.getItem(ROLE_KEY); if (saved && rolesKey.split(',').includes(saved)) setRole(saved as BoardRole) } catch { /* only a convenience */ }
+  }, [rolesKey])
 
   useEffect(() => {
     setView(readView())
@@ -59,7 +69,18 @@ export function LeadBoard({ role, cards, truncated, chatOn, conversations, openC
     setView(v)
     try { window.localStorage.setItem(VIEW_KEY, v) } catch { /* the choice is only a convenience */ }
   }
-  const open = useCallback((c: { id: string; name: string }, tab?: WindowTab) => setWins(s => openWindow(s, { id: c.id, name: c.name, tab }, vpRef.current)), [])
+  const open = useCallback((c: { id: string; name: string }, tab?: WindowTab) => {
+    setWins(s => openWindow(s, { id: c.id, name: c.name, tab }, vpRef.current))
+    // a lead that is already open stays as it is (nothing typed is lost); the page inside is told to switch tab
+    if (tab) setTimeout(() => {
+      const frame = document.querySelector<HTMLIFrameElement>(`iframe[data-lead="${CSS.escape(c.id)}"]`)
+      frame?.contentWindow?.postMessage({ type: OPEN_TAB_MESSAGE, tab }, window.location.origin)
+    }, 50)
+  }, [])
+  const pickRole = (r: BoardRole) => {
+    setRole(r)
+    try { window.localStorage.setItem(ROLE_KEY, r) } catch { /* only a convenience */ }
+  }
   const unreadTotal = conversations.reduce((n, c) => n + c.unread, 0)
   const views = chatOn ? BOARD_VIEWS : BOARD_VIEWS.filter(v => v !== 'messages')
 
@@ -118,6 +139,14 @@ export function LeadBoard({ role, cards, truncated, chatOn, conversations, openC
               className={`px-4 py-1.5 ${view === v ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-50'}`}>{t(VIEW_LABEL[v])}{v === 'messages' && unreadTotal > 0 && <span className="ml-1.5 rounded-full bg-red-600 px-1.5 text-[11px] font-semibold text-white" data-testid="messages-unread">{unreadTotal}</span>}</button>
           ))}
         </div>
+        {roles.length > 1 && (
+          <div className="flex overflow-hidden rounded-lg border bg-white text-sm" role="group" aria-label={t('Board')} data-testid="role-switch">
+            {roles.map(rl => (
+              <button key={rl} type="button" onClick={() => pickRole(rl)} aria-pressed={role === rl} data-testid={`role-${rl}`}
+                className={`px-4 py-1.5 ${role === rl ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-50'}`}>{t(ROLE_LABEL[rl])}</button>
+            ))}
+          </div>
+        )}
         <p className="text-xs text-slate-500">{hidden > 0 && view !== 'list' ? t('{n} leads that are not on the board (for example "Not in target") are in the List view.', { n: hidden }) : ''}</p>
       </div>
       {truncated && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{t('Showing the newest 500 leads. Use the Leads page filters to find older ones.')}</p>}
@@ -178,12 +207,13 @@ export function LeadBoard({ role, cards, truncated, chatOn, conversations, openC
         </div>
       )}
 
-      {wins.list.filter(w => !w.minimized).map(w => {
-        const src = windowSrc(w.id, w.tab)
+      {wins.list.map(w => {
+        // a minimized window is only hidden, not removed: what was typed in it, and an upload in flight, are still there when it comes back
+        const src = windowSrc(w.id, w.srcTab, role)
         return (
           <div key={w.id} role="dialog" aria-label={w.name} data-testid="lead-window" data-lead={w.id}
             className={`fixed flex flex-col overflow-hidden rounded-xl border bg-white shadow-2xl ${front === w.id ? 'border-slate-500' : 'border-slate-300'}`}
-            style={{ left: w.x, top: w.y, zIndex: 40 + w.z, width: WINDOW_W, height: Math.min(WINDOW_H, Math.max(320, vpRef.current.h - w.y - DOCK_H - 8)) }}
+            style={{ display: w.minimized ? 'none' : undefined, left: w.x, top: w.y, zIndex: 40 + w.z, width: WINDOW_W, height: Math.min(WINDOW_H, Math.max(320, vpRef.current.h - w.y - DOCK_H - 8)) }}
             onPointerDownCapture={() => { if (front !== w.id) setWins(s => focusWindow(s, w.id)) }}>
             <div className="flex shrink-0 cursor-move select-none items-center justify-between gap-2 border-b bg-slate-100 px-3 text-sm font-medium" style={{ height: TITLEBAR_H, touchAction: 'none' }}
               onPointerDown={e => onDown(e, w.id, w.x, w.y)}>
@@ -193,7 +223,7 @@ export function LeadBoard({ role, cards, truncated, chatOn, conversations, openC
                 <button type="button" aria-label={t('Close')} data-testid="win-close" onClick={() => setWins(s => closeWindow(s, w.id))} className="rounded px-2 py-0.5 text-lg leading-none hover:bg-slate-200">×</button>
               </span>
             </div>
-            {src ? <iframe key={`${w.id}-${w.tab}`} title={w.name} src={src} className="min-h-0 w-full flex-1 border-0 bg-slate-50" style={dragging ? { pointerEvents: 'none' } : undefined} /> : null}
+            {src ? <iframe key={w.id} data-lead={w.id} title={w.name} src={src} className="min-h-0 w-full flex-1 border-0 bg-slate-50" style={dragging ? { pointerEvents: 'none' } : undefined} /> : null}
           </div>
         )
       })}

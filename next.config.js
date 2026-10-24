@@ -68,6 +68,16 @@ const nextConfig = {
       },
     ],
   },
+  // TD Marketing pages may be framed only by this same site (the lead windows on the board are frames of /marketing/window/…), never by another site
+  async headers() {
+    return [{
+      source: '/marketing/:path*',
+      headers: [
+        { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+        { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },
+      ],
+    }]
+  },
   async rewrites() {
     return [
       // Legacy td-offers URLs: offers domain /?t=TOKEN → /offer/TOKEN

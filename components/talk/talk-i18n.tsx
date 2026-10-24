@@ -11,13 +11,18 @@ export type TalkT = (text: string, vars?: Record<string, string | number>) => st
 
 export interface TalkI18n {
   t: TalkT
+  /** Translates a line ONLY when it is one of the screen's own fixed lines ("Message deleted", "🎤 Voice message"…) — what a person wrote is never translated, even when it equals one of our words. */
+  ts: (text: string) => string
   /** The heading above a day of messages: `label` is the English one the chat model made ("Today", "Wed, Oct 23"); `iso` is the day's first message. */
   day: (label: string, iso: string) => string
 }
 
 export const fillSlots: TalkT = (text, vars) => (vars ? text.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : text)
 
-const DEFAULT: TalkI18n = { t: fillSlots, day: label => label }
+/** The fixed lines the chat model writes when a message has no words (see snippet() in lib/talk/chat-model.ts). */
+export const STATIC_SNIPPETS: ReadonlySet<string> = new Set(['Message deleted', 'Message', '🎤 Voice message', '📷 Photo'])
+
+const DEFAULT: TalkI18n = { t: fillSlots, ts: text => text, day: label => label }
 const Ctx = createContext<TalkI18n>(DEFAULT)
 
 export const TalkI18nProvider = Ctx.Provider

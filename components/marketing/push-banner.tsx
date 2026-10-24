@@ -26,6 +26,8 @@ export function MarketingPushBanner() {
       if (!ok) { if (!cancelled) setState('unsupported'); return }
       if (Notification.permission === 'denied') { if (!cancelled) setState('denied'); return }
       const on = await hasMarketingPush().catch(() => false)
+      // already subscribed in this browser: say so to the server again, silently (no prompt: the permission is already granted). That repairs a row the server dropped, and moves a shared computer's subscription to whoever is signed in now.
+      if (on) void subscribeToMarketingPush().catch(() => undefined)
       if (!cancelled) setState(on ? 'on' : 'off')
     })()
     return () => { cancelled = true }

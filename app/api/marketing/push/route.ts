@@ -24,7 +24,8 @@ export async function POST(req: NextRequest) {
   if (typeof s?.endpoint !== "string" || !s.endpoint.startsWith("https://") || typeof s.keys?.p256dh !== "string" || typeof s.keys?.auth !== "string") {
     return NextResponse.json({ error: "Invalid subscription" }, { status: 400, headers: NO_STORE })
   }
-  await db().from("marketing_push_subscriptions").delete().eq("user_id", g.ctx.user.id).eq("endpoint", s.endpoint)
+  // one browser = one person: whoever subscribed this browser before (another login on a shared computer) is replaced, so notifications for him never land on this screen
+  await db().from("marketing_push_subscriptions").delete().eq("endpoint", s.endpoint)
   const { error } = await db().from("marketing_push_subscriptions").insert({ team_id: g.ctx.team.id, user_id: g.ctx.user.id, endpoint: s.endpoint, p256dh: s.keys.p256dh, auth_key: s.keys.auth })
   if (error) return NextResponse.json({ error: "Could not save the subscription." }, { status: 500, headers: NO_STORE })
   return NextResponse.json({ success: true }, { headers: NO_STORE })

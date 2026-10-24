@@ -9,7 +9,7 @@ import { SetterNoteBlock } from '@/components/marketing/setter-note-block'
 import { ContactPanel } from '@/components/marketing/contact-panel'
 import { contactState } from '@/lib/marketing/contact-state'
 import { messageSigner, templatesFor } from '@/lib/marketing/templates'
-import { boardRole } from '@/lib/marketing/board'
+import { boardRole, type BoardRole } from '@/lib/marketing/board'
 import { HandoverPanel } from '@/components/marketing/handover-panel'
 import { getLang } from '@/lib/marketing/lang'
 import { localeFor, makeT } from '@/lib/marketing/i18n'
@@ -32,10 +32,12 @@ interface Props {
   myName?: string
   /** Antonio looking in as somebody else: his name is never put on a message */
   viewingAs?: boolean
+  /** the board the person is working from (an owner can use both); default = his own role */
+  role?: BoardRole
 }
 
 /** One lead, everything about it, with the buttons: used by the Leads screen and the Call list. A computer-width panel. Team-scoped by whoever loads it. */
-export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons, checklist, permissions, isOwner, myId, afterHref, paymentLink, myName, viewingAs }: Props) {
+export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons, checklist, permissions, isOwner, myId, afterHref, paymentLink, myName, viewingAs, role: roleIn }: Props) {
   // What the team wrote (notes, the ticks from a call) is read only by people who work the leads; the ad person gets the facts without it.
   const lang = getLang()
   const t = makeT(lang)
@@ -56,7 +58,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
   const templates = templatesFor(lang, overrides)
   const canAct = hasPermission(permissions, 'leads.mark') && !(claim === 'other' && !isOwner)
   // the seller (Rocco) and the setter see different lead pages: the setter's reaching-out box is the setter's work, not his
-  const role = boardRole(permissions)
+  const role = roleIn ?? boardRole(permissions)
   const signer = messageSigner({ claimedLabel: lead.claimed_by_label, events, viewerName: myName ?? '', viewingAs: viewingAs === true, nameOf: personName })
   const where = [lead.campaign_name, lead.adset_name, lead.ad_name].filter(Boolean)
   return (
