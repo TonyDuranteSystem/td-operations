@@ -11,6 +11,7 @@ import { MARKETING_PERMISSIONS } from "@/lib/marketing/permissions"
 import { PERMISSION_LABELS, ROLE_LABELS } from "@/lib/marketing/permission-labels"
 import { ACCESS_GROUPS, accessWarnings } from "@/lib/marketing/access"
 import { saleStatusLabel } from "@/lib/marketing/sales"
+import { columnsFor } from "@/lib/marketing/board"
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir)) {
@@ -60,7 +61,8 @@ describe("Italian for the TD Marketing workspace", () => {
     const labels = [
       ...MARKETING_SETTING_DEFS.pipeline_stages.fallback.map(x => x.label), ...MARKETING_SETTING_DEFS.not_in_target_reasons.fallback.map(x => x.label),
       ...modulesFor(Array.from(MARKETING_PERMISSIONS as readonly string[])).map(m => m.label), ...LEAD_SHOW_OPTIONS.map(o => o.label),
-      "Good", "Not in target", "Call back",
+      "Good", "Not in target", "Call back", "Pipeline", "Cards", "List",
+      ...columnsFor("setter").map(c => c.label), ...columnsFor("seller").map(c => c.label),
       ...Object.values(PERMISSION_LABELS), ...Object.values(ROLE_LABELS), "Team owner", "Custom access", "No role",
       ...ACCESS_GROUPS.flatMap(g => [g.group, ...g.items.map(i => i.label)]),
       ...accessWarnings(["payment_links.create", "leads.pick", "team.activity", "leads.worklist", "leads.mark"]).flatMap(w => [w.text, w.fixLabel ?? ""]).filter(Boolean),
