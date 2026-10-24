@@ -5,17 +5,22 @@
  * client" and every existing question are chosen by the person, nothing is fixed here.
  *
  * Pure (Uint8Array, no Buffer, no DOM) so it is tested in plain node. PDFs are appended page by page; a PNG or JPG (a fax
- * receipt is often a picture) becomes one page; anything else (Word, Excel, a locked PDF…) is refused with the file's name.
+ * receipt is often a picture) becomes one page; anything else (Word, Excel, a protected PDF…) is refused with the file's name.
  * Same inputs always give the same bytes (fixed dates), so the "this exact file is already stored" check keeps working.
+ *
+ * Hardened after the Bug Hunter's review (2026-10-24): a picture is recognised BEFORE a PDF (a JPEG whose metadata mentions
+ * "%PDF-" is still a JPEG); "protected" is decided by what the PDF library actually says (the old text search for "/Encrypt"
+ * refused harmless files); a phone photo's EXIF rotation is honoured; a filled-in form is flattened so its typed values
+ * survive the copy.
  */
-import { PDFDocument } from "pdf-lib"
+import { PDFDocument, degrees } from "pdf-lib"
 
 export class MergeError extends Error {
   constructor(message: string) { super(message); this.name = "MergeError" }
 }
 
 export const MERGE_MAX_PARTS = 20
-export const MERGE_MAX_TOTAL_BYTES = 150 * 1024 * 1024
+export const MERGE_MAX_TOTAL_BYTES = 80 * 1024 * 1024
 
 export interface MergePart { name: string; mimeType: string | null; bytes: Uint8Array }
 export interface MergeResult { bytes: Uint8Array; pageCounts: number[] }
@@ -29,11 +34,11 @@ const MAX_H = 792
 
 const latin1 = (b: Uint8Array) => new TextDecoder("latin1").decode(b)
 
-/** What a file really is, by its first bytes (the name and the type the browser reports can lie). */
+/** What a file really is, by its first bytes (the name and the type the browser reports can lie). Pictures first. */
 export function partKind(bytes: Uint8Array): PartKind {
-  if (latin1(bytes.subarray(0, 1024)).includes("%PDF-")) return "pdf"
   if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "png"
   if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpg"
+  if (latin1(bytes.subarray(0, 1024)).includes("%PDF-")) return "pdf"
   return "unsupported"
 }
 
@@ -41,12 +46,40 @@ export function partKind(bytes: Uint8Array): PartKind {
 export function looksMergeable(name: string, mimeType: string | null): boolean {
   const n = name.toLowerCase()
   const m = (mimeType ?? "").toLowerCase()
-  return /\.(pdf|png|jpe?g)$/.test(n) || m === "application/pdf" || m === "image/png" || m === "image/jpeg"
+  return /\.(pdf|png|jpe?g)$/.test(n) || m === "application/pdf" || m === "image/png" || m === "image/jpeg" || m === "image/jpg"
 }
 
-/** A locked PDF names /Encrypt near the start or the end of the file. */
-export function isEncryptedPdf(bytes: Uint8Array): boolean {
-  return latin1(bytes.subarray(Math.max(0, bytes.length - 4096))).includes("/Encrypt") || latin1(bytes.subarray(0, 4096)).includes("/Encrypt")
+/**
+ * The rotation a phone stored in a JPEG's EXIF data (0, 90, 180 or 270 degrees clockwise), or 0 when there is none. Only the
+ * three plain rotations are handled; mirrored variants are left as stored.
+ */
+export function jpegRotation(b: Uint8Array): 0 | 90 | 180 | 270 {
+  try {
+    let i = 2
+    while (i + 4 < b.length && b[i] === 0xff) {
+      const marker = b[i + 1]
+      const len = (b[i + 2] << 8) | b[i + 3]
+      if (marker === 0xe1 && latin1(b.subarray(i + 4, i + 10)) === "Exif\0\0") {
+        const t = i + 10 // start of the TIFF header
+        const little = b[t] === 0x49
+        const u16 = (o: number) => (little ? b[o] | (b[o + 1] << 8) : (b[o] << 8) | b[o + 1])
+        const u32 = (o: number) => (little ? (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0 : ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0)
+        const ifd = t + u32(t + 4)
+        const n = u16(ifd)
+        for (let k = 0; k < n; k++) {
+          const e = ifd + 2 + k * 12
+          if (u16(e) === 0x0112) {
+            const o = u16(e + 8)
+            return o === 3 ? 180 : o === 6 ? 90 : o === 8 ? 270 : 0
+          }
+        }
+        return 0
+      }
+      if (marker === 0xda || len < 2) return 0 // start of the picture data / broken segment
+      i += 2 + len
+    }
+  } catch { /* an unreadable EXIF block is simply "no rotation" */ }
+  return 0
 }
 
 export function baseName(name: string): string {
@@ -68,27 +101,37 @@ export async function mergeParts(parts: MergePart[]): Promise<MergeResult> {
   const out = await PDFDocument.create({ updateMetadata: false })
   const pageCounts: number[] = []
   for (const p of parts) {
+    if (p.bytes.length === 0) throw new MergeError(`"${p.name}" is empty.`)
     const kind = partKind(p.bytes)
     if (kind === "unsupported") throw new MergeError(`"${p.name}" is not a PDF, PNG or JPG — only those can be merged.`)
     try {
       if (kind === "pdf") {
-        if (isEncryptedPdf(p.bytes)) throw new MergeError(`"${p.name}" is locked (password-protected) — it cannot be merged.`)
         const src = await PDFDocument.load(p.bytes, { updateMetadata: false })
         const n = src.getPageCount()
         if (n === 0) throw new MergeError(`"${p.name}" has no pages.`)
+        // a filled-in form: copyPages does not bring the form fields over, so the typed values would vanish — print them into the page
+        try { const form = src.getForm(); if (form.getFields().length > 0) form.flatten() } catch { /* a PDF without a usable form is merged as it is */ }
         for (const page of await out.copyPages(src, src.getPageIndices())) out.addPage(page)
         pageCounts.push(n)
       } else {
         const img = kind === "png" ? await out.embedPng(p.bytes) : await out.embedJpg(p.bytes)
-        const scale = Math.min(1, MAX_W / img.width, MAX_H / img.height)
+        const turn = kind === "jpg" ? jpegRotation(p.bytes) : 0
+        const sideways = turn === 90 || turn === 270
+        const dw = sideways ? img.height : img.width // the size as it will be SEEN
+        const dh = sideways ? img.width : img.height
+        const scale = Math.min(1, MAX_W / dw, MAX_H / dh)
         const w = Math.max(1, Math.round(img.width * scale))
         const h = Math.max(1, Math.round(img.height * scale))
-        out.addPage([w, h]).drawImage(img, { x: 0, y: 0, width: w, height: h })
+        const page = out.addPage([w, h])
+        page.drawImage(img, { x: 0, y: 0, width: w, height: h })
+        if (turn) page.setRotation(degrees(turn))
         pageCounts.push(1)
       }
     } catch (e) {
       if (e instanceof MergeError) throw e
-      throw new MergeError(`"${p.name}" cannot be opened — it may be damaged (${e instanceof Error ? e.message : String(e)}).`)
+      const msg = e instanceof Error ? e.message : String(e)
+      if (/encrypted/i.test(msg)) throw new MergeError(`"${p.name}" is protected (a password or editing restrictions) — save or print it as a new PDF first, then merge that.`)
+      throw new MergeError(`"${p.name}" cannot be opened — it may be damaged (${msg}).`)
     }
   }
   const expected = pageCounts.reduce((a, b) => a + b, 0)

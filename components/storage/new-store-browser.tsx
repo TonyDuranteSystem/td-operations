@@ -32,6 +32,7 @@ import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
 import { putFileWithRetry } from '@/lib/storage/put-with-retry'
 import { MergeFilesDialog, type MergeFileInfo } from './merge-files-dialog'
 import { baseName } from '@/lib/crm-store/merge-parts'
+import { mergeBlockReason } from '@/lib/crm-store/merge-rules'
 import { onReconnected } from '@/lib/hooks/use-connection-state'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 import { resolveDropPreset, type DropPreset } from '@/lib/crm-store/drop-preset'
@@ -341,7 +342,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [selectedFiles, setSelectedFiles] = useState<Map<string, File_ & { folderId: string | null }>>(new Map())
   // "Merge into one": the files being ordered, and the merged PDF waiting for the usual upload questions (folder, type, name)
   const [mergeList, setMergeList] = useState<MergeFileInfo[] | null>(null)
-  const [mergedFile, setMergedFile] = useState<{ file: File; pages: number } | null>(null)
+  const [mergedFile, setMergedFile] = useState<{ file: File; pages: number; ownerId: string } | null>(null)
   const [bulkBusy, setBulkBusy] = useState(false)
   const [sortMode, setSortMode] = useState<SortMode>(() => { try { return (localStorage.getItem('store-sort') as SortMode) || 'name' } catch { return 'name' } })
   const [filterKind, setFilterKind] = useState<'all' | null>(null)
@@ -1128,16 +1129,22 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   /** Merge into one: only files of ONE company or ONE person (Antonio 2026-10-24). Opens the ordering window. */
   const startMerge = () => {
     const picked = Array.from(selectedFiles.values())
-    if (picked.length < 2) { toast.error('Tick at least two files to merge.'); return }
-    const owners = new Set(picked.map((f) => folderOwner.current.get(f.folderId ?? '') ?? ownerId ?? ''))
-    if (owners.size > 1) { toast.error('Only files of ONE company or ONE person can be merged together — untick the others.'); return }
-    if (picked.some((f) => f.state !== 'live')) { toast.error('Files in the trash cannot be merged — restore them first.'); return }
+    if (sharedView) { toast.error('Files shared with you are read-only — they cannot be merged.'); return }
+    // the storage each file lives in: its folder's owner; a file at the very top of the storage (no folder) belongs to the storage on screen
+    const reason = mergeBlockReason(
+      picked.map((f) => ({
+        name: f.name, state: f.state, staffOnly: f.staffOnly, personal: f.personal, needsReview: f.needsReview, filingStatus: f.filingStatus,
+        ownerKey: f.folderId == null ? (ownerId ?? undefined) : folderOwner.current.get(f.folderId),
+      })),
+      { internal: isInternalOwnerKind(ownerKind), ownerKind },
+    )
+    if (reason) { toast.error(reason); return }
     setMergeList(picked.map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, size: f.size })))
   }
 
   /** The merged PDF is ready: it goes through the NORMAL upload (folder, document type, name and show choice are the person's). */
-  const finishMerge = async (file: File, pageCounts: number[]) => {
-    const first = Array.from(selectedFiles.values())[0]
+  const finishMerge = async (file: File, pageCounts: number[], orderedIds: string[]) => {
+    const first = selectedFiles.get(orderedIds[0] ?? '') ?? Array.from(selectedFiles.values())[0]
     const pages = pageCounts.reduce((a, b) => a + b, 0)
     setMergeList(null)
     if (isInternalOwnerKind(ownerKind)) {                                  // My files / Business: the plain upload window (no type there)
@@ -1149,12 +1156,19 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       toast.success(`Merged into one PDF (${pages} pages) — upload it below.`)
       return
     }
-    await openUpload(first?.folderId ?? undefined)
+    // start in the first file's folder only when the Folder list really offers it (a person's top folder is not in that list)
+    const startFolder = first?.folderId && folderOptions().some((o) => o.f.id === first.folderId) ? first.folderId : undefined
+    await openUpload(startFolder)
     setUpName(baseName(file.name))
-    setMergedFile({ file, pages })
+    setMergedFile({ file, pages, ownerId: ownerIdRef.current ?? ownerId ?? '' })
     setSelectedFiles(new Map())
     toast.success(`Merged into one PDF (${pages} pages) — now choose the folder, document type and name, then upload.`)
   }
+
+  // a merged file belongs to the storage it was made in: closing the Upload panel or opening another storage drops it
+  // (the Bug Hunter found it could otherwise come back in another company's panel and be saved there)
+  useEffect(() => { if (!uploadOpen) setMergedFile(null) }, [uploadOpen])
+  useEffect(() => { setMergedFile((m) => (m && m.ownerId !== (ownerId ?? '') ? null : m)) }, [ownerId])
 
   const runBulk = async (action: 'show' | 'hide' | 'delete' | 'move') => {
     const list = Array.from(selectedFiles.values())
@@ -2407,11 +2421,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                     <span className="min-w-0 truncate text-zinc-700" title={mergedFile.file.name}>{mergedFile.file.name}</span>
                     <span className="text-xs text-zinc-500">{mergedFile.pages} pages · {fmtSize(mergedFile.file.size)}</span>
                     <span className="flex-1" />
-                    <button type="button" disabled={uploading || !upFolder || !upType || upType === '__custom__' || (upIsContacts && !upPerson)} data-testid="upload-merged"
-                      onClick={async () => { const out = await doUpload(mergedFile.file); if (out === 'saved') setMergedFile(null) }}
+                    <button type="button" disabled={uploading || !upFolderObj || !upType || upType === '__custom__' || (upIsContacts && !upPerson)} data-testid="upload-merged"
+                      onClick={async () => {
+                        if (mergedFile.ownerId !== (ownerIdRef.current ?? '')) { setMergedFile(null); toast.error('This merged file was made in another storage — merge it again here.'); return }
+                        const out = await doUpload(mergedFile.file); if (out === 'saved') setMergedFile(null)
+                      }}
                       className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40">Upload merged file</button>
                     <button type="button" disabled={uploading} onClick={() => setMergedFile(null)} className="text-xs text-zinc-600 hover:underline">Discard</button>
-                    {(!upFolder || !upType) && <span className="w-full text-xs text-blue-800">Choose the folder and the document type above, then upload.</span>}
+                    {(!upFolderObj || !upType) && <span className="w-full text-xs text-blue-800">Choose the folder and the document type above, then upload.</span>}
                   </div>
                 )}
                 {(() => {
