@@ -146,6 +146,21 @@ async function main() {
   const bucketPublic = (await db.query("select public from storage.buckets where id='marketing-chat'")).rows[0]?.public
   ck("the bucket is private", bucketPublic === false)
 
+  // a video (TD Talk takes it, the first version of this bucket did not) and a Word 97 file
+  await s.locator('[data-testid="talk-file-input"]').setInputFiles({ name: "clip.mov", mimeType: "video/quicktime", buffer: Buffer.from("fake-video-bytes") })
+  await s.click('[data-testid="talk-send"]')
+  await s.waitForSelector('text=clip.mov', { timeout: 40000 }).then(() => ck("a video file is accepted by the chat", true)).catch(() => ck("a video file is accepted by the chat", false))
+  const exe = await s.evaluate(async (a) => (await fetch(`/api/marketing/chat/${a.lead}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "", attachments: [{ path: a.path, name: "setup.exe", mime_type: "application/x-msdownload", size: 10 }] }) })).status, { lead: lead.id, path: `${team}/${lead.id}/${"3".repeat(8)}-3333-4333-8333-333333333333.exe` })
+  ck("an executable is refused by the server even if the browser check were skipped", exe === 400, exe)
+
+  // a half-written message survives minimising the window (the page inside is hidden, not removed)
+  const bf = p.frameLocator('[data-testid="lead-window"] iframe').last()
+  await bf.locator('[data-testid="talk-input"]').fill("bozza non inviata")
+  await p.click('[data-testid="win-min"]:visible')
+  await p.locator('[data-testid="dock-item"]').first().click()
+  ck("a draft typed in a window is still there after minimising and restoring it", (await bf.locator('[data-testid="talk-input"]').inputValue()) === "bozza non inviata")
+  await bf.locator('[data-testid="talk-input"]').fill("")
+
   // voice: the real microphone path with a fake device
   await s.click('[data-testid="talk-mic"]')
   const rec = await s.waitForSelector('[data-testid="talk-recording"]', { timeout: 15000 }).then(() => true).catch(() => false)

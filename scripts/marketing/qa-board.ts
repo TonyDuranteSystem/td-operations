@@ -90,24 +90,31 @@ async function main() {
   if (process.env.QA_DEBUG) console.log("messages seen by the board:", JSON.stringify(await p.evaluate(() => (window as unknown as { __msgs: unknown[] }).__msgs)))
   ck("a save inside the window makes the board read the leads again", rsc.length > 0, rsc)
   // open three more -> max 3
-  for (const i of [1, 2, 3]) { await p.click('[data-testid="win-min"]'); await (await p.$$('[data-testid="board-card"]'))[i].click(); await p.waitForTimeout(400) }
+  for (const i of [1, 2, 3]) { await p.click('[data-testid="win-min"]:visible'); await (await p.$$('[data-testid="board-card"]'))[i].click(); await p.waitForTimeout(400) }
   const open = await p.$$eval('[data-testid="lead-window"]', e => e.length)
   const dock = await p.$$eval('[data-testid="dock-item"]', e => e.length)
   ck("never more than three windows in all", dock === 3, { open, dock })
-  const minBefore = await p.$$eval('[data-testid="lead-window"]', e => e.length)
-  await p.click('[data-testid="win-min"]')
-  ck("minimize takes it off the screen but keeps it in the bar", (await p.$$eval('[data-testid="lead-window"]', e => e.length)) === minBefore - 1 && (await p.$$eval('[data-testid="dock-item"]', e => e.length)) === 3)
+  const shown = () => p.$$eval('[data-testid="lead-window"]', e => e.filter(x => getComputedStyle(x).display !== "none").length)
+  const minBefore = await shown()
+  await p.click('[data-testid="win-min"]:visible')
+  ck("minimize takes it off the screen but keeps it in the bar", (await shown()) === minBefore - 1 && (await p.$$eval('[data-testid="dock-item"]', e => e.length)) === 3)
   await p.click('[data-testid="dock-item"]')
-  ck("clicking it in the bar brings it back", (await p.$$eval('[data-testid="lead-window"]', e => e.length)) >= 1)
-  await p.click('[data-testid="win-close"]')
+  ck("clicking it in the bar brings it back", (await shown()) >= 1)
+  await p.click('[data-testid="win-close"]:visible')
   ck("close removes it", (await p.$$eval('[data-testid="dock-item"]', e => e.length)) === 2)
   // drag
   await p.locator('[data-testid="dock-item"]').first().click()
-  const bar = p.locator('[data-testid="lead-window"]').first()
+  const bar = p.locator('[data-testid="lead-window"]:visible').first()
   const box0 = await bar.boundingBox()
   await p.mouse.move(box0!.x + 200, box0!.y + 18); await p.mouse.down(); await p.mouse.move(box0!.x + 320, box0!.y + 98, { steps: 6 }); await p.mouse.up()
   const box1 = await bar.boundingBox()
   ck("a window can be dragged", Math.abs(box1!.x - box0!.x) > 60, { box0, box1 })
+  // the owner may use both boards
+  ck("the owner has a switch between the seller's and the setter's board, on the seller's first", (await p.locator('[data-testid="role-switch"]').count()) === 1 && (await p.locator('[data-testid="role-seller"]').getAttribute("aria-pressed")) === "true")
+  await p.click('[data-testid="role-setter"]')
+  const swCols = await p.$$eval("[data-column]", els => els.map(e => e.getAttribute("data-column")))
+  ck("…and the setter's board has the setter's five columns", JSON.stringify(swCols) === JSON.stringify(["to_contact", "tried", "in_target", "booked", "paid"]), swCols)
+  await p.click('[data-testid="role-seller"]')
   // views
   await p.click('[data-testid="view-cards"]'); await p.waitForSelector('[data-testid="cards"]')
   ck("Cards view shows the same leads", (await p.$$eval('[data-testid="cards"] [data-testid="board-card"]', e => e.length)) === 4)

@@ -10,10 +10,27 @@ export type BoardView = "pipeline" | "cards" | "list" | "messages"
 export const BOARD_VIEWS: readonly BoardView[] = ["pipeline", "cards", "list", "messages"]
 export const parseBoardView = (v: unknown): BoardView => (BOARD_VIEWS as readonly string[]).includes(v as string) ? (v as BoardView) : "pipeline"
 
-/** Whoever can create payment links is the seller; everyone else who works the leads sees the setter's board. */
-export function boardRole(permissions: readonly string[]): BoardRole {
-  return permissions.includes("payment_links.create") ? "seller" : "setter"
+/** A person who sells: creates payment links, hosts the calls or picks leads (the seller bundle has no money permission, so the money permission alone is not the test). */
+const sellerish = (p: readonly string[]) => p.includes("payment_links.create") || p.includes("calls.host") || p.includes("leads.pick")
+/** A person who qualifies leads on WhatsApp (the setter bundle). */
+const setterish = (p: readonly string[]) => p.includes("leads.worklist")
+
+/** The boards this person may use: the seller's, the setter's, or both (the team owner holds every permission). Never empty. */
+export function availableBoardRoles(permissions: readonly string[]): BoardRole[] {
+  const out: BoardRole[] = []
+  if (sellerish(permissions)) out.push("seller")
+  if (setterish(permissions)) out.push("setter")
+  return out.length ? out : ["setter"]
 }
+
+/** The board a person sees: the one he asked for when he may use it (an owner can switch), else the seller's for a seller, else the setter's. */
+export function resolveBoardRole(permissions: readonly string[], requested?: unknown): BoardRole {
+  const roles = availableBoardRoles(permissions)
+  return roles.find(r => r === requested) ?? roles[0]
+}
+
+/** The default board for these permissions. */
+export const boardRole = (permissions: readonly string[]): BoardRole => resolveBoardRole(permissions)
 
 export interface BoardColumn {
   key: string

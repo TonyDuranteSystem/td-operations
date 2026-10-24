@@ -7,6 +7,7 @@ import type { BoardRole } from '@/lib/marketing/board'
 import { formatWhen } from '@/lib/marketing/lead-view'
 import { useLang, useT } from '@/components/marketing/lang-provider'
 import { localeFor } from '@/lib/marketing/i18n'
+import { romeLocalToIso } from '@/lib/marketing/rome-time'
 
 const btn = 'rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50'
 
@@ -61,12 +62,12 @@ export function HandoverPanel({ leadId, role, canAct, contact }: { leadId: strin
 
           {mode === 'book' && (
             <div className="mt-3 space-y-2" data-testid="book-form">
-              <label className="block"><span className="text-slate-500">{t('Day and time of the call')}</span>
+              <label className="block"><span className="text-slate-500">{t('Day and time of the call (Rome time)')}</span>
                 <input type="datetime-local" className="mt-1 w-full rounded-lg border px-3 py-2" value={when} onChange={e => setWhen(e.target.value)} data-testid="appointment-when" /></label>
               <label className="block"><span className="text-slate-500">{t('Note for Rocco (optional)')}</span>
                 <textarea className="mt-1 w-full rounded-lg border px-3 py-2" rows={2} value={note} onChange={e => setNote(e.target.value)} placeholder={t('For example: he wants to know the costs')} /></label>
               <button type="button" className={`${btn} bg-slate-900 text-white`} disabled={busy || !when} data-testid="book-confirm"
-                onClick={() => send({ action: 'appointment', at: new Date(when).toISOString(), ...(note.trim() ? { note: note.trim() } : {}) })}>{t('Save the call')}</button>
+                onClick={() => { const at = romeLocalToIso(when); if (!at) { setError(t('Pick a valid day and time.')); return } void send({ action: 'appointment', at, ...(note.trim() ? { note: note.trim() } : {}) }) }}>{t('Save the call')}</button>
             </div>
           )}
           {mode === 'pass' && (

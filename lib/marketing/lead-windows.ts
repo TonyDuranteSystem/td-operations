@@ -12,7 +12,8 @@ export const DOCK_H = 44
 export const FRAME_CHANGED = "tdm-lead-changed"
 
 export type WindowTab = "lead" | "chat"
-export interface LeadWindow { id: string; name: string; minimized: boolean; x: number; y: number; z: number; tab: WindowTab }
+/** `tab` = the tab the person last asked for; `srcTab` = the tab the window's page was opened on (never changes, so the page inside is never reloaded and nothing typed is lost). */
+export interface LeadWindow { id: string; name: string; minimized: boolean; x: number; y: number; z: number; tab: WindowTab; srcTab: WindowTab }
 export interface Viewport { w: number; h: number }
 export interface WindowsState { list: LeadWindow[]; topZ: number }
 export const EMPTY_WINDOWS: WindowsState = { list: [], topZ: 1 }
@@ -36,7 +37,7 @@ export function openWindow(s: WindowsState, lead: { id: string; name: string; ta
   }
   const n = list.length
   const start = clampPosition(Math.round((vp.w - WINDOW_W) / 2) + n * 28 - 28, 72 + n * 28, vp)
-  return { topZ, list: [...list, { id: lead.id, name: lead.name, minimized: false, x: start.x, y: start.y, z: topZ, tab: lead.tab ?? "lead" }] }
+  return { topZ, list: [...list, { id: lead.id, name: lead.name, minimized: false, x: start.x, y: start.y, z: topZ, tab: lead.tab ?? "lead", srcTab: lead.tab ?? "lead" }] }
 }
 
 export function focusWindow(s: WindowsState, id: string): WindowsState {
@@ -60,6 +61,13 @@ export function frontWindowId(s: WindowsState): string | null {
 }
 /** A window page address: only a lead id that is a plain uuid is ever put in an address. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-export function windowSrc(id: string, tab: WindowTab = "lead"): string | null {
-  return UUID.test(id) ? `/marketing/window/${id.toLowerCase()}${tab === "chat" ? "?tab=chat" : ""}` : null
+export function windowSrc(id: string, tab: WindowTab = "lead", role?: string): string | null {
+  if (!UUID.test(id)) return null
+  const q = new URLSearchParams()
+  if (tab === "chat") q.set("tab", "chat")
+  if (role === "setter" || role === "seller") q.set("role", role)
+  const s = q.toString()
+  return `/marketing/window/${id.toLowerCase()}${s ? `?${s}` : ""}`
 }
+/** What the board tells a window page to do when its lead is opened again from a notification or the Messages list. */
+export const OPEN_TAB_MESSAGE = "tdm-open-tab"

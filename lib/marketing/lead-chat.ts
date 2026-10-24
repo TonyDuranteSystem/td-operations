@@ -3,11 +3,17 @@
  * what is unread, how a message is shown. No database and no network here; `lead-chat-server.ts` does the reading and writing. The screen itself is TD Talk's own
  * (TalkMessages / TalkComposer / TalkMessageSheet), fed with this chat's data, so a feature TD Talk gains later shows up here too.
  */
+import { validateChatAttachment } from "@/lib/portal/chat-attachment"
+
 export const BUCKET = "marketing-chat"
 export const MESSAGE_MAX_CHARS = 5000
 export const MAX_ATTACHMENTS = 5
-/** a signed link to a file or voice note lives this long (the page asks again every time it loads the messages) */
+/** a signed link to a file or voice note lives this long */
 export const SIGNED_URL_SECONDS = 3600
+/** The server hands out the SAME link for a file for this long (so a 4-second refresh does not sign every file again and the audio player is not reloaded)… */
+export const URL_CACHE_SECONDS = 15 * 60
+/** …and a window that stays open asks for fresh links after this long, so a link (at most URL_CACHE_SECONDS old when fetched) never reaches SIGNED_URL_SECONDS while on screen. */
+export const URL_REFRESH_SECONDS = 30 * 60
 /** the permission that opens the chat */
 export const CHAT_PERMISSION = "chat" as const
 
@@ -61,6 +67,9 @@ export function checkSend(i: { message: unknown; attachments: unknown; teamId: s
     if (!a || !isOwnObjectPath(a.path, i.teamId, i.leadId)) return { ok: false, error: "One of the files does not belong to this chat. Attach it again." }
     const mime = typeof a.mime_type === "string" ? a.mime_type.slice(0, 100) : undefined
     const size = typeof a.size === "number" && Number.isFinite(a.size) && a.size >= 0 ? Math.round(a.size) : undefined
+    // the same type and size policy as TD Talk's chat (executables and active content are refused; anything else is fine), checked HERE too: the browser's check is only a courtesy
+    const refused = validateChatAttachment(cleanFileName(a.name), size ?? 0, mime ?? "")
+    if (refused) return { ok: false, error: refused }
     // a voice note is recorded as an ordinary MP4 in the browser before it is sent, so it never needs the repair TD Talk gives older notes
     attachments.push({ path: a.path, name: cleanFileName(a.name), ...(mime ? { mime_type: mime } : {}), ...(size !== undefined ? { size } : {}), ...(mime?.startsWith("audio/") ? { flat: true } : {}) })
   }

@@ -644,4 +644,9 @@ export const IT: Record<string, string> = {
   "Couldn't upload the file — the connection was interrupted. Your message and files are still here — press Send to try again.": "Non sono riuscita a caricare il file: la connessione si è interrotta. Il messaggio e i file sono ancora qui: premi Invia per riprovare.",
   "Upload failed. Please check your connection and try again.": "Caricamento non riuscito. Controlla la connessione e riprova.",
   "Could not load this chat.": "Non sono riuscita a caricare questa chat.",
+  "Connection problem. New messages may be late; trying again.": "Problema di connessione. I nuovi messaggi potrebbero arrivare in ritardo; riprovo.",
+  "Day and time of the call (Rome time)": "Giorno e ora della chiamata (ora di Roma)",
+  "Day and time to call back (Rome time)": "Giorno e ora per richiamare (ora di Roma)",
+  "Seller's board": "Bacheca del venditore",
+  "Setter's board": "Bacheca della setter",
 }

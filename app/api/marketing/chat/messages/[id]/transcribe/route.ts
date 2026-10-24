@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { requireMarketing } from "@/lib/marketing/guard"
 import { checkRateLimit } from "@/lib/portal/rate-limit"
 import { VOICE_MAX_BYTES, needsEnglish, type VoiceTranscript } from "@/lib/team/voice-text"
-import { NO_STORE, downloadFile, saveTranscript, voiceAttachment } from "@/lib/marketing/lead-chat-server"
+import { NO_STORE, downloadFile, requireChatAccess, saveTranscript, voiceAttachment } from "@/lib/marketing/lead-chat-server"
 
 export const maxDuration = 60
 
@@ -12,7 +11,7 @@ export const maxDuration = 60
  * The audio is read from our private bucket by its stored path (never from an address the browser sends).
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const g = await requireMarketing("chat")
+  const g = await requireChatAccess()
   if (g.res) return g.res
   if (!checkRateLimit(`mkt-transcribe:${g.ctx.user.id}`, 20, 60_000).allowed) return NextResponse.json({ error: "Too many requests. Please wait a moment." }, { status: 429, headers: NO_STORE })
   const apiKey = process.env.OPENAI_API_KEY
