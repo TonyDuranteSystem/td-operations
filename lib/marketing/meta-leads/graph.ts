@@ -92,6 +92,17 @@ export async function listFormLeads(formId: string, fetchImpl?: typeof fetch, pa
   return r.data ?? []
 }
 
+/**
+ * One page of a form's leads, newest first, and the cursor for the next (older) page. Used by the one-time history import
+ * (the 5-minute reconcile only needs the first page). `after` is Meta's own opaque cursor, passed back as it came.
+ */
+export async function listFormLeadsPage(formId: string, after: string | null, fetchImpl?: typeof fetch, pageId?: string | null): Promise<{ leads: GraphLead[]; after: string | null }> {
+  if (!/^\d{1,30}$/.test(formId)) throw new GraphError("bad form id", null)
+  if (after !== null && !/^[A-Za-z0-9_=+/-]{1,300}$/.test(after)) throw new GraphError("bad cursor", null)
+  const r = await graphGet<{ data?: GraphLead[]; paging?: { cursors?: { after?: string }; next?: string } }>(`/${formId}/leads`, { fields: LEAD_FIELDS, limit: "50", ...(after ? { after } : {}) }, fetchImpl, pageId)
+  return { leads: r.data ?? [], after: r.paging?.next ? (r.paging.cursors?.after ?? null) : null }
+}
+
 export function configuredPageIds(): string[] {
   return (process.env.META_PAGE_IDS || "").split(",").map(s => s.trim()).filter(s => /^\d{1,30}$/.test(s))
 }

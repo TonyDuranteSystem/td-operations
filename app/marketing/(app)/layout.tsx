@@ -5,6 +5,10 @@ import { getMarketingSetting } from '@/lib/marketing/settings'
 import { SignOutButton } from './sign-out-button'
 import { WorkspaceNav } from './workspace-nav'
 import { ExitViewButton } from './exit-view-button'
+import { LangProvider } from '@/components/marketing/lang-provider'
+import { LangSwitch } from '@/components/marketing/lang-switch'
+import { getLang } from '@/lib/marketing/lang'
+import { makeT, tAccessLabel } from '@/lib/marketing/i18n'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,14 +18,17 @@ export const dynamic = 'force-dynamic'
  */
 export default async function MarketingAppLayout({ children }: { children: React.ReactNode }) {
   const g = await resolveMarketingContext()
-  if (g.ok === false) return <>{children}</>
+  const lang = getLang()
+  const t = makeT(lang)
+  if (g.ok === false) return <LangProvider lang={lang}>{children}</LangProvider>
   const { ctx } = g
   const bundlesSetting = (await getMarketingSetting('permission_bundles', ctx.team.id)) as Bundles
   return (
+    <LangProvider lang={lang}>
     <div>
       {ctx.viewAs && (
         <div className="flex items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900" role="status">
-          <span>Viewing as <b>{ctx.viewAs.label}</b>. You are Antonio: nothing is blocked, and what you do is recorded under your own email.</span>
+          <span>{t('Viewing as {who}. You are Antonio: nothing is blocked, and what you do is recorded under your own email.', { who: ctx.viewAs.label })}</span>
           <ExitViewButton />
         </div>
       )}
@@ -31,15 +38,18 @@ export default async function MarketingAppLayout({ children }: { children: React
           <p className="text-xs uppercase tracking-wide text-slate-400">TD Marketing</p>
           <p className="truncate font-semibold">{ctx.team.name}</p>
         </div>
+
         <WorkspaceNav items={modulesFor(ctx.permissions)} />
         <div className="mt-auto space-y-2 text-sm">
           <p className="truncate text-slate-500" title={ctx.user.email ?? ''}>{ctx.user.email}</p>
-          <p className="text-xs text-slate-400">{ctx.role === 'owner' ? 'Team owner' : accessLabel(ctx.permissions, bundlesSetting)}</p>
+          <p className="text-xs text-slate-400">{ctx.role === 'owner' ? t('Team owner') : tAccessLabel(t, accessLabel(ctx.permissions, bundlesSetting))}</p>
+          <LangSwitch />
           <SignOutButton />
         </div>
       </aside>
       <div className="min-w-0 flex-1">{children}</div>
     </div>
     </div>
+    </LangProvider>
   )
 }

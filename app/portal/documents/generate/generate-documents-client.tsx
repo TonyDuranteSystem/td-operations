@@ -2,11 +2,13 @@
 
 import { useState, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { FileText, Shield, ArrowLeft, Download, PenLine, Loader2, CheckCircle2, History, ScrollText, Send, AlertTriangle, Check } from 'lucide-react'
+import { FileText, Shield, ShieldCheck, ArrowLeft, Download, PenLine, Loader2, CheckCircle2, History, ScrollText, Send, AlertTriangle, Check } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
 import DistributionResolutionTemplate from '@/components/portal/distribution-resolution-template'
 import TaxStatementTemplate from '@/components/portal/tax-statement-template'
 import OperatingAgreementTemplate from '@/components/portal/operating-agreement-template'
+import OwnershipAttestationTemplate from '@/components/portal/ownership-attestation-template'
+import type { OwnershipAttestationInput } from '@/lib/pdf/ownership-attestation-pdf'
 import {
   type GeneratedDocumentType,
   type DocumentFormData,
@@ -64,6 +66,15 @@ interface Props {
   }
   members: ExtendedMemberInfo[]
   history: HistoryItem[]
+  /** The Attestation of Beneficial Ownership, built from the company's records — null when they cannot support it yet. */
+  attestation: {
+    input: Omit<OwnershipAttestationInput, 'dateLine'>
+    signerName: string
+    /** only the company's signer may sign it: their name is printed under the signature line */
+    youAreSigner: boolean
+  } | null
+  /** When the attestation cannot be prepared because an owner's details are missing: which detail, and whose. */
+  attestationGap?: { code: 'owner_dob' | 'owner_citizenship' | 'owner_contact'; who: string } | null
 }
 
 type Stage = 'selection' | 'form' | 'preview' | 'signing' | 'done'
@@ -75,16 +86,18 @@ const DOCUMENT_TYPE_EN: Record<string, string> = {
   distribution_resolution: 'Distribution Resolution',
   tax_statement: 'Tax Statement',
   operating_agreement: 'Operating Agreement',
+  ownership_attestation: 'Attestation of Beneficial Ownership',
 }
 
 function docTypeLabel(type: string, t: (key: string) => string): string {
   if (type === 'distribution_resolution') return t('documentGenerate.distributionResolution')
   if (type === 'tax_statement') return t('documentGenerate.taxStatement')
   if (type === 'operating_agreement') return t('documentGenerate.operatingAgreement')
+  if (type === 'ownership_attestation') return t('documentGenerate.ownershipAttestation')
   return type
 }
 
-export function GenerateDocumentsClient({ account, members, history: initialHistory }: Props) {
+export function GenerateDocumentsClient({ account, members, history: initialHistory, attestation, attestationGap }: Props) {
   const { t } = useLocale()
   const router = useRouter()
 
@@ -137,6 +150,10 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   const fiscalYearOptions = getFiscalYearOptions()
 
   const isOA = selectedType === 'operating_agreement'
+  const isAttestation = selectedType === 'ownership_attestation'
+  // Printed on the page: the signer's own date, in the document's language (English).
+  const attestationDateLine = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+  const attestationReady = !!attestation && attestation.youAreSigner
   // DB stores "Multi Member LLC" (long form) — normalize before comparing
   const isMMLC = normalizeEntityType(account.entityType) === 'MMLLC'
 
@@ -198,12 +215,16 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
   }
 
   const handlePreview = () => {
+    if (isAttestation) { if (!attestationReady) return; setStage('preview'); return }
     if (!isOA && (formData.amount <= 0 || members.length === 0)) return
     setStage('preview')
   }
 
   const getPdfFilename = (signed: boolean) => {
     const company = account.companyName.replace(/\s+/g, '_')
+    if (isAttestation) {
+      return signed ? `Attestation_of_Beneficial_Ownership_SIGNED_${company}.pdf` : `Attestation_of_Beneficial_Ownership_${company}.pdf`
+    }
     if (isOA) {
       return signed
         ? `Operating_Agreement_SIGNED_${company}_${oaEffectiveDate}.pdf`
@@ -307,7 +328,23 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
 
   const saveToHistory = async (status: string) => {
     try {
-      const body = isOA
+      const body = isAttestation
+        ? {
+            account_id: account.id,
+            document_type: selectedType,
+            fiscal_year: new Date().getFullYear(),
+            amount: null,
+            distribution_date: new Date().toISOString().split('T')[0],
+            currency: null,
+            status,
+            metadata: {
+              company_name: account.companyName,
+              ein: account.ein,
+              entity_type: account.entityType,
+              owners: attestation?.input.owners.map(o => ({ name: o.fullName, pct: o.ownershipPct })) ?? [],
+            },
+          }
+        : isOA
         ? {
             account_id: account.id,
             document_type: selectedType,
@@ -508,6 +545,26 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 </div>
               </div>
             </button>
+
+            {/* Attestation of Beneficial Ownership Card */}
+            <button
+              onClick={() => handleSelectType('ownership_attestation')}
+              className="text-left p-6 rounded-lg border border-zinc-200 bg-white hover:bg-zinc-50 hover:border-sky-500/50 transition-all group"
+            >
+              <div className="flex items-start gap-4">
+                <div className="p-2.5 rounded-lg bg-sky-500/10 text-sky-700 group-hover:bg-sky-500/20 transition">
+                  <ShieldCheck size={24} />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-zinc-900 group-hover:text-sky-600 transition">
+                    {t('documentGenerate.ownershipAttestation')}
+                  </h3>
+                  <p className="text-sm text-zinc-500 mt-1">
+                    {t('documentGenerate.ownershipAttestationDesc')}
+                  </p>
+                </div>
+              </div>
+            </button>
           </div>
 
           {/* History */}
@@ -597,8 +654,42 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
             </div>
           </div>
 
-          {/* OA-specific fields */}
-          {isOA ? (
+          {/* Attestation: nothing to fill in — it is built from the company's records */}
+          {isAttestation ? (
+            <div className="space-y-4">
+              {!attestation ? (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>
+                    {attestationGap
+                      ? interpolateString(
+                          t(attestationGap.code === 'owner_dob' ? 'documentGenerate.ownershipAttestationMissingDob'
+                            : attestationGap.code === 'owner_citizenship' ? 'documentGenerate.ownershipAttestationMissingCitizenship'
+                            : 'documentGenerate.ownershipAttestationMissingDetails'),
+                          { name: attestationGap.who },
+                        )
+                      : t('documentGenerate.ownershipAttestationUnavailable')}
+                  </span>
+                </div>
+              ) : !attestation.youAreSigner ? (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>{interpolateString(t('documentGenerate.ownershipAttestationNotSigner'), { name: attestation.signerName })}</span>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 space-y-2">
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">{t('documentGenerate.ownershipAttestationOwners')}</p>
+                  {attestation.input.owners.map((o, i) => (
+                    <div key={i} className="flex items-center justify-between text-sm text-zinc-700">
+                      <span>{o.fullName}</span>
+                      <span className="text-zinc-500">{o.ownershipPct.toFixed(2)}%</span>
+                    </div>
+                  ))}
+                  <p className="text-xs text-zinc-500 pt-1">{t('documentGenerate.ownershipAttestationReview')}</p>
+                </div>
+              )}
+            </div>
+          ) : isOA ? (
             <div className="space-y-4">
               {/* Pre-flight validation panel — MMLLC only */}
               {isMMLC && oaPreflight && (
@@ -766,7 +857,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
 
           {/* An empty members list would make the document templates silently
               skip their body (the "two-line document" bug) — block instead. */}
-          {!isOA && members.length === 0 && (
+          {!isOA && !isAttestation && members.length === 0 && (
             <div className="flex items-start gap-2 rounded-lg border border-red-800 bg-red-950/40 p-3 text-sm text-red-600">
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
               <span>
@@ -780,7 +871,7 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
             <FastTooltip label={isOA && !oaCanProceed ? t('documentGenerate.portalOnlyTooltip') : undefined}>
               <button
                 onClick={handlePreview}
-                disabled={(!isOA && (formData.amount <= 0 || members.length === 0)) || (isOA && !oaCanProceed)}
+                disabled={isAttestation ? !attestationReady : (!isOA && (formData.amount <= 0 || members.length === 0)) || (isOA && !oaCanProceed)}
                 className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-300 disabled:text-zinc-500 text-white rounded-lg font-medium text-sm transition"
                 aria-label={isOA && !oaCanProceed ? t('documentGenerate.portalOnlyTooltip') : undefined}
               >
@@ -812,6 +903,13 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
                 members={members}
                 form={formData}
                 entityCategory={entityCategory}
+                signatureImage={signatureImage}
+              />
+            ) : selectedType === 'ownership_attestation' && attestation ? (
+              <OwnershipAttestationTemplate
+                ref={documentRef}
+                {...attestation.input}
+                dateLine={attestationDateLine}
                 signatureImage={signatureImage}
               />
             ) : selectedType === 'tax_statement' ? (

@@ -11,6 +11,8 @@ import { loadTeamEvents } from '@/lib/marketing/events-read'
 import { accessLabel, type Bundles } from '@/lib/marketing/access'
 import { personName } from '@/lib/marketing/setter-note'
 import { paidStagesFrom, todayModel, type OutcomeStages } from '@/lib/marketing/workspace'
+import { getLang } from '@/lib/marketing/lang'
+import { makeT, tAccessLabel } from '@/lib/marketing/i18n'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,8 +23,11 @@ export const dynamic = 'force-dynamic'
 export default async function MarketingActivity() {
   const g = await resolveMarketingContext()
   if (g.ok === false) redirect('/marketing')
+  const lang = getLang()
+  const t = makeT(lang)
+  const tLabel = (s: string) => tAccessLabel(t, s)
   if (!hasPermission(g.ctx.permissions, 'team.activity')) {
-    return <main className="mx-auto max-w-xl px-4 py-10"><p className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm">You do not have access to Team activity. Ask your team owner.</p></main>
+    return <main className="mx-auto max-w-xl px-4 py-10"><p className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm">{t('You do not have access to Team activity. Ask your team owner.')}</p></main>
   }
   const db = leadDb()
   const teamId = g.ctx.team.id
@@ -45,20 +50,20 @@ export default async function MarketingActivity() {
   })
   return (
     <div className="space-y-6 p-6">
-      <div><h1 className="text-2xl font-semibold">Team activity</h1><p className="mt-1 text-sm text-slate-500">What each person did today. A name opens the leads that person worked on.</p></div>
-      {(ev.truncated || leadsRes.truncated) && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">Some older leads or activity are not counted below because there is too much of it to read at once. Tell Antonio.</p>}
-      <section className="rounded-xl border bg-white p-5" aria-label="What the team did today">
-        <h2 className="text-sm font-semibold text-slate-600">What the team did today</h2>
+      <div><h1 className="text-2xl font-semibold">{t('Team activity')}</h1><p className="mt-1 text-sm text-slate-500">{t('What each person did today. A name opens the leads that person worked on.')}</p></div>
+      {(ev.truncated || leadsRes.truncated) && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{t('Some older leads or activity are not counted below because there is too much of it to read at once. Tell Antonio.')}</p>}
+      <section className="rounded-xl border bg-white p-5" aria-label={t('What the team did today')}>
+        <h2 className="text-sm font-semibold text-slate-600">{t('What the team did today')}</h2>
         <div className="mt-2 overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="border-b text-xs text-slate-500"><tr><th className="py-2 pr-3">Person</th><th className="pr-3">Role</th><th className="pr-3 text-right">Good</th><th className="pr-3 text-right">Not in target</th><th className="pr-3 text-right">Call backs set</th><th className="pr-3 text-right">Leads picked</th><th>Last active</th></tr></thead>
+            <thead className="border-b text-xs text-slate-500"><tr><th className="py-2 pr-3">{t('Person')}</th><th className="pr-3">{t('Role')}</th><th className="pr-3 text-right">{t('Good')}</th><th className="pr-3 text-right">{t('Not in target')}</th><th className="pr-3 text-right">{t('Call backs set')}</th><th className="pr-3 text-right">{t('Leads picked')}</th><th>{t('Last active')}</th></tr></thead>
             <tbody className="divide-y">
-              {m.people.length === 0 && <tr><td colSpan={7} className="py-3 text-slate-500">Nobody else has joined yet.</td></tr>}
+              {m.people.length === 0 && <tr><td colSpan={7} className="py-3 text-slate-500">{t('Nobody else has joined yet.')}</td></tr>}
               {m.people.map(p => (
                 <tr key={p.email}>
-                  <td className="py-2 pr-3 font-medium"><Link href={`/marketing/leads?by=${encodeURIComponent(p.email)}`} className="underline decoration-slate-300 underline-offset-2 hover:decoration-slate-700" title="See the leads this person worked on">{personName(p.email)}</Link></td>
-                  <td className="pr-3">{p.role}</td><td className="pr-3 text-right font-mono tabular-nums">{p.good}</td><td className="pr-3 text-right font-mono tabular-nums">{p.notInTarget}</td><td className="pr-3 text-right font-mono tabular-nums">{p.callBacks}</td><td className="pr-3 text-right font-mono tabular-nums">{p.picked}</td>
-                  <td className="text-slate-500">{p.lastActive ? `${ageText(Date.now() - new Date(p.lastActive).getTime())} ago` : 'never'}</td>
+                  <td className="py-2 pr-3 font-medium"><Link href={`/marketing/leads?by=${encodeURIComponent(p.email)}`} className="underline decoration-slate-300 underline-offset-2 hover:decoration-slate-700" title={t('See the leads this person worked on')}>{personName(p.email)}</Link></td>
+                  <td className="pr-3">{tLabel(p.role)}</td><td className="pr-3 text-right font-mono tabular-nums">{p.good}</td><td className="pr-3 text-right font-mono tabular-nums">{p.notInTarget}</td><td className="pr-3 text-right font-mono tabular-nums">{p.callBacks}</td><td className="pr-3 text-right font-mono tabular-nums">{p.picked}</td>
+                  <td className="text-slate-500">{p.lastActive ? t('{age} ago', { age: ageText(Date.now() - new Date(p.lastActive).getTime(), lang === 'it' ? 'g' : 'd') }) : t('never')}</td>
                 </tr>
               ))}
             </tbody>

@@ -122,3 +122,30 @@ describe("the menu", () => {
     expect(has(["leads.read", "reports.read", "inbox", "chat"])).toBe(false)
   })
 })
+
+describe("booked calls with the seller (appointments)", () => {
+  const members = [{ user_id: "u-cri", email: "cristina@x.com" }, { user_id: "u-roc", email: "rocco@x.com" }]
+  const NOWX = new Date("2026-10-23T10:00:00Z")
+  const appt = (id: string, at: string, actor = "cristina@x.com") => ({ lead: { id, full_name: `Lead ${id}`, email: null, ad_name: "Ad", claimed_by: null }, at, actor })
+  it("lists a booked call in its day, marked as an appointment, beside the call backs", () => {
+    const a = buildAgenda({ leads: [], events: [], members, ownerId: "all", now: NOWX, days: 14, appointments: [appt("1", "2026-10-26T09:00:00.000Z")] })
+    expect(a.days).toHaveLength(1)
+    expect(a.days[0].items[0]).toMatchObject({ kind: "appointment", leadId: "1", time: "10:00", late: false, setBy: "Cristina" })
+  })
+  it("a call that already happened is not on the agenda, and one far ahead is only counted", () => {
+    const a = buildAgenda({ leads: [], events: [], members, ownerId: "all", now: NOWX, days: 14, appointments: [appt("1", "2026-10-22T09:00:00.000Z"), appt("2", "2026-12-26T09:00:00.000Z")] })
+    expect(a.days).toHaveLength(0)
+    expect(a.late).toHaveLength(0)
+    expect(a.beyond).toBe(1)
+  })
+  it("a setter sees the calls SHE booked; the owner picks anyone", () => {
+    const list = [appt("1", "2026-10-26T09:00:00.000Z", "cristina@x.com"), appt("2", "2026-10-26T10:00:00.000Z", "rocco@x.com")]
+    expect(buildAgenda({ leads: [], events: [], members, ownerId: "u-cri", now: NOWX, days: 14, appointments: list }).days[0].items.map(i => i.leadId)).toEqual(["1"])
+    expect(buildAgenda({ leads: [], events: [], members, ownerId: "all", now: NOWX, days: 14, appointments: list }).days[0].items.map(i => i.leadId)).toEqual(["1", "2"])
+  })
+  it("a call back and a booked call on the same lead are two rows", () => {
+    const leads = [{ id: "1", full_name: "A", email: null, ad_name: null, claimed_by: "u-cri", callback_at: "2026-10-25T09:00:00.000Z" }]
+    const a = buildAgenda({ leads, events: [], members, ownerId: "all", now: NOWX, days: 14, appointments: [appt("1", "2026-10-26T09:00:00.000Z")] })
+    expect(a.days.flatMap(d => d.items).map(i => i.kind)).toEqual(["callback", "appointment"])
+  })
+})

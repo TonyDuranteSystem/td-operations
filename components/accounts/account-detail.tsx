@@ -27,6 +27,7 @@ import { GenerateLeaseDialog } from '@/app/(dashboard)/accounts/[id]/components/
 import { RegenLeasePdfDialog } from '@/app/(dashboard)/accounts/[id]/components/regen-lease-pdf-dialog'
 import { GenerateSS4Dialog } from '@/app/(dashboard)/accounts/[id]/components/generate-ss4-dialog'
 import { GenerateIntercompanyDialog } from '@/app/(dashboard)/accounts/[id]/components/generate-intercompany-dialog'
+import { GenerateAttestationDialog } from '@/app/(dashboard)/accounts/[id]/components/generate-attestation-dialog'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { SS4PipelineCard } from '@/components/contacts/ss4-pipeline-card'
 import { type ServiceDeliveryForStepper } from './service-deliveries-section'
@@ -713,6 +714,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
   const [showLeaseDialog, setShowLeaseDialog] = useState(false)
   const [showSS4Dialog, setShowSS4Dialog] = useState(false)
   const [showIntercompanyDialog, setShowIntercompanyDialog] = useState(false)
+  const [showAttestationDialog, setShowAttestationDialog] = useState(false)
   const [regenLeaseData, setRegenLeaseData] = useState<{
     leaseId: string
     signedAt?: string | null
@@ -892,6 +894,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         onGenerateLease={() => setShowLeaseDialog(true)}
         onGenerateSS4={() => setShowSS4Dialog(true)}
         onGenerateIntercompany={normalizeEntityType(account.entity_type) === 'MMLLC' ? () => setShowIntercompanyDialog(true) : undefined}
+        onGenerateAttestation={() => setShowAttestationDialog(true)}
         onRegenLease={(leaseId, data) => setRegenLeaseData({ leaseId, ...data })}
       />
 
@@ -927,6 +930,12 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
       <GenerateIntercompanyDialog
         open={showIntercompanyDialog}
         onClose={() => setShowIntercompanyDialog(false)}
+        accountId={account.id}
+        companyName={account.company_name}
+      />
+      <GenerateAttestationDialog
+        open={showAttestationDialog}
+        onClose={() => setShowAttestationDialog(false)}
         accountId={account.id}
         companyName={account.company_name}
       />
