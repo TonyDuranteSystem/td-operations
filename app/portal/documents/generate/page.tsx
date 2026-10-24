@@ -162,6 +162,7 @@ export default async function GenerateDocumentsPage({ searchParams }: { searchPa
       }}
       members={mappedMembers}
       history={historyResult.data || []}
+      attestationGap={attestationResult.kind === 'unavailable' ? attestationResult.gap ?? null : null}
       attestation={attestationResult.kind === 'ready' ? { input: attestationResult.input, signerName: attestationResult.signerName, youAreSigner: attestationResult.youAreSigner } : null}
     />
   )
