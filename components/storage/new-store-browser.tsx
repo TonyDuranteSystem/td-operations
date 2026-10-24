@@ -30,6 +30,8 @@ import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
 import { putFileWithRetry } from '@/lib/storage/put-with-retry'
+import { onReconnected } from '@/lib/hooks/use-connection-state'
+import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 import { resolveDropPreset, type DropPreset } from '@/lib/crm-store/drop-preset'
 import { useShareMessagePrompt, isSilentShow } from './use-share-message-prompt'
 import { buildDocumentShareMessage } from '@/lib/portal/document-share-text'
@@ -1683,6 +1685,15 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       if (fileInput.current) fileInput.current.value = ''
     }
   }
+
+  // The connection came back (even after a short drop) or the tab woke up: reload what is on screen, so nobody has to refresh by
+  // hand (Antonio 2026-10-23, LAN→WiFi). Never in the middle of an upload, a pop-up or a group action — that would reset it.
+  const busyRef = useRef(false)
+  busyRef.current = uploading || dropRunning || !!drop || !!plain || bulkBusy
+  const refreshAllRef = useRef(refreshAll)
+  refreshAllRef.current = refreshAll
+  useEffect(() => onReconnected(() => { if (!busyRef.current) void refreshAllRef.current() }), [])
+  useWakeSignal({ onWake: () => { if (!busyRef.current) void refreshAllRef.current() } })
 
   /** After an upload with "Show to client" ticked: the eye's own pop-up decides what the client is told (Cancel = stays hidden). */
   const showAfterUpload = async (fileId: string, name: string) => {
