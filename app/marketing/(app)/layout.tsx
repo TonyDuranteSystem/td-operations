@@ -7,6 +7,8 @@ import { WorkspaceNav } from './workspace-nav'
 import { ExitViewButton } from './exit-view-button'
 import { LangProvider } from '@/components/marketing/lang-provider'
 import { LangSwitch } from '@/components/marketing/lang-switch'
+import { MarketingPushBanner } from '@/components/marketing/push-banner'
+import { hasPermission } from '@/lib/marketing/permissions'
 import { getLang } from '@/lib/marketing/lang'
 import { makeT, tAccessLabel } from '@/lib/marketing/i18n'
 
@@ -47,7 +49,10 @@ export default async function MarketingAppLayout({ children }: { children: React
           <SignOutButton />
         </div>
       </aside>
-      <div className="min-w-0 flex-1">{children}</div>
+      <div className="min-w-0 flex-1">
+        {hasPermission(ctx.permissions, 'chat') && <MarketingPushBanner />}
+        {children}
+      </div>
     </div>
     </div>
     </LangProvider>

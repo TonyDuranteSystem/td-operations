@@ -10,6 +10,8 @@ import { loadPaymentLinkView } from '@/lib/marketing/sales-server'
 import { personName } from '@/lib/marketing/setter-note'
 import type { StageOption } from '@/lib/marketing/lead-view'
 import { FrameChangeNotifier } from '@/components/marketing/frame-change-notifier'
+import { LeadWindowTabs } from '@/components/marketing/lead-window-tabs'
+import { unreadByLead } from '@/lib/marketing/lead-chat-server'
 import { LeadPane } from '../../(app)/_lead-pane'
 
 export const dynamic = 'force-dynamic'
@@ -20,10 +22,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
  * TD Marketing — one lead on its own bare page, to be shown inside a floating window on the board (dev job 9aec66fa, Addendum G). No menu, no frame: just the lead's page.
  * Same guard as every marketing page; the lead is read for the guard's team only, so another team's lead id finds nothing.
  */
-export default async function MarketingLeadWindow({ params }: { params: Promise<{ id: string }> }) {
+export default async function MarketingLeadWindow({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
   const lang = getLang()
   const t = makeT(lang)
   const { id } = await params
+  const sp = await searchParams
   const g = await resolveMarketingContext()
   const note = (text: string) => <LangProvider lang={lang}><main className="p-5"><p className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm">{text}</p></main></LangProvider>
   if (g.ok === false) return note(t('Sign in again to see this lead.'))
@@ -40,12 +43,14 @@ export default async function MarketingLeadWindow({ params }: { params: Promise<
   if (!lead) return note(t('This lead could not be found.'))
   const events = await leadTimeline(db, lead.id)
   const paymentLink = hasPermission(g.ctx.permissions, 'payment_links.create') ? { leadId: lead.id, ...(await loadPaymentLinkView(db, { teamId, userId: g.ctx.user.id }, lead.id)) } : undefined
+  const chatOn = hasPermission(g.ctx.permissions, 'chat')
+  const unread = chatOn ? (await unreadByLead(g.ctx)).get(lead.id) ?? 0 : 0
   return (
     <LangProvider lang={lang}>
-      <main className="p-4">
-        <FrameChangeNotifier />
+      <FrameChangeNotifier />
+      <LeadWindowTabs leadId={lead.id} chatOn={chatOn} initialTab={sp.tab === 'chat' ? 'chat' : 'lead'} initialUnread={unread}>
         <LeadPane lead={lead} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} viewingAs={!!g.ctx.viewAs} paymentLink={paymentLink} />
-      </main>
+      </LeadWindowTabs>
     </LangProvider>
   )
 }

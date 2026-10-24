@@ -13,7 +13,7 @@ import { transcriptLines, type VoiceTranscript } from '@/lib/team/voice-text'
 const repairAsked = new Set<string>()
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export function VoiceNote({ messageId, index, url, transcript: saved, flat, flattenedAt, tone = 'light', onBroken }: {
+export function VoiceNote({ messageId, index, url, transcript: saved, flat, flattenedAt, tone = 'light', onBroken, apiBase = '/api/team/messages' }: {
   messageId: string
   index: number
   url: string
@@ -24,6 +24,8 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
   /** 'dark' = text sits on a dark bubble. */
   tone?: 'light' | 'dark'
   onBroken?: () => void
+  /** Where the repair and "Show text" calls go: `<apiBase>/<message id>/flatten|transcribe`. Team Chat / TD Talk by default; the marketing lead chat passes its own. */
+  apiBase?: string
 }) {
   const [fetched, setFetched] = useState<VoiceTranscript | null>(null)
   const [open, setOpen] = useState(false)
@@ -38,10 +40,10 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
     const key = `${messageId}:${index}`
     if (flat || repairAsked.has(key) || !UUID.test(messageId)) return
     repairAsked.add(key)
-    fetch(`/api/team/messages/${messageId}/flatten`, {
+    fetch(`${apiBase}/${messageId}/flatten`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ index }),
     }).then(r => r.json()).then(d => { if (d?.ok && d.flattened_at) setRepairedAt(d.flattened_at as string) }).catch(() => {})
-  }, [messageId, index, flat])
+  }, [messageId, index, flat, apiBase])
   // a new address after the repair makes the browser load the corrected file instead of its cached copy
   const stamp = repairedAt ?? flattenedAt ?? null
   const src = stamp ? `${url}?v=${encodeURIComponent(stamp)}` : url
@@ -51,7 +53,7 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
     if (transcript) { setOpen(o => !o); return }
     setBusy(true)
     try {
-      const r = await fetch(`/api/team/messages/${messageId}/transcribe`, {
+      const r = await fetch(`${apiBase}/${messageId}/transcribe`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ index }),
       })
       const d = await r.json().catch(() => ({}))

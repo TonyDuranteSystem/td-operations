@@ -61,7 +61,7 @@ describe("Italian for the TD Marketing workspace", () => {
     const labels = [
       ...MARKETING_SETTING_DEFS.pipeline_stages.fallback.map(x => x.label), ...MARKETING_SETTING_DEFS.not_in_target_reasons.fallback.map(x => x.label),
       ...modulesFor(Array.from(MARKETING_PERMISSIONS as readonly string[])).map(m => m.label), ...LEAD_SHOW_OPTIONS.map(o => o.label),
-      "Good", "Not in target", "Call back", "Pipeline", "Cards", "List",
+      "Good", "Not in target", "Call back", "Pipeline", "Cards", "List", "Messages", "Voice message", "Photo", "File", "This message was deleted",
       ...columnsFor("setter").map(c => c.label), ...columnsFor("seller").map(c => c.label),
       ...Object.values(PERMISSION_LABELS), ...Object.values(ROLE_LABELS), "Team owner", "Custom access", "No role",
       ...ACCESS_GROUPS.flatMap(g => [g.group, ...g.items.map(i => i.label)]),

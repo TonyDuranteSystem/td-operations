@@ -11,7 +11,8 @@ export const DOCK_H = 44
 /** the message a lead window sends to the board when something on the lead was saved */
 export const FRAME_CHANGED = "tdm-lead-changed"
 
-export interface LeadWindow { id: string; name: string; minimized: boolean; x: number; y: number; z: number }
+export type WindowTab = "lead" | "chat"
+export interface LeadWindow { id: string; name: string; minimized: boolean; x: number; y: number; z: number; tab: WindowTab }
 export interface Viewport { w: number; h: number }
 export interface WindowsState { list: LeadWindow[]; topZ: number }
 export const EMPTY_WINDOWS: WindowsState = { list: [], topZ: 1 }
@@ -24,10 +25,10 @@ export function clampPosition(x: number, y: number, vp: Viewport): { x: number; 
 }
 
 /** Open a lead: an open one just comes to the front (and out of the bar); a new one is placed a little lower than the last, and the oldest closes when there are already three. */
-export function openWindow(s: WindowsState, lead: { id: string; name: string }, vp: Viewport): WindowsState {
+export function openWindow(s: WindowsState, lead: { id: string; name: string; tab?: WindowTab }, vp: Viewport): WindowsState {
   const topZ = s.topZ + 1
   const existing = s.list.find(w => w.id === lead.id)
-  if (existing) return { topZ, list: s.list.map(w => (w.id === lead.id ? { ...w, minimized: false, z: topZ, name: lead.name || w.name } : w)) }
+  if (existing) return { topZ, list: s.list.map(w => (w.id === lead.id ? { ...w, minimized: false, z: topZ, name: lead.name || w.name, tab: lead.tab ?? w.tab } : w)) }
   let list = s.list
   if (list.length >= MAX_WINDOWS) {
     const oldest = list.reduce((a, b) => (a.z <= b.z ? a : b))
@@ -35,7 +36,7 @@ export function openWindow(s: WindowsState, lead: { id: string; name: string }, 
   }
   const n = list.length
   const start = clampPosition(Math.round((vp.w - WINDOW_W) / 2) + n * 28 - 28, 72 + n * 28, vp)
-  return { topZ, list: [...list, { id: lead.id, name: lead.name, minimized: false, x: start.x, y: start.y, z: topZ }] }
+  return { topZ, list: [...list, { id: lead.id, name: lead.name, minimized: false, x: start.x, y: start.y, z: topZ, tab: lead.tab ?? "lead" }] }
 }
 
 export function focusWindow(s: WindowsState, id: string): WindowsState {
@@ -59,6 +60,6 @@ export function frontWindowId(s: WindowsState): string | null {
 }
 /** A window page address: only a lead id that is a plain uuid is ever put in an address. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-export function windowSrc(id: string): string | null {
-  return UUID.test(id) ? `/marketing/window/${id.toLowerCase()}` : null
+export function windowSrc(id: string, tab: WindowTab = "lead"): string | null {
+  return UUID.test(id) ? `/marketing/window/${id.toLowerCase()}${tab === "chat" ? "?tab=chat" : ""}` : null
 }

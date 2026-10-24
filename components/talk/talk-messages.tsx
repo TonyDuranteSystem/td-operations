@@ -10,10 +10,10 @@ import {
 } from '@/lib/talk/chat-model'
 
 /** One attachment inside a bubble: a voice note you can play, a photo you can open, or a file you can download. */
-function Attachment({ a, messageId, index }: { a: TalkAttachment; messageId: string; index: number }) {
+function Attachment({ a, messageId, index, voiceApi }: { a: TalkAttachment; messageId: string; index: number; voiceApi?: string }) {
   const [broken, setBroken] = useState(false)
   if (isAudio(a) && !broken) {
-    return <VoiceNote messageId={messageId} index={index} url={a.url} transcript={a.transcript} flat={a.flat} flattenedAt={a.flattened_at} onBroken={() => setBroken(true)} />
+    return <VoiceNote messageId={messageId} index={index} url={a.url} transcript={a.transcript} flat={a.flat} flattenedAt={a.flattened_at} onBroken={() => setBroken(true)} apiBase={voiceApi} />
   }
   if (isImage(a) && !broken) {
     return (
@@ -59,10 +59,11 @@ const LONG_PRESS_MS = 450
 const SWIPE_TRIGGER_PX = 64
 
 function Bubble({
-  m, mine, tick, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo,
+  m, mine, tick, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo, voiceApi,
 }: {
   m: TalkMessage; mine: boolean; tick: Tick; showSender: boolean; meId: string; byId: Map<string, TalkMessage>; highlighted: boolean
   onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
+  voiceApi?: string
 }) {
   const atts = (m.attachments ?? []).filter(a => a && a.url)
   const deleted = !!m.deleted_at
@@ -139,7 +140,7 @@ function Bubble({
                 <span className="block truncate text-[13px] text-zinc-600">{quote.text}</span>
               </button>
             )}
-            {atts.map((a, i) => <Attachment key={`${a.url}-${i}`} a={a} messageId={m.id} index={i} />)}
+            {atts.map((a, i) => <Attachment key={`${a.url}-${i}`} a={a} messageId={m.id} index={i} voiceApi={voiceApi} />)}
             {m.message ? <Text text={m.message} /> : null}
           </div>
         )}
@@ -179,7 +180,7 @@ function Bubble({
  * and never yanks you down while you are reading older ones.
  */
 export function TalkMessages({
-  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo,
+  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo, voiceApi,
 }: {
   threadId: string; messages: TalkMessage[]; meId: string
   /** My message's tick: sent / delivered (their device has it) / seen (they read it; a group: everyone did). */
@@ -189,6 +190,8 @@ export function TalkMessages({
   loading: boolean
   highlightId: string | null
   onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
+  /** Where a voice note's "Show text" goes (the lead chat passes its own); default = Team Chat. */
+  voiceApi?: string
 }) {
   const boxRef = useRef<HTMLDivElement>(null)
   const openedRef = useRef<string | null>(null)
@@ -241,7 +244,7 @@ export function TalkMessages({
               </div>
               {g.messages.map(m => (
                 <Bubble key={m.id} m={m} mine={m.sender_id === meId} tick={m.sender_id === meId ? tickOf(m) : 'sent'} showSender={showSender} meId={meId} byId={byId}
-                  highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} />
+                  highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} voiceApi={voiceApi} />
               ))}
             </div>
           ))}

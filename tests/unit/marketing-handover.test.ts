@@ -54,7 +54,7 @@ describe("passing a lead to the seller", () => {
 })
 
 describe("the seller's board shows only what was passed to him", () => {
-  const card = (id: string, stage: string, handedOver: boolean): BoardCard => ({ id, name: id, stage, stageLabel: stage, phone: null, filledIn: "", apptAt: null, arrivedMs: 1, chips: [], pickedText: "", note: null, ad: null, existingClient: false, handedOver })
+  const card = (id: string, stage: string, handedOver: boolean): BoardCard => ({ id, name: id, stage, stageLabel: stage, phone: null, filledIn: "", apptAt: null, arrivedMs: 1, chips: [], pickedText: "", note: null, ad: null, existingClient: false, handedOver, unread: 0 })
   it("an in-target lead is the setter's until she passes it; then it is in 'Passed to you'", () => {
     const cards = [card("mine", "qualified", false), card("passed", "qualified", true)]
     expect(columnOfCard("seller", cards[0])).toBeNull()

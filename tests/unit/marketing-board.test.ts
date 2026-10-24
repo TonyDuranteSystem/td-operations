@@ -3,7 +3,7 @@ import { BOARD_VIEWS, boardCards, boardRole, cardsInColumn, columnOf, columnsFor
 import { MAX_WINDOWS, EMPTY_WINDOWS, closeWindow, clampPosition, focusWindow, frontWindowId, minimizeWindow, moveWindow, openWindow, windowSrc, WINDOW_W } from "@/lib/marketing/lead-windows"
 import { MARKETING_SETTING_DEFS } from "@/lib/marketing/settings-schema"
 
-const card = (id: string, stage: string, over: Partial<BoardCard> = {}): BoardCard => ({ id, name: id, stage, stageLabel: stage, phone: null, filledIn: "", apptAt: null, arrivedMs: 0, chips: [], pickedText: "", note: null, ad: null, existingClient: false, handedOver: true, ...over })
+const card = (id: string, stage: string, over: Partial<BoardCard> = {}): BoardCard => ({ id, name: id, stage, stageLabel: stage, phone: null, filledIn: "", apptAt: null, arrivedMs: 0, chips: [], pickedText: "", note: null, ad: null, existingClient: false, handedOver: true, unread: 0, ...over })
 const vp = { w: 1440, h: 900 }
 
 describe("the lead board: who sees which columns", () => {
@@ -45,7 +45,7 @@ describe("the lead board: who sees which columns", () => {
     expect(hiddenCount("setter", cards)).toBe(1)
   })
   it("the saved view is one of the three, anything else falls back to the pipeline", () => {
-    expect(BOARD_VIEWS).toEqual(["pipeline", "cards", "list"])
+    expect(BOARD_VIEWS).toEqual(["pipeline", "cards", "list", "messages"])
     expect(parseBoardView("list")).toBe("list")
     expect(parseBoardView("grid")).toBe("pipeline")
     expect(parseBoardView(null)).toBe("pipeline")

@@ -6,8 +6,8 @@
 import type { TFn } from "@/lib/marketing/i18n"
 
 export type BoardRole = "setter" | "seller"
-export type BoardView = "pipeline" | "cards" | "list"
-export const BOARD_VIEWS: readonly BoardView[] = ["pipeline", "cards", "list"]
+export type BoardView = "pipeline" | "cards" | "list" | "messages"
+export const BOARD_VIEWS: readonly BoardView[] = ["pipeline", "cards", "list", "messages"]
 export const parseBoardView = (v: unknown): BoardView => (BOARD_VIEWS as readonly string[]).includes(v as string) ? (v as BoardView) : "pipeline"
 
 /** Whoever can create payment links is the seller; everyone else who works the leads sees the setter's board. */
@@ -70,6 +70,8 @@ export interface BoardCard {
   note: string | null
   ad: string | null
   existingClient: boolean
+  /** my unread chat messages in this lead */
+  unread: number
   /** the setter passed this lead to the seller */
   handedOver: boolean
 }
