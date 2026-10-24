@@ -82,7 +82,11 @@ export async function settlePayment(input: {
   if (resolution === "marketing_sale") {
     const m = await recordMarketingSaleFromPayment({ payment, marketingLeadId: String(input.marketingLeadId ?? ""), kind: String(input.saleKind ?? ""), actor })
     if (!m.ok) return { ok: false, status: m.status ?? 500, error: m.error ?? "Could not record the marketing sale." }
-    note = [note, `Marketing lead ${input.marketingLeadId}${m.leadName ? ` (${m.leadName})` : ""}, kind ${input.saleKind}, sale ${m.saleId ?? "already recorded"}.`].filter(Boolean).join(" ").slice(0, 1000)
+    note = [
+      note,
+      `Marketing lead ${input.marketingLeadId}${m.leadName ? ` (${m.leadName})` : ""}, kind ${input.saleKind}, sale ${m.saleId ?? "already recorded"}.`,
+      m.feedTagged ? "Bank Feed row marked as handled." : `Bank Feed row NOT tagged (${m.feedNote ?? "unknown"}).`,
+    ].filter(Boolean).join(" ").slice(0, 1000)
   } else if (resolution === "invoice_paid") {
     const p = await payInvoiceFromPayment({ payment, invoicePaymentId: String(input.invoicePaymentId ?? ""), actor })
     if (!p.ok) return { ok: false, status: p.status ?? 500, error: p.error ?? "Could not settle the invoice." }
