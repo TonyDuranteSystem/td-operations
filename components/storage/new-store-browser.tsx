@@ -1207,7 +1207,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         onRetry: ({ attempt, of }) => toast.message(`Connection problem — trying again (${attempt + 1} of ${of})…`),
       })
       if (!put.ok) throw new Error(put.message)
-      const r = await postJson<{ write: string; name: string }>('/api/crm-store/browse/upload', { ownerId: oid, folderId: target.id, storagePath: put.path as string, fileName, mimeType: file.type }, 'The merged file could not be saved — please try again.')
+      const r = await postJson<{ write: string; name: string }>('/api/crm-store/browse/upload', { ownerId: oid, folderId: target.id, storagePath: put.path as string, fileName, mimeType: file.type, ...(upType && (types ?? []).some((t) => t.slug === upType && (!t.personal || isPersonalAreaKind(hit.t.kind))) ? { documentType: upType } : {}) }, 'The merged file could not be saved — please try again.')
       toast.success(r.write === 'versioned' ? `"${r.name}" saved as a new version (the old copy is under Versions)` : r.write === 'unchanged' ? `"${r.name}" is identical to the current copy — nothing changed` : `"${r.name}" saved in ${hit.t.label} › ${target.name}`)
       setMergedFile(null)
       setUploadOpen(false)
@@ -2551,6 +2551,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                   ))}
                 </select>
                 <input value={upName} onChange={(e) => setUpName(e.target.value)} disabled={uploading} placeholder="Name" className="w-72 rounded-md border border-zinc-200 bg-white px-2 py-1" />
+                {/* a document type is OPTIONAL in a firm storage (it is only a label there); My files takes every type, any other firm storage the non-personal ones */}
+                <select value={upType} onChange={(e) => setUpType(e.target.value)} disabled={uploading || !types} data-testid="merged-internal-type" aria-label="Document type (optional)" className="max-w-xs rounded-md border border-zinc-200 bg-white px-2 py-1">
+                  <option value="">{types ? 'Document type (optional)…' : 'Loading types…'}</option>
+                  {(types ?? []).filter((t) => isPersonalAreaKind(mergeTargets?.find((m) => m.folders.some((x) => x.f.id === upFolder))?.kind) || !t.personal).map((t) => <option key={t.slug} value={t.slug}>{t.name}</option>)}
+                </select>
                 <span className="flex-1" />
                 <button type="button" onClick={() => setMergedPreviewOpen(true)} data-testid="preview-merged"
                   className="rounded-md border border-blue-300 bg-white px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50">Preview</button>
