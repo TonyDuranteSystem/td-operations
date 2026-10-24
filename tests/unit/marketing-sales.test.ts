@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import type { CommissionTerm } from "@/lib/marketing/commission"
 import {
-  applyTermToSale, canPayOut, formatMoney, isReceived, parseAmountToCents, planLink, planPaid, planRefund, saleStatusLabel, snapshotForSale, stageForPaidSale, totalsByCurrency,
+  applyTermToSale, canPayOut, formatMoney, isReceived, parseAmountToCents, planLink, planPaid, planRefund, saleStatusLabel, snapshotForSale, stageForPaidSale, totalsByCurrency, payoutTotals, sellerPaidInOtherCurrency,
   type SaleRow,
 } from "@/lib/marketing/sales"
 
@@ -163,5 +163,34 @@ describe("small helpers", () => {
     const s = applyTermToSale({ amount_cents: 1000, paid_amount_cents: 1000, kind: "upsell" }, [term({ kind: "upsell", seller_pct: 70, td_pct: 30 })], "team", "u1", new Date("2026-10-30T00:00:00Z"))
     expect(s).toMatchObject({ seller_cents: 700, td_cents: 300 })
     expect(applyTermToSale({ amount_cents: 1000, paid_amount_cents: 1000, kind: "upsell" }, [], "team", "u1", new Date())).toBeNull()
+  })
+})
+
+describe("the seller's company paid in dollars (same number, no exchange rate)", () => {
+  const paid = (o: Partial<SaleRow> = {}) => sale({ status: "paid", paid_at: "2026-10-22T10:00:00Z", paid_amount_cents: 39700, amount_cents: 39700, seller_cents: 31760, td_cents: 7940, ...o })
+  it("with no payout currency nothing changes", () => {
+    const t = totalsByCurrency([paid()], new Date("2026-10-23T00:00:00Z"))
+    expect(t).toHaveLength(1)
+    expect(t[0]).toMatchObject({ currency: "EUR", receivedCents: 39700, tdCents: 7940, sellerCents: 31760, owedToSellerCents: 31760 })
+    expect(payoutTotals([paid()], "")).toBeNull()
+    expect(payoutTotals([paid()], null)).toBeNull()
+  })
+  it("with USD the euro card keeps Received and TD share, and the seller's share moves to a dollar total with the same number", () => {
+    const sales = [paid(), paid({ id: "s2", paid_out_at: "2026-10-23T10:00:00Z", seller_cents: 1000, td_cents: 250 })]
+    const [eur] = totalsByCurrency(sales, new Date("2026-10-23T00:00:00Z"), "USD")
+    expect(eur).toMatchObject({ currency: "EUR", receivedCents: 79400, tdCents: 8190, sellerCents: 0, owedToSellerCents: 0, paidOutCents: 0 })
+    expect(payoutTotals(sales, "USD")).toEqual({ currency: "USD", sellerCents: 32760, owedCents: 31760, paidOutCents: 1000 })
+  })
+  it("a sale already in the payout currency stays in its own card", () => {
+    const usd = paid({ currency: "USD" })
+    expect(sellerPaidInOtherCurrency("USD", "USD")).toBe(false)
+    expect(sellerPaidInOtherCurrency("EUR", "USD")).toBe(true)
+    expect(sellerPaidInOtherCurrency("EUR", "")).toBe(false)
+    expect(totalsByCurrency([usd], new Date(), "USD")[0].sellerCents).toBe(31760)
+    expect(payoutTotals([usd], "USD")).toBeNull()
+  })
+  it("refunded, unpaid-link and unsplit sales never reach the dollar total", () => {
+    const sales = [paid({ id: "a", status: "refunded" }), sale({ id: "b" }), paid({ id: "c", seller_cents: null, td_cents: null })]
+    expect(payoutTotals(sales, "USD")).toBeNull()
   })
 })

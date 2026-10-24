@@ -76,3 +76,12 @@ describe("a broken permission setting closes the door", () => {
     expect(failClosedValue("permission_bundles")).toEqual({})
   })
 })
+
+describe("seller_payout_currency", () => {
+  it("defaults to empty (the sale's own currency) and accepts a three-letter code or empty only", () => {
+    expect(defaultForSetting("seller_payout_currency")).toBe("")
+    expect(parseSettingValue("seller_payout_currency", "USD")).toEqual({ ok: true, value: "USD" })
+    expect(parseSettingValue("seller_payout_currency", "")).toEqual({ ok: true, value: "" })
+    for (const bad of ["usd", "US", "DOLLARS", 5, null]) expect(parseSettingValue("seller_payout_currency", bad).ok).toBe(false)
+  })
+})
