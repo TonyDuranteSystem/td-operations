@@ -10,6 +10,7 @@ interface Props {
   reasons: Option[]
   switches: { owner_may_create_offers: boolean; owner_may_export_leads: boolean; member_invites_need_approval: boolean }
   currencies: string[]
+  payoutCurrency: string
 }
 
 const SWITCH_LABELS: Array<[keyof Props["switches"], string, string]> = [
@@ -24,6 +25,7 @@ export function SettingsEditor(p: Props) {
   const [checklist, setChecklist] = useState(p.checklist.length ? p.checklist : [""])
   const [reasons, setReasons] = useState<OptionRow[]>(p.reasons.map(r => ({ key: r.key, label: r.label })))
   const [currencies, setCurrencies] = useState(p.currencies.join(", "))
+  const [payout, setPayout] = useState(p.payoutCurrency)
   const [sw, setSw] = useState(p.switches)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -102,6 +104,16 @@ export function SettingsEditor(p: Props) {
         <input aria-label="Currencies" className="mt-2 w-72 rounded-lg border px-3 py-2 text-sm" value={currencies} onChange={e => setCurrencies(e.target.value)} placeholder="USD, EUR" />
         <p className="mt-1 text-xs text-slate-500">Three-letter codes separated by commas.</p>
         <button className={`${btn} mt-3 bg-slate-900 text-white`} disabled={busy === "allowed_currencies"} onClick={() => save("allowed_currencies", currencies.split(/[\s,;]+/).map(c => c.trim().toUpperCase()).filter(Boolean), "Currencies saved.")}>Save the currencies</button>
+      </section>
+
+      <section className="rounded-xl border bg-white p-4">
+        <h2 className="text-sm font-semibold text-slate-600">Pay the seller&apos;s company in</h2>
+        <select aria-label="Pay the seller's company in" className="mt-2 w-72 rounded-lg border px-3 py-2 text-sm" value={payout} onChange={e => setPayout(e.target.value)}>
+          <option value="">The same currency as the sale</option>
+          {p.currencies.map(c => <option key={c} value={c}>{c}, same number as the amount received</option>)}
+        </select>
+        <p className="mt-1 text-xs text-slate-500">Example: a sale paid in euros, the seller&apos;s company invoices you the same number in dollars. No exchange rate is applied. The seller sees their share in this currency on the Money page.</p>
+        <button className={`${btn} mt-3 bg-slate-900 text-white`} disabled={busy === "seller_payout_currency"} onClick={() => save("seller_payout_currency", payout, payout ? `The seller's company is paid in ${payout}.` : "The seller's company is paid in the currency of each sale.")}>Save</button>
       </section>
     </div>
   )

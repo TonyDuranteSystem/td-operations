@@ -58,6 +58,7 @@ export default async function MarketingSettingsPage({ searchParams }: { searchPa
             reasons={s.not_in_target_reasons as Option[]}
             switches={{ owner_may_create_offers: !!s.owner_may_create_offers, owner_may_export_leads: !!s.owner_may_export_leads, member_invites_need_approval: !!s.member_invites_need_approval }}
             currencies={s.allowed_currencies as string[]}
+            payoutCurrency={s.seller_payout_currency as string}
           />
           <section className="rounded-xl border bg-white p-4 text-sm">
             <h2 className="text-sm font-semibold text-slate-600">Pipeline stages (in order)</h2>

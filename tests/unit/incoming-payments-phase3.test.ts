@@ -9,6 +9,9 @@ const calls: { table: string; op: string; payload?: unknown }[] = []
 const tables: Record<string, unknown[]> = {}
 let insertError: { code?: string; message: string } | null = null
 let insertErrorTable = "marketing_sales"
+let updateReturn: unknown[] | null = null
+let selectError: { message: string } | null = null
+const eqCalls: Array<[string, string, unknown]> = []
 const orArgs: string[] = []
 
 function builder(table: string) {
@@ -18,13 +21,13 @@ function builder(table: string) {
     select: () => b,
     insert: (p: unknown) => { op = "insert"; calls.push({ table, op, payload: p }); return b },
     update: (p: unknown) => { op = "update"; calls.push({ table, op, payload: p }); return b },
-    eq: () => b, ilike: () => b, in: () => b, or: (a: string) => { orArgs.push(a); return b }, not: () => b, order: () => b, limit: () => b,
+    eq: (c: string, v: unknown) => { eqCalls.push([table, c, v]); return b }, ilike: () => b, in: () => b, or: (a: string) => { orArgs.push(a); return b }, not: () => b, order: () => b, limit: () => b,
     maybeSingle: () => Promise.resolve({ data: (tables[table] || [])[0] ?? null, error: null }),
     // an insert(...).select("id").single() answers with the new row's id (or the configured insert error for that table)
     single: () => (op === "insert"
       ? Promise.resolve(insertError && table === insertErrorTable ? { data: null, error: insertError } : { data: { id: "new-" + table }, error: null })
       : Promise.resolve({ data: (tables[table] || [])[0] ?? null, error: null })),
-    then: (res: (v: unknown) => unknown) => Promise.resolve({ data: op === "select" ? (tables[table] || []) : null, error: op === "insert" && table === insertErrorTable ? insertError : null }).then(res),
+    then: (res: (v: unknown) => unknown) => Promise.resolve({ data: op === "select" ? (tables[table] || []) : op === "update" ? updateReturn : null, error: op === "insert" && table === insertErrorTable ? insertError : op === "select" && table === "td_bank_feeds" ? selectError : null }).then(res),
   }
   return b
 }
@@ -55,7 +58,8 @@ import { recordMarketingSaleFromPayment } from "@/lib/incoming-payments/marketin
 import { payInvoiceFromPayment } from "@/lib/incoming-payments/invoice-payment"
 import { notifyUnlabelledPayment } from "@/lib/incoming-payments/notify"
 import { settlePayment, RESOLUTIONS } from "@/lib/incoming-payments/confirm"
-import { searchMarketingLeads, matchesFor, marketingLeadsByName, marketingSuggestionFor } from "@/lib/incoming-payments/load"
+import { searchMarketingLeads, matchesFor, marketingLeadsByName, marketingSuggestionFor, feedMatchedPaymentIntents } from "@/lib/incoming-payments/load"
+import { tagBankFeedAsMarketingSale } from "@/lib/incoming-payments/feed-tag"
 
 const LEAD = "22222222-2222-4222-8222-222222222222"
 const INV = "33333333-3333-4333-8333-333333333333"
@@ -65,6 +69,9 @@ const wrote = (table: string, op: string) => calls.filter(c => c.table === table
 beforeEach(() => {
   calls.length = 0
   orArgs.length = 0
+  eqCalls.length = 0
+  updateReturn = null
+  selectError = null
   insertError = null
   insertErrorTable = "marketing_sales"
   for (const k of Object.keys(tables)) delete tables[k]
@@ -341,5 +348,81 @@ describe("marketing lead suggestions by NAME (suggestions only) and the 'Looks l
     expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead({ via: "name" })] })).toBeNull()
     expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead({ teamId: null, kinds: [] })] })).toBeNull()
     expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead({ kinds: [{ key: "upsell", label: "Upsell" }] })] })).toBeNull()
+  })
+})
+
+describe("Bank Feed: a Marketing sale marks the payment's Stripe row as handled; matched rows leave the waiting list", () => {
+  const tagIn = { paymentIntentId: "pi_1", saleId: "sale-1", marketingLeadId: LEAD, leadName: "Monica Germani", actor: "antonio@x" }
+  const feedUpdates = () => calls.filter(c => c.table === "td_bank_feeds" && c.op === "update")
+
+  it("tags the ONE unmatched Stripe row of this payment: status ignored + a review note naming the sale, and the update itself requires 'still unmatched'", async () => {
+    tables.td_bank_feeds = [{ id: "f1", status: "unmatched", review_metadata: { keep: "me" } }]
+    updateReturn = [{ id: "f1" }]
+    const r = await tagBankFeedAsMarketingSale(tagIn, new Date("2026-10-24T01:00:00Z"))
+    expect(r).toEqual({ tagged: true, feedId: "f1" })
+    const payload = feedUpdates()[0].payload as { status: string; review_metadata: Record<string, unknown> }
+    expect(payload.status).toBe("ignored")
+    expect(payload.review_metadata).toMatchObject({ keep: "me", marketing_sale: { sale_id: "sale-1", marketing_lead_id: LEAD, tagged_by: "antonio@x", tagged_at: "2026-10-24T01:00:00.000Z" } })
+    expect(String(payload.review_metadata.note)).toContain("Marketing sale — Monica Germani")
+    expect(eqCalls).toEqual(expect.arrayContaining([["td_bank_feeds", "raw_data->>payment_intent", "pi_1"], ["td_bank_feeds", "id", "f1"], ["td_bank_feeds", "status", "unmatched"]]))
+  })
+  it("never touches a row someone already matched, ignored or flagged", async () => {
+    for (const status of ["matched", "ignored", "needs_review", "owner_ledger", "duplicate"]) {
+      calls.length = 0
+      tables.td_bank_feeds = [{ id: "f1", status, review_metadata: null }]
+      const r = await tagBankFeedAsMarketingSale(tagIn)
+      expect(r.tagged).toBe(false)
+      expect(feedUpdates()).toHaveLength(0)
+    }
+  })
+  it("leaves it alone when there is no row yet, or more than one, or no payment-intent id", async () => {
+    tables.td_bank_feeds = []
+    expect((await tagBankFeedAsMarketingSale(tagIn)).tagged).toBe(false)
+    tables.td_bank_feeds = [{ id: "a", status: "unmatched", review_metadata: null }, { id: "b", status: "unmatched", review_metadata: null }]
+    expect(await tagBankFeedAsMarketingSale(tagIn)).toMatchObject({ tagged: false })
+    expect((await tagBankFeedAsMarketingSale({ ...tagIn, paymentIntentId: null })).tagged).toBe(false)
+    expect(feedUpdates()).toHaveLength(0)
+  })
+  it("a colleague changing the row at the same moment (the guarded update changes nothing) is reported, not overwritten", async () => {
+    tables.td_bank_feeds = [{ id: "f1", status: "unmatched", review_metadata: null }]
+    updateReturn = []
+    expect(await tagBankFeedAsMarketingSale(tagIn)).toMatchObject({ tagged: false })
+  })
+  it("a read failure never throws: the sale is already recorded", async () => {
+    selectError = { message: "boom" }
+    tables.td_bank_feeds = []
+    await expect(tagBankFeedAsMarketingSale(tagIn)).resolves.toMatchObject({ tagged: false })
+  })
+  it("confirming a Marketing sale tags the feed row, and a RETRY of the same sale tags it again (healing a failed first attempt)", async () => {
+    tables.marketing_leads = [{ id: LEAD, team_id: "team-1", full_name: "Monica G", email: null }]
+    tables.td_bank_feeds = [{ id: "f1", status: "unmatched", review_metadata: null }]
+    updateReturn = [{ id: "f1" }]
+    const r = await recordMarketingSaleFromPayment({ payment: PAY, marketingLeadId: LEAD, kind: "strategic_call", actor: "a" })
+    expect(r).toMatchObject({ ok: true, feedTagged: true })
+    expect(feedUpdates()).toHaveLength(1)
+    calls.length = 0
+    tables.marketing_sales = [{ id: "sale-9" }]
+    const again = await recordMarketingSaleFromPayment({ payment: PAY, marketingLeadId: LEAD, kind: "strategic_call", actor: "a" })
+    expect(again).toMatchObject({ ok: true, alreadyRecorded: true, feedTagged: true })
+  })
+  it("the confirmation note says whether the Bank Feed row was tagged", async () => {
+    tables.marketing_leads = [{ id: LEAD, team_id: "team-1", full_name: "Monica G", email: null }]
+    tables.td_bank_feeds = []
+    await settlePayment({ payment: PAY, resolution: "marketing_sale", marketingLeadId: LEAD, saleKind: "strategic_call", actor: "a" })
+    expect(String((wrote("incoming_payment_resolutions", "insert")[0].payload as { note: string }).note)).toContain("Bank Feed row NOT tagged")
+  })
+
+  it("feedMatchedPaymentIntents: only rows that are matched AND carry a payment count", async () => {
+    tables.td_bank_feeds = [
+      { raw_data: { payment_intent: "pi_a" }, status: "matched", matched_payment_id: "p1" },
+      { raw_data: { payment_intent: "pi_b" }, status: "matched", matched_payment_id: null },
+      { raw_data: null, status: "matched", matched_payment_id: "p2" },
+    ]
+    expect([...(await feedMatchedPaymentIntents(["pi_a", "pi_b", "pi_c"]))]).toEqual(["pi_a"])
+    expect(eqCalls).toEqual(expect.arrayContaining([["td_bank_feeds", "source", "stripe"], ["td_bank_feeds", "status", "matched"]]))
+  })
+  it("a Bank Feed read error stops the list instead of showing money that may already be recorded", async () => {
+    selectError = { message: "boom" }
+    await expect(feedMatchedPaymentIntents(["pi_a"])).rejects.toThrow(/Bank Feed/)
   })
 })
