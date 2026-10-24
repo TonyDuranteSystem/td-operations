@@ -8,7 +8,7 @@ import { buildSetterNote, personName } from '@/lib/marketing/setter-note'
 import { SetterNoteBlock } from '@/components/marketing/setter-note-block'
 import { ContactPanel } from '@/components/marketing/contact-panel'
 import { contactState } from '@/lib/marketing/contact-state'
-import { messageSigner, templatesFor } from '@/lib/marketing/templates'
+import { messageSigner, templatesFor, type TeamTemplates } from '@/lib/marketing/templates'
 import { boardRole, type BoardRole } from '@/lib/marketing/board'
 import { HandoverPanel } from '@/components/marketing/handover-panel'
 import { getLang } from '@/lib/marketing/lang'
@@ -55,7 +55,8 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
   // what has been tried to reach the lead, and the messages the team sends (the team's own wording wins over the built-in ones)
   const contact = contactState(events)
   const overrides = lead.team_id ? ((await getMarketingSetting('message_templates', lead.team_id)) as Record<string, string>) : {}
-  const templates = templatesFor(lang, overrides)
+  const custom = lead.team_id ? ((await getMarketingSetting('team_templates', lead.team_id)) as TeamTemplates) : {}
+  const templates = templatesFor(lang, overrides, custom)
   const canAct = hasPermission(permissions, 'leads.mark') && !(claim === 'other' && !isOwner)
   // the seller (Rocco) and the setter see different lead pages: the setter's reaching-out box is the setter's work, not his
   const role = roleIn ?? boardRole(permissions)
@@ -83,7 +84,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
 
       {setterNote && <SetterNoteBlock note={setterNote} ticks={lead.qualification} />}
 
-      {role === 'setter' && <ContactPanel leadId={lead.id} canAct={canAct} contact={contact} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} setterName={signer} templates={templates} />}
+      {role === 'setter' && <ContactPanel leadId={lead.id} canAct={canAct} contact={contact} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} setterName={signer} templates={templates} canEditTemplates={isOwner} />}
 
       <HandoverPanel leadId={lead.id} role={role} canAct={canAct} contact={contact} />
 
