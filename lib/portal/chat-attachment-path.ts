@@ -51,3 +51,20 @@ export function convertibleChatPath(path: string, accountId: string | null, cont
 export function jpegPathBeside(path: string): string {
   return path.replace(/\/[0-9a-f-]{36}\.(heic|heif)$/, `/${randomUUID()}.jpg`)
 }
+
+/** Largest file the 'base64' source of portal_chat_attach_file accepts — the bytes travel inside the tool call itself, so this stays small; bigger files go through a link instead. */
+export const MAX_BASE64_ATTACHMENT_BYTES = 2 * 1024 * 1024
+
+/** Decode a base64 payload (plain or `data:` URI) into bytes; returns an error message instead of throwing. */
+export function decodeBase64Attachment(input: string): { buffer: Buffer } | { error: string } {
+  const raw = input.trim().replace(/^data:[^,]*;base64,/i, "").replace(/\s+/g, "")
+  if (!raw || raw.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(raw)) {
+    return { error: "content_base64 is not valid base64." }
+  }
+  const buffer = Buffer.from(raw, "base64")
+  if (buffer.length === 0) return { error: "content_base64 decoded to an empty file." }
+  if (buffer.length > MAX_BASE64_ATTACHMENT_BYTES) {
+    return { error: `file too large for base64 upload (${(buffer.length / 1024 / 1024).toFixed(1)}MB, max ${MAX_BASE64_ATTACHMENT_BYTES / 1024 / 1024}MB) — host it at a link and use source='url' instead.` }
+  }
+  return { buffer }
+}
