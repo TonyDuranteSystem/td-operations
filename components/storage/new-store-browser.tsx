@@ -31,6 +31,7 @@ import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQues
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
 import { putFileWithRetry } from '@/lib/storage/put-with-retry'
 import { MergeFilesDialog, type MergeFileInfo } from './merge-files-dialog'
+import { MergedPreviewModal } from './merged-preview-modal'
 import { baseName } from '@/lib/crm-store/merge-parts'
 import { mergeBlockReason } from '@/lib/crm-store/merge-rules'
 import { onReconnected } from '@/lib/hooks/use-connection-state'
@@ -343,6 +344,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // "Merge into one": the files being ordered, and the merged PDF waiting for the usual upload questions (folder, type, name)
   const [mergeList, setMergeList] = useState<MergeFileInfo[] | null>(null)
   const [mergedFile, setMergedFile] = useState<{ file: File; pages: number; ownerId: string } | null>(null)
+  const [mergedPreviewOpen, setMergedPreviewOpen] = useState(false)
   const [bulkBusy, setBulkBusy] = useState(false)
   const [sortMode, setSortMode] = useState<SortMode>(() => { try { return (localStorage.getItem('store-sort') as SortMode) || 'name' } catch { return 'name' } })
   const [filterKind, setFilterKind] = useState<'all' | null>(null)
@@ -1168,6 +1170,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // a merged file belongs to the storage it was made in: closing the Upload panel or opening another storage drops it
   // (the Bug Hunter found it could otherwise come back in another company's panel and be saved there)
   useEffect(() => { if (!uploadOpen) setMergedFile(null) }, [uploadOpen])
+  useEffect(() => { if (!mergedFile) setMergedPreviewOpen(false) }, [mergedFile])
   useEffect(() => { setMergedFile((m) => (m && m.ownerId !== (ownerId ?? '') ? null : m)) }, [ownerId])
 
   const runBulk = async (action: 'show' | 'hide' | 'delete' | 'move') => {
@@ -2421,6 +2424,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                     <span className="min-w-0 truncate text-zinc-700" title={mergedFile.file.name}>{mergedFile.file.name}</span>
                     <span className="text-xs text-zinc-500">{mergedFile.pages} pages · {fmtSize(mergedFile.file.size)}</span>
                     <span className="flex-1" />
+                    <button type="button" onClick={() => setMergedPreviewOpen(true)} data-testid="preview-merged"
+                      className="rounded-md border border-blue-300 bg-white px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50">Preview</button>
                     <button type="button" disabled={uploading || !upFolderObj || !upType || upType === '__custom__' || (upIsContacts && !upPerson)} data-testid="upload-merged"
                       onClick={async () => {
                         if (mergedFile.ownerId !== (ownerIdRef.current ?? '')) { setMergedFile(null); toast.error('This merged file was made in another storage — merge it again here.'); return }
@@ -2505,6 +2510,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       {previewVersion && <PreviewPanel file={previewVersion.file} src={previewVersion.src} viewSrc={previewVersion.viewSrc} title={previewVersion.title} onClose={() => setPreviewVersion(null)} />}
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
       {shareDialog}
+      {mergedFile && mergedPreviewOpen && <MergedPreviewModal file={mergedFile.file} pages={mergedFile.pages} onClose={() => setMergedPreviewOpen(false)} />}
       {mergeList && <MergeFilesDialog files={mergeList} onCancel={() => setMergeList(null)} onMerged={finishMerge} />}
       {asking && (
         <QuestionDialog q={questions?.[asking.slug]} fallbackTitle={asking.fallbackTitle}
