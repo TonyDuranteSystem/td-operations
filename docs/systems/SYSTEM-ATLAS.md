@@ -199,7 +199,7 @@ _Regenerated 2026-10-24. Every subsystem doc under `docs/systems/` (52 docs), wi
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-21)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-23)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-21)_
-- [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-23)_
+- [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-24)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-23)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-10-23)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-23)_

@@ -72,6 +72,9 @@ export async function loadWaitingPayments(): Promise<WaitingRow[]> {
     if (payErr) throw new Error(`incoming-payments: could not read payments: ${payErr.message}`)
     for (const p of (pays ?? []) as Array<{ stripe_payment_id: string | null }>) if (p.stripe_payment_id) stripeIds.add(p.stripe_payment_id)
   }
+  // A payment that Finance's Bank Feed already MATCHED to an invoice (by hand or automatically) is settled even when that invoice does not carry
+  // the Stripe id (older paid-call attaches did not stamp it — Roberto Anastasio's EUR 257 of 7 Oct sat in this list for that reason).
+  Array.from(await feedMatchedPaymentIntents(candidates.map((c) => c.paymentIntentId).filter((x): x is string => !!x))).forEach((pi) => stripeIds.add(pi))
   const waiting = pickWaiting(events, { sessionIds, stripeIds })
 
   const rows: WaitingRow[] = []
@@ -213,4 +216,26 @@ export async function searchMarketingLeads(q: string): Promise<{ available: bool
     throw new Error(`incoming-payments: could not search the marketing leads: ${error.message}`)
   }
   return { available: true, leads: await toChoices((data ?? []) as MarketingLeadRow[]) }
+}
+
+/**
+ * Of these Stripe payment-intent ids, the ones whose Bank Feed row is already MATCHED to a payment (status matched + a payment id).
+ * "ignored", "unmatched" and the rest do NOT count: ignoring a row in Finance dismisses it, it does not record the money.
+ */
+export async function feedMatchedPaymentIntents(paymentIntentIds: string[]): Promise<Set<string>> {
+  const out = new Set<string>()
+  for (const part of chunks(Array.from(new Set(paymentIntentIds)), CHUNK)) {
+    const { data, error } = await supabaseAdmin
+      .from("td_bank_feeds")
+      .select("raw_data, status, matched_payment_id")
+      .eq("source", "stripe")
+      .eq("status", "matched")
+      .in("raw_data->>payment_intent", part)
+    if (error) throw new Error(`incoming-payments: could not read the Bank Feed: ${error.message}`)
+    for (const r of (data ?? []) as Array<{ raw_data: { payment_intent?: string } | null; matched_payment_id: string | null }>) {
+      const pi = r.raw_data?.payment_intent
+      if (pi && r.matched_payment_id) out.add(pi)
+    }
+  }
+  return out
 }
