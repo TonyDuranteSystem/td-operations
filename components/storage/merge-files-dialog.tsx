@@ -53,7 +53,8 @@ export function MergeFilesDialog({ files, onCancel, onMerged }: {
         parts.push({ name: f.name, mimeType: f.mimeType, bytes: new Uint8Array(await res.arrayBuffer()) })
       }
       const r = await mergeParts(parts)
-      onMerged(new File([r.bytes], suggestMergedName(list.map((f) => f.name)), { type: 'application/pdf' }), r.pageCounts)
+      // newer TypeScript types a Uint8Array as ArrayBufferLike, which a File refuses: hand it a plain ArrayBuffer copy
+      onMerged(new File([r.bytes.slice().buffer as ArrayBuffer], suggestMergedName(list.map((f) => f.name)), { type: 'application/pdf' }), r.pageCounts)
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : 'The files could not be merged — please try again.')
     } finally {
