@@ -110,3 +110,44 @@ describe("the team_templates setting", () => {
     expect(parseSettingValue("team_templates", { t_a: { it: 5 } })).toMatchObject({ ok: false })
   })
 })
+
+describe("bug-hunt fixes (PR 825)", () => {
+  it("a name that is part of the template's own wording stays wording (the owner is called Rocco and the built-in says 'Tony Durante and Rocco')", () => {
+    const original = DEFAULT_TEMPLATES[0].text.en
+    const filled = original.replace(/\{name\}/g, "Marco").replace(/\{setter\}/g, "Rocco")
+    const back = unfillTemplate(filled, { name: "Marco", setter: "Rocco" }, original)
+    expect(back).toContain("Tony Durante and Rocco")
+    expect(back).toContain("Hello {name}")
+    // without the original the fixed wording would have been turned into a placeholder
+    expect(unfillTemplate(filled, { name: "Marco", setter: "Rocco" })).toContain("Tony Durante and {setter}")
+  })
+  it("when the lead and the setter share a name nothing is guessed", () => {
+    expect(unfillTemplate("Buongiorno Cristina, sono Cristina", { name: "Cristina", setter: "Cristina" })).toBe("Buongiorno Cristina, sono Cristina")
+    expect(unfillTemplate("Ciao Cristina, il {when}", { name: "Cristina", setter: "Cristina", when: "il {when}" })).toContain("Ciao Cristina")
+  })
+  it("a doubled brace is not a placeholder", () => {
+    expect(unknownPlaceholder("Hi {{name}}")).not.toBeNull()
+    expect(unknownPlaceholder("Hi {name}")).toBeNull()
+    expect(applyTemplateEdit({}, { action: "save", label: "x", it: "Hi {{name}}" })).toMatchObject({ ok: false, status: 400 })
+  })
+  it("the Templates screen shows the built-in names in the page's language", () => {
+    expect(templateRows({}, {}, "it")[0].label).toBe(DEFAULT_TEMPLATES[0].label.it)
+    expect(templateRows({}, {}, "en")[0].label).toBe(DEFAULT_TEMPLATES[0].label.en)
+    expect(templateRows()[0].label).toBe(DEFAULT_TEMPLATES[0].label.en)
+  })
+  it("two templates created in the same millisecond get different keys", () => {
+    let n = 0
+    const rand = () => (n++ % 2 === 0 ? 0.1 : 0.9)
+    const a = newTemplateKey({}, 1000, rand)
+    const b = newTemplateKey({}, 1000, rand)
+    expect(a).not.toBe(b)
+    expect(a).toMatch(/^t_[a-z0-9]+$/)
+  })
+  it("the limit also applies to a built-in that gets its first entry (the setting would refuse it with a vague error)", () => {
+    const many: TeamTemplates = {}
+    for (let i = 0; i < MAX_TEMPLATES; i++) many[`t_${i}`] = { label: "x", it: "y" }
+    expect(applyTemplateEdit(many, { action: "save", key: "first_contact", it: "Ciao" })).toMatchObject({ ok: false, status: 400 })
+    expect(applyTemplateEdit({ first_contact: { it: "a" } }, { action: "save", key: "first_contact", it: "b" }).ok).toBe(true)
+  })
+})
+

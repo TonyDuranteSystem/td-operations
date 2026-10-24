@@ -88,10 +88,10 @@ export function templatesFor(lang: Lang, overrides: Record<string, string> = {},
 }
 
 /** The rows of the Templates screen: both languages of every template. */
-export function templateRows(overrides: Record<string, string> = {}, custom: TeamTemplates = {}): TemplateRow[] {
+export function templateRows(overrides: Record<string, string> = {}, custom: TeamTemplates = {}, lang: Lang = "en"): TemplateRow[] {
   const rows: TemplateRow[] = DEFAULT_TEMPLATES.map(t => {
     const c = custom[t.key]
-    return { key: t.key, label: c?.label || t.label.en, it: c?.it || overrides[t.key] || t.text.it, en: c?.en || overrides[t.key] || t.text.en, builtIn: true, edited: !!(c && (c.label || c.it || c.en)) || t.key in overrides }
+    return { key: t.key, label: c?.label || t.label[lang], it: c?.it || overrides[t.key] || t.text.it, en: c?.en || overrides[t.key] || t.text.en, builtIn: true, edited: !!(c && (c.label || c.it || c.en)) || t.key in overrides }
   })
   for (const [k, c] of Object.entries(custom)) {
     if (DEFAULT_TEMPLATES.some(t => t.key === k)) continue
@@ -101,8 +101,10 @@ export function templateRows(overrides: Record<string, string> = {}, custom: Tea
 }
 
 const KNOWN_PLACEHOLDERS = ["name", "setter", "when"]
-/** The first {word} in a text that is not a placeholder the system fills in, or null. */
+/** The first {word} in a text that is not a placeholder the system fills in (or a doubled brace like {{name}}), or null. */
 export function unknownPlaceholder(text: string): string | null {
+  const doubled = /\{\{[^{}]*\}?\}?/.exec(text)
+  if (doubled) return doubled[0]
   const re = /\{([^{}]*)\}/g
   for (let m = re.exec(text); m !== null; m = re.exec(text)) if (!KNOWN_PLACEHOLDERS.includes(m[1])) return m[1]
   return null
@@ -112,12 +114,17 @@ export function unknownPlaceholder(text: string): string | null {
  * A message as typed in the lead's box has THIS lead's first name, THIS setter's name and THIS call time in it. Saved as a template those must go back to {name} {setter} {when}, or the
  * template would greet every lead as Marco. Only whole words are replaced, and only names of 2 letters or more.
  */
-export function unfillTemplate(text: string, v: { name?: string | null; setter?: string | null; when?: string | null }): string {
+export function unfillTemplate(text: string, v: { name?: string | null; setter?: string | null; when?: string | null }, original = ""): string {
   const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const word = (w: string) => new RegExp(`(^|[^\\p{L}\\p{N}])${esc(w)}(?![\\p{L}\\p{N}])`, "iu")
+  const same = (v.name ?? "").trim().toLowerCase() !== "" && (v.name ?? "").trim().toLowerCase() === (v.setter ?? "").trim().toLowerCase()
   let out = text
   for (const [value, token] of [[v.when, "{when}"], [v.setter, "{setter}"], [v.name, "{name}"]] as const) {
     const w = (value ?? "").trim()
     if (w.length < 2) continue
+    // a name that is part of the template's own fixed wording ("…Tony Durante and Rocco") is wording, not a placeholder; and when the lead and the setter share a name there is no telling which is which
+    if (original && word(w).test(original)) continue
+    if (same && token !== "{when}") continue
     out = out.replace(new RegExp(`(^|[^\\p{L}\\p{N}])${esc(w)}(?![\\p{L}\\p{N}])`, "gu"), `$1${token}`)
   }
   return out

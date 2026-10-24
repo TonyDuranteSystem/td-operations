@@ -16,12 +16,13 @@ export const dynamic = 'force-dynamic'
 export default async function MarketingTemplates() {
   const g = await resolveMarketingContext()
   if (g.ok === false) redirect('/marketing')
-  const t = makeT(getLang())
+  const lang = getLang()
+  const t = makeT(lang)
   if (!hasPermission(g.ctx.permissions, 'leads.mark')) {
     return <main className="mx-auto max-w-xl px-4 py-10"><p className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm">{t('You do not have access to the templates. Ask your team owner.')}</p></main>
   }
   const [legacy, custom] = await Promise.all([getMarketingSetting('message_templates', g.ctx.team.id), getMarketingSetting('team_templates', g.ctx.team.id)])
-  const rows = templateRows(legacy as Record<string, string>, custom as TeamTemplates)
+  const rows = templateRows(legacy as Record<string, string>, custom as TeamTemplates, lang)
   return (
     <div className="space-y-4 p-6 pb-20">
       <div>

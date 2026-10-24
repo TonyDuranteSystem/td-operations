@@ -49,7 +49,7 @@ export function ContactPanel({ leadId, canAct, contact, leadName, phone, setterN
   const chips = contactChips(contact, fw, t)
 
   // the text as a template: this lead's name, this setter's name and this call time go back to {name} {setter} {when}
-  const asTemplate = unfillTemplate(message, { name: firstName(leadName), setter: setterName, when: whenText })
+  const asTemplate = unfillTemplate(message, { name: firstName(leadName), setter: setterName, when: whenText }, tpl?.text ?? '')
   async function saveTemplate() {
     if (!saving) return
     setBusy(true); setError(null)
