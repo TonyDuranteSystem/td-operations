@@ -10,9 +10,9 @@ import { clientFlagText, formatWhen, stageLabel, type StageOption } from '@/lib/
 import { canSeeNotes, withoutPhone } from '@/lib/marketing/lead-privacy'
 import { loadLeadActivity } from '@/lib/marketing/note-read'
 import { contactChips, EMPTY_CONTACT } from '@/lib/marketing/contact-state'
-import { availableBoardRoles, boardRole, type BoardCard } from '@/lib/marketing/board'
+import type { BoardCard } from '@/lib/marketing/board'
 import { LeadBoard } from '@/components/marketing/lead-board'
-import { listConversations, unreadByLead } from '@/lib/marketing/lead-chat-server'
+import { unreadByLead } from '@/lib/marketing/lead-chat-server'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,7 +21,7 @@ export const dynamic = 'force-dynamic'
  * lead in a floating window (components/marketing/lead-board.tsx). The team id comes from the guard and is in every query. Phone numbers and the team's notes are left out of the
  * page for people who may not see them (the same rules as the Leads page).
  */
-export default async function MarketingBoard({ searchParams }: { searchParams: Promise<{ chat?: string }> }) {
+export default async function MarketingBoard() {
   const g = await resolveMarketingContext()
   if (g.ok === false) redirect('/marketing')
   const lang = getLang()
@@ -29,7 +29,6 @@ export default async function MarketingBoard({ searchParams }: { searchParams: P
   if (!hasPermission(g.ctx.permissions, 'leads.read')) {
     return <main className="mx-auto max-w-xl px-4 py-10"><p className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm">{t('You do not have access to the leads. Ask your team owner.')}</p></main>
   }
-  const sp = await searchParams
   const db = leadDb()
   const teamId = g.ctx.team.id
   const userId = g.ctx.user.id
@@ -37,9 +36,9 @@ export default async function MarketingBoard({ searchParams }: { searchParams: P
   const res = await listTeamLeadsCapped(db, teamId, 500, { order: 'newest' })
   const leads = withoutPhone(res.rows, g.ctx.permissions)
   const seesNotes = canSeeNotes(g.ctx.permissions)
-  // the chat: my unread numbers on the cards and the Messages list (only for people who may chat)
+  // the chat: my unread numbers on the cards (only for people who may chat)
   const chatOn = hasPermission(g.ctx.permissions, 'chat')
-  const [unread, conversations] = chatOn ? await Promise.all([unreadByLead(g.ctx), listConversations(g.ctx)]) : [new Map<string, number>(), []]
+  const unread = chatOn ? await unreadByLead(g.ctx) : new Map<string, number>()
   const activity = leads.length > 0 ? await loadLeadActivity(db, leads.map(l => l.id)) : null
   const fw = (iso: string | null | undefined) => formatWhen(iso, 'Europe/Rome', localeFor(lang))
   const cards: BoardCard[] = leads.map(l => {
@@ -65,7 +64,7 @@ export default async function MarketingBoard({ searchParams }: { searchParams: P
   return (
     <div className="space-y-4 p-6 pb-20">
       <div><h1 className="text-2xl font-semibold">{t('Board')}</h1><p className="mt-1 text-sm text-slate-500">{t('Click a lead to open it in a window. You can keep up to three open.')}</p></div>
-      <LeadBoard role={boardRole(g.ctx.permissions)} roles={availableBoardRoles(g.ctx.permissions)} cards={cards} truncated={res.truncated} chatOn={chatOn} conversations={conversations} openChatId={sp.chat && /^[0-9a-f-]{36}$/i.test(sp.chat) ? sp.chat : null} />
+      <LeadBoard cards={cards} truncated={res.truncated} />
     </div>
   )
 }

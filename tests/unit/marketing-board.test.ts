@@ -45,7 +45,7 @@ describe("the lead board: who sees which columns", () => {
     expect(hiddenCount("setter", cards)).toBe(1)
   })
   it("the saved view is one of the three, anything else falls back to the pipeline", () => {
-    expect(BOARD_VIEWS).toEqual(["pipeline", "cards", "list", "messages"])
+    expect(BOARD_VIEWS).toEqual(["pipeline", "cards", "list"])
     expect(parseBoardView("list")).toBe("list")
     expect(parseBoardView("grid")).toBe("pipeline")
     expect(parseBoardView(null)).toBe("pipeline")

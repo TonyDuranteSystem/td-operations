@@ -10,6 +10,7 @@ import { loadPaymentLinkView } from '@/lib/marketing/sales-server'
 import { personName } from '@/lib/marketing/setter-note'
 import type { StageOption } from '@/lib/marketing/lead-view'
 import { FrameChangeNotifier } from '@/components/marketing/frame-change-notifier'
+import { ThemeSync } from '@/components/marketing/theme-sync'
 import { LeadWindowTabs } from '@/components/marketing/lead-window-tabs'
 import { unreadByLead } from '@/lib/marketing/lead-chat-server'
 import { resolveBoardRole } from '@/lib/marketing/board'
@@ -48,6 +49,7 @@ export default async function MarketingLeadWindow({ params, searchParams }: { pa
   const unread = chatOn ? (await unreadByLead(g.ctx)).get(lead.id) ?? 0 : 0
   return (
     <LangProvider lang={lang}>
+      <ThemeSync />
       <FrameChangeNotifier />
       <LeadWindowTabs leadId={lead.id} chatOn={chatOn} initialTab={sp.tab === 'chat' ? 'chat' : 'lead'} initialUnread={unread}>
         <LeadPane role={resolveBoardRole(g.ctx.permissions, sp.role)} lead={lead} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} viewingAs={!!g.ctx.viewAs} paymentLink={paymentLink} />
