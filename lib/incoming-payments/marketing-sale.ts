@@ -19,6 +19,7 @@ import { getMarketingSetting, listCommissionTerms } from "@/lib/marketing/settin
 import { snapshotForSale, formatMoney } from "@/lib/marketing/sales"
 import { moveLeadAfterPaid } from "@/lib/marketing/sales-server"
 import type { WaitingPayment } from "@/lib/incoming-payments/classify"
+import { tagBankFeedAsMarketingSale } from "@/lib/incoming-payments/feed-tag"
 
 export interface MarketingSaleResult {
   ok: boolean
@@ -28,6 +29,9 @@ export interface MarketingSaleResult {
   alreadyRecorded?: boolean
   termsSet?: boolean
   leadName?: string | null
+  /** Did the payment's Stripe row in Finance → Bank Feed get marked as handled? (best effort; false = left for a person, see feedNote) */
+  feedTagged?: boolean
+  feedNote?: string
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -44,7 +48,12 @@ export async function recordMarketingSaleFromPayment(
   // Already recorded for this Stripe session (retry, double click)?
   const { data: existing, error: exErr } = await db.from("marketing_sales").select("id").eq("stripe_session_id", payment.sessionId).maybeSingle()
   if (exErr) return { ok: false, status: 500, error: `Could not check whether this sale was already recorded: ${exErr.message}` }
-  if (existing) return { ok: true, alreadyRecorded: true, saleId: (existing as { id: string }).id }
+  if (existing) {
+    const saleId = (existing as { id: string }).id
+    // A retry: the sale is there; make sure its Bank Feed row is tagged too (only ever changes a row that is still unmatched).
+    const f = await tagBankFeedAsMarketingSale({ paymentIntentId: payment.paymentIntentId, saleId, marketingLeadId: input.marketingLeadId, leadName: null, actor })
+    return { ok: true, alreadyRecorded: true, saleId, feedTagged: f.tagged, feedNote: f.reason }
+  }
 
   const { data: lead, error: leadErr } = await db.from("marketing_leads").select("id, team_id, full_name, email").eq("id", input.marketingLeadId).maybeSingle()
   if (leadErr) return { ok: false, status: 500, error: `Could not read the marketing lead: ${leadErr.message}` }
@@ -80,5 +89,7 @@ export async function recordMarketingSaleFromPayment(
     data: { sale_id: saleId, amount_cents: amountCents, currency: payment.currency, recorded_late: true, stripe_session_id: payment.sessionId },
   })
   await moveLeadAfterPaid(db, { id: saleId, team_id: l.team_id, lead_id: l.id, kind })
-  return { ok: true, saleId, termsSet: snap.seller_cents !== null, leadName: l.full_name }
+  // Finance: mark this payment's Stripe row in the Bank Feed as handled and tag it to the sale (best effort, never fails the sale).
+  const feed = await tagBankFeedAsMarketingSale({ paymentIntentId: payment.paymentIntentId, saleId, marketingLeadId: l.id, leadName: l.full_name, actor })
+  return { ok: true, saleId, termsSet: snap.seller_cents !== null, leadName: l.full_name, feedTagged: feed.tagged, feedNote: feed.reason }
 }

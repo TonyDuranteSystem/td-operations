@@ -5,7 +5,7 @@ import { hasPermission } from '@/lib/marketing/permissions'
 import { getMarketingSetting } from '@/lib/marketing/settings'
 import { leadDb } from '@/lib/marketing/meta-leads/service'
 import { listTeamSales } from '@/lib/marketing/sales-server'
-import { formatMoney, saleStatusLabel, totalsByCurrency } from '@/lib/marketing/sales'
+import { formatMoney, payoutTotals, saleStatusLabel, sellerPaidInOtherCurrency, totalsByCurrency } from '@/lib/marketing/sales'
 import { formatWhen } from '@/lib/marketing/lead-view'
 import { getLang } from '@/lib/marketing/lang'
 import { localeFor, makeT } from '@/lib/marketing/i18n'
@@ -28,12 +28,14 @@ export default async function MarketingMoney() {
   const db = leadDb()
   const teamId = g.ctx.team.id
   const sales = await listTeamSales(db, teamId, g.ctx.role === 'owner' ? {} : { mineUserId: g.ctx.user.id })
-  const [kinds, leadsRes] = await Promise.all([
+  const [kinds, payoutCurrency, leadsRes] = await Promise.all([
     getMarketingSetting('sale_kinds', teamId) as Promise<{ key: string; label: string }[]>,
+    getMarketingSetting('seller_payout_currency', teamId) as Promise<string>,
     sales.length ? db.from('marketing_leads').select('id, full_name, email, phone').eq('team_id', teamId).in('id', Array.from(new Set(sales.map(s => s.lead_id)))) : Promise.resolve({ data: [] }),
   ])
   const names = new Map(((leadsRes.data ?? []) as { id: string; full_name: string | null; email: string | null; phone: string | null }[]).map(l => [l.id, l.full_name || l.email || (canSeePhone(g.ctx.permissions) ? l.phone : null) || t('Unnamed lead')]))
-  const totalsList = totalsByCurrency(sales)
+  const totalsList = totalsByCurrency(sales, new Date(), payoutCurrency)
+  const payout = payoutTotals(sales, payoutCurrency)
   const card = 'rounded-xl border bg-white p-5'
   return (
     <div className="space-y-5 p-6">
@@ -47,15 +49,28 @@ export default async function MarketingMoney() {
               <h2 className="text-sm font-semibold text-slate-600">{tt.currency}</h2>
               <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
                 <div><dt className="text-slate-500">{t('Sold (paid)')}</dt><dd className="text-xl font-semibold">{formatMoney(tt.receivedCents, tt.currency)}</dd></div>
-                <div><dt className="text-slate-500">{t('Your share')}</dt><dd className="text-xl font-semibold">{formatMoney(tt.sellerCents, tt.currency)}</dd></div>
-                <div><dt className="text-slate-500">{t('Paid to your company')}</dt><dd className="font-medium">{formatMoney(tt.paidOutCents, tt.currency)}</dd></div>
-                <div><dt className="text-slate-500">{t('Still to come')}</dt><dd className="font-medium">{formatMoney(tt.owedToSellerCents, tt.currency)}</dd></div>
+                {!sellerPaidInOtherCurrency(tt.currency, payoutCurrency) && <>
+                  <div><dt className="text-slate-500">{t('Your share')}</dt><dd className="text-xl font-semibold">{formatMoney(tt.sellerCents, tt.currency)}</dd></div>
+                  <div><dt className="text-slate-500">{t('Paid to your company')}</dt><dd className="font-medium">{formatMoney(tt.paidOutCents, tt.currency)}</dd></div>
+                  <div><dt className="text-slate-500">{t('Still to come')}</dt><dd className="font-medium">{formatMoney(tt.owedToSellerCents, tt.currency)}</dd></div>
+                </>}
               </dl>
               {tt.unsetCount > 0 && <p className="mt-3 text-xs text-amber-800">{t(tt.unsetCount === 1 ? '{n} sale paid but the split is not set yet. Antonio sets it; it is not in “Your share” until then.' : '{n} sales paid but the split is not set yet. Antonio sets it; it is not in “Your share” until then.', { n: tt.unsetCount })}</p>}
               {tt.openLinks > 0 && <p className="mt-1 text-xs text-slate-500">{t(tt.openLinks === 1 ? '{n} link sent, not paid yet.' : '{n} links sent, not paid yet.', { n: tt.openLinks })}</p>}
               {tt.refundedCount > 0 && <p className="mt-1 text-xs text-slate-500">{t(tt.refundedCount === 1 ? '{n} refunded sale (not counted).' : '{n} refunded sales (not counted).', { n: tt.refundedCount })}</p>}
             </section>
           ))}
+          {payout && (
+            <section className={card} aria-label={t('Your share in {currency}', { currency: payout.currency })}>
+              <h2 className="text-sm font-semibold text-slate-600">{t('Your share, to invoice in {currency}', { currency: payout.currency })}</h2>
+              <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+                <div><dt className="text-slate-500">{t('Your share')}</dt><dd className="text-xl font-semibold">{formatMoney(payout.sellerCents, payout.currency)}</dd></div>
+                <div><dt className="text-slate-500">{t('Still to invoice')}</dt><dd className="text-xl font-semibold">{formatMoney(payout.owedCents, payout.currency)}</dd></div>
+                <div><dt className="text-slate-500">{t('Paid to your company')}</dt><dd className="font-medium">{formatMoney(payout.paidOutCents, payout.currency)}</dd></div>
+              </dl>
+              <p className="mt-3 text-xs text-slate-500">{t('Invoice this amount in {currency}: the same number as your share, with no exchange rate.', { currency: payout.currency })}</p>
+            </section>
+          )}
         </div>
       )}
 
@@ -72,7 +87,7 @@ export default async function MarketingMoney() {
                     <td className="pr-4">{names.get(s.lead_id) ?? t('Lead')}</td>
                     <td className="pr-4">{t(kinds.find(k => k.key === s.kind)?.label ?? s.kind)}</td>
                     <td className="pr-4 font-medium">{formatMoney(s.amount_cents, s.currency)}</td>
-                    <td className="pr-4">{s.status === 'refunded' ? '—' : s.seller_cents === null ? <span className="text-amber-800">{t('Terms not set')}</span> : formatMoney(s.seller_cents, s.currency)}</td>
+                    <td className="pr-4">{s.status === 'refunded' ? '—' : s.seller_cents === null ? <span className="text-amber-800">{t('Terms not set')}</span> : formatMoney(s.seller_cents, sellerPaidInOtherCurrency(s.currency, payoutCurrency) ? payoutCurrency : s.currency)}</td>
                     <td>{t(saleStatusLabel(s))}{s.needs_attention && <span className="block text-xs text-amber-800">{s.needs_attention}</span>}</td>
                   </tr>
                 ))}
