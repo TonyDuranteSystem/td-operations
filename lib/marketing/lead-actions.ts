@@ -40,7 +40,8 @@ export function permissionFor(a: LeadActionInput["action"]): MarketingPermission
   return a === "claim" || a === "release" ? "leads.pick" : "leads.mark"
 }
 
-export interface LeadFacts { claimed_by: string | null; status: string }
+/** `callback_at` and `appointment_at` (the booked call that still stands) are only given when moving a call needs them. */
+export interface LeadFacts { claimed_by: string | null; status: string; callback_at?: string | null; appointment_at?: string | null }
 export interface Actor { id: string; email: string | null; role: "owner" | "member" }
 
 export interface PlannedChange {
@@ -152,21 +153,28 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
     }
 
     case "reschedule": {
+      // a full day AND time (a bare date would silently become midnight UTC)
+      if (!/T\d{2}:\d{2}/.test(input.at)) return fail(400, "Pick a valid day and time.")
       const at = new Date(input.at)
       if (Number.isNaN(at.getTime())) return fail(400, "Pick a valid day and time.")
       if (at.getTime() < now.getTime() - GRACE_MS) return fail(400, "That time has already passed. Pick a day and time in the future.")
       if (at.getTime() > now.getTime() + MAX_AHEAD_MS) return fail(400, "That is too far away. Pick a day within the next six months.")
+      if (input.reason === "Other" && !input.note) return fail(400, "Tell us why: write a few words.")
       const from = typeof input.from === "string" && !Number.isNaN(Date.parse(input.from)) ? new Date(input.from).toISOString() : null
+      // only a call that STILL STANDS can be moved: a stale page must never bring back a cancelled booking or reopen a lead that has moved on
+      const stale = "This call was changed by someone else. Reload the calendar and try again."
+      const differs = (stored: string) => from !== null && Math.abs(Date.parse(stored) - Date.parse(from)) > 60_000
       const moved = { note: input.note ?? null, reason: input.reason, rescheduled: true }
       if (input.target === "appointment") {
+        if (!lead.appointment_at) return fail(409, "This call is no longer booked. Reload the calendar.")
+        if (Date.parse(lead.appointment_at) < now.getTime() - GRACE_MS) return fail(409, "This call has already taken place. Book a new one from the lead.")
+        if (differs(lead.appointment_at)) return fail(409, stale)
         return { ok: true, change: { patch: movedToBooked(lead, s), event: { kind: "appointment", data: { at: at.toISOString(), from, ...moved } } } }
       }
-      const target = s.outcomeStages.call_back
-      if (!stageExists(target)) return fail(400, "The stage for \"Call back later\" is not set up. Ask Antonio.")
-      return { ok: true, change: {
-        patch: { status: target, callback_at: at.toISOString(), not_in_target_reason: null },
-        event: { kind: "status_changed", data: { from: lead.status, to: target, outcome: "call_back", callback_at: at.toISOString(), callback_from: from, ...moved } },
-      } }
+      // a call back still stands only while the lead is at the call back stage with its time set; the stage itself is never touched
+      if (!lead.callback_at || lead.status !== s.outcomeStages.call_back) return fail(409, "This call back is no longer on this lead. Reload the calendar.")
+      if (differs(lead.callback_at)) return fail(409, stale)
+      return { ok: true, change: { patch: { callback_at: at.toISOString() }, event: { kind: "callback_moved", data: { callback_at: at.toISOString(), from, ...moved } } } }
     }
 
     case "handover": {

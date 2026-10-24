@@ -83,7 +83,7 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }
 
   const block = (it: CalendarItem, style?: React.CSSProperties, compact = false) => (
     <div key={keyOf(it)} role="button" tabIndex={0} draggable={movable(it)} data-testid="cal-item" data-lead={it.leadId}
-      onClick={() => open({ id: it.leadId, name: it.name })} onKeyDown={e => { if (e.key === 'Enter') open({ id: it.leadId, name: it.name }) }}
+      onClick={() => open({ id: it.leadId, name: it.name })} onKeyDown={e => { if (e.key === 'Enter' && e.target === e.currentTarget) open({ id: it.leadId, name: it.name }) }}
       onDragStart={e => { drag.current = it; e.dataTransfer.setData('text/plain', keyOf(it)); e.dataTransfer.effectAllowed = 'move' }} onDragEnd={() => { drag.current = null }}
       className={`${compact ? 'relative mt-1' : 'absolute'} overflow-hidden rounded-md border-l-4 px-1.5 py-0.5 text-xs ${TONE[it.kind]} ${it.late ? 'ring-2 ring-red-400' : ''} ${it.done ? 'opacity-70' : ''} ${movable(it) ? 'cursor-grab' : 'cursor-pointer'}`} style={style}>
       <span className="flex items-start justify-between gap-1">
@@ -278,8 +278,10 @@ function MoveDialog({ pending, nowIso, told, whenText, onClose, onDone }: { pend
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'reschedule', target: item.kind === 'appointment' ? 'appointment' : 'callback', at, reason, note: note.trim() || undefined, from: item.at }),
       })
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || t('Could not move the call. Please try again.')) }
-      onDone(item, at, told ? t('Moved. The seller and the setter were told.') : t('Moved.'))
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || t('Could not move the call. Please try again.'))
+      // only say people were told when a notification really went out
+      onDone(item, at, told && Number(d.notified) > 0 ? t('Moved. The seller and the setter were told.') : t('Moved.'))
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : t('Could not move the call. Please try again.'))
       setBusy(false)

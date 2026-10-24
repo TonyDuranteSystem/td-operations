@@ -58,8 +58,6 @@ export function latestSetters(events: readonly CalEvent[]): Map<string, { actor:
   const out = new Map<string, { actor: string; at: string }>()
   for (const e of events) {
     if (e.data?.outcome !== "call_back") continue
-    // a call back that was only MOVED (to another day) keeps the person who first set it: the one who moved it did not take it over
-    if (e.data?.rescheduled === true) continue
     const cur = out.get(e.lead_id)
     if (!cur || e.created_at > cur.at) out.set(e.lead_id, { actor: e.actor, at: e.created_at })
   }
@@ -177,8 +175,12 @@ export function calendarItems(i: { leads: readonly CalLead[]; events: readonly C
   const setters = latestSetters(i.events)
   const isMember = (email: string | null) => email !== null && i.members.some(m => m.email !== null && m.email.toLowerCase() === email.toLowerCase() && m.status !== "removed")
   const items: CalendarItem[] = []
+  // a call back is superseded by a booked call at or after its time (the setter booked the call the lead was waiting for): it is not shown, so it cannot be moved by mistake
+  const bookedAt = new Map<string, number>()
+  for (const a of i.appointments ?? []) { const at = Date.parse(a.at); if (!Number.isNaN(at)) bookedAt.set(a.lead.id, Math.max(bookedAt.get(a.lead.id) ?? 0, at)) }
   for (const l of i.leads) {
     if (!l.callback_at || Number.isNaN(Date.parse(l.callback_at))) continue
+    if ((bookedAt.get(l.id) ?? -1) >= Date.parse(l.callback_at)) continue
     const setter = setters.get(l.id)?.actor ?? null
     const ownerId = callBackOwner(l, setter, i.members)
     if (i.ownerId !== "all" && ownerId !== i.ownerId) continue

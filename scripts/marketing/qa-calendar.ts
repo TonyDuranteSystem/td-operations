@@ -165,7 +165,7 @@ async function main() {
   ck("V4 picking a reason switches Move the call on", (await page.getByTestId("move-save").isDisabled()) === false)
   await page.getByTestId("move-save").click()
   const t1 = await waitToast(page)
-  ck("V5 the screen says it moved and that the seller and the setter were told", /Moved\. The seller and the setter were told/.test(t1), t1)
+  ck("V5 the screen says 'Moved.' and does NOT claim anyone was told when no notification went out (nobody here has a device subscribed)", t1.trim() === "Moved.", t1)
   const a1 = await lastAppt(L1)
   ck("V6 a NEW booking row was written at Wednesday 15:00 Rome time with the reason, the old time, and moved=true, by the person who moved it", a1.data.at === slot(dayOf(2), 15) && a1.data.reason === "The lead asked to move" && a1.data.rescheduled === true && a1.data.from === slot(nextMon, 11) && a1.actor === em("ownerA") && (await apptCount(L1)) === 2, a1)
   await page.waitForTimeout(1500)
@@ -181,7 +181,7 @@ async function main() {
   await page.getByTestId("move-save").click()
   await waitToast(page)
   const l2 = (await db.query("select callback_at, status from marketing_leads where id=$1", [L2])).rows[0]
-  const e2 = (await db.query("select actor, data from marketing_lead_events where lead_id=$1 and kind='status_changed' order by created_at desc limit 1", [L2])).rows[0]
+  const e2 = (await db.query("select actor, data from marketing_lead_events where lead_id=$1 and kind='callback_moved' order by created_at desc limit 1", [L2])).rows[0]
   ck("V9 the call back moved to Thursday 12:00 Rome with the reason and the note, and the lead keeps its stage", new Date(l2.callback_at).toISOString() === slot(dayOf(3), 12) && e2.data.rescheduled === true && e2.data.reason === "Other" && e2.data.note === "she travels on Tuesday" && l2.status === "contacted", { l2, e2 })
   await page.close()
 
@@ -258,6 +258,15 @@ async function main() {
   const post = (payload: object) => sp.evaluate(async ([id, p]) => { const r = await fetch(`/api/marketing/leads/${id}/action`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) }); return { status: r.status, body: await r.json().catch(() => ({})) } }, [L1, payload] as const)
   const noReason = await post({ action: "reschedule", target: "appointment", at: slot(dayOf(4), 10), reason: "" })
   const past = await post({ action: "reschedule", target: "appointment", at: new Date(Date.now() - 86400000).toISOString(), reason: "x" })
+  const post2 = (id: string, payload: object) => sp.evaluate(async ([i, p]) => { const r = await fetch(`/api/marketing/leads/${i}/action`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) }); return { status: r.status, body: await r.json().catch(() => ({})) } }, [id, payload] as const)
+  const noAppt = await post2(L2, { action: "reschedule", target: "appointment", at: slot(dayOf(4), 10), reason: "The lead asked to move" })
+  const noCb = await post2(L1, { action: "reschedule", target: "callback", at: slot(dayOf(4), 10), reason: "The lead asked to move" })
+  const stale = await post2(L1, { action: "reschedule", target: "appointment", at: slot(dayOf(4), 10), reason: "The lead asked to move", from: slot(dayOf(5), 10) })
+  const nApptBefore = await apptCount(L1)
+  ck("V21 a move cannot create a call out of nothing: a lead with no booking (409), a lead with no call back (409), a stale page whose old time no longer matches (409), and nothing is written", noAppt.status === 409 && noCb.status === 409 && stale.status === 409 && (await apptCount(L1)) === nApptBefore, { noAppt, noCb, stale })
+  const cbRows = Number((await db.query("select count(*) from marketing_lead_events where lead_id=$1 and kind='status_changed'", [L2])).rows[0].count)
+  const mvRows = Number((await db.query("select count(*) from marketing_lead_events where lead_id=$1 and kind='callback_moved'", [L2])).rows[0].count)
+  ck("V22 moving a call back writes its OWN history kind and never a new 'call back' outcome row (so the numbers do not count a move as new work)", cbRows === 1 && mvRows === 1, { cbRows, mvRows })
   ck("V19 the server refuses a move with no reason (400) and a move into the past (400, clear message)", noReason.status === 400 && past.status === 400 && /already passed/.test(past.body.error ?? ""), { noReason, past })
   await sp.close()
 

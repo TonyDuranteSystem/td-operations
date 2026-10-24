@@ -6,7 +6,7 @@
 import type { Db } from "@/lib/marketing/meta-leads/ingest"
 import { getMarketingSetting } from "@/lib/marketing/settings"
 import { getTeamLead } from "@/lib/marketing/leads-read"
-import { leadActionSchema, planLeadAction, type ActionSettings, type Actor, type LeadActionInput } from "@/lib/marketing/lead-actions"
+import { leadActionSchema, planLeadAction, type ActionSettings, type Actor, type LeadActionInput, type LeadFacts } from "@/lib/marketing/lead-actions"
 
 export type ActionResult = { ok: true } | { ok: false; status: 400 | 404 | 409 | 500; error: string }
 
@@ -29,7 +29,16 @@ export async function applyLeadAction(
 ): Promise<ActionResult> {
   const lead = await getTeamLead(db, teamId, leadId)
   if (!lead) return { ok: false, status: 404, error: "Lead not found." }
-  const plan = planLeadAction(input, { claimed_by: (lead as { claimed_by?: string | null }).claimed_by ?? null, status: lead.status }, actor, settings, now)
+  const facts: LeadFacts = { claimed_by: (lead as { claimed_by?: string | null }).claimed_by ?? null, status: lead.status }
+  if (input.action === "reschedule") {
+    // what stands NOW: the call back time on the lead, and the newest booking row (a cancelled booking has no time)
+    facts.callback_at = (lead as { callback_at?: string | null }).callback_at ?? null
+    const { data: ap, error: apErr } = await db.from("marketing_lead_events").select("data").eq("lead_id", lead.id).eq("kind", "appointment").order("created_at", { ascending: false }).order("id", { ascending: false }).limit(1)
+    if (apErr) return { ok: false, status: 500, error: "Could not check the call. Please try again." }
+    const at = (ap as Array<{ data?: { at?: unknown } }> | null)?.[0]?.data?.at
+    facts.appointment_at = typeof at === "string" ? at : null
+  }
+  const plan = planLeadAction(input, facts, actor, settings, now)
   if (plan.ok === false) return plan
 
   const { change } = plan

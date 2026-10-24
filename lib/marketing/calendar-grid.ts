@@ -87,7 +87,10 @@ export function bucketDrop(bucket: Bucket, atIso: string, nowIso: string): { kin
     const same = moveToDay(atIso, now.key)
     if (same && new Date(same).getTime() > new Date(nowIso).getTime()) return { kind: "move", at: same }
     const next = slotIso(now.key, now.h + 1, 0)
-    return next ? { kind: "move", at: next } : { kind: "refuse" }
+    if (next) return { kind: "move", at: next }
+    // late in the evening there is no hour left today: let the person choose, starting tomorrow
+    const tomorrow = moveToDay(atIso, addDays(now.key, 1))
+    return tomorrow ? { kind: "choose", suggest: tomorrow } : { kind: "refuse" }
   }
   if (bucket === "tomorrow") { const t = moveToDay(atIso, addDays(now.key, 1)); return t ? { kind: "move", at: t } : { kind: "refuse" } }
   const target = bucket === "week" ? (addDays(now.key, 2) <= addDays(weekStart(now.key), 6) ? addDays(now.key, 2) : addDays(weekStart(now.key), 6)) : addDays(now.key, 8)

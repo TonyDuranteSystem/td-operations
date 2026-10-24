@@ -24,24 +24,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const settings = await loadActionSettings(g.ctx.team.id)
   const r = await applyLeadAction(leadDb(), g.ctx.team.id, id, parsed.value, { id: g.ctx.user.id, email: g.ctx.user.email, role: g.ctx.role }, settings, new Date(), g.ctx.viewAs !== undefined)
   if (r.ok === false) return NextResponse.json({ error: r.error }, { status: r.status, headers: NO_STORE })
-  if (parsed.value.action === "reschedule" && g.ctx.viewAs === undefined) await notifyMoved(g.ctx.team.id, g.ctx.user.id, g.ctx.user.email, id, parsed.value)
-  return NextResponse.json({ ok: true }, { headers: NO_STORE })
+  const notified = parsed.value.action === "reschedule" && g.ctx.viewAs === undefined ? await notifyMoved(g.ctx.team.id, g.ctx.user.id, g.ctx.user.email, id, parsed.value) : 0
+  return NextResponse.json({ ok: true, notified }, { headers: NO_STORE })
 }
 
 /** Tell the seller and the setter that a call was moved. The move is already saved: a failed or slow notification never fails it (and never holds the answer back more than a few seconds). */
-async function notifyMoved(teamId: string, moverId: string, moverEmail: string | null, leadId: string, a: { at: string; reason: string; from?: string | null }) {
+async function notifyMoved(teamId: string, moverId: string, moverEmail: string | null, leadId: string, a: { at: string; reason: string; from?: string | null }): Promise<number> {
   try {
     const [{ data: lead }, members] = await Promise.all([
       leadDb().from("marketing_leads").select("full_name, email").eq("id", leadId).eq("team_id", teamId).maybeSingle(),
       chatMembers(teamId),
     ])
     const to = rescheduleRecipients(members.map(m => ({ user_id: m.id, status: m.status, permissions: m.permissions })), moverId)
-    if (to.length === 0) return
+    if (to.length === 0) return 0
     // a lead with no name is shown by its email, never its phone number (a notification can sit on a lock screen)
     const text = reschedulePush({ moverName: personName(moverEmail ?? ""), leadName: lead?.full_name || lead?.email || "Lead", from: a.from ?? null, to: new Date(a.at).toISOString(), reason: a.reason })
-    await Promise.race([
+    const r = await Promise.race([
       sendMarketingPush(teamId, to, { ...text, url: `/marketing/board?open=${leadId}`, tag: `moved-${leadId}` }),
-      new Promise(resolve => setTimeout(resolve, 4000)),
+      new Promise<null>(resolve => setTimeout(() => resolve(null), 4000)),
     ])
-  } catch { /* the call is already moved */ }
+    return r?.sent ?? 0
+  } catch { return 0 /* the call is already moved */ }
 }
