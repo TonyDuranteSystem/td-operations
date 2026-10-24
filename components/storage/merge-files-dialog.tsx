@@ -13,7 +13,7 @@ import { ArrowDown, ArrowUp, FileText, Layers, Loader2, X } from 'lucide-react'
 import { trapTabKey } from '@/components/storage/focus-trap'
 import { looksMergeable, mergeParts, suggestMergedName, MERGE_MAX_PARTS, MERGE_MAX_TOTAL_BYTES, type MergePart } from '@/lib/crm-store/merge-parts'
 
-export interface MergeFileInfo { id: string; name: string; mimeType: string | null; size: number | null }
+export interface MergeFileInfo { id: string; name: string; mimeType: string | null; size: number | null; /** which storage the file is in (shown when files of different storages are merged) */ where?: string }
 
 const FETCH_TIMEOUT_MS = 90_000
 const fmtSize = (n: number | null) => (n == null ? '' : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`)
@@ -117,6 +117,7 @@ export function MergeFilesDialog({ files, onCancel, onMerged }: {
                   <FileText className={`h-4 w-4 shrink-0 ${bad ? 'text-red-500' : 'text-zinc-400'}`} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate" title={f.name}>{f.name}</span>
+                    {f.where && new Set(list.map((x) => x.where)).size > 1 && <span className="block text-xs text-zinc-400">{f.where}</span>}
                     {bad && <span className="block text-xs text-red-600">Only PDF, PNG and JPG files can be merged — remove this one.</span>}
                   </span>
                   <span className="shrink-0 text-xs text-zinc-400">{fmtSize(f.size)}</span>

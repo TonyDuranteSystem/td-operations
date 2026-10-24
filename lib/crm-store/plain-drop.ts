@@ -5,8 +5,7 @@
  * their strict upload (their files need a type, a year, a filing answer …).
  */
 
-export const INTERNAL_OWNER_KINDS = new Set(["business", "private"])
-export const isInternalOwnerKind = (kind: string | null | undefined): boolean => !!kind && INTERNAL_OWNER_KINDS.has(kind)
+export { isInternalOwnerKind } from "./owner-kinds"
 
 /** Google Drive for desktop shows a Google Doc / Sheet / Slide as a tiny pointer file (.gdoc …) — the pointer is not the document. */
 const GOOGLE_POINTER = /\.(gdoc|gsheet|gslides|gform|gdraw|gmap|gsite|gjam|gscript|glink|gtable)$/i

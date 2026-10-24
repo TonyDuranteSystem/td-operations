@@ -326,6 +326,7 @@ export const IT: Record<string, string> = {
   "Stages": "Fasi",
   "Start from one or more roles": "Parti da uno o più ruoli",
   "Status": "Stato",
+  "Lead payment status": "Stato pagamento del lead",
   "Still to come": "Ancora da ricevere",
   "TD Marketing": "TD Marketing",
   "Takes effect on their next click. Anything they are in the middle of on a page they lose may be lost.": "Ha effetto al loro prossimo clic. Ciò che stanno facendo in una pagina che perdono potrebbe andare perso.",

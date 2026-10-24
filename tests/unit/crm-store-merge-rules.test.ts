@@ -1,41 +1,55 @@
 import { describe, it, expect } from "vitest"
 import { mergeBlockReason, type MergeCandidate } from "@/lib/crm-store/merge-rules"
 
-const f = (over: Partial<MergeCandidate> = {}): MergeCandidate => ({ name: "a.pdf", state: "live", staffOnly: false, personal: false, needsReview: null, filingStatus: "none", ownerKey: "owner-1", ...over })
-const client = { internal: false, ownerKind: "company" }
+const f = (over: Partial<MergeCandidate> = {}): MergeCandidate => ({ name: "a.pdf", state: "live", staffOnly: false, personal: false, needsReview: null, filingStatus: "none", ownerKey: "owner-1", ownerKind: "company", ...over })
+const biz = (over: Partial<MergeCandidate> = {}) => f({ ownerKey: "biz-1", ownerKind: "business", ...over })
+const mine = (over: Partial<MergeCandidate> = {}) => f({ ownerKey: "mine-1", ownerKind: "private", ...over })
 
 describe("mergeBlockReason — which ticked files may be merged", () => {
   it("two ordinary files of one company: allowed", () => {
-    expect(mergeBlockReason([f(), f({ name: "b.pdf" })], client)).toBeNull()
+    expect(mergeBlockReason([f(), f({ name: "b.pdf" })])).toBeNull()
   })
   it("fewer than two: refused", () => {
-    expect(mergeBlockReason([f()], client)).toMatch(/at least two/)
+    expect(mergeBlockReason([f()])).toMatch(/at least two/)
   })
-  it("files of two different owners (company vs person, or two companies): refused", () => {
-    expect(mergeBlockReason([f(), f({ ownerKey: "owner-2" })], client)).toMatch(/ONE company or ONE person/)
+  it("files of two different client owners (company vs person, or two companies): refused", () => {
+    expect(mergeBlockReason([f(), f({ ownerKey: "owner-2" })])).toMatch(/SAME company or person/)
+    expect(mergeBlockReason([f(), f({ ownerKey: "p-1", ownerKind: "person" })])).toMatch(/SAME company or person/)
+  })
+  it("a client file is never mixed with a firm storage file", () => {
+    expect(mergeBlockReason([f(), biz()])).toMatch(/SAME company or person/)
+    expect(mergeBlockReason([mine(), f()])).toMatch(/SAME company or person/)
   })
   it("a file whose owner could not be worked out is refused, never guessed", () => {
-    expect(mergeBlockReason([f(), f({ ownerKey: undefined })], client)).toMatch(/Could not tell which storage/)
+    expect(mergeBlockReason([f(), f({ ownerKey: undefined })])).toMatch(/Could not tell which storage/)
   })
   it("a trashed file is refused and named", () => {
-    expect(mergeBlockReason([f(), f({ name: "old.pdf", state: "trashed" })], client)).toMatch(/"old\.pdf" is in the trash/)
+    expect(mergeBlockReason([f(), f({ name: "old.pdf", state: "trashed" })])).toMatch(/"old\.pdf" is in the trash/)
   })
   it("in a client storage a staff-only file, a draft return, a 'Needs review' file are refused and named", () => {
-    expect(mergeBlockReason([f(), f({ name: "s.pdf", staffOnly: true })], client)).toMatch(/"s\.pdf" is staff-only/)
-    expect(mergeBlockReason([f(), f({ name: "d.pdf", filingStatus: "draft" })], client)).toMatch(/"d\.pdf" is a draft return/)
-    expect(mergeBlockReason([f(), f({ name: "n.pdf", needsReview: "check it" })], client)).toMatch(/"n\.pdf" is marked "Needs review"/)
+    expect(mergeBlockReason([f(), f({ name: "s.pdf", staffOnly: true })])).toMatch(/"s\.pdf" is staff-only/)
+    expect(mergeBlockReason([f(), f({ name: "d.pdf", filingStatus: "draft" })])).toMatch(/"d\.pdf" is a draft return/)
+    expect(mergeBlockReason([f(), f({ name: "n.pdf", needsReview: "check it" })])).toMatch(/"n\.pdf" is marked "Needs review"/)
   })
   it("a filed or amended return is fine", () => {
-    expect(mergeBlockReason([f({ filingStatus: "filed" }), f({ filingStatus: "amended" })], client)).toBeNull()
+    expect(mergeBlockReason([f({ filingStatus: "filed" }), f({ filingStatus: "amended" })])).toBeNull()
   })
   it("a personal document is merged only inside the person's own storage", () => {
-    expect(mergeBlockReason([f({ personal: true }), f()], client)).toMatch(/personal document/)
-    expect(mergeBlockReason([f({ personal: true }), f({ personal: true })], { internal: false, ownerKind: "person" })).toBeNull()
+    expect(mergeBlockReason([f({ personal: true }), f()])).toMatch(/personal document/)
+    expect(mergeBlockReason([f({ personal: true, ownerKind: "person" }), f({ personal: true, ownerKind: "person" })])).toBeNull()
   })
-  it("in My files / Business the protection flags do not apply (never shown to a client), but owner and trash still do", () => {
-    const internal = { internal: true, ownerKind: "private" }
-    expect(mergeBlockReason([f({ staffOnly: true }), f({ filingStatus: "draft" })], internal)).toBeNull()
-    expect(mergeBlockReason([f(), f({ ownerKey: "other" })], internal)).toMatch(/ONE company or ONE person/)
-    expect(mergeBlockReason([f(), f({ state: "trashed" })], internal)).toMatch(/trash/)
+  it("in a firm storage the protection flags do not apply (never shown to a client), but trash still does", () => {
+    expect(mergeBlockReason([biz({ staffOnly: true }), biz({ filingStatus: "draft" })])).toBeNull()
+    expect(mergeBlockReason([biz(), biz({ state: "trashed" })])).toMatch(/trash/)
+  })
+  it("Antonio 2026-10-24: one file from Business and one from My files can be merged", () => {
+    expect(mergeBlockReason([biz(), mine()])).toBeNull()
+  })
+  it("three firm storages' files can be merged together", () => {
+    expect(mergeBlockReason([biz(), mine(), biz({ ownerKey: "biz-2" })])).toBeNull()
+  })
+  it("a storage whose kind is unknown or unregistered is NOT trusted as a firm storage", () => {
+    expect(mergeBlockReason([biz(), f({ ownerKey: "x", ownerKind: undefined })])).toMatch(/SAME company or person/)
+    expect(mergeBlockReason([biz(), f({ ownerKey: "x", ownerKind: "somethingnew" })])).toMatch(/SAME company or person/)
   })
 })
