@@ -79,7 +79,7 @@ export default async function MarketingMoney() {
           <h2 className="text-sm font-semibold text-slate-600">{t('Sales')}</h2>
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-slate-500"><tr><th className="py-2 pr-4">{t('Date')}</th><th className="pr-4">{t('Lead')}</th><th className="pr-4">{t('Kind')}</th><th className="pr-4">{t('Amount')}</th><th className="pr-4">{t('Your share')}</th><th>{t('Status')}</th></tr></thead>
+              <thead className="text-xs uppercase tracking-wide text-slate-500"><tr><th className="py-2 pr-4">{t('Date')}</th><th className="pr-4">{t('Lead')}</th><th className="pr-4">{t('Kind')}</th><th className="pr-4">{t('Amount')}</th><th className="pr-4">{t('Your share')}</th><th>{t('Lead payment status')}</th></tr></thead>
               <tbody className="divide-y">
                 {sales.map(s => (
                   <tr key={s.id}>
