@@ -19,6 +19,22 @@ describe('formation-materialize — admin state override + wizard_progress fallb
     expect([a, b, c, d, e]).toEqual(['NM', 'WY', 'FL', 'DE', undefined])
   })
 
+  it('MaterializeStep type accepts offer_link step', () => {
+    const okStep: import('@/lib/operations/formation-materialize').MaterializeStep = {
+      step: 'offer_link',
+      status: 'ok',
+      detail: '1 formation offer(s) linked to account',
+    }
+    expect(okStep.step).toBe('offer_link')
+
+    const skippedStep: import('@/lib/operations/formation-materialize').MaterializeStep = {
+      step: 'offer_link',
+      status: 'skipped',
+      detail: 'No lead_id on wizard_progress — cannot resolve formation offer',
+    }
+    expect(skippedStep.status).toBe('skipped')
+  })
+
   it('outcome enum still includes missing_submission, invalid_state, missing_chosen_name', () => {
     const r: MaterializeFormationResult = {
       success: false,
