@@ -25,7 +25,8 @@ import { useAiMarks, AiMarkChip, AiCheckFilesButton, AiReviewPanel } from './ai-
 import { MyDriveDialog } from '@/components/storage/my-drive-dialog'
 import { PlainDropPanel, type PlainOutcome } from './plain-drop-panel'
 import { viewKindFor } from '@/lib/crm-store/view-html'
-import { allFolderPaths, filterPlainDrop, isInternalOwnerKind, itemsFromFileList, type PlainItem, type PlainSkipped } from '@/lib/crm-store/plain-drop'
+import { allFolderPaths, filterPlainDrop, itemsFromFileList, type PlainItem, type PlainSkipped } from '@/lib/crm-store/plain-drop'
+import { isInternalOwnerKind, isPersonalAreaKind } from '@/lib/crm-store/owner-kinds'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
@@ -340,10 +341,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [plain, setPlain] = useState<{ folder: Fold; items: PlainItem[]; skipped: PlainSkipped[]; folders: string[][] } | null>(null)
   const plainFolders = useRef(new Map<string, Fold>())
   // many files at once: selection, sort, filters, details
-  const [selectedFiles, setSelectedFiles] = useState<Map<string, File_ & { folderId: string | null }>>(new Map())
+  const [selectedFiles, setSelectedFiles] = useState<Map<string, File_ & { folderId: string | null; ownerId: string; ownerKind: string; ownerLabel: string }>>(new Map())
   // "Merge into one": the files being ordered, and the merged PDF waiting for the usual upload questions (folder, type, name)
   const [mergeList, setMergeList] = useState<MergeFileInfo[] | null>(null)
-  const [mergedFile, setMergedFile] = useState<{ file: File; pages: number; ownerId: string } | null>(null)
+  const [mergedFile, setMergedFile] = useState<{ file: File; pages: number; ownerId: string; sources: Array<{ kind: string; label: string }> } | null>(null)
+  /** where the merged file can be saved: every folder of every firm storage that took part in the merge (and the one on screen) */
+  const [mergeTargets, setMergeTargets] = useState<Array<{ ownerId: string; label: string; kind: string; folders: Array<{ f: Fold; depth: number }> }> | null>(null)
   const [mergedPreviewOpen, setMergedPreviewOpen] = useState(false)
   const [bulkBusy, setBulkBusy] = useState(false)
   const [sortMode, setSortMode] = useState<SortMode>(() => { try { return (localStorage.getItem('store-sort') as SortMode) || 'name' } catch { return 'name' } })
@@ -417,7 +420,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   const openOwner = useCallback(async (oid: string, fromPick = false) => {
     setSharedView(false)
-    setSelectedFiles(new Map())
+    // ticks of firm-storage files stay when another storage is opened (Antonio 2026-10-24: merge a Business file with a My files one); client ticks never travel
+    setSelectedFiles((m) => new Map(Array.from(m).filter(([, v]) => isInternalOwnerKind(v.ownerKind))))
     setFilterKind(null)
     setAllQ(''); setAllQuick(null); setAllMax(500)
     if (!fromPick) pickSeq.current++ // opening a storage by hand cancels a folder pick still loading
@@ -1121,7 +1125,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   const toggleSelect = (f: File_, folderId: string | null) => setSelectedFiles((m) => {
     const n = new Map(m)
-    if (n.has(f.id)) n.delete(f.id); else n.set(f.id, { ...f, folderId })
+    if (n.has(f.id)) n.delete(f.id); else n.set(f.id, { ...f, folderId, ownerId: ownerIdRef.current ?? ownerId ?? '', ownerKind: ownerKind ?? '', ownerLabel: root?.owner.label ?? '' })
     return n
   })
 
@@ -1136,22 +1140,45 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     const reason = mergeBlockReason(
       picked.map((f) => ({
         name: f.name, state: f.state, staffOnly: f.staffOnly, personal: f.personal, needsReview: f.needsReview, filingStatus: f.filingStatus,
-        ownerKey: f.folderId == null ? (ownerId ?? undefined) : folderOwner.current.get(f.folderId),
+        // the storage each file lives in: its folder's owner; in a firm storage the one it was ticked in is enough (a client person's folder opened through a company is not)
+        ownerKey: f.folderId == null ? f.ownerId : (folderOwner.current.get(f.folderId) ?? (isInternalOwnerKind(f.ownerKind) ? f.ownerId : undefined)),
+        ownerKind: f.ownerKind,
       })),
-      { internal: isInternalOwnerKind(ownerKind), ownerKind },
     )
     if (reason) { toast.error(reason); return }
-    setMergeList(picked.map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, size: f.size })))
+    setMergeList(picked.map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, size: f.size, where: f.ownerLabel })))
   }
 
-  /** Save the merged PDF into the chosen folder of My files / Business (no document type there — the same rules as a plain upload). */
+  /** every folder of one storage (all levels, tree order) for the merged file's Folder list; also teaches folderOwner who owns each folder */
+  const loadStorageFolders = async (oid: string): Promise<Array<{ f: Fold; depth: number }>> => {
+    const kids = new Map<string, Fold[]>()
+    const top = await fetchInto(oid, null)
+    kids.set('', top.folders.filter((x) => !x.trashed))
+    let frontier = (kids.get('') ?? []).filter((x) => x.kind !== 'contacts' && !x.locked)
+    for (let level = 0; frontier.length && level < 12; level++) {
+      const res = await Promise.all(frontier.map((f) => fetchInto(oid, f.id).catch(() => null)))
+      const next: Fold[] = []
+      res.forEach((c, i) => {
+        const ch = (c?.folders ?? []).filter((x) => !x.trashed)
+        kids.set(frontier[i].id, ch)
+        next.push(...ch.filter((x) => x.kind !== 'contacts' && !x.locked))
+      })
+      frontier = next
+    }
+    const out: Array<{ f: Fold; depth: number }> = []
+    const walk = (list: Fold[], depth: number) => { for (const f of [...list].sort(sortFolders)) { out.push({ f, depth }); walk(kids.get(f.id) ?? [], depth + 1) } }
+    walk(kids.get('') ?? [], 0)
+    return out
+  }
+
+  /** Save the merged PDF into the chosen folder of any firm storage (no document type there — the same rules as a plain upload). */
   const uploadMergedInternal = async () => {
     if (!mergedFile) return
-    const target = folderOptions().find((o) => o.f.id === upFolder)?.f
-    if (!target || target.trashed || target.locked || target.kind === 'root') { toast.error('Choose the folder first.'); return }
+    const hit = (mergeTargets ?? []).flatMap((t) => t.folders.map((x) => ({ f: x.f, t }))).find((x) => x.f.id === upFolder)
+    const target = hit?.f
+    if (!hit || !target || target.trashed || target.locked || target.kind === 'root') { toast.error('Choose the folder first.'); return }
     if (mergedFile.ownerId !== (ownerIdRef.current ?? '')) { setMergedFile(null); toast.error('This merged file was made in another storage — merge it again here.'); return }
-    const oid = folderOwner.current.get(target.id) ?? ownerId
-    if (!oid) return
+    const oid = hit.t.ownerId
     const file = mergedFile.file
     const fileName = finalUploadName(file.name, upName)
     const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
@@ -1169,10 +1196,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       })
       if (!put.ok) throw new Error(put.message)
       const r = await postJson<{ write: string; name: string }>('/api/crm-store/browse/upload', { ownerId: oid, folderId: target.id, storagePath: put.path as string, fileName, mimeType: file.type }, 'The merged file could not be saved — please try again.')
-      toast.success(r.write === 'versioned' ? `"${r.name}" saved as a new version (the old copy is under Versions)` : r.write === 'unchanged' ? `"${r.name}" is identical to the current copy — nothing changed` : `"${r.name}" saved in ${target.name}`)
+      toast.success(r.write === 'versioned' ? `"${r.name}" saved as a new version (the old copy is under Versions)` : r.write === 'unchanged' ? `"${r.name}" is identical to the current copy — nothing changed` : `"${r.name}" saved in ${hit.t.label} › ${target.name}`)
       setMergedFile(null)
       setUploadOpen(false)
-      await refreshAll([target.id])
+      await refreshAll(oid === ownerId ? [target.id] : [])
     } catch (e) {
       toast.error(errMsg(e, 'The merged file could not be saved — please try again.'))
     } finally {
@@ -1186,21 +1213,33 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     const pages = pageCounts.reduce((a, b) => a + b, 0)
     setMergeList(null)
     if (isInternalOwnerKind(ownerKind)) {
-      // My files / Business: the same bar and Preview, and the person picks ANY folder of this storage (no document type exists there)
-      const opts = folderOptions().filter((o) => !o.f.locked && o.f.kind !== 'root')
-      const startFolder = first?.folderId && opts.some((o) => o.f.id === first.folderId) ? first.folderId : (viewFolder && opts.some((o) => o.f.id === viewFolder.id) ? viewFolder.id : undefined)
-      await openUpload(startFolder)
+      // a firm storage (Business, My files, any added later): the same bar and Preview; the person picks ANY folder of ANY storage that took part (no document type exists there)
+      const picked = Array.from(selectedFiles.values())
+      const owners = new Map<string, { ownerId: string; label: string; kind: string }>()
+      for (const v of picked) owners.set(v.ownerId, { ownerId: v.ownerId, label: v.ownerLabel, kind: v.ownerKind })
+      const here = ownerIdRef.current ?? ownerId ?? ''
+      if (here && !owners.has(here)) owners.set(here, { ownerId: here, label: root?.owner.label ?? '', kind: ownerKind ?? '' })
+      const sources = Array.from(new Map(picked.map((v) => [v.ownerId, { kind: v.ownerKind, label: v.ownerLabel }])).values())
+      await openUpload(undefined)
       setUpName(baseName(file.name))
-      setMergedFile({ file, pages, ownerId: ownerIdRef.current ?? ownerId ?? '' })
+      setMergedFile({ file, pages, ownerId: here, sources })
+      setMergeTargets(null)
       setSelectedFiles(new Map())
       toast.success(`Merged into one PDF (${pages} pages) — choose the folder and the name, then upload.`)
+      void Promise.all(Array.from(owners.values()).map(async (o) => ({ ...o, folders: await loadStorageFolders(o.ownerId) })))
+        .then((ts) => {
+          setMergeTargets(ts)
+          const pre = first?.folderId && ts.some((t) => t.folders.some((x) => x.f.id === first.folderId && !x.f.locked)) ? first.folderId : ''
+          if (pre) setUpFolder((cur) => cur || pre)
+        })
+        .catch((e) => toast.error(errMsg(e, 'Could not list the folders — close this and merge again.')))
       return
     }
     // start in the first file's folder only when the Folder list really offers it (a person's top folder is not in that list)
     const startFolder = first?.folderId && folderOptions().some((o) => o.f.id === first.folderId) ? first.folderId : undefined
     await openUpload(startFolder)
     setUpName(baseName(file.name))
-    setMergedFile({ file, pages, ownerId: ownerIdRef.current ?? ownerId ?? '' })
+    setMergedFile({ file, pages, ownerId: ownerIdRef.current ?? ownerId ?? '', sources: [] })
     setSelectedFiles(new Map())
     toast.success(`Merged into one PDF (${pages} pages) — now choose the folder, document type and name, then upload.`)
   }
@@ -1208,6 +1247,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // a merged file belongs to the storage it was made in: closing the Upload panel or opening another storage drops it
   // (the Bug Hunter found it could otherwise come back in another company's panel and be saved there)
   useEffect(() => { if (!uploadOpen) setMergedFile(null) }, [uploadOpen])
+  useEffect(() => { if (!mergedFile) setMergeTargets(null) }, [mergedFile])
   useEffect(() => { if (!mergedFile) setMergedPreviewOpen(false) }, [mergedFile])
   useEffect(() => { setMergedFile((m) => (m && m.ownerId !== (ownerId ?? '') ? null : m)) }, [ownerId])
 
@@ -1519,6 +1559,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const upFolderObj = upOptions.find((o) => o.f.id === upFolder)?.f ?? null
   const upIsContacts = upFolderObj?.kind === 'contacts'
   const ownerKind = root?.owner.kind ?? scopedKind
+  // a client storage never keeps ticks that came from elsewhere (and never mixes): entering one clears the selection
+  const loadedKind = root?.owner.kind // the kind of the storage that has really loaded (ownerKind falls back to 'company' while one is loading)
+  useEffect(() => { if (loadedKind && !isInternalOwnerKind(loadedKind)) setSelectedFiles((m) => (m.size ? new Map() : m)) }, [loadedKind])
   const upTargetIsPerson = ownerKind === 'person' || (!!upFolderObj && viaCompany.current.has(upFolderObj.id))
   const upViaCompany = !!upFolderObj && viaCompany.current.has(upFolderObj.id)
   // a person's folder opened from a company page takes only the person's own documents (the server refuses the rest)
@@ -1823,7 +1866,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     const busy = busyFiles.has(f.id)
     const canShare = !f.staffOnly && f.state === 'live' && (f.listed || f.clientVisible) && f.filingStatus !== 'draft'
       && (f.clientVisible || (!!f.documentType && !(f.personal && !f.inPersonStorage)))
-    const internal = ownerKind === 'business' || ownerKind === 'private'
+    const internal = isInternalOwnerKind(ownerKind)
     const cantShowWhy = f.filingStatus === 'draft' ? 'A draft return — never shown to the client until it is marked filed (menu → Mark filed)'
       : f.staffOnly ? 'Staff only — it holds other people\'s personal data and is never shown to a client'
       : internal ? 'Internal folders — never shown to a client'
@@ -1837,7 +1880,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         onDragEnd={() => { setDragFile(null); setDropOn(null) }}
         className="group relative flex items-start gap-2 py-2 text-sm hover:bg-zinc-50/70" style={{ paddingLeft: `${depth * 20 + 22}px` }}>
         <input type="checkbox" aria-label={`Select ${f.name}`} checked={selectedFiles.has(f.id)} onChange={() => toggleSelect(f, inFolder?.id ?? null)}
-          className={`mt-1 h-3.5 w-3.5 shrink-0 ${selectedFiles.size ? '' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'}`} />
+          className={`mt-1 h-3.5 w-3.5 shrink-0 ${selectedFiles.size || internal ? '' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'}`} />
         <Icon className="mt-0.5 h-4 w-4 shrink-0 text-zinc-400" />
         {/* the name gets the whole width (it wraps instead of being cut); everything else sits under it or in fixed columns on the right */}
         <div className="min-w-0 flex-1">
@@ -2108,7 +2151,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   /** All files: every file of this storage in one list, whichever folder it is in */
   const allFilesView = (): React.ReactNode => {
     const all = filtered ?? []
-    const internalOwner = ownerKind === 'business' || ownerKind === 'private'
+    const internalOwner = isInternalOwnerKind(ownerKind)
     const q = allQ.trim().toLowerCase()
     const quick = (k: 'untyped' | 'review' | 'shown', f: FilteredFile) => (k === 'untyped' ? !f.documentType : k === 'review' ? !!f.needsReview : f.clientVisible)
     const n = { untyped: all.filter((f) => quick('untyped', f)).length, review: all.filter((f) => quick('review', f)).length, shown: all.filter((f) => quick('shown', f)).length }
@@ -2147,6 +2190,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             const showInFolder = () => { setMenuFor(null); void selectFolder(folderOwner.current.get(ff.folderId) ?? ownerId ?? '', ff.folderId); void openFilter(null) }
             return (
               <li key={ff.id} className="group relative flex items-start gap-2 py-2 text-sm hover:bg-zinc-50/70">
+                {/* Business / My files: tick files from ANY folder here, then "Merge into one…" (client storages keep ticking in the folder view, where their protection flags are known) */}
+                {internalOwner && (
+                  <input type="checkbox" aria-label={`Select ${ff.name}`} data-testid="all-files-select" checked={selectedFiles.has(ff.id)} onChange={() => toggleSelect(asStoreFile(ff), ff.folderId)}
+                    className="mt-1 h-3.5 w-3.5 shrink-0" />
+                )}
                 <Icon className="mt-0.5 h-4 w-4 shrink-0 text-zinc-400" />
                 <div className="min-w-0 flex-1">
                   <button type="button" onClick={() => setPreview(asStoreFile(ff))} className="block max-w-full break-words text-left font-medium text-zinc-800 hover:underline">{ff.name}</button>
@@ -2223,6 +2271,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         ? [{ label: '2. Contacts' }, { label: personOfFolder(pathKey)!.name }, ...selPath.map((x) => ({ label: x.name }))]
         : selPath.map((x) => ({ label: x.name, go: ownerId && (folderOwner.current.get(x.id) ?? ownerId) === ownerId ? () => { void selectFolder(ownerId, x.id) } : undefined }))),
   ]
+
+  // ticks that came from more than one storage can only be merged (a move / delete / show reaches one storage at a time)
+  const selMixed = Array.from(selectedFiles.values()).some((v) => v.ownerId !== (ownerId ?? ''))
 
   const right = (
     <div className={`rounded-xl border border-zinc-200 bg-white p-4 ${scopedOwnerId ? '' : 'min-h-[70vh] self-start'}`} onClick={() => { if (menuFor) setMenuFor(null); if (versionsFor) setVersionsFor(null) }}>
@@ -2379,18 +2430,18 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
           {selectedFiles.size > 0 && (
             <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm" onClick={(e) => e.stopPropagation()}>
-              <span className="font-medium text-blue-900">{selectedFiles.size} selected</span>
+              <span className="font-medium text-blue-900">{selectedFiles.size} selected{selMixed ? ` · ${Array.from(selectedFiles.values()).filter((v) => v.ownerId !== (ownerId ?? '')).length} in another storage` : ''}</span>
               <span className="flex-1" />
               <FastTooltip label={selectedFiles.size < 2 ? 'Tick at least two files' : 'Merge the ticked files into one PDF'}>
                 <button type="button" disabled={bulkBusy} onClick={startMerge} aria-label="Merge the ticked files into one PDF" data-testid="bulk-merge"
                   className={`rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50 ${selectedFiles.size < 2 ? 'opacity-50' : ''}`}><Layers className="mr-1 inline h-3.5 w-3.5" />Merge into one…</button>
               </FastTooltip>
-              <button type="button" disabled={bulkBusy} onClick={() => runBulk('move')} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"><FolderInput className="mr-1 inline h-3.5 w-3.5" />Move to…</button>
-              {ownerKind !== 'business' && ownerKind !== 'private' && <>
+              {!selMixed && <button type="button" disabled={bulkBusy} onClick={() => runBulk('move')} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"><FolderInput className="mr-1 inline h-3.5 w-3.5" />Move to…</button>}
+              {!selMixed && !isInternalOwnerKind(ownerKind) && <>
                 <button type="button" disabled={bulkBusy} onClick={() => runBulk('show')} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"><Eye className="mr-1 inline h-3.5 w-3.5" />Show to client</button>
                 <button type="button" disabled={bulkBusy} onClick={() => runBulk('hide')} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"><EyeOff className="mr-1 inline h-3.5 w-3.5" />Hide from client</button>
               </>}
-              <button type="button" disabled={bulkBusy} onClick={() => runBulk('delete')} className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 className="mr-1 inline h-3.5 w-3.5" />Delete</button>
+              {!selMixed && <button type="button" disabled={bulkBusy} onClick={() => runBulk('delete')} className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 className="mr-1 inline h-3.5 w-3.5" />Delete</button>}
               <button type="button" disabled={bulkBusy} onClick={() => setSelectedFiles(new Map())} className="text-xs text-zinc-600 hover:underline">Clear</button>
               {bulkBusy && <Loader2 className="h-4 w-4 animate-spin text-blue-700" />}
             </div>
@@ -2405,19 +2456,30 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               <span className="text-xs text-zinc-500">{mergedFile.pages} pages · {fmtSize(mergedFile.file.size)}</span>
               <span className="flex-1" />
               <div className="flex w-full flex-wrap items-center gap-2">
-                <select value={upFolder} onChange={(e) => setUpFolder(e.target.value)} disabled={uploading} data-testid="merged-internal-folder" className="max-w-xs rounded-md border border-zinc-200 bg-white px-2 py-1">
-                  <option value="">Folder…</option>
-                  {folderOptions().filter((o) => !o.f.locked && o.f.kind !== 'root').map(({ f, depth }) => <option key={f.id} value={f.id}>{`${'  '.repeat(depth)}${f.name}`}</option>)}
+                <select value={upFolder} onChange={(e) => setUpFolder(e.target.value)} disabled={uploading || !mergeTargets} data-testid="merged-internal-folder" className="max-w-xs rounded-md border border-zinc-200 bg-white px-2 py-1">
+                  <option value="">{mergeTargets ? 'Folder…' : 'Loading folders…'}</option>
+                  {(mergeTargets ?? []).map((t) => (
+                    <optgroup key={t.ownerId} label={t.label || 'Storage'}>
+                      {t.folders.filter((x) => !x.f.locked && x.f.kind !== 'root').map(({ f, depth }) => <option key={f.id} value={f.id}>{`${'\u00A0\u00A0'.repeat(depth)}${f.name}`}</option>)}
+                    </optgroup>
+                  ))}
                 </select>
                 <input value={upName} onChange={(e) => setUpName(e.target.value)} disabled={uploading} placeholder="Name" className="w-72 rounded-md border border-zinc-200 bg-white px-2 py-1" />
                 <span className="flex-1" />
                 <button type="button" onClick={() => setMergedPreviewOpen(true)} data-testid="preview-merged"
                   className="rounded-md border border-blue-300 bg-white px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50">Preview</button>
-                <button type="button" disabled={uploading || !folderOptions().some((o) => o.f.id === upFolder)} onClick={uploadMergedInternal} data-testid="upload-merged"
+                <button type="button" disabled={uploading || !(mergeTargets ?? []).some((t) => t.folders.some((x) => x.f.id === upFolder && !x.f.locked))} onClick={uploadMergedInternal} data-testid="upload-merged"
                   className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40">Upload merged file</button>
                 <button type="button" disabled={uploading} onClick={() => { setMergedFile(null); setUploadOpen(false) }} className="text-xs text-zinc-600 hover:underline">Discard</button>
               </div>
-              {!folderOptions().some((o) => o.f.id === upFolder) && <span className="w-full text-xs text-blue-800">Choose the folder above (only folders you have opened in the tree are listed), then upload.</span>}
+              {mergeTargets && !mergeTargets.some((t) => t.folders.some((x) => x.f.id === upFolder && !x.f.locked)) && <span className="w-full text-xs text-blue-800">Choose the folder above — every folder of {mergeTargets.map((t) => t.label || 'the storage').join(' and ')} is listed — then upload.</span>}
+              {(() => {
+                // My files is private to one person: saving a merge that includes one of its documents into a storage others can open deserves a warning (Antonio: warn and let me continue)
+                const dest = mergeTargets?.find((t) => t.folders.some((x) => x.f.id === upFolder))
+                const privateSrc = mergedFile.sources.filter((x) => isPersonalAreaKind(x.kind))
+                if (!dest || !privateSrc.length || isPersonalAreaKind(dest.kind)) return null
+                return <span className="w-full rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-800" data-testid="merged-private-warning">This file includes a document from {privateSrc.map((x) => x.label || 'a private storage').join(' and ')}, which is private to you. “{dest.label}” can be opened by other staff. You can still upload it.</span>
+              })()}
             </div>
           )}
           {uploadOpen && isInternalOwnerKind(ownerKind) && viewFolder && !mergedFile && (
@@ -2463,7 +2525,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                   </>
                 )}
                 <input value={upName} onChange={(e) => setUpName(e.target.value)} placeholder="Name shown (optional)" className="w-52 rounded-md border border-zinc-200 bg-white px-2 py-1" disabled={uploading} />
-                {ownerKind !== 'business' && ownerKind !== 'private' && (() => {
+                {!isInternalOwnerKind(ownerKind) && (() => {
                   // a staff-only type is never shown: the box says so instead of looking ticked
                   const neverShown = (types ?? []).find((t) => t.slug === upType)?.staffOnly === true
                   return (
@@ -2593,7 +2655,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 ['Type', details.typeName ?? 'Needs a type'],
                 ['Year', details.year ? String(details.year) : '—'],
                 ['Filed or draft', details.filingStatus && details.filingStatus !== 'none' ? details.filingStatus : '—'],
-                ['Client can see it', ownerKind === 'business' || ownerKind === 'private' ? 'Never (internal)' : details.clientCanSee ? 'Yes' : details.listed ? 'No' : 'No — not linked to the CRM list'],
+                ['Client can see it', isInternalOwnerKind(ownerKind) ? 'Never (internal)' : details.clientCanSee ? 'Yes' : details.listed ? 'No' : 'No — not linked to the CRM list'],
                 ...(details.sharedWithStaff ? [['Shared with staff', details.sharedWithStaff.length ? details.sharedWithStaff.join(', ') : 'Nobody']] : []),
                 ...(details.needsReview ? [['Needs review', details.needsReview]] : []),
                 ['Uploaded', `${fmtDate(details.createdAt)}${details.createdBy ? ` by ${details.createdBy}` : ''}`],
