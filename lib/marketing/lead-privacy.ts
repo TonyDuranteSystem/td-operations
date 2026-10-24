@@ -28,9 +28,9 @@ export function answersWithoutPhone<T extends { name?: string; label?: string; q
 }
 
 /** The kinds of history line that are plain facts about a lead; a person who may not read the team's notes sees only these (never money lines, never a kind this list does not know). */
-const FACT_KINDS = new Set(["received", "claimed", "released", "assigned", "details_filled", "possible_existing_client", "client_check_failed", "status_changed", "whatsapp", "attempt", "appointment", "handover"])
+const FACT_KINDS = new Set(["received", "claimed", "released", "assigned", "details_filled", "possible_existing_client", "client_check_failed", "status_changed", "whatsapp", "attempt", "appointment", "callback_moved", "handover"])
 /** Facts whose row may carry a written note: the note is removed for a person who may not read the team's notes. */
-const NOTE_BEARING = new Set(["status_changed", "whatsapp", "attempt", "appointment", "handover"])
+const NOTE_BEARING = new Set(["status_changed", "whatsapp", "attempt", "appointment", "callback_moved", "handover"])
 
 /** The history without anything a person written for the team: note rows go, money lines go; the note and the ticks inside a Good / Not in target / Call back row go; the facts stay. */
 export function redactTimeline(events: readonly LeadEventRow[], seesNotes: boolean): LeadEventRow[] {

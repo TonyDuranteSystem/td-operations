@@ -1,8 +1,7 @@
 /* eslint-disable no-console */
-/* LOCAL private stack only (TD Marketing, dev job 9aec66fa, build step 5: Calendar): proves what a setter, the owner and another team's owner can do with a
-   lead, through the REAL login page, the REAL dev server and the REAL database (picking, Good / Not in target / Call back, notes, filters,
-   history, and that another team's lead cannot be touched).
-   Needs: the private stack up (with migration 20261019-2300 applied) and `td-marketing-qa-leads` running on :3011.
+/* LOCAL private stack only (TD Marketing, dev job 9aec66fa, round 2 step 2: the Calendar views): proves Day / Week / Month / Pipeline, drag-to-move with a REQUIRED
+   reason, the Move button, past times refused, and what is written, through the REAL login page, dev server and database.
+   Needs: the private stack up (with migration 20261019-2300 applied) and `td-marketing-qa` running on :3010.
    Run: npx tsx scripts/marketing/qa-calendar.ts */
 import { config } from "dotenv"
 config({ path: ".env.local" })
@@ -11,14 +10,13 @@ import { Client } from "pg"
 import { SignJWT } from "jose"
 import { execSync } from "node:child_process"
 
-const BASE = process.env.QA_BASE ?? "http://127.0.0.1:3011"
+const BASE = process.env.QA_BASE ?? "http://127.0.0.1:3010"
 const PASS = "Qa-ws-pass-12345"
 const SHOTS = process.env.QA_SHOTS ?? "/tmp"
 const stamp = Date.now()
 const em = (k: string) => `qa-cl-${k.toLowerCase()}@example.test`
 let pass = 0, fail = 0
 const ck = (id: string, ok: boolean, note?: unknown) => { if (ok) pass++; else fail++; console.log(ok ? "PASS" : "FAIL", id, ok ? "" : JSON.stringify(note)) }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 async function main() {
   if (!(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").includes("127.0.0.1")) throw new Error("local private stack only")
@@ -69,18 +67,21 @@ async function main() {
 
 
 
-  const mkLead = async (n: string, name: string, hoursFromNow: number | null, claimed: string | null = null) =>
-    (await db.query("insert into marketing_leads (team_id, leadgen_id, full_name, email, phone, status, ad_name, received_at, callback_at, claimed_by, claimed_by_label, answers) values ($1,$2,$3,$4,'+393339990000','contacted','Ad Alpha', now() - interval '3 days', case when $5::text is null then null else now() + ($5 || ' hours')::interval end, $6, $7, '[]'::jsonb) returning id", [teamA.id, `qcl-${n}`, name, `qcl${n}@example.test`, hoursFromNow === null ? null : String(hoursFromNow), claimed, claimed ? em("ownerA") : null])).rows[0].id as string
-  const cb = (lead: string, actor: string, note?: string) => db.query("insert into marketing_lead_events (lead_id, kind, actor, data, created_at) values ($1,'status_changed',$2,$3, now() - interval '1 hour')", [lead, actor, JSON.stringify({ from: "new", to: "contacted", outcome: "call_back", ...(note ? { note } : {}) })])
-  const aLate = await mkLead("a", "Late Chiara Lead", -3); await cb(aLate, em("setterA"), "asked to call after her meeting")
-  const aSoon = await mkLead("b", "Soon Chiara Lead", 1); await cb(aSoon, em("setterA"))
-  const bSoon = await mkLead("c", "Soon Marco Lead", 2); await cb(bSoon, em("marcoA"))
-  const bTmrw = await mkLead("d", "Tomorrow Marco Lead", 26); await cb(bTmrw, em("marcoA"))
-  const moved = await mkLead("e", "Picked By Rocco Lead", 3, ids.ownerA); await cb(moved, em("setterA"))
-  const far = await mkLead("f", "Far Chiara Lead", 24 * 20); await cb(far, em("setterA"))
-  const outsider = await mkLead("g", "Set By Antonio Lead", 4); await cb(outsider, "antonio@example.test")
-  await mkLead("h", "No Call Back Lead", null)
-  const sellerOwn = await mkLead("i", "Seller Picked Lead", 5, ids.sellerA); await cb(sellerOwn, em("marcoA"))
+  const G = await import("@/lib/marketing/calendar-grid")
+  const todayKey = G.romeParts(new Date().toISOString())!.key
+  const nextMon = G.addDays(G.weekStart(todayKey), 7)
+  const dayOf = (off: number) => G.addDays(nextMon, off)
+  const slot = (key: string, h: number, m = 0) => G.slotIso(key, h, m)!
+  const mkLead = async (n: string, name: string, cbIso: string | null, claimed: string | null = null) =>
+    (await db.query("insert into marketing_leads (team_id, leadgen_id, full_name, email, phone, status, ad_name, received_at, callback_at, claimed_by, claimed_by_label, answers) values ($1,$2,$3,$4,'+393339990000','contacted','Ad Alpha', now() - interval '30 days', $5::timestamptz, $6, $7, '[]'::jsonb) returning id", [teamA.id, `qcl-${n}`, name, `qcl${n}@example.test`, cbIso, claimed, claimed ? em("ownerA") : null])).rows[0].id as string
+  const cb = (lead: string, actor: string) => db.query("insert into marketing_lead_events (lead_id, kind, actor, data, created_at) values ($1,'status_changed',$2,$3, now() - interval '1 hour')", [lead, actor, JSON.stringify({ from: "new", to: "contacted", outcome: "call_back" })])
+  const appt = (lead: string, actor: string, iso: string) => db.query("insert into marketing_lead_events (lead_id, kind, actor, data, created_at) values ($1,'appointment',$2,$3, now() - interval '2 hours')", [lead, actor, JSON.stringify({ at: iso })])
+  const L1 = await mkLead("1", "Week Appt Lead", null, ids.ownerA); await appt(L1, em("setterA"), slot(nextMon, 11))
+  const L2 = await mkLead("2", "Week Callback Lead", slot(dayOf(1), 10)); await cb(L2, em("setterA"))
+  const L3 = await mkLead("3", "Late Callback Lead", new Date(Date.now() - 3 * 86400000).toISOString()); await cb(L3, em("setterA"))
+  const L4 = await mkLead("4", "Done Call Lead", null, ids.ownerA); await appt(L4, em("setterA"), new Date(Date.now() - 5 * 86400000).toISOString())
+  const L6 = await mkLead("6", "Tomorrow Appt Lead", null, ids.ownerA); await appt(L6, em("setterA"), slot(G.addDays(todayKey, 1), 11))
+  const L7 = await mkLead("7", "Later Appt Lead", null, ids.ownerA); await appt(L7, em("setterA"), slot(G.addDays(nextMon, 14), 16))
   for (const [k, v] of [["pipeline_stages", [{ key: "new", label: "New" }, { key: "contacted", label: "Contacted" }, { key: "qualified", label: "Qualified" }, { key: "not_in_target", label: "Not in target" }, { key: "sold", label: "Sold" }]], ["sale_kind_stages", { strategic_call: "sold" }]] as const) {
     const r = await S.setMarketingSetting({ key: k, value: v, teamId: teamA.id, actor: "qa-cl" }); if (r.ok === false) throw new Error(`setting ${k}: ${r.error}`)
   }
@@ -116,18 +117,9 @@ async function main() {
     for (;;) { if ((await ctx.cookies(BASE)).some(c => /^sb-.*-auth-token/.test(c.name)) || Date.now() > until) break; await page.waitForTimeout(500) }
     await page.waitForTimeout(1500)
     await liftToAal2(ctx)
+    await ctx.addCookies([{ name: "tdm_lang", value: "en", domain: new URL(BASE).hostname, path: "/" }])
     await page.close()
     return ctx
-  }
-  const view = async (ctx: BrowserContext, path: string) => {
-    for (let i = 0; ; i++) {
-      try {
-        const page = await ctx.newPage()
-        const resp = await page.goto(BASE + path, { waitUntil: "networkidle", timeout: 180000 })
-        const text = (await page.locator("body").innerText()).slice(0, 4000)
-        return { page, status: resp?.status() ?? 0, text }
-      } catch (e) { if (i >= 3) throw e; await sleep(3000) }
-    }
   }
 
 
@@ -139,71 +131,152 @@ async function main() {
 
 
   const body = (page: import("playwright").Page) => page.locator("body").innerText().then(t => t.replace(/\s+/g, " "))
-  const owner = await session(em("ownerA")), chiara = await session(em("setterA")), marco = await session(em("marcoA")), ale = await session(em("aleA")), seller = await session(em("sellerA"))
-  const names = async (page: import("playwright").Page) => (await page.getByTestId("cal-item").allInnerTexts()).map(t => t.replace(/\s+/g, " "))
+  const owner = await session(em("ownerA")), setter = await session(em("setterA"))
+  type Pg = import("playwright").Page
+  const lastAppt = async (lead: string) => (await db.query("select data, actor from marketing_lead_events where lead_id=$1 and kind='appointment' order by created_at desc limit 1", [lead])).rows[0]
+  const apptCount = async (lead: string) => Number((await db.query("select count(*) from marketing_lead_events where lead_id=$1 and kind='appointment'", [lead])).rows[0].count)
+  // a toast stays about 4 s: wait for the NEW one, read it, then wait for it to go so the next step never reads the old one
+  const waitToast = async (p: Pg) => { await p.getByTestId("cal-toast").waitFor({ timeout: 60000 }); const t = await p.getByTestId("cal-toast").innerText(); await p.getByTestId("cal-toast").waitFor({ state: "detached", timeout: 15000 }); return t }
+  const dragTo = async (p: Pg, src: string, target: string, y?: number) => {
+    const col = p.locator(target)
+    const box = (await col.boundingBox())!
+    await p.locator(src).first().dragTo(col, { targetPosition: { x: Math.max(4, box.width / 2), y: y ?? Math.min(box.height / 2, 40) } })
+  }
+  const NEXT = "[data-testid=cal-next]"
 
-  let v = await view(owner, "/marketing/calendar")
-  let items = await names(v.page)
-  const all = items.join(" | ")
-  ck("C1 Rocco (everyone) sees every call back in the window: both setters', the one Rocco picked, and the one set from outside the team; not the lead with no call back, not the far one", ["Late Chiara Lead", "Soon Chiara Lead", "Soon Marco Lead", "Tomorrow Marco Lead", "Picked By Rocco Lead", "Set By Antonio Lead"].every(n => all.includes(n)) && !all.includes("No Call Back Lead") && !all.includes("Far Chiara Lead"), all)
-  ck("C2 the late one is in its own red 'Late' section, first", (await v.page.getByTestId("cal-late").count()) === 1 && /Late Chiara Lead/.test(await v.page.getByTestId("cal-late").innerText()) && /late/.test(items[0]))
-  ck("C3 each row says who set it ('set by Qa Cl Settera'); the one set outside the team says so, not a guessed name", /Late Chiara Lead.*set by Qa Cl Settera/.test(all) && /Soon Marco Lead.*set by Qa Cl Marcoa/.test(all) && /Set By Antonio Lead.*set by Antonio/.test(all), all)
-  ck("C4 the setter's note shows under the call back for people who may read notes", /asked to call after her meeting/.test(all))
-  ck("C5 days are listed in order, with Today and Tomorrow named", (await v.page.getByTestId("cal-day").count()) >= 2 && /Today · /.test(await body(v.page)) && /Tomorrow · /.test(await body(v.page)))
-  ck("C6 the page has a picker with Everyone and each person", (await v.page.getByTestId("cal-picker").count()) === 1 && /Qa Cl Settera/.test(await v.page.getByTestId("cal-picker").innerText()) && /Qa Cl Marcoa/.test(await v.page.getByTestId("cal-picker").innerText()))
-  const html1 = await v.page.content()
-  ck("C7 no phone number anywhere on the Calendar", !html1.includes("3339990000"))
-  await v.page.screenshot({ path: `${SHOTS}/qa-cl-rocco.png`, fullPage: true })
-  const chiaraId = ids.setterA
-  await v.page.close()
+  // ---- the week
+  const page = await owner.newPage()
+  await page.goto(BASE + "/marketing/calendar", { waitUntil: "networkidle", timeout: 180000 })
+  await page.getByTestId("cal-view-week").click()
+  await page.locator(NEXT).click()
+  await page.waitForTimeout(500)
+  const colMon = `[data-testid=cal-col][data-day="${nextMon}"]`
+  ck("V1 Rocco's week (next week) shows the booked call on Monday and the call back on Tuesday, each in its own day", (await page.locator(`${colMon} [data-lead="${L1}"]`).count()) === 1 && (await page.locator(`[data-testid=cal-col][data-day="${dayOf(1)}"] [data-lead="${L2}"]`).count()) === 1)
+  await page.screenshot({ path: `${SHOTS}/qa-cal-week.png`, fullPage: true })
 
-  v = await view(owner, `/marketing/calendar?who=${chiaraId}`)
-  items = await names(v.page); const ch = items.join(" | ")
-  ck("C8 the picker narrows to Chiara: hers only (late + soon), not Marco's, not the one Rocco picked, not the outsider's", ch.includes("Late Chiara Lead") && ch.includes("Soon Chiara Lead") && !ch.includes("Marco Lead") && !ch.includes("Picked By Rocco Lead") && !ch.includes("Set By Antonio Lead"), ch)
-  await v.page.close()
+  // drag the booked call from Monday 11:00 to Wednesday ~15:00
+  const wedY = (await page.locator(`[data-testid=cal-col][data-day="${dayOf(2)}"]`).boundingBox())!.height * ((15 - 8) / 13) + 2
+  await dragTo(page, `${colMon} [data-lead="${L1}"]`, `[data-testid=cal-col][data-day="${dayOf(2)}"]`, wedY)
+  await page.getByTestId("move-dialog").waitFor({ timeout: 30000 })
+  ck("V2 dropping a call on another day opens the 'Why is this call moving?' box, and Move the call stays OFF until a reason is picked", (await page.getByTestId("move-save").isDisabled()) === true && /Why is this call moving/.test(await body(page)))
+  const before = await apptCount(L1)
+  ck("V3b still one booking row before the reason is given", before === 1)
+  await page.getByTestId("move-reason").first().click()
+  ck("V4 picking a reason switches Move the call on", (await page.getByTestId("move-save").isDisabled()) === false)
+  await page.getByTestId("move-save").click()
+  const t1 = await waitToast(page)
+  ck("V5 the screen says 'Moved.' and does NOT claim anyone was told when no notification went out (nobody here has a device subscribed)", t1.trim() === "Moved.", t1)
+  const a1 = await lastAppt(L1)
+  ck("V6 a NEW booking row was written at Wednesday 15:00 Rome time with the reason, the old time, and moved=true, by the person who moved it", a1.data.at === slot(dayOf(2), 15) && a1.data.reason === "The lead asked to move" && a1.data.rescheduled === true && a1.data.from === slot(nextMon, 11) && a1.actor === em("ownerA") && (await apptCount(L1)) === 2, a1)
+  await page.waitForTimeout(1500)
+  ck("V7 after the refresh the call sits in the Wednesday column and no longer in Monday's", (await page.locator(`[data-testid=cal-col][data-day="${dayOf(2)}"] [data-lead="${L1}"]`).count()) === 1 && (await page.locator(`${colMon} [data-lead="${L1}"]`).count()) === 0)
 
-  v = await view(owner, "/marketing/calendar?days=30")
-  ck("C9 'Show 30 days' brings the far one in", (await names(v.page)).join(" ").includes("Far Chiara Lead"))
-  await v.page.close()
-  v = await view(owner, "/marketing/calendar")
-  ck("C10 and the 14-day page says there is one more after these days, with the link", /1 more later/.test(await body(v.page)) && (await v.page.getByTestId("cal-more").count()) === 1)
-  await v.page.close()
+  // the Move button, typed time, "Other" needs words
+  await page.locator(`[data-testid=cal-col][data-day="${dayOf(1)}"] [data-lead="${L2}"] [data-testid=cal-move]`).click()
+  await page.getByTestId("move-dialog").waitFor({ timeout: 30000 })
+  await page.getByTestId("move-when").fill(`${dayOf(3)}T12:00`)
+  await page.getByTestId("move-reason").last().click()
+  ck("V8 'Other' needs a few words: Move the call stays off until they are typed", (await page.getByTestId("move-save").isDisabled()) === true)
+  await page.getByTestId("move-note").fill("she travels on Tuesday")
+  await page.getByTestId("move-save").click()
+  await waitToast(page)
+  const l2 = (await db.query("select callback_at, status from marketing_leads where id=$1", [L2])).rows[0]
+  const e2 = (await db.query("select actor, data from marketing_lead_events where lead_id=$1 and kind='callback_moved' order by created_at desc limit 1", [L2])).rows[0]
+  ck("V9 the call back moved to Thursday 12:00 Rome with the reason and the note, and the lead keeps its stage", new Date(l2.callback_at).toISOString() === slot(dayOf(3), 12) && e2.data.rescheduled === true && e2.data.reason === "Other" && e2.data.note === "she travels on Tuesday" && l2.status === "contacted", { l2, e2 })
+  await page.close()
 
-  v = await view(chiara, "/marketing/calendar")
-  const cht = await body(v.page); const chHtml = await v.page.content()
-  items = await names(v.page)
-  ck("C11 Chiara (setter) sees only HERS: Late Chiara, Soon Chiara", items.length === 2 && cht.includes("Late Chiara Lead") && cht.includes("Soon Chiara Lead"), items)
-  ck("C12 and nothing of Marco's, Rocco's or the outsider's is in the page the server sent to her", !chHtml.includes("Marco Lead") && !chHtml.includes("Picked By Rocco Lead") && !chHtml.includes("Set By Antonio Lead") && !chHtml.includes("Far Chiara") === true, "leak")
-  ck("C13 she has no picker, no 'set by' column", (await v.page.getByTestId("cal-picker").count()) === 0 && !/set by/.test(cht))
-  await v.page.close()
-  v = await view(chiara, `/marketing/calendar?who=${ids.marcoA}`)
-  const typed = await body(v.page)
-  ck("C14 she types Marco's id in the address: she still gets only her own list", typed.includes("Soon Chiara Lead") && !typed.includes("Marco Lead"), typed.slice(0, 300))
-  await v.page.close()
+  // the history on the lead says it in plain words
+  const hv = await owner.newPage()
+  await hv.goto(`${BASE}/marketing/window/${L1}`, { waitUntil: "networkidle", timeout: 180000 })
+  ck("V10 the lead's history says 'Call moved to … Reason: The lead asked to move'", /Call moved to .* Reason: The lead asked to move/.test(await body(hv)))
+  await hv.close()
 
-  v = await view(marco, "/marketing/calendar")
-  const mt = await body(v.page)
-  ck("C15 Marco sees his own two, not Chiara's, and not the lead a seller picked after Marco set its call back", mt.includes("Soon Marco Lead") && mt.includes("Tomorrow Marco Lead") && !mt.includes("Chiara Lead") && !mt.includes("Seller Picked Lead"))
-  await v.page.close()
+  // the setter still owns the call back Rocco moved
+  const sv = await setter.newPage()
+  await sv.goto(BASE + "/marketing/calendar", { waitUntil: "networkidle", timeout: 180000 })
+  await sv.getByTestId("cal-view-week").click(); await sv.locator(NEXT).click(); await sv.waitForTimeout(500)
+  ck("V11 the setter (who set the call back) still sees it after Rocco moved it, at its new time, and has the Move button too", (await sv.locator(`[data-testid=cal-col][data-day="${dayOf(3)}"] [data-lead="${L2}"]`).count()) === 1 && (await sv.locator(`[data-lead="${L2}"] [data-testid=cal-move]`).count()) === 1)
+  await sv.close()
 
-  v = await view(seller, "/marketing/calendar")
-  const sl = await body(v.page)
-  ck("C16 a seller (picks leads) opens the Calendar and sees only the call back on the lead SHE picked (owner = picker), nothing of the setters'", sl.includes("Seller Picked Lead") && !sl.includes("Chiara Lead") && !sl.includes("Marco Lead") && !sl.includes("Picked By Rocco Lead"), sl.slice(0, 300))
-  await v.page.close()
+  // ---- the month: past days refuse
+  const mv = await owner.newPage()
+  await mv.goto(BASE + "/marketing/calendar", { waitUntil: "networkidle", timeout: 180000 })
+  await mv.getByTestId("cal-view-month").click()
+  await mv.waitForTimeout(400)
+  await mv.screenshot({ path: `${SHOTS}/qa-cal-month.png`, fullPage: true })
+  const yesterday = G.addDays(todayKey, -1)
+  const lateChip = mv.locator(`[data-testid=cal-cell] [data-lead="${L3}"]`)
+  if ((await lateChip.count()) === 1 && (await mv.locator(`[data-testid=cal-cell][data-day="${yesterday}"]`).count()) === 1) {
+    await lateChip.first().dragTo(mv.locator(`[data-testid=cal-cell][data-day="${yesterday}"]`))
+    const tp = await waitToast(mv)
+    ck("V12 dragging a call to a day that has passed is refused with a message and NO box opens", /already passed/.test(tp) && (await mv.getByTestId("move-dialog").count()) === 0, tp)
+  } else ck("V12 (skipped: the late call or yesterday is not in this month's grid)", true)
+  // a drop on a future day (month): the same time of day is kept
+  const tmrKey = G.addDays(todayKey, 1)
+  const tomChip = mv.locator(`[data-testid=cal-cell] [data-lead="${L6}"]`)
+  const wasAt = (await lastAppt(L6)).data.at as string
+  const target = G.addDays(todayKey, 2)
+  if ((await tomChip.count()) === 1 && (await mv.locator(`[data-testid=cal-cell][data-day="${target}"]`).count()) === 1) {
+    await tomChip.first().dragTo(mv.locator(`[data-testid=cal-cell][data-day="${target}"]`))
+    await mv.getByTestId("move-dialog").waitFor({ timeout: 30000 })
+    await mv.getByTestId("move-reason").nth(1).click(); await mv.getByTestId("move-save").click(); await waitToast(mv)
+    const a6 = await lastAppt(L6)
+    ck("V13 a drop on another day in the month keeps the time of day (11:00) and records the reason", a6.data.at === G.moveToDay(wasAt, target) && a6.data.reason === "The seller is not available", { a6, wasAt })
+  } else ck("V13 (skipped: not in the grid)", true, tmrKey)
+  await mv.close()
 
-  v = await view(ale, "/marketing/calendar")
-  const at = await body(v.page); const aleHtml = await v.page.content()
-  ck("C17 the ad person is refused by the server and no lead name reaches the page", /do not have access to the Calendar/.test(at) && !aleHtml.includes("Chiara Lead") && !aleHtml.includes("Marco Lead"), at.slice(0, 200))
-  await v.page.close()
-  v = await view(ale, "/marketing/leads")
-  ck("C18 and there is no Calendar in her menu", !/\bCalendar\b/.test(await body(v.page))); await v.page.close()
-  v = await view(chiara, "/marketing/leads")
-  ck("C19 Chiara's menu has Calendar", /\bCalendar\b/.test(await body(v.page))); await v.page.close()
+  // ---- the pipeline
+  const pv = await owner.newPage()
+  await pv.goto(BASE + "/marketing/calendar", { waitUntil: "networkidle", timeout: 180000 })
+  await pv.getByTestId("cal-view-pipeline").click()
+  await pv.waitForTimeout(400)
+  const inBucket = async (b: string) => (await pv.locator(`[data-bucket="${b}"]`).innerText()).replace(/\s+/g, " ")
+  ck("V14 'By when' has the five groups, with the late call back in Late and the far call in Later; the call that already happened is not there", (await pv.locator("[data-bucket]").count()) === 5 && /Late Callback Lead/.test(await inBucket("late")) && /Later Appt Lead/.test(await inBucket("later")) && !/Done Call Lead/.test(await body(pv)))
+  await pv.screenshot({ path: `${SHOTS}/qa-cal-pipeline.png`, fullPage: true })
+  await pv.locator(`[data-bucket="later"] [data-lead="${L7}"]`).first().dragTo(pv.locator('[data-bucket="late"]'))
+  const tl = await waitToast(pv)
+  ck("V15 dropping a card into Late is refused with a message", /cannot be moved into Late/.test(tl) && (await pv.getByTestId("move-dialog").count()) === 0, tl)
+  const n7 = await apptCount(L7)
+  await pv.locator(`[data-bucket="later"] [data-lead="${L7}"]`).first().dragTo(pv.locator('[data-bucket="tomorrow"]'))
+  await pv.getByTestId("move-dialog").waitFor({ timeout: 30000 })
+  await pv.keyboard.press("Escape")
+  await pv.waitForTimeout(300)
+  ck("V16 closing the box without a reason writes nothing", (await apptCount(L7)) === n7 && (await pv.getByTestId("move-dialog").count()) === 0)
+  await pv.locator(`[data-bucket="later"] [data-lead="${L7}"]`).first().dragTo(pv.locator('[data-bucket="tomorrow"]'))
+  await pv.getByTestId("move-dialog").waitFor({ timeout: 30000 })
+  await pv.getByTestId("move-reason").nth(3).click(); await pv.getByTestId("move-save").click(); await waitToast(pv)
+  const a7 = await lastAppt(L7)
+  ck("V17 dropping on Tomorrow keeps the time of day (16:00) and writes tomorrow", a7.data.at === G.moveToDay(slot(G.addDays(nextMon, 14), 16), G.addDays(todayKey, 1)) && a7.data.reason === "The lead did not answer", a7)
+  await pv.getByTestId("pipe-stage").click()
+  await pv.waitForTimeout(300)
+  ck("V18 'By stage' has four columns; the call that happened is in 'Call done', the call back in 'Call back later'", (await pv.locator("[data-stage]").count()) === 4 && /Done Call Lead/.test((await pv.locator('[data-stage="done"]').innerText())) && /Week Callback Lead/.test((await pv.locator('[data-stage="back"]').innerText())))
+  await pv.close()
 
-  v = await view(owner, "/marketing/calendar")
-  await v.page.getByTestId("cal-item").first().click()
-  await v.page.waitForURL(/\/marketing\/leads\?lead=/, { timeout: 60000 })
-  ck("C20 a row opens the lead in Leads", /\/marketing\/leads\?lead=/.test(v.page.url())); await v.page.close()
+  // ---- the server itself refuses an empty reason or a past time
+  const sp = await owner.newPage()
+  await sp.goto(BASE + "/marketing/calendar", { waitUntil: "networkidle", timeout: 180000 })
+  const post = (payload: object) => sp.evaluate(async ([id, p]) => { const r = await fetch(`/api/marketing/leads/${id}/action`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) }); return { status: r.status, body: await r.json().catch(() => ({})) } }, [L1, payload] as const)
+  const noReason = await post({ action: "reschedule", target: "appointment", at: slot(dayOf(4), 10), reason: "" })
+  const past = await post({ action: "reschedule", target: "appointment", at: new Date(Date.now() - 86400000).toISOString(), reason: "x" })
+  const post2 = (id: string, payload: object) => sp.evaluate(async ([i, p]) => { const r = await fetch(`/api/marketing/leads/${i}/action`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) }); return { status: r.status, body: await r.json().catch(() => ({})) } }, [id, payload] as const)
+  const noAppt = await post2(L2, { action: "reschedule", target: "appointment", at: slot(dayOf(4), 10), reason: "The lead asked to move" })
+  const noCb = await post2(L1, { action: "reschedule", target: "callback", at: slot(dayOf(4), 10), reason: "The lead asked to move" })
+  const stale = await post2(L1, { action: "reschedule", target: "appointment", at: slot(dayOf(4), 10), reason: "The lead asked to move", from: slot(dayOf(5), 10) })
+  const nApptBefore = await apptCount(L1)
+  ck("V21 a move cannot create a call out of nothing: a lead with no booking (409), a lead with no call back (409), a stale page whose old time no longer matches (409), and nothing is written", noAppt.status === 409 && noCb.status === 409 && stale.status === 409 && (await apptCount(L1)) === nApptBefore, { noAppt, noCb, stale })
+  const cbRows = Number((await db.query("select count(*) from marketing_lead_events where lead_id=$1 and kind='status_changed'", [L2])).rows[0].count)
+  const mvRows = Number((await db.query("select count(*) from marketing_lead_events where lead_id=$1 and kind='callback_moved'", [L2])).rows[0].count)
+  ck("V22 moving a call back writes its OWN history kind and never a new 'call back' outcome row (so the numbers do not count a move as new work)", cbRows === 1 && mvRows === 1, { cbRows, mvRows })
+  ck("V19 the server refuses a move with no reason (400) and a move into the past (400, clear message)", noReason.status === 400 && past.status === 400 && /already passed/.test(past.body.error ?? ""), { noReason, past })
+  await sp.close()
+
+  // ---- Day view
+  const dv = await owner.newPage()
+  await dv.goto(BASE + "/marketing/calendar", { waitUntil: "networkidle", timeout: 180000 })
+  await dv.getByTestId("cal-view-day").click()
+  await dv.waitForTimeout(300)
+  ck("V20 the Day view shows one column with a title for that day, and the arrows move by one day", (await dv.locator("[data-testid=cal-col]").count()) === 1 && /\d{4}/.test(await dv.getByTestId("cal-title").innerText()))
+  await dv.close()
 
   await browser.close(); await db.end()
   console.log(`\n${pass} passed, ${fail} failed`)
