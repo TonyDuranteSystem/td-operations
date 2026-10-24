@@ -30,7 +30,7 @@ export type TalkComposerMode =
  * message went out, so a failed send keeps what was typed.
  */
 export function TalkComposer({
-  onSend, onEdit, mode, onCancelMode, onTyping, disabled,
+  onSend, onEdit, mode, onCancelMode, onTyping, disabled, mentionPeople,
 }: {
   onSend: (input: TalkSendInput) => Promise<boolean>
   onEdit: (id: string, text: string) => Promise<boolean>
@@ -39,6 +39,8 @@ export function TalkComposer({
   /** Called while the person types or records, so the other side can show "typing…" (the caller throttles). */
   onTyping?: (kind: TypingKind) => void
   disabled?: boolean
+  /** The people who can be named with @ (the marketing chats pass the people of the conversation; the default is nobody: TD Talk and Team Chat show no picker). */
+  mentionPeople?: ReadonlyArray<{ id: string; name: string }>
 }) {
   const { t, ts } = useTalkI18n()
   const [text, setText] = useState('')
@@ -46,6 +48,9 @@ export function TalkComposer({
   const [busy, setBusy] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const taRef = useRef<HTMLTextAreaElement>(null)
+  // the @ picker: what is typed after the @ at the caret, and the highlighted person
+  const [mention, setMention] = useState<{ at: number; q: string } | null>(null)
+  const [mentionHot, setMentionHot] = useState(0)
   const fileRef = useRef<HTMLInputElement>(null)
   const textRef = useRef(text)
   const modeRef = useRef(mode)
@@ -55,6 +60,23 @@ export function TalkComposer({
   const onTypingRef = useRef(onTyping)
   onTypingRef.current = onTyping
   textRef.current = text
+  const mentionMatches = mention && mentionPeople ? mentionPeople.filter(p => p.name.toLowerCase().startsWith(mention.q.toLowerCase())).slice(0, 6) : []
+  const readMention = (value: string, caret: number) => {
+    if (!mentionPeople || mentionPeople.length === 0) return
+    const m = /(^|[\s(])@([^\n@]{0,40})$/.exec(value.slice(0, caret))
+    if (!m) { setMention(null); return }
+    setMention({ at: caret - m[2].length - 1, q: m[2] })
+    setMentionHot(0)
+  }
+  const pickMention = (p: { name: string }) => {
+    if (!mention) return
+    const caret = mention.at + 1 + mention.q.length
+    const next = `${text.slice(0, mention.at)}@${p.name} ${text.slice(caret)}`
+    setText(next)
+    setMention(null)
+    const pos = mention.at + p.name.length + 2
+    setTimeout(() => { taRef.current?.focus(); taRef.current?.setSelectionRange(pos, pos) }, 0)
+  }
   const editingId = mode?.kind === 'edit' ? mode.message.id : null
   const replyingId = mode?.kind === 'reply' ? mode.message.id : null
 
@@ -172,7 +194,7 @@ export function TalkComposer({
   }
 
   return (
-    <div className="shrink-0 border-t border-zinc-200 bg-white px-2 pb-2 pt-2">
+    <div className="relative shrink-0 border-t border-zinc-200 bg-white px-2 pb-2 pt-2">
       {mode && (
         <div className="mx-1 mb-2 flex items-center gap-2 rounded-lg border-l-4 border-[#BE1E2D] bg-zinc-100 px-3 py-1.5" data-testid="talk-mode-bar">
           {mode.kind === 'reply' ? <CornerUpLeft className="h-4 w-4 shrink-0 text-zinc-500" /> : <Pencil className="h-4 w-4 shrink-0 text-zinc-500" />}
@@ -204,13 +226,30 @@ export function TalkComposer({
             <Paperclip className="h-5 w-5" />
           </button>
         )}
+        {mention && mentionMatches.length > 0 && (
+          <ul role="listbox" aria-label={t('Mention someone')} data-testid="mention-picker" className="absolute bottom-full left-14 z-20 mb-1 min-w-[12rem] overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lg">
+            {mentionMatches.map((p, i) => (
+              <li key={p.id} role="option" aria-selected={i === mentionHot}>
+                <button type="button" onMouseDown={e => { e.preventDefault(); pickMention(p) }} data-testid="mention-option"
+                  className={`block w-full px-3 py-2 text-left text-sm hover:bg-zinc-100 ${i === mentionHot ? 'bg-zinc-100' : ''}`}>@{p.name}</button>
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
           ref={taRef}
           value={text}
           rows={1}
           disabled={disabled}
-          onChange={e => { setText(e.target.value); if (e.target.value && mode?.kind !== 'edit') onTyping?.('typing') }}
+          onChange={e => { setText(e.target.value); readMention(e.target.value, e.target.selectionStart ?? e.target.value.length); if (e.target.value && mode?.kind !== 'edit') onTyping?.('typing') }}
           onKeyDown={e => {
+            // the @ picker has the arrows, Enter / Tab (choose) and Escape (close) while it is open
+            if (mention && mentionMatches.length > 0) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setMentionHot(h => (h + 1) % mentionMatches.length); return }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setMentionHot(h => (h + mentionMatches.length - 1) % mentionMatches.length); return }
+              if ((e.key === 'Enter' || e.key === 'Tab') && !e.nativeEvent.isComposing) { e.preventDefault(); pickMention(mentionMatches[Math.min(mentionHot, mentionMatches.length - 1)]); return }
+              if (e.key === 'Escape') { e.preventDefault(); setMention(null); return }
+            }
             if (e.key === 'Escape' && mode) { onCancelMode(); return }
             // On a computer or a tablet Enter sends (Shift+Enter = new line); on a PHONE Enter is a new line and the arrow
             // sends. Never while an input method is composing a word (Enter confirms the word there).

@@ -27,7 +27,7 @@ describe("modulesFor", () => {
     expect(homeFor(OWNER)).toBe("/marketing/today")
     expect(homeFor(SETTER)).toBe("/marketing/call-list")
     expect(homeFor(["leads.read"])).toBe("/marketing/board")   // the Board is the first built screen of anyone who can read leads
-    expect(homeFor(["chat"])).toBeNull()   // the chat page also needs the right to read leads, so chat alone opens nothing
+    expect(homeFor(["chat"])).toBe("/marketing/chat")   // the team chat (direct messages, groups) needs only the chat permission
     expect(homeFor(["inbox"])).toBeNull()
   })
   it("unbuilt screens are marked, built ones are links", () => {

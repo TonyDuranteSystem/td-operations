@@ -14,6 +14,7 @@ import { leadDb } from "@/lib/marketing/meta-leads/service"
 import { personName } from "@/lib/marketing/setter-note"
 import type { Bundles } from "@/lib/marketing/access"
 import { sendMarketingPush } from "@/lib/marketing/push"
+import { parseMentions, threadPush } from "@/lib/marketing/team-chat"
 import {
   BUCKET, SIGNED_URL_SECONDS, URL_CACHE_SECONDS, checkEdit, isInvolved, checkEmoji, checkSend, chatUrlFor, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, pushRecipients, toTalkMessage, unreadCount,
   type ChatMessageRow, type ChatReaction, type StoredAttachment,
@@ -71,7 +72,7 @@ async function loadChatMembers(teamId: string): Promise<ChatMember[]> {
 const urlCache = new Map<string, { at: number; url: string }>()
 
 /** Signed links for these files. The same link is handed out for URL_CACHE_SECONDS (fewer calls to storage, and the audio player is not reloaded by every refresh); a new one is signed after that. */
-async function signUrls(paths: readonly string[]): Promise<Map<string, string>> {
+export async function signUrls(paths: readonly string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   const now = Date.now()
   const missing: string[] = []
@@ -89,7 +90,7 @@ async function signUrls(paths: readonly string[]): Promise<Map<string, string>> 
   return out
 }
 
-async function shape(rows: ChatMessageRow[], reactions: ChatReaction[]) {
+export async function shape(rows: ChatMessageRow[], reactions: ChatReaction[]) {
   const byId = new Map(rows.map(r => [r.id, r]))
   const urls = await signUrls(rows.flatMap(r => (r.deleted_at ? [] : (r.attachments ?? []).map(a => a.path))))
   return rows.map(r => toTalkMessage(r, byId, reactions, p => urls.get(p) ?? null))
@@ -150,8 +151,14 @@ export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body
     replyTo = body.reply_to_id
   }
   const senderName = personName(ctx.user.email ?? "")
+  // the people named with @ (among those who work this lead's chat); a lookup that fails only means nobody is named: the message is still sent
+  let members: Awaited<ReturnType<typeof chatMembers>> = []
+  try { members = await chatMembers(ctx.team.id) } catch { /* the message matters more than the mention */ }
+  const mentions = parseMentions(c.message, members.filter(m => isInvolved(m.permissions)).map(m => ({ id: m.id, name: m.name })), ctx.user.id)
   const { data: row, error } = await d.from("marketing_lead_messages").insert({
     team_id: ctx.team.id, lead_id: lead.id, sender_id: ctx.user.id, sender_name: senderName, message: c.message, attachments: c.attachments.length ? c.attachments : null, reply_to_id: replyTo,
+    // only written when somebody IS named, so a team that has not run the team-chat migration yet can still send ordinary messages
+    ...(mentions.length ? { mentions } : {}),
   }).select(MESSAGE_COLS).single()
   if (error || !row) return { ok: false, error: "Could not send. Please try again.", status: 500 }
   // what you send you have read, and this device has it
@@ -159,15 +166,19 @@ export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body
   const [message] = await shape([row as ChatMessageRow], [])
   // tell the others (never the sender); a failed notification never fails the message
   try {
-    const members = await chatMembers(ctx.team.id)
     const to = pushRecipients(members.map(m => ({ user_id: m.id, status: m.status, permissions: m.permissions })), ctx.user.id)
     // a lead with no name is shown by its email, never its phone number (a notification can sit on a lock screen)
     const leadName = lead.full_name || lead.email || "Lead"
-    // WAIT for the notifications (a function may be stopped as soon as it has answered), but never longer than a few seconds: a slow phone service must not hold up the sender
-    await Promise.race([
-      sendMarketingPush(ctx.team.id, to, { title: `${senderName} · ${leadName}`, body: previewLine({ message: c.message, attachments: c.attachments, deleted_at: null }), url: chatUrlFor(lead.id), tag: `chat-${lead.id}` }),
+    const preview = previewLine({ message: c.message, attachments: c.attachments, deleted_at: null })
+    const named = to.filter(id => mentions.includes(id))
+    const rest = to.filter(id => !mentions.includes(id))
+    // WAIT for the notifications (a function may be stopped as soon as it has answered), but never longer than a few seconds: a slow phone service must not hold up the sender.
+    // A person named with @ gets a note that says so.
+    const send = (ids: string[], mentioned: boolean) => (ids.length === 0 ? Promise.resolve() : Promise.race([
+      sendMarketingPush(ctx.team.id, ids, { ...threadPush({ senderName, threadTitle: leadName, kind: "lead", mentioned, preview }), url: chatUrlFor(lead.id), tag: `chat-${lead.id}` }),
       new Promise(resolve => setTimeout(resolve, 4000)),
-    ])
+    ]))
+    await Promise.all([send(named, true), send(rest, false)])
   } catch { /* the message is already saved */ }
   return { ok: true, message }
 }

@@ -100,7 +100,7 @@ async function main() {
   const navBadge = await p.locator('[data-testid="nav-chat-badge"]').innerText()
   ck("the sidebar's Chat carries the red number 1", navBadge.trim() === "1", navBadge)
   await p.click('[data-testid="nav-chat"]')
-  await p.waitForSelector('[data-testid="messages"]')
+  await p.waitForSelector('[data-testid="lead-conversations"]')
   const unreadTxt = await p.locator('[data-testid="conversation-unread"]').innerText()
   ck("the Chat page lists the conversation with its red number", unreadTxt.trim() === "1" && (await p.locator('[data-testid="conversation"]').count()) === 1, unreadTxt)
   await hydrated(p)

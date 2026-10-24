@@ -15,6 +15,8 @@ import { ThemeSwitch } from '@/components/marketing/theme-switch'
 import { getTheme } from '@/lib/marketing/theme-server'
 import { availableBoardRoles, boardRole } from '@/lib/marketing/board'
 import { unreadByLead } from '@/lib/marketing/lead-chat-server'
+import { unreadByThread } from '@/lib/marketing/team-chat-server'
+import { isInvolved } from '@/lib/marketing/lead-chat'
 import { getLang } from '@/lib/marketing/lang'
 import { makeT, tAccessLabel } from '@/lib/marketing/i18n'
 
@@ -32,8 +34,11 @@ export default async function MarketingAppLayout({ children }: { children: React
   const { ctx } = g
   const bundlesSetting = (await getMarketingSetting('permission_bundles', ctx.team.id)) as Bundles
   const chatOn = hasPermission(ctx.permissions, 'chat') && hasPermission(ctx.permissions, 'leads.read')
-  // the red number on the sidebar's Chat: my unread lead messages (the team chat joins it later)
-  const chatUnread = chatOn ? Array.from((await unreadByLead(ctx)).values()).reduce((a, b) => a + b, 0) : 0
+  const chatAny = hasPermission(ctx.permissions, 'chat')
+  // the red number on the sidebar's Chat: my unread messages in the chats about leads (people who work the leads) plus in my direct messages and groups
+  const sum = (m: Map<string, number>) => Array.from(m.values()).reduce((a, b) => a + b, 0)
+  const [leadUnread, teamUnread] = await Promise.all([chatOn && isInvolved(ctx.permissions) ? unreadByLead(ctx).then(sum) : 0, chatAny ? unreadByThread(ctx).then(sum) : 0])
+  const chatUnread = leadUnread + teamUnread
   const nav = modulesFor(ctx.permissions).map(m => (m.key === 'chat' ? { ...m, badge: chatUnread } : m))
   return (
     <LangProvider lang={lang}>
@@ -61,7 +66,7 @@ export default async function MarketingAppLayout({ children }: { children: React
         </div>
       </aside>
       <div className="min-w-0 flex-1">
-        <LeadWindowsHost defaultRole={boardRole(ctx.permissions)} roles={availableBoardRoles(ctx.permissions)} chatOn={chatOn}>
+        <LeadWindowsHost defaultRole={boardRole(ctx.permissions)} roles={availableBoardRoles(ctx.permissions)} chatOn={chatOn} pollOn={chatAny}>
           {hasPermission(ctx.permissions, 'chat') && <MarketingPushBanner />}
           {hasPermission(ctx.permissions, 'leads.read') && <div className="flex items-center gap-3 border-b bg-white px-6 py-2"><LeadSearch /></div>}
           {children}
