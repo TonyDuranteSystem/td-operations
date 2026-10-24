@@ -28,6 +28,8 @@ export const leadActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("no_answer"), via: z.enum(["whatsapp", "call"]).default("call"), note: note.optional() }),
   // at = a day and time; null cancels the booked call
   z.object({ action: z.literal("appointment"), at: z.string().min(10).max(40).nullable(), note: note.optional() }),
+  // move a booked call or a call back to another day or time: the reason is REQUIRED (it goes in the history and in the notification); `from` is the old time, for the history line only
+  z.object({ action: z.literal("reschedule"), target: z.enum(["appointment", "callback"]), at: z.string().min(10).max(40), reason: z.string().trim().min(1).max(200), note: note.optional(), from: z.string().max(40).nullable().optional() }),
   // the setter passes an in-target lead to the seller without booking a call (the seller then fixes the call himself)
   z.object({ action: z.literal("handover"), note: note.optional() }),
 ])
@@ -94,8 +96,8 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
       } }
   }
 
-  // Every other action: a lead someone else picked is theirs to work (the owner can always step in).
-  if (someoneElse && actor.role !== "owner") return fail(409, "Someone else picked this lead, so only they (or the team owner) can change it.")
+  // Every other action: a lead someone else picked is theirs to work (the owner can always step in). Moving a call is the exception: the setter and the seller both work the same call, so either may move it.
+  if (someoneElse && actor.role !== "owner" && input.action !== "reschedule") return fail(409, "Someone else picked this lead, so only they (or the team owner) can change it.")
 
   switch (input.action) {
     case "note":
@@ -146,6 +148,24 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
       return { ok: true, change: {
         patch: movedToBooked(lead, s),
         event: { kind: "appointment", data: { at: at.toISOString(), note: input.note ?? null } },
+      } }
+    }
+
+    case "reschedule": {
+      const at = new Date(input.at)
+      if (Number.isNaN(at.getTime())) return fail(400, "Pick a valid day and time.")
+      if (at.getTime() < now.getTime() - GRACE_MS) return fail(400, "That time has already passed. Pick a day and time in the future.")
+      if (at.getTime() > now.getTime() + MAX_AHEAD_MS) return fail(400, "That is too far away. Pick a day within the next six months.")
+      const from = typeof input.from === "string" && !Number.isNaN(Date.parse(input.from)) ? new Date(input.from).toISOString() : null
+      const moved = { note: input.note ?? null, reason: input.reason, rescheduled: true }
+      if (input.target === "appointment") {
+        return { ok: true, change: { patch: movedToBooked(lead, s), event: { kind: "appointment", data: { at: at.toISOString(), from, ...moved } } } }
+      }
+      const target = s.outcomeStages.call_back
+      if (!stageExists(target)) return fail(400, "The stage for \"Call back later\" is not set up. Ask Antonio.")
+      return { ok: true, change: {
+        patch: { status: target, callback_at: at.toISOString(), not_in_target_reason: null },
+        event: { kind: "status_changed", data: { from: lead.status, to: target, outcome: "call_back", callback_at: at.toISOString(), callback_from: from, ...moved } },
       } }
     }
 

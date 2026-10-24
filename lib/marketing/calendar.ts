@@ -8,13 +8,13 @@ import { localeFor, makeT, type TFn } from "@/lib/marketing/i18n"
 import type { Lang } from "@/lib/marketing/templates"
 import { ageText, romeStartOfDay, romeStartOfNextDay } from "@/lib/marketing/master-view"
 
-export interface CalLead { id: string; full_name: string | null; email: string | null; ad_name: string | null; claimed_by: string | null; callback_at: string | null }
+export interface CalLead { id: string; full_name: string | null; email: string | null; ad_name: string | null; claimed_by: string | null; callback_at: string | null; status?: string }
 /** The history rows that set a call back: kind status_changed with outcome call_back. */
 export interface CalEvent { lead_id: string; actor: string; created_at: string; data: Record<string, unknown> }
 export interface CalMember { user_id: string; email: string | null; status?: string }
 
 /** A call booked with the seller (the newest "appointment" row of a lead that is not cancelled). */
-export interface CalAppointment { lead: Pick<CalLead, "id" | "full_name" | "email" | "ad_name" | "claimed_by">; at: string; actor: string }
+export interface CalAppointment { lead: Pick<CalLead, "id" | "full_name" | "email" | "ad_name" | "claimed_by" | "status">; at: string; actor: string }
 
 export interface CalItem {
   /** "callback" = the setter promised to call back; "appointment" = a call booked with the seller */
@@ -58,6 +58,8 @@ export function latestSetters(events: readonly CalEvent[]): Map<string, { actor:
   const out = new Map<string, { actor: string; at: string }>()
   for (const e of events) {
     if (e.data?.outcome !== "call_back") continue
+    // a call back that was only MOVED (to another day) keeps the person who first set it: the one who moved it did not take it over
+    if (e.data?.rescheduled === true) continue
     const cur = out.get(e.lead_id)
     if (!cur || e.created_at > cur.at) out.set(e.lead_id, { actor: e.actor, at: e.created_at })
   }
@@ -140,4 +142,59 @@ export function relativeDay(d: Date, now: Date, lang: Lang = "en"): string {
   const tomorrow = romeDayKey(romeStartOfNextDay(now))
   const base = romeDayLabel(d, lang)
   return k === today ? `${t("Today")} · ${base}` : k === tomorrow ? `${t("Tomorrow")} · ${base}` : base
+}
+
+/** The stage a calendar item sits in for the pipeline "by stage" view. */
+export type CalStage = "back" | "booked" | "done" | "paid"
+/** The lead stages that mean the sale was paid (the seller's board uses the same two). */
+const PAID_STAGES = ["paid_call", "upsell_won"]
+
+/** One call on the calendar views (serializable: times are ISO strings). */
+export interface CalendarItem {
+  kind: "callback" | "appointment"
+  leadId: string
+  name: string
+  at: string
+  ad: string | null
+  ownerId: string | null
+  setBy: string | null
+  setByMember: boolean
+  /** a call back whose time has passed and nobody has called back */
+  late: boolean
+  /** a booked call whose time has passed */
+  done: boolean
+  stage: CalStage
+}
+export const CALENDAR_LATE_CAP = 300
+
+/**
+ * Everything the day, week, month and pipeline views draw, for one person (`ownerId`) or everyone ("all"): the call backs (past ones are "late"), the booked calls (past ones are "done"
+ * or "paid"). The late ones are capped (the most recent first) so a long-forgotten backlog cannot make the page heavy; the rest are counted.
+ */
+export function calendarItems(i: { leads: readonly CalLead[]; events: readonly CalEvent[]; members: readonly CalMember[]; ownerId: string; now: Date; appointments?: readonly CalAppointment[]; lang?: Lang }): { items: CalendarItem[]; lateMore: number } {
+  const t = makeT(i.lang ?? "en")
+  const nowMs = i.now.getTime()
+  const setters = latestSetters(i.events)
+  const isMember = (email: string | null) => email !== null && i.members.some(m => m.email !== null && m.email.toLowerCase() === email.toLowerCase() && m.status !== "removed")
+  const items: CalendarItem[] = []
+  for (const l of i.leads) {
+    if (!l.callback_at || Number.isNaN(Date.parse(l.callback_at))) continue
+    const setter = setters.get(l.id)?.actor ?? null
+    const ownerId = callBackOwner(l, setter, i.members)
+    if (i.ownerId !== "all" && ownerId !== i.ownerId) continue
+    items.push({ kind: "callback", leadId: l.id, name: l.full_name || l.email || t("Unnamed lead"), at: l.callback_at, ad: l.ad_name, ownerId, setBy: setter ? personName(setter) : null, setByMember: isMember(setter), late: new Date(l.callback_at).getTime() < nowMs, done: false, stage: "back" })
+  }
+  for (const a of i.appointments ?? []) {
+    const at = new Date(a.at).getTime()
+    if (Number.isNaN(at)) continue
+    const ownerId = callBackOwner(a.lead, a.actor, i.members)
+    if (i.ownerId !== "all" && ownerId !== i.ownerId) continue
+    const past = at < nowMs
+    const paid = past && PAID_STAGES.includes(a.lead.status ?? "")
+    items.push({ kind: "appointment", leadId: a.lead.id, name: a.lead.full_name || a.lead.email || t("Unnamed lead"), at: a.at, ad: a.lead.ad_name, ownerId, setBy: personName(a.actor), setByMember: isMember(a.actor), late: false, done: past, stage: paid ? "paid" : past ? "done" : "booked" })
+  }
+  items.sort((a, b) => a.at.localeCompare(b.at))
+  const lateAll = items.filter(x => x.late)
+  const keep = new Set(lateAll.slice(-CALENDAR_LATE_CAP))
+  return { items: items.filter(x => !x.late || keep.has(x)), lateMore: lateAll.length - keep.size }
 }
