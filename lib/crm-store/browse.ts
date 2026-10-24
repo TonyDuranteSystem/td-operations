@@ -7,6 +7,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { isInternalOwnerKind } from "./owner-kinds"
 
 // store_* tables are not in the generated types until they reach production.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -507,7 +508,7 @@ export async function staffUploadToStore(p: {
   let owner = owner0 as { kind: string; account_id: string | null; contact_id: string | null; service_delivery_id: string | null }
   // The firm's own "Business" folders and a staff member's private "My files": no client, so no CRM
   // documents row and never shown to anyone outside the firm. Same versioning rule as everywhere else.
-  if (owner.kind === "business" || owner.kind === "private") {
+  if (isInternalOwnerKind(owner.kind)) {
     if (typeRow?.metadata?.personal === true && owner.kind === "business") {
       throw new Error("This is a personal document — it belongs in the person's own storage, not in the Business folders.")
     }
@@ -769,7 +770,7 @@ export async function setClientVisibility(fileId: string, visible: boolean, acto
       throw new Error(workspaceShownMessage((n?.name as string | undefined) ?? "this file", ws))
     }
   }
-  if (visible && (areaKind === "business" || areaKind === "private")) throw new Error("Files in the Business folders and in My files are internal — they can never be shown to a client.")
+  if (visible && isInternalOwnerKind(areaKind)) throw new Error("Files in the Business folders and in My files are internal — they can never be shown to a client.")
   const { data: rows, error: rErr } = await db().from("documents").select("id, category, contact_id, portal_visible").eq("drive_file_id", storePointer(fileId))
   if (rErr) throw new Error(`Could not read the CRM listing — please try again (${rErr.message}).`)
   if (visible) {
