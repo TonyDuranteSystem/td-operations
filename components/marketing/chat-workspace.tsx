@@ -13,7 +13,7 @@ interface Person { id: string; name: string }
 interface Snapshot { threads: ThreadRow[]; people: Person[]; me: string }
 type Dialog = 'dm' | 'group' | 'info' | null
 
-const POLL_MS = 6_000
+const POLL_MS = 8_000
 const btn = 'rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50'
 
 /**
@@ -59,7 +59,7 @@ export function ChatWorkspace({ initial, leadConversations, showLeads, startThre
     try {
       const r = await fetch('/api/marketing/team-chat/threads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const d = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(d.error || t('Could not do that. Please try again.'))
+      if (!r.ok) throw new Error(d.error ? t(d.error) : t('Could not do that. Please try again.'))
       return d.thread_id as string
     } catch (e) { setError(e instanceof Error && e.message ? e.message : t('Could not do that. Please try again.')); return null } finally { setBusy(false) }
   }
@@ -183,7 +183,7 @@ function InfoDialog({ thread, people, nameOf, onClose, onChanged }: { thread: Th
     setBusy(true); setError('')
     try {
       const r = await fetch(`/api/marketing/team-chat/${thread.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || t('Could not do that. Please try again.')) }
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error ? t(d.error) : t('Could not do that. Please try again.')) }
       onChanged(leave)
     } catch (e) { setError(e instanceof Error && e.message ? e.message : t('Could not do that. Please try again.')); setBusy(false) }
   }

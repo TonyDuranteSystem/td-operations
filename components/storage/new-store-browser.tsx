@@ -13,7 +13,7 @@
  * When the system can't work something out it ASKS (Part 16): one question, the evidence, real choices.
  */
 
-import { useCallback, useEffect, useRef, useState, useMemo } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react'
 import { toast } from 'sonner'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -45,6 +45,14 @@ import { DriveImportDialog } from './drive-import-dialog'
 import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keepBothName } from '@/lib/crm-store/names'
 
 interface Fold { id: string; name: string; kind: string; trashed: boolean; locked?: boolean }
+/** the right-click menu: what was clicked (the menu items are the SAME ones the row's "…" button shows) */
+type CtxBody =
+  | { kind: 'file'; f: File_; inFolder: Fold | null }
+  | { kind: 'allfile'; ff: FilteredFile }
+  | { kind: 'folder'; folder: Fold; parentId: string | null }
+  | { kind: 'selection' }
+  | { kind: 'empty'; folder: Fold }
+type CtxMenu = CtxBody & { x: number; y: number }
 interface File_ {
   id: string; name: string; documentType: string | null; state: string; published: boolean; clientVisible: boolean
   /** the workspace that always shows this file to the client — it can't be hidden from here */
@@ -295,6 +303,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const fileInput = useRef<HTMLInputElement | null>(null)
   // row menus / inline rename / new folder / drag and drop
   const [menuFor, setMenuFor] = useState<string | null>(null)
+  const [ctx, setCtx] = useState<CtxMenu | null>(null)
+  const ctxMenuRef = useRef<HTMLDivElement>(null)
+  const ctxOpenedAt = useRef(0)
   // the AI check inside the storage (job 685467b5): marks of the files on screen, and the side panel that shows the document next to what the AI found
   const visibleFileIds = useMemo(() => Object.values(loaded).flatMap((c) => c.files.filter((f) => f.state === 'live').map((f) => f.id)), [loaded])
   const ai = useAiMarks(ownerId, visibleFileIds)
@@ -1134,6 +1145,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   /** Merge into one: only files of ONE company or ONE person (Antonio 2026-10-24). Opens the ordering window. */
   const startMerge = () => {
+    if (bulkBusy) return
     const picked = Array.from(selectedFiles.values())
     if (sharedView) { toast.error('Files shared with you are read-only — they cannot be merged.'); return }
     // the storage each file lives in: its folder's owner; a file at the very top of the storage (no folder) belongs to the storage on screen
@@ -1248,10 +1260,43 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // (the Bug Hunter found it could otherwise come back in another company's panel and be saved there)
   useEffect(() => { if (!uploadOpen) setMergedFile(null) }, [uploadOpen])
   useEffect(() => { if (!mergedFile) setMergeTargets(null) }, [mergedFile])
+  // the right-click menu closes on a press anywhere outside it (capture phase, so buttons that stop the click from spreading still close it), another right-click,
+  // Escape (which then does NOT also close a dialog underneath), scrolling (not the first 300 ms: a trackpad still coasting) or resizing
+  useEffect(() => {
+    if (!ctx) return
+    const close = () => setCtx(null)
+    const onOutside = (e: Event) => { if (!ctxMenuRef.current?.contains(e.target as Node)) close() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close() } }
+    const onScroll = () => { if (Date.now() - ctxOpenedAt.current > 300) close() }
+    document.addEventListener('pointerdown', onOutside, true)
+    document.addEventListener('contextmenu', onOutside, true)
+    document.addEventListener('keydown', onKey, true)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', close)
+    return () => {
+      document.removeEventListener('pointerdown', onOutside, true)
+      document.removeEventListener('contextmenu', onOutside, true)
+      document.removeEventListener('keydown', onKey, true)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', close)
+    }
+  }, [ctx])
+  // once drawn: keep the menu inside the window whatever its height, mark the items for screen readers and put the keyboard on the first item
+  useLayoutEffect(() => {
+    const el = ctxMenuRef.current
+    if (!ctx || !el) return
+    const r = el.getBoundingClientRect()
+    el.style.left = `${Math.max(8, Math.min(ctx.x, window.innerWidth - r.width - 8))}px`
+    el.style.top = `${Math.max(8, Math.min(ctx.y, window.innerHeight - r.height - 8))}px`
+    const items = Array.from(el.querySelectorAll('button'))
+    items.forEach((b) => b.setAttribute('role', 'menuitem'))
+    items.find((b) => !b.disabled)?.focus()
+  }, [ctx])
   useEffect(() => { if (!mergedFile) setMergedPreviewOpen(false) }, [mergedFile])
   useEffect(() => { setMergedFile((m) => (m && m.ownerId !== (ownerId ?? '') ? null : m)) }, [ownerId])
 
   const runBulk = async (action: 'show' | 'hide' | 'delete' | 'move') => {
+    if (bulkBusy) return // a bulk action is already running: a second one would redo every file
     const list = Array.from(selectedFiles.values())
     if (!list.length) return
     const oids = new Set(list.map((f) => (f.folderId && folderOwner.current.get(f.folderId)) || ownerId))
@@ -1861,6 +1906,43 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   // ───────────────────────────────────────── rows
 
+  /** the file menu — shared by the row's "…" button and the right-click menu */
+  const fileMenuItems = (f: File_, inFolder: Fold | null) => (
+    <>
+<MenuItem icon={Search} label="Preview" onClick={() => { setMenuFor(null); setPreview(f) }} />
+              {ai.available && f.state === 'live' && <MenuItem icon={ScanText} label="Check this file" onClick={() => { setMenuFor(null); setAiFile(f.id) }} />}
+              <MenuItem icon={Layers} label="Details" onClick={() => { void openDetails(f.id) }} />
+              <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }} />
+              <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFile(f, inFolder)} />
+              <MenuItem icon={Tag} label={f.documentType ? 'Change type…' : 'Set type…'} onClick={() => { setMenuFor(null); setTyping(f) }} />
+              {f.inPersonStorage && <MenuItem icon={User} label="Belongs to another person…" onClick={() => { setMenuFor(null); setChangingPerson(f) }} />}
+              {f.needsReview && <MenuItem icon={Check} label="Mark reviewed" onClick={() => markReviewed(f)} />}
+              {f.filingStatus === 'draft' && !f.needsReview && <MenuItem icon={Check} label="Mark filed" onClick={() => markFiled(f)} />}
+              <MenuItem icon={Trash2} label="Delete" danger onClick={() => doDeleteFile(f)} />
+    </>
+  )
+
+  /** the folder menu — shared by the row's "…" button and the right-click menu (which also lists the buttons that only show on hover) */
+  const folderMenuItems = (f: Fold, parentId: string | null, extras: boolean) => (
+    <>
+      {extras && f.kind !== 'root' && <MenuItem icon={Upload} label="Upload here" onClick={() => { setMenuFor(null); void openUpload(f.id) }} />}
+      <MenuItem icon={FolderPlus} label="New folder inside" onClick={() => startNewFolder(f.id)} />
+                  <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name, folder: true }) }} />
+                  <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFolder(f, parentId)} />
+                  <MenuItem icon={Trash2} label="Delete" danger onClick={() => deleteFolder(f)} />
+      {extras && f.kind !== 'contacts' && <MenuItem icon={Download} label="Download as zip" onClick={() => { setMenuFor(null); void downloadZip(f) }} />}
+      {extras && (f.kind === 'tax' || f.kind === 'person_tax') && <MenuItem icon={CalendarPlus} label="New tax year" onClick={() => { setMenuFor(null); startNewFolder(f.id, true) }} />}
+    </>
+  )
+
+  /** open the right-click menu at the pointer (the browser's own menu is replaced only on rows and empty space) */
+  const openCtx = (e: React.MouseEvent, c: CtxBody) => {
+    e.preventDefault(); e.stopPropagation()
+    setMenuFor(null)
+    ctxOpenedAt.current = Date.now()
+    setCtx({ ...c, x: e.clientX, y: e.clientY })
+  }
+
   const fileRow = (f: File_, inFolder: Fold | null, depth: number) => {
     const Icon = fileIcon(f.mimeType)
     const busy = busyFiles.has(f.id)
@@ -1875,6 +1957,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             : "A person's document can only be shown from their own storage"
     return (
       <li key={f.id}
+        onContextMenu={(e) => {
+          if (renaming?.id === f.id) return
+          // a file that is one of several ticked ones: the menu acts on the whole selection (Finder-style); any other file: just that file
+          openCtx(e, selectedFiles.size >= 2 && selectedFiles.has(f.id) ? { kind: 'selection' } : { kind: 'file', f, inFolder })
+        }}
         draggable={!renaming}
         onDragStart={() => { const d = { id: f.id, from: inFolder?.id ?? null }; dragRef.current = d; setDragFile(d) }}
         onDragEnd={() => { setDragFile(null); setDropOn(null) }}
@@ -1972,16 +2059,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><MoreHorizontal className="h-4 w-4" /></button></FastTooltip>
           {menuFor === f.id && (
             <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
-              <MenuItem icon={Search} label="Preview" onClick={() => { setMenuFor(null); setPreview(f) }} />
-              {ai.available && f.state === 'live' && <MenuItem icon={ScanText} label="Check this file" onClick={() => { setMenuFor(null); setAiFile(f.id) }} />}
-              <MenuItem icon={Layers} label="Details" onClick={() => { void openDetails(f.id) }} />
-              <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }} />
-              <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFile(f, inFolder)} />
-              <MenuItem icon={Tag} label={f.documentType ? 'Change type…' : 'Set type…'} onClick={() => { setMenuFor(null); setTyping(f) }} />
-              {f.inPersonStorage && <MenuItem icon={User} label="Belongs to another person…" onClick={() => { setMenuFor(null); setChangingPerson(f) }} />}
-              {f.needsReview && <MenuItem icon={Check} label="Mark reviewed" onClick={() => markReviewed(f)} />}
-              {f.filingStatus === 'draft' && !f.needsReview && <MenuItem icon={Check} label="Mark filed" onClick={() => markFiled(f)} />}
-              <MenuItem icon={Trash2} label="Delete" danger onClick={() => doDeleteFile(f)} />
+              {fileMenuItems(f, inFolder)}
             </div>
           )}
         </div>
@@ -2023,6 +2101,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     return (
       <li key={f.id}>
         <div
+          // a fixed (locked) or trashed folder has no menu: it keeps the browser's own, and does not borrow the empty-space menu of the folder around it
+          onContextMenu={(e) => { if (f.locked || f.trashed || renaming?.id === f.id) { e.stopPropagation(); return } openCtx(e, { kind: 'folder', folder: f, parentId }) }}
           onDragOver={(e) => { if (canDrop || (isComputerDrag(e) && f.kind !== 'root' && !f.trashed)) { e.preventDefault(); e.stopPropagation(); setDropOn(f.id) } }}
           onDragLeave={() => setDropOn((d) => (d === f.id ? null : d))}
           onDrop={(e) => { if (isComputerDrag(e)) { void onComputerDrop(e, f); return } e.preventDefault(); e.stopPropagation(); if (canDrop) onDropInto(f, where) }}
@@ -2079,10 +2159,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><MoreHorizontal className="h-4 w-4" /></button></FastTooltip>
               {menuFor === `folder:${f.id}` && (
                 <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
-                  <MenuItem icon={FolderPlus} label="New folder inside" onClick={() => startNewFolder(f.id)} />
-                  <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name, folder: true }) }} />
-                  <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFolder(f, parentId)} />
-                  <MenuItem icon={Trash2} label="Delete" danger onClick={() => deleteFolder(f)} />
+                  {folderMenuItems(f, parentId, false)}
                 </div>
               )}
             </div>
@@ -2189,7 +2266,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             const menuKey = `all:${ff.id}`
             const showInFolder = () => { setMenuFor(null); void selectFolder(folderOwner.current.get(ff.folderId) ?? ownerId ?? '', ff.folderId); void openFilter(null) }
             return (
-              <li key={ff.id} className="group relative flex items-start gap-2 py-2 text-sm hover:bg-zinc-50/70">
+              <li key={ff.id} className="group relative flex items-start gap-2 py-2 text-sm hover:bg-zinc-50/70"
+                onContextMenu={(e) => openCtx(e, selectedFiles.size >= 2 && selectedFiles.has(ff.id) ? { kind: 'selection' } : { kind: 'allfile', ff })}>
                 {/* Business / My files: tick files from ANY folder here, then "Merge into one…" (client storages keep ticking in the folder view, where their protection flags are known) */}
                 {internalOwner && (
                   <input type="checkbox" aria-label={`Select ${ff.name}`} data-testid="all-files-select" checked={selectedFiles.has(ff.id)} onChange={() => toggleSelect(asStoreFile(ff), ff.folderId)}
@@ -2275,6 +2353,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // ticks that came from more than one storage can only be merged (a move / delete / show reaches one storage at a time)
   const selMixed = Array.from(selectedFiles.values()).some((v) => v.ownerId !== (ownerId ?? ''))
 
+  /** right-click on EMPTY space of the folder content on screen → New folder / Upload here (the toolbar's own places) */
+  const onEmptyContextMenu = (e: React.MouseEvent) => {
+    // text boxes, links, buttons and the panels that are not a list (selection bar, merged-file bar, upload box) keep the browser's own menu
+    if ((e.target as HTMLElement).closest('input, textarea, select, button, a, [contenteditable="true"], [data-no-ctx]')) return
+    if (!browseOn || !viewFolder || viewFolder.trashed || sharedView) return
+    openCtx(e, { kind: 'empty', folder: viewFolder })
+  }
+
   const right = (
     <div className={`rounded-xl border border-zinc-200 bg-white p-4 ${scopedOwnerId ? '' : 'min-h-[70vh] self-start'}`} onClick={() => { if (menuFor) setMenuFor(null); if (versionsFor) setVersionsFor(null) }}>
       {error && <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
@@ -2306,7 +2392,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       {!sharedView && !root && !error && <p className="text-sm text-zinc-500">{scopedOwnerId || ownerId ? 'Loading…' : 'Pick a client, Business or My files on the left.'}</p>}
       {!sharedView && root && !root.folder && <p className="text-sm text-zinc-500">No folders yet.</p>}
       {!sharedView && root?.folder && (
-        <div className="min-h-[60vh]"
+        <div className="min-h-[60vh]" onContextMenu={onEmptyContextMenu}
           onDragOver={(e) => { if (viewFolder && isComputerDrag(e) && viewFolder.kind !== 'root' && viewFolder.kind !== 'contacts') { e.preventDefault(); setDropOn(`view:${viewFolder.id}`) } }}
           onDragLeave={() => setDropOn((d) => (d?.startsWith('view:') ? null : d))}
           onDrop={(e) => { if (viewFolder && isComputerDrag(e) && viewFolder.kind !== 'root' && viewFolder.kind !== 'contacts') void onComputerDrop(e, viewFolder) }}>
@@ -2429,7 +2515,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           </div>
 
           {selectedFiles.size > 0 && (
-            <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm" onClick={(e) => e.stopPropagation()}>
+            <div data-no-ctx="" className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm" onClick={(e) => e.stopPropagation()}>
               <span className="font-medium text-blue-900">{selectedFiles.size} selected{selMixed ? ` · ${Array.from(selectedFiles.values()).filter((v) => v.ownerId !== (ownerId ?? '')).length} in another storage` : ''}</span>
               <span className="flex-1" />
               <FastTooltip label={selectedFiles.size < 2 ? 'Tick at least two files' : 'Merge the ticked files into one PDF'}>
@@ -2450,7 +2536,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           {!browseOn && allFilesView()}
 
           {uploadOpen && isInternalOwnerKind(ownerKind) && mergedFile && (
-            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm" onClick={(e) => e.stopPropagation()} data-testid="merged-file-ready">
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm" onClick={(e) => e.stopPropagation()} data-no-ctx="" data-testid="merged-file-ready">
               <Layers className="h-4 w-4 shrink-0 text-blue-600" />
               <span className="font-medium text-blue-900">Merged file ready:</span>
               <span className="text-xs text-zinc-500">{mergedFile.pages} pages · {fmtSize(mergedFile.file.size)}</span>
@@ -2483,7 +2569,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             </div>
           )}
           {uploadOpen && isInternalOwnerKind(ownerKind) && viewFolder && !mergedFile && (
-            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm" onClick={(e) => e.stopPropagation()} data-testid="plain-upload-box">
+            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm" onClick={(e) => e.stopPropagation()} data-no-ctx="" data-testid="plain-upload-box">
               <span className="text-zinc-700">Into <strong>{viewFolder.name}</strong>:</span>
               <label className="cursor-pointer rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50">Choose files
                 <input type="file" multiple className="hidden" onChange={(e) => { const list = Array.from(e.target.files ?? []); e.target.value = ''; if (!list.length) return; const { items, skipped, folders } = filterPlainDrop(itemsFromFileList(list.map((file) => ({ file })))); plainFolders.current = new Map(); setPlain({ folder: viewFolder, items, skipped, folders }); setUploadOpen(false) }} />
@@ -2540,7 +2626,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {mergedFile && (
-                  <div className="flex w-full flex-wrap items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2" data-testid="merged-file-ready">
+                  <div className="flex w-full flex-wrap items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2" data-no-ctx="" data-testid="merged-file-ready">
                     <Layers className="h-4 w-4 shrink-0 text-blue-600" />
                     <span className="font-medium text-blue-900">Merged file ready:</span>
                     <span className="min-w-0 truncate text-zinc-700" title={mergedFile.file.name}>{mergedFile.file.name}</span>
@@ -2634,6 +2720,47 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       {shareDialog}
       {mergedFile && mergedPreviewOpen && <MergedPreviewModal file={mergedFile.file} pages={mergedFile.pages} onClose={() => setMergedPreviewOpen(false)} />}
       {mergeList && <MergeFilesDialog files={mergeList} onCancel={() => setMergeList(null)} onMerged={finishMerge} />}
+      {ctx && (
+        <div ref={ctxMenuRef} role="menu" data-testid="ctx-menu" className="fixed z-[70] w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg"
+          style={{ left: ctx.x, top: ctx.y }}
+          // a click on an item runs the item first (it bubbles up from the button), then the menu goes away
+          onClick={() => setCtx(null)}
+          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation() }}
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+            e.preventDefault()
+            const items = Array.from(e.currentTarget.querySelectorAll('button')).filter((b) => !b.disabled)
+            const at = items.indexOf(document.activeElement as HTMLButtonElement)
+            items[(at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus()
+          }}>
+          {ctx.kind === 'file' && fileMenuItems(ctx.f, ctx.inFolder)}
+          {ctx.kind === 'folder' && folderMenuItems(ctx.folder, ctx.parentId, true)}
+          {ctx.kind === 'allfile' && (
+            <>
+              <MenuItem icon={Search} label="Preview" onClick={() => setPreview(asStoreFile(ctx.ff))} />
+              <MenuItem icon={Layers} label="Details" onClick={() => { void openDetails(ctx.ff.id) }} />
+              <MenuItem icon={FolderOpen} label="Show in folder" onClick={() => { void selectFolder(folderOwner.current.get(ctx.ff.folderId) ?? ownerId ?? '', ctx.ff.folderId); void openFilter(null) }} />
+            </>
+          )}
+          {ctx.kind === 'empty' && (
+            <>
+              {ctx.folder.kind !== 'contacts' && <MenuItem icon={FolderPlus} label="New folder" onClick={() => startNewFolder(ctx.folder.id)} />}
+              <MenuItem icon={Upload} label="Upload here" onClick={() => { void openUpload(ctx.folder.kind !== 'root' ? ctx.folder.id : undefined) }} />
+            </>
+          )}
+          {ctx.kind === 'selection' && (
+            <>
+              <div className="px-3 py-1 text-xs text-zinc-400">{selectedFiles.size} selected{selMixed ? ' · from more than one storage' : ''}</div>
+              <MenuItem icon={Layers} label="Merge into one…" onClick={startMerge} disabled={bulkBusy} />
+              {!selMixed && <MenuItem icon={FolderInput} label="Move to…" onClick={() => runBulk('move')} disabled={bulkBusy} />}
+              {!selMixed && !isInternalOwnerKind(ownerKind) && <MenuItem icon={Eye} label="Show to client" onClick={() => runBulk('show')} disabled={bulkBusy} />}
+              {!selMixed && !isInternalOwnerKind(ownerKind) && <MenuItem icon={EyeOff} label="Hide from client" onClick={() => runBulk('hide')} disabled={bulkBusy} />}
+              {!selMixed && <MenuItem icon={Trash2} label="Delete" danger onClick={() => runBulk('delete')} disabled={bulkBusy} />}
+              <MenuItem icon={X} label="Clear selection" onClick={() => setSelectedFiles(new Map())} />
+            </>
+          )}
+        </div>
+      )}
       {asking && (
         <QuestionDialog q={questions?.[asking.slug]} fallbackTitle={asking.fallbackTitle}
           onClose={() => { const r = asking.resolve; setAsking(null); r('cancel') }}
@@ -3035,10 +3162,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   )
 }
 
-function MenuItem({ icon: Icon, label, onClick, danger }: { icon: React.ComponentType<{ className?: string }>; label: string; onClick: () => void; danger?: boolean }) {
+function MenuItem({ icon: Icon, label, onClick, danger, disabled }: { icon: React.ComponentType<{ className?: string }>; label: string; onClick: () => void; danger?: boolean; disabled?: boolean }) {
   return (
-    <button type="button" onClick={onClick}
-      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left ${danger ? 'text-red-600 hover:bg-red-50' : 'hover:bg-zinc-50'}`}>
+    <button type="button" onClick={onClick} disabled={disabled}
+      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left disabled:opacity-40 ${danger ? 'text-red-600 hover:bg-red-50' : 'hover:bg-zinc-50'}`}>
       <Icon className="h-3.5 w-3.5" />{label}
     </button>
   )

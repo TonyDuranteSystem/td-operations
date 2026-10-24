@@ -69,7 +69,7 @@ export function TalkComposer({
     setMentionHot(0)
   }
   const pickMention = (p: { name: string }) => {
-    if (!mention) return
+    if (!mention || !text.includes('@')) return
     const caret = mention.at + 1 + mention.q.length
     const next = `${text.slice(0, mention.at)}@${p.name} ${text.slice(caret)}`
     setText(next)
@@ -77,6 +77,8 @@ export function TalkComposer({
     const pos = mention.at + p.name.length + 2
     setTimeout(() => { taRef.current?.focus(); taRef.current?.setSelectionRange(pos, pos) }, 0)
   }
+  // the picker belongs to what is typed: when the box is emptied (a send, an edit started) it closes
+  useEffect(() => { if (!text.includes('@')) setMention(null) }, [text])
   const editingId = mode?.kind === 'edit' ? mode.message.id : null
   const replyingId = mode?.kind === 'reply' ? mode.message.id : null
 
@@ -242,6 +244,8 @@ export function TalkComposer({
           rows={1}
           disabled={disabled}
           onChange={e => { setText(e.target.value); readMention(e.target.value, e.target.selectionStart ?? e.target.value.length); if (e.target.value && mode?.kind !== 'edit') onTyping?.('typing') }}
+          onClick={e => readMention(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length)}
+          onKeyUp={e => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') readMention(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length) }}
           onKeyDown={e => {
             // the @ picker has the arrows, Enter / Tab (choose) and Escape (close) while it is open
             if (mention && mentionMatches.length > 0) {

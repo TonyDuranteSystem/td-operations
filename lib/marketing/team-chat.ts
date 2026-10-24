@@ -74,8 +74,8 @@ export function sortThreads<T extends { unread: number; lastAt: string | null }>
 
 /** The notification text: a mention says so; everything else shows who wrote where. */
 export function threadPush(i: { senderName: string; threadTitle: string; kind: "dm" | "group" | "lead"; mentioned: boolean; preview: string }): { title: string; body: string } {
-  if (i.mentioned) return { title: `${i.senderName} mentioned you · ${i.threadTitle}`, body: i.preview }
-  return { title: i.kind === "dm" ? i.senderName : `${i.senderName} · ${i.threadTitle}`, body: i.preview }
+  if (i.mentioned) return { title: `${i.senderName} mentioned you${i.threadTitle ? ` · ${i.threadTitle}` : ""}`, body: i.preview }
+  return { title: i.kind === "dm" || !i.threadTitle ? i.senderName : `${i.senderName} · ${i.threadTitle}`, body: i.preview }
 }
 
 /** Where a tapped notification goes: the Chat page with this conversation open. */

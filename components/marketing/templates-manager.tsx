@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useT } from '@/components/marketing/lang-provider'
 import type { TemplateRow } from '@/lib/marketing/templates'
@@ -54,6 +54,13 @@ export function TemplatesManager({ rows, canEdit }: { rows: TemplateRow[]; canEd
     const at = el?.selectionStart ?? cur.length
     setEditing({ ...editing, [field]: cur.slice(0, at) + ph + cur.slice(at) })
   }
+  // Escape closes the box wherever the focus is
+  useEffect(() => {
+    if (!editing) return
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') setEditing(null) }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [editing])
   const ready = !!editing && editing.label.trim() !== '' && (editing.it.trim() !== '' || editing.en.trim() !== '') && !busy
 
   return (

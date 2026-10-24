@@ -248,6 +248,31 @@ async function main() {
   await sp2.getByTestId("lead-window").waitFor({ timeout: 60000 })
   ck("C27 …and the lead window opens on the chat", (await sp2.getByTestId("lead-window").count()) === 1)
 
+  // ---- a chat that once lost its members is healed the next time it is opened (never broken for good)
+  await db.query("delete from marketing_chat_thread_members where thread_id=$1", [dmId])
+  const brokenGet = await api(sp, "GET", `/api/marketing/team-chat/${dmId}`)
+  const healed = await api(sp, "POST", "/api/marketing/team-chat/threads", { kind: "dm", user_id: ids.ownerA })
+  const healedGet = await api(sp, "GET", `/api/marketing/team-chat/${dmId}`)
+  ck("C29 a direct message left without members (404 now) is healed when either person opens it again: same chat, both members back", brokenGet.status === 404 && healed.status === 200 && healed.body.thread_id === dmId && healedGet.status === 200 && Number((await db.query("select count(*) from marketing_chat_thread_members where thread_id=$1", [dmId])).rows[0].count) === 2, { brokenGet: brokenGet.status, healed, healedGet: healedGet.status })
+
+  // ---- editing a message to name someone counts as a mention (and taking the name out stops it)
+  const plainMsg = (await db.query("select id from marketing_team_messages where thread_id=$1 and sender_id=$2 and deleted_at is null order by created_at limit 1", [dmId, ids.setterA])).rows[0]?.id as string | undefined
+  const wr = await api(sp, "POST", `/api/marketing/team-chat/${dmId}/messages`, { message: "plain note to start" })
+  const mid = wr.body.message?.id as string
+  const e1 = await api(sp, "PATCH", `/api/marketing/team-chat/messages/${mid}`, { message: `now naming @${OWN}` })
+  const m3 = (await db.query("select mentions from marketing_team_messages where id=$1", [mid])).rows[0]
+  const e2 = await api(sp, "PATCH", `/api/marketing/team-chat/messages/${mid}`, { message: "name taken out again" })
+  const m4 = (await db.query("select mentions from marketing_team_messages where id=$1", [mid])).rows[0]
+  ck("C30 an edit that names someone stores the mention, and an edit that takes the name out clears it", e1.status === 200 && (m3.mentions as string[]).includes(ids.ownerA) && e2.status === 200 && (m4.mentions as string[]).length === 0 && !!plainMsg, { m3, m4 })
+
+  // ---- a person who is in a conversation but is not on the team list (Antonio under View as is one) is shown by name, not as "Chat"
+  const guestKey = [ids.setterA, ids.admin].sort().join(":")
+  const gt = (await db.query("insert into marketing_chat_threads (team_id, kind, dm_key, created_by) values ($1,'dm',$2,$3) returning id", [teamA.id, guestKey, ids.admin])).rows[0].id as string
+  await db.query("insert into marketing_chat_thread_members (thread_id, user_id) values ($1,$2),($1,$3)", [gt, ids.setterA, ids.admin])
+  const listWithGuest = await api(sp, "GET", "/api/marketing/team-chat/threads")
+  const guestRow = (listWithGuest.body.threads as Array<{ id: string; title: string }>).find(x => x.id === gt)
+  ck("C31 a conversation with a person who is not on the team list is titled with that person's name (not 'Chat')", !!guestRow && guestRow.title === "Qa Cl Admin", guestRow)
+
   // ---- the lists never mix teams or people
   const mp = await open(marco)
   const tList = await api(mp, "GET", "/api/marketing/team-chat/threads")

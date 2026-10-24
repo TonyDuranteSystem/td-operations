@@ -17,10 +17,11 @@ export type EditResult = { ok: true; value: TeamTemplates; key: string } | { ok:
 const bad = (error: string, status: 400 | 404 = 400): EditResult => ({ ok: false, error, status })
 
 /** A new key for a template the owner creates: letters, digits and underscores only, unique in this team. */
-export function newTemplateKey(existing: TeamTemplates, seed = Date.now()): string {
+export function newTemplateKey(existing: TeamTemplates, seed = Date.now(), rand = () => Math.random()): string {
   let n = seed
   for (;;) {
-    const k = `t_${n.toString(36)}`
+    // the time plus a few random characters: two owners creating a template in the same millisecond still get different keys
+    const k = `t_${n.toString(36)}${Math.floor(rand() * 36 ** 3).toString(36).padStart(3, "0")}`
     if (!(k in existing) && !isBuiltIn(k)) return k
     n++
   }
@@ -54,6 +55,7 @@ export function applyTemplateEdit(current: TeamTemplates, input: TemplateAction,
   if (input.key) {
     const key = input.key
     if (!isBuiltIn(key) && !(key in current)) return bad("That template does not exist any more. Reload the page.", 404)
+    if (!(key in current) && Object.keys(current).length >= MAX_TEMPLATES) return bad("There are too many templates. Delete one you do not use.")
     const merged = { ...(current[key] ?? {}) }
     // for a built-in, a field sent empty goes back to the original wording; for the owner's own, a name and one text must stay
     if (input.label !== undefined) { if (label) merged.label = label; else delete merged.label }
