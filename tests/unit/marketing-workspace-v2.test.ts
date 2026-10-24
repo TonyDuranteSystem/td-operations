@@ -115,8 +115,8 @@ describe("review fixes (bug hunt on PR 823)", () => {
     expect(isFrameHidden()).toBe(true)
     setFrameHidden(false)
   })
-  it("the Chat entry needs both the chat and the right to read leads (the page needs both)", () => {
-    expect(modulesFor(["chat"]).some(m => m.key === "chat")).toBe(false)
-    expect(modulesFor(["chat", "leads.read"]).some(m => m.key === "chat")).toBe(true)
+  it("the Chat entry needs only the chat permission (direct messages and groups are for the whole team; the chats about leads need more and the page checks that)", () => {
+    expect(modulesFor(["chat"]).some(m => m.key === "chat")).toBe(true)
+    expect(modulesFor(["leads.read"]).some(m => m.key === "chat")).toBe(false)
   })
 })

@@ -1,12 +1,12 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Check, CheckCheck, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import { useTalkI18n } from '@/components/talk/talk-i18n'
 import {
-  formatSize, groupByDay, isAudio, isImage, linkify, nameColorFor, quotedPreview, reactionSummary, timeLabel,
+  formatSize, groupByDay, isAudio, isImage, linkify, nameColorFor, quotedPreview, reactionSummary, splitMentions, timeLabel,
   type Tick, type TalkAttachment, type TalkMessage,
 } from '@/lib/talk/chat-model'
 
@@ -45,13 +45,17 @@ function Attachment({ a, messageId, index, voiceApi }: { a: TalkAttachment; mess
   )
 }
 
+/** The names a chat highlights after an @ (the marketing chats provide the people of the conversation; the default is nobody, so TD Talk and Team Chat are unchanged). */
+export const TalkMentionNames = createContext<readonly string[]>([])
+
 function Text({ text }: { text: string }) {
+  const names = useContext(TalkMentionNames)
   return (
     <p className="whitespace-pre-wrap break-words text-[15px] leading-snug">
       {linkify(text).map((p, i) =>
         p.href
           ? <a key={i} href={p.href} target="_blank" rel="noopener noreferrer" className="underline text-blue-700 break-all">{p.text}</a>
-          : <span key={i}>{p.text}</span>,
+          : <span key={i}>{splitMentions(p.text, names).map((q, j) => (q.mention ? <span key={j} className="rounded bg-yellow-100 px-0.5 font-semibold text-yellow-900" data-testid="mention">{q.text}</span> : <span key={j}>{q.text}</span>))}</span>,
       )}
     </p>
   )

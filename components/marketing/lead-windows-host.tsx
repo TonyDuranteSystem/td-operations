@@ -37,7 +37,7 @@ export function useLeadWindows(): Api {
  * minimize to the bar at the bottom, close), and the page behind stays where it was. Mounted once in the workspace frame. A window shows the lead's own page in a frame
  * (/marketing/window/[id]), so it has exactly the buttons and the privacy of that page. The pure rules are in lib/marketing/lead-windows.ts.
  */
-export function LeadWindowsHost({ defaultRole, roles, chatOn, children }: { defaultRole: BoardRole; roles: BoardRole[]; chatOn: boolean; children: React.ReactNode }) {
+export function LeadWindowsHost({ defaultRole, roles, chatOn, pollOn, children }: { defaultRole: BoardRole; roles: BoardRole[]; chatOn: boolean; /** read the screens again every so often (new chat messages, the red numbers); default = same as chatOn */ pollOn?: boolean; children: React.ReactNode }) {
   const t = useT()
   const router = useRouter()
   const params = useSearchParams()
@@ -110,10 +110,10 @@ export function LeadWindowsHost({ defaultRole, roles, chatOn, children }: { defa
   }, [router])
 
   useEffect(() => {
-    if (!chatOn) return
+    if (!(pollOn ?? chatOn)) return
     const timer = setInterval(() => { if (document.visibilityState === 'visible') router.refresh() }, REFRESH_MS)
     return () => clearInterval(timer)
-  }, [chatOn, router])
+  }, [chatOn, pollOn, router])
 
   const onDown = (e: React.PointerEvent, id: string, x: number, y: number) => {
     if ((e.target as HTMLElement).closest('button')) return

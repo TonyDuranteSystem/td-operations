@@ -14,6 +14,7 @@ import { leadDb } from "@/lib/marketing/meta-leads/service"
 import { personName } from "@/lib/marketing/setter-note"
 import type { Bundles } from "@/lib/marketing/access"
 import { sendMarketingPush } from "@/lib/marketing/push"
+import { parseMentions, threadPush } from "@/lib/marketing/team-chat"
 import {
   BUCKET, SIGNED_URL_SECONDS, URL_CACHE_SECONDS, checkEdit, isInvolved, checkEmoji, checkSend, chatUrlFor, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, pushRecipients, toTalkMessage, unreadCount,
   type ChatMessageRow, type ChatReaction, type StoredAttachment,
@@ -71,7 +72,7 @@ async function loadChatMembers(teamId: string): Promise<ChatMember[]> {
 const urlCache = new Map<string, { at: number; url: string }>()
 
 /** Signed links for these files. The same link is handed out for URL_CACHE_SECONDS (fewer calls to storage, and the audio player is not reloaded by every refresh); a new one is signed after that. */
-async function signUrls(paths: readonly string[]): Promise<Map<string, string>> {
+export async function signUrls(paths: readonly string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   const now = Date.now()
   const missing: string[] = []
@@ -89,7 +90,7 @@ async function signUrls(paths: readonly string[]): Promise<Map<string, string>> 
   return out
 }
 
-async function shape(rows: ChatMessageRow[], reactions: ChatReaction[]) {
+export async function shape(rows: ChatMessageRow[], reactions: ChatReaction[]) {
   const byId = new Map(rows.map(r => [r.id, r]))
   const urls = await signUrls(rows.flatMap(r => (r.deleted_at ? [] : (r.attachments ?? []).map(a => a.path))))
   return rows.map(r => toTalkMessage(r, byId, reactions, p => urls.get(p) ?? null))
@@ -150,24 +151,34 @@ export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body
     replyTo = body.reply_to_id
   }
   const senderName = personName(ctx.user.email ?? "")
-  const { data: row, error } = await d.from("marketing_lead_messages").insert({
-    team_id: ctx.team.id, lead_id: lead.id, sender_id: ctx.user.id, sender_name: senderName, message: c.message, attachments: c.attachments.length ? c.attachments : null, reply_to_id: replyTo,
-  }).select(MESSAGE_COLS).single()
+  // the people named with @ (among those who work this lead's chat); a lookup that fails only means nobody is named: the message is still sent
+  let members: Awaited<ReturnType<typeof chatMembers>> = []
+  try { members = await chatMembers(ctx.team.id) } catch { /* the message matters more than the mention */ }
+  const mentions = parseMentions(c.message, members.filter(m => isInvolved(m.permissions)).map(m => ({ id: m.id, name: m.name })), ctx.user.id)
+  const base = { team_id: ctx.team.id, lead_id: lead.id, sender_id: ctx.user.id, sender_name: senderName, message: c.message, attachments: c.attachments.length ? c.attachments : null, reply_to_id: replyTo }
+  // `mentions` is only written when somebody IS named, so a team that has not run the team-chat migration yet can still send ordinary messages
+  let { data: row, error } = await d.from("marketing_lead_messages").insert(mentions.length ? { ...base, mentions } : base).select(MESSAGE_COLS).single()
+  // the mentions column is not there yet (migration not run): send the message without it rather than not at all (the person is still notified below)
+  if (error && mentions.length && (error as { code?: string }).code === "42703") ({ data: row, error } = await d.from("marketing_lead_messages").insert(base).select(MESSAGE_COLS).single())
   if (error || !row) return { ok: false, error: "Could not send. Please try again.", status: 500 }
   // what you send you have read, and this device has it
   await Promise.all([markLeadRead(ctx, lead.id), markDelivered(ctx, [lead.id])])
   const [message] = await shape([row as ChatMessageRow], [])
   // tell the others (never the sender); a failed notification never fails the message
   try {
-    const members = await chatMembers(ctx.team.id)
     const to = pushRecipients(members.map(m => ({ user_id: m.id, status: m.status, permissions: m.permissions })), ctx.user.id)
     // a lead with no name is shown by its email, never its phone number (a notification can sit on a lock screen)
     const leadName = lead.full_name || lead.email || "Lead"
-    // WAIT for the notifications (a function may be stopped as soon as it has answered), but never longer than a few seconds: a slow phone service must not hold up the sender
-    await Promise.race([
-      sendMarketingPush(ctx.team.id, to, { title: `${senderName} · ${leadName}`, body: previewLine({ message: c.message, attachments: c.attachments, deleted_at: null }), url: chatUrlFor(lead.id), tag: `chat-${lead.id}` }),
+    const preview = previewLine({ message: c.message, attachments: c.attachments, deleted_at: null })
+    const named = to.filter(id => mentions.includes(id))
+    const rest = to.filter(id => !mentions.includes(id))
+    // WAIT for the notifications (a function may be stopped as soon as it has answered), but never longer than a few seconds: a slow phone service must not hold up the sender.
+    // A person named with @ gets a note that says so.
+    const send = (ids: string[], mentioned: boolean) => (ids.length === 0 ? Promise.resolve() : Promise.race([
+      sendMarketingPush(ctx.team.id, ids, { ...threadPush({ senderName, threadTitle: leadName, kind: "lead", mentioned, preview }), url: chatUrlFor(lead.id), tag: mentioned ? `chat-${lead.id}-at` : `chat-${lead.id}` }),
       new Promise(resolve => setTimeout(resolve, 4000)),
-    ])
+    ]))
+    await Promise.all([send(named, true), send(rest, false)])
   } catch { /* the message is already saved */ }
   return { ok: true, message }
 }
@@ -188,7 +199,29 @@ export async function editChatMessage(ctx: MarketingContext, id: string, text: u
   const edited_at = new Date().toISOString()
   const { error } = await db().from("marketing_lead_messages").update({ message: c.message, edited_at, original_message: m.message }).eq("id", id).is("deleted_at", null)
   if (error) return { ok: false, error: "Could not edit the message.", status: 500 }
+  if (c.message.includes("@")) await remention(ctx, m, c.message)
   return { ok: true, message: { message: c.message, edited_at } }
+}
+
+/** After an edit that has an @ in it: the people named now are told (a name added in the edit). Best effort and only when there is an @: the edit is saved, and a team without the migration is never disturbed. */
+async function remention(ctx: MarketingContext, m: ChatMessageRow & { lead_id: string }, text: string): Promise<void> {
+  try {
+    const members = await chatMembers(ctx.team.id)
+    const now = parseMentions(text, members.filter(x => isInvolved(x.permissions)).map(x => ({ id: x.id, name: x.name })), ctx.user.id)
+    if (now.length === 0) return
+    const { data: before, error: readErr } = await db().from("marketing_lead_messages").select("mentions, lead_id").eq("id", m.id).maybeSingle()
+    if (readErr) return
+    const was = ((before?.mentions ?? []) as string[])
+    const { error } = await db().from("marketing_lead_messages").update({ mentions: now }).eq("id", m.id)
+    if (error) return
+    const to = pushRecipients(members.map(x => ({ user_id: x.id, status: x.status, permissions: x.permissions })), ctx.user.id).filter(id => now.includes(id) && !was.includes(id))
+    if (to.length === 0) return
+    const { data: lead } = await db().from("marketing_leads").select("full_name, email").eq("id", m.lead_id).eq("team_id", ctx.team.id).maybeSingle()
+    await Promise.race([
+      sendMarketingPush(ctx.team.id, to, { ...threadPush({ senderName: personName(ctx.user.email ?? ""), threadTitle: lead?.full_name || lead?.email || "Lead", kind: "lead", mentioned: true, preview: previewLine({ message: text, attachments: m.attachments, deleted_at: null }) }), url: chatUrlFor(m.lead_id), tag: `chat-${m.lead_id}-at` }),
+      new Promise(resolve => setTimeout(resolve, 4000)),
+    ])
+  } catch { /* the edit is already saved */ }
 }
 
 export async function deleteChatMessage(ctx: MarketingContext, id: string): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
