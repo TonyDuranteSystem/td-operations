@@ -176,8 +176,17 @@ export const isReceived = (s: Pick<SaleRow, "status">) => s.status === "paid" ||
 
 export interface CurrencyTotals { currency: string; receivedCents: number; sellerCents: number; tdCents: number; owedToSellerCents: number; paidOutCents: number; unsetCount: number; openLinks: number; refundedCount: number }
 
-/** Per-currency totals. Sales with "terms not set" count as received but have no shares until terms are applied. */
-export function totalsByCurrency(sales: readonly SaleRow[], now: Date = new Date()): CurrencyTotals[] {
+/**
+ * The currency the seller's company is paid in, when it is not the sale's own (Antonio's ruling 2026-10-23: Rocco's company is always
+ * paid, and invoices, in dollars, with the SAME number as the euro amount received — no exchange rate). Empty = the sale's own currency.
+ * True only when the seller's share leaves the sale's currency card.
+ */
+export function sellerPaidInOtherCurrency(saleCurrency: string, payoutCurrency?: string | null): boolean {
+  return !!payoutCurrency && payoutCurrency !== saleCurrency
+}
+
+/** Per-currency totals. Sales with "terms not set" count as received but have no shares until terms are applied. With a payout currency, the seller's amounts of other-currency sales are left out of the card (see `payoutTotals`). */
+export function totalsByCurrency(sales: readonly SaleRow[], now: Date = new Date(), payoutCurrency?: string | null): CurrencyTotals[] {
   const map = new Map<string, CurrencyTotals>()
   const get = (c: string) => {
     let t = map.get(c)
@@ -191,12 +200,36 @@ export function totalsByCurrency(sales: readonly SaleRow[], now: Date = new Date
     if (!isReceived(s)) continue
     t.receivedCents += s.paid_amount_cents ?? s.amount_cents
     if (s.seller_cents === null || s.td_cents === null) { t.unsetCount += 1; continue }
-    t.sellerCents += s.seller_cents
     t.tdCents += s.td_cents
+    if (sellerPaidInOtherCurrency(s.currency, payoutCurrency)) continue
+    t.sellerCents += s.seller_cents
     if (s.paid_out_at) t.paidOutCents += s.seller_cents
     else t.owedToSellerCents += s.seller_cents
   }
   return Array.from(map.values()).sort((a, b) => a.currency.localeCompare(b.currency))
+}
+
+export interface PayoutTotals { currency: string; sellerCents: number; owedCents: number; paidOutCents: number }
+
+/**
+ * What the seller's company is owed / was paid, in its payout currency. The number is the same as the share in the sale's currency
+ * (no conversion). Only sales whose currency differs from the payout currency are included here; the others stay in their own card.
+ * Null when no payout currency is set or nothing qualifies.
+ */
+export function payoutTotals(sales: readonly SaleRow[], payoutCurrency?: string | null): PayoutTotals | null {
+  if (!payoutCurrency) return null
+  const t: PayoutTotals = { currency: payoutCurrency, sellerCents: 0, owedCents: 0, paidOutCents: 0 }
+  let any = false
+  for (const s of sales) {
+    if (!isReceived(s) || s.status === "refunded" || s.status === "link_created") continue
+    if (s.seller_cents === null || s.td_cents === null) continue
+    if (!sellerPaidInOtherCurrency(s.currency, payoutCurrency)) continue
+    any = true
+    t.sellerCents += s.seller_cents
+    if (s.paid_out_at) t.paidOutCents += s.seller_cents
+    else t.owedCents += s.seller_cents
+  }
+  return any ? t : null
 }
 
 /** The plain word shown for a sale's status. */

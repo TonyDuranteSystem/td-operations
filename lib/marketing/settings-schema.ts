@@ -93,6 +93,8 @@ export const MARKETING_SETTING_DEFS = {
   },
   /** Above this amount (in the sale's own currency) the link form asks "are you sure?". Not a limit. */
   confirm_above_amount: { schema: z.number().positive().nullable(), fallback: null as number | null },
+  /** The currency the seller's company is paid (and invoices) in when it differs from the sale's. Same number, no exchange rate. Empty = the sale's own currency. */
+  seller_payout_currency: { schema: z.union([z.string().regex(/^[A-Z]{3}$/), z.literal("")]), fallback: "" as string },
   /** Whether the team owner may create offers. ON by Antonio's ruling (2026-10-17 late: Rocco has every option on); he can switch it off. */
   owner_may_create_offers: { schema: z.boolean(), fallback: true },
   /** Whether the team owner may export lead lists. ON by Antonio's ruling (2026-10-17 late); every export is logged; he can switch it off. */

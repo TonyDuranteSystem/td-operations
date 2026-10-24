@@ -29,7 +29,11 @@ import { allFolderPaths, filterPlainDrop, isInternalOwnerKind, itemsFromFileList
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
-import { useShareMessagePrompt } from './use-share-message-prompt'
+import { putFileWithRetry } from '@/lib/storage/put-with-retry'
+import { onReconnected } from '@/lib/hooks/use-connection-state'
+import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
+import { resolveDropPreset, type DropPreset } from '@/lib/crm-store/drop-preset'
+import { useShareMessagePrompt, isSilentShow } from './use-share-message-prompt'
 import { buildDocumentShareMessage } from '@/lib/portal/document-share-text'
 import { ChangePersonDialog } from './change-person-dialog'
 import { DriveImportDialog } from './drive-import-dialog'
@@ -642,8 +646,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       const decision = showing ? await decideShare([{ id: f.id, name: f.name }]) : null
       if (decision?.kind === 'cancel') return
       // the automatic "new document" chat line is off for the eye: the pop-up decided (the notification still goes out)
-      await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: showing, ...(showing ? { suppressChat: true } : {}) }, 'Could not change who can see this file — please try again.')
-      toast.success(f.clientVisible ? `"${f.name}" is now hidden from the client` : `"${f.name}" is now visible to the client`)
+      await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: showing, ...(showing ? { suppressChat: true } : {}), ...(showing && isSilentShow(decision) ? { silent: true } : {}) }, 'Could not change who can see this file — please try again.')
+      toast.success(f.clientVisible ? `"${f.name}" is now hidden from the client` : `"${f.name}" is now visible to the client${isSilentShow(decision) ? ' — no notification sent' : ''}`)
       // the message first, then the (slower) refresh — the automatic chat line is off, so nothing else tells the client
       if (decision?.kind === 'send') await sendShareChat(decision.pick, [f.name])
       await refreshAll()
@@ -890,11 +894,18 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       }
       const file = item.file
       const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
-      const storagePath = `${STAGING_PREFIX}${ownerId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safe}`
-      const sig = await postJson<{ signedUrl?: string }>('/api/storage/upload', { bucket: 'onboarding-uploads', path: storagePath, contentType: file.type }, 'Could not prepare the upload.')
-      if (!sig.signedUrl) return { outcome: 'failed', message: 'Could not prepare the upload.' }
-      const put = await fetch(sig.signedUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
-      if (!put.ok) return { outcome: 'failed', message: `The file could not be sent (status ${put.status}).` }
+      // each try asks for a fresh link and a fresh staging path (a connection blip no longer fails the upload)
+      const put = await putFileWithRetry({
+        file,
+        prepare: async () => {
+          const path = `${STAGING_PREFIX}${ownerId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safe}`
+          const sig = await postJson<{ signedUrl?: string }>('/api/storage/upload', { bucket: 'onboarding-uploads', path, contentType: file.type }, 'Could not prepare the upload.')
+          if (!sig.signedUrl) throw new Error('Could not prepare the upload.')
+          return { signedUrl: sig.signedUrl, path }
+        },
+      })
+      if (!put.ok) return { outcome: 'failed', message: put.message }
+      const storagePath = put.path as string
       const r = await postJson<{ write: string }>('/api/crm-store/browse/upload', { ownerId, folderId: into.id, storagePath, fileName: file.name, mimeType: file.type }, 'The file could not be saved.')
       return { outcome: r.write === 'unchanged' ? 'unchanged' : 'saved' }
     } catch (e) {
@@ -970,7 +981,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   }
 
   /** Files or a whole folder chosen for a company's folder — from a drop OR from the Upload box's pickers — go to the same typed upload. */
-  const startDrop = async (folder: Fold, found: { file: File; path: string[] }[]) => {
+  const startDrop = async (folder: Fold, found: { file: File; path: string[] }[], preset?: DropPreset) => {
     // "2. Contacts" needs its people for "Whose documents?" even when the folder is closed in the tree
     if (folder.kind === 'contacts' && !loaded[folder.id]) {
       try {
@@ -983,7 +994,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     if (folder.kind === 'contacts' && found.some((x) => x.path.length)) { toast.error('A whole folder can’t go into "2. Contacts" — open the person and drop it into one of their folders.'); return }
     const typed = typesForFolder(folder, types ?? (await loadTypes()))
     const def = defaultTypeFor(folder, typed)
-    setDrop({ folder, person: '', items: found.map(({ file, path }) => ({ file, path, type: def, name: '', status: 'waiting' })) })
+    // what the Upload panel already knows (type, person, name) is kept — it is not asked a second time
+    const r = resolveDropPreset(preset, { allowedTypeSlugs: typed.map((t) => t.slug), defaultType: def, folderIsContacts: folder.kind === 'contacts', fileCount: found.length })
+    setDrop({ folder, person: r.person, items: found.map(({ file, path }) => ({ file, path, type: r.type, name: r.name, status: 'waiting' })) })
   }
 
   const runDrop = async () => {
@@ -1180,7 +1193,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     for (const f of targets) {
       try {
         // group: true → the server refuses a personal document (shown one by one, with its question)
-        if (action === 'show') { await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: true, group: true, ...(suppressChat ? { suppressChat: true } : {}) }, 'Could not show it.'); shownNames.push(f.name) }
+        if (action === 'show') { await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: true, group: true, ...(suppressChat ? { suppressChat: true } : {}), ...(isSilentShow(shareDecision) ? { silent: true } : {}) }, 'Could not show it.'); shownNames.push(f.name) }
         if (action === 'hide') await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: false }, 'Could not hide it.')
         if (action === 'delete') await postJson(`/api/crm-store/browse/file/${f.id}/delete`, {}, 'Could not delete it.')
         if (action === 'move' && moveTo) {
@@ -1615,15 +1628,27 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       }
       // the save
       const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
-      const storagePath = `${STAGING_PREFIX}${target.ownerId}/${Date.now()}_${safe}`
-      const sig = await postJson<{ signedUrl?: string }>('/api/storage/upload',
-        { bucket: 'onboarding-uploads', path: storagePath, contentType: file.type }, 'Could not prepare the upload — please try again.')
-      if (!sig.signedUrl) throw new Error('Could not prepare the upload — please try again.')
-      const put = await fetch(sig.signedUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
-      if (!put.ok) throw new Error(`The file could not be sent (status ${put.status}) — please try again.`)
-      const r = await postJson<{ write: string; name: string; visible: boolean; identity?: string | null }>('/api/crm-store/browse/upload', {
+      // each try asks for a fresh link and a fresh staging path (a connection blip no longer fails the upload)
+      const put = await putFileWithRetry({
+        file,
+        prepare: async () => {
+          const path = `${STAGING_PREFIX}${target.ownerId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safe}`
+          const sig = await postJson<{ signedUrl?: string }>('/api/storage/upload',
+            { bucket: 'onboarding-uploads', path, contentType: file.type }, 'Could not prepare the upload — please try again.')
+          if (!sig.signedUrl) throw new Error('Could not prepare the upload — please try again.')
+          return { signedUrl: sig.signedUrl, path }
+        },
+        onRetry: ({ attempt, of }) => toast.message(`Connection problem — trying again (${attempt + 1} of ${of})…`),
+      })
+      if (!put.ok) throw new Error(put.message)
+      const storagePath = put.path as string
+      // "Show to client" ticked in the panel: the file is saved HIDDEN first, then the same pop-up as the eye asks what to tell
+      // the client (Show only / Send message / Cancel) — so an upload can never alert a client without that choice
+      const deferShow = upVisible && !needsReview && !o.batch
+      const wasVisible = !!same?.clientVisible
+      const r = await postJson<{ fileId?: string; write: string; name: string; visible: boolean; identity?: string | null }>('/api/crm-store/browse/upload', {
         ownerId: target.ownerId, folderId: target.folder.id, storagePath, fileName: file.name, mimeType: file.type, documentType: upType,
-        displayName: displayName || undefined, visible: upVisible && !needsReview, periodYear, filingAnswer, needsReview,
+        displayName: displayName || undefined, visible: deferShow ? false : upVisible && !needsReview, periodYear, filingAnswer, needsReview,
         ...(target.folder.kind === 'contacts' ? { personContactId: upPerson } : {}),
         ...(target.via && ownerId ? { viaCompanyOwnerId: ownerId } : {}),
       }, 'The upload could not be saved — please try again.')
@@ -1633,6 +1658,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             : `"${r.name}" uploaded${needsReview ? ' — marked "Needs review", hidden from the client' : r.visible ? ' and shared with the client' : ' (hidden from the client)'}`,
       )
       if (r.identity) toast.message(r.identity)
+      if (deferShow && r.fileId && r.write !== 'unchanged') {
+        if (r.write === 'versioned' && wasVisible) {
+          // the file was already shown to the client: keep it shown, tell the client nothing new
+          await postJson(`/api/crm-store/browse/file/${r.fileId}/visibility`, { visible: true, suppressChat: true, silent: true }, 'The new copy was saved, but it could not be shown again — use the eye on its row.').catch((e) => toast.error(errMsg(e, 'The new copy was saved hidden — use the eye on its row to show it.')))
+        } else {
+          await showAfterUpload(r.fileId, r.name)
+        }
+      }
       // saved into My files › Shared with staff: ask straight away who may open it (nobody until ticked) —
       // one file at a time only; after a drag-in of several the panel says so once
       if (!o.batch && root?.owner.kind === 'private' && r.write === 'created') {
@@ -1650,6 +1683,30 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       setAsking(null)
       if (!o.batch) setUploading(false)
       if (fileInput.current) fileInput.current.value = ''
+    }
+  }
+
+  // The connection came back (even after a short drop) or the tab woke up: reload what is on screen, so nobody has to refresh by
+  // hand (Antonio 2026-10-23, LAN→WiFi). Never in the middle of an upload, a pop-up or a group action — that would reset it.
+  const busyRef = useRef(false)
+  busyRef.current = uploading || dropRunning || !!drop || !!plain || bulkBusy
+  const refreshAllRef = useRef(refreshAll)
+  refreshAllRef.current = refreshAll
+  useEffect(() => onReconnected(() => { if (!busyRef.current) void refreshAllRef.current() }), [])
+  useWakeSignal({ onWake: () => { if (!busyRef.current) void refreshAllRef.current() } })
+
+  /** After an upload with "Show to client" ticked: the eye's own pop-up decides what the client is told (Cancel = stays hidden). */
+  const showAfterUpload = async (fileId: string, name: string) => {
+    const fail = 'Saved, but it could not be shown to the client — use the eye on its row.'
+    try {
+      const decision = await decideShare([{ id: fileId, name }])
+      if (decision.kind === 'cancel') { toast.message(`"${name}" was saved and left hidden from the client.`); return }
+      const silent = isSilentShow(decision)
+      await postJson(`/api/crm-store/browse/file/${fileId}/visibility`, { visible: true, suppressChat: true, ...(silent ? { silent: true } : {}) }, fail)
+      toast.success(`"${name}" is now visible to the client${silent ? ' — no notification sent' : ''}`)
+      if (decision.kind === 'send') await sendShareChat(decision.pick, [name])
+    } catch (e) {
+      toast.error(errMsg(e, fail))
     }
   }
 
@@ -2312,7 +2369,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                       return { file, path: withPath && rel.includes('/') ? rel.split('/').slice(0, -1) : [] }
                     })
                     setUploadOpen(false)
-                    void startDrop(target, found)
+                    void startDrop(target, found, { type: upType, person: upPerson, name: upName })
                   }
                   return (
                     <>

@@ -16,7 +16,7 @@ import { ResolvePersonalDocument } from '@/components/documents/resolve-personal
 import { isUnresolvedPersonalDocument } from '@/lib/documents/visibility-guard'
 import { useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
 import { StoreReadOnlyPanel } from './store-readonly-panel'
-import { useShareMessagePrompt, suppressesAutoChat, type ShareDecision } from '@/components/storage/use-share-message-prompt'
+import { useShareMessagePrompt, suppressesAutoChat, isSilentShow, type ShareDecision } from '@/components/storage/use-share-message-prompt'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -156,11 +156,12 @@ function FileRow({
         if (decision.kind === 'cancel') return
       }
       const suppressChat = suppressesAutoChat(decision)
+      const silent = isSilentShow(decision)
       if (docInfo?.docId) {
         // Already processed — just toggle visibility
         const { toggleDocumentPortalVisibility } = await import('@/app/(dashboard)/accounts/actions')
         const newVisible = !portalVisible
-        const result = await toggleDocumentPortalVisibility(docInfo.docId, newVisible, undefined, suppressChat ? { suppressChat: true } : undefined)
+        const result = await toggleDocumentPortalVisibility(docInfo.docId, newVisible, undefined, suppressChat ? { suppressChat: true, ...(silent ? { silent: true } : {}) } : undefined)
         if (result.success) {
           setPortalVisible(newVisible)
           toast.success(`Portal visibility ${newVisible ? 'enabled' : 'disabled'}`)
@@ -175,7 +176,7 @@ function FileRow({
         const res = await fetch(`/api/accounts/${accountId}/files/process-and-share`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileId: file.id, ...(suppressChat ? { suppressChat: true } : {}) }),
+          body: JSON.stringify({ fileId: file.id, ...(suppressChat ? { suppressChat: true } : {}), ...(silent ? { silent: true } : {}) }),
         })
         // A server-side timeout/crash can return a non-JSON body — don't let
         // that throw and fall through to the generic catch-all below (R099).

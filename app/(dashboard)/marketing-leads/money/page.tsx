@@ -5,7 +5,7 @@ import { isSecureAdmin } from "@/lib/auth"
 import { leadDb } from "@/lib/marketing/meta-leads/service"
 import { getMarketingSetting, listCommissionTerms, listTeams } from "@/lib/marketing/settings"
 import { listTeamSales } from "@/lib/marketing/sales-server"
-import { canPayOut, formatMoney, saleStatusLabel, totalsByCurrency } from "@/lib/marketing/sales"
+import { canPayOut, formatMoney, payoutTotals, saleStatusLabel, sellerPaidInOtherCurrency, totalsByCurrency } from "@/lib/marketing/sales"
 import { formatWhen } from "@/lib/marketing/lead-view"
 import { SaleActions, TermsForm } from "./money-controls"
 
@@ -23,15 +23,18 @@ export default async function MarketingMoneyAdmin({ searchParams }: { searchPara
   const team = teams.find(t => t.id === sp.team) ?? teams.find(t => t.status === "active") ?? teams[0] ?? null
   if (!team) return <div className="p-6"><h1 className="text-2xl font-semibold">Money</h1><p className="mt-2 text-sm text-slate-600">There is no team yet.</p></div>
   const db = leadDb()
-  const [sales, terms, kinds] = await Promise.all([
+  const [sales, terms, kinds, payoutCurrency] = await Promise.all([
     listTeamSales(db, team.id, { limit: 1000 }),
     listCommissionTerms(team.id),
     getMarketingSetting("sale_kinds", team.id) as Promise<{ key: string; label: string }[]>,
+    getMarketingSetting("seller_payout_currency", team.id) as Promise<string>,
   ])
   const ids = Array.from(new Set(sales.map(s => s.lead_id)))
   const { data: leadRows } = ids.length ? await db.from("marketing_leads").select("id, full_name, email, phone").in("id", ids) : { data: [] }
   const names = new Map(((leadRows ?? []) as { id: string; full_name: string | null; email: string | null; phone: string | null }[]).map(l => [l.id, l.full_name || l.email || l.phone || "Unnamed lead"]))
-  const totals = totalsByCurrency(sales)
+  const totals = totalsByCurrency(sales, new Date(), payoutCurrency)
+  const payout = payoutTotals(sales, payoutCurrency)
+  const sellerMoney = (cents: number | null, saleCurrency: string) => formatMoney(cents, sellerPaidInOtherCurrency(saleCurrency, payoutCurrency) ? payoutCurrency : saleCurrency)
   const flagged = sales.filter(s => s.needs_attention)
   const now = Date.now()
   const kindLabel = (k: string) => kinds.find(x => x.key === k)?.label ?? k
@@ -60,14 +63,26 @@ export default async function MarketingMoneyAdmin({ searchParams }: { searchPara
               <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
                 <div><dt className="text-slate-500">Received</dt><dd className="text-xl font-semibold">{formatMoney(t.receivedCents, t.currency)}</dd></div>
                 <div><dt className="text-slate-500">TD share</dt><dd className="text-xl font-semibold">{formatMoney(t.tdCents, t.currency)}</dd></div>
-                <div><dt className="text-slate-500">Owed to the seller&apos;s company</dt><dd className="font-medium">{formatMoney(t.owedToSellerCents, t.currency)}</dd></div>
-                <div><dt className="text-slate-500">Already paid out</dt><dd className="font-medium">{formatMoney(t.paidOutCents, t.currency)}</dd></div>
+                {!sellerPaidInOtherCurrency(t.currency, payoutCurrency) && <>
+                  <div><dt className="text-slate-500">Owed to the seller&apos;s company</dt><dd className="font-medium">{formatMoney(t.owedToSellerCents, t.currency)}</dd></div>
+                  <div><dt className="text-slate-500">Already paid out</dt><dd className="font-medium">{formatMoney(t.paidOutCents, t.currency)}</dd></div>
+                </>}
               </dl>
               {t.unsetCount > 0 && <p className="mt-3 text-xs text-amber-800">{t.unsetCount} paid sale{t.unsetCount === 1 ? "" : "s"} without a split (terms not set). Set the split below, then press “Apply today&apos;s split” on each.</p>}
               {t.openLinks > 0 && <p className="mt-1 text-xs text-slate-500">{t.openLinks} link{t.openLinks === 1 ? "" : "s"} sent, not paid yet.</p>}
               {t.refundedCount > 0 && <p className="mt-1 text-xs text-slate-500">{t.refundedCount} refunded sale{t.refundedCount === 1 ? "" : "s"} (both shares removed).</p>}
             </section>
           ))}
+          {payout && (
+            <section className={card} aria-label={`Seller's company in ${payout.currency}`}>
+              <h2 className="text-sm font-semibold text-slate-600">Seller&apos;s company · invoices you in {payout.currency}</h2>
+              <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+                <div><dt className="text-slate-500">Owed (to be invoiced)</dt><dd className="text-xl font-semibold">{formatMoney(payout.owedCents, payout.currency)}</dd></div>
+                <div><dt className="text-slate-500">Already paid out</dt><dd className="font-medium">{formatMoney(payout.paidOutCents, payout.currency)}</dd></div>
+              </dl>
+              <p className="mt-3 text-xs text-slate-500">The same number as the share received, with no exchange rate. The money in and the money out are separate transactions.</p>
+            </section>
+          )}
         </div>
       )}
 
@@ -99,7 +114,7 @@ export default async function MarketingMoneyAdmin({ searchParams }: { searchPara
                     <td className="pr-4">{names.get(s.lead_id) ?? "Lead"}<span className="block text-xs text-slate-400">by {s.created_by}</span></td>
                     <td className="pr-4">{kindLabel(s.kind)}</td>
                     <td className="pr-4 font-medium">{formatMoney(s.amount_cents, s.currency)}</td>
-                    <td className="pr-4">{s.status === "refunded" ? "—" : s.seller_cents === null ? <span className="text-amber-800">Terms not set</span> : formatMoney(s.seller_cents, s.currency)}</td>
+                    <td className="pr-4">{s.status === "refunded" ? "—" : s.seller_cents === null ? <span className="text-amber-800">Terms not set</span> : sellerMoney(s.seller_cents, s.currency)}</td>
                     <td className="pr-4">{s.status === "refunded" ? "—" : s.td_cents === null ? "—" : formatMoney(s.td_cents, s.currency)}</td>
                     <td className="pr-4">{saleStatusLabel(s)}{s.paid_out_at && <span className="block text-xs text-slate-400">{formatWhen(s.paid_out_at)} · {s.paid_out_reference}</span>}</td>
                     <td><SaleActions saleId={s.id} canApplyTerms={s.status === "paid" && s.seller_cents === null} canPayOut={canPayOut(s)} /></td>

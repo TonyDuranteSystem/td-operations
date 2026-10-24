@@ -9,6 +9,9 @@ const calls: { table: string; op: string; payload?: unknown }[] = []
 const tables: Record<string, unknown[]> = {}
 let insertError: { code?: string; message: string } | null = null
 let insertErrorTable = "marketing_sales"
+let updateReturn: unknown[] | null = null
+let selectError: { message: string } | null = null
+const eqCalls: Array<[string, string, unknown]> = []
 const orArgs: string[] = []
 
 function builder(table: string) {
@@ -18,13 +21,13 @@ function builder(table: string) {
     select: () => b,
     insert: (p: unknown) => { op = "insert"; calls.push({ table, op, payload: p }); return b },
     update: (p: unknown) => { op = "update"; calls.push({ table, op, payload: p }); return b },
-    eq: () => b, ilike: () => b, in: () => b, or: (a: string) => { orArgs.push(a); return b }, not: () => b, order: () => b, limit: () => b,
+    eq: (c: string, v: unknown) => { eqCalls.push([table, c, v]); return b }, ilike: () => b, in: () => b, or: (a: string) => { orArgs.push(a); return b }, not: () => b, order: () => b, limit: () => b,
     maybeSingle: () => Promise.resolve({ data: (tables[table] || [])[0] ?? null, error: null }),
     // an insert(...).select("id").single() answers with the new row's id (or the configured insert error for that table)
     single: () => (op === "insert"
       ? Promise.resolve(insertError && table === insertErrorTable ? { data: null, error: insertError } : { data: { id: "new-" + table }, error: null })
       : Promise.resolve({ data: (tables[table] || [])[0] ?? null, error: null })),
-    then: (res: (v: unknown) => unknown) => Promise.resolve({ data: op === "select" ? (tables[table] || []) : null, error: op === "insert" && table === insertErrorTable ? insertError : null }).then(res),
+    then: (res: (v: unknown) => unknown) => Promise.resolve({ data: op === "select" ? (tables[table] || []) : op === "update" ? updateReturn : null, error: op === "insert" && table === insertErrorTable ? insertError : op === "select" && table === "td_bank_feeds" ? selectError : null }).then(res),
   }
   return b
 }
@@ -55,7 +58,8 @@ import { recordMarketingSaleFromPayment } from "@/lib/incoming-payments/marketin
 import { payInvoiceFromPayment } from "@/lib/incoming-payments/invoice-payment"
 import { notifyUnlabelledPayment } from "@/lib/incoming-payments/notify"
 import { settlePayment, RESOLUTIONS } from "@/lib/incoming-payments/confirm"
-import { searchMarketingLeads } from "@/lib/incoming-payments/load"
+import { searchMarketingLeads, matchesFor, marketingLeadsByName, marketingSuggestionFor, feedMatchedPaymentIntents } from "@/lib/incoming-payments/load"
+import { tagBankFeedAsMarketingSale } from "@/lib/incoming-payments/feed-tag"
 
 const LEAD = "22222222-2222-4222-8222-222222222222"
 const INV = "33333333-3333-4333-8333-333333333333"
@@ -65,6 +69,9 @@ const wrote = (table: string, op: string) => calls.filter(c => c.table === table
 beforeEach(() => {
   calls.length = 0
   orArgs.length = 0
+  eqCalls.length = 0
+  updateReturn = null
+  selectError = null
   insertError = null
   insertErrorTable = "marketing_sales"
   for (const k of Object.keys(tables)) delete tables[k]
@@ -251,5 +258,171 @@ describe("searchMarketingLeads", () => {
     expect(r.available).toBe(true)
     expect(r.leads[0]).toMatchObject({ id: LEAD, teamId: "team-1", kinds: [{ key: "strategic_call", label: "Strategic call" }, { key: "upsell", label: "Upsell" }] })
     expect(r.leads[1]).toMatchObject({ teamId: null, kinds: [] })
+  })
+})
+
+describe("matchesFor — marketing leads that share the payer's email are offered straight to the Marketing sale picker", () => {
+  it("finds the lead by EMAIL even when the card carries another name (Stella on the card, Monica on the lead), with her team's kinds", async () => {
+    tables.leads = []
+    tables.contacts = []
+    tables.marketing_leads = [{ id: LEAD, full_name: "Monica Germani", email: "monicagermani2025@gmail.com", team_id: "team-1" }]
+    const m = await matchesFor("monicagermani2025@gmail.com")
+    expect(m.marketingLeads).toEqual([
+      { id: LEAD, name: "Monica Germani", email: "monicagermani2025@gmail.com", teamId: "team-1", via: "email", kinds: [{ key: "strategic_call", label: "Strategic call" }, { key: "upsell", label: "Upsell" }] },
+    ])
+  })
+  it("a lead with no team comes back with no kinds (the picker says to assign it to a team first)", async () => {
+    tables.leads = []
+    tables.contacts = []
+    tables.marketing_leads = [{ id: "l9", full_name: "No Team", email: "n@x.com", team_id: null }]
+    expect((await matchesFor("n@x.com")).marketingLeads).toEqual([{ id: "l9", name: "No Team", email: "n@x.com", teamId: null, via: "email", kinds: [] }])
+  })
+  it("no email on the payment = no suggestions", async () => {
+    expect(await matchesFor(null)).toEqual({ leads: [], contacts: [], marketingLeads: [] })
+  })
+})
+
+describe("marketing lead suggestions by NAME (suggestions only) and the 'Looks like a marketing sale' preview", () => {
+  it("a payer whose card name shares a significant word with a lead is offered as a 'similar name' (Stella Germani M ~ Monica Germani), never as an email match", async () => {
+    tables.leads = []
+    tables.contacts = []
+    tables.marketing_leads = [{ id: LEAD, full_name: "Monica Germani", email: "monicagermani2025@gmail.com", team_id: "team-1" }, { id: "l2", full_name: "Unrelated Person", email: "u@x.com", team_id: "team-1" }]
+    const out = await marketingLeadsByName("Stella Germani M", [])
+    expect(out.map(c => c.id)).toEqual([LEAD])
+    expect(out[0]).toMatchObject({ via: "name", name: "Monica Germani", teamId: "team-1" })
+  })
+  it("ranks by how many words are shared, caps at 5, and skips leads already listed by email", async () => {
+    tables.marketing_leads = [
+      { id: "a", full_name: "Rossi Mario", email: null, team_id: "t" },
+      { id: "b", full_name: "Mario Rossi Bianchi", email: null, team_id: "t" },
+      { id: "c", full_name: "Rossi Anna", email: null, team_id: "t" },
+      { id: "d", full_name: "Rossi Luca", email: null, team_id: "t" },
+      { id: "e", full_name: "Rossi Paolo", email: null, team_id: "t" },
+      { id: "f", full_name: "Rossi Carlo", email: null, team_id: "t" },
+    ]
+    const out = await marketingLeadsByName("Mario Rossi", ["c"])
+    expect(out.length).toBe(5)
+    expect(out.map(c => c.id)).not.toContain("c")
+    expect(["a", "b"]).toContain(out[0].id) // the two that share both words come first
+    expect(["a", "b"]).toContain(out[1].id)
+  })
+  it("no usable name (empty, or only short/stop words) = no suggestions, and the filter only ever sees [a-z0-9] words", async () => {
+    expect(await marketingLeadsByName(null, [])).toEqual([])
+    expect(await marketingLeadsByName("A M", [])).toEqual([])
+    tables.marketing_leads = []
+    await marketingLeadsByName("Rossi,(x).or(id.eq.1)%", [])
+    expect(orArgs[0]).toMatch(/^(full_name\.ilike\.%[a-z0-9]+%)(,full_name\.ilike\.%[a-z0-9]+%)*$/)
+  })
+  it("matchesFor with no email still tries the name", async () => {
+    tables.marketing_leads = [{ id: LEAD, full_name: "Monica Germani", email: "m@x.com", team_id: "team-1" }]
+    const m = await matchesFor(null, "Stella Germani M")
+    expect(m.marketingLeads.map(c => c.via)).toEqual(["name"])
+  })
+  it("matchesFor lists the email match first, then name matches, each marked", async () => {
+    tables.leads = []
+    tables.contacts = []
+    tables.marketing_leads = [{ id: LEAD, full_name: "Monica Germani", email: "monicagermani2025@gmail.com", team_id: "team-1" }]
+    const m = await matchesFor("monicagermani2025@gmail.com", "Stella Germani M")
+    // the same lead is listed once, as an email match (the name pass skips what the email pass already found)
+    expect(m.marketingLeads.map(c => [c.id, c.via])).toEqual([[LEAD, "email"]])
+  })
+
+  const waiting = { sessionId: "cs_live_abc12345", paymentIntentId: "pi_1", paymentLinkId: null, amount: 397, currency: "EUR" as const, email: "m@x.com", name: "Stella Germani M", paidAt: "2026-10-23T11:59:45Z" }
+  const emailLead = (over: Record<string, unknown> = {}) => ({ id: LEAD, name: "Monica Germani", email: "m@x.com", teamId: "team-1", via: "email" as const, kinds: [{ key: "strategic_call", label: "Strategic call" }, { key: "upsell", label: "Upsell" }], ...over })
+  const term = { id: "t1", team_id: "team-1", kind: "strategic_call", person_ref: "team", effective_from: "2026-10-21", seller_pct: 80, td_pct: 20, basis: "amount_paid", payee_account_id: null }
+
+  it("exactly one email-matched lead on a team = a suggestion with the split in force on the payment day (80/20 of EUR 397 = 317.60 / 79.40)", async () => {
+    tables.marketing_teams = [{ name: "Rocco's sales team" }]
+    listTerms.mockResolvedValue([term])
+    const s = await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead()] })
+    expect(s).toMatchObject({ leadId: LEAD, leadName: "Monica Germani", teamName: "Rocco's sales team", kind: "strategic_call", kindLabel: "Strategic call", currency: "EUR", termSet: true, sellerAmount: 317.6, tdAmount: 79.4 })
+  })
+  it("a term that starts AFTER the payment is not used (terms not set, amounts null)", async () => {
+    tables.marketing_teams = [{ name: "T" }]
+    listTerms.mockResolvedValue([{ ...term, effective_from: "2026-10-25" }])
+    expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead()] })).toMatchObject({ termSet: false, sellerAmount: null, tdAmount: null })
+  })
+  it("no suggestion when two leads share the email, the only match is by name, the lead has no team, or the team has no strategic_call kind", async () => {
+    tables.marketing_teams = [{ name: "T" }]
+    expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead(), emailLead({ id: "l2" })] })).toBeNull()
+    expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead({ via: "name" })] })).toBeNull()
+    expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead({ teamId: null, kinds: [] })] })).toBeNull()
+    expect(await marketingSuggestionFor(waiting, { leads: [], contacts: [], marketingLeads: [emailLead({ kinds: [{ key: "upsell", label: "Upsell" }] })] })).toBeNull()
+  })
+})
+
+describe("Bank Feed: a Marketing sale marks the payment's Stripe row as handled; matched rows leave the waiting list", () => {
+  const tagIn = { paymentIntentId: "pi_1", saleId: "sale-1", marketingLeadId: LEAD, leadName: "Monica Germani", actor: "antonio@x" }
+  const feedUpdates = () => calls.filter(c => c.table === "td_bank_feeds" && c.op === "update")
+
+  it("tags the ONE unmatched Stripe row of this payment: status ignored + a review note naming the sale, and the update itself requires 'still unmatched'", async () => {
+    tables.td_bank_feeds = [{ id: "f1", status: "unmatched", review_metadata: { keep: "me" } }]
+    updateReturn = [{ id: "f1" }]
+    const r = await tagBankFeedAsMarketingSale(tagIn, new Date("2026-10-24T01:00:00Z"))
+    expect(r).toEqual({ tagged: true, feedId: "f1" })
+    const payload = feedUpdates()[0].payload as { status: string; review_metadata: Record<string, unknown> }
+    expect(payload.status).toBe("ignored")
+    expect(payload.review_metadata).toMatchObject({ keep: "me", marketing_sale: { sale_id: "sale-1", marketing_lead_id: LEAD, tagged_by: "antonio@x", tagged_at: "2026-10-24T01:00:00.000Z" } })
+    expect(String(payload.review_metadata.note)).toContain("Marketing sale — Monica Germani")
+    expect(eqCalls).toEqual(expect.arrayContaining([["td_bank_feeds", "raw_data->>payment_intent", "pi_1"], ["td_bank_feeds", "id", "f1"], ["td_bank_feeds", "status", "unmatched"]]))
+  })
+  it("never touches a row someone already matched, ignored or flagged", async () => {
+    for (const status of ["matched", "ignored", "needs_review", "owner_ledger", "duplicate"]) {
+      calls.length = 0
+      tables.td_bank_feeds = [{ id: "f1", status, review_metadata: null }]
+      const r = await tagBankFeedAsMarketingSale(tagIn)
+      expect(r.tagged).toBe(false)
+      expect(feedUpdates()).toHaveLength(0)
+    }
+  })
+  it("leaves it alone when there is no row yet, or more than one, or no payment-intent id", async () => {
+    tables.td_bank_feeds = []
+    expect((await tagBankFeedAsMarketingSale(tagIn)).tagged).toBe(false)
+    tables.td_bank_feeds = [{ id: "a", status: "unmatched", review_metadata: null }, { id: "b", status: "unmatched", review_metadata: null }]
+    expect(await tagBankFeedAsMarketingSale(tagIn)).toMatchObject({ tagged: false })
+    expect((await tagBankFeedAsMarketingSale({ ...tagIn, paymentIntentId: null })).tagged).toBe(false)
+    expect(feedUpdates()).toHaveLength(0)
+  })
+  it("a colleague changing the row at the same moment (the guarded update changes nothing) is reported, not overwritten", async () => {
+    tables.td_bank_feeds = [{ id: "f1", status: "unmatched", review_metadata: null }]
+    updateReturn = []
+    expect(await tagBankFeedAsMarketingSale(tagIn)).toMatchObject({ tagged: false })
+  })
+  it("a read failure never throws: the sale is already recorded", async () => {
+    selectError = { message: "boom" }
+    tables.td_bank_feeds = []
+    await expect(tagBankFeedAsMarketingSale(tagIn)).resolves.toMatchObject({ tagged: false })
+  })
+  it("confirming a Marketing sale tags the feed row, and a RETRY of the same sale tags it again (healing a failed first attempt)", async () => {
+    tables.marketing_leads = [{ id: LEAD, team_id: "team-1", full_name: "Monica G", email: null }]
+    tables.td_bank_feeds = [{ id: "f1", status: "unmatched", review_metadata: null }]
+    updateReturn = [{ id: "f1" }]
+    const r = await recordMarketingSaleFromPayment({ payment: PAY, marketingLeadId: LEAD, kind: "strategic_call", actor: "a" })
+    expect(r).toMatchObject({ ok: true, feedTagged: true })
+    expect(feedUpdates()).toHaveLength(1)
+    calls.length = 0
+    tables.marketing_sales = [{ id: "sale-9" }]
+    const again = await recordMarketingSaleFromPayment({ payment: PAY, marketingLeadId: LEAD, kind: "strategic_call", actor: "a" })
+    expect(again).toMatchObject({ ok: true, alreadyRecorded: true, feedTagged: true })
+  })
+  it("the confirmation note says whether the Bank Feed row was tagged", async () => {
+    tables.marketing_leads = [{ id: LEAD, team_id: "team-1", full_name: "Monica G", email: null }]
+    tables.td_bank_feeds = []
+    await settlePayment({ payment: PAY, resolution: "marketing_sale", marketingLeadId: LEAD, saleKind: "strategic_call", actor: "a" })
+    expect(String((wrote("incoming_payment_resolutions", "insert")[0].payload as { note: string }).note)).toContain("Bank Feed row NOT tagged")
+  })
+
+  it("feedMatchedPaymentIntents: only rows that are matched AND carry a payment count", async () => {
+    tables.td_bank_feeds = [
+      { raw_data: { payment_intent: "pi_a" }, status: "matched", matched_payment_id: "p1" },
+      { raw_data: { payment_intent: "pi_b" }, status: "matched", matched_payment_id: null },
+      { raw_data: null, status: "matched", matched_payment_id: "p2" },
+    ]
+    expect([...(await feedMatchedPaymentIntents(["pi_a", "pi_b", "pi_c"]))]).toEqual(["pi_a"])
+    expect(eqCalls).toEqual(expect.arrayContaining([["td_bank_feeds", "source", "stripe"], ["td_bank_feeds", "status", "matched"]]))
+  })
+  it("a Bank Feed read error stops the list instead of showing money that may already be recorded", async () => {
+    selectError = { message: "boom" }
+    await expect(feedMatchedPaymentIntents(["pi_a"])).rejects.toThrow(/Bank Feed/)
   })
 })

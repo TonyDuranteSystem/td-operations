@@ -20,6 +20,7 @@ import { useRouter } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
+import { onReconnected } from '@/lib/hooks/use-connection-state'
 import { WHATSAPP_LIVE_QUERY_KEYS, WHATSAPP_LIST_QUERY_KEY, WHATSAPP_LIVE_DEBOUNCE_MS, WHATSAPP_LIVE_MAX_WAIT_MS } from '@/lib/ui-event-whatsapp-keys'
 import { useNotificationSound, SOUND_NONE } from '@/lib/hooks/use-notification-sound'
 import { inboundCountFromPayload, readSoundPref, claimSoundEvent, gapElapsed } from '@/lib/whatsapp-sound'
@@ -239,24 +240,29 @@ export function UiEventListener() {
   // invalidateQueries defaults to refetchType 'active', so only MOUNTED queries
   // actually re-request — the rest are just marked stale. No Gmail key is in
   // the list, so a tab-back can never re-run the ~300-call inbox query.
-  useWakeSignal({
-    onWake: () => {
-      for (const key of WAKE_QUERY_KEYS) {
-        queryClient.invalidateQueries({ queryKey: [key] })
-      }
-      // Coming back to the tab: the WhatsApp chat list refreshes too (it was missing from the list above and sat stale
-      // until its 75 s poll — Antonio 2026-10-07: "every time I have to hard refresh").
-      queryClient.invalidateQueries({ queryKey: [...WHATSAPP_LIST_QUERY_KEY] })
-      // Server-rendered dashboard pages don't live in react-query. Reuse the
-      // same throttle the ui_events path uses so a wake plus a burst of events
-      // can't stack refreshes.
-      const now = Date.now()
-      if (now - lastRefreshRef.current > REFRESH_THROTTLE_MS) {
-        lastRefreshRef.current = now
-        router.refresh()
-      }
-    },
-  })
+  const catchUp = () => {
+    for (const key of WAKE_QUERY_KEYS) {
+      queryClient.invalidateQueries({ queryKey: [key] })
+    }
+    // Coming back to the tab: the WhatsApp chat list refreshes too (it was missing from the list above and sat stale
+    // until its 75 s poll — Antonio 2026-10-07: "every time I have to hard refresh").
+    queryClient.invalidateQueries({ queryKey: [...WHATSAPP_LIST_QUERY_KEY] })
+    // Server-rendered dashboard pages don't live in react-query. Reuse the
+    // same throttle the ui_events path uses so a wake plus a burst of events
+    // can't stack refreshes.
+    const now = Date.now()
+    if (now - lastRefreshRef.current > REFRESH_THROTTLE_MS) {
+      lastRefreshRef.current = now
+      router.refresh()
+    }
+  }
+  useWakeSignal({ onWake: catchUp })
+
+  // The connection came back after ANY drop (even one shorter than the 20 s "away" rule above, e.g. a LAN→WiFi switch —
+  // Antonio 2026-10-23): the same catch-up, so no manual refresh is needed. The ref keeps the listener on the latest closure.
+  const catchUpRef = useRef(catchUp)
+  catchUpRef.current = catchUp
+  useEffect(() => onReconnected(() => catchUpRef.current()), [])
 
   return null
 }
