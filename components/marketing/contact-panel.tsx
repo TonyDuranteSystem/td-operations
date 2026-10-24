@@ -32,22 +32,26 @@ export function ContactPanel({ leadId, canAct, contact, leadName, phone, setterN
   const firstKey = contact.whatsapp === 'sent' || contact.attempts > 0 ? 'no_answer' : 'first_contact'
   const [tplKey, setTplKey] = useState(templates.some(t => t.key === firstKey) ? firstKey : templates[0]?.key ?? '')
   const [edited, setEdited] = useState<string | null>(null)
-  const [when, setWhen] = useState('')
   const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const tpl = templates.find(t => t.key === tplKey)
-  const whenText = contact.appointmentAt ? fw(contact.appointmentAt) : when ? fw(new Date(when).toISOString()) : ''
+  const whenText = contact.appointmentAt ? fw(contact.appointmentAt) : ''
   const message = edited ?? (tpl ? fillTemplate(tpl.text, { name: firstName(leadName), setter: setterName, when: whenText }) : '')
   const link = whatsappLink(phone, message)
   const chips = contactChips(contact, fw, t)
+
+  async function copy() {
+    try { await navigator.clipboard.writeText(message); setCopied(true); setTimeout(() => setCopied(false), 2000) }
+    catch { setError(t('Could not copy. Select the text and copy it by hand.')) }
+  }
 
   async function send(body: Record<string, unknown>) {
     setBusy(true); setError(null)
     try {
       const res = await fetch(`/api/marketing/leads/${leadId}/action`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error ? t(d.error) : t('Could not save. Please try again.')) }
-      setWhen('')
       router.refresh()
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : t('Could not save. Please try again.'))
@@ -78,20 +82,13 @@ export function ContactPanel({ leadId, canAct, contact, leadName, phone, setterN
             {link
               ? <a className={`${btn} bg-emerald-600 text-white`} href={link} target="_blank" rel="noopener noreferrer" data-testid="open-whatsapp">{t('Open WhatsApp with this message')}</a>
               : <span className="self-center text-xs text-slate-500">{phone ? t('This number cannot be used for WhatsApp.') : t('No phone number to write to.')}</span>}
+            <button type="button" className={btn} onClick={copy} data-testid="copy-message">{copied ? t('Copied') : t('Copy message')}</button>
             <button className={btn} disabled={busy} onClick={() => send({ action: 'whatsapp', state: 'sent', template: tplKey || undefined })}>{t('I sent it')}</button>
             <button className={btn} disabled={busy} onClick={() => send({ action: 'whatsapp', state: 'no_wa' })}>{t('No WhatsApp')}</button>
             <button className={btn} disabled={busy} onClick={() => send({ action: 'no_answer', via: 'call' })}>{t('No answer')}</button>
           </div>
           <p className="mt-1 text-xs text-slate-400">{t('WhatsApp opens with the message typed in — you press Send there, then "I sent it" here.')}</p>
 
-          <div className="mt-4 border-t pt-3 text-sm">
-            <p className="text-slate-500">{t('Call with the seller')} {contact.appointmentAt ? <b className="text-slate-900">{t(' · booked {when}', { when: fw(contact.appointmentAt) })}</b> : null}</p>
-            <div className="mt-2 flex flex-wrap items-end gap-2">
-              <input type="datetime-local" className="rounded-lg border px-3 py-2" value={when} onChange={e => setWhen(e.target.value)} aria-label={t('Day and time of the call')} data-testid="appointment-when" />
-              <button className={`${btn} bg-slate-900 text-white`} disabled={busy || !when} onClick={() => send({ action: 'appointment', at: new Date(when).toISOString() })}>{contact.appointmentAt ? t('Move the call') : t('Book the call')}</button>
-              {contact.appointmentAt && <button className={btn} disabled={busy} onClick={() => send({ action: 'appointment', at: null })}>{t('Cancel the call')}</button>}
-            </div>
-          </div>
         </>
       )}
       {error && <p role="alert" className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p>}

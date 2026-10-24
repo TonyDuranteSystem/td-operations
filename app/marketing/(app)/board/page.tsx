@@ -53,6 +53,7 @@ export default async function MarketingBoard() {
       note: seesNotes ? activity?.notes.get(l.id)?.text ?? null : null,
       ad: l.ad_name,
       existingClient: clientFlagText(l.existing_client) !== null,
+      handedOver: contact.handedOverAt !== null,
     }
   })
   return (

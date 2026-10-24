@@ -28,6 +28,8 @@ export const leadActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("no_answer"), via: z.enum(["whatsapp", "call"]).default("call"), note: note.optional() }),
   // at = a day and time; null cancels the booked call
   z.object({ action: z.literal("appointment"), at: z.string().min(10).max(40).nullable(), note: note.optional() }),
+  // the setter passes an in-target lead to the seller without booking a call (the seller then fixes the call himself)
+  z.object({ action: z.literal("handover"), note: note.optional() }),
 ])
 export type LeadActionInput = z.infer<typeof leadActionSchema>
 
@@ -145,6 +147,16 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
         patch: movedToBooked(lead, s),
         event: { kind: "appointment", data: { at: at.toISOString(), note: input.note ?? null } },
       } }
+    }
+
+    case "handover": {
+      // passing a lead on means it is in target: a lead still before the "Good" stage is moved there (one that is further along, or out of target, stays)
+      const good = s.outcomeStages.good
+      const cur = keyIndex(s.stages, lead.status)
+      const target = keyIndex(s.stages, good)
+      if (lead.status === s.outcomeStages.not_in_target) return fail(409, "This lead is marked Not in target. Change that first if you want to pass it on.")
+      const patch: Record<string, unknown> = target >= 0 && cur >= 0 && cur < target ? { status: good, callback_at: null, not_in_target_reason: null } : {}
+      return { ok: true, change: { patch, event: { kind: "handover", data: { note: input.note ?? null, from: lead.status, to: typeof patch.status === "string" ? patch.status : lead.status } } } }
     }
 
     case "call_back": {

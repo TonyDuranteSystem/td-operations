@@ -83,6 +83,7 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
     case "whatsapp": return `${data.state === "no_wa" ? t("No WhatsApp on this number") : t("WhatsApp sent")}${note}`
     case "attempt": return `${t("No answer ({via})", { via: data.via === "whatsapp" ? "WhatsApp" : t("call") })}${note}`
     case "appointment": return data.at ? `${t("Call booked for {when}", { when: fw(typeof data.at === "string" ? data.at : null) })}${note}` : `${t("Booked call cancelled")}${note}`
+    case "handover": return `${t("Passed to Rocco, no call booked yet")}${note}`
     case "payment_link_created": return t("Payment link created")
     case "payment_received": return t("Payment received")
     case "sale_refunded": return t("Sale refunded")

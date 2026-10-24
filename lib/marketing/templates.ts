@@ -86,3 +86,22 @@ export function whatsappLink(phone: string | null | undefined, text: string): st
   if (d.length < 8 || d.length > 15) return null
   return `https://wa.me/${d}?text=${encodeURIComponent(text)}`
 }
+
+/**
+ * Whose name the opening message is signed with: the SETTER of this lead — never whoever happens to be looking at the page. In order: the person who picked the lead; else the person who last
+ * worked it as a setter (sent the WhatsApp, tried a call, picked it), Antonio's "View as" rows ignored; else the viewer, unless the viewer is Antonio looking in as someone else
+ * (then nothing: a blank signature is better than his name on a message to a lead).
+ */
+export function messageSigner(i: {
+  claimedLabel: string | null
+  events: ReadonlyArray<{ kind: string; actor: string; created_at: string; data?: Record<string, unknown> | null }>
+  viewerName: string
+  viewingAs: boolean
+  nameOf: (actor: string) => string
+}): string {
+  if (i.claimedLabel) return i.nameOf(i.claimedLabel)
+  const setterKinds = new Set(["whatsapp", "attempt", "claimed"])
+  const mine = i.events.filter(e => setterKinds.has(e.kind) && e.actor && e.actor !== "system" && e.data?.via_view_as !== true).sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+  if (mine) return i.nameOf(mine.actor)
+  return i.viewingAs ? "" : i.viewerName
+}

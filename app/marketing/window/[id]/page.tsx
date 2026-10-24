@@ -44,7 +44,7 @@ export default async function MarketingLeadWindow({ params }: { params: Promise<
     <LangProvider lang={lang}>
       <main className="p-4">
         <FrameChangeNotifier />
-        <LeadPane lead={lead} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} paymentLink={paymentLink} />
+        <LeadPane lead={lead} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} viewingAs={!!g.ctx.viewAs} paymentLink={paymentLink} />
       </main>
     </LangProvider>
   )

@@ -15,6 +15,8 @@ export function SetterNoteBlock({ note, ticks, noteDay }: { note: SetterNote; ti
   const fw = (iso: string | null | undefined) => formatWhen(iso, 'Europe/Rome', loc)
   const o = note.outcome
   const empty = !o && note.notes.length === 0 && (!ticks || ticks.length === 0)
+  // nothing written yet: no frame at all (an empty yellow box only took room and made people look for a note that was not there)
+  if (empty) return null
   const badge = !o ? null
     : o.outcome === 'good' ? { text: t('Good'), cls: 'bg-emerald-100 text-emerald-900' }
     : o.outcome === 'not_in_target' ? { text: o.reasonLabel ? t('Not in target: {reason}', { reason: t(o.reasonLabel) }) : t('Not in target'), cls: 'bg-rose-100 text-rose-900' }
@@ -22,7 +24,6 @@ export function SetterNoteBlock({ note, ticks, noteDay }: { note: SetterNote; ti
   return (
     <section aria-label={t("Setter's note")} data-tour="lead-note" className="rounded-xl border-2 border-amber-300 bg-amber-50 p-5 text-sm" data-testid="setter-note">
       <h3 className="text-sm font-semibold text-amber-900">{t("Setter's note")}</h3>
-      {empty && <p className="mt-2 text-slate-600">{t('Nobody has written a note on this lead yet.')}</p>}
       {o && badge && (
         <div className="mt-2">
           <p className="flex flex-wrap items-center gap-2"><span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${badge.cls}`}>{badge.text}</span><span className="text-xs text-slate-600">{o.by}{o.viaViewAs ? ` ${t('(viewing as)')}` : ''} · {fw(o.at)}</span></p>

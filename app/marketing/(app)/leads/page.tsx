@@ -166,7 +166,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
         </section>
         <aside className="min-w-0" aria-label={t('Lead detail')}>
           {selected ? (
-            <LeadPane lead={selected} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} paymentLink={paymentLink} />
+            <LeadPane lead={selected} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} viewingAs={!!g.ctx.viewAs} paymentLink={paymentLink} />
           ) : <div className="rounded-xl border border-dashed p-8 text-sm text-slate-500">{t('Click a lead on the left to see what they answered, what the setter wrote, and everything that happened to it.')}</div>}
         </aside>
       </div>

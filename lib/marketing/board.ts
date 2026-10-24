@@ -44,6 +44,12 @@ export function columnOf(role: BoardRole, stage: string): string | null {
   return columnsFor(role).find(c => c.stages.includes(stage))?.key ?? null
 }
 
+/** The column a CARD sits in. For the seller an in-target lead appears (in "Passed to you") only once the setter has passed it on; until then it is the setter's. */
+export function columnOfCard(role: BoardRole, card: Pick<BoardCard, "stage" | "handedOver">): string | null {
+  const key = columnOf(role, card.stage)
+  return role === "seller" && key === "passed" && !card.handedOver ? null : key
+}
+
 export interface BoardCard {
   id: string
   name: string
@@ -64,13 +70,15 @@ export interface BoardCard {
   note: string | null
   ad: string | null
   existingClient: boolean
+  /** the setter passed this lead to the seller */
+  handedOver: boolean
 }
 
 /** The cards of one column in the order people work them: calls by their time (soonest first), everything else newest first. */
 export function cardsInColumn(role: BoardRole, columnKey: string, cards: readonly BoardCard[]): BoardCard[] {
   const col = columnsFor(role).find(c => c.key === columnKey)
   if (!col) return []
-  const mine = cards.filter(c => col.stages.includes(c.stage))
+  const mine = cards.filter(c => columnOfCard(role, c) === columnKey)
   if (columnKey === "booked") return mine.sort((a, b) => (a.apptAt ?? "9").localeCompare(b.apptAt ?? "9") || b.arrivedMs - a.arrivedMs)
   return mine.sort((a, b) => b.arrivedMs - a.arrivedMs)
 }
@@ -82,7 +90,7 @@ export function boardCards(role: BoardRole, cards: readonly BoardCard[]): BoardC
 
 /** How many leads the board leaves out because they sit at no column (for the "not shown" note). */
 export function hiddenCount(role: BoardRole, cards: readonly BoardCard[]): number {
-  return cards.filter(c => columnOf(role, c.stage) === null).length
+  return cards.filter(c => columnOfCard(role, c) === null).length
 }
 
 /** The column heading with its count: "In target · 3". */

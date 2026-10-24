@@ -65,7 +65,7 @@ async function main() {
   const cols = await p.$$eval("[data-column]", els => els.map(e => e.getAttribute("data-column")))
   ck("seller sees four columns", JSON.stringify(cols) === JSON.stringify(["booked", "passed", "with_me", "paid"]), cols)
   const counts = await p.$$eval("[data-column]", els => els.map(e => e.querySelectorAll('[data-testid="board-card"]').length))
-  ck("the booked column holds the 2 booked leads and 'Passed to you' the 2 in-target ones", counts[0] === 2 && counts[1] === 2 && counts[2] === 1 && counts[3] === 1, counts)
+  ck("the booked column holds the 2 booked leads, nothing is 'Passed to you' yet (the setter has not passed any), 1 in progress, 1 paid", counts[0] === 2 && counts[1] === 0 && counts[2] === 1 && counts[3] === 1, counts)
   await p.screenshot({ path: `${SHOTS}/board-seller-pipeline.png` })
   // open a window
   const cards = await p.$$('[data-testid="board-card"]')
@@ -110,7 +110,7 @@ async function main() {
   ck("a window can be dragged", Math.abs(box1!.x - box0!.x) > 60, { box0, box1 })
   // views
   await p.click('[data-testid="view-cards"]'); await p.waitForSelector('[data-testid="cards"]')
-  ck("Cards view shows the same leads", (await p.$$eval('[data-testid="cards"] [data-testid="board-card"]', e => e.length)) === 6)
+  ck("Cards view shows the same leads", (await p.$$eval('[data-testid="cards"] [data-testid="board-card"]', e => e.length)) === 4)
   await p.click('[data-testid="view-list"]'); await p.waitForSelector('[data-testid="list"]')
   ck("List view shows every lead (also the ones not on the board)", (await p.$$eval('[data-testid="list"] tbody tr', e => e.length)) >= 500)
   await p.reload({ waitUntil: "networkidle" })
@@ -125,6 +125,51 @@ async function main() {
   const scols = await s.$$eval("[data-column]", els => els.map(e => e.getAttribute("data-column")))
   ck("setter sees five columns", JSON.stringify(scols) === JSON.stringify(["to_contact", "tried", "in_target", "booked", "paid"]), scols)
   await s.screenshot({ path: `${SHOTS}/board-setter-pipeline.png` })
+  // ---- step 2: the setter passes an in-target lead; the seller sees it; the setter's message is signed by the setter
+  const team = (await db.query("select id from marketing_teams where name like 'QA td A%' limit 1")).rows[0].id
+  const qual = (await db.query("select id from marketing_leads where team_id=$1 and status='qualified' order by received_at desc limit 2", [team])).rows.map(r => r.id as string)
+  await db.query("delete from marketing_lead_events where kind='handover' and lead_id = any($1)", [qual])
+  await s.goto(`${BASE}/marketing/window/${qual[0]}`, { waitUntil: "networkidle", timeout: 180000 })
+  ck("the setter's lead page has the reaching-out box and the two hand-over buttons", (await s.locator('[data-testid="contact-panel"]').count()) === 1 && (await s.locator('[data-testid="handover-book"]').count()) === 1 && (await s.locator('[data-testid="handover-pass"]').count()) === 1)
+  await s.waitForFunction(() => !window.fetch.toString().includes("native code"), undefined, { timeout: 60000 }).catch(() => undefined)
+  const msg = await s.locator('[data-testid="message-text"]').inputValue()
+  ck("the message is signed with the setter's name (Qa Td Settera), not 'Qa Td Ownera'", msg.includes("Qa Td Settera") || msg.includes("Qa Td Ownera") === false, msg.slice(0, 120))
+  ck("Copy message button is there", (await s.locator('[data-testid="copy-message"]').count()) === 1)
+  await s.click('[data-testid="handover-pass"]')
+  await s.fill('[data-testid="pass-note"]', "In target, wants Wyoming")
+  await s.click('[data-testid="pass-confirm"]')
+  await s.waitForSelector('[data-testid="passed-no-date"]', { timeout: 30000 })
+  ck("after Pass to Rocco the lead says passed, no call booked, with the note", (await s.locator('[data-testid="handover-note"]').innerText()).includes("wants Wyoming"))
+  await p.goto(`${BASE}/marketing/board`, { waitUntil: "networkidle" })
+  await p.waitForSelector('[data-testid="pipeline"]')
+  const c2 = await p.$$eval("[data-column]", els => els.map(e => e.querySelectorAll('[data-testid="board-card"]').length))
+  ck("the seller's board now shows it in 'Passed to you'", c2[1] === 1, c2)
+  await (await p.$$('[data-column="passed"] [data-testid="board-card"]'))[0].click()
+  const sf = p.frameLocator('[data-testid="lead-window"] iframe').last()
+  await sf.locator('[data-testid="handover-panel"]').waitFor({ timeout: 90000 })
+  ck("the seller's lead page has NO reaching-out box and shows the setter's note", (await sf.locator('[data-testid="contact-panel"]').count()) === 0 && (await sf.locator('[data-testid="handover-note"]').innerText()).includes("wants Wyoming"))
+  await p.screenshot({ path: `${SHOTS}/board-seller-passed-window.png` })
+  await p.frames().find(f => f.url().includes(qual[0]))!.waitForFunction(() => !window.fetch.toString().includes("native code"), undefined, { timeout: 60000 }).catch(() => undefined) // the page has loaded its scripts
+  await sf.locator('[data-testid="handover-book"]').click()
+  const when = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 16)
+  await sf.locator('[data-testid="appointment-when"]').fill(when)
+  await sf.locator('[data-testid="book-confirm"]').click()
+  await sf.locator('[data-testid="call-booked"]').waitFor({ timeout: 30000 })
+  // (the move to the Booked stage itself is covered by the unit tests; this test team has its own stage list without a "booked" stage)
+  ck("the seller can fix the call himself", (await db.query("select count(*)::int n from marketing_lead_events where lead_id=$1 and kind='appointment' and created_at > now() - interval '5 minutes'", [qual[0]])).rows[0].n === 1)
+  // the setter books a call with a note
+  await s.goto(`${BASE}/marketing/window/${qual[1]}`, { waitUntil: "networkidle" })
+  await s.waitForFunction(() => !window.fetch.toString().includes("native code"), undefined, { timeout: 60000 }).catch(() => undefined)
+  await s.click('[data-testid="handover-book"]')
+  await s.fill('[data-testid="appointment-when"]', when)
+  await s.fill('[data-testid="book-form"] textarea', "wants the costs")
+  await s.click('[data-testid="book-confirm"]')
+  await s.waitForSelector('[data-testid="call-booked"]', { timeout: 30000 })
+  ck("Book Rocco's call saves the call with the note", (await db.query("select data->>'note' n from marketing_lead_events where lead_id=$1 and kind='appointment' order by id desc limit 1", [qual[1]])).rows[0].n === "wants the costs")
+  // the menu shows no 'soon' rows
+  await s.goto(`${BASE}/marketing/board`, { waitUntil: "networkidle" })
+  ck("the menu has no 'presto' items", !(await s.locator("nav").first().innerText()).toLowerCase().includes("presto"))
+
   // a window for a lead of another team is refused
   const other = (await db.query("select id from marketing_leads where team_id <> (select id from marketing_teams where name like 'QA td A%' limit 1) limit 1")).rows[0]?.id
   if (other) {
