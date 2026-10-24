@@ -11,6 +11,7 @@ import { MARKETING_PERMISSIONS } from "@/lib/marketing/permissions"
 import { PERMISSION_LABELS, ROLE_LABELS } from "@/lib/marketing/permission-labels"
 import { ACCESS_GROUPS, accessWarnings } from "@/lib/marketing/access"
 import { saleStatusLabel } from "@/lib/marketing/sales"
+import { columnsFor } from "@/lib/marketing/board"
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir)) {
@@ -21,7 +22,9 @@ function walk(dir: string, out: string[] = []): string[] {
   return out
 }
 const root = process.cwd()
-const files = [...walk(join(root, "app/marketing")), ...walk(join(root, "components/marketing")), ...walk(join(root, "lib/marketing"))].filter(f => !f.endsWith("i18n-it.ts") && !f.endsWith("lib/marketing/i18n.ts"))
+// the chat screen is TD Talk's own (components/talk/*, the voice note): its words go through a swappable translator (components/talk/talk-i18n.tsx), so they are checked here too
+const TALK_SCREEN = ["components/talk/talk-messages.tsx", "components/talk/talk-composer.tsx", "components/talk/talk-sheet.tsx", "components/team-chat/voice-note.tsx"].map(f => join(root, f))
+const files = [...walk(join(root, "app/marketing")), ...walk(join(root, "components/marketing")), ...walk(join(root, "lib/marketing")), ...TALK_SCREEN].filter(f => !f.endsWith("i18n-it.ts") && !f.endsWith("lib/marketing/i18n.ts"))
 
 /** Every `t("…")`, `t('…')` or `t(`…`)` with a plain string in the screens and in the lib helpers they call. */
 function used(): Array<{ file: string; text: string }> {
@@ -60,7 +63,8 @@ describe("Italian for the TD Marketing workspace", () => {
     const labels = [
       ...MARKETING_SETTING_DEFS.pipeline_stages.fallback.map(x => x.label), ...MARKETING_SETTING_DEFS.not_in_target_reasons.fallback.map(x => x.label),
       ...modulesFor(Array.from(MARKETING_PERMISSIONS as readonly string[])).map(m => m.label), ...LEAD_SHOW_OPTIONS.map(o => o.label),
-      "Good", "Not in target", "Call back",
+      "Good", "Not in target", "Call back", "Pipeline", "Cards", "List", "Messages", "Voice message", "Photo", "File", "This message was deleted",
+      ...columnsFor("setter").map(c => c.label), ...columnsFor("seller").map(c => c.label),
       ...Object.values(PERMISSION_LABELS), ...Object.values(ROLE_LABELS), "Team owner", "Custom access", "No role",
       ...ACCESS_GROUPS.flatMap(g => [g.group, ...g.items.map(i => i.label)]),
       ...accessWarnings(["payment_links.create", "leads.pick", "team.activity", "leads.worklist", "leads.mark"]).flatMap(w => [w.text, w.fixLabel ?? ""]).filter(Boolean),

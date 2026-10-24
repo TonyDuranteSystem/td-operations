@@ -73,7 +73,7 @@ export default async function MarketingCallList({ searchParams }: { searchParams
         </section>
         <aside className="min-w-0" aria-label={t('Lead to call')}>
           {selected ? (
-            <LeadPane lead={selected} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} afterHref={afterHref} />
+            <LeadPane lead={selected} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} viewingAs={!!g.ctx.viewAs} afterHref={afterHref} />
           ) : <div className="rounded-xl border border-dashed p-8 text-sm text-slate-500">{queue.length === 0 ? t('The list is empty. Good work.') : t('Pick a lead on the left.')}</div>}
         </aside>
       </div>

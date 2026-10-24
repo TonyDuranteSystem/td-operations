@@ -48,6 +48,7 @@ export const MARKETING_SETTING_DEFS = {
       { key: "wrong_profile", label: "Wrong profile" },
       { key: "lives_in_italy_no_business", label: "Lives in Italy, no business" },
       { key: "not_interested", label: "Not interested" },
+      { key: "fake", label: "Fake / no target" },
       { key: "other", label: "Other" },
     ],
   },

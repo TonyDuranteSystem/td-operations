@@ -8,7 +8,9 @@ import { buildSetterNote, personName } from '@/lib/marketing/setter-note'
 import { SetterNoteBlock } from '@/components/marketing/setter-note-block'
 import { ContactPanel } from '@/components/marketing/contact-panel'
 import { contactState } from '@/lib/marketing/contact-state'
-import { templatesFor } from '@/lib/marketing/templates'
+import { messageSigner, templatesFor } from '@/lib/marketing/templates'
+import { boardRole } from '@/lib/marketing/board'
+import { HandoverPanel } from '@/components/marketing/handover-panel'
 import { getLang } from '@/lib/marketing/lang'
 import { localeFor, makeT } from '@/lib/marketing/i18n'
 import { getMarketingSetting } from '@/lib/marketing/settings'
@@ -26,12 +28,14 @@ interface Props {
   afterHref?: string
   /** the payment-link box; only given to people who may create payment links */
   paymentLink?: PaymentLinkProps
-  /** the name the messages are signed with (the person using the screen) */
+  /** the person using the screen, as a name: the message is signed with the lead's SETTER, and this is only the fallback when nobody has worked the lead yet */
   myName?: string
+  /** Antonio looking in as somebody else: his name is never put on a message */
+  viewingAs?: boolean
 }
 
 /** One lead, everything about it, with the buttons: used by the Leads screen and the Call list. A computer-width panel. Team-scoped by whoever loads it. */
-export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons, checklist, permissions, isOwner, myId, afterHref, paymentLink, myName }: Props) {
+export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons, checklist, permissions, isOwner, myId, afterHref, paymentLink, myName, viewingAs }: Props) {
   // What the team wrote (notes, the ticks from a call) is read only by people who work the leads; the ad person gets the facts without it.
   const lang = getLang()
   const t = makeT(lang)
@@ -51,6 +55,9 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
   const overrides = lead.team_id ? ((await getMarketingSetting('message_templates', lead.team_id)) as Record<string, string>) : {}
   const templates = templatesFor(lang, overrides)
   const canAct = hasPermission(permissions, 'leads.mark') && !(claim === 'other' && !isOwner)
+  // the seller (Rocco) and the setter see different lead pages: the setter's reaching-out box is the setter's work, not his
+  const role = boardRole(permissions)
+  const signer = messageSigner({ claimedLabel: lead.claimed_by_label, events, viewerName: myName ?? '', viewingAs: viewingAs === true, nameOf: personName })
   const where = [lead.campaign_name, lead.adset_name, lead.ad_name].filter(Boolean)
   return (
     <div className="space-y-4">
@@ -74,7 +81,9 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
 
       {setterNote && <SetterNoteBlock note={setterNote} ticks={lead.qualification} />}
 
-      <ContactPanel leadId={lead.id} canAct={canAct} contact={contact} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} setterName={myName ?? ''} templates={templates} />
+      {role === 'setter' && <ContactPanel leadId={lead.id} canAct={canAct} contact={contact} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} setterName={signer} templates={templates} />}
+
+      <HandoverPanel leadId={lead.id} role={role} canAct={canAct} contact={contact} />
 
       <LeadActionPanel
         leadId={lead.id}

@@ -19,7 +19,7 @@ export async function loadLeadActivity(db: Db, leadIds: readonly string[]): Prom
   const rows: Row[] = []
   for (let i = 0; i < ids.length; i += 100) {
     const chunk = ids.slice(i, i + 100)
-    const { rows: got } = await readPaged<Row>((from, to) => db.from("marketing_lead_events").select("lead_id, kind, actor, data, created_at").in("lead_id", chunk).in("kind", ["note", "status_changed", "whatsapp", "attempt", "appointment"]).order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, to), 5000)
+    const { rows: got } = await readPaged<Row>((from, to) => db.from("marketing_lead_events").select("lead_id, kind, actor, data, created_at").in("lead_id", chunk).in("kind", ["note", "status_changed", "whatsapp", "attempt", "appointment", "handover"]).order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, to), 5000)
     rows.push(...got)
   }
   return { notes: pickLatestNotes(rows), marks: pickLatestMarks(rows), contact: contactStates(rows) }

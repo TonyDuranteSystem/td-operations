@@ -190,6 +190,7 @@ const PUBLIC_PREFIXES = [
   '/dashboard-sw.js',
   '/portal-sw.js',
   '/talk-sw.js',
+  '/marketing-sw.js',
   // Offline fallback page — precached by the service workers at install time
   // (an authenticated-only page could not be cached by a fresh SW).
   '/offline',

@@ -1,0 +1,24 @@
+import { NextRequest, NextResponse } from "next/server"
+import { requireMarketing } from "@/lib/marketing/guard"
+import { NO_STORE, deleteChatMessage, editChatMessage } from "@/lib/marketing/lead-chat-server"
+
+/** PATCH /api/marketing/chat/messages/[id] { message } — edit my own message. */
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const g = await requireMarketing("chat")
+  if (g.res) return g.res
+  const { id } = await params
+  const body = (await req.json().catch(() => ({}))) as { message?: unknown }
+  const r = await editChatMessage(g.ctx, id, body.message)
+  if (r.ok === false) return NextResponse.json({ error: r.error }, { status: r.status, headers: NO_STORE })
+  return NextResponse.json({ message: r.message }, { headers: NO_STORE })
+}
+
+/** DELETE /api/marketing/chat/messages/[id] — soft delete (the message leaves a note, the row stays for the record). The author or the team owner. */
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const g = await requireMarketing("chat")
+  if (g.res) return g.res
+  const { id } = await params
+  const r = await deleteChatMessage(g.ctx, id)
+  if (r.ok === false) return NextResponse.json({ error: r.error }, { status: r.status, headers: NO_STORE })
+  return NextResponse.json({ ok: true }, { headers: NO_STORE })
+}

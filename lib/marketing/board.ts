@@ -1,0 +1,101 @@
+/**
+ * TD Marketing — the lead board (pure; dev job 9aec66fa, Addendum G of the master plan, approved by Antonio 2026-10-23).
+ * Two roles see the same leads in different columns: the SETTER (qualifies leads on WhatsApp) and the SELLER (takes the call and sells). The column a lead sits in
+ * comes from its stage, so there is no second copy of the state to keep in step. No database here.
+ */
+import type { TFn } from "@/lib/marketing/i18n"
+
+export type BoardRole = "setter" | "seller"
+export type BoardView = "pipeline" | "cards" | "list" | "messages"
+export const BOARD_VIEWS: readonly BoardView[] = ["pipeline", "cards", "list", "messages"]
+export const parseBoardView = (v: unknown): BoardView => (BOARD_VIEWS as readonly string[]).includes(v as string) ? (v as BoardView) : "pipeline"
+
+/** Whoever can create payment links is the seller; everyone else who works the leads sees the setter's board. */
+export function boardRole(permissions: readonly string[]): BoardRole {
+  return permissions.includes("payment_links.create") ? "seller" : "setter"
+}
+
+export interface BoardColumn {
+  key: string
+  /** English text; the screen passes it through t() */
+  label: string
+  /** the lead stages (pipeline_stages keys) that sit in this column */
+  stages: readonly string[]
+}
+
+const SETTER_COLUMNS: readonly BoardColumn[] = [
+  { key: "to_contact", label: "To contact", stages: ["new"] },
+  { key: "tried", label: "Tried, no answer", stages: ["contacted"] },
+  { key: "in_target", label: "In target", stages: ["qualified"] },
+  { key: "booked", label: "Call booked", stages: ["booked", "showed"] },
+  { key: "paid", label: "Paid", stages: ["paid_call", "upsell_won"] },
+]
+const SELLER_COLUMNS: readonly BoardColumn[] = [
+  { key: "booked", label: "Booked calls", stages: ["booked"] },
+  { key: "passed", label: "Passed to you", stages: ["qualified"] },
+  { key: "with_me", label: "In progress with you", stages: ["showed"] },
+  { key: "paid", label: "Paid", stages: ["paid_call", "upsell_won"] },
+]
+
+export const columnsFor = (role: BoardRole): readonly BoardColumn[] => (role === "seller" ? SELLER_COLUMNS : SETTER_COLUMNS)
+
+/** The column a stage sits in for this role, or null (a lead "not in target", or at a stage the board does not show). */
+export function columnOf(role: BoardRole, stage: string): string | null {
+  return columnsFor(role).find(c => c.stages.includes(stage))?.key ?? null
+}
+
+/** The column a CARD sits in. For the seller an in-target lead appears (in "Passed to you") only once the setter has passed it on; until then it is the setter's. */
+export function columnOfCard(role: BoardRole, card: Pick<BoardCard, "stage" | "handedOver">): string | null {
+  const key = columnOf(role, card.stage)
+  return role === "seller" && key === "passed" && !card.handedOver ? null : key
+}
+
+export interface BoardCard {
+  id: string
+  name: string
+  stage: string
+  stageLabel: string
+  phone: string | null
+  /** when the form was filled in, already formatted */
+  filledIn: string
+  /** the next call booked with the seller (ISO) */
+  apptAt: string | null
+  /** when the form came in (ms), for the order inside a column */
+  arrivedMs: number
+  /** short facts: WhatsApp ✓, No answer ×2, Call 27 Oct 11:00 */
+  chips: Array<{ key: string; text: string; tone: "ok" | "warn" | "info" }>
+  /** who picked the lead, as a word ("Not picked", "Picked by you", …) */
+  pickedText: string
+  /** the setter's last written line; only given to people who may read notes */
+  note: string | null
+  ad: string | null
+  existingClient: boolean
+  /** my unread chat messages in this lead */
+  unread: number
+  /** the setter passed this lead to the seller */
+  handedOver: boolean
+}
+
+/** The cards of one column in the order people work them: calls by their time (soonest first), everything else newest first. */
+export function cardsInColumn(role: BoardRole, columnKey: string, cards: readonly BoardCard[]): BoardCard[] {
+  const col = columnsFor(role).find(c => c.key === columnKey)
+  if (!col) return []
+  const mine = cards.filter(c => columnOfCard(role, c) === columnKey)
+  if (columnKey === "booked") return mine.sort((a, b) => (a.apptAt ?? "9").localeCompare(b.apptAt ?? "9") || b.arrivedMs - a.arrivedMs)
+  return mine.sort((a, b) => b.arrivedMs - a.arrivedMs)
+}
+
+/** Every card the board shows, in column order (the Cards view). */
+export function boardCards(role: BoardRole, cards: readonly BoardCard[]): BoardCard[] {
+  return columnsFor(role).flatMap(c => cardsInColumn(role, c.key, cards))
+}
+
+/** How many leads the board leaves out because they sit at no column (for the "not shown" note). */
+export function hiddenCount(role: BoardRole, cards: readonly BoardCard[]): number {
+  return cards.filter(c => columnOfCard(role, c) === null).length
+}
+
+/** The column heading with its count: "In target · 3". */
+export function columnTitle(col: BoardColumn, count: number, t: TFn): string {
+  return `${t(col.label)} · ${count}`
+}

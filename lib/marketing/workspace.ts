@@ -11,6 +11,7 @@ export interface Module { key: string; label: string; href: string; built: boole
 const CATALOG: Array<{ key: string; label: string; href: string; built: boolean; when: (p: readonly string[]) => boolean }> = [
   { key: "today", label: "Today", href: "/marketing/today", built: true, when: p => p.includes("leads.pick") },
   { key: "call-list", label: "Call list", href: "/marketing/call-list", built: true, when: p => p.includes("leads.worklist") },
+  { key: "board", label: "Board", href: "/marketing/board", built: true, when: p => p.includes("leads.read") },
   { key: "leads", label: "Leads", href: "/marketing/leads", built: true, when: p => p.includes("leads.read") },
   { key: "calendar", label: "Calendar", href: "/marketing/calendar", built: true, when: p => p.includes("leads.worklist") || p.includes("leads.pick") || p.includes("team.activity") },
   { key: "inbox", label: "Inbox", href: "/marketing/inbox", built: false, when: p => p.includes("inbox") },
