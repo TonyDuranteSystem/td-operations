@@ -58,12 +58,75 @@ export const DEFAULT_TEMPLATES: readonly TemplateDef[] = [
   },
 ]
 
-export interface TemplateView { key: string; label: string; text: string }
+/** What the owner changed on one template (a field left out = the built-in wording; for a template the owner created, `label` and one text are required). */
+export interface TemplateEdit { label?: string; it?: string; en?: string }
+export type TeamTemplates = Record<string, TemplateEdit>
 
-/** The templates in one language: the defaults, with the team's own text (by key) winning. A team-only key is added with its key as the label. */
-export function templatesFor(lang: Lang, overrides: Record<string, string> = {}): TemplateView[] {
-  const out: TemplateView[] = DEFAULT_TEMPLATES.map(t => ({ key: t.key, label: t.label[lang], text: overrides[t.key] ?? t.text[lang] }))
+export interface TemplateView { key: string; label: string; text: string }
+/** One row of the Templates screen: both languages, and where the template comes from. */
+export interface TemplateRow { key: string; label: string; it: string; en: string; builtIn: boolean; edited: boolean }
+
+const other = (l: Lang): Lang => (l === "it" ? "en" : "it")
+
+/**
+ * The templates in one language: the built-in ones, with the team's own wording winning (the owner's `team_templates` first, then the older single-text `message_templates`), then the templates
+ * the owner created. A template with a text in only one language is shown in that language to everyone (better a message in the other language than none).
+ */
+export function templatesFor(lang: Lang, overrides: Record<string, string> = {}, custom: TeamTemplates = {}): TemplateView[] {
+  const out: TemplateView[] = DEFAULT_TEMPLATES.map(t => {
+    const c = custom[t.key]
+    return { key: t.key, label: c?.label || t.label[lang], text: c?.[lang] || overrides[t.key] || t.text[lang] }
+  })
+  for (const [k, c] of Object.entries(custom)) {
+    if (DEFAULT_TEMPLATES.some(t => t.key === k)) continue
+    const text = c[lang] || c[other(lang)] || ""
+    if (text) out.push({ key: k, label: c.label || k, text })
+  }
+  // the older setting could still hold a key nobody has built in
   for (const [k, v] of Object.entries(overrides)) if (!out.some(t => t.key === k)) out.push({ key: k, label: k, text: v })
+  return out
+}
+
+/** The rows of the Templates screen: both languages of every template. */
+export function templateRows(overrides: Record<string, string> = {}, custom: TeamTemplates = {}, lang: Lang = "en"): TemplateRow[] {
+  const rows: TemplateRow[] = DEFAULT_TEMPLATES.map(t => {
+    const c = custom[t.key]
+    return { key: t.key, label: c?.label || t.label[lang], it: c?.it || overrides[t.key] || t.text.it, en: c?.en || overrides[t.key] || t.text.en, builtIn: true, edited: !!(c && (c.label || c.it || c.en)) || t.key in overrides }
+  })
+  for (const [k, c] of Object.entries(custom)) {
+    if (DEFAULT_TEMPLATES.some(t => t.key === k)) continue
+    rows.push({ key: k, label: c.label || k, it: c.it ?? "", en: c.en ?? "", builtIn: false, edited: false })
+  }
+  return rows
+}
+
+const KNOWN_PLACEHOLDERS = ["name", "setter", "when"]
+/** The first {word} in a text that is not a placeholder the system fills in (or a doubled brace like {{name}}), or null. */
+export function unknownPlaceholder(text: string): string | null {
+  const doubled = /\{\{[^{}]*\}?\}?/.exec(text)
+  if (doubled) return doubled[0]
+  const re = /\{([^{}]*)\}/g
+  for (let m = re.exec(text); m !== null; m = re.exec(text)) if (!KNOWN_PLACEHOLDERS.includes(m[1])) return m[1]
+  return null
+}
+
+/**
+ * A message as typed in the lead's box has THIS lead's first name, THIS setter's name and THIS call time in it. Saved as a template those must go back to {name} {setter} {when}, or the
+ * template would greet every lead as Marco. Only whole words are replaced, and only names of 2 letters or more.
+ */
+export function unfillTemplate(text: string, v: { name?: string | null; setter?: string | null; when?: string | null }, original = ""): string {
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const word = (w: string) => new RegExp(`(^|[^\\p{L}\\p{N}])${esc(w)}(?![\\p{L}\\p{N}])`, "iu")
+  const same = (v.name ?? "").trim().toLowerCase() !== "" && (v.name ?? "").trim().toLowerCase() === (v.setter ?? "").trim().toLowerCase()
+  let out = text
+  for (const [value, token] of [[v.when, "{when}"], [v.setter, "{setter}"], [v.name, "{name}"]] as const) {
+    const w = (value ?? "").trim()
+    if (w.length < 2) continue
+    // a name that is part of the template's own fixed wording ("…Tony Durante and Rocco") is wording, not a placeholder; and when the lead and the setter share a name there is no telling which is which
+    if (original && word(w).test(original)) continue
+    if (same && token !== "{when}") continue
+    out = out.replace(new RegExp(`(^|[^\\p{L}\\p{N}])${esc(w)}(?![\\p{L}\\p{N}])`, "gu"), `$1${token}`)
+  }
   return out
 }
 
