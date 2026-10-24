@@ -30,6 +30,10 @@ import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
 import { putFileWithRetry } from '@/lib/storage/put-with-retry'
+import { MergeFilesDialog, type MergeFileInfo } from './merge-files-dialog'
+import { MergedPreviewModal } from './merged-preview-modal'
+import { baseName } from '@/lib/crm-store/merge-parts'
+import { mergeBlockReason } from '@/lib/crm-store/merge-rules'
 import { onReconnected } from '@/lib/hooks/use-connection-state'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 import { resolveDropPreset, type DropPreset } from '@/lib/crm-store/drop-preset'
@@ -337,6 +341,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const plainFolders = useRef(new Map<string, Fold>())
   // many files at once: selection, sort, filters, details
   const [selectedFiles, setSelectedFiles] = useState<Map<string, File_ & { folderId: string | null }>>(new Map())
+  // "Merge into one": the files being ordered, and the merged PDF waiting for the usual upload questions (folder, type, name)
+  const [mergeList, setMergeList] = useState<MergeFileInfo[] | null>(null)
+  const [mergedFile, setMergedFile] = useState<{ file: File; pages: number; ownerId: string } | null>(null)
+  const [mergedPreviewOpen, setMergedPreviewOpen] = useState(false)
   const [bulkBusy, setBulkBusy] = useState(false)
   const [sortMode, setSortMode] = useState<SortMode>(() => { try { return (localStorage.getItem('store-sort') as SortMode) || 'name' } catch { return 'name' } })
   const [filterKind, setFilterKind] = useState<'all' | null>(null)
@@ -1119,6 +1127,51 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   /** a file the client could be shown in a group "Show" (the same checks as its own button; personal ones one by one) */
   const bulkShowable = (f: File_) => !f.staffOnly && !f.personal && !f.needsReview && f.listed && !!f.documentType && f.sharedWith == null
+
+  /** Merge into one: only files of ONE company or ONE person (Antonio 2026-10-24). Opens the ordering window. */
+  const startMerge = () => {
+    const picked = Array.from(selectedFiles.values())
+    if (sharedView) { toast.error('Files shared with you are read-only — they cannot be merged.'); return }
+    // the storage each file lives in: its folder's owner; a file at the very top of the storage (no folder) belongs to the storage on screen
+    const reason = mergeBlockReason(
+      picked.map((f) => ({
+        name: f.name, state: f.state, staffOnly: f.staffOnly, personal: f.personal, needsReview: f.needsReview, filingStatus: f.filingStatus,
+        ownerKey: f.folderId == null ? (ownerId ?? undefined) : folderOwner.current.get(f.folderId),
+      })),
+      { internal: isInternalOwnerKind(ownerKind), ownerKind },
+    )
+    if (reason) { toast.error(reason); return }
+    setMergeList(picked.map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, size: f.size })))
+  }
+
+  /** The merged PDF is ready: it goes through the NORMAL upload (folder, document type, name and show choice are the person's). */
+  const finishMerge = async (file: File, pageCounts: number[], orderedIds: string[]) => {
+    const first = selectedFiles.get(orderedIds[0] ?? '') ?? Array.from(selectedFiles.values())[0]
+    const pages = pageCounts.reduce((a, b) => a + b, 0)
+    setMergeList(null)
+    if (isInternalOwnerKind(ownerKind)) {                                  // My files / Business: the plain upload window (no type there)
+      if (!viewFolder || viewFolder.kind === 'root') { toast.error('Open the folder the merged file should go into, then merge again.'); return }
+      const { items, skipped, folders } = filterPlainDrop(itemsFromFileList([{ file }]))
+      plainFolders.current = new Map()
+      setPlain({ folder: viewFolder, items, skipped, folders })
+      setSelectedFiles(new Map())
+      toast.success(`Merged into one PDF (${pages} pages) — upload it below.`)
+      return
+    }
+    // start in the first file's folder only when the Folder list really offers it (a person's top folder is not in that list)
+    const startFolder = first?.folderId && folderOptions().some((o) => o.f.id === first.folderId) ? first.folderId : undefined
+    await openUpload(startFolder)
+    setUpName(baseName(file.name))
+    setMergedFile({ file, pages, ownerId: ownerIdRef.current ?? ownerId ?? '' })
+    setSelectedFiles(new Map())
+    toast.success(`Merged into one PDF (${pages} pages) — now choose the folder, document type and name, then upload.`)
+  }
+
+  // a merged file belongs to the storage it was made in: closing the Upload panel or opening another storage drops it
+  // (the Bug Hunter found it could otherwise come back in another company's panel and be saved there)
+  useEffect(() => { if (!uploadOpen) setMergedFile(null) }, [uploadOpen])
+  useEffect(() => { if (!mergedFile) setMergedPreviewOpen(false) }, [mergedFile])
+  useEffect(() => { setMergedFile((m) => (m && m.ownerId !== (ownerId ?? '') ? null : m)) }, [ownerId])
 
   const runBulk = async (action: 'show' | 'hide' | 'delete' | 'move') => {
     const list = Array.from(selectedFiles.values())
@@ -2290,6 +2343,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm" onClick={(e) => e.stopPropagation()}>
               <span className="font-medium text-blue-900">{selectedFiles.size} selected</span>
               <span className="flex-1" />
+              <FastTooltip label={selectedFiles.size < 2 ? 'Tick at least two files' : 'Merge the ticked files into one PDF'}>
+                <button type="button" disabled={bulkBusy} onClick={startMerge} aria-label="Merge the ticked files into one PDF" data-testid="bulk-merge"
+                  className={`rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50 ${selectedFiles.size < 2 ? 'opacity-50' : ''}`}><Layers className="mr-1 inline h-3.5 w-3.5" />Merge into one…</button>
+              </FastTooltip>
               <button type="button" disabled={bulkBusy} onClick={() => runBulk('move')} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"><FolderInput className="mr-1 inline h-3.5 w-3.5" />Move to…</button>
               {ownerKind !== 'business' && ownerKind !== 'private' && <>
                 <button type="button" disabled={bulkBusy} onClick={() => runBulk('show')} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"><Eye className="mr-1 inline h-3.5 w-3.5" />Show to client</button>
@@ -2360,6 +2417,25 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 })()}
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {mergedFile && (
+                  <div className="flex w-full flex-wrap items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2" data-testid="merged-file-ready">
+                    <Layers className="h-4 w-4 shrink-0 text-blue-600" />
+                    <span className="font-medium text-blue-900">Merged file ready:</span>
+                    <span className="min-w-0 truncate text-zinc-700" title={mergedFile.file.name}>{mergedFile.file.name}</span>
+                    <span className="text-xs text-zinc-500">{mergedFile.pages} pages · {fmtSize(mergedFile.file.size)}</span>
+                    <span className="flex-1" />
+                    <button type="button" onClick={() => setMergedPreviewOpen(true)} data-testid="preview-merged"
+                      className="rounded-md border border-blue-300 bg-white px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50">Preview</button>
+                    <button type="button" disabled={uploading || !upFolderObj || !upType || upType === '__custom__' || (upIsContacts && !upPerson)} data-testid="upload-merged"
+                      onClick={async () => {
+                        if (mergedFile.ownerId !== (ownerIdRef.current ?? '')) { setMergedFile(null); toast.error('This merged file was made in another storage — merge it again here.'); return }
+                        const out = await doUpload(mergedFile.file); if (out === 'saved') setMergedFile(null)
+                      }}
+                      className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40">Upload merged file</button>
+                    <button type="button" disabled={uploading} onClick={() => setMergedFile(null)} className="text-xs text-zinc-600 hover:underline">Discard</button>
+                    {(!upFolderObj || !upType) && <span className="w-full text-xs text-blue-800">Choose the folder and the document type above, then upload.</span>}
+                  </div>
+                )}
                 {(() => {
                   const target = upOptions.find((o) => o.f.id === upFolder)?.f ?? viewFolder
                   const pick = (list: File[], withPath: boolean) => {
@@ -2387,7 +2463,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                   disabled={uploading || !upFolder || !upType || upType === '__custom__' || (upIsContacts && !upPerson)}
                   onChange={(e) => { const file = e.target.files?.[0]; if (file) doUpload(file) }} />
                 {uploading && <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />}
-                <button type="button" onClick={() => setUploadOpen(false)} disabled={uploading} className="rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50 disabled:opacity-50" data-testid="company-upload-cancel">Cancel</button>
+                <button type="button" onClick={() => { setUploadOpen(false); setMergedFile(null) }} disabled={uploading} className="rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50 disabled:opacity-50" data-testid="company-upload-cancel">Cancel</button>
                 <span className="text-xs text-zinc-400">Uploading a file with the same name replaces it; the old copy is kept under Versions.</span>
               </div>
             </div>
@@ -2434,6 +2510,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       {previewVersion && <PreviewPanel file={previewVersion.file} src={previewVersion.src} viewSrc={previewVersion.viewSrc} title={previewVersion.title} onClose={() => setPreviewVersion(null)} />}
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
       {shareDialog}
+      {mergedFile && mergedPreviewOpen && <MergedPreviewModal file={mergedFile.file} pages={mergedFile.pages} onClose={() => setMergedPreviewOpen(false)} />}
+      {mergeList && <MergeFilesDialog files={mergeList} onCancel={() => setMergeList(null)} onMerged={finishMerge} />}
       {asking && (
         <QuestionDialog q={questions?.[asking.slug]} fallbackTitle={asking.fallbackTitle}
           onClose={() => { const r = asking.resolve; setAsking(null); r('cancel') }}
