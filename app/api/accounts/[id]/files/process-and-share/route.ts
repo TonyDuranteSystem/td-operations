@@ -40,9 +40,11 @@ export async function POST(
     return NextResponse.json({ error: 'Dashboard access required' }, { status: 403 })
   }
 
-  const { fileId, suppressChat } = await request.json()
+  const { fileId, suppressChat, silent } = await request.json()
   // the staff eye pop-up decides the chat message: true = no AUTOMATIC chat line (notification + push still go out)
   const clientChat = suppressChat === true ? false : undefined
+  // "Show only": no client alert at all (no notification, no push, no chat)
+  const clientAlert = silent === true ? false : undefined
   if (!fileId) {
     return NextResponse.json({ error: 'fileId is required' }, { status: 400 })
   }
@@ -91,6 +93,7 @@ export async function POST(
           ? 'Portal visibility enabled (existing record — reprocess queued)'
           : 'Portal visibility enabled (existing record)',
         clientChat,
+        clientAlert,
       })
 
       if (!updateResult.success) {
@@ -149,6 +152,7 @@ export async function POST(
       actor: `dashboard:${user.email ?? 'staff'}`,
       summary: 'Portal visibility enabled (process-and-share)',
       clientChat,
+      clientAlert,
     })
     // never report "shared" when the document did not become visible — the staff pop-up sends its message on this answer
     if (!shareResult.success) {
