@@ -88,6 +88,14 @@ describe("assembleOwnershipAttestation", () => {
     expect(run([member({})], [contact({ citizenship: " " })]).error).toMatch(/citizenship/)
     expect(run([member({})], []).error).toMatch(/not linked to a contact/)
   })
+  it("names exactly which detail of which owner is missing (Beril shape: the 50% co-owner has no birth date)", () => {
+    const ms = [member({ ownership_pct: 50 }), member({ id: "m2", full_name: "Caterina Levoni", ownership_pct: 50, is_primary: false, is_signer: false, contact_id: "c2" })]
+    const r = run(ms, [contact(), contact({ id: "c2", full_name: "Caterina Levoni", date_of_birth: null, citizenship: "Italian" })])
+    expect(r.gap).toEqual({ code: "owner_dob", who: "Caterina Levoni" })
+    expect(run([member({})], [contact({ citizenship: " " })]).gap).toEqual({ code: "owner_citizenship", who: "Ann One" })
+    expect(run([member({})], []).gap).toEqual({ code: "owner_contact", who: "Ann One" })
+    expect(run([member({ ownership_pct: 60 })], [contact()]).gap).toBeUndefined()
+  })
   it("refuses: company with no address or state", () => {
     expect(assembleOwnershipAttestation({ account: { ...account, physical_address: null }, members: [member({})], contacts: [contact()], effectiveDate: "2026-10-23" }).error).toMatch(/address/)
     expect(assembleOwnershipAttestation({ account: { ...account, state_of_formation: null }, members: [member({})], contacts: [contact()], effectiveDate: "2026-10-23" }).error).toMatch(/state/)

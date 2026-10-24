@@ -90,9 +90,16 @@ export interface AttestationSigner {
   email: string | null
 }
 
+/** What exactly is missing about an owner — lets a screen name it plainly instead of a vague "incomplete". */
+export interface AttestationGap {
+  code: "owner_dob" | "owner_citizenship" | "owner_contact"
+  /** the owner's name */
+  who: string
+}
+
 export type AssembleAttestationResult =
-  | { input: OwnershipAttestationInput; signer: AttestationSigner; error?: undefined }
-  | { input?: undefined; signer?: undefined; error: string }
+  | { input: OwnershipAttestationInput; signer: AttestationSigner; error?: undefined; gap?: undefined }
+  | { input?: undefined; signer?: undefined; error: string; gap?: AttestationGap }
 
 export function assembleOwnershipAttestation(params: AssembleAttestationParams): AssembleAttestationResult {
   const { account, members, contacts, effectiveDate } = params
@@ -145,10 +152,10 @@ export function assembleOwnershipAttestation(params: AssembleAttestationParams):
     const c = m.contact_id ? contactById.get(m.contact_id) : undefined
     const fullName = m.full_name ?? c?.full_name ?? null
     if (!fullName) return { error: "An owner has no name on file." }
-    if (!c) return { error: `${fullName} is not linked to a contact record, so their date of birth and nationality cannot be read. Link the member to the contact first.` }
+    if (!c) return { error: `${fullName} is not linked to a contact record, so their date of birth and nationality cannot be read. Link the member to the contact first.`, gap: { code: "owner_contact", who: fullName } }
     const dob = formatLongDate(c.date_of_birth)
-    if (!dob) return { error: `${fullName} has no date of birth on their contact record. Fill it in first.` }
-    if (!c.citizenship?.trim()) return { error: `${fullName} has no citizenship on their contact record. Fill it in first.` }
+    if (!dob) return { error: `${fullName} has no date of birth on their contact record. Fill it in first.`, gap: { code: "owner_dob", who: fullName } }
+    if (!c.citizenship?.trim()) return { error: `${fullName} has no citizenship on their contact record. Fill it in first.`, gap: { code: "owner_citizenship", who: fullName } }
     owners.push({ fullName, dateOfBirth: dob, nationality: nationalityLabel(c.citizenship), ownershipPct: pctOf(m) as number })
   }
 
@@ -190,6 +197,13 @@ export async function loadAttestation(accountId: string, effectiveDate: string):
     .eq("id", accountId)
     .single()
   if (!account) return { error: "Account not found." }
+
+  // The company address the portal's own documents use (the Operating Agreement, tax statement, …): the official address built
+  // from the company's suite number, else the saved one. The plain `accounts.physical_address` column is empty for many companies
+  // whose address lives in linked address records (Beril LLC) — reading only that column refused them for "no address".
+  const { getPortalAccountDetail } = await import("@/lib/portal/queries")
+  const detail = await getPortalAccountDetail(accountId)
+  if (detail?.physical_address) account.physical_address = detail.physical_address
 
   const { data: memberRows } = await db
     .from("members")
@@ -369,7 +383,7 @@ export async function sendOwnershipAttestationForSignature(
 /** What the client's own Generate Documents page needs to show and sign the attestation. */
 export type ClientAttestation =
   | { kind: "ready"; input: Omit<OwnershipAttestationInput, "dateLine">; signerName: string; youAreSigner: boolean }
-  | { kind: "unavailable"; reason: string }
+  | { kind: "unavailable"; reason: string; gap?: AttestationGap }
 
 /**
  * The same data as the staff button, for the signed-in client's company. `youAreSigner` is true only when the person looking at
@@ -378,7 +392,7 @@ export type ClientAttestation =
  */
 export async function prepareAttestationForClient(accountId: string, viewerContactId: string | null): Promise<ClientAttestation> {
   const assembled = await loadAttestation(accountId, new Date().toISOString().slice(0, 10))
-  if (assembled.error) return { kind: "unavailable", reason: assembled.error }
+  if (assembled.error) return { kind: "unavailable", reason: assembled.error, gap: assembled.gap }
   const { dateLine: _unused, ...rest } = assembled.input
   void _unused
   return { kind: "ready", input: rest, signerName: assembled.signer.name, youAreSigner: !!viewerContactId && assembled.signer.contactId === viewerContactId }

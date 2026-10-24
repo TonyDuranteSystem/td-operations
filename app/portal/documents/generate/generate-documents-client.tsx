@@ -73,6 +73,8 @@ interface Props {
     /** only the company's signer may sign it: their name is printed under the signature line */
     youAreSigner: boolean
   } | null
+  /** When the attestation cannot be prepared because an owner's details are missing: which detail, and whose. */
+  attestationGap?: { code: 'owner_dob' | 'owner_citizenship' | 'owner_contact'; who: string } | null
 }
 
 type Stage = 'selection' | 'form' | 'preview' | 'signing' | 'done'
@@ -95,7 +97,7 @@ function docTypeLabel(type: string, t: (key: string) => string): string {
   return type
 }
 
-export function GenerateDocumentsClient({ account, members, history: initialHistory, attestation }: Props) {
+export function GenerateDocumentsClient({ account, members, history: initialHistory, attestation, attestationGap }: Props) {
   const { t } = useLocale()
   const router = useRouter()
 
@@ -658,7 +660,16 @@ export function GenerateDocumentsClient({ account, members, history: initialHist
               {!attestation ? (
                 <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                  <span>{t('documentGenerate.ownershipAttestationUnavailable')}</span>
+                  <span>
+                    {attestationGap
+                      ? interpolateString(
+                          t(attestationGap.code === 'owner_dob' ? 'documentGenerate.ownershipAttestationMissingDob'
+                            : attestationGap.code === 'owner_citizenship' ? 'documentGenerate.ownershipAttestationMissingCitizenship'
+                            : 'documentGenerate.ownershipAttestationMissingDetails'),
+                          { name: attestationGap.who },
+                        )
+                      : t('documentGenerate.ownershipAttestationUnavailable')}
+                  </span>
                 </div>
               ) : !attestation.youAreSigner ? (
                 <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
