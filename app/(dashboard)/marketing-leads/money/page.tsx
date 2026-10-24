@@ -106,7 +106,7 @@ export default async function MarketingMoneyAdmin({ searchParams }: { searchPara
           <h2 className="text-sm font-semibold text-slate-600">Sales</h2>
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-slate-500"><tr><th className="py-2 pr-4">Date</th><th className="pr-4">Lead</th><th className="pr-4">Kind</th><th className="pr-4">Amount</th><th className="pr-4">Seller</th><th className="pr-4">TD</th><th className="pr-4">Status</th><th>Actions</th></tr></thead>
+              <thead className="text-xs uppercase tracking-wide text-slate-500"><tr><th className="py-2 pr-4">Date</th><th className="pr-4">Lead</th><th className="pr-4">Kind</th><th className="pr-4">Amount</th><th className="pr-4">Seller</th><th className="pr-4">TD</th><th className="pr-4">Lead payment status</th><th>Actions</th></tr></thead>
               <tbody className="divide-y">
                 {sales.map(s => (
                   <tr key={s.id} className="align-top">
