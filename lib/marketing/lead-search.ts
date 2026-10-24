@@ -9,7 +9,7 @@ export const SEARCH_LIMIT = 8
 /** The cleaned search text, or null when it is too short to search for. */
 export function cleanSearch(raw: unknown): string | null {
   if (typeof raw !== "string") return null
-  const s = raw.normalize("NFKC").replace(/[^\p{L}\p{N}@.+\- ]/gu, " ").replace(/\s+/g, " ").trim().slice(0, SEARCH_MAX)
+  const s = raw.normalize("NFKC").replace(/[^A-Za-z0-9\u00C0-\u024F@.+\- ]/g, " ").replace(/\s+/g, " ").trim().slice(0, SEARCH_MAX)
   return s.length >= SEARCH_MIN ? s : null
 }
 

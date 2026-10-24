@@ -102,18 +102,18 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
       )}
       <nav aria-label={t('Filter leads')} className="space-y-2">
         <div className="flex flex-wrap items-center gap-2" data-testid="stage-strip" role="group" aria-label={t('Stages')}>
-          <Link href={href({ stage: '', lead: '' })} className={chip(stage === '')} aria-current={stage === '' ? 'true' : undefined}>{t('Any stage')} <b className="ml-1 font-semibold">{totalInStrip}</b></Link>
-          {stages.map(st => <Link key={st.key} href={href({ stage: st.key, lead: '' })} className={chip(stage === st.key, (counts.get(st.key) ?? 0) === 0)} data-stage={st.key} aria-current={stage === st.key ? 'true' : undefined}>{t(st.label)} <b className="ml-1 font-semibold">{counts.get(st.key) ?? 0}</b></Link>)}
+          <Link href={href({ stage: '' })} className={chip(stage === '')} aria-current={stage === '' ? 'true' : undefined}>{t('Any stage')} <b className="ml-1 font-semibold">{totalInStrip}</b></Link>
+          {stages.map(st => <Link key={st.key} href={href({ stage: st.key })} className={chip(stage === st.key, (counts.get(st.key) ?? 0) === 0)} data-stage={st.key} aria-current={stage === st.key ? 'true' : undefined}>{t(st.label)} <b className="ml-1 font-semibold">{counts.get(st.key) ?? 0}</b></Link>)}
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <div className="flex flex-wrap gap-2" role="group" aria-label={t('Whose')}>{LEAD_SHOW_OPTIONS.map(o => <Link key={o.key} href={href({ show: o.key === 'all' ? '' : o.key, lead: '' })} className={chip(show === o.key)} aria-current={show === o.key ? 'true' : undefined}>{o.key === 'all' ? t('All leads') : t(o.label)}</Link>)}</div>
+          <div className="flex flex-wrap gap-2" role="group" aria-label={t('Whose')}>{LEAD_SHOW_OPTIONS.map(o => <Link key={o.key} href={href({ show: o.key === 'all' ? '' : o.key })} className={chip(show === o.key)} aria-current={show === o.key ? 'true' : undefined}>{o.key === 'all' ? t('All leads') : t(o.label)}</Link>)}</div>
           {adList.length > 0 && (
             <FilterMenu label={t('Ad')} testId="ad-filter" current={ad ? (ad === NO_AD ? t('No ad name') : ad) : t('Any ad')}
-              options={[{ label: t('Any ad'), href: href({ ad: '', lead: '' }), on: !ad }, ...adList.map(a => ({ label: `${a.name === NO_AD ? t('No ad name') : a.name} (${a.count})`, href: href({ ad: a.name, lead: '' }), on: ad === a.name }))]} />
+              options={[{ label: t('Any ad'), href: href({ ad: '' }), on: !ad }, ...adList.map(a => ({ label: `${a.name === NO_AD ? t('No ad name') : a.name} (${a.count})`, href: href({ ad: a.name }), on: ad === a.name }))]} />
           )}
           {hasPermission(g.ctx.permissions, 'team.activity') && peopleOptions.length > 0 && (
             <FilterMenu label={t('Worked on by')} testId="person-filter" current={by ? personName(by) : t('Anyone')}
-              options={[{ label: t('Anyone'), href: href({ by: '', lead: '' }), on: !by }, ...peopleOptions.map(p => ({ label: personName(p.email), href: href({ by: p.email, lead: '' }), on: by === p.email }))]} />
+              options={[{ label: t('Anyone'), href: href({ by: '' }), on: !by }, ...peopleOptions.map(p => ({ label: personName(p.email), href: href({ by: p.email }), on: by === p.email }))]} />
           )}
         </div>
       </nav>
