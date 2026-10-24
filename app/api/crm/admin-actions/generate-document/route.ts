@@ -1,5 +1,5 @@
 /**
- * Admin Action: Generate Document (OA, Lease, SS-4) or Send Document
+ * Admin Action: Generate Document (OA, Lease, SS-4, Intercompany, Ownership Attestation) or Send Document
  *
  * POST /api/crm/admin-actions/generate-document
  *
@@ -779,6 +779,31 @@ export async function POST(request: Request) {
         const result = await generateIntercompanyForAccount(account_id, {
           effective_date: params.effective_date as string | undefined,
           actor: "crm-admin",
+        })
+        if (result.error) return NextResponse.json({ error: result.error }, { status: 400 })
+        return NextResponse.json(result)
+      }
+
+      case "generate_ownership_attestation": {
+        if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
+        const { generateOwnershipAttestationForAccount } = await import("@/lib/operations/ownership-attestation")
+        const result = await generateOwnershipAttestationForAccount(account_id, {
+          effective_date: params.effective_date as string | undefined,
+          actor: "crm-admin",
+        })
+        if (result.error) return NextResponse.json({ error: result.error }, { status: 400 })
+        return NextResponse.json(result)
+      }
+
+      case "send_ownership_attestation": {
+        if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
+        const { sendOwnershipAttestationForSignature } = await import("@/lib/operations/ownership-attestation")
+        const { chooseLinkBase, originFromHeaders } = await import("@/lib/esign/link-base")
+        const baseUrl = chooseLinkBase(originFromHeaders(n => request.headers.get(n)), process.env.VERCEL_ENV === "production")
+        const result = await sendOwnershipAttestationForSignature(account_id, {
+          effective_date: params.effective_date as string | undefined,
+          actor: "crm-admin",
+          baseUrl,
         })
         if (result.error) return NextResponse.json({ error: result.error }, { status: 400 })
         return NextResponse.json(result)

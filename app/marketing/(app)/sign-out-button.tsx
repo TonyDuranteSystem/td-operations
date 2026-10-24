@@ -1,7 +1,9 @@
 'use client'
 import { createClient } from '@/lib/supabase/client'
+import { useT } from '@/components/marketing/lang-provider'
 
 export function SignOutButton() {
+  const t = useT()
   return (
     <button
       type="button"
@@ -11,7 +13,7 @@ export function SignOutButton() {
         window.location.href = '/login'
       }}
     >
-      Sign out
+      {t('Sign out')}
     </button>
   )
 }

@@ -97,13 +97,55 @@ export function pickWaiting(
   return out.sort((a, b) => b.paidAt.localeCompare(a.paidAt))
 }
 
+/** A TD Marketing lead staff can pick for a "Marketing sale", with the kinds of sale its team offers (empty when the lead has no team). */
+export interface MarketingLeadChoice {
+  id: string
+  name: string
+  email: string | null
+  teamId: string | null
+  kinds: Array<{ key: string; label: string }>
+  /** Why it is offered: the payer's email is the lead's email, or only the NAMES look alike (never pre-selected, always for a person to check). */
+  via?: "email" | "name"
+}
+
 /** Who in our records shares the payer's email. Suggestions only: nothing acts on them without a click. */
 export interface PayerMatch {
   leads: Array<{ id: string; name: string; status: string }>
   contacts: Array<{ id: string; name: string }>
-  marketingLeads: Array<{ id: string; name: string }>
+  /** Marketing leads with the payer's email — offered straight to the "Marketing sale" picker, so a card in another name (Stella) still finds the lead (Monica). */
+  marketingLeads: MarketingLeadChoice[]
+}
+
+/** An open invoice the payer could have paid (Phase 3 "Paid an invoice"). Whole units. */
+export interface OpenInvoice {
+  paymentId: string
+  invoiceNumber: string
+  description: string
+  amountDue: number
+  currency: "EUR" | "USD"
+  dueDate: string | null
+  status: string
+}
+
+/**
+ * "Looks like a marketing sale": exactly one marketing lead (on a team) has the payer's email. Carries a PREVIEW of what confirming would
+ * record, computed from the split in force on the day of payment. Whole units. Nothing is recorded by showing it.
+ */
+export interface MarketingSuggestion {
+  leadId: string
+  leadName: string
+  teamName: string
+  kind: string
+  kindLabel: string
+  currency: "EUR" | "USD"
+  /** False when no split is set for this kind on the payment day ("terms not set"): the amounts below are then null. */
+  termSet: boolean
+  sellerAmount: number | null
+  tdAmount: number | null
 }
 
 export interface WaitingRow extends WaitingPayment {
   match: PayerMatch
+  invoices: OpenInvoice[]
+  marketingSuggestion: MarketingSuggestion | null
 }

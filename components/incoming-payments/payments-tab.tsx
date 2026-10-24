@@ -8,7 +8,7 @@ import { ConfirmActions } from '@/components/incoming-payments/confirm-actions'
 import type { WaitingRow } from '@/lib/incoming-payments/classify'
 
 function money(amount: number, currency: string): string {
-  return `${currency === 'EUR' ? '€' : '$'}${amount.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
+  return `${currency === 'EUR' ? '€' : '$'}${amount.toLocaleString('en-US', { minimumFractionDigits: Number.isInteger(amount) ? 0 : 2, maximumFractionDigits: 2 })}`
 }
 
 function when(iso: string): string {
@@ -52,14 +52,17 @@ export function PaymentsToConfirmTab({ rows }: { rows: WaitingRow[] | null }) {
                 <p className="mt-2 text-sm text-zinc-700">
                   {r.match.leads.length > 0 && <>Lead with this email: {r.match.leads.map(l => `${l.name || 'Unnamed'} (${l.status})`).join(', ')}. </>}
                   {r.match.contacts.length > 0 && <>Client contact with this email: {r.match.contacts.map(c => c.name || 'Unnamed').join(', ')}. </>}
-                  {r.match.marketingLeads.length > 0 && (
-                    <b className="text-amber-800">This email is also a TD Marketing lead ({r.match.marketingLeads.map(m => m.name || 'Unnamed').join(', ')}): marketing sales follow marketing&apos;s own rules, so do not record it here as a paid call. </b>
+                  {r.match.marketingLeads.some(m => m.via !== 'name') && (
+                    <b className="text-amber-800">This email is also a TD Marketing lead ({r.match.marketingLeads.filter(m => m.via !== 'name').map(m => m.name || 'Unnamed').join(', ')}): choose <i>Marketing sale</i> (marketing sales follow marketing&apos;s own rules), not a paid call. </b>
                   )}
-                  {r.match.leads.length === 0 && r.match.contacts.length === 0 && r.match.marketingLeads.length === 0 && <>No lead, client or marketing lead has this email.</>}
+                  {r.match.leads.length === 0 && r.match.contacts.length === 0 && !r.match.marketingLeads.some(m => m.via !== 'name') && <>No lead, client or marketing lead has this email. </>}
+                  {r.match.marketingLeads.some(m => m.via === 'name') && (
+                    <span className="text-zinc-600">Marketing leads with a similar name (check before using): {r.match.marketingLeads.filter(m => m.via === 'name').map(m => m.name || 'Unnamed').join(', ')}.</span>
+                  )}
                 </p>
 
                 <div className="mt-3">
-                  <ConfirmActions sessionId={r.sessionId} amountText={amountText} leads={r.match.leads} />
+                  <ConfirmActions sessionId={r.sessionId} amount={r.amount} currency={r.currency} amountText={amountText} leads={r.match.leads} invoices={r.invoices} suggestedMarketingLeads={r.match.marketingLeads} marketingSuggestion={r.marketingSuggestion} searchSeed={r.email || r.name || ''} />
                 </div>
               </li>
             )

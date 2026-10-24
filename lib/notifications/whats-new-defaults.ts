@@ -22,6 +22,7 @@ export const WHATS_NEW_DEFAULT_STEPS: Record<string, string> = {
   closure_wizard_submitted: 'Review the closure form, then start the state compliance check',
   members_updated: 'Review the updated member details and reconcile the account',
   installment_2_paid: 'The tax return gate is lifted; check the return and take its next step',
+  unlabelled_payment_waiting: 'Open Calendar → Payments to confirm and say what the payment was (paid call, marketing sale, an invoice, or already recorded)',
   person_left: 'Check the company still has the right people; if the person asks for their documents, send them by hand',
   account_status_changed: 'Check the status change is what you meant and the company page still shows the right things',
   contact_updated: 'Review the contact details the client submitted',

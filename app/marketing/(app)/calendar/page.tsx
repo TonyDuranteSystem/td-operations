@@ -9,6 +9,8 @@ import { buildAgenda, romeZoneName, type CalItem } from '@/lib/marketing/calenda
 import { loadLeadActivity } from '@/lib/marketing/note-read'
 import { canSeeNotes } from '@/lib/marketing/lead-privacy'
 import { personName } from '@/lib/marketing/setter-note'
+import { getLang } from '@/lib/marketing/lang'
+import { makeT } from '@/lib/marketing/i18n'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,11 +23,13 @@ const WINDOWS = [14, 30, 60, 90]
 export default async function MarketingCalendar({ searchParams }: { searchParams: Promise<{ who?: string; days?: string }> }) {
   const g = await resolveMarketingContext()
   if (g.ok === false) redirect('/marketing')
+  const lang = getLang()
+  const t = makeT(lang)
   const perms = g.ctx.permissions
   const seesAll = hasPermission(perms, 'team.activity')
   const seesOwn = hasPermission(perms, 'leads.worklist') || hasPermission(perms, 'leads.pick')
   if (!seesAll && !seesOwn) {
-    return <main className="mx-auto max-w-xl px-4 py-10"><p className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm">You do not have access to the Calendar. Ask your team owner.</p></main>
+    return <main className="mx-auto max-w-xl px-4 py-10"><p className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm">{t('You do not have access to the Calendar. Ask your team owner.')}</p></main>
   }
   const sp = await searchParams
   const db = leadDb()
@@ -37,7 +41,7 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
   const days = WINDOWS.includes(Number(sp.days)) ? Number(sp.days) : 14
   const now = new Date()
   const data = await loadCalendarData(db, teamId)
-  const agenda = buildAgenda({ leads: data.leads, events: data.events, members: members.map(m => ({ user_id: m.user_id, email: m.email, status: m.status })), ownerId: who, now, days })
+  const agenda = buildAgenda({ leads: data.leads, events: data.events, members: members.map(m => ({ user_id: m.user_id, email: m.email, status: m.status })), ownerId: who, now, days, appointments: data.appointments, lang })
   // a line of the setter's note under each call back, for people who may read the team's notes
   const shown = [...agenda.late, ...agenda.days.flatMap(d => d.items)]
   const notes = canSeeNotes(perms) && shown.length > 0 ? (await loadLeadActivity(db, shown.map(i => i.leadId))).notes : null
@@ -55,14 +59,14 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
   const lateCount = agenda.late.length + agenda.lateMore
   const total = due + agenda.late.length
   const row = (it: CalItem) => (
-    <li key={it.leadId}>
+    <li key={`${it.leadId}-${it.kind}`}>
       <Link href={`/marketing/leads?lead=${it.leadId}`} className={`grid grid-cols-[3.5rem_minmax(0,1fr)] items-start gap-3 rounded-lg border bg-white px-3 py-2.5 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-900 ${it.late ? 'border-red-300' : ''}`} data-testid="cal-item">
         <span className="font-mono text-sm font-medium tabular-nums">{it.time}</span>
         <span className="min-w-0">
-          <span className="block truncate text-sm font-medium">{it.name}</span>
+          <span className="block truncate text-sm font-medium">{it.name}{it.kind === 'appointment' && <span className="ml-2 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-normal text-sky-800">{t('Call with the seller')}</span>}</span>
           <span className="block truncate text-xs text-slate-500">
             {it.late && <span className="font-medium text-red-700">{it.dateLabel} · {it.lateBy} · </span>}
-            {[it.ad, seesAll || previewAll ? (it.setBy ? `set by ${it.setBy}${it.setByMember ? '' : ' (not on the team)'}` : 'who set it is not recorded') : null].filter(Boolean).join(' · ')}
+            {[it.ad, seesAll || previewAll ? (it.setBy ? t('set by {name}', { name: it.setBy }) + (it.setByMember ? '' : t(' (not on the team)')) : t('who set it is not recorded')) : null].filter(Boolean).join(' · ')}
           </span>
           {notes?.get(it.leadId)?.text && <span className="mt-0.5 line-clamp-2 block break-words text-xs text-slate-700">{notes?.get(it.leadId)?.text}</span>}
         </span>
@@ -72,24 +76,24 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
   return (
     <div className="space-y-4 p-6">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div><h1 className="text-2xl font-semibold">Calendar</h1><p className="text-sm text-slate-500" data-testid="cal-sub">Call backs, by day. {seesAll ? (who === 'all' ? 'Call backs for everyone' : `Call backs for ${personName(members.find(m => m.user_id === who)?.email)}`) : 'Your call backs'} · {due} due in the next {days} days{lateCount > 0 ? `, ${lateCount} late` : ''}</p></div>
+        <div><h1 className="text-2xl font-semibold">{t('Calendar')}</h1><p className="text-sm text-slate-500" data-testid="cal-sub">{t('Call backs and booked calls, by day.')} {seesAll ? (who === 'all' ? t('Call backs for everyone') : t('Call backs for {name}', { name: personName(members.find(m => m.user_id === who)?.email) })) : t('Your call backs')} · {t('{n} due in the next {days} days', { n: due, days })}{lateCount > 0 ? t(', {n} late', { n: lateCount }) : ''}</p></div>
         {seesAll && members.length > 0 && (
-          <nav aria-label="Whose calendar" className="flex flex-wrap items-center gap-2" data-testid="cal-picker">
-            <span className="text-xs text-slate-500">Whose:</span>
-            <Link href={href({ who: '' })} className={chip(who === 'all')} aria-current={who === 'all' ? 'true' : undefined}>Everyone</Link>
+          <nav aria-label={t('Whose calendar')} className="flex flex-wrap items-center gap-2" data-testid="cal-picker">
+            <span className="text-xs text-slate-500">{t('Whose:')}</span>
+            <Link href={href({ who: '' })} className={chip(who === 'all')} aria-current={who === 'all' ? 'true' : undefined}>{t('Everyone')}</Link>
             {members.map(m => <Link key={m.user_id} href={href({ who: m.user_id })} className={chip(who === m.user_id)} aria-current={who === m.user_id ? 'true' : undefined}>{personName(m.email)}</Link>)}
           </nav>
         )}
       </div>
-      {previewAll && <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="cal-preview">You are viewing as a role that sees only its own call backs. Here is everyone&apos;s, because you may see them all; a real person would see only hers.</p>}
-      <p className="text-sm text-slate-600" data-testid="cal-help">Times are Rome time ({romeZoneName(now)}). A row opens the lead; to change a time, open the lead and press <b className="font-medium">Call back later</b>.</p>
-      {data.truncated && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">Showing the first call backs only; some later ones are not listed.</p>}
-      {total === 0 && <div className="rounded-xl border border-dashed p-6 text-sm text-slate-600" data-testid="cal-empty">{seesAll && who !== 'all' ? 'This person has no call backs set' : 'No call backs set'} for the next {days} days. Nothing is due. To add one, <Link href="/marketing/leads" className="underline">open a lead</Link>, press Call back later, and pick a day and time.</div>}
+      {previewAll && <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="cal-preview">{t("You are viewing as a role that sees only its own call backs. Here is everyone's, because you may see them all; a real person would see only hers.")}</p>}
+      <p className="text-sm text-slate-600" data-testid="cal-help">{t('Times are Rome time ({zone}). A row opens the lead; to change a time, open the lead and press ', { zone: romeZoneName(now) })}<b className="font-medium">{t('Call back later')}</b>.</p>
+      {data.truncated && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{t('Showing the first call backs only; some later ones are not listed.')}</p>}
+      {total === 0 && <div className="rounded-xl border border-dashed p-6 text-sm text-slate-600" data-testid="cal-empty">{seesAll && who !== 'all' ? t('This person has no call backs set') : t('No call backs set')}{t(' for the next {days} days. Nothing is due. To add one, ', { days })}<Link href="/marketing/leads" className="underline">{t('open a lead')}</Link>{t(', press Call back later, and pick a day and time.')}</div>}
       {agenda.late.length > 0 && (
-        <section aria-label="Late call backs" data-testid="cal-late">
-          <h2 className="mb-1.5 text-sm font-medium text-red-700">Late · {lateCount}</h2>
+        <section aria-label={t('Late call backs')} data-testid="cal-late">
+          <h2 className="mb-1.5 text-sm font-medium text-red-700">{t('Late · {n}', { n: lateCount })}</h2>
           <ul className="space-y-1.5">{agenda.late.map(row)}</ul>
-          {agenda.lateMore > 0 && <p className="mt-1.5 text-xs text-slate-500">…and {agenda.lateMore} more, less overdue than these.</p>}
+          {agenda.lateMore > 0 && <p className="mt-1.5 text-xs text-slate-500">{t('…and {n} more, less overdue than these.', { n: agenda.lateMore })}</p>}
         </section>
       )}
       {agenda.days.map(d => (
@@ -99,9 +103,9 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
         </section>
       ))}
       <p className="text-sm text-slate-600">
-        {agenda.beyond > 0 && <>{agenda.beyond} more later. </>}
-        {WINDOWS.filter(w => w > days).slice(0, 1).map(w => <Link key={w} href={href({ days: w })} className="underline" data-testid="cal-more">Show {w} days</Link>)}
-        {days > 14 && <> · <Link href={href({ days: 14 })} className="underline">Back to 14 days</Link></>}
+        {agenda.beyond > 0 && <>{t('{n} more later. ', { n: agenda.beyond })}</>}
+        {WINDOWS.filter(w => w > days).slice(0, 1).map(w => <Link key={w} href={href({ days: w })} className="underline" data-testid="cal-more">{t('Show {n} days', { n: w })}</Link>)}
+        {days > 14 && <> · <Link href={href({ days: 14 })} className="underline">{t('Back to 14 days')}</Link></>}
       </p>
     </div>
   )

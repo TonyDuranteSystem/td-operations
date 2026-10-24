@@ -412,6 +412,9 @@ export default function PortalChatsPage() {
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
   // Right-pane sub-tab: Messages | What's New (incoming client-action notes) | To Do (cards)
   const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'ideas' | 'todo' | 'email' | 'worker'>('messages')
+  // "Select" mode: tick several messages of the open conversation and delete them together (Luca 2026-10-23: six messages, one by one).
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(new Set())
   // Chat-list filter chip: all / unread / whatsnew / issues.
   const [listFilter, setListFilter] = useState<'all' | 'unread' | 'whatsnew'>('all')
   // "Open card" from a What's New note → opens the same dashboard card editor, preset to this client.
@@ -1433,6 +1436,38 @@ export default function PortalChatsPage() {
       toast.error(err instanceof Error && err.message ? err.message : 'Failed to delete message')
     },
   })
+
+  // Delete the ticked messages in one request. The request names the OPEN conversation (a company chat, or one person's thread) and the
+  // server refuses any message outside it. Same soft delete as the single delete: the client stops seeing them, rows are kept.
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const res = await fetch('/api/portal/chat/messages/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(selectedAccountId ? { ids, account_id: selectedAccountId } : { ids, contact_id: selectedContactId }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Delete failed — please try again.')
+      return d as { deleted: number; alreadyDeleted: number }
+    },
+    onSuccess: (d) => {
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId] })
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+      setSelectMode(false)
+      setSelectedMsgIds(new Set())
+      toast.success(`${d.deleted} ${d.deleted === 1 ? 'message' : 'messages'} deleted${d.alreadyDeleted ? ` (${d.alreadyDeleted} were already gone)` : ''}`)
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to delete the messages')
+    },
+  })
+
+  // A selection belongs to ONE view: leaving the conversation, the topic or the Messages tab drops it, so a delete can never reach
+  // messages that are no longer on screen (the same stale-selection trap the send pop-up had).
+  useEffect(() => {
+    setSelectMode(false)
+    setSelectedMsgIds(new Set())
+  }, [selectedAccountId, selectedContactId, adminActiveTopic, chatViewMode])
 
   const pinMessageMutation = useMutation({
     mutationFn: async ({ messageId, pinned }: { messageId: string; pinned: boolean }) => {
@@ -4029,12 +4064,22 @@ export default function PortalChatsPage() {
                   )
 
                   return (
-                    <div key={msg.id} id={`pc-msg-${msg.id}`} className={cn('scroll-mt-4 flex flex-col gap-0.5', isAdmin ? 'items-end' : 'items-start')}>
+                    <div
+                      key={msg.id}
+                      id={`pc-msg-${msg.id}`}
+                      className={cn('scroll-mt-4 flex flex-col gap-0.5', isAdmin ? 'items-end' : 'items-start', selectMode && 'cursor-pointer rounded-lg py-0.5 hover:bg-zinc-50', selectMode && selectedMsgIds.has(msg.id) && 'bg-red-50 hover:bg-red-50')}
+                      onClick={selectMode ? () => setSelectedMsgIds(prev => { const n = new Set(prev); if (n.has(msg.id)) n.delete(msg.id); else n.add(msg.id); return n }) : undefined}
+                    >
                       <div className={cn('flex items-end gap-1 max-w-full', isAdmin ? 'justify-end' : 'justify-start')}>
-                      {isAdmin && actionButton}
+                      {selectMode && (
+                        <input type="checkbox" checked={selectedMsgIds.has(msg.id)} readOnly aria-label="Select this message" className="mb-2 mr-1 h-4 w-4 shrink-0 accent-red-600" />
+                      )}
+                      {isAdmin && !selectMode && actionButton}
                       <div
                         className={cn(
                           'rounded-xl px-4 py-2.5 overflow-hidden transition-shadow',
+                          // Select mode: the bubble is inert (links, images, buttons inside it do nothing) so a click anywhere on the row only ticks it
+                          selectMode && 'pointer-events-none',
                           editingMessageId === msg.id ? 'max-w-[90%] sm:max-w-[520px]' : 'max-w-[75%]',
                           isAdmin
                             ? 'bg-blue-600 text-white'
@@ -4244,7 +4289,7 @@ export default function PortalChatsPage() {
                           )
                         })()}
                       </div>
-                      {!isAdmin && actionButton}
+                      {!isAdmin && !selectMode && actionButton}
                       </div>
                       <div className={cn('px-1', isAdmin ? 'self-end' : 'self-start')}>
                         <MessageReactions
@@ -4635,7 +4680,49 @@ export default function PortalChatsPage() {
                 'px-3 py-1 border-t text-[11px] font-medium flex items-center gap-1.5 shrink-0',
                 adminActiveTopic ? 'bg-blue-50 text-blue-700' : 'bg-zinc-50 text-zinc-500'
               )}>
-                Replying in: <span className="font-semibold">{adminActiveTopic || 'General'}</span>
+                {selectMode ? (
+                  <>
+                    <span className="font-semibold">{selectedMsgIds.size} selected</span>
+                    <button
+                      type="button"
+                      disabled={selectedMsgIds.size === 0 || bulkDeleteMutation.isPending}
+                      onClick={() => {
+                        const ids = Array.from(selectedMsgIds)
+                        const byId = new Map(combinedMessages.map(m => [m.id, m]))
+                        const previews = ids.slice(0, 5).map(id => {
+                          const m = byId.get(id)
+                          const t = m?.message ? (m.message.length > 60 ? m.message.slice(0, 60) + '…' : m.message) : '[Attachment]'
+                          return `• ${t}`
+                        }).join('\n')
+                        const more = ids.length > 5 ? `\n… and ${ids.length - 5} more` : ''
+                        if (window.confirm(`Delete ${ids.length} ${ids.length === 1 ? 'message' : 'messages'}?\n\n${previews}${more}\n\nThe client will no longer see them. This cannot be undone from here.`)) {
+                          bulkDeleteMutation.mutate(ids)
+                        }
+                      }}
+                      className="ml-2 inline-flex items-center gap-1 rounded-md bg-red-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-red-700 disabled:opacity-40"
+                    >
+                      <Trash2 className="h-3 w-3" /> {bulkDeleteMutation.isPending ? 'Deleting…' : 'Delete selected'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setSelectMode(false); setSelectedMsgIds(new Set()) }}
+                      className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-700 hover:bg-zinc-50"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    Replying in: <span className="font-semibold">{adminActiveTopic || 'General'}</span>
+                    <button
+                      type="button"
+                      onClick={() => { setEditingMessageId(null); setEditDraft(''); setSelectMode(true) }}
+                      className="ml-auto inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-zinc-600 hover:bg-zinc-50"
+                    >
+                      <CheckCircle2 className="h-3 w-3" /> Select
+                    </button>
+                  </>
+                )}
               </div>
             )}
 
