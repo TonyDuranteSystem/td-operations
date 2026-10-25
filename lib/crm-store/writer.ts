@@ -227,6 +227,108 @@ export async function saveBytesToStore(input0: SaveMeta & { bytes: Buffer }): Pr
   return { ...(await finish(result, path)), mimeType: input.mimeType ?? null, size: input.bytes.length }
 }
 
+// ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ONE safe save for an EXISTING file (dev job bd21e833, master plan Part 54): a new version of the SAME file, whatever its
+// caller key. All the rules (the file changed since it was opened, filed / signed / passport-ID / replaced / amended locks, the
+// same bytes, a retry of a save that already went through) are decided by ONE database function, store_append_version; the old
+// save path (store_write) obeys the same locks through a trigger.
+// ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export type AppendStatus = "versioned" | "unmerged" | "unchanged" | "conflict" | "locked" | "frozen" | "needs_confirmation" | "trashed" | "not_found"
+
+export interface AppendVersionInput {
+  fileId: string
+  bytes: Buffer
+  mimeType: string | null
+  /** the version the person started from (the page / the checkout told them). null = a system writer that does not edit by hand. */
+  expectedVersionNo: number | null
+  actor: string | null
+  source: "web" | "mac" | "claude" | "restore"
+  /** ONLY the signed-in web route sets this, after it verified the one-time confirmation. Never the Mac or Claude routes. */
+  confirmed?: boolean
+  /** keep the save as a hidden "not applied" version instead of making it current (the person chose it after a conflict) */
+  unmerged?: boolean
+  reason?: string | null
+  note?: string | null
+  deviceId?: string | null
+  ip?: string | null
+  userAgent?: string | null
+  skipAnalysis?: boolean
+}
+
+export interface AppendVersionResult {
+  status: AppendStatus
+  fileId: string | null
+  name: string | null
+  versionId?: string | null
+  versionNo?: number | null
+  /** locked / needs_confirmation: why — signed | replace_only | replaced | amended */
+  kind?: string | null
+  currentVersionNo?: number | null
+  currentBy?: string | null
+  currentAt?: string | null
+  /** unchanged because this very save had already gone through (a retry) */
+  alreadyApplied?: boolean
+  size?: number
+  mimeType?: string | null
+}
+
+export async function appendVersionBytes(i: AppendVersionInput): Promise<AppendVersionResult> {
+  const { data: f, error: fErr } = await db().from("store_files").select("owner_id").eq("id", i.fileId).maybeSingle()
+  if (fErr) throw new Error(`store: could not read the file — ${fErr.message}`)
+  if (!f) return { status: "not_found", fileId: null, name: null }
+  const sha = sha256Hex(i.bytes)
+  const path = storeObjectPath(f.owner_id as string)
+  const put = () => db().storage.from(STORE_BUCKET).upload(path, i.bytes, { contentType: i.mimeType ?? "application/octet-stream", upsert: false })
+  let { error: upErr } = await put()
+  if (upErr && isTransientStorageError(upErr.message)) {
+    await new Promise((r) => setTimeout(r, 750))
+    const again = await put()
+    upErr = again.error && !/already exists|Duplicate/i.test(again.error.message) ? again.error : null
+  }
+  if (upErr) throw new Error(`store: upload failed — ${upErr.message}`)
+
+  let r: Record<string, unknown>
+  try {
+    const size = await storedSize(STORE_BUCKET, path)
+    if (size !== i.bytes.length) throw new Error(`store: stored size ${size} ≠ ${i.bytes.length} bytes sent`)
+    const { data, error } = await db().rpc("store_append_version", {
+      p: {
+        file_id: i.fileId, expected_version_no: i.expectedVersionNo, bucket: STORE_BUCKET, path, sha256: sha, size, mime: i.mimeType ?? null,
+        actor: i.actor, source: i.source, confirmed: i.confirmed === true, unmerged: i.unmerged === true,
+        reason: i.reason ?? null, note: i.note ?? null, device_id: i.deviceId ?? null, ip: i.ip ?? null, user_agent: i.userAgent ?? null,
+      },
+    })
+    if (error) throw new Error(`store: could not save the new version — ${error.message}`)
+    r = data as Record<string, unknown>
+  } catch (e) {
+    await removeIfUnreferenced(path)
+    throw e
+  }
+  const status = r.status as AppendStatus
+  // anything that did not become a saved version leaves no object behind (the helper never removes one a version refers to)
+  if (status !== "versioned" && status !== "unmerged") await removeIfUnreferenced(path)
+  if (status === "versioned" || status === "unmerged") {
+    // File Understanding reads every new version (same switch as every other save); a failure to queue never fails the save
+    if (r.version_id && !i.skipAnalysis && process.env.STORE_ANALYSIS_ENABLED === "1") {
+      try { await (await import("./understand/analyze")).enqueueAnalysis(r.version_id as string, i.actor) } catch (e) { console.error("[crm-store] analysis not queued:", e instanceof Error ? e.message : e) }
+    }
+  }
+  if (status === "versioned") {
+    // the CRM list keeps the size and type it was given at the first save: keep it true (best effort, never fails the save)
+    try {
+      await db().from("documents").update({ file_size: i.bytes.length, mime_type: i.mimeType ?? null, updated_at: new Date().toISOString() }).eq("drive_file_id", `store:${i.fileId}`)
+    } catch (e) { console.error("[crm-store] could not refresh the CRM row after a new version:", e instanceof Error ? e.message : e) }
+  }
+  return {
+    status, fileId: (r.file_id as string | undefined) ?? i.fileId, name: (r.name as string | undefined) ?? null,
+    versionId: (r.version_id as string | undefined) ?? null, versionNo: (r.version_no as number | undefined) ?? null,
+    kind: (r.kind as string | undefined) ?? null, currentVersionNo: (r.current_version_no as number | undefined) ?? null,
+    currentBy: (r.current_by as string | undefined) ?? null, currentAt: (r.current_at as string | undefined) ?? null,
+    alreadyApplied: r.already_applied === true, size: i.bytes.length, mimeType: i.mimeType ?? null,
+  }
+}
+
 export interface UploadIntent {
   intentId: string
   bucket: string

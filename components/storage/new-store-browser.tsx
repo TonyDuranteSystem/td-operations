@@ -32,6 +32,8 @@ import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQues
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
 import { putFileWithRetry } from '@/lib/storage/put-with-retry'
 import { MergeFilesDialog, type MergeFileInfo } from './merge-files-dialog'
+import { NewVersionDialog, type EditTarget } from './new-version-dialog'
+import { lockText } from '@/lib/crm-store/new-version-rules'
 import { MergedPreviewModal } from './merged-preview-modal'
 import { baseName } from '@/lib/crm-store/merge-parts'
 import { mergeBlockReason } from '@/lib/crm-store/merge-rules'
@@ -60,6 +62,8 @@ interface File_ {
   staffOnly: boolean; personal: boolean; versions: number; size: number | null; mimeType: string | null; updatedAt: string
   listed: boolean; personName: string | null; inPersonStorage: boolean; docId: string | null
   sha256?: string | null; needsReview?: string | null
+  /** current version number, why it can't be edited in place (signed / replace_only / replaced / filed), edits kept "not applied" */
+  versionNo?: number | null; lockKind?: string | null; unmergedPending?: number
   /** in My files › Shared with staff: who it is shared with (null = not a shareable place) */
   sharedWith?: string[] | null
   /** none / draft / filed / amended */
@@ -284,7 +288,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [preview, setPreview] = useState<File_ | null>(null)
   const [ocrDocId, setOcrDocId] = useState<string | null>(null)
   const [versionsFor, setVersionsFor] = useState<string | null>(null)
-  const [versions, setVersions] = useState<{ id: string; versionNo: number; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null }[] | null>(null)
+  const [versions, setVersions] = useState<{ id: string; versionNo: number; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null; unmerged?: boolean }[] | null>(null)
+  const [editing, setEditing] = useState<EditTarget | null>(null)
+  const [lockNote, setLockNote] = useState<string | null>(null)
   const [previewVersion, setPreviewVersion] = useState<{ file: File_; src: string; title: string; viewSrc: string } | null>(null)
   const [busyFiles, setBusyFiles] = useState<Set<string>>(new Set())
   const [types, setTypes] = useState<DocType[] | null>(null)
@@ -634,6 +640,22 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       setVersionsFor(null)
       toast.error(errMsg(e, 'Could not load the versions.'))
     }
+  }
+
+  /** "Make this the current copy": the older copy is saved again as a NEW version (nothing is deleted) */
+  const makeCurrent = async (f: File_, versionNo: number) => {
+    try {
+      const r = await postJson<{ status: string; message: string }>(`/api/crm-store/browse/file/${f.id}/restore`, { versionNo, baseVersionNo: f.versionNo ?? 1 }, 'The older copy could not be restored.')
+      if (r.status === 'versioned') toast.success(r.message); else toast.error(r.message)
+    } catch (e) { toast.error(errMsg(e, 'The older copy could not be restored.')) }
+    setVersionsFor(null)
+    void refreshAll()
+  }
+
+  const startEdit = (f: File_) => {
+    setMenuFor(null)
+    if (f.lockKind) { setLockNote(lockText(f.lockKind, f.name)); return }
+    setEditing({ id: f.id, name: f.name, mimeType: f.mimeType, size: f.size, versionNo: f.versionNo ?? null, ownerId: ownerId ?? '' })
   }
 
   const withBusy = async (id: string, fn: () => Promise<void>) => {
@@ -1910,6 +1932,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const fileMenuItems = (f: File_, inFolder: Fold | null) => (
     <>
 <MenuItem icon={Search} label="Preview" onClick={() => { setMenuFor(null); setPreview(f) }} />
+              {f.state === 'live' && <MenuItem icon={f.lockKind ? Lock : Upload} label="Upload edited version…" onClick={() => startEdit(f)} />}
               {ai.available && f.state === 'live' && <MenuItem icon={ScanText} label="Check this file" onClick={() => { setMenuFor(null); setAiFile(f.id) }} />}
               <MenuItem icon={Layers} label="Details" onClick={() => { void openDetails(f.id) }} />
               <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }} />
@@ -1998,27 +2021,38 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 </button>
               </FastTooltip>
             )}
-            {f.versions > 1 && (
+            {f.lockKind && (
+              <FastTooltip label={lockText(f.lockKind, f.name)}>
+                <button type="button" onClick={(e) => { e.stopPropagation(); setLockNote(lockText(f.lockKind, f.name)) }} aria-label="Can't be edited in place" className="inline-flex items-center gap-1 text-zinc-500 hover:underline"><Lock className="h-3 w-3" />Locked</button>
+              </FastTooltip>
+            )}
+            {(f.versions > 1 || (f.unmergedPending ?? 0) > 0) && (
               <div className="relative">
                 <FastTooltip label="See and open every saved copy">
                   <button type="button" onClick={(e) => { e.stopPropagation(); openVersions(f.id) }} className="inline-flex items-center gap-1 text-blue-700 hover:underline">
-                    <Layers className="h-3 w-3" />{f.versions} versions
+                    <Layers className="h-3 w-3" />v{f.versionNo ?? f.versions} · {Math.max(0, f.versions - 1)} older{(f.unmergedPending ?? 0) > 0 ? ` · ${f.unmergedPending} unmerged` : ''}
                   </button>
                 </FastTooltip>
                 {versionsFor === f.id && (
-                  <div className="absolute left-0 z-20 mt-1 w-80 rounded-md border border-zinc-200 bg-white py-1 text-xs shadow-lg" onClick={(e) => e.stopPropagation()}>
-                    <p className="px-3 py-1 text-[11px] text-zinc-500">Each time a file with this name was uploaded again (newest first):</p>
+                  <div className="absolute left-0 z-20 mt-1 w-96 max-w-[90vw] rounded-md border border-zinc-200 bg-white py-1 text-xs shadow-lg" onClick={(e) => e.stopPropagation()}>
+                    <p className="px-3 py-1 text-[11px] text-zinc-500">Older copies of this file (newest first). Nothing is deleted.</p>
                     {versions === null && <p className="px-3 py-1.5 text-zinc-500">Loading…</p>}
                     {(versions ?? []).map((v) => (
-                      <div key={v.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-50">
+                      <div key={v.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1.5 hover:bg-zinc-50">
                         <span className="font-medium">v{v.versionNo}</span>
                         <span className="text-zinc-500">{fmtDate(v.createdAt)} · {fmtSize(v.size)}{v.by ? ` · ${v.by}` : ''}</span>
                         {v.current && <Badge tone="green">current</Badge>}
+                        {v.unmerged && <Badge tone="amber">not applied</Badge>}
                         <span className="flex-1" />
                         <button type="button" className="text-blue-700 hover:underline"
                           onClick={() => { setVersionsFor(null); setPreviewVersion({ file: { ...f, mimeType: v.mimeType ?? f.mimeType }, src: `/api/crm-store/browse/file/${f.id}/versions?open=${v.id}`, viewSrc: `/api/crm-store/browse/file/${f.id}/view?version=${v.id}`, title: `${f.name} — version ${v.versionNo}${v.current ? ' (current)' : ''}` }) }}>
                           View
                         </button>
+                        {!v.current && !f.lockKind && f.state === 'live' && (
+                          <button type="button" className="text-blue-700 hover:underline" onClick={() => void makeCurrent(f, v.versionNo)}>
+                            {v.unmerged ? 'Apply this edit' : 'Make this the current copy'} (saved as v{Math.max(0, ...(versions ?? []).map((x) => x.versionNo)) + 1})
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -2580,7 +2614,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               </label>
               {myDriveProbe?.allowed && <button type="button" onClick={() => { setMyDriveFor(viewFolder); setUploadOpen(false) }} className="rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50" data-testid="my-drive-open">From my Google Drive</button>}
               <button type="button" onClick={() => setUploadOpen(false)} className="text-xs text-zinc-500 hover:underline">Cancel</button>
-              <span className="text-xs text-zinc-400">Any kind of file. The same name replaces the file; the old copy is kept under Versions.</span>
+              <span className="text-xs text-zinc-400">Any kind of file. The same name replaces the file; the old copy is kept under “older copies” (or use “Upload edited version…” on the file itself).</span>
             </div>
           )}
           {uploadOpen && !isInternalOwnerKind(ownerKind) && (
@@ -2672,7 +2706,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                   onChange={(e) => { const file = e.target.files?.[0]; if (file) doUpload(file) }} />
                 {uploading && <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />}
                 <button type="button" onClick={() => { setUploadOpen(false); setMergedFile(null) }} disabled={uploading} className="rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50 disabled:opacity-50" data-testid="company-upload-cancel">Cancel</button>
-                <span className="text-xs text-zinc-400">Uploading a file with the same name replaces it; the old copy is kept under Versions.</span>
+                <span className="text-xs text-zinc-400">Uploading a file with the same name replaces it; the old copy is kept under “older copies” (or use “Upload edited version…” on the file itself).</span>
               </div>
             </div>
           )}
@@ -2714,6 +2748,15 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         <AiReviewPanel fileId={aiFile} onClose={() => setAiFile(null)}
           queue={Array.from(new Set([aiFile, ...visibleFileIds.filter((id) => ai.marks[id] && (ai.marks[id].mark === 'look' || ai.marks[id].mark === 'conflict'))]))}
           onChanged={() => { void refreshAll(); void ai.reload(visibleFileIds) }} onOpenFile={setAiFile} />
+      )}
+      {editing && <NewVersionDialog target={editing} onClose={() => setEditing(null)} onSaved={() => { void refreshAll() }} />}
+      {lockNote && (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-black/40 px-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setLockNote(null) }}>
+          <div role="dialog" aria-modal="true" aria-label="This file can't be edited in place" className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+            <p className="text-sm text-zinc-700">{lockNote}</p>
+            <div className="mt-4 flex justify-end"><button type="button" autoFocus onClick={() => setLockNote(null)} className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">Close</button></div>
+          </div>
+        </div>
       )}
       {previewVersion && <PreviewPanel file={previewVersion.file} src={previewVersion.src} viewSrc={previewVersion.viewSrc} title={previewVersion.title} onClose={() => setPreviewVersion(null)} />}
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
