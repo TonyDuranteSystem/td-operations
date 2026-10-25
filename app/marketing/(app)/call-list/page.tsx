@@ -45,7 +45,7 @@ export default async function MarketingCallList() {
   return (
     <div className="space-y-4 p-6">
       <div className="flex items-baseline justify-between"><h1 className="text-2xl font-semibold">{t('Call list')}</h1><span className="text-sm text-slate-500">{t('{n} to call', { n: queue.length })}</span></div>
-      <section className="min-w-0 rounded-xl border bg-white" aria-label={t('Leads to call')}>
+      <section className="min-w-0 rounded-xl border bg-white" aria-label={t('Leads to call')} data-testid="queue">
         {queue.length === 0 ? <p className="p-5 text-sm text-slate-600">{t('Nobody to call right now. New leads from the ads appear here by themselves.')}</p> : (
           <ul className="divide-y">
             {queue.map(l => { const w = waitText(l); return (

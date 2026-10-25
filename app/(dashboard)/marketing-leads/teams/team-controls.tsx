@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
+import { InviteEmailPanel } from "@/components/marketing/invite-email-panel"
 
 /** For one team: the kill switch and the owner invitation. Every server answer, including a refusal, is shown as written (R099). */
 export function TeamControls({ teamId, status, hasOwner, iAmMember }: { teamId: string; status: "draft" | "active" | "paused"; hasOwner: boolean; iAmMember: boolean }) {
@@ -65,6 +66,7 @@ export function TeamControls({ teamId, status, hasOwner, iAmMember }: { teamId: 
           <p className="text-slate-700">Send him this link. It is shown only now and cannot be shown again (cancel it and make a new one if lost).</p>
           <input readOnly aria-label="Invitation link" className="mt-2 w-full rounded-lg border bg-white px-3 py-2 text-xs" value={link.url} onFocus={e => e.currentTarget.select()} />
           <button className={`${btn} mt-2`} onClick={() => { void navigator.clipboard?.writeText(link.url).then(() => setDone("Link copied.")).catch(() => setError("Could not copy. Select the link and copy it.")) }}>Copy link</button>
+          <InviteEmailPanel url={link.url} endpoint="/api/marketing-admin/invites/email" />
         </div>
       )}
       {done && <p role="status" className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{done}</p>}

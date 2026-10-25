@@ -6,6 +6,7 @@ import { getMarketingSetting } from '@/lib/marketing/settings'
 import { listMembers, listOpenInvites } from '@/lib/marketing/members'
 import { grantablePermissions } from '@/lib/marketing/permission-labels'
 import { TeamManager } from '@/components/marketing/team-manager'
+import { TourPreviewBox } from '@/components/marketing/tour'
 import { getLang } from '@/lib/marketing/lang'
 import { makeT } from '@/lib/marketing/i18n'
 
@@ -44,8 +45,9 @@ export default async function MarketingTeam() {
           permissions: effectivePermissions({ memberRole: m.member_role, bundle: m.bundle, bundles, extra: m.permissions }), status: m.status as 'active' | 'paused',
           joinedAt: m.joined_at, lastSignInAt: m.last_sign_in_at,
         }))}
-        invites={invites.map(i => ({ id: i.id, email: i.email_lower, role: i.member_role, bundle: i.bundle, permissions: i.permissions ?? [], expiresAt: i.expires_at, sentBy: i.created_by }))}
+        invites={invites.map(i => ({ id: i.id, email: i.email_lower, role: i.member_role, bundle: i.bundle, permissions: i.permissions ?? [], expiresAt: i.expires_at, sentBy: i.created_by, emailedAt: i.emailed_at ?? null }))}
       />
+      <TourPreviewBox />
     </main>
   )
 }
