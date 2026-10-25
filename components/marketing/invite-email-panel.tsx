@@ -3,7 +3,7 @@
 import { useState } from 'react'
 
 type TFn = (text: string, vars?: Record<string, string | number>) => string
-interface Preview { to: string; from: string; subject: string; html: string; lang: 'en' | 'it'; alreadyEmailedAt: string | null }
+interface Preview { to: string; from: string; replyTo: string | null; subject: string; html: string; lang: 'en' | 'it'; alreadyEmailedAt: string | null }
 
 const same: TFn = (text, vars) => (vars ? text.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : text)
 
@@ -54,9 +54,10 @@ export function InviteEmailPanel({ url, endpoint, t = same }: { url: string; end
       {preview && (
         <div className="rounded-lg border bg-white p-3" data-testid="invite-email-preview">
           <p className="mb-2 text-xs text-slate-500">{t('This is exactly what will be sent:')}</p>
-          <dl className="mb-2 grid grid-cols-[70px_1fr] gap-y-0.5 text-sm">
+          <dl className="mb-2 grid grid-cols-[96px_1fr] gap-y-0.5 text-sm">
             <dt className="text-slate-500">{t('From')}</dt><dd>{preview.from}</dd>
             <dt className="text-slate-500">{t('To')}</dt><dd data-testid="invite-email-to">{preview.to}</dd>
+            {preview.replyTo && <><dt className="text-slate-500">{t('Replies go to')}</dt><dd data-testid="invite-email-replyto">{preview.replyTo}</dd></>}
             <dt className="text-slate-500">{t('Subject')}</dt><dd data-testid="invite-email-subject">{preview.subject}</dd>
             <dt className="text-slate-500">{t('Language')}</dt>
             <dd className="flex gap-1">
