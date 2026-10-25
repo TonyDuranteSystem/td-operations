@@ -45,7 +45,7 @@ let failMemberInsert = false
 const createUser = vi.fn()
 const updateUserById = vi.fn()
 const deleteUser = vi.fn()
-const getUserById = vi.fn(async () => ({ data: { user: null } }))
+const getUserById = vi.fn(async () => ({ data: { user: { id: "u", email: "someone@example.test", app_metadata: { role: "marketing" } } } }))
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: { from: (t: string) => builder(t), auth: { admin: { createUser: (a: unknown) => createUser(a), updateUserById: (...a: unknown[]) => updateUserById(...a), deleteUser: (a: unknown) => deleteUser(a), getUserById: () => getUserById() } } },
 }))
@@ -194,6 +194,15 @@ describe("removeMember", () => {
     expect(tables.marketing_team_members.find(m => m.user_id === "manager-1")?.status).toBe("removed")
     expect(tables.marketing_invites.find(i => i.id === "i-mgr")?.revoked_at).toBeTruthy()
     expect(tables.marketing_invites.find(i => i.id === "i-rocco")?.revoked_at ?? null).toBeNull()
+  })
+
+  it("when the login cannot be looked up nothing is banned and nothing is removed (it could be Antonio's own CRM login)", async () => {
+    setup()
+    getUserById.mockResolvedValueOnce({ data: { user: null } } as never)
+    const r = await removeMember({ teamId: TEAM, userId: "manager-1", actor: owner })
+    expect(r.ok).toBe(false)
+    expect(updateUserById).not.toHaveBeenCalled()
+    expect(tables.marketing_team_members.find(m => m.user_id === "manager-1")?.status).not.toBe("removed")
   })
 })
 
