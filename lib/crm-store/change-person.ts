@@ -57,7 +57,7 @@ export async function peopleForFile(fileId: string): Promise<PersonChoice[]> {
  * Move a file out of one person's storage into a folder the staff member CHOSE in another person's storage (the Move picker).
  * Refused unless both storages are people's and the other person is in one of the first person's companies.
  */
-export async function moveFileToOtherPerson(fileId: string, toFolderId: string, actorId: string | null): Promise<{ folderName: string; person: string }> {
+export async function moveFileToOtherPerson(fileId: string, toFolderId: string, actorId: string | null): Promise<{ folderName: string; person: string; note: string | null }> {
   const f = await personFile(fileId)
   const { data: to, error: tErr } = await db().from("store_folders").select("id, owner_id, name, kind, trashed_at, store_owners!inner(kind, contact_id)").eq("id", toFolderId).maybeSingle()
   if (tErr) throw new Error(`Could not read the folder — please try again (${tErr.message}).`)
@@ -74,8 +74,14 @@ export async function moveFileToOtherPerson(fileId: string, toFolderId: string, 
   const { data: ft } = await db().from("store_files").select("document_type").eq("id", f.id).maybeSingle()
   const isPers = !!ft?.document_type && (await personalTypes()).has(ft.document_type)
   const cat = isPers ? null : await categoryForFolder(to.id)
+  // the old audience does not follow the file to another person: hide it first (staff show it again on purpose)
+  const { hideForOwnerChange } = await import("./owner-change-hide")
+  const hidden = await hideForOwnerChange(f.id, actorId)
   const { error: rhErr } = await db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: to.id, p_actor: actorId, p_reason: `Moved to ${who.name}` })
-  if (rhErr) throw new Error(`The file could not be moved (${rhErr.message.replace(/^store: /, "")}).`)
+  if (rhErr) {
+    await hidden.restore().catch((b) => console.error("[crm-store] could not restore visibility after a refused move:", b))
+    throw new Error(`The file could not be moved (${rhErr.message.replace(/^store: /, "")}).`)
+  }
   // the CRM record follows the file (a later failure puts the file back — never half-done)
   const { storePointer } = await import("./document-pointer")
   const patch: Record<string, unknown> = { contact_id: who.contactId, updated_at: new Date().toISOString() }
@@ -83,12 +89,13 @@ export async function moveFileToOtherPerson(fileId: string, toFolderId: string, 
   const { error: rErr } = await db().from("documents").update(patch).eq("drive_file_id", storePointer(f.id))
   if (rErr) {
     await db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: f.folder_id, p_actor: actorId, p_reason: "Move failed — put back" })
+    await hidden.restore().catch((b) => console.error("[crm-store] could not restore visibility after a failed move:", b))
     throw new Error(`The CRM list could not be updated, so the file was not moved (${rErr.message}) — please try again.`)
   }
-  return { folderName: to.name, person: who.name }
+  return { folderName: to.name, person: who.name, note: hidden.note }
 }
 
-export async function changeFilePerson(fileId: string, toContactId: string, actorId: string | null): Promise<{ person: string; folder: string }> {
+export async function changeFilePerson(fileId: string, toContactId: string, actorId: string | null): Promise<{ person: string; folder: string; note: string | null }> {
   const f = await personFile(fileId)
   const choices = await peopleForFile(fileId)
   const who = choices.find((c) => c.contactId === toContactId)
@@ -102,5 +109,5 @@ export async function changeFilePerson(fileId: string, toContactId: string, acto
   const target = list.find((x) => x.kind === f.folderKind) ?? list.find((x) => x.kind === "personal")
   if (!target) throw new Error("The other person's storage has no personal folder.")
   const r = await moveFileToOtherPerson(fileId, target.id, actorId)
-  return { person: r.person, folder: r.folderName }
+  return { person: r.person, folder: r.folderName, note: r.note }
 }

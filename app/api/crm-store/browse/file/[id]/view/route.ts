@@ -20,13 +20,14 @@ const HEADERS: Record<string, string> = {
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await denyUnlessStoreStaff()
   if (denied) return denied
-  const noAccess = await denyUnlessAreaAccess({ fileId: params.id }, { allowSharedRead: true })
+  // a shared-with-staff tick opens the file's CURRENT copy only — older saved copies need real access to the area
+  const versionId = req.nextUrl.searchParams.get("version")
+  const noAccess = await denyUnlessAreaAccess({ fileId: params.id }, { allowSharedRead: versionId === null })
   if (noAccess) return noAccess
   try {
     const { readFileForStaff, readVersionForStaff } = await import("@/lib/crm-store/browse")
     const v = await import("@/lib/crm-store/view-html")
     // an older saved copy: the same checks as the file itself (area access above), and the version must belong to THIS file
-    const versionId = req.nextUrl.searchParams.get("version")
     if (versionId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(versionId)) return NextResponse.json({ error: "Bad version." }, { status: 400 })
     const f = versionId ? await readVersionForStaff(params.id, versionId) : await readFileForStaff(params.id)
     const kind = v.viewKindFor(f.name, f.mimeType)

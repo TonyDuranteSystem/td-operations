@@ -147,7 +147,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     .eq('service_delivery_id', sd.id)
     .order('created_at', { ascending: false })
     .limit(100)
-  const docs = ((docData ?? []) as Array<{
+  const docsAll = ((docData ?? []) as Array<{
     id: string; file_name: string; document_type_name: string | null; category: number | null
     contact_id: string | null
     drive_file_id: string | null; processed_at: string | null; created_at: string
@@ -157,6 +157,9 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     .filter(d => !isPersonalDocumentHiddenFrom(d, contactId))
     // a person who joined the company later does not see files saved before their start date (dev job d14e823f)
     .filter(d => !isHiddenByHistoryCutoff(d, flowCutoff, contactId))
+  // a file in the new storage that this client could not open (no type, staff-only type, a personal paper filed elsewhere) is not listed — no dead link
+  const { dropStoreRowsClientCannotOpen } = await import('@/lib/portal/client-store-docs')
+  const docs = await dropStoreRowsClientCannotOpen(docsAll, { applyRowRule: false })
 
   // ITIN "Client Signing" card embeds the actual prepared documents (W-7 /
   // 1040-NR / Schedule OI) as download links — the SD-linked client-safe docs
