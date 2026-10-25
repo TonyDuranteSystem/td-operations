@@ -4,6 +4,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { isDashboardUser } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
+import { staffFileHeaders } from '@/lib/crm-store/serve'
 
 export const dynamic = 'force-dynamic'
 
@@ -64,13 +65,14 @@ export async function GET(request: NextRequest) {
   }
 
   const arrayBuffer = await blob.arrayBuffer()
-  const contentType = blob.type || 'application/octet-stream'
-
+  // The stored type was chosen by the uploader (a client): untrusted. Same rule as the CRM file viewer — only types that cannot run script
+  // on our origin are shown inline, everything else downloads as bytes. nosniff + CSP sandbox are always on (stored XSS fix, 2026-10-25).
+  const fileName = segments[segments.length - 1] || 'attachment'
   return new NextResponse(arrayBuffer, {
     status: 200,
     headers: {
-      'Content-Type': contentType,
-      'Content-Disposition': 'inline',
+      ...staffFileHeaders(blob.type, fileName),
+      'Content-Security-Policy': 'sandbox',
       // Private: never let a shared CDN/cache serve this without re-auth.
       'Cache-Control': 'private, no-store',
     },
