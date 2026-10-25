@@ -169,9 +169,29 @@ describe("registerNow", () => {
     expect(vi.mocked(supabaseAdmin.rpc).mock.calls[2][0]).toBe("store_finalize_intent")
     fetchSpy.mockRestore()
   })
+  const versionLookup = (rows: unknown[], error: { message: string } | null = null) => {
+    const chain: Record<string, unknown> = {}
+    for (const m of ["select", "eq"]) chain[m] = vi.fn(() => chain)
+    chain.limit = vi.fn(async () => ({ data: rows, error }))
+    vi.mocked(supabaseAdmin.from).mockReturnValue(chain as never)
+  }
+  it("a retry after store_write COMMITTED (died before finalise) finalises the slot against the existing file — no second write", async () => {
+    const st = { ...storageMock({ infoSize: 5 }), exists: vi.fn(async () => ({ data: false, error: null })) }
+    vi.mocked(supabaseAdmin.storage.from).mockReturnValue(st as never)
+    versionLookup([{ id: "v9", file_id: "file9", mime_type: "application/pdf", size_bytes: 5, store_files: { name: "Passport.pdf" } }])
+    vi.mocked(supabaseAdmin.rpc)
+      .mockResolvedValueOnce({ data: slot, error: null } as never)       // claim
+      .mockResolvedValueOnce({ data: null, error: null } as never)       // finalise
+    const r = await registerNow({ intentId: "i1", actor: "u1" })
+    expect(r).toMatchObject({ fileId: "file9", versionId: "v9", name: "Passport.pdf" })
+    const names = vi.mocked(supabaseAdmin.rpc).mock.calls.map((c) => c[0])
+    expect(names).toEqual(["store_claim_intent", "store_finalize_intent"])   // store_write was NOT called again
+    expect(vi.mocked(supabaseAdmin.rpc).mock.calls[1][1]).toMatchObject({ p_intent_id: "i1", p_file_id: "file9" })
+  })
   it("a retry after a killed attempt resumes from the store (object already moved), without moving again", async () => {
     const st = { ...storageMock({ infoSize: 5 }), exists: vi.fn(async () => ({ data: false, error: null })) }
     vi.mocked(supabaseAdmin.storage.from).mockReturnValue(st as never)
+    versionLookup([])
     vi.mocked(supabaseAdmin.rpc)
       .mockResolvedValueOnce({ data: slot, error: null } as never)
       .mockResolvedValueOnce({ data: { status: "created", file_id: "file9", version_id: "v9", name: "Passport.pdf" }, error: null } as never)

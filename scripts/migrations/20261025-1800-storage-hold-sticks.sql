@@ -67,7 +67,13 @@ DECLARE
   l record;
   f record;
   v_hold text;
+  v_owner uuid;
 BEGIN
+  -- same lock ORDER as every other store function (owner lock first, then the rows): this keeps the deadlock fix of
+  -- 20261025-1500-storage-datalayer-hardening.sql, which defined this function before this newer file did
+  SELECT owner_id INTO v_owner FROM public.store_files WHERE id = p_file_id;
+  IF NOT FOUND THEN RETURN false; END IF;
+  PERFORM public.store_lock_owner(v_owner);
   SELECT * INTO l FROM public.store_record_links WHERE file_id = p_file_id AND link_kind = p_link_kind AND record_id = p_record_id FOR UPDATE;
   IF NOT FOUND THEN RETURN false; END IF;
   SELECT owner_id, folder_id, name INTO f FROM public.store_files WHERE id = p_file_id;

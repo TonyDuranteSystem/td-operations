@@ -428,6 +428,17 @@ export async function registerStagedUpload(p: { intentId: string; actor: string 
   return registerNow(p)
 }
 
+/** The saved version (if any) whose bytes are the object at this crm-store path. Used to make registerNow retry-safe. */
+export async function committedSaveAt(path: string): Promise<WriteResult | null> {
+  const { data, error } = await db().from("store_file_versions")
+    .select("id, file_id, mime_type, size_bytes, store_files!inner(name)").eq("storage_bucket", STORE_BUCKET).eq("storage_path", path).limit(1)
+  if (error) throw new Error(`store: could not check whether this upload was already saved — ${error.message}`)
+  const v = ((data ?? []) as Array<{ id: string; file_id: string; mime_type?: string | null; size_bytes?: number | null; store_files: { name: string } | { name: string }[] }>)[0]
+  if (!v) return null
+  const f = Array.isArray(v.store_files) ? v.store_files[0] : v.store_files
+  return { status: "created", fileId: v.file_id, versionId: v.id, name: f?.name ?? "", mimeType: v.mime_type ?? null, size: v.size_bytes != null ? Number(v.size_bytes) : undefined }
+}
+
 /** Claim the slot (a lease — a killed attempt can be retried), hash, move, register, finalise. */
 export async function registerNow(p: { intentId: string; actor: string } & RegisterMeta): Promise<WriteResult> {
   const { data: claimed, error } = await db().rpc("store_claim_intent", { p_intent_id: p.intentId, p_actor: p.actor })
@@ -440,6 +451,18 @@ export async function registerNow(p: { intentId: string; actor: string } & Regis
   const { data: inStaging } = await db().storage.from(STORE_STAGING_BUCKET).exists(i.staging_path)
   const bucket = inStaging ? STORE_STAGING_BUCKET : STORE_BUCKET
   const at = inStaging ? i.staging_path : i.dest_path
+
+  // A retry after store_write already COMMITTED (the process died before store_finalize_intent): the object at dest_path is
+  // already a saved version. Writing again would add a second version row with the same (bucket, path) and hit
+  // UNIQUE(storage_bucket, storage_path) — finalise the slot against the existing file instead.
+  if (!inStaging) {
+    const done = await committedSaveAt(i.dest_path)
+    if (done) {
+      const { error: finErr } = await db().rpc("store_finalize_intent", { p_intent_id: p.intentId, p_file_id: done.fileId })
+      if (finErr) console.error(`[crm-store] could not finalise upload slot ${p.intentId}:`, finErr.message)
+      return done
+    }
+  }
 
   let size = await storedSize(bucket, at)
   let { sha256, bytes } = await streamSha256(bucket, at)
