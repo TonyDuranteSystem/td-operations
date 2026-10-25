@@ -22,7 +22,7 @@ const CANONICAL_LATEST: Record<string, string> = {
   store_purge_pending_objects: "20261025-1500-storage-datalayer-hardening.sql",
   store_rehome_file: "20261025-1500-storage-datalayer-hardening.sql",
   store_rehome_subtree: "20261025-1500-storage-datalayer-hardening.sql",
-  store_remove_link: "20261025-1500-storage-datalayer-hardening.sql",
+  store_remove_link: "20261025-1800-storage-hold-sticks.sql",
   store_rename_root: "20261025-1500-storage-datalayer-hardening.sql",
   store_set_filing_status: "20261025-1500-storage-datalayer-hardening.sql",
   store_set_published: "20261025-1500-storage-datalayer-hardening.sql",
