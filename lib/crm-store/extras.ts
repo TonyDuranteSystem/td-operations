@@ -5,6 +5,7 @@
  * so every file still follows its own rules.
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { readAllPages } from "./paged"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
@@ -40,9 +41,13 @@ export function pathOf(folderId: string, folders: Map<string, { name: string; pa
 
 /** One storage's files that match a filter, across all its folders, each with where it lives. */
 export async function filterFiles(ownerId: string, kind: FilterKind): Promise<FilteredFile[]> {
-  const { data: fs, error: fErr } = await db().from("store_folders").select("id, name, parent_id").eq("owner_id", ownerId).is("trashed_at", null)
-  if (fErr) throw new Error(`Could not read the folders (${fErr.message}).`)
-  const folders = new Map(((fs ?? []) as { id: string; name: string; parent_id: string | null }[]).map((f) => [f.id, f]))
+  // paged: a storage can hold more than the 1000 rows one request returns (the rest would read as "Top of the storage")
+  let fs: Array<{ id: string; name: string; parent_id: string | null }>
+  try {
+    fs = await readAllPages<{ id: string; name: string; parent_id: string | null }>((from, to) =>
+      db().from("store_folders").select("id, name, parent_id").eq("owner_id", ownerId).is("trashed_at", null).order("id").range(from, to))
+  } catch (e) { throw new Error(`Could not read the folders (${e instanceof Error ? e.message : "database error"}).`) }
+  const folders = new Map(fs.map((f) => [f.id, f]))
   const rows: FilterRow[] = []
   for (let from = 0; ; from += 1000) {
     let q = db().from("store_files").select("id, name, folder_id, updated_at, needs_review_at, needs_review_reason, document_type, store_file_versions!store_files_current_version_fk(mime_type, size_bytes)")
@@ -76,8 +81,9 @@ export async function fileDetails(fileId: string): Promise<FileDetails> {
     .eq("id", fileId).maybeSingle()
   if (error) throw new Error(`Could not read the file (${error.message}).`)
   if (!f) throw new Error("File not found.")
-  const { data: fs } = await db().from("store_folders").select("id, name, parent_id").eq("owner_id", f.owner_id)
-  const where = pathOf(f.folder_id, new Map(((fs ?? []) as { id: string; name: string; parent_id: string | null }[]).map((x) => [x.id, x])))
+  const fs = await readAllPages<{ id: string; name: string; parent_id: string | null }>((from, to) =>
+    db().from("store_folders").select("id, name, parent_id").eq("owner_id", f.owner_id).order("id").range(from, to)).catch(() => [] as Array<{ id: string; name: string; parent_id: string | null }>)
+  const where = pathOf(f.folder_id, new Map<string, { name: string; parent_id: string | null }>(fs.map((x) => [x.id, x] as [string, { name: string; parent_id: string | null }])))
   const [{ data: t }, { listFileVersions }, { storePointer }] = await Promise.all([
     f.document_type ? db().from("catalog_entries").select("display_name").eq("catalog_id", "storage_document_types").eq("slug", f.document_type).maybeSingle() : Promise.resolve({ data: null }),
     import("./browse"), import("./document-pointer"),

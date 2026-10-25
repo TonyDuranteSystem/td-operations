@@ -83,10 +83,21 @@ export function AccountDocumentsList({
   const homeless = filterDocumentsNeedingFlatListing(documents, driveTreeShown)
     .filter((d) => !shown.has(d.drive_file_id ?? ''))
     .filter((d) => !(pendingStore && (d.drive_file_id ?? '').startsWith('store:')))
-  if (homeless.length === 0) return null
+  // the check of where the files live failed (not "no storage"): say so, with Retry — the list below is then only what the CRM itself knows
+  // (without a Drive folder the Files view itself says it; with one, this note is the only place that says the check failed)
+  const checkFailed = !!accountId && storeOwner.isError && !storeOwner.data && accountHasDriveFolder
+  const failedNote = checkFailed ? (
+    <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+      Could not check where this company&apos;s files are kept — {storeOwner.error instanceof Error ? storeOwner.error.message : 'please try again.'}{' '}
+      <button type="button" onClick={() => { void storeOwner.refetch() }} className="font-medium underline">Retry</button>
+    </div>
+  ) : null
+  if (homeless.length === 0) return failedNote
   const allStore = homeless.every((d) => (d.drive_file_id ?? '').startsWith('store:'))
 
   return (
+    <div className="space-y-2">
+    {failedNote}
     <div className="rounded-lg border bg-white">
       <div className="flex items-center gap-2 px-4 py-3 border-b">
         <FileText className="h-4 w-4" />
@@ -137,6 +148,7 @@ export function AccountDocumentsList({
           )
         })}
       </ul>
+    </div>
     </div>
   )
 }
