@@ -387,6 +387,7 @@ export const IT: Record<string, string> = {
   "Analyst": "Analyst",
   "Guided tour": "Giro guidato",
   "Opening the screen…": "Apro la schermata…",
+  "Replies go to": "Le risposte vanno a",
   "Send invitation email": "Invia email di invito",
   "You see the email first. Nothing is sent until you press Send.": "Vedi prima l'email. Non parte nulla finché non premi Invia.",
   "This is exactly what will be sent:": "Questo è esattamente ciò che verrà inviato:",
