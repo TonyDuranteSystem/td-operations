@@ -5,6 +5,7 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 import { PERSONAL_CATEGORY } from '@/lib/documents/visibility-guard'
 import { getClientContactId } from '@/lib/portal-auth'
+import { isOwnStagedUploadPath } from '@/lib/portal/upload-path'
 import { CLIENT_NO_STORAGE_SENTENCE, NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
 
 /**
@@ -47,6 +48,12 @@ export async function POST(request: NextRequest) {
 
     if (!accountId || !storagePath || !fileName) {
       return NextResponse.json({ error: 'account_id, storage_path, and file_name required' }, { status: 400 })
+    }
+
+    // The staged object must be in THIS account's folder: the route downloads it and deletes it afterwards, so a path into another
+    // company's folder (or the bucket root) must never get that far (security hunt 2026-10-25).
+    if (!isOwnStagedUploadPath(accountId, storagePath)) {
+      return NextResponse.json({ error: 'Invalid storage_path' }, { status: 400 })
     }
 
     // Download from Supabase Storage

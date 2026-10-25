@@ -5,6 +5,10 @@
       "schedule": "10 4 * * *"
     },
     {
+      "path": "/api/cron/store-staging-sweep",
+      "schedule": "20 4 * * *"
+    },
+    {
       "path": "/api/cron/payment-integrity-alarm",
       "schedule": "0 9 * * *"
     },
