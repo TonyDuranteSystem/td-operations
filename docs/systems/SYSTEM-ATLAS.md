@@ -202,10 +202,10 @@ _Regenerated 2026-10-25. Every subsystem doc under `docs/systems/` (52 docs), wi
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-24)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-23)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-10-25)_
-- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-23)_
+- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-25)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-23)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-23)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-23)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-25)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-21)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-10-22)_
