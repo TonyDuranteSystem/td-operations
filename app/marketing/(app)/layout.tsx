@@ -11,13 +11,16 @@ import { ExitViewButton } from './exit-view-button'
 import { LangProvider } from '@/components/marketing/lang-provider'
 import { LangSwitch } from '@/components/marketing/lang-switch'
 import { MarketingPushBanner } from '@/components/marketing/push-banner'
-import { hasPermission } from '@/lib/marketing/permissions'
+import { MARKETING_PERMISSIONS, hasPermission } from '@/lib/marketing/permissions'
 import { LeadWindowsHost } from '@/components/marketing/lead-windows-host'
 import { LeadSearch } from '@/components/marketing/lead-search'
 import { ThemeSwitch } from '@/components/marketing/theme-switch'
 import { getTheme } from '@/lib/marketing/theme-server'
 import { availableBoardRoles, boardRole } from '@/lib/marketing/board'
 import { marketingChatUnread } from '@/lib/marketing/menu-unread'
+import { TourButton, TourProvider } from '@/components/marketing/tour'
+import { PREVIEW_TOURS, resolveTour, tourKeyFor, type ResolvedStep, type TourKey } from '@/lib/marketing/tour'
+import { tourSeen } from '@/lib/marketing/tour-seen'
 import { getLang } from '@/lib/marketing/lang'
 import { makeT, tAccessLabel } from '@/lib/marketing/i18n'
 
@@ -36,13 +39,21 @@ export default async function MarketingAppLayout({ children }: { children: React
   const bundlesSetting = (await getMarketingSetting('permission_bundles', ctx.team.id)) as Bundles
   const chatAny = hasPermission(ctx.permissions, 'chat')
   const chatOn = chatAny && hasPermission(ctx.permissions, 'leads.read')
-  const chatUnread = await marketingChatUnread(ctx)
   // Antonio comes here from the CRM's Marketing tab (his own login or "View as"): one click takes him back
   const { data: { user: authUser } } = await createClient().auth.getUser()
   const fromCrm = !!authUser && isSecureAdmin(authUser)
+  // the guided tour: the person's own (by his exact access), started by itself ONCE; the owner can also preview each role's tour from the Team screen. "View as" never records anything.
+  const tourKey = tourKeyFor({ memberRole: ctx.viewAs && ctx.membership.bundle ? 'member' : ctx.role, permissions: ctx.permissions, bundles: bundlesSetting })
+  const ownSteps = resolveTour(tourKey, ctx.permissions, lang)
+  // the two reads are independent: run them together so the tour costs the page no extra wait
+  const [chatUnread, seen] = await Promise.all([marketingChatUnread(ctx), ctx.viewAs || ownSteps.length === 0 ? Promise.resolve(true) : tourSeen(ctx.user.id, ctx.team.id, tourKey)])
+  const autoStart = !ctx.viewAs && ownSteps.length > 0 && !seen
+  const previews: Partial<Record<TourKey, ResolvedStep[]>> | null = ctx.role === 'owner' && hasPermission(ctx.permissions, 'team.manage')
+    ? Object.fromEntries(PREVIEW_TOURS.map(k => [k, resolveTour(k, MARKETING_PERMISSIONS, lang)])) : null
   const nav = modulesFor(ctx.permissions).map(m => (m.key === 'chat' ? { ...m, badge: chatUnread } : m))
   return (
     <LangProvider lang={lang}>
+    <TourProvider own={{ key: tourKey, steps: ownSteps }} previews={previews} autoStart={autoStart} recordable={!ctx.viewAs}>
     <div>
       {ctx.viewAs && (
         <div className="flex items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900" role="status">
@@ -60,6 +71,7 @@ export default async function MarketingAppLayout({ children }: { children: React
 
         <WorkspaceNav items={nav} />
         <div className="mt-auto space-y-2 text-sm">
+          <TourButton />
           <p className="truncate text-slate-500" title={ctx.user.email ?? ''}>{ctx.user.email}</p>
           <p className="text-xs text-slate-400">{ctx.role === 'owner' ? t('Team owner') : tAccessLabel(t, accessLabel(ctx.permissions, bundlesSetting))}</p>
           <ThemeSwitch initial={getTheme()} />
@@ -76,6 +88,7 @@ export default async function MarketingAppLayout({ children }: { children: React
       </div>
     </div>
     </div>
+    </TourProvider>
     </LangProvider>
   )
 }

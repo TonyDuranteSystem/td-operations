@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { formatWhen } from '@/lib/marketing/lead-view'
+import { InviteEmailPanel } from '@/components/marketing/invite-email-panel'
 import { AccessPopup, type PopupRole } from '@/components/marketing/access-popup'
 import { accessLabel, type Bundles } from '@/lib/marketing/access'
 import { roleLabel } from '@/lib/marketing/permission-labels'
@@ -10,7 +11,7 @@ import { useLang, useT } from '@/components/marketing/lang-provider'
 import { localeFor, tAccessLabel } from '@/lib/marketing/i18n'
 
 interface Member { userId: string; email: string | null; role: 'owner' | 'member'; bundle: string | null; /** what the person holds now: the exact list of ticks */ permissions: string[]; status: 'active' | 'paused'; joinedAt: string | null; lastSignInAt: string | null }
-interface Invite { id: string; email: string; role: 'owner' | 'member'; bundle: string | null; permissions: string[]; expiresAt: string; sentBy: string | null }
+interface Invite { id: string; email: string; role: 'owner' | 'member'; bundle: string | null; permissions: string[]; expiresAt: string; sentBy: string | null; emailedAt?: string | null }
 
 interface Props { me: string; iAmOwner: boolean; roles: PopupRole[]; grantable: string[]; members: Member[]; invites: Invite[] }
 
@@ -88,6 +89,7 @@ export function TeamManager({ me, iAmOwner, roles, grantable, members, invites }
             <button className={btn} onClick={() => { void navigator.clipboard?.writeText(link.url).then(() => setDone(t('Link copied.'))).catch(() => setError(t('Could not copy. Select the link and copy it.'))) }}>{t('Copy link')}</button>
             <button className={btn} onClick={() => setLink(null)}>{t('Hide')}</button>
           </div>
+          <InviteEmailPanel url={link.url} endpoint="/api/marketing/team/invites/email" t={t} />
         </section>
       )}
 
@@ -135,7 +137,7 @@ export function TeamManager({ me, iAmOwner, roles, grantable, members, invites }
               <li key={i.id} className="flex items-center justify-between gap-3 rounded-xl border bg-white p-4 text-sm">
                 <div className="min-w-0">
                   <p className="truncate font-medium">{i.email}</p>
-                  <p className="text-slate-500">{t('{who} · expires {when}', { who: i.role === 'owner' ? t('Team owner') : tLabel(i.bundle ? roleLabel(i.bundle) : accessLabel(i.permissions, bundles)), when: fw(i.expiresAt) })}</p>
+                  <p className="text-slate-500">{t('{who} · expires {when}', { who: i.role === 'owner' ? t('Team owner') : tLabel(i.bundle ? roleLabel(i.bundle) : accessLabel(i.permissions, bundles)), when: fw(i.expiresAt) })}{i.emailedAt ? ` · ${t('emailed {when}', { when: fw(i.emailedAt) })}` : ''}</p>
                 </div>
                 {(iAmOwner || i.role !== 'owner') && <button className={`${btn} shrink-0`} disabled={busy} onClick={() => cancelInvite(i.id)}>{t('Cancel')}</button>}
               </li>

@@ -159,9 +159,12 @@ function mayManage(actor: Actor): boolean {
 
 /** Invitations still open (not used, not revoked, not expired), newest first. The link itself is never stored, so it cannot be shown again. */
 export async function listOpenInvites(teamId: string) {
-  const { data } = await db().from("marketing_invites").select("id, email_lower, member_role, bundle, permissions, expires_at, created_by, created_at")
+  const open = (cols: string) => db().from("marketing_invites").select(cols)
     .eq("team_id", teamId).is("used_at", null).is("revoked_at", null).gt("expires_at", new Date().toISOString()).order("created_at", { ascending: false })
-  return (data ?? []) as Array<{ id: string; email_lower: string; member_role: "owner" | "member"; bundle: string | null; permissions: string[]; expires_at: string; created_by: string | null; created_at: string }>
+  // emailed_at is newer than the table: on a database that does not have the column yet the list still works, without it
+  let res = await open("id, email_lower, member_role, bundle, permissions, expires_at, created_by, created_at, emailed_at")
+  if (res.error) res = await open("id, email_lower, member_role, bundle, permissions, expires_at, created_by, created_at")
+  return (res.data ?? []) as Array<{ id: string; email_lower: string; member_role: "owner" | "member"; bundle: string | null; permissions: string[]; expires_at: string; created_by: string | null; created_at: string; emailed_at?: string | null }>
 }
 
 export async function revokeInvite(input: { teamId: string; inviteId: string; actor: Actor }): Promise<R> {

@@ -66,7 +66,7 @@ export default async function MarketingTeamsPage() {
                     <tr key={m.user_id}><td className="py-2 pr-3 font-medium">{m.email ?? "Unknown login"}</td><td className="pr-3">{m.member_role === "owner" ? "Team owner" : accessLabel(effectivePermissions({ memberRole: "member", bundle: m.bundle, bundles, extra: m.permissions }), bundles)}</td><td className="pr-3">{m.status === "paused" ? "Paused" : "Active"}</td><td className="text-slate-500">{m.last_sign_in_at ? `${ageText(Date.now() - new Date(m.last_sign_in_at).getTime())} ago` : "has not signed in yet"}</td></tr>
                   ))}</tbody></table></div>
               )}
-              {invites.length > 0 && <p className="mt-2 text-sm text-slate-600">Invitations waiting: {invites.map(i => `${i.email_lower} (expires ${formatWhen(i.expires_at)})`).join(", ")}</p>}
+              {invites.length > 0 && <p className="mt-2 text-sm text-slate-600">Invitations waiting: {invites.map(i => `${i.email_lower} (expires ${formatWhen(i.expires_at)}${i.emailed_at ? `, emailed ${formatWhen(i.emailed_at)}` : ""})`).join(", ")}</p>}
             </div>
 
             <div>

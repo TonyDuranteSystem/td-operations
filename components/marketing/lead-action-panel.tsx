@@ -61,7 +61,7 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
       <h2 className="text-sm font-semibold text-slate-600">{t('What to do with this lead')}</h2>
       {claim === 'other' && !isOwner && <p className="mt-2 text-sm text-amber-800">{t('Someone else picked this lead, so only they (or the team owner) can change it.')}</p>}
 
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="mt-3 flex flex-wrap gap-2" data-testid="lead-result">
         {canPick && claim === 'free' && <button className={`${btn} bg-slate-900 text-white`} disabled={busy} onClick={() => send({ action: 'claim' })}>{t('Pick this lead')}</button>}
         {canPick && (claim === 'me' || (claim === 'other' && isOwner)) && <button className={btn} disabled={busy} onClick={() => send({ action: 'release' })}>{t('Give it back')}</button>}
         {markOk && <button className={`${btn} ${mode === 'good' ? 'border-emerald-600 bg-emerald-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'good' ? null : 'good')}>{t('Good')}</button>}
