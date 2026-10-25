@@ -7,7 +7,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { gmailPost } from "@/lib/gmail"
 import { safeSend } from "@/lib/mcp/safe-send"
-import { GENERIC_INVITE_ERROR, hashInviteToken, inviteUsable, plausibleToken } from "@/lib/marketing/invite-rules"
+import { GENERIC_INVITE_ERROR, hashInviteToken, inviteUsable, normalizeEmail, plausibleToken } from "@/lib/marketing/invite-rules"
 import { INVITE_FROM, buildInviteEmail, buildInviteMime, firstNameFromEmail, langFromContact } from "@/lib/marketing/invite-email"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -16,10 +16,10 @@ const db = () => supabaseAdmin as unknown as { from: (t: string) => any }
 /** Who may email which invitation: `teamId` set = only invitations of that team; `allowOwnerInvite` = may also email an invitation for a team owner (Antonio only). */
 export interface InviteEmailScope { teamId: string | null; allowOwnerInvite: boolean; actorLabel: string }
 
-export interface InviteEmailPreview { to: string; from: string; subject: string; html: string; lang: "en" | "it"; alreadyEmailedAt: string | null }
+export interface InviteEmailPreview { to: string; from: string; replyTo: string | null; subject: string; html: string; lang: "en" | "it"; alreadyEmailedAt: string | null }
 type Res<T> = { ok: true; data: T } | { ok: false; error: string; status: number }
 
-interface Prepared { invite: { id: string; email_lower: string; team_id: string; expires_at: string; created_by: string | null; emailed_at?: string | null }; to: string; mail: ReturnType<typeof buildInviteEmail>; lang: "en" | "it" }
+interface Prepared { replyTo: string | null; invite: { id: string; email_lower: string; team_id: string; expires_at: string; created_by: string | null; emailed_at?: string | null }; to: string; mail: ReturnType<typeof buildInviteEmail>; lang: "en" | "it" }
 
 async function prepare(token: unknown, scope: InviteEmailScope, langOverride?: unknown): Promise<Res<Prepared>> {
   if (!plausibleToken(token)) return { ok: false, error: GENERIC_INVITE_ERROR, status: 400 }
@@ -41,15 +41,18 @@ async function prepare(token: unknown, scope: InviteEmailScope, langOverride?: u
     lang, toName: (contact?.first_name as string | undefined)?.trim() || firstNameFromEmail(inv.email_lower), senderName: sender,
     teamName: team?.name ?? "TD Marketing", link: `${APP_BASE_URL}/marketing/accept?token=${token}`, expiresAt: inv.expires_at,
   })
-  return { ok: true, data: { invite: inv, to: inv.email_lower, mail, lang } }
+  // answers go to whoever made the invitation (his login email is stored on it), unless that is the invited person himself
+  const maker = normalizeEmail(inv.created_by)
+  const replyTo = maker && maker !== inv.email_lower ? maker : null
+  return { ok: true, data: { invite: inv, to: inv.email_lower, mail, lang, replyTo } }
 }
 
 /** The exact email, without sending anything. */
 export async function previewInviteEmail(token: unknown, scope: InviteEmailScope, wantLang?: unknown): Promise<Res<InviteEmailPreview>> {
   const p = await prepare(token, scope, wantLang)
   if (p.ok === false) return p
-  const { invite, to, mail, lang } = p.data
-  return { ok: true, data: { to, from: INVITE_FROM, subject: mail.subject, html: mail.html, lang, alreadyEmailedAt: invite.emailed_at ?? null } }
+  const { invite, to, mail, lang, replyTo } = p.data
+  return { ok: true, data: { to, from: INVITE_FROM, replyTo, subject: mail.subject, html: mail.html, lang, alreadyEmailedAt: invite.emailed_at ?? null } }
 }
 
 /**
@@ -59,7 +62,7 @@ export async function previewInviteEmail(token: unknown, scope: InviteEmailScope
 export async function sendInviteEmail(token: unknown, scope: InviteEmailScope, wantLang?: unknown): Promise<Res<{ to: string; sentAt: string }>> {
   const p = await prepare(token, scope, wantLang)
   if (p.ok === false) return p
-  const { invite, to, mail } = p.data
+  const { invite, to, mail, replyTo } = p.data
   const sentAt = new Date().toISOString()
   // give the claim back when the send did not go out; returns false when even that could not be saved (then the invitation would wrongly show as emailed)
   const release = async (): Promise<boolean> => {
@@ -76,7 +79,7 @@ export async function sendInviteEmail(token: unknown, scope: InviteEmailScope, w
         if (error) throw new Error(`cannot claim: ${error.message}`)
         return Array.isArray(data) && data.length === 1 ? null : { alreadySent: true as const, message: "This invitation was already emailed. Make a new link to send it again." }
       },
-      sendFn: async () => gmailPost("/messages/send", { raw: Buffer.from(buildInviteMime(to, mail)).toString("base64url") }),
+      sendFn: async () => gmailPost("/messages/send", { raw: Buffer.from(buildInviteMime(to, mail, undefined, replyTo)).toString("base64url") }),
       postSendSteps: [],
     })
     if (r.alreadySent) return { ok: false, error: r.idempotencyMessage ?? "Already emailed.", status: 409 }
