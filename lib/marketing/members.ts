@@ -9,6 +9,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import { getMarketingSetting } from "@/lib/marketing/settings"
 import { canGrant, effectivePermissions, validatePermissionList, MARKETING_PERMISSIONS } from "@/lib/marketing/permissions"
 import { findMarketingAuthUserByEmail } from "@/lib/auth-admin-helpers"
+import { isSecureAdmin } from "@/lib/auth"
 import {
   GENERIC_INVITE_ERROR, TRY_AGAIN_ERROR, WEAK_PASSWORD_ERROR, hashInviteToken, inviteExpiry, inviteUsable, isEmailTakenError, isOrphanMarketingLogin,
   isWeakPasswordError, newInviteToken, normalizeEmail, overInviteLimit, passwordProblem, plausibleToken,
@@ -182,6 +183,24 @@ async function loadMember(teamId: string, userId: string) {
 }
 
 
+/**
+ * Antonio (a CRM admin login) joins a team as its owner, directly: no invitation, because an invitation never touches an existing admin login. His login stays the same; the guard lets an admin who is
+ * an active member work as that member. Admin only (the route checks). Safe to repeat: an existing row is made an active owner again.
+ */
+export async function addAdminAsOwner(input: { teamId: string; admin: { id: string; email: string | null } }): Promise<R<{ already: boolean }>> {
+  const { data: team } = await db().from("marketing_teams").select("id").eq("id", input.teamId).maybeSingle()
+  if (!team) return fail("Team not found.")
+  const existing = await loadMember(input.teamId, input.admin.id)
+  const now = new Date().toISOString()
+  if (existing && existing.status === "active" && existing.member_role === "owner") return { ok: true, data: { already: true } }
+  const label = input.admin.email ?? input.admin.id
+  const { error } = existing
+    ? await db().from("marketing_team_members").update({ member_role: "owner", status: "active", bundle: null, permissions: [], removed_at: null, removed_by: null }).eq("team_id", input.teamId).eq("user_id", input.admin.id)
+    : await db().from("marketing_team_members").insert({ team_id: input.teamId, user_id: input.admin.id, member_role: "owner", bundle: null, permissions: [], status: "active", invited_by: label, invited_at: now, joined_at: now })
+  if (error) return fail("Could not add you to the team. Please try again.")
+  return { ok: true, data: { already: false } }
+}
+
 export async function removeMember(input: { teamId: string; userId: string; actor: Actor }): Promise<R> {
   if (!mayManage(input.actor)) return fail("You cannot manage the team.")
   if (input.actor.userId && input.actor.userId === input.userId) return fail("You cannot remove yourself.")
@@ -191,8 +210,15 @@ export async function removeMember(input: { teamId: string; userId: string; acto
   const now = new Date().toISOString()
   // end the login FIRST (the middleware refuses a banned login on its very next request). If that fails nothing has changed and the
   // person can simply try again; if saving the row fails afterwards the login is already closed, and trying again completes the record.
-  const ban = await db().auth.admin.updateUserById(input.userId, { ban_duration: "876000h" })
-  if (ban?.error) return fail("The login could not be ended. Please try again.")
+  // …but never ban a CRM ADMIN login (Antonio's own, when he is a member): removing him from a team must not lock him out of the CRM
+  const target = await db().auth.admin.getUserById(input.userId)
+  // if the login cannot be looked up we do not know whether it is a CRM admin: stop, never guess (a ban on Antonio's own login would lock him out of the CRM)
+  if (target?.error || !target?.data?.user) return fail("The login could not be checked. Please try again.")
+  const isAdminLogin = isSecureAdmin(target.data.user)
+  if (!isAdminLogin) {
+    const ban = await db().auth.admin.updateUserById(input.userId, { ban_duration: "876000h" })
+    if (ban?.error) return fail("The login could not be ended. Please try again.")
+  }
   const { error } = await db().from("marketing_team_members").update({ status: "removed", removed_at: now, removed_by: input.actor.label, token_version: (m.token_version ?? 1) + 1 })
     .eq("team_id", input.teamId).eq("user_id", input.userId)
   if (error) return fail("The change could not be saved. Please try again.")

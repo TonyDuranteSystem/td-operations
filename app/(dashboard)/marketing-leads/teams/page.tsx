@@ -55,7 +55,7 @@ export default async function MarketingTeamsPage() {
             </div>
             {truncated && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">Some of this month&apos;s activity is not counted below: there is too much to read at once.</p>}
             <ViewAsButtons teamId={t.id} options={viewOptions} />
-            <TeamControls teamId={t.id} status={t.status} hasOwner={members.some(m => m.member_role === "owner")} />
+            <TeamControls teamId={t.id} status={t.status} hasOwner={members.some(m => m.member_role === "owner" && m.user_id !== user.id)} iAmMember={members.some(m => m.user_id === user.id && m.status === "active")} />
 
             <div>
               <h3 className="text-sm font-semibold text-slate-600">People ({members.length})</h3>

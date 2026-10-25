@@ -1,3 +1,6 @@
+import Link from 'next/link'
+import { createClient } from '@/lib/supabase/server'
+import { isSecureAdmin } from '@/lib/auth'
 import { resolveMarketingContext } from '@/lib/marketing/guard'
 import { modulesFor } from '@/lib/marketing/workspace'
 import { accessLabel, type Bundles } from '@/lib/marketing/access'
@@ -14,9 +17,7 @@ import { LeadSearch } from '@/components/marketing/lead-search'
 import { ThemeSwitch } from '@/components/marketing/theme-switch'
 import { getTheme } from '@/lib/marketing/theme-server'
 import { availableBoardRoles, boardRole } from '@/lib/marketing/board'
-import { unreadByLead } from '@/lib/marketing/lead-chat-server'
-import { unreadByThread } from '@/lib/marketing/team-chat-server'
-import { isInvolved } from '@/lib/marketing/lead-chat'
+import { marketingChatUnread } from '@/lib/marketing/menu-unread'
 import { getLang } from '@/lib/marketing/lang'
 import { makeT, tAccessLabel } from '@/lib/marketing/i18n'
 
@@ -33,12 +34,12 @@ export default async function MarketingAppLayout({ children }: { children: React
   if (g.ok === false) return <LangProvider lang={lang}>{children}</LangProvider>
   const { ctx } = g
   const bundlesSetting = (await getMarketingSetting('permission_bundles', ctx.team.id)) as Bundles
-  const chatOn = hasPermission(ctx.permissions, 'chat') && hasPermission(ctx.permissions, 'leads.read')
   const chatAny = hasPermission(ctx.permissions, 'chat')
-  // the red number on the sidebar's Chat: my unread messages in the chats about leads (people who work the leads) plus in my direct messages and groups
-  const sum = (m: Map<string, number>) => Array.from(m.values()).reduce((a, b) => a + b, 0)
-  const [leadUnread, teamUnread] = await Promise.all([chatOn && isInvolved(ctx.permissions) ? unreadByLead(ctx).then(sum) : 0, chatAny ? unreadByThread(ctx).then(sum) : 0])
-  const chatUnread = leadUnread + teamUnread
+  const chatOn = chatAny && hasPermission(ctx.permissions, 'leads.read')
+  const chatUnread = await marketingChatUnread(ctx)
+  // Antonio comes here from the CRM's Marketing tab (his own login or "View as"): one click takes him back
+  const { data: { user: authUser } } = await createClient().auth.getUser()
+  const fromCrm = !!authUser && isSecureAdmin(authUser)
   const nav = modulesFor(ctx.permissions).map(m => (m.key === 'chat' ? { ...m, badge: chatUnread } : m))
   return (
     <LangProvider lang={lang}>
@@ -52,6 +53,7 @@ export default async function MarketingAppLayout({ children }: { children: React
     <div className="flex min-h-screen">
       <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col gap-4 border-r bg-white p-4">
         <div>
+          {fromCrm && <Link href="/marketing-leads" className="mb-2 inline-block text-xs text-slate-500 underline" data-testid="back-to-crm">&#9666; {t('Back to the CRM')}</Link>}
           <p className="text-xs uppercase tracking-wide text-slate-400">TD Marketing</p>
           <p className="truncate font-semibold">{ctx.team.name}</p>
         </div>
