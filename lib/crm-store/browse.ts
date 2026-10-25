@@ -48,6 +48,12 @@ export interface BrowseFile {
   staffOnly: boolean
   personal: boolean
   versions: number
+  /** the current version's number (null until the safe-save migration is on this database) */
+  versionNo?: number | null
+  /** why the file cannot be edited in place: signed | replace_only | replaced | filed — else null */
+  lockKind?: string | null
+  /** edits saved after a conflict, kept hidden and not applied */
+  unmergedPending?: number
   size: number | null
   mimeType: string | null
   updatedAt: string
@@ -205,6 +211,7 @@ export async function folderContents(ownerId: string, folderId: string | null, o
   const docIdOf = new Map<string, string>()
   const byWorkspace = new Map<string, string>()
   const facts = new Map<string, { is_personal: boolean; staff_only: boolean; version_count: number }>()
+  const editInfo = new Map<string, { lock_kind: string | null; version_no: number | null; version_count: number; unmerged_pending: number }>()
   if (all.length > 0) {
     const { storePointer } = await import("./document-pointer")
     for (let i = 0; i < all.length; i += 200) {
@@ -235,6 +242,9 @@ export async function folderContents(ownerId: string, folderId: string | null, o
         if (!docIdOf.has(fid)) docIdOf.set(fid, r.id as string)
       }
       for (const x of (fx ?? []) as { id: string; is_personal: boolean; staff_only: boolean; version_count: number }[]) facts.set(x.id, x)
+      // current version number, older copies, lock reason, unmerged edits — a database without the safe-save migration just has no such info
+      const { data: ei, error: eErr } = await db().rpc("store_files_edit_info", { p_ids: part.map((f) => f.id) })
+      if (!eErr) for (const x of (ei ?? []) as { file_id: string; lock_kind: string | null; version_no: number | null; version_count: number; unmerged_pending: number }[]) editInfo.set(x.file_id, x)
     }
   }
   const isPerson = own.kind === "person"
@@ -248,13 +258,15 @@ export async function folderContents(ownerId: string, folderId: string | null, o
     const k = facts.get(f.id)
     // a file whose facts could not be read counts as staff-only (fails closed: never offered to the client)
     const so = k ? k.staff_only : true
+    const ei = editInfo.get(f.id)
     const v = f.store_file_versions as { size_bytes: number | null; mime_type: string | null; sha256: string | null } | null
     files.push({
       id: f.id, name: f.name, documentType: f.document_type, state: f.state, published: !!f.published,
       // exactly what the portal shows (the same rule as the filter and the details panel) — never "hidden" for a
       // file the client sees, whatever its type says
       clientVisible: rowsVisible.get(f.id) === true, shownByWorkspace: byWorkspace.get(f.id) ?? null, listed: rowsVisible.has(f.id), docId: docIdOf.get(f.id) ?? null,
-      staffOnly: so, personal: k?.is_personal === true, versions: k?.version_count ?? 0,
+      staffOnly: so, personal: k?.is_personal === true, versions: ei ? ei.version_count : k?.version_count ?? 0,
+      versionNo: ei?.version_no ?? null, lockKind: ei?.lock_kind ?? null, unmergedPending: ei?.unmerged_pending ?? 0,
       size: v?.size_bytes ?? null, mimeType: v?.mime_type ?? null, updatedAt: f.updated_at, sha256: v?.sha256 ?? null,
       needsReview: f.needs_review_at ? (f.needs_review_reason || "Needs review") : null,
       personName: opts.throughCompany ? owner.label : null,
@@ -298,15 +310,17 @@ export async function storeOwnerForAccount(accountId: string): Promise<string | 
   }
 }
 
-export interface BrowseVersion { id: string; versionNo: number; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null }
+export interface BrowseVersion { id: string; versionNo: number; unmerged: boolean; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null }
 
 /** Every saved copy of a file, newest first — so an older copy can be opened (and a wrong replacement spotted). */
 export async function listFileVersions(fileId: string): Promise<BrowseVersion[]> {
   const { data: f, error: fErr } = await db().from("store_files").select("current_version_id, state").eq("id", fileId).maybeSingle()
   if (fErr) throw new Error(`store browse: ${fErr.message}`)
   if (!f || f.state === "purged") throw new Error("File not found.")
-  const { data, error } = await db().from("store_file_versions").select("id, version_no, created_at, size_bytes, mime_type, created_by")
-    .eq("file_id", fileId).order("version_no", { ascending: false })
+  const list = (cols: string) => db().from("store_file_versions").select(cols).eq("file_id", fileId).order("version_no", { ascending: false })
+  let { data, error } = await list("id, version_no, created_at, size_bytes, mime_type, created_by, unmerged")
+  // a database without the safe-save migration has no `unmerged` column yet: list without it
+  if (error && /unmerged/.test(error.message)) ({ data, error } = await list("id, version_no, created_at, size_bytes, mime_type, created_by"))
   if (error) throw new Error(`store browse: ${error.message}`)
   const ids: string[] = Array.from(new Set(((data ?? []) as { created_by: string | null }[]).map((v) => v.created_by).filter((x): x is string => !!x)))
   const names = new Map<string, string>()
@@ -315,8 +329,8 @@ export async function listFileVersions(fileId: string): Promise<BrowseVersion[]>
     const email = u?.user?.email ?? null
     if (email) names.set(id, email.split("@")[0])
   }
-  return (data ?? []).map((v: { id: string; version_no: number; created_at: string; size_bytes: number | null; mime_type: string | null; created_by: string | null }) => ({
-    id: v.id, versionNo: v.version_no, createdAt: v.created_at, size: v.size_bytes, mimeType: v.mime_type,
+  return (data ?? []).map((v: { id: string; version_no: number; created_at: string; size_bytes: number | null; mime_type: string | null; created_by: string | null; unmerged?: boolean }) => ({
+    id: v.id, versionNo: v.version_no, unmerged: v.unmerged === true, createdAt: v.created_at, size: v.size_bytes, mimeType: v.mime_type,
     current: v.id === f.current_version_id, by: v.created_by ? names.get(v.created_by) ?? "staff" : null,
   }))
 }

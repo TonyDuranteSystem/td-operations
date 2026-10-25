@@ -25,6 +25,16 @@ async function liveFile(fileId: string) {
   return f as { id: string; name: string; owner_id: string; folder_id: string; document_type: string | null; state: string; store_owners: { kind: string } }
 }
 
+/** A person says "this file is a signed document": from now on it is never edited in place (only a replacement is added). One-way here. */
+export async function markFileSigned(fileId: string, actorId: string | null): Promise<{ marked: boolean }> {
+  const f = await liveFile(fileId)
+  const { data, error } = await db().from("store_files").update({ marked_signed_at: new Date().toISOString() }).eq("id", fileId).eq("state", "live").is("marked_signed_at", null).select("id")
+  if (error) throw new Error("The file could not be marked as signed — please try again.")
+  if (!data || data.length === 0) return { marked: false }   // already marked
+  await logEvent("marked_signed", f, actorId, {})
+  return { marked: true }
+}
+
 export { cleanNewFileName } from "./names"
 import { cleanNewFileName } from "./names"
 
