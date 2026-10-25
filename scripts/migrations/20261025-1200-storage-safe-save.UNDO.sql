@@ -1,7 +1,26 @@
--- UNDO of 20261025-1200-storage-safe-save.sql. Versions already written stay valid (nothing is lost): an 'unmerged' version keeps its
--- number but loses its hidden flag when the column goes — run the SELECT below first and decide if any exist.
---   SELECT count(*) FROM public.store_file_versions WHERE unmerged;
+-- UNDO of 20261025-1200-storage-safe-save.sql.
+--
+-- PRE-CHECKS (run these first; the guard below RAISES if either is above zero):
+--   SELECT count(*) FROM public.store_file_versions WHERE unmerged;           -- hidden "not applied" versions: they lose their hidden flag
+--                                                                             -- AND keep a version number HIGHER than the file's current one, so the
+--                                                                             -- ORIGINAL store_write (cur.version_no + 1) would collide with
+--                                                                             -- UNIQUE (file_id, version_no) on the next save of such a file.
+--   SELECT count(*) FROM public.store_files WHERE marked_signed_at IS NOT NULL; -- people's "this is a signed document" marks: the column is dropped
+--                                                                             -- and those files become editable in place again.
+-- If both are zero the UNDO is lossless. If not, decide first (export the rows, or merge/discard the unmerged versions), then, knowing
+-- what is lost, run in the SAME transaction before this script:   SET LOCAL store.allow_unsafe_undo = 'on';
 BEGIN;
+DO $$
+DECLARE
+  v_unmerged int;
+  v_signed int;
+BEGIN
+  SELECT count(*) INTO v_unmerged FROM public.store_file_versions WHERE unmerged;
+  SELECT count(*) INTO v_signed FROM public.store_files WHERE marked_signed_at IS NOT NULL;
+  IF (v_unmerged > 0 OR v_signed > 0) AND coalesce(current_setting('store.allow_unsafe_undo', true), '') <> 'on' THEN
+    RAISE EXCEPTION 'UNDO refused: % unmerged version(s) and % file(s) marked signed would be damaged (see the header of this file). Set store.allow_unsafe_undo = on only after deciding.', v_unmerged, v_signed;
+  END IF;
+END $$;
 DROP TRIGGER IF EXISTS trg_store_files_version_lock ON public.store_files;
 DROP FUNCTION IF EXISTS public.store_files_version_lock();
 DROP FUNCTION IF EXISTS public.store_append_version(jsonb);

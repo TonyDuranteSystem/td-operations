@@ -526,7 +526,9 @@ export type PilotAlarmKind =
   | "storage_pointer_adopt_failed" // a client file parked in the older bucket (storage: pointer) could not be filed into the CRM storage
   | "lead_form_contact_lookup_failed" // the CRM contact lookup for a lead-stage form failed: nothing was filed, the rest of the chain ran
   | "lead_form_member_passport_held" // an LLC member with no email has a passport on a form: no contact can be made automatically, the file waits on the submission
-  | "store_move_stale"             // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
+  | "store_event_not_logged"       // a store action succeeded but its history row could not be written (twice): Drive-backup change detection may miss it
+  | "store_putback_failed"          // a rollback after a failed step did not work: a file may be in an unexpected place
+  | "store_move_stale"           // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
   | "drive_write_refused"          // a flow needed to write in Google Drive for a company/person that may not be written to there (Stop Drive S1d)
   | "banking_package_problem"      // a banking application package could not be (fully) filed: lookup failed, personal papers held, hidden study copy (Stop Drive S1d)
 

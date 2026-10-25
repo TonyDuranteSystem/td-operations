@@ -37,14 +37,18 @@ export default async function TaxDocumentsPage() {
   // Fetch previously uploaded tax documents
   const { data: uploadedDocsAll } = await supabaseAdmin
     .from('documents')
-    .select('id, file_name, document_type_name, created_at, visible_to_new_owners')
+    .select('id, file_name, document_type_name, created_at, visible_to_new_owners, category, contact_id, drive_file_id, portal_visible, service_delivery_id, flow_stage')
     .eq('account_id', selectedAccountId)
     .eq('category', 3) // Tax
     .order('created_at', { ascending: false })
     .limit(50)
   // a person added later sees only what came after they were added (unless staff opened the file) — dev job d14e823f
   const historyCutoff = await getHistoryCutoff(selectedAccountId, contactId)
-  const uploadedDocs = (uploadedDocsAll ?? []).filter(d => !isHiddenByHistoryCutoff(d, historyCutoff, contactId))
+  // Only what the client may actually see: shown by the flag or a client-safe flow stage, not another member's personal
+  // document, and (for the new storage) not a closed file — a hidden draft return is never listed by name.
+  const { dropDocsClientCannotSee } = await import('@/lib/portal/client-store-docs')
+  const listable = await dropDocsClientCannotSee((uploadedDocsAll ?? []) as Array<NonNullable<typeof uploadedDocsAll>[number]>, contactId)
+  const uploadedDocs = listable.filter(d => !isHiddenByHistoryCutoff(d, historyCutoff, contactId))
 
   const locale = getLocale(user)
 

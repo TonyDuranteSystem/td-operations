@@ -87,7 +87,7 @@ beforeEach(() => {
 })
 
 describe("portal documents upload", () => {
-  const body = { account_id: "acct-1", storage_path: "p/x.pdf", file_name: "x.pdf", mime_type: "application/pdf", doc_type: "Bank statement", category: "4" }
+  const body = { account_id: "acct-1", storage_path: "acct-1/x.pdf", file_name: "x.pdf", mime_type: "application/pdf", doc_type: "Bank statement", category: "4" }
 
   it("storage company: saved in the storage, hidden from the client, typed other_document, zero Drive calls", async () => {
     const { POST } = await import("@/app/api/portal/documents/upload/route")
@@ -111,7 +111,7 @@ describe("portal documents upload", () => {
     expect(state.recorded.filter((r) => r.table === "documents")).toEqual([])
     expect(state.driveCalls).toEqual([])
     // the refused upload leaves nothing behind in the upload bucket
-    expect(state.removed).toContain("portal-uploads/p/x.pdf")
+    expect(state.removed).toContain("portal-uploads/acct-1/x.pdf")
   })
 
   it("a Closed company that still has a folder is refused too (no Drive write), staged file removed", async () => {
@@ -121,7 +121,7 @@ describe("portal documents upload", () => {
     const res = await POST(json(body))
     expect(res.status).toBe(409)
     expect(state.driveCalls).toEqual([])
-    expect(state.removed).toContain("portal-uploads/p/x.pdf")
+    expect(state.removed).toContain("portal-uploads/acct-1/x.pdf")
   })
 
   it("a company left on its old folder (Active, folder, no storage) is FROZEN (Stop Drive S2): refused, no Drive call, no record written", async () => {
@@ -133,7 +133,7 @@ describe("portal documents upload", () => {
     expect(await res.json()).toEqual({ error: CLIENT_NO_STORAGE_SENTENCE })
     expect(state.driveCalls).toEqual([])
     expect(state.recorded.filter((r) => r.table === "documents")).toEqual([])
-    expect(state.removed).toContain("portal-uploads/p/x.pdf")
+    expect(state.removed).toContain("portal-uploads/acct-1/x.pdf")
   })
 })
 
@@ -335,7 +335,7 @@ describe("a company being moved is a TRANSIENT refusal: the staged file is kept 
   it("portal upload", async () => {
     state.moving = true
     const { POST } = await import("@/app/api/portal/documents/upload/route")
-    const res = await POST(json({ account_id: "acct-1", storage_path: "p/x.pdf", file_name: "x.pdf", mime_type: "application/pdf", category: "4" }))
+    const res = await POST(json({ account_id: "acct-1", storage_path: "acct-1/x.pdf", file_name: "x.pdf", mime_type: "application/pdf", category: "4" }))
     expect(res.status).toBe(409)
     expect(state.removed).toEqual([])
   })

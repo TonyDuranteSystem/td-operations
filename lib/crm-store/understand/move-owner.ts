@@ -37,11 +37,20 @@ export async function moveFileToOwner(p: { fileId: string; toFolderId: string; a
 
   const { error: rhErr } = await db().rpc("store_rehome_file", { p_file_id: p.fileId, p_to_folder: p.toFolderId, p_actor: p.actor, p_reason: p.reason?.trim() || "Moved to another client (File Understanding)" })
   if (rhErr) throw new Error(`The file could not be moved (${String(rhErr.message).replace(/^store: /, "")}).`)
-  const putBack = async () => {
-    await db().rpc("store_rehome_file", { p_file_id: p.fileId, p_to_folder: f.folder_id, p_actor: p.actor, p_reason: "Move failed — put back" })
-    await db().from("store_files").update({ published: before.published }).eq("id", p.fileId)
-    for (const r of before.records) { const { id, ...fields } = r; await db().from("documents").update(fields).eq("id", id) }
+  // every compensating write is CHECKED (supabase-js returns {error}); returns true only if ALL of them worked
+  const putBack = async (): Promise<boolean> => {
+    const { rollBackOrAlarm } = await import("../event-log")
+    const d = { fileId: p.fileId, fromOwner: to.owner_id, backToFolder: f.folder_id }
+    let ok = await rollBackOrAlarm("move-owner put-back (rehome)", d, () => db().rpc("store_rehome_file", { p_file_id: p.fileId, p_to_folder: f.folder_id, p_actor: p.actor, p_reason: "Move failed — put back" }))
+    ok = (await rollBackOrAlarm("move-owner put-back (published)", d, () => db().from("store_files").update({ published: before.published }).eq("id", p.fileId))) && ok
+    for (const r of before.records) {
+      const { id, ...fields } = r
+      ok = (await rollBackOrAlarm("move-owner put-back (CRM record)", { ...d, documentId: id }, () => db().from("documents").update(fields).eq("id", id))) && ok
+    }
+    return ok
   }
+  const undoneMessage = (why: string, ok: boolean) => ok ? why
+    : `${why} The undo did not fully work, so the file or its CRM entry may be in an unexpected place — staff have been alerted. Please check the file before trying again.`
   try {
     const { error: pErr } = await db().from("store_files").update({ published: false }).eq("id", p.fileId)
     if (pErr) throw new Error(pErr.message)
@@ -55,15 +64,15 @@ export async function moveFileToOwner(p: { fileId: string; toFolderId: string; a
     const { clearShares } = await import("../staff-share")
     await clearShares([p.fileId], p.actor, "moved to another client")            // a failure here undoes the move (below)
   } catch (e) {
-    await putBack().catch((b) => console.error("[understand] move roll-back incomplete:", b))
-    throw new Error(`The move was undone because the file could not be hidden and unshared safely (${e instanceof Error ? e.message : "error"}).`)
+    const ok = await putBack().then((x) => x, () => false)
+    throw new Error(undoneMessage(`The move was undone because the file could not be hidden and unshared safely (${e instanceof Error ? e.message : "error"}).`, ok))
   }
   const { data: d, error: dErr } = await db().from("store_ai_decisions").insert({
     analysis_id: p.analysisId ?? null, file_id: p.fileId, action: "moved", before_state: before, after_state: { owner_id: to.owner_id, folder_id: p.toFolderId, hidden: true }, actor: p.actor,
   }).select("id").single()
   if (dErr || !d) {
-    await putBack().catch((b) => console.error("[understand] move roll-back incomplete:", b))
-    throw new Error("The move could not be recorded, so it was undone.")
+    const ok = await putBack().then((x) => x, () => false)
+    throw new Error(undoneMessage("The move could not be recorded, so it was undone.", ok))
   }
   return { decisionId: d.id as string, toOwnerId: to.owner_id }
 }
@@ -75,7 +84,7 @@ export async function moveDecisionFile(decisionId: string): Promise<string | nul
 }
 
 /** Put a moved file back exactly as it was (owner, folder, published flag, the CRM record) — once, and only while it is still where the move left it. */
-export async function undoMove(decisionId: string, actor: string): Promise<void> {
+export async function undoMove(decisionId: string, actor: string): Promise<{ note: string | null }> {
   if (!actor) throw new Error("Only a named staff member can undo a move.")
   const { data: d } = await db().from("store_ai_decisions").select("id, file_id, analysis_id, action, before_state, after_state").eq("id", decisionId).maybeSingle()
   if (!d || d.action !== "moved") throw new Error("That is not a move that can be undone.")
@@ -88,10 +97,36 @@ export async function undoMove(decisionId: string, actor: string): Promise<void>
   const before = d.before_state as { folder_id: string; published?: boolean; records: Array<Record<string, unknown> & { id: string }> }
   const { error } = await db().rpc("store_rehome_file", { p_file_id: d.file_id, p_to_folder: before.folder_id, p_actor: actor, p_reason: "Move undone (File Understanding)" })
   if (error) throw new Error(`The move could not be undone (${String(error.message).replace(/^store: /, "")}).`)
-  await db().from("store_files").update({ published: before.published === true }).eq("id", d.file_id)
+  // The old fields come back with the file HIDDEN; showing it again goes through the guarded path (setClientVisibility), so a file
+  // marked "Needs review" or retyped staff-only / left with no type since the move is NOT re-shown behind those guards.
+  // Every follow-up write is CHECKED: a failure is an alarm and a plain message, never silent.
+  const { rollBackOrAlarm } = await import("../event-log")
+  const dd = { fileId: d.file_id, decisionId }
+  const wasShown = undoShowPlan(before.published === true, before.records as Array<{ portal_visible?: boolean | null }>)
+  let allBack = true
   for (const r of before.records) {
     const { id, ...fields } = r
-    await db().from("documents").update({ ...fields, updated_at: new Date().toISOString() }).eq("id", id)
+    allBack = (await rollBackOrAlarm("undo-move (CRM record)", { ...dd, documentId: id }, () => db().from("documents").update({ ...fields, portal_visible: false, updated_at: new Date().toISOString() }).eq("id", id))) && allBack
   }
-  await db().from("store_ai_decisions").insert({ analysis_id: d.analysis_id, file_id: d.file_id, action: "changed", before_state: { undone: decisionId }, after_state: null, actor })
+  // the "undone" mark is written even if a follow-up failed: the file IS back, so a retry must not run the undo twice
+  const { error: markErr } = await db().from("store_ai_decisions").insert({ analysis_id: d.analysis_id, file_id: d.file_id, action: "changed", before_state: { undone: decisionId }, after_state: null, actor })
+  if (markErr) console.error(`[understand] undo mark not written for ${decisionId}: ${markErr.message}`)
+  if (!allBack) throw new Error("The file was put back, but its CRM entry could not be fully restored — staff have been alerted. Please check the file's visibility.")
+  let note: string | null = null
+  if (wasShown) {
+    try {
+      const { setClientVisibility } = await import("../browse")
+      await setClientVisibility(d.file_id, true, actor, { silent: true })
+      // the shown-again step is silent; the stamp of when the client was told is put back as it was
+      for (const r of before.records) await db().from("documents").update({ client_notified_at: (r as { client_notified_at?: string | null }).client_notified_at ?? null }).eq("id", r.id)
+    } catch (e) {
+      note = `The file is back, but it stays hidden from the client: ${e instanceof Error ? e.message : "it could not be shown"}`
+    }
+  }
+  return { note }
+}
+
+/** Pure: was the file in front of a client before the move (so undo should try to show it again)? */
+export function undoShowPlan(published: boolean, records: Array<{ portal_visible?: boolean | null }>): boolean {
+  return published === true || records.some((r) => r.portal_visible === true)
 }
