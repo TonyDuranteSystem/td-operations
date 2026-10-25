@@ -213,7 +213,7 @@ _Regenerated 2026-10-25. Every subsystem doc under `docs/systems/` (52 docs), wi
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-10-23)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-10-23)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-10-25)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-10-23)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-10-23)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_

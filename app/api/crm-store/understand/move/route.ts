@@ -19,8 +19,8 @@ export async function POST(req: NextRequest) {
       if (!movedFile) return NextResponse.json({ error: "Not found" }, { status: 404 })
       const e1 = await denyUnlessStorePilotEnv({ study: true, fileId: movedFile }); if (e1) return e1
       const na = await denyUnlessAreaAccess({ fileId: movedFile }); if (na) return na
-      await undoMove(body.undo, user.id)
-      return NextResponse.json({ ok: true })
+      const undone = await undoMove(body.undo, user.id)
+      return NextResponse.json({ ok: true, note: undone.note })
     }
     const fileId = typeof body.fileId === "string" ? body.fileId : ""
     const toFolderId = typeof body.toFolderId === "string" ? body.toFolderId : ""
