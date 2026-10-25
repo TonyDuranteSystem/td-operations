@@ -58,10 +58,19 @@ export async function resolveMarketingContext(): Promise<GuardResult> {
         }
       }
     }
+    // An admin who has been ADDED to a team as a member (the owner does it from CRM > Marketing > Teams) works as that member, with no "View as" step; "View as" above still wins when it is on.
+    // If that is not possible (not a member, paused, team switched off) he gets the "View as" message, as before.
+    const own = await memberContext(user.id, user.email ?? null, "marketing")
+    if (own.ok) return own
     return { ok: false, status: 403, code: "ADMIN_NO_VIEW", message: "You are signed in as Antonio. Open CRM > Marketing > Teams and press \"View as\" to see a team's workspace." }
   }
+  return memberContext(user.id, user.email ?? null, role)
+}
+
+/** The context of a person who is a member of a team: his membership, the team's status and his permissions. `role` is the login's role as the door rules see it (an admin who is a member is let through as "marketing"). */
+async function memberContext(userId: string, email: string | null, role: unknown): Promise<GuardResult> {
   const { data: members } = await db().from("marketing_team_members")
-    .select("team_id, member_role, status, bundle, permissions").eq("user_id", user.id)
+    .select("team_id, member_role, status, bundle, permissions").eq("user_id", userId)
   const memberships = (members ?? []) as GuardMembership[]
   const teamIds = Array.from(new Set(memberships.map(m => m.team_id)))
   const { data: teams } = teamIds.length
@@ -75,7 +84,7 @@ export async function resolveMarketingContext(): Promise<GuardResult> {
   })
   return {
     ok: true,
-    ctx: { user: { id: user.id, email: user.email ?? null }, team: verdict.team, role: verdict.membership.member_role, membership: verdict.membership, permissions },
+    ctx: { user: { id: userId, email }, team: verdict.team, role: verdict.membership.member_role, membership: verdict.membership, permissions },
   }
 }
 

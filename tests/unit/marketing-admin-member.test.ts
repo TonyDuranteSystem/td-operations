@@ -1,0 +1,29 @@
+import { describe, it, expect } from "vitest"
+import { decideMarketingAccess, type GuardMembership, type GuardTeam } from "@/lib/marketing/guard-rules"
+import { isSecureAdmin } from "@/lib/auth"
+
+const team = (status: string): GuardTeam => ({ id: "t1", name: "Rocco's sales team", status })
+const owner = (status = "active"): GuardMembership => ({ team_id: "t1", member_role: "owner", status, bundle: null, permissions: [] })
+
+describe("an admin login that was added to a team as owner", () => {
+  it("is let through when the door is asked as 'marketing' (what the guard does for an admin member), as the owner of that team", () => {
+    const v = decideMarketingAccess({ signedIn: true, role: "marketing", memberships: [owner()], teams: [team("active")] })
+    expect(v).toMatchObject({ ok: true, membership: { member_role: "owner" }, team: { id: "t1" } })
+  })
+  it("with the admin role itself the door still says no (the admin only gets in through View as or through a membership)", () => {
+    expect(decideMarketingAccess({ signedIn: true, role: "admin", memberships: [owner()], teams: [team("active")] })).toMatchObject({ ok: false, status: 403, code: "NOT_MARKETING" })
+  })
+  it("a paused membership, a paused team and a team not yet switched on all turn him away (he then gets the View-as message)", () => {
+    expect(decideMarketingAccess({ signedIn: true, role: "marketing", memberships: [owner("paused")], teams: [team("active")] })).toMatchObject({ ok: false, code: "MEMBER_PAUSED" })
+    expect(decideMarketingAccess({ signedIn: true, role: "marketing", memberships: [owner()], teams: [team("paused")] })).toMatchObject({ ok: false, code: "TEAM_PAUSED" })
+    expect(decideMarketingAccess({ signedIn: true, role: "marketing", memberships: [owner()], teams: [team("draft")] })).toMatchObject({ ok: false, code: "TEAM_NOT_ACTIVE" })
+  })
+  it("an admin with no membership at all has no team (View as is his only door)", () => {
+    expect(decideMarketingAccess({ signedIn: true, role: "marketing", memberships: [], teams: [] })).toMatchObject({ ok: false, code: "NO_TEAM" })
+  })
+  it("who counts as an admin login (the one a removal must never ban)", () => {
+    expect(isSecureAdmin({ email: "x@y.z", app_metadata: { role: "admin" } } as never)).toBe(true)
+    expect(isSecureAdmin({ email: "x@y.z", app_metadata: { role: "marketing" } } as never)).toBe(false)
+    expect(isSecureAdmin(null)).toBe(false)
+  })
+})

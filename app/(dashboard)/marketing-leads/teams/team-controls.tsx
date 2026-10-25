@@ -4,7 +4,7 @@ import { useState } from "react"
 import { useRouter } from "next/navigation"
 
 /** For one team: the kill switch and the owner invitation. Every server answer, including a refusal, is shown as written (R099). */
-export function TeamControls({ teamId, status, hasOwner }: { teamId: string; status: "draft" | "active" | "paused"; hasOwner: boolean }) {
+export function TeamControls({ teamId, status, hasOwner, iAmMember }: { teamId: string; status: "draft" | "active" | "paused"; hasOwner: boolean; iAmMember: boolean }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -26,6 +26,10 @@ export function TeamControls({ teamId, status, hasOwner }: { teamId: string; sta
     const d = await call(`/api/marketing-admin/teams/${teamId}/status`, "PATCH", { status: to }, "Could not change the team. Please try again.")
     if (d) { setDone(to === "active" ? "The team is on. Its people can work." : "The team is paused. Nobody on it can work until you switch it on."); router.refresh() }
   }
+  async function addMe() {
+    const d = await call(`/api/marketing-admin/teams/${teamId}/add-me`, "POST", {}, "Could not add you to the team. Please try again.")
+    if (d) { setDone("You are now an owner of this team. Open Marketing team in the menu to go straight in: you are a person in its chat now."); router.refresh() }
+  }
   async function invite() {
     const d = await call(`/api/marketing-admin/teams/${teamId}/owner-invite`, "POST", { email }, "Could not create the invitation. Please try again.")
     if (d) { setLink({ url: String(d.inviteUrl), email: String(d.email ?? email), expiresAt: String(d.expiresAt) }); setEmail(""); router.refresh() }
@@ -37,6 +41,15 @@ export function TeamControls({ teamId, status, hasOwner }: { teamId: string; sta
       <div className="flex flex-wrap gap-2">
         {status !== "active" && <button className={`${btn} bg-emerald-700 text-white`} disabled={busy} onClick={() => setStatus("active")}>{status === "draft" ? "Switch the team on" : "Resume the team"}</button>}
         {status === "active" && <button className={`${btn} text-rose-700`} disabled={busy} onClick={() => setStatus("paused")}>Pause the team (stops every login and link)</button>}
+      </div>
+      <div className="rounded-lg border p-3">
+        <p className="text-sm font-medium">You, in this team</p>
+        {iAmMember
+          ? <p className="mt-1 text-sm text-slate-600">You are an owner of this team: open <b>Marketing team</b> in the menu to go straight in. &quot;View as&quot; above still shows you what each role sees.</p>
+          : <>
+              <p className="mt-1 text-xs text-slate-500">Join as an owner (with your own login, no invitation): the workspace opens without &quot;View as&quot;, and you are a person in the team&apos;s chat that Rocco and the others can write to.</p>
+              <button className={`${btn} mt-2 bg-slate-900 text-white`} disabled={busy} data-testid="add-me" onClick={addMe}>Add me to this team as owner</button>
+            </>}
       </div>
       <div className="rounded-lg border p-3">
         <p className="text-sm font-medium">{hasOwner ? "Invite another team owner" : "Invite the team owner (Rocco)"}</p>

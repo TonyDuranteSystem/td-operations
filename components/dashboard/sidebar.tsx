@@ -139,6 +139,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'forms', name: 'Forms', href: '/forms', icon: ClipboardList, adminOnly: true, tooltip: 'Standalone forms that are not tied to a client — view a form, make a one-time link to send, and read what comes back. Admin only.' },
   { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
   { id: 'marketing', name: 'Marketing', href: '/marketing-leads', icon: Megaphone, adminOnly: true, tooltip: 'TD Marketing — the master view of Rocco\'s team: leads from the ads, who is working them, what needs you today, and the Meta connection. Admin only.' },
+  { id: 'marketing-team', name: 'Marketing team', href: '/marketing', icon: MessageSquare, adminOnly: true, tooltip: 'The marketing team\'s own workspace (board, calendar, chat, templates). Opens straight in once you have added yourself to the team on Marketing > Teams; until then it explains how. Admin only.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
   { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2, tooltip: 'LLCs and companies. Each account has services, documents, invoices, and a timeline.' },
