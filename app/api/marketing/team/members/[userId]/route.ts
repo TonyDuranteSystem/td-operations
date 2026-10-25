@@ -3,8 +3,8 @@ import { requireMarketing } from "@/lib/marketing/guard"
 import { removeMember, setMemberPaused, updateMemberAccess, type Actor } from "@/lib/marketing/members"
 
 const NO_STORE = { "Cache-Control": "no-store" }
-const actorOf = (ctx: { role: "owner" | "member"; user: { id: string; email: string | null }; permissions: string[] }): Actor =>
-  ({ kind: ctx.role, userId: ctx.user.id, label: ctx.user.email ?? ctx.user.id, permissions: ctx.permissions })
+const actorOf = (ctx: { role: "owner" | "member"; admin?: true; user: { id: string; email: string | null }; permissions: string[] }): Actor =>
+  ({ kind: ctx.admin ? "admin" : ctx.role, userId: ctx.user.id, label: ctx.user.email ?? ctx.user.id, permissions: ctx.permissions })
 
 /** PATCH — body { action: 'pause' | 'resume' | 'access', bundle?, permissions? }. The team is the caller's own (from the guard). */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ userId: string }> }) {

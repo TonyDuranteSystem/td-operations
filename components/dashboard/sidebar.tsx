@@ -111,7 +111,7 @@ interface SidebarProps {
   isAdmin?: boolean
   /** True only for the code-level owner account (see lib/auth). */
   isOwner?: boolean
-  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; talk?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; devBoard?: number }
+  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; talk?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; marketing?: number; devBoard?: number }
   enabledFeatures?: string[]
 }
 
@@ -139,7 +139,6 @@ const defaultNavigation: NavItem[] = [
   { id: 'forms', name: 'Forms', href: '/forms', icon: ClipboardList, adminOnly: true, tooltip: 'Standalone forms that are not tied to a client — view a form, make a one-time link to send, and read what comes back. Admin only.' },
   { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
   { id: 'marketing', name: 'Marketing', href: '/marketing-leads', icon: Megaphone, adminOnly: true, tooltip: 'TD Marketing — the master view of Rocco\'s team: leads from the ads, who is working them, what needs you today, and the Meta connection. Admin only.' },
-  { id: 'marketing-team', name: 'Marketing team', href: '/marketing', icon: MessageSquare, adminOnly: true, tooltip: 'The marketing team\'s own workspace (board, calendar, chat, templates). Opens straight in once you have added yourself to the team on Marketing > Teams; until then it explains how. Admin only.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
   { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2, tooltip: 'LLCs and companies. Each account has services, documents, invoices, and a timeline.' },
@@ -386,6 +385,8 @@ export function Sidebar({
   const [liveReconReview, setLiveReconReview] = useState(badgeCounts?.reconciliationReview ?? 0)
   const [liveComm] = useState(badgeCounts?.commUnread ?? 0)
   const [liveDevBoard, setLiveDevBoard] = useState(badgeCounts?.devBoard ?? 0)
+  // Marketing: what the team is waiting on Antonio for (@mentions, direct messages, lead chats); 0 until he has joined the team
+  const [liveMarketing, setLiveMarketing] = useState(0)
   const [liveWhatsNew, setLiveWhatsNew] = useState(0)
   const pathnameRef = useRef(pathname)
 
@@ -425,6 +426,7 @@ export function Sidebar({
           if (typeof data.devBoard === 'number') {
             setLiveDevBoard(data.devBoard)
           }
+          if (typeof data.marketing === 'number') setLiveMarketing(data.marketing)
         })
         .catch(() => {})
     }
@@ -645,6 +647,7 @@ export function Sidebar({
       // TD Talk (the tab above Home) lights the same plain dot: a new direct message / group message / @mention.
       // Not while you are ON the tab: you are looking at the chat (it reads itself), so a dot there would only flicker.
       if (item.id === 'td-talk' && liveTalk > 0 && pathname !== '/td-talk') return { ...item, dotBadge: true }
+      if (item.id === 'marketing' && liveMarketing > 0) return { ...item, badge: liveMarketing }
       if (item.id === 'dev-board' && liveDevBoard > 0) return { ...item, badge: liveDevBoard }
       if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
       if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }

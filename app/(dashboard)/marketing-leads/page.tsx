@@ -2,6 +2,7 @@ import Link from "next/link"
 import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { isSecureAdmin } from "@/lib/auth"
+import { adminMemberContext } from "@/lib/marketing/guard"
 import { leadDb } from "@/lib/marketing/meta-leads/service"
 import { ageText } from "@/lib/marketing/master-view"
 import { loadMasterData } from "@/lib/marketing/master-read"
@@ -23,6 +24,8 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || !isSecureAdmin(user)) redirect("/")
   const sp = await searchParams
+  // the button into the team's workspace only works once he has joined a team (the Teams page has the button that does it)
+  const joined = (await adminMemberContext({ id: user.id, email: user.email })).ok
 
   const db = leadDb()
   const teams = await listTeams()
@@ -53,6 +56,14 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
             {team ? <>Team: <b>{team.name}</b> ({team.status}){master ? ` · ${master.memberCount} ${master.memberCount === 1 ? "person" : "people"}` : ""}</> : "No team yet."}
           </p>
         </div>
+        {team && (
+          <div className="text-right">
+            {joined
+              ? <Link href="/marketing" data-testid="open-team-workspace" className="inline-block rounded-lg bg-teal-700 px-4 py-2 text-sm font-medium text-white hover:bg-teal-800">Open the team workspace &#9656;</Link>
+              : <Link href="/marketing-leads/teams" data-testid="join-team-workspace" className="inline-block rounded-lg border px-4 py-2 text-sm font-medium text-teal-800 hover:bg-slate-50">Join the team to open its workspace</Link>}
+            <p className="mt-1 text-xs text-slate-500">Leads, board, calendar, chat</p>
+          </div>
+        )}
         {master && (
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
             <span><span className={`mr-1.5 inline-block h-2.5 w-2.5 rounded-full ${connected ? "bg-emerald-500" : "bg-red-500"}`} />{connected ? "Meta connected" : "Meta not fully set up"}</span>

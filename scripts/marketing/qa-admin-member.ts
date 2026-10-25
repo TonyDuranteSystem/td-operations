@@ -133,8 +133,11 @@ async function main() {
   await a0.close()
   const t0 = await open(adminCtx, "/marketing-leads/teams")
   ck("M1b on CRM > Marketing > Teams the admin sees the 'Add me to this team as owner' button for the team (he is not in it yet)", (await t0.getByTestId("add-me").count()) >= 1)
+  const ov0 = await open(adminCtx, "/marketing-leads")
+  ck("M1d before he has joined, the Overview offers 'Join the team to open its workspace' (to the Teams page), not a dead button", (await ov0.getByTestId("open-team-workspace").count()) === 0 && (await ov0.getByTestId("join-team-workspace").count()) === 1)
+  await ov0.close()
   const crm = await t0.locator("body").innerText()
-  ck("M1c the CRM menu has the 'Marketing team' entry that goes to the workspace", /Marketing team/.test(crm) && (await t0.locator('a[href="/marketing"]').count()) >= 1)
+  ck("M1c the CRM left menu has NO extra 'Marketing team' item (Antonio: too many tabs); the Marketing item is the only one", !/Marketing team/.test(crm.split("Teams")[0] ?? crm) && (await t0.locator('nav a[href="/marketing"]').count()) === 0)
   await t0.screenshot({ path: `${SHOTS}/qa-admin-member-teams.png`, fullPage: false })
   await t0.close()
 
@@ -153,12 +156,16 @@ async function main() {
   const mine = t1.locator("section", { hasText: teamA.name })
   ck("M3b after adding himself, THIS team's block on the Teams page says he is an owner and its button is gone (other teams keep theirs)", (await mine.getByTestId("add-me").count()) === 0 && /You are an owner of this team/.test(await mine.innerText()))
   await t1.close()
+  const ov = await open(adminCtx, "/marketing-leads")
+  ck("M3c the Marketing Overview has the one button 'Open the team workspace' going to the workspace", (await ov.getByTestId("open-team-workspace").getAttribute("href")) === "/marketing")
+  await ov.close()
 
   // ---- after: he is simply in, as the owner, with every screen and no banner
   const a1 = await open(adminCtx, "/marketing/board")
   const nav1 = await a1.locator("aside").innerText()
   ck("M5 he opens the workspace straight in: the owner's every screen (Team, Templates, Money), and NO 'Viewing as' banner", /Team/.test(nav1) && /Templates/.test(nav1) && /Money/.test(nav1) && (await a1.getByText("Viewing as").count()) === 0, nav1.slice(0, 300))
   await a1.screenshot({ path: `${SHOTS}/qa-admin-member-board.png`, fullPage: true })
+  ck("M5b a 'Back to the CRM' link takes him back to the Marketing tab", (await a1.getByTestId("back-to-crm").getAttribute("href")) === "/marketing-leads")
   ck("M6 …and the chat entry is there", (await a1.getByTestId("nav-chat").count()) === 1)
 
   // ---- he is a person in the chat: others see him, can write to him, mention him
@@ -172,6 +179,10 @@ async function main() {
   await sp.getByTestId("talk-input").fill("Antonio, a question about the Rossi lead")
   await sp.getByTestId("talk-send").click()
   await sp.waitForTimeout(1500)
+  // the dev server can be slow: wait (up to a minute) for the message to be saved and counted
+  let badges: { marketing?: number } = {}
+  for (let i = 0; i < 20; i++) { badges = await ap.evaluate(async () => (await fetch("/api/dashboard/badges")).json()); if (badges.marketing === 1) break; await ap.waitForTimeout(3000) }
+  ck("M7b the CRM menu's red number for Marketing is 1 (the setter's message waits for him)", badges.marketing === 1, { marketing: badges.marketing })
   const ac = await open(adminCtx, "/marketing/chat")
   ck("M8 the admin's Chat page shows that message with a red number, and opening it reads it", (await ac.getByTestId("thread-row").count()) === 1 && /1/.test(await ac.getByTestId("thread-unread").first().innerText()))
   await ac.getByTestId("thread-row").first().click()
@@ -179,7 +190,7 @@ async function main() {
   await ac.getByTestId("talk-input").fill("Tell me which lead and I will look")
   await ac.getByTestId("talk-send").click()
   let lastFromAdmin = { sender_name: "" }
-  for (let i = 0; i < 30; i++) { lastFromAdmin = (await db.query("select sender_name from marketing_team_messages where team_id=$1 order by created_at desc limit 1", [teamA.id])).rows[0]; if (lastFromAdmin.sender_name === ADM) break; await ac.waitForTimeout(500) }
+  for (let i = 0; i < 90; i++) { lastFromAdmin = (await db.query("select sender_name from marketing_team_messages where team_id=$1 order by created_at desc limit 1", [teamA.id])).rows[0]; if (lastFromAdmin.sender_name === ADM) break; await ac.waitForTimeout(500) }
   ck("M9 the admin writes back in the same chat, as himself (not as someone else)", lastFromAdmin.sender_name === ADM, lastFromAdmin)
 
   // ---- @mention in a lead chat
@@ -188,7 +199,7 @@ async function main() {
   ck("M10 a setter can @mention the admin in a lead's chat (stored as mentioned)", lm.status === 200 && (lrow.mentions as string[]).includes(ids.admin), lrow)
   const adminLead = await adminCtx.newPage()
   await adminLead.goto(`${BASE}/marketing/window/${L1}?tab=chat`, { waitUntil: "domcontentloaded", timeout: 180000 })
-  await adminLead.getByTestId("lead-chat").waitFor({ timeout: 90000 })
+  await adminLead.getByTestId("lead-chat").waitFor({ timeout: 120000 }).catch(async e => { console.log("M11 page said:", (await text(adminLead)).slice(0, 600)); await adminLead.screenshot({ path: `${SHOTS}/qa-admin-member-m11.png` }); throw e })
   ck("M11 the admin can read and answer in that lead's chat", (await adminLead.getByTestId("lead-chat").count()) === 1)
 
   // ---- View as still works, and leaving it returns him to his own owner view

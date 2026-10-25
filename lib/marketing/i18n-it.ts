@@ -372,6 +372,7 @@ export const IT: Record<string, string> = {
   "Use team chat": "Usare la chat del team",
   "Use the shared inbox": "Usare la posta condivisa",
   "Viewing as {who}. You are Antonio: nothing is blocked, and what you do is recorded under your own email.": "Stai guardando come {who}. Sei Antonio: nulla è bloccato e ciò che fai viene registrato con la tua email.",
+  "Back to the CRM": "Torna al CRM",
   "Waiting {age}": "In attesa da {age}",
   "We could not check whether this person is already a TD client. Ask before selling.": "Non abbiamo potuto verificare se questa persona è già cliente TD. Chiedi prima di vendere.",
   "What each person did today. A name opens the leads that person worked on.": "Cosa ha fatto oggi ciascuna persona. Un nome apre i lead su cui ha lavorato.",

@@ -28,7 +28,7 @@ export function TeamControls({ teamId, status, hasOwner, iAmMember }: { teamId: 
   }
   async function addMe() {
     const d = await call(`/api/marketing-admin/teams/${teamId}/add-me`, "POST", {}, "Could not add you to the team. Please try again.")
-    if (d) { setDone("You are now an owner of this team. Open Marketing team in the menu to go straight in: you are a person in its chat now."); router.refresh() }
+    if (d) { setDone("You are now an owner of this team. Open the team workspace from the Marketing Overview page: you are a person in its chat now."); router.refresh() }
   }
   async function invite() {
     const d = await call(`/api/marketing-admin/teams/${teamId}/owner-invite`, "POST", { email }, "Could not create the invitation. Please try again.")
@@ -45,7 +45,7 @@ export function TeamControls({ teamId, status, hasOwner, iAmMember }: { teamId: 
       <div className="rounded-lg border p-3">
         <p className="text-sm font-medium">You, in this team</p>
         {iAmMember
-          ? <p className="mt-1 text-sm text-slate-600">You are an owner of this team: open <b>Marketing team</b> in the menu to go straight in. &quot;View as&quot; above still shows you what each role sees.</p>
+          ? <p className="mt-1 text-sm text-slate-600">You are an owner of this team: press <b>Open the team workspace</b> on the Marketing Overview page to go straight in. &quot;View as&quot; above still shows you what each role sees.</p>
           : <>
               <p className="mt-1 text-xs text-slate-500">Join as an owner (with your own login, no invitation): the workspace opens without &quot;View as&quot;, and you are a person in the team&apos;s chat that Rocco and the others can write to.</p>
               <button className={`${btn} mt-2 bg-slate-900 text-white`} disabled={busy} data-testid="add-me" onClick={addMe}>Add me to this team as owner</button>

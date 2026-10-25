@@ -212,7 +212,9 @@ export async function removeMember(input: { teamId: string; userId: string; acto
   // person can simply try again; if saving the row fails afterwards the login is already closed, and trying again completes the record.
   // …but never ban a CRM ADMIN login (Antonio's own, when he is a member): removing him from a team must not lock him out of the CRM
   const target = await db().auth.admin.getUserById(input.userId)
-  const isAdminLogin = isSecureAdmin(target?.data?.user ?? null)
+  // if the login cannot be looked up we do not know whether it is a CRM admin: stop, never guess (a ban on Antonio's own login would lock him out of the CRM)
+  if (target?.error || !target?.data?.user) return fail("The login could not be checked. Please try again.")
+  const isAdminLogin = isSecureAdmin(target.data.user)
   if (!isAdminLogin) {
     const ban = await db().auth.admin.updateUserById(input.userId, { ban_duration: "876000h" })
     if (ban?.error) return fail("The login could not be ended. Please try again.")

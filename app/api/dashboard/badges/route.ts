@@ -2,6 +2,9 @@ import { createClient } from '@supabase/supabase-js'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { countTeamNotifications, countTalkNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
 import { gmailGet } from '@/lib/gmail'
+import { isSecureAdmin } from '@/lib/auth'
+import { adminMemberContext } from '@/lib/marketing/guard'
+import { marketingChatUnread } from '@/lib/marketing/menu-unread'
 import { NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
@@ -26,9 +29,11 @@ export async function GET() {
     // Who is asking — team-chat unread is PER-USER (a DM/share is "unread" only
     // for its recipient), so we need the caller's id to compute it correctly.
     let userId: string | null = null
+    let adminUser: { id: string; email?: string | null } | null = null
     try {
       const { data: { user } } = await createServerClient().auth.getUser()
       userId = user?.id ?? null
+      if (user && isSecureAdmin(user)) adminUser = { id: user.id, email: user.email }
     } catch { /* unauthenticated → teamChat stays 0 */ }
 
     // Run all queries in parallel
@@ -143,7 +148,16 @@ export async function GET() {
       devBoard = Array.isArray(newCards) ? newCards.length : 0
     }
 
-    return NextResponse.json({ portalChats, teamChat, talk, inbox, tasks, overdueInvoices, reconciliationReview, devBoard, _debug: { supportUnread, antonioUnread } })
+    // Marketing: what the team waits on him for. Only when he has joined a team as a member (0 otherwise); never allowed to break the other badges.
+    let marketing = 0
+    if (adminUser) {
+      try {
+        const g = await adminMemberContext(adminUser)
+        if (g.ok) marketing = await marketingChatUnread(g.ctx)
+      } catch (e) { console.error('[badges] marketing unread failed:', e instanceof Error ? e.message : e) }
+    }
+
+    return NextResponse.json({ portalChats, teamChat, talk, inbox, tasks, overdueInvoices, reconciliationReview, devBoard, marketing, _debug: { supportUnread, antonioUnread } })
   } catch (err) {
     console.error('[dashboard/badges] Error:', err)
     return NextResponse.json({ portalChats: 0, inbox: 0, tasks: 0, overdueInvoices: 0, reconciliationReview: 0 })
