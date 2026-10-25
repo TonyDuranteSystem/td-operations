@@ -11,6 +11,7 @@ DELETE FROM public.app_settings WHERE key = 'store_signed_key_prefixes';
 UPDATE public.catalog_entries SET metadata = metadata - 'replace_only'
  WHERE catalog_id = 'storage_document_types' AND slug IN ('passport', 'id_document');
 ALTER TABLE public.store_file_versions DROP COLUMN IF EXISTS unmerged;
+ALTER TABLE public.store_files DROP COLUMN IF EXISTS marked_signed_at;
 -- store_write back to the original text of 20260925-1100
 CREATE OR REPLACE FUNCTION public.store_write(p jsonb)
 RETURNS jsonb LANGUAGE plpgsql AS $$

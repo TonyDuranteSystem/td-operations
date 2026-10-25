@@ -291,6 +291,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [versions, setVersions] = useState<{ id: string; versionNo: number; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null; unmerged?: boolean }[] | null>(null)
   const [editing, setEditing] = useState<EditTarget | null>(null)
   const [lockNote, setLockNote] = useState<string | null>(null)
+  const [signConfirm, setSignConfirm] = useState<File_ | null>(null)
   const [previewVersion, setPreviewVersion] = useState<{ file: File_; src: string; title: string; viewSrc: string } | null>(null)
   const [busyFiles, setBusyFiles] = useState<Set<string>>(new Set())
   const [types, setTypes] = useState<DocType[] | null>(null)
@@ -653,11 +654,20 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     void refreshAll()
   }
 
+  const doMarkSigned = async (f: File_) => {
+    setSignConfirm(null)
+    try {
+      await postJson(`/api/crm-store/browse/file/${f.id}/mark-signed`, {}, 'The file could not be marked as signed.')
+      toast.success(`"${f.name}" is now a signed document — it can only be replaced, never edited.`)
+    } catch (e) { toast.error(errMsg(e, 'The file could not be marked as signed.')) }
+    void refreshAll()
+  }
+
   const startEdit = (f: File_) => {
     setMenuFor(null)
     if (f.lockKind) { setLockNote(lockText(f.lockKind, f.name)); return }
     // never guess the version the person started from: without it a false "someone else changed this" would follow
-    if (f.versionNo == null) { setLockNote('The current version of this file could not be read, so it cannot be edited from here right now. Reload the page and try again.'); return }
+    if (f.versionNo == null || !ownerId) { setLockNote('The current version of this file could not be read, so it cannot be edited from here right now. Reload the page and try again.'); return }
     setEditing({ id: f.id, name: f.name, mimeType: f.mimeType, size: f.size, versionNo: f.versionNo, ownerId: ownerId ?? '', clientVisible: f.clientVisible, alwaysShown: !!f.shownByWorkspace })
   }
 
@@ -1936,6 +1946,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     <>
 <MenuItem icon={Search} label="Preview" onClick={() => { setMenuFor(null); setPreview(f) }} />
               {f.state === 'live' && <MenuItem icon={f.lockKind ? Lock : Upload} label="Upload edited version…" onClick={() => startEdit(f)} />}
+              {f.state === 'live' && !f.lockKind && <MenuItem icon={Lock} label="Mark as signed…" onClick={() => { setMenuFor(null); setSignConfirm(f) }} />}
               {ai.available && f.state === 'live' && <MenuItem icon={ScanText} label="Check this file" onClick={() => { setMenuFor(null); setAiFile(f.id) }} />}
               <MenuItem icon={Layers} label="Details" onClick={() => { void openDetails(f.id) }} />
               <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }} />
@@ -2751,6 +2762,17 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         <AiReviewPanel fileId={aiFile} onClose={() => setAiFile(null)}
           queue={Array.from(new Set([aiFile, ...visibleFileIds.filter((id) => ai.marks[id] && (ai.marks[id].mark === 'look' || ai.marks[id].mark === 'conflict'))]))}
           onChanged={() => { void refreshAll(); void ai.reload(visibleFileIds) }} onOpenFile={setAiFile} />
+      )}
+      {signConfirm && (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-black/40 px-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setSignConfirm(null) }}>
+          <div role="dialog" aria-modal="true" aria-label="Mark as signed" className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+            <p className="text-sm text-zinc-700">Mark <b>{signConfirm.name}</b> as a signed document? From then on it can never be edited in place — only a replacement file can be added.</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" autoFocus onClick={() => setSignConfirm(null)} className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50">Cancel</button>
+              <button type="button" onClick={() => void doMarkSigned(signConfirm)} className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">Mark as signed</button>
+            </div>
+          </div>
+        </div>
       )}
       {editing && <NewVersionDialog target={editing} onClose={() => setEditing(null)} onSaved={() => { void refreshAll() }} />}
       {lockNote && (

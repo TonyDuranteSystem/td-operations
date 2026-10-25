@@ -62,11 +62,21 @@ export async function saveNewVersionFromStaged(r: NewVersionRequest): Promise<Ne
   if (!r.storagePath.startsWith(STAGING_PREFIX) || r.storagePath.includes("..")) return { status: "refused", message: "That upload is not valid — please choose the file again." }
   const info = await currentInfo(r.fileId)
   if (!info) { await removeStaged(r.storagePath); return { status: "not_found", message: statusMessage("not_found", "") } }
+  // the size is read from the storage listing BEFORE anything is downloaded: a huge object is refused without being read
+  const slash = r.storagePath.lastIndexOf("/")
+  const { data: listed } = await db().storage.from(STAGING_BUCKET).list(r.storagePath.slice(0, slash), { search: r.storagePath.slice(slash + 1), limit: 5 })
+  const stagedSize = ((listed ?? []) as Array<{ name: string; metadata?: { size?: number } | null }>).find((o) => o.name === r.storagePath.slice(slash + 1))?.metadata?.size
+  if (typeof stagedSize === "number" && stagedSize > INLINE_REGISTER_MAX_BYTES) {
+    await removeStaged(r.storagePath)
+    return { status: "refused", message: `That file is ${(stagedSize / 1048576).toFixed(0)} MB — a new version can be up to ${INLINE_REGISTER_MAX_BYTES / 1048576} MB for now.` }
+  }
   const { data: blob, error: dlErr } = await db().storage.from(STAGING_BUCKET).download(r.storagePath)
   if (dlErr || !blob) { console.error("[crm-store] staged file unreadable:", dlErr?.message); return { status: "refused", message: "The chosen file could not be read — please choose it again." } }
-  if (blob.size > INLINE_REGISTER_MAX_BYTES) { await removeStaged(r.storagePath); return { status: "refused", message: `That file is ${(blob.size / 1048576).toFixed(0)} MB — a new version can be up to ${INLINE_REGISTER_MAX_BYTES / 1048576} MB for now.` } }
+  const blobType: string = blob.type
+  // one copy: the Buffer takes over the downloaded memory (no second copy is made)
   const bytes = Buffer.from(await blob.arrayBuffer())
-  const mime = r.mimeType || blob.type || info.mime || "application/octet-stream"
+  if (bytes.length > INLINE_REGISTER_MAX_BYTES) { await removeStaged(r.storagePath); return { status: "refused", message: `That file is ${(bytes.length / 1048576).toFixed(0)} MB — a new version can be up to ${INLINE_REGISTER_MAX_BYTES / 1048576} MB for now.` } }
+  const mime = r.mimeType || blobType || info.mime || "application/octet-stream"
 
   const chk = checkReplacement({ name: info.name, mimeType: info.mime, size: info.size }, { name: r.fileName, mimeType: mime, size: bytes.length })
   if (chk.block) { await removeStaged(r.storagePath); return { status: "refused", message: chk.block } }

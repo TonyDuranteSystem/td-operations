@@ -133,6 +133,12 @@ async function main() {
   check('two saves from the same base at the same moment: exactly one wins, the other is a conflict', statuses === 'conflict,versioned', { r1, r2 })
   check('the file has exactly 2 versions after the race', (await versions(wc.file_id)).length === 2)
 
+  // a hand-marked signed document
+  const wm = await write(`qa-safe:${TS}:marked`, `ZZ QA marked signed ${TS}.pdf`, 'G1')
+  await q(`update public.store_files set marked_signed_at = now() where id = $1`, [wm.file_id])
+  const am = await append(wm.file_id, 'G2', { expected_version_no: 1 })
+  check('a file a person MARKED as signed → locked (signed)', am.status === 'locked' && am.kind === 'signed', am)
+
   // a retry of an applied save, with a hidden "not applied" version in between
   const wu = await write(`qa-safe:${TS}:retry-gap`, `ZZ QA retry gap ${TS}.pdf`, 'U0')
   await append(wu.file_id, 'U-theirs', { expected_version_no: 1, unmerged: true, actor: other })

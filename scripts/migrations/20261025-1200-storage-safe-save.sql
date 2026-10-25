@@ -14,6 +14,8 @@
 BEGIN;
 
 ALTER TABLE public.store_file_versions ADD COLUMN IF NOT EXISTS unmerged boolean NOT NULL DEFAULT false;
+-- a person marked this file as a SIGNED document (a hand-uploaded signed contract has no filing key to tell it apart); one-way in the app
+ALTER TABLE public.store_files ADD COLUMN IF NOT EXISTS marked_signed_at timestamptz;
 
 INSERT INTO public.app_settings (key, value, updated_at)
 VALUES ('store_signed_key_prefixes', '["esign-signed:","offer-signed:","lease-signed:","oa-signed:","ss4-signed-company:"]'::jsonb, now())
@@ -33,9 +35,10 @@ DECLARE
   v_pfx text;
   v_locked boolean;
 BEGIN
-  SELECT id, filing_status, caller_key, document_type INTO f FROM public.store_files WHERE id = p_file_id;
+  SELECT id, filing_status, caller_key, document_type, marked_signed_at INTO f FROM public.store_files WHERE id = p_file_id;
   IF NOT FOUND THEN RETURN NULL; END IF;
   IF f.filing_status = 'filed' THEN RETURN 'filed'; END IF;
+  IF f.marked_signed_at IS NOT NULL THEN RETURN 'signed'; END IF;
   IF EXISTS (SELECT 1 FROM public.store_files n WHERE n.supersedes_file_id = f.id AND n.state = 'live') THEN RETURN 'replaced'; END IF;
   IF f.caller_key IS NOT NULL THEN
     SELECT value INTO v_prefixes FROM public.app_settings WHERE key = 'store_signed_key_prefixes';

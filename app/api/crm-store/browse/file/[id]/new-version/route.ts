@@ -21,6 +21,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (typeof b.storagePath !== "string" || typeof b.fileName !== "string" || typeof b.baseVersionNo !== "number" || !Number.isInteger(b.baseVersionNo) || b.baseVersionNo < 0 || b.baseVersionNo > 1_000_000) {
     return NextResponse.json({ error: "Choose the edited file again." }, { status: 400 })
   }
+  // the staged file must sit under a storage THIS person may use (the page stages it under the storage it is showing) — never another person's in-flight upload
+  const seg = b.storagePath.startsWith("crm-uploads/store-staging/") ? b.storagePath.slice("crm-uploads/store-staging/".length).split("/")[0] : ""
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg)) return NextResponse.json({ error: "That upload is not valid — please choose the file again." }, { status: 400 })
+  const noStaging = await denyUnlessAreaAccess({ ownerId: seg })
+  if (noStaging) return noStaging
   const { data: { user } } = await createClient().auth.getUser()
   try {
     const { saveNewVersionFromStaged } = await import("@/lib/crm-store/new-version")
