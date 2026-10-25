@@ -61,6 +61,7 @@ export async function runNewClientBackfill(contactId: string): Promise<{ plan: B
         mimeType: "application/pdf",
         documentType: "other_document",
         callerKey: `offer-signed:${k.offerId}`,
+        replaceIfLocked: true, // the signed contract is a locked file: a changed copy becomes a replacement file, never lost
         row: { document_type_name: "Signed Contract", category: 5, status: "classified" },
       })
       if (routed.route !== "store") throw new Error("the person's storage could not be opened")

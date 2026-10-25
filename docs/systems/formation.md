@@ -155,3 +155,6 @@ Resolves the first pipeline stage for the service type; propagates `is_test` fro
 - Tier logic: `lib/operations/sync-tier.ts` + `tierForContract` in `lib/portal/auto-create.ts`.
 - Pipeline stages for Company Formation: query `pipeline_stages` / the services catalog.
 - Note (R096): sandbox via sandbox MCP / `psql`; production `execute_sql` hits production.
+
+## Re-signed SS-4 and re-scanned passports (2026-10-25, sandbox)
+A re-signed SS-4 with different bytes is filed as a NEW file `ss4-signed-company:<id>:<sha8>` (and `ss4-signed:<id>:<sha8>` in a store-owned case) replacing the locked signed copy, so the signed copy and the IRS package (`ss4-irs-package:`, new version) agree; a failure is reported in the step result in plain words ("The signed SS-4 was NOT filed …"). A passport re-scan with different bytes (`person-passport:<contact>`; passports are replace-only) is saved as a new file `person-passport:<contact>:<sha8>` replacing the old one — the scan is never lost; a failure says "The passport was NOT saved: <reason>" (no "using Drive" — Drive is frozen). See storage.md "Producers around the lock rules".
