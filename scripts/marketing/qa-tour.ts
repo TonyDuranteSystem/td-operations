@@ -279,6 +279,7 @@ async function main() {
   await blockB.getByTestId("invite-email-lang-en").click()
   await blockB.getByTestId("invite-email-subject").filter({ hasText: "Your access to TD Marketing" }).waitFor({ timeout: 60000 })
   ck("E2a choosing English in the preview changes the subject (and what will be sent)", (await blockB.getByTestId("invite-email-subject").innerText()) === "Your access to TD Marketing")
+  ck("E2d the preview says where answers go: to the person who made the invitation (Antonio here)", (await blockB.getByTestId("invite-email-replyto").innerText()) === em("admin"), await blockB.getByTestId("invite-email-replyto").innerText().catch(() => "missing"))
   const frameHtml = await blockB.getByTestId("invite-email-frame").getAttribute("srcdoc")
   ck("E2b the email carries the one-time link on the app's address and a sandboxed frame (no scripts)", /accept\?token=/.test(frameHtml ?? "") && (await blockB.getByTestId("invite-email-frame").getAttribute("sandbox")) === "")
   const before = (await db.query("select emailed_at from marketing_invites where team_id=$1 and email_lower=$2", [teamB.id, em("roccoB")])).rows[0]
@@ -303,6 +304,7 @@ async function main() {
   await own.getByTestId("invite-email-open").click()
   await own.getByTestId("invite-email-preview").waitFor({ timeout: 60000 })
   ck("E5 in the workspace Team screen the same button and preview exist, to the invited address", (await own.getByTestId("invite-email-to").innerText()) === em("newsetter"))
+  ck("E5a in the workspace the replies go to the owner who made the invitation", (await own.getByTestId("invite-email-replyto").innerText()) === em("ownerA"))
   await own.getByTestId("invite-email-send").click()
   await own.getByTestId("invite-email-sent").waitFor({ timeout: 90000 })
   await own.reload({ waitUntil: "domcontentloaded" })

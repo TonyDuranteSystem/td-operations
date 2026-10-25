@@ -55,12 +55,14 @@ export function buildInviteEmail(i: InviteEmailInput): InviteEmail {
   return { subject, text, html }
 }
 
-/** The finished message for the Gmail API: multipart (plain text + HTML), Subject encoded as RFC 2047 (rule R041), body parts in base64. */
-export function buildInviteMime(to: string, mail: InviteEmail, boundary = `td_${Date.now().toString(36)}`): string {
+/** The finished message for the Gmail API: multipart (plain text + HTML), Subject encoded as RFC 2047 (rule R041), body parts in base64, and a Reply-To when given. */
+export function buildInviteMime(to: string, mail: InviteEmail, boundary = `td_${Date.now().toString(36)}`, replyTo: string | null = null): string {
   const encodedSubject = `=?utf-8?B?${Buffer.from(mail.subject).toString("base64")}?=`
   return [
     `From: ${INVITE_FROM_NAME} <${INVITE_FROM}>`,
     `To: ${to}`,
+    // answers go to the person who made the invitation (the email itself is sent from support@); the caller only passes an address that passed normalizeEmail, so no line break can get in
+    ...(replyTo && /^[^\s<>\r\n]+$/.test(replyTo) ? [`Reply-To: ${replyTo}`] : []),
     `Subject: ${encodedSubject}`,
     "MIME-Version: 1.0",
     `Content-Type: multipart/alternative; boundary="${boundary}"`,

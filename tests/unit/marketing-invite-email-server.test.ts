@@ -74,6 +74,24 @@ describe("previewInviteEmail", () => {
     }
     expect(gmailPost).not.toHaveBeenCalled()
   })
+  it("answers go to whoever made the invitation: the preview says so and the sent email carries a Reply-To", async () => {
+    const pre = await previewInviteEmail(TOKEN, scope)
+    expect(pre.ok && pre.data.replyTo).toBe("antonio.durante@tonydurante.us")
+    await sendInviteEmail(TOKEN, scope)
+    const body = gmailPost.mock.calls[0][1] as { raw: string }
+    expect(Buffer.from(body.raw, "base64url").toString("utf8")).toContain("Reply-To: antonio.durante@tonydurante.us")
+  })
+  it("no Reply-To when the maker is not an email address, or is the invited person himself", async () => {
+    state.invites = [invite({ created_by: "qa-cl" })]
+    const noMaker = await previewInviteEmail(TOKEN, scope)
+    expect(noMaker.ok && noMaker.data.replyTo).toBeNull()
+    state.invites = [invite({ created_by: "rocco@tonydurante.us" })]
+    const self = await previewInviteEmail(TOKEN, scope)
+    expect(self.ok && self.data.replyTo).toBeNull()
+    await sendInviteEmail(TOKEN, scope)
+    const body = gmailPost.mock.calls[0][1] as { raw: string }
+    expect(Buffer.from(body.raw, "base64url").toString("utf8")).not.toContain("Reply-To")
+  })
   it("Antonio's preview uses the language and first name of the invited person's CRM record", async () => {
     state.contact = { first_name: "Roccò", language: "English" }
     const r = await previewInviteEmail(TOKEN, scope)
