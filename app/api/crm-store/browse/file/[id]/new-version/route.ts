@@ -18,7 +18,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const noAccess = await denyUnlessAreaAccess({ fileId: params.id })
   if (noAccess) return noAccess
   const b = await req.json().catch(() => ({})) as Record<string, unknown>
-  if (typeof b.storagePath !== "string" || typeof b.fileName !== "string" || typeof b.baseVersionNo !== "number" || !Number.isInteger(b.baseVersionNo)) {
+  if (typeof b.storagePath !== "string" || typeof b.fileName !== "string" || typeof b.baseVersionNo !== "number" || !Number.isInteger(b.baseVersionNo) || b.baseVersionNo < 0 || b.baseVersionNo > 1_000_000) {
     return NextResponse.json({ error: "Choose the edited file again." }, { status: 400 })
   }
   const { data: { user } } = await createClient().auth.getUser()
@@ -26,12 +26,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const { saveNewVersionFromStaged } = await import("@/lib/crm-store/new-version")
     const r = await saveNewVersionFromStaged({
       fileId: params.id, storagePath: b.storagePath, fileName: b.fileName, mimeType: typeof b.mimeType === "string" ? b.mimeType : null,
-      baseVersionNo: b.baseVersionNo, acceptWarnings: b.acceptWarnings === true, keepUnmerged: b.keepUnmerged === true,
+      baseVersionNo: b.baseVersionNo, acceptWarnings: b.acceptWarnings === true, keepUnmerged: b.keepUnmerged === true, clientChoice: b.clientChoice === "hide" ? "hide" : "keep",
       reason: typeof b.reason === "string" ? b.reason.trim().slice(0, 300) : null, confirmToken: typeof b.confirmToken === "string" ? b.confirmToken : null,
       actor: { userId: user?.id ?? null, ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null, userAgent: req.headers.get("user-agent")?.slice(0, 200) ?? null },
     })
     return NextResponse.json(r)
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "The new version could not be saved." }, { status: 400 })
+    console.error("[crm-store] new-version route:", e instanceof Error ? e.message : e)
+    return NextResponse.json({ error: "The new version could not be saved — please try again." }, { status: 400 })
   }
 }

@@ -133,8 +133,15 @@ async function main() {
   check('two saves from the same base at the same moment: exactly one wins, the other is a conflict', statuses === 'conflict,versioned', { r1, r2 })
   check('the file has exactly 2 versions after the race', (await versions(wc.file_id)).length === 2)
 
+  // a retry of an applied save, with a hidden "not applied" version in between
+  const wu = await write(`qa-safe:${TS}:retry-gap`, `ZZ QA retry gap ${TS}.pdf`, 'U0')
+  await append(wu.file_id, 'U-theirs', { expected_version_no: 1, unmerged: true, actor: other })
+  const u1 = await append(wu.file_id, 'U-mine', { expected_version_no: 1 })
+  const u2 = await append(wu.file_id, 'U-mine', { expected_version_no: 1 })
+  check('a retry is still recognised when a hidden unmerged version sits between (not a false conflict)', u1.status === 'versioned' && u2.status === 'unchanged' && u2.already_applied === true, { u1, u2 })
+
   // grants
-  const g = await q(`select has_function_privilege('anon', 'public.store_append_version(jsonb)', 'execute') as a, has_function_privilege('authenticated', 'public.store_append_version(jsonb)', 'execute') as b, has_function_privilege('anon', 'public.store_lock_class(uuid)', 'execute') as c`)
+  const g =await q(`select has_function_privilege('anon', 'public.store_append_version(jsonb)', 'execute') as a, has_function_privilege('authenticated', 'public.store_append_version(jsonb)', 'execute') as b, has_function_privilege('anon', 'public.store_lock_class(uuid)', 'execute') as c`)
   check('the new functions are closed to anon / signed-in users', g[0].a === false && g[0].b === false && g[0].c === false, g[0])
 
   await db.end()

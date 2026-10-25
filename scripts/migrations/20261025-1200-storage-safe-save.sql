@@ -121,8 +121,10 @@ BEGIN
 
   -- 1. did the file change since the person opened it? (BEFORE the same-bytes test)
   IF v_expected IS NOT NULL AND coalesce(v_cur.version_no, 0) <> v_expected THEN
-    -- a retry of a save that already went through (same bytes, same person, the very next number) is not a conflict
-    IF v_cur.sha256 = v_sha AND v_cur.created_by IS NOT DISTINCT FROM v_actor AND v_cur.version_no = v_expected + 1 THEN
+    -- a retry of a save that already went through (same bytes, same person, the first APPLIED version after the one they started from —
+    -- hidden "not applied" versions in between do not count) is not a conflict
+    IF v_cur.sha256 = v_sha AND v_cur.created_by IS NOT DISTINCT FROM v_actor AND v_cur.id = (
+         SELECT x.id FROM public.store_file_versions x WHERE x.file_id = v_f.id AND NOT x.unmerged AND x.version_no > v_expected ORDER BY x.version_no LIMIT 1) THEN
       RETURN jsonb_build_object('status', 'unchanged', 'already_applied', true, 'file_id', v_f.id, 'version_id', v_cur.id,
                                 'version_no', v_cur.version_no, 'name', v_f.name);
     END IF;
@@ -236,6 +238,7 @@ BEGIN
     SELECT id, owner_id, folder_id, state, filing_status, current_version_id, name INTO v_file
       FROM public.store_files WHERE id = v_file_id FOR UPDATE;
     PERFORM public.store_lock_owner(v_file.owner_id);
+    IF v_file.state = 'purged' THEN RAISE EXCEPTION 'store: this file was removed while it was being saved — please try again'; END IF;
     IF v_file.state = 'trashed' THEN
       RETURN jsonb_build_object('status','trashed','file_id',v_file.id,'version_id',v_file.current_version_id,'name',v_file.name);
     END IF;

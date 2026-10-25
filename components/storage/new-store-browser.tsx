@@ -644,8 +644,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   /** "Make this the current copy": the older copy is saved again as a NEW version (nothing is deleted) */
   const makeCurrent = async (f: File_, versionNo: number) => {
+    if (f.versionNo == null) { toast.error('The current version of this file could not be read — reload the page and try again.'); return }
     try {
-      const r = await postJson<{ status: string; message: string }>(`/api/crm-store/browse/file/${f.id}/restore`, { versionNo, baseVersionNo: f.versionNo ?? 1 }, 'The older copy could not be restored.')
+      const r = await postJson<{ status: string; message: string }>(`/api/crm-store/browse/file/${f.id}/restore`, { versionNo, baseVersionNo: f.versionNo }, 'The older copy could not be restored.')
       if (r.status === 'versioned') toast.success(r.message); else toast.error(r.message)
     } catch (e) { toast.error(errMsg(e, 'The older copy could not be restored.')) }
     setVersionsFor(null)
@@ -655,7 +656,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const startEdit = (f: File_) => {
     setMenuFor(null)
     if (f.lockKind) { setLockNote(lockText(f.lockKind, f.name)); return }
-    setEditing({ id: f.id, name: f.name, mimeType: f.mimeType, size: f.size, versionNo: f.versionNo ?? null, ownerId: ownerId ?? '' })
+    // never guess the version the person started from: without it a false "someone else changed this" would follow
+    if (f.versionNo == null) { setLockNote('The current version of this file could not be read, so it cannot be edited from here right now. Reload the page and try again.'); return }
+    setEditing({ id: f.id, name: f.name, mimeType: f.mimeType, size: f.size, versionNo: f.versionNo, ownerId: ownerId ?? '', clientVisible: f.clientVisible, alwaysShown: !!f.shownByWorkspace })
   }
 
   const withBusy = async (id: string, fn: () => Promise<void>) => {

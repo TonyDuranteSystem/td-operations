@@ -17,7 +17,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const noAccess = await denyUnlessAreaAccess({ fileId: params.id })
   if (noAccess) return noAccess
   const b = await req.json().catch(() => ({})) as Record<string, unknown>
-  if (!Number.isInteger(b.versionNo) || !Number.isInteger(b.baseVersionNo)) return NextResponse.json({ error: "Choose the older copy again." }, { status: 400 })
+  if (!Number.isInteger(b.versionNo) || !Number.isInteger(b.baseVersionNo) || (b.versionNo as number) < 1 || (b.baseVersionNo as number) < 0 || (b.baseVersionNo as number) > 1_000_000) return NextResponse.json({ error: "Choose the older copy again." }, { status: 400 })
   const { data: { user } } = await createClient().auth.getUser()
   try {
     const { restoreVersion } = await import("@/lib/crm-store/new-version")
@@ -26,6 +26,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null, userAgent: req.headers.get("user-agent")?.slice(0, 200) ?? null,
     }))
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "The older copy could not be restored." }, { status: 400 })
+    console.error("[crm-store] restore route:", e instanceof Error ? e.message : e)
+    return NextResponse.json({ error: "The older copy could not be restored — please try again." }, { status: 400 })
   }
 }

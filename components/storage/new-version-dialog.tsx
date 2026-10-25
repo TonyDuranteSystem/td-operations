@@ -14,7 +14,7 @@ import { checkReplacement, lockText, warningText, type ReplaceWarning } from '@/
 
 const STAGING_PREFIX = 'crm-uploads/store-staging/'
 
-export interface EditTarget { id: string; name: string; mimeType: string | null; size: number | null; versionNo: number | null; ownerId: string }
+export interface EditTarget { id: string; name: string; mimeType: string | null; size: number | null; versionNo: number; ownerId: string; /** the client sees this file now */ clientVisible?: boolean; /** a workspace always shows it, so it cannot be hidden */ alwaysShown?: boolean }
 
 type Reply = { status: string; message: string; versionNo?: number; token?: string | null; warnings?: ReplaceWarning[]; error?: string }
 type Phase =
@@ -32,9 +32,10 @@ export function NewVersionDialog({ target, onClose, onSaved }: { target: EditTar
   const [error, setError] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const savedRef = useRef(false)
+  const [hide, setHide] = useState(false)
 
-  const close = () => { if (savedRef.current) onSaved(); onClose() }
+  // always refresh the list on the way out: after a conflict the page's version number is out of date
+  const close = () => { onSaved(); onClose() }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && phase.k !== 'saving') close() }
     window.addEventListener('keydown', onKey)
@@ -42,7 +43,8 @@ export function NewVersionDialog({ target, onClose, onSaved }: { target: EditTar
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase.k])
 
-  const send = async (file: File, extra: { acceptWarnings?: boolean; keepUnmerged?: boolean; reason?: string; confirmToken?: string | null }) => {
+  const send = async (file: File, extra0: { acceptWarnings?: boolean; keepUnmerged?: boolean; reason?: string; confirmToken?: string | null }) => {
+    const extra = { ...extra0, clientChoice: hide ? 'hide' : 'keep' }
     setPhase({ k: 'saving' }); setError(null)
     try {
       const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
@@ -59,12 +61,12 @@ export function NewVersionDialog({ target, onClose, onSaved }: { target: EditTar
       if (!put.ok) throw new Error(put.message)
       const res = await fetch(`/api/crm-store/browse/file/${target.id}/new-version`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ storagePath: put.path, fileName: file.name, mimeType: file.type, baseVersionNo: target.versionNo ?? 1, ...extra }),
+        body: JSON.stringify({ storagePath: put.path, fileName: file.name, mimeType: file.type, baseVersionNo: target.versionNo, ...extra }),
       })
       const r = await res.json().catch(() => ({})) as Reply
       if (!res.ok) throw new Error(r.error || 'The new version could not be saved — please try again.')
-      if (r.status === 'versioned') { savedRef.current = true; setPhase({ k: 'done', message: r.message, tone: 'ok' }) }
-      else if (r.status === 'unmerged') { savedRef.current = true; setPhase({ k: 'done', message: r.message, tone: 'info' }) }
+      if (r.status === 'versioned') { setPhase({ k: 'done', message: r.message, tone: 'ok' }) }
+      else if (r.status === 'unmerged') { setPhase({ k: 'done', message: r.message, tone: 'info' }) }
       else if (r.status === 'unchanged') setPhase({ k: 'done', message: r.message, tone: 'info' })
       else if (r.status === 'conflict') setPhase({ k: 'conflict', file, message: r.message })
       else if (r.status === 'locked' || r.status === 'frozen' || r.status === 'trashed' || r.status === 'not_found') setPhase({ k: 'blocked', message: r.message })
@@ -88,7 +90,15 @@ export function NewVersionDialog({ target, onClose, onSaved }: { target: EditTar
   const body = (() => {
     if (phase.k === 'pick') return (
       <>
-        <p className="text-sm text-zinc-700">Choose the edited file. It is saved as the next version of <b>{target.name}</b>{target.versionNo ? ` (now version ${target.versionNo})` : ''}. The current copy stays under “older copies”.</p>
+        <p className="text-sm text-zinc-700">Choose the edited file. It is saved as the next version of <b>{target.name}</b> (now version {target.versionNo}). The current copy stays under “older copies”.</p>
+        {target.clientVisible && !target.alwaysShown && (
+          <fieldset className="mt-3 rounded-md border border-zinc-200 px-3 py-2 text-sm text-zinc-700">
+            <legend className="px-1 text-xs text-zinc-500">The client can see this file now. After saving:</legend>
+            <label className="flex items-center gap-2"><input type="radio" name="client-choice" checked={!hide} onChange={() => setHide(false)} />The client sees the new version</label>
+            <label className="mt-1 flex items-center gap-2"><input type="radio" name="client-choice" checked={hide} onChange={() => setHide(true)} />Hide it from the client (they never see the new version)</label>
+          </fieldset>
+        )}
+        {target.clientVisible && target.alwaysShown && <p className="mt-3 text-sm text-amber-700">A workspace always shows this file to the client, so the client will see the new version.</p>}
         {error && <p role="alert" className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
         <input ref={inputRef} type="file" className="hidden" data-testid="new-version-input" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onPick(f) }} />
         <div className="mt-4 flex justify-end gap-2">

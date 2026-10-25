@@ -317,7 +317,8 @@ export async function appendVersionBytes(i: AppendVersionInput): Promise<AppendV
   if (status === "versioned") {
     // the CRM list keeps the size and type it was given at the first save: keep it true (best effort, never fails the save)
     try {
-      await db().from("documents").update({ file_size: i.bytes.length, mime_type: i.mimeType ?? null, updated_at: new Date().toISOString() }).eq("drive_file_id", `store:${i.fileId}`)
+      const { error: dErr } = await db().from("documents").update({ file_size: i.bytes.length, mime_type: i.mimeType ?? null, updated_at: new Date().toISOString() }).eq("drive_file_id", `store:${i.fileId}`)
+      if (dErr) console.error("[crm-store] could not refresh the CRM row after a new version:", dErr.message)
     } catch (e) { console.error("[crm-store] could not refresh the CRM row after a new version:", e instanceof Error ? e.message : e) }
   }
   return {

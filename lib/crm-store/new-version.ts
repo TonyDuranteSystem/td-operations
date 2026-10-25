@@ -24,6 +24,8 @@ export interface NewVersionRequest {
   acceptWarnings?: boolean
   /** keep as a hidden "not applied" version after a conflict */
   keepUnmerged?: boolean
+  /** the file is shown to the client now: "keep" it shown with the new version (default) or "hide" it BEFORE the new version is saved */
+  clientChoice?: "keep" | "hide"
   /** amended return: the typed reason + the token the server gave this person for these exact bytes */
   reason?: string | null
   confirmToken?: string | null
@@ -61,7 +63,7 @@ export async function saveNewVersionFromStaged(r: NewVersionRequest): Promise<Ne
   const info = await currentInfo(r.fileId)
   if (!info) { await removeStaged(r.storagePath); return { status: "not_found", message: statusMessage("not_found", "") } }
   const { data: blob, error: dlErr } = await db().storage.from(STAGING_BUCKET).download(r.storagePath)
-  if (dlErr || !blob) return { status: "refused", message: `The chosen file could not be read (${dlErr?.message ?? "no data"}) — please try again.` }
+  if (dlErr || !blob) { console.error("[crm-store] staged file unreadable:", dlErr?.message); return { status: "refused", message: "The chosen file could not be read — please choose it again." } }
   if (blob.size > INLINE_REGISTER_MAX_BYTES) { await removeStaged(r.storagePath); return { status: "refused", message: `That file is ${(blob.size / 1048576).toFixed(0)} MB — a new version can be up to ${INLINE_REGISTER_MAX_BYTES / 1048576} MB for now.` } }
   const bytes = Buffer.from(await blob.arrayBuffer())
   const mime = r.mimeType || blob.type || info.mime || "application/octet-stream"
@@ -76,11 +78,42 @@ export async function saveNewVersionFromStaged(r: NewVersionRequest): Promise<Ne
 
   const sha = sha256Hex(bytes)
   const confirmed = !!r.actor.userId && verifyConfirmToken(r.confirmToken ?? null, { fileId: r.fileId, baseVersionNo: r.baseVersionNo, userId: r.actor.userId, sha256: sha })
-  const res = await appendVersionBytes({
-    fileId: r.fileId, bytes, mimeType: mime, expectedVersionNo: r.baseVersionNo, actor: r.actor.userId, source: "web",
-    confirmed, unmerged: r.keepUnmerged === true, reason: confirmed ? (r.reason ?? null) : null,
-    ip: r.actor.ip ?? null, userAgent: r.actor.userAgent ?? null,
-  })
+  // the reason is a SERVER rule, not just a pop-up rule: a confirmed change to an amended return always carries a typed reason
+  if (confirmed && (r.reason ?? "").trim().length < 3) { await removeStaged(r.storagePath); return { status: "refused", message: "Please type why the amended return is being changed." } }
+
+  // "hide it from the client": done BEFORE the new copy is saved, so the client never sees the new copy, not even for a moment.
+  // If the save then does not go through, the file is shown again (only if it WAS shown).
+  let hiddenByUs = false
+  if (r.clientChoice === "hide" && !r.keepUnmerged) {
+    const { storePointer } = await import("./document-pointer")
+    const { data: rows } = await db().from("documents").select("portal_visible").eq("drive_file_id", storePointer(r.fileId))
+    const wasShown = ((rows ?? []) as { portal_visible: boolean | null }[]).some((x) => x.portal_visible === true)
+    if (wasShown) {
+      try {
+        const { setClientVisibility } = await import("./browse")
+        await setClientVisibility(r.fileId, false, r.actor.userId, { silent: true })
+        hiddenByUs = true
+      } catch (e) { await removeStaged(r.storagePath); return { status: "refused", message: e instanceof Error ? e.message : "The file could not be hidden from the client, so nothing was saved." } }
+    }
+  }
+  const reshowIfNotSaved = async (saved: boolean) => {
+    if (!hiddenByUs || saved) return
+    try { const { setClientVisibility } = await import("./browse"); await setClientVisibility(r.fileId, true, r.actor.userId, { silent: true }) } catch (e) { console.error("[crm-store] could not show the file to the client again after a refused save:", e instanceof Error ? e.message : e) }
+  }
+  let res
+  try {
+    res = await appendVersionBytes({
+      fileId: r.fileId, bytes, mimeType: mime, expectedVersionNo: r.baseVersionNo, actor: r.actor.userId, source: "web",
+      confirmed, unmerged: r.keepUnmerged === true, reason: confirmed ? (r.reason ?? null) : null,
+      ip: r.actor.ip ?? null, userAgent: r.actor.userAgent ?? null,
+    })
+  } catch (e) {
+    console.error("[crm-store] new version failed:", e instanceof Error ? e.message : e)
+    await removeStaged(r.storagePath)
+    await reshowIfNotSaved(false)
+    return { status: "refused", message: "The new version could not be saved — please try again." }
+  }
+  await reshowIfNotSaved(res.status === "versioned")
   const name = res.name ?? info.name
   if (res.status === "needs_confirmation") {
     // the page confirms, then stages the same file again (the token is tied to the file's content, so it still fits)
@@ -103,12 +136,18 @@ export async function restoreVersion(p: { fileId: string; versionNo: number; bas
   if (error || !v) return { status: "not_found", message: "That older copy no longer exists." }
   if ((v.size_bytes as number | null) !== null && (v.size_bytes as number) > INLINE_REGISTER_MAX_BYTES) return { status: "refused", message: "That copy is too large to restore from here for now." }
   const { data: blob, error: dlErr } = await db().storage.from(v.storage_bucket ?? STORE_BUCKET).download(v.storage_path)
-  if (dlErr || !blob) return { status: "refused", message: `The older copy could not be read (${dlErr?.message ?? "no data"}) — please try again.` }
+  if (dlErr || !blob) { console.error("[crm-store] older copy unreadable:", dlErr?.message); return { status: "refused", message: "The older copy could not be read — please try again." } }
   const info = await currentInfo(p.fileId)
-  const res = await appendVersionBytes({
-    fileId: p.fileId, bytes: Buffer.from(await blob.arrayBuffer()), mimeType: v.mime_type ?? null, expectedVersionNo: p.baseVersionNo,
-    actor: p.actor, source: "restore", note: `restored from version ${p.versionNo}`, ip: p.ip ?? null, userAgent: p.userAgent ?? null,
-  })
+  let res
+  try {
+    res = await appendVersionBytes({
+      fileId: p.fileId, bytes: Buffer.from(await blob.arrayBuffer()), mimeType: v.mime_type ?? null, expectedVersionNo: p.baseVersionNo,
+      actor: p.actor, source: "restore", note: `restored from version ${p.versionNo}`, ip: p.ip ?? null, userAgent: p.userAgent ?? null,
+    })
+  } catch (e) {
+    console.error("[crm-store] restore failed:", e instanceof Error ? e.message : e)
+    return { status: "refused", message: "The older copy could not be restored — please try again." }
+  }
   const name = res.name ?? info?.name ?? "this file"
   if (res.status === "versioned") return { status: "versioned", versionNo: res.versionNo ?? 0, message: `Version ${p.versionNo} is now the current copy (saved as version ${res.versionNo}).` }
   if (res.status === "conflict") return { status: "conflict", currentVersionNo: res.currentVersionNo ?? null, message: conflictText({ name, currentVersionNo: res.currentVersionNo, by: await personName(res.currentBy), at: plainWhen(res.currentAt) }) }
