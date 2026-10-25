@@ -905,10 +905,10 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
         if (save_to_account_id) {
           try {
             const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
-            const { storeNameKey } = await import("@/lib/crm-store/rules")
+            const { gmailAttachmentCallerKey } = await import("@/lib/crm-store/gmail-attachment-key")
             const routed = await saveDocumentForAccount({
               accountId: save_to_account_id, name: filename, bytes: buffer, mimeType,
-              folder: "correspondence", documentType: null, callerKey: `gmail-attachment:${message_id}:${attachment_id}:${storeNameKey(filename)}`, portalVisible: false,
+              folder: "correspondence", documentType: null, callerKey: gmailAttachmentCallerKey(message_id, buffer, filename), portalVisible: false,
               row: { document_type_name: "Email attachment", category: 5, status: "classified" },
             })
             if (routed.route !== "store") {

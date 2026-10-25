@@ -246,8 +246,8 @@ async function nameTaken(ownerId: string, parentId: string, name: string, except
 }
 
 async function logFolder(event: string, f: { id: string; owner_id: string; name: string }, actor: string | null, details: Record<string, unknown>) {
-  const { error } = await db().from("store_events").insert({ event, actor, owner_id: f.owner_id, folder_id: f.id, name_snapshot: f.name, details })
-  if (error) console.error(`[crm-store] ${event} not logged for folder ${f.id}: ${error.message}`)
+  const { logStoreEvent } = await import("./event-log")
+  await logStoreEvent({ event, actor, owner_id: f.owner_id, folder_id: f.id, name_snapshot: f.name, details })
 }
 
 export async function createFolder(parentId: string, name: string, actorId: string | null, kind = "custom", templateSlug: string | null = null): Promise<{ id: string; name: string }> {
@@ -526,7 +526,7 @@ export async function markNeedsReview(fileId: string, reason: string, actorId: s
     .eq("id", fileId).eq("state", "live").select("id, owner_id, folder_id, name")
   if (error) throw new Error(`The file was saved, but could not be marked "Needs review" (${error.message}).`)
   const f = (data ?? [])[0]
-  if (f) await db().from("store_events").insert({ event: "needs_review", actor: actorId, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details: { reason } })
+  if (f) await (await import("./event-log")).logStoreEvent({ event: "needs_review", actor: actorId, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details: { reason } })
 }
 
 /** Staff settled a "Needs review" file. */
@@ -536,5 +536,5 @@ export async function clearNeedsReview(fileId: string, actorId: string | null): 
   if (error) throw new Error(`Could not clear "Needs review" (${error.message}).`)
   const f = (data ?? [])[0]
   if (!f) throw new Error("File not found.")
-  await db().from("store_events").insert({ event: "reviewed", actor: actorId, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details: {} })
+  await (await import("./event-log")).logStoreEvent({ event: "reviewed", actor: actorId, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details: {} })
 }

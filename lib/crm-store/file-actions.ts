@@ -39,10 +39,9 @@ export { cleanNewFileName } from "./names"
 import { cleanNewFileName } from "./names"
 
 async function logEvent(event: string, f: { id: string; owner_id: string; folder_id: string; name: string }, actor: string | null, details: Record<string, unknown>) {
-  const { error } = await db().from("store_events").insert({
-    event, actor, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details,
-  })
-  if (error) console.error(`[crm-store] ${event} not logged for ${f.id}: ${error.message}`)
+  // retried once, then a staff alarm (not just console.error): the Drive backup's change detection reads these rows
+  const { logStoreEvent } = await import("./event-log")
+  await logStoreEvent({ event, actor, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details })
 }
 
 export async function renameStoreFile(fileId: string, newName: string, actorId: string | null): Promise<{ name: string }> {
@@ -57,8 +56,11 @@ export async function renameStoreFile(fileId: string, newName: string, actorId: 
   const { storePointer } = await import("./document-pointer")
   const { error: rErr } = await db().from("documents").update({ file_name: name, updated_at: new Date().toISOString() }).eq("drive_file_id", storePointer(fileId))
   if (rErr) {
-    // never leave the store and the CRM list with two names: put the store's name back
-    await db().from("store_files").update({ name: f.name }).eq("id", fileId)
+    // never leave the store and the CRM list with two names: put the store's name back (and CHECK that it worked)
+    const { rollBackOrAlarm, unexpectedPlaceMessage } = await import("./event-log")
+    const back = await rollBackOrAlarm("rename put-back", { ownerId: f.owner_id, fileId, from: f.name, to: name },
+      () => db().from("store_files").update({ name: f.name }).eq("id", fileId))
+    if (!back) throw new Error(unexpectedPlaceMessage(`The CRM list could not be updated (${rErr.message}), and the file now shows the name "${name}" in storage but "${f.name}" in the CRM list.`))
     throw new Error(`The CRM list could not be updated, so the file was not renamed (${rErr.message}) — please try again.`)
   }
   await logEvent("renamed", { ...f, name }, actorId, { from: f.name, to: name })
@@ -109,7 +111,10 @@ export async function moveStoreFile(fileId: string, toFolderId: string, actorId:
     const { error: rErr } = await db().from("documents").update({ category: cat.num, category_name: cat.name, updated_at: new Date().toISOString() })
       .eq("drive_file_id", storePointer(fileId))
     if (rErr) {
-      await db().from("store_files").update({ folder_id: f.folder_id }).eq("id", fileId)
+      const { rollBackOrAlarm, unexpectedPlaceMessage } = await import("./event-log")
+      const back = await rollBackOrAlarm("move put-back", { ownerId: f.owner_id, fileId, fromFolder: f.folder_id, toFolder: toFolderId },
+        () => db().from("store_files").update({ folder_id: f.folder_id }).eq("id", fileId))
+      if (!back) throw new Error(unexpectedPlaceMessage(`The CRM list could not be updated (${rErr.message}).`))
       throw new Error(`The CRM list could not be updated, so the file was not moved (${rErr.message}) — please try again.`)
     }
   }
@@ -133,8 +138,9 @@ export async function deleteStoreFile(fileId: string, actorId: string | null): P
   const { error } = await db().rpc("store_trash_file", { p_file_id: fileId, p_actor: actorId, p_reason: "Deleted by staff from the CRM" })
   if (error) {
     if ((removed ?? []).length > 0) {
-      const { error: back } = await db().from("documents").insert(removed)
-      if (back) console.error(`[crm-store] delete: CRM rows could not be put back for ${fileId}: ${back.message}`)
+      const { rollBackOrAlarm } = await import("./event-log")
+      const ok = await rollBackOrAlarm("delete: CRM rows put-back", { fileId, rows: removed.length }, () => db().from("documents").insert(removed))
+      if (!ok) throw new Error(`${error.message.replace(/^store: /, "")} The file is still in storage, but its CRM list entry could not be put back — staff have been alerted.`)
     }
     throw new Error(error.message.replace(/^store: /, ""))
   }

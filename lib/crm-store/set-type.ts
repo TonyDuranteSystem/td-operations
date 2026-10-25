@@ -138,8 +138,8 @@ async function pathOf(folderId: string): Promise<string> {
 }
 
 async function logEvent(f: { id: string; owner_id: string; folder_id: string; name: string }, actor: string | null, details: Record<string, unknown>) {
-  const { error } = await db().from("store_events").insert({ event: "type_changed", actor, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details })
-  if (error) console.error(`[crm-store] type_changed not logged for ${f.id}: ${error.message}`)
+  const { logStoreEvent } = await import("./event-log")
+  await logStoreEvent({ event: "type_changed", actor, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details })
 }
 
 /** The Drive moves that stored this file: refused while one is running or being undone; the items, and the first

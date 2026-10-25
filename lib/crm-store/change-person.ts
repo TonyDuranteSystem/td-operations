@@ -82,7 +82,10 @@ export async function moveFileToOtherPerson(fileId: string, toFolderId: string, 
   if (cat) { patch.category = cat.num; patch.category_name = cat.name }
   const { error: rErr } = await db().from("documents").update(patch).eq("drive_file_id", storePointer(f.id))
   if (rErr) {
-    await db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: f.folder_id, p_actor: actorId, p_reason: "Move failed — put back" })
+    const { rollBackOrAlarm, unexpectedPlaceMessage } = await import("./event-log")
+    const back = await rollBackOrAlarm("change-person put-back", { fileId: f.id, fromFolder: f.folder_id, toFolder: to.id },
+      () => db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: f.folder_id, p_actor: actorId, p_reason: "Move failed — put back" }))
+    if (!back) throw new Error(unexpectedPlaceMessage(`The CRM list could not be updated (${rErr.message}).`))
     throw new Error(`The CRM list could not be updated, so the file was not moved (${rErr.message}) — please try again.`)
   }
   return { folderName: to.name, person: who.name }
