@@ -11,7 +11,7 @@ import {
   dayLabel, matchMessages, mergeSnapshot, messageSignature, parseTypingSignal, shouldAnnounceTyping, snippet, tickStateAll, timeLabel, TYPING_EXPIRES_MS,
   type TalkMessage, type TalkReaction, type TypingKind,
 } from '@/lib/talk/chat-model'
-import { TalkMessages } from '@/components/talk/talk-messages'
+import { TalkMessages, TalkMentionNames } from '@/components/talk/talk-messages'
 import { TalkComposer, type TalkComposerMode, type TalkSendInput } from '@/components/talk/talk-composer'
 import { TalkMessageSheet } from '@/components/talk/talk-sheet'
 import { STATIC_SNIPPETS, TalkI18nProvider, type TalkI18n } from '@/components/talk/talk-i18n'
@@ -20,8 +20,6 @@ import { useLang, useT } from '@/components/marketing/lang-provider'
 import { localeFor } from '@/lib/marketing/i18n'
 
 const POLL_MS = 4_000
-const API = '/api/marketing/chat'
-const VOICE_API = `${API}/messages`
 
 /**
  * The chat inside a lead (dev job 9aec66fa, Addendum G): the setter and the seller talk about THIS lead. The screen is TD Talk's own — the same message list, composer
@@ -30,6 +28,20 @@ const VOICE_API = `${API}/messages`
  * READ RULE (TD Talk's): messages are marked read only while somebody is looking at the window.
  */
 export function LeadChat({ leadId }: { leadId: string }) {
+  return <ConversationChat id={leadId} api="/api/marketing/chat" idField="lead_id" channel="tdm-lead-typing" />
+}
+
+/** The chat of a team conversation (a direct message or a group): the same screen, fed by /api/marketing/team-chat. */
+export function TeamChat({ threadId }: { threadId: string }) {
+  return <ConversationChat id={threadId} api="/api/marketing/team-chat" idField="thread_id" channel="tdm-team-typing" />
+}
+
+/**
+ * One conversation, whatever it is about: a lead, a direct message, a group. `api` is the chat's own address (it answers the same shape everywhere), `idField` names the id in the
+ * "delivered" call, `channel` the live "typing…" channel. Everything below is the lead chat's own code, only not tied to a lead any more.
+ */
+function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix }: { id: string; api: string; idField: 'lead_id' | 'thread_id'; channel: string }) {
+  const VOICE_API = `${API}/messages`
   const t = useT()
   const lang = useLang()
   const tRef = useRef(t)
@@ -91,7 +103,7 @@ export function LeadChat({ leadId }: { leadId: string }) {
       const newest = incoming.filter(m => m.sender_id !== d.me).map(m => m.created_at).sort().pop() ?? null
       if (newest && deliveredFor.current !== newest) {
         deliveredFor.current = newest
-        void fetch(`${API}/delivered`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [{ lead_id: leadId }] }), keepalive: true }).catch(() => { deliveredFor.current = null })
+        void fetch(`${API}/delivered`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [{ [idField]: leadId }] }), keepalive: true }).catch(() => { deliveredFor.current = null })
       }
     } catch (e) {
       // a refresh that fails in the background used to be invisible: after three in a row the chat says so
@@ -100,7 +112,7 @@ export function LeadChat({ leadId }: { leadId: string }) {
     } finally {
       setLoading(false)
     }
-  }, [leadId])
+  }, [leadId, API, idField])
 
   useEffect(() => { void load() }, [load])
 
@@ -120,7 +132,7 @@ export function LeadChat({ leadId }: { leadId: string }) {
     const supabase = createClient()
     let expire: ReturnType<typeof setTimeout> | null = null
     const channel = supabase
-      .channel(`tdm-lead-typing-${leadId}`, { config: { broadcast: { self: false } } })
+      .channel(`${typingPrefix}-${leadId}`, { config: { broadcast: { self: false } } })
       .on('broadcast', { event: 'typing' }, ({ payload }) => {
         const sig = parseTypingSignal(payload, meIdRef.current)
         if (!sig) return
@@ -131,7 +143,7 @@ export function LeadChat({ leadId }: { leadId: string }) {
       .subscribe()
     typingChannelRef.current = channel
     return () => { if (expire) clearTimeout(expire); typingChannelRef.current = null; void supabase.removeChannel(channel) }
-  }, [leadId])
+  }, [leadId, typingPrefix])
 
   const announceTyping = useCallback((kind: TypingKind) => {
     const now = Date.now()
@@ -144,7 +156,7 @@ export function LeadChat({ leadId }: { leadId: string }) {
     const voiceOnly = !text && files.length === 1 && files[0].type.startsWith('audio/')
     try {
       const attachments = []
-      for (const f of files) attachments.push(await uploadLeadAttachment(f, leadId))
+      for (const f of files) attachments.push(await uploadLeadAttachment(f, leadId, API))
       const r = await fetch(`${API}/${leadId}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text, reply_to_id: replyToId ?? null, attachments: attachments.length ? attachments : null }) })
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not send. Please try again.') }
       const d = await r.json().catch(() => null)
@@ -155,7 +167,7 @@ export function LeadChat({ leadId }: { leadId: string }) {
       toast.error(voiceOnly ? `${why} ${t('Please record the voice message again.')}` : why)
       return false
     }
-  }, [leadId, t])
+  }, [leadId, t, API])
 
   const applyToMessage = useCallback((id: string, patch: Partial<TalkMessage>) => setMessages(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m))), [])
 
@@ -167,7 +179,7 @@ export function LeadChat({ leadId }: { leadId: string }) {
       if (!r.ok) throw new Error(t(d.error || 'Could not react.'))
       if (Array.isArray(d.reactions)) applyToMessage(m.id, { reactions: d.reactions as TalkReaction[] })
     } catch (e) { toast.error(e instanceof Error ? e.message : t('Could not react.')) }
-  }, [applyToMessage, t])
+  }, [applyToMessage, t, VOICE_API])
 
   const copyText = useCallback(async (m: TalkMessage) => {
     setSheetMsg(null)
@@ -183,7 +195,7 @@ export function LeadChat({ leadId }: { leadId: string }) {
       if (d.message) applyToMessage(id, { message: d.message.message, edited_at: d.message.edited_at })
       return true
     } catch (e) { toast.error(e instanceof Error ? e.message : t('Could not edit the message.')); return false }
-  }, [applyToMessage, t])
+  }, [applyToMessage, t, VOICE_API])
 
   const remove = useCallback(async (m: TalkMessage) => {
     setSheetMsg(null)
@@ -194,7 +206,7 @@ export function LeadChat({ leadId }: { leadId: string }) {
       applyToMessage(m.id, { deleted_at: new Date().toISOString() })
       setMode(cur => (cur && cur.message.id === m.id ? null : cur))
     } catch (e) { toast.error(e instanceof Error ? e.message : t('Could not delete the message.')) }
-  }, [applyToMessage, t])
+  }, [applyToMessage, t, VOICE_API])
 
   const jumpTo = useCallback((id: string) => {
     if (!messagesRef.current.some(m => m.id === id)) { toast(t('That message is older than the latest 500 in this chat.')); return }
@@ -215,12 +227,16 @@ export function LeadChat({ leadId }: { leadId: string }) {
       </div>
     )
   }
+  // the people of this conversation: who can be named with @, and whose @name is highlighted in the messages
+  const mentionPeople = Object.entries(names).filter(([pid]) => pid !== meId).map(([pid, name]) => ({ id: pid, name }))
+  const mentionNames = Object.values(names)
   const typingWho = peerTyping ? names[peerTyping.userId] ?? t('Someone') : null
   const typingText = peerTyping ? t(peerTyping.kind === 'recording' ? '{who} is recording a voice message…' : '{who} is typing…', { who: typingWho ?? '' }) : ''
   const tickOf = (m: TalkMessage) => tickStateAll(m, others, reads, delivered)
   const hits = matchMessages(messages, searchQ)
   return (
     <TalkI18nProvider value={i18n}>
+    <TalkMentionNames.Provider value={mentionNames}>
     <div className="flex h-full flex-col bg-white" data-testid="lead-chat">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-zinc-200 px-3 py-1.5">
         <span className="min-w-0 truncate text-xs text-zinc-500" data-testid="lead-chat-status">
@@ -257,7 +273,7 @@ export function LeadChat({ leadId }: { leadId: string }) {
           onJumpTo={jumpTo}
         />
       )}
-      {!searchOpen && <TalkComposer key={leadId} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping} />}
+      {!searchOpen && <TalkComposer key={leadId} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping} mentionPeople={mentionPeople} />}
       {sheetMsg && meId && (
         <TalkMessageSheet
           message={messages.find(x => x.id === sheetMsg.id) ?? sheetMsg} meId={meId} onClose={() => setSheetMsg(null)}
@@ -269,6 +285,7 @@ export function LeadChat({ leadId }: { leadId: string }) {
         />
       )}
     </div>
+    </TalkMentionNames.Provider>
     </TalkI18nProvider>
   )
 }

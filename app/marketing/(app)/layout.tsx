@@ -1,3 +1,6 @@
+import Link from 'next/link'
+import { createClient } from '@/lib/supabase/server'
+import { isSecureAdmin } from '@/lib/auth'
 import { resolveMarketingContext } from '@/lib/marketing/guard'
 import { modulesFor } from '@/lib/marketing/workspace'
 import { accessLabel, type Bundles } from '@/lib/marketing/access'
@@ -14,7 +17,7 @@ import { LeadSearch } from '@/components/marketing/lead-search'
 import { ThemeSwitch } from '@/components/marketing/theme-switch'
 import { getTheme } from '@/lib/marketing/theme-server'
 import { availableBoardRoles, boardRole } from '@/lib/marketing/board'
-import { unreadByLead } from '@/lib/marketing/lead-chat-server'
+import { marketingChatUnread } from '@/lib/marketing/menu-unread'
 import { getLang } from '@/lib/marketing/lang'
 import { makeT, tAccessLabel } from '@/lib/marketing/i18n'
 
@@ -31,9 +34,12 @@ export default async function MarketingAppLayout({ children }: { children: React
   if (g.ok === false) return <LangProvider lang={lang}>{children}</LangProvider>
   const { ctx } = g
   const bundlesSetting = (await getMarketingSetting('permission_bundles', ctx.team.id)) as Bundles
-  const chatOn = hasPermission(ctx.permissions, 'chat') && hasPermission(ctx.permissions, 'leads.read')
-  // the red number on the sidebar's Chat: my unread lead messages (the team chat joins it later)
-  const chatUnread = chatOn ? Array.from((await unreadByLead(ctx)).values()).reduce((a, b) => a + b, 0) : 0
+  const chatAny = hasPermission(ctx.permissions, 'chat')
+  const chatOn = chatAny && hasPermission(ctx.permissions, 'leads.read')
+  const chatUnread = await marketingChatUnread(ctx)
+  // Antonio comes here from the CRM's Marketing tab (his own login or "View as"): one click takes him back
+  const { data: { user: authUser } } = await createClient().auth.getUser()
+  const fromCrm = !!authUser && isSecureAdmin(authUser)
   const nav = modulesFor(ctx.permissions).map(m => (m.key === 'chat' ? { ...m, badge: chatUnread } : m))
   return (
     <LangProvider lang={lang}>
@@ -47,6 +53,7 @@ export default async function MarketingAppLayout({ children }: { children: React
     <div className="flex min-h-screen">
       <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col gap-4 border-r bg-white p-4">
         <div>
+          {fromCrm && <Link href="/marketing-leads" className="mb-2 inline-block text-xs text-slate-500 underline" data-testid="back-to-crm">&#9666; {t('Back to the CRM')}</Link>}
           <p className="text-xs uppercase tracking-wide text-slate-400">TD Marketing</p>
           <p className="truncate font-semibold">{ctx.team.name}</p>
         </div>
@@ -61,7 +68,7 @@ export default async function MarketingAppLayout({ children }: { children: React
         </div>
       </aside>
       <div className="min-w-0 flex-1">
-        <LeadWindowsHost defaultRole={boardRole(ctx.permissions)} roles={availableBoardRoles(ctx.permissions)} chatOn={chatOn}>
+        <LeadWindowsHost defaultRole={boardRole(ctx.permissions)} roles={availableBoardRoles(ctx.permissions)} chatOn={chatOn} pollOn={chatAny}>
           {hasPermission(ctx.permissions, 'chat') && <MarketingPushBanner />}
           {hasPermission(ctx.permissions, 'leads.read') && <div className="flex items-center gap-3 border-b bg-white px-6 py-2"><LeadSearch /></div>}
           {children}

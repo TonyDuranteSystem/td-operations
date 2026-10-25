@@ -59,6 +59,15 @@ export const MARKETING_SETTING_DEFS = {
     schema: z.record(z.string().trim().min(1).max(60), z.string().max(4000)),
     fallback: {} as Record<string, string>,
   },
+  /**
+   * The team's own message templates, by key (round 2 step 4; edited by the team owner only). A built-in key (first_contact, …) keeps its built-in wording for any field left out; a key that is
+   * not built in is a template the owner created and needs a `label` and a text. Placeholders: {name} {setter} {when}. Replaces nothing: `message_templates` above still applies to a
+   * built-in key that has no entry here.
+   */
+  team_templates: {
+    schema: z.record(z.string().regex(/^[a-z0-9_]{1,60}$/), z.object({ label: z.string().trim().max(80).optional(), it: z.string().trim().max(4000).optional(), en: z.string().trim().max(4000).optional() })).refine(o => Object.keys(o).length <= 80, "Too many templates."),
+    fallback: {} as Record<string, { label?: string; it?: string; en?: string }>,
+  },
   /** Named bundles of permissions a team owner can hand to a member. Starting values from plan v1.4 (A.3); all editable. */
   permission_bundles: {
     schema: z.record(z.string().trim().min(1).max(60), z.array(z.string().trim().min(1).max(60)).max(60)),

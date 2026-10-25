@@ -6,7 +6,7 @@
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import {
-  MARKETING_SETTING_KEYS, failClosedValue, isMarketingSettingKey, parseSettingValue, resolveSetting, type MarketingSettingKey,
+  MARKETING_SETTING_KEYS, defaultForSetting, failClosedValue, isMarketingSettingKey, parseSettingValue, resolveSetting, type MarketingSettingKey,
 } from "@/lib/marketing/settings-schema"
 import { canChangeTeamStatus, isTeamStatus, type TeamStatus } from "@/lib/marketing/team-status"
 import type { CommissionTerm } from "@/lib/marketing/commission"
@@ -84,6 +84,19 @@ export async function getMarketingSetting(key: MarketingSettingKey, teamId?: str
   const own = teamId ? rows.find(r => r.team_id === teamId) : undefined
   const global = rows.find(r => r.team_id === null)
   return resolveSetting(key, (own ?? global)?.value).value
+}
+
+/**
+ * The team's stored value for a key, READ STRICTLY: for a screen that changes a setting by reading it, editing it and writing it back. If the read fails, or a stored value exists but is
+ * broken, it says so instead of handing back the built-in default (writing a change on top of a default would silently erase what was stored).
+ */
+export async function readMarketingSettingStrict(key: MarketingSettingKey, teamId: string): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
+  const read = await db().from("marketing_settings").select("team_id, value").eq("key", key).eq("team_id", teamId)
+  if (read.error) return { ok: false, error: read.error.message }
+  const row = (read.data ?? [])[0] as { value: unknown } | undefined
+  if (!row) return { ok: true, value: defaultForSetting(key) }
+  const p = parseSettingValue(key, row.value)
+  return p.ok === true ? { ok: true, value: p.value } : { ok: false, error: "The stored value is not valid." }
 }
 
 /** Every setting resolved for a team, for the Settings screen. */

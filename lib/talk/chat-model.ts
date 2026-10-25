@@ -445,3 +445,26 @@ export function tickStateAll(
   const allHave = otherMemberIds.every(id => tickState(m, reads[id], deliveries[id]) !== 'sent')
   return allHave ? 'delivered' : 'sent'
 }
+
+export interface MentionPart { text: string; mention?: boolean }
+
+/**
+ * Split a piece of message text so the people named with @ can be shown highlighted (the marketing chats pass the names of the people in the conversation; TD Talk passes none and gets the
+ * text back whole). The full name must follow the @ and end at a word boundary; a longer name wins over a shorter one inside it.
+ */
+export function splitMentions(text: string, names: readonly string[]): MentionPart[] {
+  const clean = names.map(n => n.trim()).filter(Boolean)
+  if (clean.length === 0 || !text.includes('@')) return [{ text }]
+  const alt = [...clean].sort((a, b) => b.length - a.length).map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}])(@(?:${alt}))(?![\\p{L}\\p{N}])`, 'giu')
+  const parts: MentionPart[] = []
+  let last = 0
+  for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+    const start = m.index + m[1].length
+    if (start > last) parts.push({ text: text.slice(last, start) })
+    parts.push({ text: m[2], mention: true })
+    last = start + m[2].length
+  }
+  if (last < text.length) parts.push({ text: text.slice(last) })
+  return parts.length ? parts : [{ text }]
+}

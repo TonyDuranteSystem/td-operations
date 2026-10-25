@@ -9359,6 +9359,73 @@ export type Database = {
           },
         ]
       }
+      marketing_chat_thread_members: {
+        Row: {
+          added_by: string | null
+          joined_at: string
+          thread_id: string
+          user_id: string
+        }
+        Insert: {
+          added_by?: string | null
+          joined_at?: string
+          thread_id: string
+          user_id: string
+        }
+        Update: {
+          added_by?: string | null
+          joined_at?: string
+          thread_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_chat_thread_members_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_chat_threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_chat_threads: {
+        Row: {
+          created_at: string
+          created_by: string
+          dm_key: string | null
+          id: string
+          kind: string
+          team_id: string
+          title: string | null
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          dm_key?: string | null
+          id?: string
+          kind: string
+          team_id: string
+          title?: string | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          dm_key?: string | null
+          id?: string
+          kind?: string
+          team_id?: string
+          title?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_chat_threads_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       marketing_commission_terms: {
         Row: {
           basis: string
@@ -9613,6 +9680,7 @@ export type Database = {
           edited_at: string | null
           id: string
           lead_id: string
+          mentions: string[]
           message: string
           original_message: string | null
           reply_to_id: string | null
@@ -9628,6 +9696,7 @@ export type Database = {
           edited_at?: string | null
           id?: string
           lead_id: string
+          mentions?: string[]
           message?: string
           original_message?: string | null
           reply_to_id?: string | null
@@ -9643,6 +9712,7 @@ export type Database = {
           edited_at?: string | null
           id?: string
           lead_id?: string
+          mentions?: string[]
           message?: string
           original_message?: string | null
           reply_to_id?: string | null
@@ -10105,6 +10175,78 @@ export type Database = {
         }
         Relationships: []
       }
+      marketing_team_chat_delivery: {
+        Row: {
+          delivered_at: string
+          team_id: string
+          thread_id: string
+          user_id: string
+        }
+        Insert: {
+          delivered_at?: string
+          team_id: string
+          thread_id: string
+          user_id: string
+        }
+        Update: {
+          delivered_at?: string
+          team_id?: string
+          thread_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_team_chat_delivery_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "marketing_team_chat_delivery_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_chat_threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_team_chat_reads: {
+        Row: {
+          last_read_at: string
+          team_id: string
+          thread_id: string
+          user_id: string
+        }
+        Insert: {
+          last_read_at?: string
+          team_id: string
+          thread_id: string
+          user_id: string
+        }
+        Update: {
+          last_read_at?: string
+          team_id?: string
+          thread_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_team_chat_reads_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "marketing_team_chat_reads_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_chat_threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       marketing_team_members: {
         Row: {
           bundle: string | null
@@ -10157,6 +10299,111 @@ export type Database = {
             columns: ["team_id"]
             isOneToOne: false
             referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_team_message_reactions: {
+        Row: {
+          created_at: string
+          emoji: string
+          message_id: string
+          user_id: string
+          user_name: string
+        }
+        Insert: {
+          created_at?: string
+          emoji: string
+          message_id: string
+          user_id: string
+          user_name: string
+        }
+        Update: {
+          created_at?: string
+          emoji?: string
+          message_id?: string
+          user_id?: string
+          user_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_team_message_reactions_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_team_messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_team_messages: {
+        Row: {
+          attachments: Json | null
+          created_at: string
+          deleted_at: string | null
+          deleted_by: string | null
+          edited_at: string | null
+          id: string
+          mentions: string[]
+          message: string
+          original_message: string | null
+          reply_to_id: string | null
+          sender_id: string
+          sender_name: string
+          team_id: string
+          thread_id: string
+        }
+        Insert: {
+          attachments?: Json | null
+          created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
+          edited_at?: string | null
+          id?: string
+          mentions?: string[]
+          message?: string
+          original_message?: string | null
+          reply_to_id?: string | null
+          sender_id: string
+          sender_name: string
+          team_id: string
+          thread_id: string
+        }
+        Update: {
+          attachments?: Json | null
+          created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
+          edited_at?: string | null
+          id?: string
+          mentions?: string[]
+          message?: string
+          original_message?: string | null
+          reply_to_id?: string | null
+          sender_id?: string
+          sender_name?: string
+          team_id?: string
+          thread_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_team_messages_reply_to_id_fkey"
+            columns: ["reply_to_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_team_messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "marketing_team_messages_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "marketing_team_messages_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_chat_threads"
             referencedColumns: ["id"]
           },
         ]

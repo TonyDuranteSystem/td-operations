@@ -7,13 +7,14 @@ import { validateChatAttachment, CHAT_ATTACHMENT_MAX_MB } from '@/lib/portal/cha
 import { fetchWithNetworkRetry } from '@/lib/chat/upload-with-retry'
 import type { StoredAttachment } from '@/lib/marketing/lead-chat'
 
-export async function uploadLeadAttachment(file: File, leadId: string): Promise<StoredAttachment> {
+/** `api` is the chat's own address (the lead chat by default; the team chat passes /api/marketing/team-chat): the signed link is asked of THAT chat, into its own folder. */
+export async function uploadLeadAttachment(file: File, leadId: string, api = '/api/marketing/chat'): Promise<StoredAttachment> {
   const invalid = validateChatAttachment(file.name, file.size, file.type)
   if (invalid) throw new Error(invalid)
 
   let urlRes: Response
   try {
-    urlRes = await fetchWithNetworkRetry(`/api/marketing/chat/${leadId}/upload-url`, {
+    urlRes = await fetchWithNetworkRetry(`${api}/${leadId}/upload-url`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_name: file.name }),
     })
   } catch {

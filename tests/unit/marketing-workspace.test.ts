@@ -12,11 +12,11 @@ const lead = (o: Partial<TodayLead> = {}): TodayLead => ({
 
 describe("modulesFor", () => {
   it("the owner gets every screen of the mockup in its order, with Today, Team activity and Team", () => {
-    expect(modulesFor(OWNER).map(m => m.key)).toEqual(["today", "call-list", "board", "leads", "calendar", "inbox", "whatsapp", "chat", "calls", "money", "offers", "content", "my-numbers", "activity", "reports", "team"])
+    expect(modulesFor(OWNER).map(m => m.key)).toEqual(["today", "call-list", "board", "leads", "calendar", "inbox", "whatsapp", "chat", "calls", "money", "offers", "content", "templates", "my-numbers", "activity", "reports", "team"])
   })
   it("a setter gets the Call list, Board, Leads, Calendar, Chat, Inbox, WhatsApp and My numbers, and no money, no team, no Today", () => {
     const k = modulesFor(SETTER).map(m => m.key)
-    expect(k).toEqual(["call-list", "board", "leads", "calendar", "inbox", "whatsapp", "chat", "my-numbers"])
+    expect(k).toEqual(["call-list", "board", "leads", "calendar", "inbox", "whatsapp", "chat", "templates", "my-numbers"])
     for (const no of ["today", "money", "team", "offers"]) expect(k).not.toContain(no)
   })
   it("a person with no permission gets nothing and no home", () => {
@@ -27,7 +27,7 @@ describe("modulesFor", () => {
     expect(homeFor(OWNER)).toBe("/marketing/today")
     expect(homeFor(SETTER)).toBe("/marketing/call-list")
     expect(homeFor(["leads.read"])).toBe("/marketing/board")   // the Board is the first built screen of anyone who can read leads
-    expect(homeFor(["chat"])).toBeNull()   // the chat page also needs the right to read leads, so chat alone opens nothing
+    expect(homeFor(["chat"])).toBe("/marketing/chat")   // the team chat (direct messages, groups) needs only the chat permission
     expect(homeFor(["inbox"])).toBeNull()
   })
   it("unbuilt screens are marked, built ones are links", () => {
