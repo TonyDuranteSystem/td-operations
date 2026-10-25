@@ -17400,6 +17400,7 @@ export type Database = {
           size_bytes: number
           storage_bucket: string
           storage_path: string
+          unmerged: boolean
           version_no: number
         }
         Insert: {
@@ -17414,6 +17415,7 @@ export type Database = {
           size_bytes: number
           storage_bucket: string
           storage_path: string
+          unmerged?: boolean
           version_no: number
         }
         Update: {
@@ -17428,6 +17430,7 @@ export type Database = {
           size_bytes?: number
           storage_bucket?: string
           storage_path?: string
+          unmerged?: boolean
           version_no?: number
         }
         Relationships: [
@@ -17450,6 +17453,7 @@ export type Database = {
           filing_status: string
           folder_id: string
           id: string
+          marked_signed_at: string | null
           name: string
           name_key: string | null
           needs_review_at: string | null
@@ -17476,6 +17480,7 @@ export type Database = {
           filing_status?: string
           folder_id: string
           id?: string
+          marked_signed_at?: string | null
           name: string
           name_key?: string | null
           needs_review_at?: string | null
@@ -17502,6 +17507,7 @@ export type Database = {
           filing_status?: string
           folder_id?: string
           id?: string
+          marked_signed_at?: string | null
           name?: string
           name_key?: string | null
           needs_review_at?: string | null
@@ -22039,6 +22045,7 @@ export type Database = {
           staging_path: string
         }[]
       }
+      store_append_version: { Args: { p: Json }; Returns: Json }
       store_apply_name_change: {
         Args: {
           p_actor?: string
@@ -22276,6 +22283,16 @@ export type Database = {
         Returns: string
       }
       store_file_self_visible: { Args: { p_file_id: string }; Returns: boolean }
+      store_files_edit_info: {
+        Args: { p_ids: string[] }
+        Returns: {
+          file_id: string
+          lock_kind: string
+          unmerged_pending: number
+          version_count: number
+          version_no: number
+        }[]
+      }
       store_files_facts: {
         Args: { p_ids: string[] }
         Returns: {
@@ -22355,6 +22372,7 @@ export type Database = {
         Args: { p_account_id: string; p_contact_id: string }
         Returns: string
       }
+      store_lock_class: { Args: { p_file_id: string }; Returns: string }
       store_lock_owner: { Args: { p_owner_id: string }; Returns: undefined }
       store_name_key: { Args: { p_name: string }; Returns: string }
       store_navigation: {
