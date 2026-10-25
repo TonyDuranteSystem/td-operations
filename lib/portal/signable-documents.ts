@@ -270,23 +270,31 @@ export async function getSignableDocuments(params: GetSignableDocumentsParams): 
     if (missingDocNames.length > 0) {
       const { data: legacyDocs } = await supabaseAdmin
         .from('documents')
-        .select('document_type_name, drive_link, processed_at')
+        .select('id, document_type_name, drive_link, drive_file_id, processed_at')
         .eq('account_id', selectedAccountId)
         .in('document_type_name', missingDocNames)
         .not('drive_link', 'is', null)
+        // only what staff has shown to the client — a hidden working copy is never surfaced as "signed"
+        .eq('portal_visible', true)
         .order('processed_at', { ascending: false })
 
       if (legacyDocs) {
+        // a file in the new storage the client could not open is not listed (and its drive_link is a staff-only preview URL)
+        const { dropStoreRowsClientCannotOpen } = await import('@/lib/portal/client-store-docs')
+        const { isStorePointer } = await import('@/lib/crm-store/document-pointer')
+        const openable = await dropStoreRowsClientCannotOpen(legacyDocs.map(d => ({ ...d, portal_visible: true })), { applyRowRule: false })
         const seen = new Set<string>()
-        for (const doc of legacyDocs) {
+        for (const doc of openable) {
           const docType = DOC_DRIVE_MAP[doc.document_type_name ?? '']
           if (!docType || seen.has(docType)) continue
           seen.add(docType)
+          // a stored file opens through the portal's own download route, never the staff preview link
+          const href = isStorePointer(doc.drive_file_id) ? `/api/portal/documents/${doc.id}` : doc.drive_link!
           documents.push({
             type: docType,
             status: 'signed',
-            href: doc.drive_link!,
-            driveLink: doc.drive_link!,
+            href,
+            driveLink: href,
           })
         }
       }

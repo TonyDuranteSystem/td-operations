@@ -154,7 +154,7 @@ describe("fixes found by the reviewers", () => {
     const folder2 = await folderOfKind(owner2, "personal")
     const { saveBytesToStore } = await import("@/lib/crm-store/writer")
     const w = await saveBytesToStore({ ownerId: owner, folderId: folder, name: "MoveMe.pdf", mimeType: "application/pdf", bytes: await pdf(["ZZ move fixture " + tag]), callerKey: `zz-und:${tag}:move`, contentChanged: true })
-    await db.from("store_files").update({ published: true }).eq("id", w.fileId)
+    await db.from("store_files").update({ published: true, document_type: "other_document" }).eq("id", w.fileId)
     const rec = await insert("documents", { drive_file_id: `store:${w.fileId}`, file_name: "MoveMe.pdf", contact_id: contact2 === "" ? null : (await insert("contacts", { first_name: "Zz", last_name: `Src ${tag}`, full_name: `ZZ SRC ${tag}`, email: `zz-src-${tag}@example.test` })), category: 2, portal_visible: true, status: "classified" })
     const { moveFileToOwner, undoMove } = await import("@/lib/crm-store/understand/move-owner")
     const m = await moveFileToOwner({ fileId: w.fileId, toFolderId: folder2, actor })

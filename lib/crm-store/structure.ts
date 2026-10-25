@@ -10,6 +10,7 @@
  * loops, names without "/" "\" or control characters, one live name per folder).
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { isLockedFolder as isLockedFolderRule, folderDeleteRefusal, parseYearFolderName, YEAR_RANGE_MESSAGE } from "./folder-rules"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
@@ -196,8 +197,24 @@ async function folder(folderId: string): Promise<FolderRow> {
 
 /** Pure: a folder made by a template (the client's top folder, the 5 company folders, a person's 3 folders,
  *  the Business / My files top folders) is locked — it can't be renamed, moved or deleted. */
-export function isLockedFolder(f: { template_slug: string | null; parent_id: string | null }): boolean {
-  return f.template_slug !== null || f.parent_id === null
+export function isLockedFolder(f: { template_slug: string | null; parent_id: string | null; kind?: string | null }): boolean {
+  return isLockedFolderRule(f)
+}
+
+/** The kinds of every folder below this one (all levels), for the delete check. */
+async function descendantFolderKinds(folderId: string): Promise<string[]> {
+  const kinds: string[] = []
+  let level = [folderId]
+  for (let depth = 0; depth < 60 && level.length > 0; depth++) {
+    const next: string[] = []
+    for (const part of chunks(level)) {
+      const { data, error } = await db().from("store_folders").select("id, kind").in("parent_id", part).is("trashed_at", null)
+      if (error) throw new Error(`Could not read the folder's sub-folders — please try again (${error.message}).`)
+      for (const r of (data ?? []) as Array<{ id: string; kind: string }>) { kinds.push(r.kind); next.push(r.id) }
+    }
+    level = next
+  }
+  return kinds
 }
 
 export { cleanFolderName } from "./names"
@@ -219,7 +236,7 @@ export async function nearestYear(folderId: string): Promise<number | null> {
   let cur: string | null = folderId
   for (let i = 0; i < 50 && cur; i++) {
     const f = await folder(cur)
-    if (f.kind === "tax_year" || f.kind === "person_tax_year") return /^\d{4}$/.test(f.name.trim()) ? Number(f.name.trim()) : null
+    if (f.kind === "tax_year" || f.kind === "person_tax_year") return parseYearFolderName(f.name)
     if (f.template_slug !== null) return null // reached a fixed folder with no year on the way
     cur = f.parent_id
   }
@@ -266,7 +283,7 @@ export async function createFolder(parentId: string, name: string, actorId: stri
 export async function createTaxYear(taxFolderId: string, year: string, actorId: string | null): Promise<{ id: string; name: string }> {
   const kind = await effectiveKind(taxFolderId)
   if (kind !== "tax" && kind !== "person_tax") throw new Error("A tax-year folder goes inside a Tax folder.")
-  if (!/^(19|20)\d{2}$/.test(year.trim())) throw new Error("Enter a four-digit year, e.g. 2025.")
+  if (parseYearFolderName(year) === null) throw new Error(YEAR_RANGE_MESSAGE)
   // a year folder is its own kind (so a file saved in it is known to be for that year) but not locked
   return createFolder(taxFolderId, year.trim(), actorId, kind === "tax" ? "tax_year" : "person_tax_year")
 }
@@ -379,7 +396,7 @@ export async function folderSummary(folderId: string): Promise<{ name: string; f
   const ws = await workspaceShownFiles(files.filter((x) => x.visible).map((x) => x.id))
   const list = files.map((x) => ({ id: x.id, name: x.name, shown: x.visible, byWorkspace: ws.get(x.id) ?? null }))
     .sort((a, b) => Number(b.shown) - Number(a.shown) || a.name.localeCompare(b.name)).slice(0, 500)
-  return { name: f.name, files: files.length, shown: files.filter((x) => x.visible).length, list, locked: isLockedFolder(f) }
+  return { name: f.name, files: files.length, shown: files.filter((x) => x.visible).length, list, locked: isLockedFolder(f) || folderDeleteRefusal(f, await descendantFolderKinds(folderId)) !== null }
 }
 
 /** Hide from the client the given files (all must be under the folder); stops at the first failure and says which. */
@@ -418,7 +435,9 @@ export async function deleteFolder(folderId: string, actorId: string | null, hid
   if (!actorId) throw new Error("Only a signed-in staff member can delete a folder.")
   const f = await folder(folderId)
   if (f.trashed_at) throw new Error("That folder is already in the trash.")
-  if (isLockedFolder(f)) throw new Error(`"${f.name}" is one of the fixed folders and can't be deleted.`)
+  // refused BEFORE any file is hidden or any CRM listing removed (the store's trash only takes folders staff created by hand)
+  const refusal = folderDeleteRefusal(f, await descendantFolderKinds(folderId))
+  if (refusal) throw new Error(refusal)
   await applyHide(folderId, hide, actorId)
   const files = await filesUnder(folderId)
   const { storePointer } = await import("./document-pointer")

@@ -180,7 +180,7 @@ _Regenerated 2026-10-25. Every subsystem doc under `docs/systems/` (52 docs), wi
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-10-13)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-10-18)_
-- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-10-24)_
+- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-10-25)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-10-21)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-21)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-10-12)_
@@ -195,7 +195,7 @@ _Regenerated 2026-10-25. Every subsystem doc under `docs/systems/` (52 docs), wi
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-21)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-21)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-23)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-25)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-21)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-23)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-21)_
@@ -213,7 +213,7 @@ _Regenerated 2026-10-25. Every subsystem doc under `docs/systems/` (52 docs), wi
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-10-23)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-10-23)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-10-25)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-10-23)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-10-23)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_

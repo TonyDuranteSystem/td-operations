@@ -72,7 +72,7 @@ async function ownerKindOfFolder(folderId: string): Promise<string | null> {
   return (data?.store_owners?.kind as string | undefined) ?? null
 }
 
-export async function moveStoreFile(fileId: string, toFolderId: string, actorId: string | null): Promise<{ folderName: string }> {
+export async function moveStoreFile(fileId: string, toFolderId: string, actorId: string | null): Promise<{ folderName: string; note?: string | null }> {
   const f = await liveFile(fileId)
   const { data: to, error: tErr } = await db().from("store_folders").select("id, owner_id, name, kind, trashed_at").eq("id", toFolderId).maybeSingle()
   if (tErr) throw new Error(`Could not read the folder — please try again (${tErr.message}).`)
@@ -84,11 +84,11 @@ export async function moveStoreFile(fileId: string, toFolderId: string, actorId:
     if (["company", "formation"].includes((await ownerKindOfFolder(toFolderId)) ?? "")) {
       const { moveFileToCompany } = await import("./move-to-company")
       const r = await moveFileToCompany(fileId, toFolderId, actorId)
-      return { folderName: `${r.company} › ${r.folderName}` }
+      return { folderName: `${r.company} › ${r.folderName}`, note: r.note }
     }
     const { moveFileToOtherPerson } = await import("./change-person")
     const r = await moveFileToOtherPerson(fileId, toFolderId, actorId)
-    return { folderName: `${r.person} › ${r.folderName}` }
+    return { folderName: `${r.person} › ${r.folderName}`, note: r.note }
   }
   if (to.id === f.folder_id) return { folderName: to.name }
   const wasInsideShare = f.store_owners.kind === "private" && await (await import("./staff-share")).isInStaffShare(f.folder_id)

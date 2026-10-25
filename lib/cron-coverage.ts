@@ -46,6 +46,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // /api/cron/drive-pickup removed 2026-10-22 — Stop Drive S4 (dev job 264bb882, Antonio: files left in Drive are not brought in). It had finished its short list (6 items "done" on every run, nothing new).
   "/api/cron/account-status-events": "*/5 * * * *", // company status changes → staff-only note in What's New (job f855295a)
   "/api/cron/fax-staging-sweep": "10 4 * * *", // deletes fax uploads staged but never sent (older than 24 h) — dev job c43a8b2e
+  "/api/cron/store-staging-sweep": "20 4 * * *", // deletes CRM Storage upload leftovers (crm-uploads/store-staging/, older than 24 h) — security hunt 2026-10-25
   "/api/cron/storage-app-prune": "40 3 * * *", // TD Storage Mac app housekeeping (dev job 1992a087)
   // /api/cron/drive-gap removed 2026-10-22 — Stop Drive S4 (dev job 264bb882). It re-read 266 companies' old Drive folders every 5 minutes (checked 266, "done", nothing new) just to refresh a report that no screen or code reads (only the sysdoc itself).
   "/api/cron/deadline-reminders": "0 8 * * *",
