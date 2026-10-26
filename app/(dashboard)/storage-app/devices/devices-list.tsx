@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 
-type Row = { id: string; user_id: string; email: string | null; name: string; created_at: string; last_seen_at: string | null; revoked_at: string | null }
+type Row = { id: string; user_id: string; email: string | null; name: string; created_at: string; last_seen_at: string | null; revoked_at: string | null; app_version?: string | null; app_build?: number | null }
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "never")
 
@@ -48,7 +48,7 @@ export function DevicesList({ rows: initial, owner, selfId }: { rows: Row[]; own
       {error ? <p className="text-red-600">{error}</p> : null}
       {rows.length === 0 ? <p className="text-muted-foreground">No Mac has signed in yet.</p> : (
         <table className="w-full text-left">
-          <thead className="text-muted-foreground"><tr><th className="py-1">Mac</th>{owner ? <th>Person</th> : null}<th>Signed in</th><th>Last seen</th><th /></tr></thead>
+          <thead className="text-muted-foreground"><tr><th className="py-1">Mac</th>{owner ? <th>Person</th> : null}<th>Signed in</th><th>Last seen</th><th>App</th><th /></tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id} className="border-t">
@@ -56,6 +56,7 @@ export function DevicesList({ rows: initial, owner, selfId }: { rows: Row[]; own
                 {owner ? <td>{r.email ?? r.user_id}{r.user_id === selfId ? " (you)" : ""}</td> : null}
                 <td>{when(r.created_at)}</td>
                 <td>{when(r.last_seen_at)}</td>
+                <td>{r.app_version ? `${r.app_version} (${r.app_build ?? "?"})` : "not reported"}</td>
                 <td className="text-right">
                   {r.revoked_at ? null : <button className="rounded-md border px-2 py-1 disabled:opacity-60" disabled={busy !== null} onClick={() => signOut(r.id)}>{busy === r.id ? "Signing out…" : "Sign out"}</button>}
                 </td>

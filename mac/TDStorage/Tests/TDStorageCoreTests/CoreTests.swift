@@ -598,3 +598,12 @@ final class ParentResolverTests: XCTestCase {
         XCTAssertFalse(ParentResolver.isTopLevel(serverParent: "bbbb-2", topFolderId: nil))
     }
 }
+
+final class UpdateHintTests: XCTestCase {
+    func testWhoAmIReadsTheOfferedBuildAndOlderServersStillRead() throws {
+        let withHint = #"{"userId":"u","email":"a@b.c","role":"admin","owner":true,"deviceId":"d","latestBuild":4}"#
+        XCTAssertEqual(try JSONDecoder().decode(WhoAmI.self, from: Data(withHint.utf8)).latestBuild, 4)
+        let without = #"{"userId":"u","email":"a@b.c","role":"admin","owner":true,"deviceId":"d"}"#
+        XCTAssertNil(try JSONDecoder().decode(WhoAmI.self, from: Data(without.utf8)).latestBuild)
+    }
+}
