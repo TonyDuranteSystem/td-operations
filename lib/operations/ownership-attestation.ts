@@ -15,6 +15,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
+import { plainStoreError } from "@/lib/crm-store/lock-errors"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { generateOwnershipAttestationPDF, type OwnershipAttestationInput } from "@/lib/pdf/ownership-attestation-pdf"
 
@@ -263,7 +264,7 @@ export async function generateOwnershipAttestationForAccount(
       callerKey: `ownership-attestation:${accountId}`,
     })
   } catch (err) {
-    return { error: `Saving to the new storage failed: ${err instanceof Error ? err.message : String(err)}` }
+    return { error: `Saving to the new storage failed: ${plainStoreError(err)}` }
   }
 
   if (routed.route === "store") {

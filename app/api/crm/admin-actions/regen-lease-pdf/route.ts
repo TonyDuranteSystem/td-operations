@@ -92,6 +92,9 @@ export async function POST(req: NextRequest) {
     // VERSION of that file. A company with no storage gets one plain sentence back.
     {
       const { saveSignedPdfForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+      const { plainStoreError } = await import('@/lib/crm-store/lock-errors')
+      // The signed original is locked: a regenerated lease with different bytes is saved by the writer as a NEW file that replaces
+      // it (the signed original stays in storage); the same bytes again change nothing.
       let routed
       try {
       routed = await saveSignedPdfForAccount({
@@ -105,7 +108,11 @@ export async function POST(req: NextRequest) {
           dropOrphan()
           return NextResponse.json({ error: e.message }, { status: 409 })
         }
-        throw e
+        // any other refusal (a signed original that takes no new version is saved as a replacement file by the writer, so this is a
+        // real failure): the regenerated copy is not left behind in the bucket, and staff get plain words — never raw "store:" text
+        dropOrphan()
+        console.error('[regen-lease-pdf] store save failed:', e)
+        return NextResponse.json({ error: plainStoreError(e, 'The regenerated lease could not be saved in the company storage. Nothing was changed — please try again.') }, { status: 500 })
       }
       if (routed.route === 'store') {
         await supabaseAdmin

@@ -12,7 +12,7 @@
  * file (macOS sends a half-written snapshot first when an app writes a growing file in place, then the finished content; and an app may re-save
  * its own document). Same two routes, no new path: upload-slot / save take `replaceFileId`. The server checks the file's key belongs to THIS Mac
  * (`storage-app:<deviceId>:` prefix — never another Mac, never a staff upload), that it is live, not filed, and still in an allowed place; the
- * writer makes version N+1 under the file's own key; the old versions stay. Same bytes = no new version. Last write wins (history kept).
+ * safe save (`appendVersionBytes`, source "mac") adds version N+1; the old versions stay. Same bytes = no new version. The Mac MAY send `baseVersionNo` (the version it started from): then a file changed since answers 409 "conflict" and nothing is overwritten; without it, last write wins (history kept). A locked / filed file answers 422 with plain words (never a retried 500).
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { User } from "@supabase/supabase-js"
@@ -20,6 +20,8 @@ import { logAppEvent } from "./device-auth"
 import { checkDestination, checkNewFile, saveCallerKey, isItemKey, isClientOwnerKind, type SaveRefusal } from "./save-rules"
 import { getSettings, clientSaveAllowed, type StorageAppSettings } from "./settings"
 import { ensureClientFileRecords, refreshClientRow } from "./client-records"
+import { answerForAppend, parseBaseVersionNo, slotBelongsToUpdate, updateCallerKey } from "./update-rules"
+import { lockText } from "@/lib/crm-store/new-version-rules"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
@@ -151,20 +153,25 @@ async function createUpdateSlot(p: { settings: StorageAppSettings; user: User; d
   const target = await checkTarget({ ownerId: own.owner_id, folderId: own.folder_id }, p.user, p.settings)
   if (target.ok === false) return refused(target.code, target.message, STATUS_OF[target.code] ?? 422)
   const mimeType = typeof p.mimeType === "string" && p.mimeType ? p.mimeType.slice(0, 200) : null
+  // a file that takes no new version (signed, passport/ID, replaced, amended, filed) is refused BEFORE anything is uploaded
+  const { data: lockKind, error: lErr } = await db().rpc("store_lock_class", { p_file_id: own.id })
+  if (!lErr && typeof lockKind === "string" && lockKind) return refused("locked", lockText(lockKind, own.name), 422)
   // this update is counted against the hourly upload limit under its own key (a retry of the same update is not counted twice)
-  const updateKey = `${own.caller_key}:u:${(p.itemKey as string).toLowerCase()}`
+  const updateKey = updateCallerKey(own.caller_key, p.itemKey as string)
   const { data: reserve, error: rErr } = await db().rpc("storage_app_reserve_write", {
     p_device: p.deviceId, p_user: p.user.id, p_owner: own.owner_id, p_name: own.name, p_caller_key: updateKey, p_size: p.size as number, p_limit: p.settings.writeLimitMB * 1024 * 1024,
   })
   if (rErr) throw new Error(`Could not check the upload limit (${rErr.message}).`)
   if (!(reserve as { allowed?: boolean } | null)?.allowed) return refuse(429, "upload_limit", "This Mac has uploaded a lot in the last hour. Try again later, or add the files in the CRM.")
   const { createServerUploadIntent, STORE_STAGING_BUCKET } = await import("@/lib/crm-store/writer")
-  // the slot carries the FILE'S OWN key, so the writer adds a version to that file; an open slot for the same update is reused
-  const { data: open } = await db().from("store_upload_intents").select("id, staging_path").eq("caller_key", own.caller_key).eq("created_by", p.user.id).is("consumed_at", null).gt("expires_at", new Date().toISOString()).limit(1).maybeSingle()
+  // ONE slot per update: the slot carries the file's key PLUS this update's item key, so a second update (another item key) never gets the
+  // first update's slot. Only an open slot of THIS update is reused (a retry). The save adds a version to the file through the safe save
+  // (appendVersionBytes), so the slot's key is only a tag.
+  const { data: open } = await db().from("store_upload_intents").select("id, staging_path").eq("caller_key", updateKey).eq("created_by", p.user.id).is("consumed_at", null).gt("expires_at", new Date().toISOString()).limit(1).maybeSingle()
   let intentId = open?.id as string | undefined
   let stagingPath = open?.staging_path as string | undefined
   if (!intentId) {
-    const i = await createServerUploadIntent({ ownerId: own.owner_id, folderId: own.folder_id, fileName: own.name, mimeType, callerKey: own.caller_key, actor: p.user.id })
+    const i = await createServerUploadIntent({ ownerId: own.owner_id, folderId: own.folder_id, fileName: own.name, mimeType, callerKey: updateKey, actor: p.user.id })
     intentId = i.intentId; stagingPath = i.stagingPath
   }
   const { data: signed, error: sErr } = await supabaseAdmin.storage.from(STORE_STAGING_BUCKET).createSignedUploadUrl(stagingPath!)
@@ -176,40 +183,68 @@ async function giveBackReservation(p: { user: User; deviceId: string; callerKey:
   await logAppEvent("app_upload_refunded", p.user.id, { deviceId: p.deviceId, callerKey: p.callerKey, size: Math.max(p.size, 1048576) })
 }
 
-async function saveUpdate(p: { settings: StorageAppSettings; user: User; deviceId: string; intentId: unknown; itemKey: unknown; fileId: unknown }): Promise<SaveAnswer> {
+async function saveUpdate(p: { settings: StorageAppSettings; user: User; deviceId: string; intentId: unknown; itemKey: unknown; fileId: unknown; baseVersionNo?: unknown }): Promise<SaveAnswer> {
   if (typeof p.intentId !== "string" || typeof p.fileId !== "string" || !isItemKey(p.itemKey)) return refuse(400, "bad_request", "The upload is not complete.")
   const own = await loadOwnFile(p.fileId, p.deviceId, p.settings)
   if ("refusal" in own) return own.refusal
   const ids = { ownerId: own.owner_id, folderId: own.folder_id, fileId: own.id }
-  const updateKey = `${own.caller_key}:u:${(p.itemKey as string).toLowerCase()}`
-  const { data: slot, error } = await db().from("store_upload_intents").select("id, owner_id, folder_id, caller_key, created_by, consumed_at, file_id, expires_at, staging_path").eq("id", p.intentId).maybeSingle()
+  const updateKey = updateCallerKey(own.caller_key, p.itemKey)
+  const { data: slot, error } = await db().from("store_upload_intents").select("id, owner_id, folder_id, caller_key, created_by, consumed_at, file_id, expires_at, staging_path, mime_type").eq("id", p.intentId).maybeSingle()
   if (error) throw new Error(`Could not read the upload slot (${error.message}).`)
-  if (!slot || slot.created_by !== p.user.id || slot.caller_key !== own.caller_key || slot.owner_id !== own.owner_id) return refuse(404, "not_found", "This upload was not found. Try saving again.")
-  // a retry after a lost answer: the slot was already used for THIS file → the update is done
+  const belongs = slot ? slotBelongsToUpdate({ slotKey: slot.caller_key, fileCallerKey: own.caller_key, itemKey: p.itemKey }) : "no"
+  if (!slot || slot.created_by !== p.user.id || belongs === "no" || slot.owner_id !== own.owner_id) return refuse(404, "not_found", "This upload was not found. Try saving again.")
+  // a retry after a lost answer: THIS update's slot was already used for THIS file → the update is done. A slot of another update (or an
+  // older-style slot that cannot be tied to this update) is never answered as a repeat, because its content may not be this update's.
   if (slot.consumed_at) {
-    if (slot.file_id === own.id) return { status: 200, body: { fileId: own.id, ownerId: own.owner_id, name: own.name, repeated: true } }
+    if (belongs === "match" && slot.file_id === own.id) return { status: 200, body: { fileId: own.id, ownerId: own.owner_id, name: own.name, repeated: true } }
     return refuse(409, "slot_closed", "This upload is no longer open. Try saving again.")
   }
   if (new Date(slot.expires_at).getTime() < Date.now()) return refuse(409, "slot_closed", "This upload is no longer open. Try saving again.")
-  const { storedSize, registerStagedUpload, STORE_STAGING_BUCKET } = await import("@/lib/crm-store/writer")
+  const { storedSize, appendVersionBytes, STORE_STAGING_BUCKET } = await import("@/lib/crm-store/writer")
   let size: number
   try { size = await storedSize(STORE_STAGING_BUCKET, slot.staging_path as string) } catch { return refuse(409, "not_uploaded", "The file did not arrive. Try saving again.") }
   const back = () => giveBackReservation({ user: p.user, deviceId: p.deviceId, callerKey: updateKey, size })
   if (size > p.settings.maxSaveMB * 1024 * 1024) { await back(); return refuse(413, "too_big", `This file is too big to save from the Mac for now (the limit is ${p.settings.maxSaveMB} MB). Add it in the CRM.`) }
   const target = await checkTarget({ ownerId: own.owner_id, folderId: own.folder_id }, p.user, p.settings)
   if (target.ok === false) { await back(); await logAppEvent("app_save_refused", p.user.id, { deviceId: p.deviceId, reason: target.code, update: true }, ids); return fromRefusal(target) }
-  let result
-  try { result = await registerStagedUpload({ intentId: p.intentId, actor: p.user.id }) } catch (e) { await back(); throw e }
-  if (result.status === "queued") throw new Error("A file this big should have been refused earlier.")
-  if (result.status === "frozen" || result.status === "trashed") { await back(); return refuse(409, result.status, "This file can no longer be changed from the Mac. Open the CRM.") }
+
+  // claim the slot (a lease: two saves of the same slot at once → the second waits), read the staged bytes, add the version through the ONE safe save
+  const { error: cErr } = await db().rpc("store_claim_intent", { p_intent_id: p.intentId, p_actor: p.user.id })
+  if (cErr) {
+    if (/busy|already registered|unknown/i.test(cErr.message ?? "")) return refuse(409, "slot_busy", "This upload is already being saved. Wait a moment and try again.")
+    throw new Error(`Could not claim the upload slot (${cErr.message}).`)
+  }
+  const { data: blob, error: dErr } = await db().storage.from(STORE_STAGING_BUCKET).download(slot.staging_path as string)
+  if (dErr || !blob) { await back(); return refuse(409, "not_uploaded", "The file did not arrive. Try saving again.") }
+  const bytes = Buffer.from(await blob.arrayBuffer())
+  const mimeType = (slot.mime_type as string | null) || blob.type || null
+  // the version the Mac started from (OPTIONAL — a Mac that does not send it keeps today's "last write wins, history kept")
+  const baseVersionNo = parseBaseVersionNo(p.baseVersionNo)
+  let res
+  try {
+    res = await appendVersionBytes({ fileId: own.id, bytes, mimeType, expectedVersionNo: baseVersionNo, actor: p.user.id, source: "mac", deviceId: p.deviceId })
+  } catch (e) { await back(); throw e }
+  const answer = answerForAppend(res, own.id, own.owner_id, own.name, size)
+  const closeSlot = async (fileId: string | null) => {
+    await db().from("store_upload_intents").update({ consumed_at: new Date().toISOString(), ...(fileId ? { file_id: fileId } : {}) }).eq("id", p.intentId).is("consumed_at", null)
+    await db().storage.from(STORE_STAGING_BUCKET).remove([slot.staging_path as string]).catch(() => {})
+  }
+  if (!answer.done) {
+    // nothing was changed: the slot is closed (a retry of it is "no longer open"), the upload is given back, the Mac gets plain words
+    await closeSlot(null)
+    await back()
+    await logAppEvent("app_save_refused", p.user.id, { deviceId: p.deviceId, reason: String(answer.body.error), update: true, name: own.name.slice(0, 120) }, ids)
+    return { status: answer.status, body: answer.body }
+  }
+  await closeSlot(own.id)
   await refreshClientRow(own.id)      // a client storage: the documents row follows the new size / type (no-op elsewhere)
-  await logAppEvent("app_file_updated", p.user.id, { deviceId: p.deviceId, userId: p.user.id, name: own.name, size, outcome: result.status }, ids)
-  return { status: 200, body: { fileId: own.id, ownerId: own.owner_id, name: own.name, size, outcome: result.status } }
+  await logAppEvent("app_file_updated", p.user.id, { deviceId: p.deviceId, userId: p.user.id, name: own.name, size, outcome: res.status, versionNo: res.versionNo ?? null, baseVersionNo }, ids)
+  return { status: 200, body: answer.body }
 }
 
-export async function saveFromSlot(p: { user: User; deviceId: string; intentId: unknown; itemKey: unknown; replaceFileId?: unknown }): Promise<SaveAnswer> {
+export async function saveFromSlot(p: { user: User; deviceId: string; intentId: unknown; itemKey: unknown; replaceFileId?: unknown; baseVersionNo?: unknown }): Promise<SaveAnswer> {
   const settings = await getSettings()
-  if (p.replaceFileId !== undefined && p.replaceFileId !== null) return saveUpdate({ settings, user: p.user, deviceId: p.deviceId, intentId: p.intentId, itemKey: p.itemKey, fileId: p.replaceFileId })
+  if (p.replaceFileId !== undefined && p.replaceFileId !== null) return saveUpdate({ settings, user: p.user, deviceId: p.deviceId, intentId: p.intentId, itemKey: p.itemKey, fileId: p.replaceFileId, baseVersionNo: p.baseVersionNo })
   if (typeof p.intentId !== "string" || !isItemKey(p.itemKey)) return refuse(400, "bad_request", "The upload is not complete.")
   const callerKey = saveCallerKey(p.deviceId, p.itemKey)
   const earlier = await existingByKey(callerKey)

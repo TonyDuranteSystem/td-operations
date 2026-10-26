@@ -73,4 +73,16 @@ describe("buildInviteMime", () => {
     expect(raw).toContain("text/html")
     expect(raw.endsWith("--B1--")).toBe(true)
   })
+  it("adds a Reply-To when given (answers reach whoever made the invitation) and none when not", () => {
+    const mail = buildInviteEmail({ ...base, lang: "en" })
+    const withReply = buildInviteMime("cristina@x.com", mail, "B2", "rocco@tonydurante.us")
+    expect(withReply).toContain("Reply-To: rocco@tonydurante.us")
+    expect(withReply).toContain("From: Tony Durante LLC <support@tonydurante.us>")
+    expect(buildInviteMime("cristina@x.com", mail, "B2")).not.toContain("Reply-To")
+    expect(buildInviteMime("cristina@x.com", mail, "B2", null)).not.toContain("Reply-To")
+  })
+  it("never lets a line break or a space into the Reply-To header", () => {
+    const mail = buildInviteEmail({ ...base, lang: "en" })
+    for (const bad of ["a@x.com\r\nBcc: evil@x.com", "a b@x.com", "<a@x.com>"]) expect(buildInviteMime("c@x.com", mail, "B3", bad)).not.toContain("Reply-To")
+  })
 })

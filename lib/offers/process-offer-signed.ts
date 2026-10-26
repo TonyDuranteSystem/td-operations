@@ -498,6 +498,7 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
             // typed (generic) so staff can show it to the client later on request — an untyped file is closed to clients — but still hidden now
             documentType: "other_document",
             callerKey: `offer-signed:${offer.id}`,
+            replaceIfLocked: true, // the signed contract is a locked file: a changed copy becomes a replacement file, never lost
             row: { document_type_name: "Signed Contract", category: 5, status: "classified" },
           })
           if (routed.route !== "store") throw new Error("The new client's storage could not be opened — the signed contract was not saved.")

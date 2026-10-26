@@ -59,7 +59,10 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         // a company that is being moved: a clean "try again", never a 500
         if (e instanceof CompanyMovingError) return NextResponse.json({ error: e.message }, { status: 409 })
-        throw e
+        // a signed original takes no new version (the writer saves a changed copy as a replacement file); anything else gets plain words
+        const { plainStoreError } = await import('@/lib/crm-store/lock-errors')
+        console.error('[lease-regen-drive] store save failed:', e)
+        return NextResponse.json({ error: plainStoreError(e, 'The lease could not be saved in the company storage. Please try again.') }, { status: 500 })
       }
       if (routed.route === 'store') return NextResponse.json({ ok: true, driveFileId: routed.pointer })
     }

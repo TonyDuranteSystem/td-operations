@@ -209,7 +209,10 @@ export async function POST(req: NextRequest) {
           }
         }
       } catch (e) {
-        results.push({ step: "drive_upload", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        // a re-signed SS-4 with different bytes is saved as a replacement file by the writer; anything else is reported in plain words
+        // (staff must see that the signed copy was NOT filed — never raw "store:" text)
+        const { plainStoreError } = await import("@/lib/crm-store/lock-errors")
+        results.push({ step: "drive_upload", status: "error", detail: `The signed SS-4 was NOT filed in the company storage: ${plainStoreError(e)}` })
       }
     }
 
@@ -256,7 +259,8 @@ export async function POST(req: NextRequest) {
           }
         }
       } catch (e) {
-        results.push({ step: "signed_doc_store", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        const { plainStoreError } = await import("@/lib/crm-store/lock-errors")
+        results.push({ step: "signed_doc_store", status: "error", detail: `The signed SS-4 was NOT filed in the CRM Store: ${plainStoreError(e)}` })
       }
     }
 

@@ -19,6 +19,8 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isProductionDatabase } from "@/lib/google-drive-guard"
+import { saveWithReplacement } from "./replacement"
+import { plainStoreError } from "./lock-errors"
 import { saveBytesToStore, type StoreLink, type StoreSubject, type WriteResult } from "./writer"
 import { storePointer, storeDocumentLink } from "./document-pointer"
 import { storeNameKey } from "./rules"
@@ -165,6 +167,8 @@ export interface PilotSave {
   actor?: string | null
   /** never queue the AI file reader for this file (personal documents: passports, IDs) */
   skipAnalysis?: boolean
+  /** a locked original (passport/ID, signed …) never loses a changed copy: it is saved as a NEW file that replaces the old one */
+  replaceIfLocked?: boolean
 }
 
 /**
@@ -176,13 +180,15 @@ export interface PilotSave {
  */
 export async function savePilotFile(p: PilotSave): Promise<WriteResult> {
   const folderId = p.folderId ?? (await folderOfKind(p.ownerId, p.folderKind))
-  const save = (callerKey: string) => saveBytesToStore({
-    ownerId: p.ownerId, folderId, name: storeSafeFileName(p.name), mimeType: p.mimeType, bytes: p.bytes,
-    callerKey, contentChanged: p.contentChanged ?? true, documentType: p.documentType,
-    periodYear: p.periodYear ?? null, published: p.published ?? null, actor: p.actor ?? null,
-    links: p.links, subjects: p.subjects, skipAnalysis: p.skipAnalysis,
+  const save = (callerKey: string, supersedesFileId: string | null = null, name: string = p.name, over: { documentType?: string | null; periodYear?: number | null } = {}) => saveBytesToStore({
+    ownerId: p.ownerId, folderId, name: storeSafeFileName(name), mimeType: p.mimeType, bytes: p.bytes,
+    callerKey, contentChanged: p.contentChanged ?? true, documentType: over.documentType ?? p.documentType,
+    periodYear: over.periodYear ?? p.periodYear ?? null, published: p.published ?? null, actor: p.actor ?? null,
+    links: p.links, subjects: p.subjects, skipAnalysis: p.skipAnalysis, supersedesFileId,
   })
-  let w = await save(p.callerKey)
+  let w: WriteResult = p.replaceIfLocked
+    ? await saveWithReplacement({ baseKey: p.callerKey, bytes: p.bytes, name: p.name, save: (a) => save(a.callerKey, a.supersedesFileId, a.name, a) })
+    : await save(p.callerKey)
   // keyed on the trashed file: the next same-name upload becomes a VERSION of this new file, not a third
   // file; a replacement that was itself trashed again leads one step further (bounded).
   for (let hop = 0; w.status === "trashed" && hop < 5; hop++) w = await save(`${p.callerKey}:after-trash:${w.fileId}`)
@@ -382,7 +388,7 @@ export async function pilotSaveFormationUpload(p: {
 }
 
 export type PilotSaved =
-  | { status: "failed" }
+  | { status: "failed"; /** plain English, safe to show staff */ reason?: string }
   | { status: "saved"; fileId: string; pointer: string; documentRowId: string; documentRowInserted: boolean; write: WriteResult["status"] }
 
 /**
@@ -407,7 +413,7 @@ export async function pilotSavePassport(p: {
     const ownerId = await ensurePersonOwner(p.contactId, p.personName)
     const w = await savePilotFile({
       ownerId, folderKind: "personal", name: p.fileName, bytes: p.bytes, mimeType: p.mimeType,
-      documentType: "passport", callerKey: `person-passport:${p.contactId}`, skipAnalysis: true,
+      documentType: "passport", callerKey: `person-passport:${p.contactId}`, skipAnalysis: true, replaceIfLocked: true,
       links: p.buyerCaseId ? [{ kind: "service_case", recordId: p.buyerCaseId }] : [],
       subjects: p.companyAccountId ? [{ kind: "company", accountId: p.companyAccountId, role: "owner_member" }] : [],
     })
@@ -415,7 +421,7 @@ export async function pilotSavePassport(p: {
     return { status: "saved", fileId: w.fileId, pointer: storePointer(w.fileId), documentRowId: row.id, documentRowInserted: row.inserted, write: w.status }
   } catch (e) {
     await raisePilotAlarm("store_save_failed", { contactId: p.contactId, what: "passport", error: e instanceof Error ? e.message : String(e) })
-    return { status: "failed" }
+    return { status: "failed", reason: plainStoreError(e, "The passport could not be saved in the person's storage.") }
   }
 }
 
@@ -442,12 +448,13 @@ export async function pilotSaveCaseFile(p: {
       ownerId: owner.id, folderKind: p.folderKind, name: p.name, bytes: p.bytes, mimeType: p.mimeType,
       documentType: p.documentType, callerKey: p.callerKey, published: p.published ?? null,
       links: [{ kind: "service_case", recordId: p.caseId }],
+      replaceIfLocked: true, // a re-signed / regenerated copy of a locked (signed) file becomes a replacement file, never lost
     })
     const row = await upsertStoreDocumentRow(w.fileId, { ...p.row, file_name: w.name, mime_type: p.mimeType, file_size: p.bytes.length }, w.status)
     return { status: "saved", fileId: w.fileId, pointer: storePointer(w.fileId), documentRowId: row.id, documentRowInserted: row.inserted, write: w.status }
   } catch (e) {
     await raisePilotAlarm("store_save_failed", { ownerId: owner.id, caseId: p.caseId, what: p.documentType, error: e instanceof Error ? e.message : String(e) })
-    return { status: "failed" }
+    return { status: "failed", reason: plainStoreError(e, "The file could not be saved in the store.") }
   }
 }
 
@@ -519,7 +526,9 @@ export type PilotAlarmKind =
   | "storage_pointer_adopt_failed" // a client file parked in the older bucket (storage: pointer) could not be filed into the CRM storage
   | "lead_form_contact_lookup_failed" // the CRM contact lookup for a lead-stage form failed: nothing was filed, the rest of the chain ran
   | "lead_form_member_passport_held" // an LLC member with no email has a passport on a form: no contact can be made automatically, the file waits on the submission
-  | "store_move_stale"             // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
+  | "store_event_not_logged"       // a store action succeeded but its history row could not be written (twice): Drive-backup change detection may miss it
+  | "store_putback_failed"          // a rollback after a failed step did not work: a file may be in an unexpected place
+  | "store_move_stale"           // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
   | "drive_write_refused"          // a flow needed to write in Google Drive for a company/person that may not be written to there (Stop Drive S1d)
   | "banking_package_problem"      // a banking application package could not be (fully) filed: lookup failed, personal papers held, hidden study copy (Stop Drive S1d)
 

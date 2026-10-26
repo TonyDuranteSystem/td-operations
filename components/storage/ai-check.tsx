@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Check, AlertTriangle, Loader2, X, ChevronLeft, ChevronRight, ScanText } from 'lucide-react'
 import { SetTypeDialog } from './set-type-dialog'
+import { idsStillToMark } from './store-ui-rules'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 export type AiMarkKind = 'none' | 'looks_right' | 'look' | 'conflict'
@@ -45,19 +46,27 @@ export function useAiMarks(ownerId: string | null, fileIds: string[]) {
   const [available, setAvailable] = useState<boolean | null>(null)
   const key = useMemo(() => Array.from(new Set(fileIds)).sort().join(','), [fileIds])
   const seq = useRef(0)
+  /** the files whose marks were already asked for (in this storage) — a refresh asks only for files it has not seen */
+  const asked = useRef(new Set<string>())
+  const askedOwner = useRef<string | null>(null)
   const load = useCallback(async (ids: string[]) => {
     if (!ownerId || ids.length === 0) return
     const mine = ++seq.current
     try {
       for (let i = 0; i < ids.length; i += 200) {
-        const r = await fetch(`/api/crm-store/understand/marks?owner=${encodeURIComponent(ownerId)}&ids=${ids.slice(i, i + 200).join(',')}`, { cache: 'no-store' })
+        const part = ids.slice(i, i + 200)
+        const r = await fetch(`/api/crm-store/understand/marks?owner=${encodeURIComponent(ownerId)}&ids=${part.join(',')}`, { cache: 'no-store' })
         if (!r.ok) { if (mine === seq.current) setAvailable(false); return }
         const j = (await r.json()) as { marks: Record<string, FileMark> }
-        if (mine === seq.current) { setAvailable(true); setMarks((m) => ({ ...m, ...j.marks })) }
+        if (mine === seq.current) { setAvailable(true); setMarks((m) => ({ ...m, ...j.marks })); for (const id of part) asked.current.add(id) }
       }
     } catch { /* the marks are a convenience — the screen works without them */ }
   }, [ownerId])
-  useEffect(() => { void load(key ? key.split(',') : []) }, [key, load])
+  useEffect(() => {
+    if (askedOwner.current !== ownerId) { askedOwner.current = ownerId; asked.current = new Set() }
+    // automatic loading asks only for files not asked before; `reload` (after an AI check) asks for the ones it is given
+    void load(idsStillToMark(key ? key.split(',') : [], {}, asked.current))
+  }, [key, load, ownerId])
   const setOne = useCallback((id: string, m: FileMark) => setMarks((x) => ({ ...x, [id]: m })), [])
   return { marks, available, reload: load, setOne }
 }
@@ -190,7 +199,16 @@ export function AiReviewPanel({ fileId, queue, onClose, onChanged, onOpenFile }:
   const idx = queue.indexOf(fileId)
   const go = (d: number) => { const n = queue[idx + d]; if (n) onOpenFile(n) }
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); if (e.key === 'ArrowRight') go(1); if (e.key === 'ArrowLeft') go(-1) }
+    const onKey = (e: KeyboardEvent) => {
+      if (typeFor) return // the Set-type window on top has its own keys — Escape closes only it, the arrows are not for this panel
+      // typing in a box (the name, the type search …): the arrow keys move the cursor, they must not jump to another file
+      const t = e.target as HTMLElement | null
+      const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
+      if (e.key === 'Escape') onClose()
+      if (typing) return
+      if (e.key === 'ArrowRight') go(1)
+      if (e.key === 'ArrowLeft') go(-1)
+    }
     window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey)
   })
 

@@ -7,6 +7,7 @@ import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/port
 import { isPortalAdminEmailEnabled } from '@/lib/settings'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { CRM_BASE_URL, PORTAL_BASE_URL } from '@/lib/config'
+import { isOwnAttachmentUrl } from '@/lib/portal/attachment-url'
 import { isOfficeOpen } from '@/lib/portal/office-hours'
 import { sendOfficeClosedAutoReply } from '@/lib/portal/auto-reply'
 import { buildChatQueryPlan, messageVisibleInPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
@@ -351,8 +352,8 @@ export async function POST(request: NextRequest) {
   // The proxy (app/api/portal/chat/attachment/route.ts) re-checks access on
   // every view, so a Capture send (Phase 2, 2026-09-04) can point here
   // instead of handing out a permanent public storage link.
-  const attachmentProxyPrefix = `${PORTAL_BASE_URL}/api/portal/chat/attachment?path=`
-  const isValidAttachmentUrl = (url: string) => url.startsWith(supabaseBaseUrl) || url.startsWith(attachmentProxyPrefix)
+  // Parsed and compared by exact origin (a bare startsWith let https://<ref>.supabase.co.attacker.tld/x through — security hunt 2026-10-25).
+  const isValidAttachmentUrl = (url: string) => isOwnAttachmentUrl(url, supabaseBaseUrl, PORTAL_BASE_URL)
   if (attachment_url && !isValidAttachmentUrl(attachment_url)) {
     return NextResponse.json({ error: 'Invalid attachment URL' }, { status: 400 })
   }

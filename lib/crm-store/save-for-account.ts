@@ -53,6 +53,11 @@ export interface SaveForAccountInput {
   person?: { contactId: string; name: string } | null
   /** Extra columns of the CRM documents row (category, status, flow stage, …). */
   row?: Partial<Omit<DocumentsRow, "file_name" | "mime_type" | "file_size" | "portal_visible" | "account_id">>
+  /**
+   * A signed / passport / replaced original takes no new version. With this on, a CHANGED copy is saved as a NEW file that replaces
+   * the old one (the old copy stays), and the same copy again is "unchanged" — a new copy is never lost (see replacement.ts).
+   */
+  replaceIfLocked?: boolean
 }
 
 export type SaveForAccountResult =
@@ -109,10 +114,11 @@ export async function saveDocumentForAccount(input: SaveForAccountInput, deps?: 
     ownerId, folderKind, name: input.name, bytes: input.bytes, mimeType: input.mimeType,
     documentType: typeFor(input.documentType, input.portalVisible), callerKey: input.callerKey, published: input.portalVisible ?? false,
     periodYear: input.periodYear ?? null, actor: input.actor ?? null,
+    ...(input.replaceIfLocked ? { replaceIfLocked: true } : {}),
   })
   const listed = await d.upsertRow(w.fileId, {
     ...(input.row ?? {}),
-    file_name: input.name, mime_type: input.mimeType, file_size: input.bytes.length,
+    file_name: input.replaceIfLocked && w.name ? w.name : input.name, mime_type: input.mimeType, file_size: input.bytes.length,
     account_id: input.person ? null : input.accountId,
     contact_id: input.person ? input.person.contactId : input.row?.contact_id ?? null,
     portal_visible: input.portalVisible ?? false,
@@ -140,6 +146,8 @@ export interface SaveForContactInput {
   actor?: string | null
   /** the person's folder: "personal" (default) or "itin" (the ITIN papers). A person storage with no such folder gets Personal documents. */
   folderKind?: "personal" | "itin"
+  /** a changed copy of a locked (signed) file is saved as a replacement file instead of being refused — see replacement.ts */
+  replaceIfLocked?: boolean
   row?: Partial<Omit<DocumentsRow, "file_name" | "mime_type" | "file_size" | "portal_visible" | "account_id" | "contact_id">>
 }
 
@@ -180,6 +188,7 @@ export async function saveDocumentForContact(input: SaveForContactInput, deps?: 
     ownerId, folderKind, name: input.name, bytes: input.bytes, mimeType: input.mimeType,
     documentType: typeFor(input.documentType, input.portalVisible), callerKey: input.callerKey, published: input.portalVisible ?? false, actor: input.actor ?? null,
     skipAnalysis: true, // a person's own documents are never queued for the AI file reader
+    ...(input.replaceIfLocked ? { replaceIfLocked: true } : {}),
   })
   let w
   try {
@@ -219,12 +228,15 @@ export async function saveSignedPdfForAccount(p: {
   documentType?: string | null
   /** stamps the CRM record with the service it belongs to (the flow workspace lists documents by it) */
   serviceDeliveryId?: string | null
+  /** default ON for a signed PDF: a changed copy of a locked (signed) file is saved as a replacement file, never lost and never a raw error. Pass false to refuse instead. */
+  replaceIfLocked?: boolean
 }, deps?: SaveDeps): Promise<SaveForAccountResult> {
   const category = p.category ?? 1
   return saveDocumentForAccount({
     accountId: p.accountId, name: p.fileName, bytes: p.bytes, mimeType: "application/pdf",
     folder: category === 3 ? "tax" : category === 4 ? "banking" : category === 5 ? "correspondence" : "company",
     documentType: p.documentType ?? null, callerKey: p.callerKey, portalVisible: p.portalVisible ?? true, actor: p.actor ?? null,
+    replaceIfLocked: p.replaceIfLocked !== false,
     row: { document_type_name: p.label, category, status: "classified", contact_id: p.contactId ?? null, service_delivery_id: p.serviceDeliveryId ?? null },
   }, deps)
 }

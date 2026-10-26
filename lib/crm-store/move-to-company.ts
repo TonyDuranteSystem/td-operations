@@ -12,7 +12,7 @@ import { looksLikeIdPaper } from "./id-papers"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
 
-export async function moveFileToCompany(fileId: string, toFolderId: string, actorId: string | null): Promise<{ folderName: string; company: string }> {
+export async function moveFileToCompany(fileId: string, toFolderId: string, actorId: string | null): Promise<{ folderName: string; company: string; note: string | null }> {
   const { data: f, error } = await db().from("store_files").select("id, name, owner_id, folder_id, state, document_type, store_owners!inner(kind, contact_id)").eq("id", fileId).maybeSingle()
   if (error) throw new Error(`Could not read the file — please try again (${error.message}).`)
   if (!f) throw new Error("File not found.")
@@ -42,14 +42,25 @@ export async function moveFileToCompany(fileId: string, toFolderId: string, acto
   const company = (acc?.company_name as string | undefined) ?? "the company"
   const { categoryForFolder } = await import("./structure")
   const cat = await categoryForFolder(to.id)
+  // the old audience does not follow the file into a company every member sees: hide it first (staff show it again on purpose)
+  const { hideForOwnerChange } = await import("./owner-change-hide")
+  const hidden = await hideForOwnerChange(f.id, actorId)
   const { error: rhErr } = await db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: to.id, p_actor: actorId, p_reason: `Moved to ${company}` })
-  if (rhErr) throw new Error(`The file could not be moved (${String(rhErr.message).replace(/^store: /, "")}).`)
+  if (rhErr) {
+    await hidden.restore().catch((b) => console.error("[crm-store] could not restore visibility after a refused move:", b))
+    throw new Error(`The file could not be moved (${String(rhErr.message).replace(/^store: /, "")}).`)
+  }
   const { storePointer } = await import("./document-pointer")
   const { error: rErr } = await db().from("documents").update({ account_id: accountId, category: cat.num, category_name: cat.name, updated_at: new Date().toISOString() }).eq("drive_file_id", storePointer(f.id))
   if (rErr) {
     // never half-done: the file goes back where it was
-    await db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: f.folder_id, p_actor: actorId, p_reason: "Move failed — put back" })
+    const { rollBackOrAlarm, unexpectedPlaceMessage } = await import("./event-log")
+    const back = await rollBackOrAlarm("move-to-company put-back", { fileId: f.id, fromFolder: f.folder_id, toFolder: to.id },
+      () => db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: f.folder_id, p_actor: actorId, p_reason: "Move failed — put back" }))
+    // the put-back failed: the file stays hidden from the client (it is in an unexpected place) and staff are told plainly
+    if (!back) throw new Error(unexpectedPlaceMessage(`The CRM list could not be updated (${rErr.message}).`))
+    await hidden.restore().catch((b) => console.error("[crm-store] could not restore visibility after a failed move:", b))
     throw new Error(`The CRM list could not be updated, so the file was not moved (${rErr.message}) — please try again.`)
   }
-  return { folderName: to.name, company }
+  return { folderName: to.name, company, note: hidden.note }
 }

@@ -25,6 +25,7 @@ import {
   type IntercompanyAgreementInput,
 } from "@/lib/pdf/intercompany-agreement-pdf"
 import { logAction } from "@/lib/mcp/action-log"
+import { plainStoreError } from "@/lib/crm-store/lock-errors"
 
 // ─── Types ───
 
@@ -226,7 +227,7 @@ export async function generateIntercompanyForAccount(
         callerKey: `intercompany:${accountId}:${assembled.input.treasuryCompanyName}`,
       })
     } catch (err) {
-      return { error: `Saving to the new storage failed: ${err instanceof Error ? err.message : String(err)}` }
+      return { error: `Saving to the new storage failed: ${plainStoreError(err)}` }
     }
     if (routed.route === "store") {
       logAction({

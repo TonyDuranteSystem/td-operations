@@ -464,6 +464,16 @@ export function FileManager({ accountId, driveFolderId }: {
     return <div className="py-12 text-center text-sm text-zinc-400">Loading…</div>
   }
 
+  // the check itself failed (not "this company has no files"): say so and offer Retry — never the empty "No files to show here."
+  if (!driveFolderId && storeOwner.isError && !storeOwner.data) {
+    return (
+      <div className="rounded-md bg-red-50 px-3 py-3 text-sm text-red-700" role="alert">
+        Could not check where this company&apos;s files are kept — {storeOwner.error instanceof Error ? storeOwner.error.message : 'please try again.'}{' '}
+        <button type="button" onClick={() => { void storeOwner.refetch() }} className="font-medium underline">Retry</button>
+      </div>
+    )
+  }
+
   if (!driveFolderId && storeOwner.data?.ownerId) {
     return (
       <StoreReadOnlyPanel ownerId={storeOwner.data.ownerId} />

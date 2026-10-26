@@ -28,6 +28,7 @@ import { createSD } from "@/lib/operations/service-delivery"
 import { advanceServiceDelivery } from "@/lib/service-delivery"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateFormationData } from "../validation"
+import { plainStoreError } from "@/lib/crm-store/lock-errors"
 import { firstUploadPath } from "@/lib/portal/wizard-uploads"
 import {
   decideFormationRun,
@@ -375,7 +376,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
           const cleanPath = passportPath.replace(/^\/+/, "")
           const { data: blob, error: dlErr } = await supabaseAdmin.storage.from("onboarding-uploads").download(cleanPath)
           if (dlErr || !blob) {
-            result.steps.push(step("store_passport", "error", `CRM Store pilot — passport not readable (${dlErr?.message || "no data"}); using Drive`))
+            result.steps.push(step("store_passport", "error", `The passport was NOT saved: the uploaded file could not be read (${dlErr?.message || "no data"})`))
           } else {
             const content = await blob.arrayBuffer()
             const mimeType = blob.type || "application/octet-stream"
@@ -410,13 +411,13 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
                 result.steps.push(step("passport_ocr", passportResult.status, passportResult.detail))
               }
             } else {
-              result.steps.push(step("store_passport", "error", "CRM Store pilot — save failed (alarm raised); using Drive"))
+              result.steps.push(step("store_passport", "error", `The passport was NOT saved: ${saved.reason ?? "the store refused it"} (a staff alarm was raised)`))
             }
           }
         }
       }
     } catch (e) {
-      result.steps.push(step("store_passport", "error", `CRM Store pilot — ${e instanceof Error ? e.message : String(e)}; using Drive`))
+      result.steps.push(step("store_passport", "error", `The passport was NOT saved: ${plainStoreError(e)}`))
     }
   }
 
@@ -463,7 +464,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
                   result.steps.push(step("passport_ocr", passportResult.status, passportResult.detail))
                 }
               } else {
-                result.steps.push(step("store_passport", "error", "The passport could not be saved in the person's storage (a staff alarm was raised)"))
+                result.steps.push(step("store_passport", "error", `The passport was NOT saved: ${saved.reason ?? "the store refused it"} (a staff alarm was raised)`))
               }
             }
           }

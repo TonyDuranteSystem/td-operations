@@ -28,11 +28,11 @@ describe("modulesFor", () => {
     expect(homeFor(SETTER)).toBe("/marketing/call-list")
     expect(homeFor(["leads.read"])).toBe("/marketing/board")   // the Board is the first built screen of anyone who can read leads
     expect(homeFor(["chat"])).toBe("/marketing/chat")   // the team chat (direct messages, groups) needs only the chat permission
-    expect(homeFor(["inbox"])).toBeNull()
+    expect(homeFor(["inbox"])).toBe("/marketing/inbox")
   })
   it("unbuilt screens are marked, built ones are links", () => {
     const m = Object.fromEntries(modulesFor(OWNER).map(x => [x.key, x.built]))
-    expect(m).toMatchObject({ today: true, leads: true, team: true, inbox: false, money: true })
+    expect(m).toMatchObject({ today: true, leads: true, team: true, inbox: true, money: true })
   })
 })
 

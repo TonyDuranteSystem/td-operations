@@ -20,6 +20,8 @@ export async function GET(req: NextRequest) {
     const throughCompany = req.nextUrl.searchParams.get("via") === "company"
     return NextResponse.json(await folderContents(owner, folder, { throughCompany }), { headers: { "Cache-Control": "no-store" } })
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Could not read the folder." }, { status: 500 })
+    const message = e instanceof Error ? e.message : "Could not read the folder."
+    // a folder / storage that no longer exists is a 404 — the screen then steps back to the top; any other failure is a 500 (it keeps the folder open)
+    return NextResponse.json({ error: message }, { status: /not found/i.test(message) ? 404 : 500 })
   }
 }

@@ -110,6 +110,15 @@ export const MARKETING_SETTING_DEFS = {
   owner_may_export_leads: { schema: z.boolean(), fallback: true },
   /** Whether adding a member needs Antonio's approval first. */
   member_invites_need_approval: { schema: z.boolean(), fallback: false },
+  /** The mailboxes the team's Inbox may open (dev job 9aec66fa). Only Antonio changes this list (CRM > Marketing > Settings): the system's Gmail key can open any company mailbox, so the list IS the wall. Fails closed (empty) when broken. */
+  inbox_mailboxes: {
+    schema: z.array(z.object({
+      address: z.string().trim().toLowerCase().regex(/^[a-z0-9._+-]{1,64}@tonydurante\.us$/),
+      people: z.array(z.string().uuid()).max(60),
+      signature: z.string().max(600),
+    })).max(20).refine(l => new Set(l.map(m => m.address)).size === l.length, "Each address once"),
+    fallback: [] as Array<{ address: string; people: string[]; signature: string }>,
+  },
   /** Which team the leads arriving from Meta belong to. Empty text = no team chosen: the only ACTIVE team if there is exactly one, else nobody's yet (Antonio sees them and assigns). */
   lead_intake_team_id: { schema: z.union([z.string().uuid(), z.literal("")]), fallback: "" as string },
 } as const
@@ -156,7 +165,7 @@ export function resolveSetting(key: MarketingSettingKey, stored: unknown): { val
 }
 
 /** Settings that GRANT access. When their stored value is broken, or cannot be read at all, the result is this (no access), never the default. */
-const FAIL_CLOSED: Partial<Record<MarketingSettingKey, unknown>> = { permission_bundles: {} }
+const FAIL_CLOSED: Partial<Record<MarketingSettingKey, unknown>> = { permission_bundles: {}, inbox_mailboxes: [] }
 export function failClosedValue(key: MarketingSettingKey): unknown {
   return Object.prototype.hasOwnProperty.call(FAIL_CLOSED, key) ? FAIL_CLOSED[key] : undefined
 }
