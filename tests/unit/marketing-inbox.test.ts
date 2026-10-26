@@ -329,7 +329,7 @@ describe("editing a saved draft", () => {
     expect(draftMsg.text.match(/Rocco SIG/g)?.length).toBe(1)
     expect(draftMsg.text).toContain("10225 Ulmerton Rd")
     // send it again as an edited ("complete") draft: the text is used as it is
-    const sent = await sendOrDraft({ ...base, box: b, driver, draft: false, body: { mode: "reply", threadId: "t1", messageId: "m1", to: "giulia@example.test", subject: "Re: x", message: draftMsg.text, complete: true, draftId: saved.ok ? saved.draftId : undefined } })
+    const sent = await sendOrDraft({ ...base, box: b, driver, draft: false, body: { mode: "reply", threadId: "t1", messageId: "m1", to: "giulia@example.test", subject: "Re: x", message: "Yes two parts", complete: true, draftId: saved.ok ? saved.draftId : undefined } })
     expect(sent.ok).toBe(true)
     const t1 = (await driver.thread(b.address, "t1"))!
     const last = t1.messages[t1.messages.length - 1]

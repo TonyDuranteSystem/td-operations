@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { buildSignature } from "@/lib/email/signature"
+import { composeMessage } from "@/lib/marketing/inbox/compose"
 import { signatureFor } from "@/lib/marketing/inbox/send"
 import type { InboxMailbox } from "@/lib/marketing/inbox/mailboxes"
 
@@ -49,5 +50,19 @@ describe("the signature picked next to Send", () => {
   it("nonsense or the personal portrait choice from a hand-made request falls back safely", () => {
     expect(signatureFor(box(), "new", "hat")?.html).not.toContain("signature-antonio")
     expect(signatureFor(box(), "reply", "<script>")?.html).toContain("signature-td-mark.png")
+  })
+})
+
+describe("a signature in a saved draft", () => {
+  it("sits in a marked block, so re-opening the draft can lift it out of the editor", () => {
+    const sig = signatureFor(box({ signature_name: "Rocco" }), "new", "gala")
+    const c = composeMessage({ from: "rocco@tonydurante.us", to: "a@example.test", subject: "x", message: "Hi", signature: sig, draft: true })
+    expect(c.ok).toBe(true)
+    if (c.ok) {
+      const b64 = /Content-Type: text\/html; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/.exec(Buffer.from(c.raw, "base64url").toString("utf8"))?.[1] ?? ""
+      const html = Buffer.from(b64.replace(/\s+/g, ""), "base64").toString("utf-8")
+      expect(html).toContain('<div data-td-signature="1">')
+      expect(html).toContain("Rocco")
+    }
   })
 })

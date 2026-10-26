@@ -27,6 +27,14 @@ interface Staged { path: string; name: string; mime_type: string; size: number }
 const MAX_TOTAL = 18 * 1024 * 1024
 const htmlEscape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 /** plain text typed or kept in a draft -> the editor's html */
+/** A saved draft holds its signature in a marked block; the editor cannot hold that layout, so it is lifted out here and added back (in the chosen style) when the email is sent. */
+export function withoutSignature(html: string): string {
+  if (typeof DOMParser === 'undefined' || !html.includes('data-td-signature')) return html
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  doc.querySelectorAll('[data-td-signature]').forEach(el => el.remove())
+  return doc.body.innerHTML
+}
+
 export const textToEditorHtml = (text: string): string => text.split(/\n{2,}/).map(p => `<p>${htmlEscape(p).replace(/\n/g, '<br>')}</p>`).join('') || '<p></p>'
 
 /** Throw away one staged upload (best effort: a stale one is also swept by the server after a day). */
@@ -171,8 +179,8 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged, onDir
         <button type="button" className={btn} disabled={busy} onClick={saveDraft} data-testid="composer-save-draft">{t('Save draft')}</button>
         <button type="button" className={btn} disabled={busy} onClick={discard} data-testid="composer-discard">{draftId ? t('Discard draft') : t('Close')}</button>
         <label className="flex items-center gap-1 text-xs text-slate-500">{t('Signature')}
-          <select value={sigVariant} disabled={busy || seed.complete === true} onChange={e => setSigVariant(e.target.value as 'gala' | 'text' | 'none')} data-testid="composer-signature"
-            title={seed.complete === true ? t('This draft already has its signature.') : undefined} className="rounded-md border bg-white px-1.5 py-1 text-xs text-slate-700 disabled:opacity-50">
+          <select value={sigVariant} disabled={busy} onChange={e => setSigVariant(e.target.value as 'gala' | 'text' | 'none')} data-testid="composer-signature"
+            className="rounded-md border bg-white px-1.5 py-1 text-xs text-slate-700 disabled:opacity-50">
             <option value="gala">{t('Full')}</option>
             <option value="text">{t('Compact')}</option>
             <option value="none">{t('No signature')}</option>

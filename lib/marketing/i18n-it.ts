@@ -864,5 +864,4 @@ export const IT: Record<string, string> = {
   "Full": "Completa",
   "Compact": "Compatta",
   "No signature": "Nessuna firma",
-  "This draft already has its signature.": "Questa bozza ha già la sua firma.",
 }

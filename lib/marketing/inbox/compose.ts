@@ -115,7 +115,8 @@ export function composeMessage(input: ComposeInput): Composed {
 
   // the signature sits between the message and the quoted history, as in every mail client; its HTML is built by the one shared builder (the same block the CRM Inbox sends)
   const sigText = input.signature?.text ? `\r\n\r\n${input.signature.text}` : ""
-  const sigHtml = input.signature?.html ?? ""
+  // marked, so that re-opening a saved draft can lift the signature out of the editor (the editor cannot hold its table) and the send adds it back
+  const sigHtml = input.signature?.html ? `<div data-td-signature="1">${input.signature.html}</div>` : ""
   const quote = input.quote ? quoteBlocks(input.quote) : { plain: "", html: "" }
 
   const messageHtml = body.rich ? `${richBodyOpenTag(body.rich.style ?? DEFAULT_RICH_STYLE)}${body.rich.html}</div>` : textToHtml(text)

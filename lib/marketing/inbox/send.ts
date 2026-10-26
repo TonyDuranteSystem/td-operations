@@ -61,11 +61,11 @@ export async function sendOrDraft(input: {
   const staged = draft ? { ok: true as const, files: [], paths: [] as string[] } : await loadStaged(input.teamId, input.userId, body.attachments)
   if (staged.ok === false) return { ok: false, error: staged.error, status: 400 }
 
-  // an edited draft already holds its signature and the quoted original in its text: adding them again would double them
+  // an edited draft already holds the quoted original in its text, so that is not added again; the signature is lifted out of it on opening and added back here, so it keeps its full layout
   const complete = body.complete === true
   const composed = composeMessage({
     from: box.address, to: body.to, cc: body.cc, bcc: body.bcc, subject: body.subject, messageHtml: body.messageHtml, message: body.message, style: body.style,
-    signature: complete ? null : signatureFor(box, mode, body.signatureVariant), inReplyTo: mode === "forward" ? undefined : answered?.messageIdHeader, references: mode === "forward" ? undefined : answered?.references,
+    signature: signatureFor(box, mode, body.signatureVariant), inReplyTo: mode === "forward" ? undefined : answered?.messageIdHeader, references: mode === "forward" ? undefined : answered?.references,
     quote: answered && !complete ? { from: answered.from, date: answered.date, text: answered.text } : null, attachments: staged.files, draft,
   })
   if (composed.ok === false) return { ok: false, error: composed.error, status: 400 }
