@@ -103,9 +103,10 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged, onDir
   }
   async function discard() {
     // typed words or a saved draft are not thrown away by one stray click
-    if ((touched || draftId) && !window.confirm(draftId ? t('Delete this draft?') : t('Throw away the email you are writing?'))) return
+    if ((touched || draftId || files.length > 0) && !window.confirm(draftId ? t('Delete this draft?') : t('Throw away the email you are writing?'))) return
     if (draftId) {
-      await fetch(`/api/marketing/inbox/drafts?address=${encodeURIComponent(address)}&draftId=${encodeURIComponent(draftId)}`, { method: 'DELETE' }).catch(() => {})
+      const res = await fetch(`/api/marketing/inbox/drafts?address=${encodeURIComponent(address)}&draftId=${encodeURIComponent(draftId)}`, { method: 'DELETE' }).catch(() => null)
+      if (!res || !res.ok) { setError(t('The draft could not be deleted. Please try again.')); return }
       onDraftChanged()
     }
     onClose()

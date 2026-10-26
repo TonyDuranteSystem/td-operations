@@ -54,8 +54,12 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
   const [threadError, setThreadError] = useState<string | null>(null)
   const [composer, setComposer] = useState<ComposerSeed | null>(null)
   const composerDirty = useRef(false)
+  const composerRef = useRef<ComposerSeed | null>(null)
+  // the open email is read again after a send / a saved or deleted draft, so the reader never shows an old version (an old draft could be edited and sent twice)
+  const [threadTick, setThreadTick] = useState(0)
   const setDirty = useCallback((d: boolean) => { composerDirty.current = d }, [])
   /** a half-written email is never thrown away silently: leaving it (another folder, address or email) asks first */
+  composerRef.current = composer
   const leaveComposer = (): boolean => !composer || !composerDirty.current || window.confirm(t('Throw away the email you are writing?'))
   const [toast, setToast] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
@@ -107,7 +111,7 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
         }
       })
       .catch(e => { if (seq === threadSeq.current) setThreadError(e instanceof Error ? e.message : t('Could not open this email. Please try again.')) })
-  }, [selected, address, t])
+  }, [selected, address, t, threadTick])
 
   const act = useCallback(async (action: ThreadAction) => {
     if (!selected) return
@@ -221,8 +225,14 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
         <div className="min-w-0 p-4" data-testid="inbox-reader">
           {composer && (
             <Composer key={`${composer.mode}-${composer.threadId ?? 'new'}-${composer.draftId ?? ''}-${composer.messageId ?? ''}-${composer.nonce ?? 0}`} address={address} seed={composer}
-              onClose={() => setComposer(null)} onDirty={setDirty} onDraftChanged={() => setTick(x => x + 1)}
-              onSent={threadId => { setComposer(cur => (cur === composer ? null : cur)); flash(t('Sent from {address}.', { address })); setTick(x => x + 1); if (threadId && composer.mode !== 'new') setSelected(threadId) }} />
+              onClose={() => setComposer(null)} onDirty={setDirty} onDraftChanged={() => { setTick(x => x + 1); setThreadTick(x => x + 1) }}
+              onSent={threadId => {
+                const still = composerRef.current === composer // false when the person already moved on while it was being sent
+                flash(t('Sent from {address}.', { address })); setTick(x => x + 1); setThreadTick(x => x + 1)
+                if (!still) return
+                setComposer(null)
+                if (threadId && composer.mode !== 'new') setSelected(threadId)
+              }} />
           )}
           {!composer && !selected && <p className="text-sm text-slate-500" data-testid="inbox-pick">{t('Choose an email on the left, or write a new one.')}</p>}
           {!composer && selected && threadError && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800" data-testid="inbox-thread-error">{threadError}</p>}

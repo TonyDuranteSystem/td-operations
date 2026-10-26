@@ -295,6 +295,8 @@ async function main() {
   ck("B22 Edit draft brings back the Bcc, the To, and the text once (signature once)", (await T(oi, "composer-bcc").inputValue()) === "boss@example.test" && (await T(oi, "composer-to").inputValue()).includes("giulia@example.test") && /Draft answer one/.test(edTxt) && (edTxt.split(/\nOn .* wrote:/)[0].match(/TD Marketing/g) ?? []).length === 1, { edTxt, bcc: await T(oi, "composer-bcc").inputValue() })
   await T(oi, "composer-send").click()
   await T(oi, "inbox-toast").filter({ hasText: "Sent from" }).waitFor({ timeout: 60000 })
+  await oi.waitForTimeout(2000)
+  ck("B22b right after sending the edited draft the reader no longer offers that draft again (no second send possible)", (await T(oi, "inbox-edit-draft").count()) === 0 && !/Draft answer one[\s\S]*Draft answer one/.test(await oi.locator("body").innerText()))
   await T(oi, "inbox-folder-sent").click()
   await oi.waitForTimeout(1500)
   await oi.getByTestId("inbox-row").filter({ hasText: "quick question" }).first().click()

@@ -859,4 +859,5 @@ export const IT: Record<string, string> = {
   "WhatsApp Web opened": "WhatsApp Web aperto",
   "Throw away the email you are writing?": "Scartare l'email che stai scrivendo?",
   "Delete this draft?": "Eliminare questa bozza?",
+  "The draft could not be deleted. Please try again.": "Non è stato possibile eliminare la bozza. Riprova.",
 }
