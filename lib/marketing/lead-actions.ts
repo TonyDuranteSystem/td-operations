@@ -13,6 +13,8 @@ export interface ActionSettings {
   reasons: readonly Option[]
   checklist: readonly string[]
   outcomeStages: { good: string; not_in_target: string; call_back: string }
+  /** where the seller's results after the call put a lead */
+  sellerStages?: { not_ready: string; closed: string; not_closed: string }
 }
 
 const note = z.string().trim().max(2000)
@@ -23,6 +25,10 @@ export const leadActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("good"), ticked: z.array(z.string().max(200)).max(60).default([]), note: note.optional() }),
   z.object({ action: z.literal("not_in_target"), reason: z.string().trim().min(1).max(40), note: note.optional() }),
   z.object({ action: z.literal("call_back"), callbackAt: z.string().min(10).max(40), note: note.optional() }),
+  // the seller's results after the call: not ready now (come back on a day), the sale closed, the sale not closed
+  z.object({ action: z.literal("not_ready"), callbackAt: z.string().min(10).max(40), note: note.optional() }),
+  z.object({ action: z.literal("closed"), note: note.optional() }),
+  z.object({ action: z.literal("not_closed"), note: note.optional() }),
   // reaching out (the team's sheet: "WhatsApp sent / no WhatsApp", "NR + date", the booked call)
   z.object({ action: z.literal("whatsapp"), state: z.enum(["sent", "no_wa", "opened"]), template: z.string().trim().max(60).optional(), note: note.optional() }),
   z.object({ action: z.literal("no_answer"), via: z.enum(["whatsapp", "call"]).default("call"), note: note.optional() }),
@@ -54,8 +60,10 @@ export type Plan = { ok: true; change: PlannedChange } | { ok: false; status: 40
 
 const fail = (status: 400 | 409, error: string): Plan => ({ ok: false, status, error })
 const MAX_AHEAD_MS = 180 * 24 * 3600 * 1000
+const NOT_READY_MAX_AHEAD_MS = 366 * 24 * 3600 * 1000 // "not ready now" may be a year away: Rocco: "today no, maybe in six months"
 const GRACE_MS = 5 * 60 * 1000
 
+const sellerOf = (s: ActionSettings) => s.sellerStages ?? { not_ready: "not_ready", closed: "closed", not_closed: "not_closed" }
 const keyIndex = (stages: readonly Option[], k: string) => stages.findIndex(x => x.key === k)
 
 /** "Contacted" has one meaning: the FIRST reach-out moves a brand-new lead out of the first stage (to the stage the team uses for "contacted"); a lead already further along is left where it is. */
@@ -65,11 +73,13 @@ function movedToContacted(lead: LeadFacts, s: ActionSettings): Record<string, un
   return first && lead.status === first && target && target !== first && keyIndex(s.stages, target) >= 0 ? { status: target } : {}
 }
 
-/** A booked call moves the lead to the "booked" stage when the team has one and the lead is not already there, past it, or out of target. */
+/** A booked call moves the lead to the "booked" stage when the team has one and the lead is not already there, past it, or out of target. A lead the seller put aside ("not ready now", "not closed") comes back to the booked calls when a new call is booked. */
 function movedToBooked(lead: LeadFacts, s: ActionSettings): Record<string, unknown> {
   const booked = keyIndex(s.stages, "booked")
   const cur = keyIndex(s.stages, lead.status)
-  if (booked < 0 || lead.status === s.outcomeStages.not_in_target || (cur >= 0 && cur >= booked)) return {}
+  if (booked < 0 || lead.status === s.outcomeStages.not_in_target) return {}
+  if (lead.status === sellerOf(s).not_ready || lead.status === sellerOf(s).not_closed) return { status: "booked", callback_at: null }
+  if (cur >= 0 && cur >= booked) return {}
   return { status: "booked" }
 }
 
@@ -172,7 +182,7 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
         return { ok: true, change: { patch: movedToBooked(lead, s), event: { kind: "appointment", data: { at: at.toISOString(), from, ...moved } } } }
       }
       // a call back still stands only while the lead is at the call back stage with its time set; the stage itself is never touched
-      if (!lead.callback_at || lead.status !== s.outcomeStages.call_back) return fail(409, "This call back is no longer on this lead. Reload the calendar.")
+      if (!lead.callback_at || (lead.status !== s.outcomeStages.call_back && lead.status !== sellerOf(s).not_ready)) return fail(409, "This call back is no longer on this lead. Reload the calendar.")
       if (differs(lead.callback_at)) return fail(409, stale)
       return { ok: true, change: { patch: { callback_at: at.toISOString() }, event: { kind: "callback_moved", data: { callback_at: at.toISOString(), from, ...moved } } } }
     }
@@ -187,16 +197,27 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
       return { ok: true, change: { patch, event: { kind: "handover", data: { note: input.note ?? null, from: lead.status, to: typeof patch.status === "string" ? patch.status : lead.status } } } }
     }
 
+    case "closed":
+    case "not_closed": {
+      const target = input.action === "closed" ? sellerOf(s).closed : sellerOf(s).not_closed
+      if (!stageExists(target)) return fail(400, `The stage for "${input.action === "closed" ? "Closed" : "Not closed"}" is not set up. Ask Antonio.`)
+      return { ok: true, change: {
+        patch: { status: target, callback_at: null, not_in_target_reason: null },
+        event: { kind: "status_changed", data: { from: lead.status, to: target, outcome: input.action, note: input.note ?? null } },
+      } }
+    }
+
+    case "not_ready":
     case "call_back": {
       const at = new Date(input.callbackAt)
       if (Number.isNaN(at.getTime())) return fail(400, "Pick a valid day and time.")
       if (at.getTime() < now.getTime() - GRACE_MS) return fail(400, "That time has already passed. Pick a day and time in the future.")
-      if (at.getTime() > now.getTime() + MAX_AHEAD_MS) return fail(400, "That is too far away. Pick a day within the next six months.")
-      const target = s.outcomeStages.call_back
-      if (!stageExists(target)) return fail(400, "The stage for \"Call back later\" is not set up. Ask Antonio.")
+      if (at.getTime() > now.getTime() + (input.action === "not_ready" ? NOT_READY_MAX_AHEAD_MS : MAX_AHEAD_MS)) return fail(400, input.action === "not_ready" ? "That is too far away. Pick a day within the next year." : "That is too far away. Pick a day within the next six months.")
+      const target = input.action === "not_ready" ? sellerOf(s).not_ready : s.outcomeStages.call_back
+      if (!stageExists(target)) return fail(400, `The stage for "${input.action === "not_ready" ? "Not ready now" : "Call back later"}" is not set up. Ask Antonio.`)
       return { ok: true, change: {
         patch: { status: target, callback_at: at.toISOString(), not_in_target_reason: null },
-        event: { kind: "status_changed", data: { from: lead.status, to: target, outcome: "call_back", callback_at: at.toISOString(), note: input.note ?? null } },
+        event: { kind: "status_changed", data: { from: lead.status, to: target, outcome: input.action, callback_at: at.toISOString(), note: input.note ?? null } },
       } }
     }
   }

@@ -27,6 +27,9 @@ export const MARKETING_SETTING_DEFS = {
       { key: "qualified", label: "Qualified" },
       { key: "booked", label: "Booked" },
       { key: "showed", label: "Showed" },
+      { key: "not_ready", label: "Not ready now" },
+      { key: "closed", label: "Closed" },
+      { key: "not_closed", label: "Not closed" },
       { key: "paid_call", label: "Paid call" },
       { key: "upsell_won", label: "Upsell won" },
       { key: "not_in_target", label: "Not in target" },
@@ -40,6 +43,15 @@ export const MARKETING_SETTING_DEFS = {
       call_back: z.string().trim().min(1).max(40),
     }),
     fallback: { good: "qualified", not_in_target: "not_in_target", call_back: "contacted" } as { good: string; not_in_target: string; call_back: string },
+  },
+  /** Which stage each result the SELLER presses after the call moves a lead to (Rocco: "Not ready now" with a come-back day, "Closed", "Not closed"). The keys must exist in pipeline_stages. */
+  seller_result_stages: {
+    schema: z.object({
+      not_ready: z.string().trim().min(1).max(40),
+      closed: z.string().trim().min(1).max(40),
+      not_closed: z.string().trim().min(1).max(40),
+    }),
+    fallback: { not_ready: "not_ready", closed: "closed", not_closed: "not_closed" } as { not_ready: string; closed: string; not_closed: string },
   },
   /** Why a lead is marked "not in target" (a reason is required). */
   not_in_target_reasons: {

@@ -89,6 +89,8 @@ export function todayModel(i: {
   outcomeStages: OutcomeStages; me: string; now: Date
   /** stages that mean "a sale was paid" (from the settings); default: the built-in two */
   paidStages?: readonly string[]
+  /** the seller's results after the call (default: the built-in three): a lead there is not "open" any more */
+  sellerStages?: readonly string[]
 }): TodayModel {
   const nowMs = i.now.getTime()
   const dayEnd = romeStartOfNextDay(i.now).getTime()
@@ -96,7 +98,7 @@ export function todayModel(i: {
     .sort((a, b) => String(a.callback_at).localeCompare(String(b.callback_at)))
     .map(lead => ({ lead, late: new Date(lead.callback_at as string).getTime() < nowMs }))
   const goodWaiting = i.leads.filter(l => l.status === i.outcomeStages.good && l.claimed_by === null).sort((a, b) => arrival(a) - arrival(b))
-  const done = new Set([i.outcomeStages.not_in_target, ...(i.paidStages?.length ? i.paidStages : ["paid_call", "upsell_won"])])
+  const done = new Set([i.outcomeStages.not_in_target, ...(i.sellerStages ?? ["not_ready", "closed", "not_closed"]), ...(i.paidStages?.length ? i.paidStages : ["paid_call", "upsell_won"])])
   const mine = i.leads.filter(l => l.claimed_by === i.me && !done.has(l.status)).sort((a, b) => String(b.claimed_at ?? "").localeCompare(String(a.claimed_at ?? "")))
   const people = buildMasterView({ leads: i.leads, events: i.events, members: i.members, stages: i.stages, now: i.now, paidStages: i.paidStages }).people
   const firstStage = i.stages[0]?.key
