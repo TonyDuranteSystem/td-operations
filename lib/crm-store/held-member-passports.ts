@@ -85,6 +85,11 @@ async function defaultDeps(): Promise<HandOffDeps> {
         contactId: p.contactId, personName: p.personName, fileName: p.fileName, bytes: p.bytes, mimeType: p.mimeType,
         row: { document_type_name: "Passport", category: 2, category_name: "Contacts", contact_id: p.contactId, portal_visible: true },
       })
+      // pilotSavePassport raises its own alarm with the technical error; this one names the hand-off so staff know which member's passport is waiting
+      if (r.status !== "saved") {
+        const { raisePilotAlarm } = await import("./formation-pilot")
+        await raisePilotAlarm("store_save_failed", { contactId: p.contactId, what: "held member passport hand-off", error: r.reason ?? "save failed" })
+      }
       return { status: r.status }
     },
   }

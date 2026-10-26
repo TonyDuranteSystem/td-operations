@@ -40,6 +40,23 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: 'File not found' }, { status: 404 })
   }
 
+  // The same closure as the Documents download, except that a correspondence file is saved with NO type on purpose (it is listed by
+  // this row, not by Documents): a staff-only type or a personal paper filed outside a person's own storage is never served —
+  // and the file must still belong to the party this item names (staff can re-home a file without touching this row).
+  {
+    const { correspondenceOwnerMatches, correspondenceTypeAllowed } = await import('@/lib/portal/client-store-docs')
+    const { staffOnlyStorePointers, personalStoreFilesOutsidePerson } = await import('@/lib/crm-store/document-pointer')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
+    const { data: sf } = await (supabaseAdmin as any).from('store_files').select('document_type, store_owners!inner(account_id, contact_id)').eq('id', fileId).maybeSingle()
+    const owner = (Array.isArray(sf?.store_owners) ? sf.store_owners[0] : sf?.store_owners) as { account_id: string | null; contact_id: string | null } | undefined
+    const pointer = item.drive_file_id as string
+    const [closed, personal] = await Promise.all([staffOnlyStorePointers([pointer]), personalStoreFilesOutsidePerson([pointer])])
+    const open = !!sf
+      && correspondenceOwnerMatches({ account_id: item.account_id as string | null, contact_id: item.contact_id as string | null }, owner)
+      && correspondenceTypeAllowed((sf.document_type as string | null) ?? null, closed.has(pointer), personal.has(pointer))
+    if (!open) return NextResponse.json({ error: 'File not found' }, { status: 404 })
+  }
+
   try {
     const { readStoreFile, StoreFileUnavailableError } = await import('@/lib/crm-store/document-pointer')
     const { canPreviewInline } = await import('@/lib/crm-store/serve')

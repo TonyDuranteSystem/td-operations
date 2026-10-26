@@ -20,6 +20,9 @@
 import { createHash, randomUUID } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isStoreStaffRole } from "./access"
+import { StoreLockedFileError, lockKindFromDbError } from "./lock-errors"
+
+export { StoreLockedFileError } from "./lock-errors"
 
 export const STORE_BUCKET = "crm-store"
 export const STORE_STAGING_BUCKET = "crm-store-staging"
@@ -119,7 +122,12 @@ function writePayload(m: SaveMeta, path: string, sha256: string, size: number) {
 
 async function callWrite(payload: ReturnType<typeof writePayload>, opts: { skipAnalysis?: boolean } = {}): Promise<WriteResult> {
   const { data, error } = await db().rpc("store_write", { p: payload })
-  if (error) throw new Error(`store: could not register the file — ${error.message}`)
+  if (error) {
+    // the version-lock trigger (signed / passport-ID / replaced / amended): a typed error, so a flow can save a replacement file
+    const kind = lockKindFromDbError(error)
+    if (kind) throw new StoreLockedFileError(kind, (payload as { name?: string }).name ?? null)
+    throw new Error(`store: could not register the file — ${error.message}`)
+  }
   const r = data as { status: WriteStatus; file_id: string; version_id: string | null; name: string }
   // File Understanding (default OFF — STORE_ANALYSIS_ENABLED=1 switches it on): every NEW version is read in the
   // background. A failure to queue never fails the save.
@@ -183,6 +191,24 @@ export async function assertPersonalGoesToPerson(ownerId: string, documentType: 
   if (tErr || oErr || !o) throw new Error("store: could not check where this document may be saved — please try again.")
   const personal = (t?.metadata as { personal?: boolean } | null)?.personal === true
   if (personal && o.kind !== "person") throw new PersonalDocumentMisfileError()
+}
+
+/**
+ * Is this file PERSONAL content (a catalog `personal` document type — passport, ID, proof of address, ITIN papers, W-7 … — or anything
+ * in a person's own storage)? Personal content is never sent to the AI file reader: that reader sends the text to an AI service BEFORE
+ * anyone checked the identity. Fails closed: if the type or the owner cannot be read, it counts as personal (no AI reading).
+ */
+export async function isPersonalContent(ownerId: string, documentType: string | null | undefined): Promise<boolean> {
+  try {
+    const [{ data: t }, { data: o, error: oErr }] = await Promise.all([
+      documentType
+        ? db().from("catalog_entries").select("metadata").eq("catalog_id", "storage_document_types").eq("slug", documentType).maybeSingle()
+        : Promise.resolve({ data: null }),
+      db().from("store_owners").select("kind").eq("id", ownerId).maybeSingle(),
+    ])
+    if (oErr || !o) return true
+    return (t?.metadata as { personal?: boolean } | null)?.personal === true || o.kind === "person"
+  } catch { return true }
 }
 
 /** A storage error worth ONE retry (gateway / unavailable / timeout), never a refusal or a bad request. */
@@ -274,9 +300,11 @@ export interface AppendVersionResult {
 }
 
 export async function appendVersionBytes(i: AppendVersionInput): Promise<AppendVersionResult> {
-  const { data: f, error: fErr } = await db().from("store_files").select("owner_id").eq("id", i.fileId).maybeSingle()
+  const { data: f, error: fErr } = await db().from("store_files").select("owner_id, document_type").eq("id", i.fileId).maybeSingle()
   if (fErr) throw new Error(`store: could not read the file — ${fErr.message}`)
   if (!f) return { status: "not_found", fileId: null, name: null }
+  // a personal file (ITIN papers, proof of address, W-7 … in a person's storage) is never queued for the AI reader
+  const skipAnalysis = i.skipAnalysis ?? (await isPersonalContent(f.owner_id as string, (f.document_type as string | null) ?? null))
   const sha = sha256Hex(i.bytes)
   const path = storeObjectPath(f.owner_id as string)
   const put = () => db().storage.from(STORE_BUCKET).upload(path, i.bytes, { contentType: i.mimeType ?? "application/octet-stream", upsert: false })
@@ -310,7 +338,7 @@ export async function appendVersionBytes(i: AppendVersionInput): Promise<AppendV
   if (status !== "versioned" && status !== "unmerged") await removeIfUnreferenced(path)
   if (status === "versioned" || status === "unmerged") {
     // File Understanding reads every new version (same switch as every other save); a failure to queue never fails the save
-    if (r.version_id && !i.skipAnalysis && process.env.STORE_ANALYSIS_ENABLED === "1") {
+    if (r.version_id && !skipAnalysis && process.env.STORE_ANALYSIS_ENABLED === "1") {
       try { await (await import("./understand/analyze")).enqueueAnalysis(r.version_id as string, i.actor) } catch (e) { console.error("[crm-store] analysis not queued:", e instanceof Error ? e.message : e) }
     }
   }
@@ -428,6 +456,17 @@ export async function registerStagedUpload(p: { intentId: string; actor: string 
   return registerNow(p)
 }
 
+/** The saved version (if any) whose bytes are the object at this crm-store path. Used to make registerNow retry-safe. */
+export async function committedSaveAt(path: string): Promise<WriteResult | null> {
+  const { data, error } = await db().from("store_file_versions")
+    .select("id, file_id, mime_type, size_bytes, store_files!inner(name)").eq("storage_bucket", STORE_BUCKET).eq("storage_path", path).limit(1)
+  if (error) throw new Error(`store: could not check whether this upload was already saved — ${error.message}`)
+  const v = ((data ?? []) as Array<{ id: string; file_id: string; mime_type?: string | null; size_bytes?: number | null; store_files: { name: string } | { name: string }[] }>)[0]
+  if (!v) return null
+  const f = Array.isArray(v.store_files) ? v.store_files[0] : v.store_files
+  return { status: "created", fileId: v.file_id, versionId: v.id, name: f?.name ?? "", mimeType: v.mime_type ?? null, size: v.size_bytes != null ? Number(v.size_bytes) : undefined }
+}
+
 /** Claim the slot (a lease — a killed attempt can be retried), hash, move, register, finalise. */
 export async function registerNow(p: { intentId: string; actor: string } & RegisterMeta): Promise<WriteResult> {
   const { data: claimed, error } = await db().rpc("store_claim_intent", { p_intent_id: p.intentId, p_actor: p.actor })
@@ -440,6 +479,18 @@ export async function registerNow(p: { intentId: string; actor: string } & Regis
   const { data: inStaging } = await db().storage.from(STORE_STAGING_BUCKET).exists(i.staging_path)
   const bucket = inStaging ? STORE_STAGING_BUCKET : STORE_BUCKET
   const at = inStaging ? i.staging_path : i.dest_path
+
+  // A retry after store_write already COMMITTED (the process died before store_finalize_intent): the object at dest_path is
+  // already a saved version. Writing again would add a second version row with the same (bucket, path) and hit
+  // UNIQUE(storage_bucket, storage_path) — finalise the slot against the existing file instead.
+  if (!inStaging) {
+    const done = await committedSaveAt(i.dest_path)
+    if (done) {
+      const { error: finErr } = await db().rpc("store_finalize_intent", { p_intent_id: p.intentId, p_file_id: done.fileId })
+      if (finErr) console.error(`[crm-store] could not finalise upload slot ${p.intentId}:`, finErr.message)
+      return done
+    }
+  }
 
   let size = await storedSize(bucket, at)
   let { sha256, bytes } = await streamSha256(bucket, at)
@@ -481,7 +532,7 @@ export async function registerNow(p: { intentId: string; actor: string } & Regis
     documentType: p.documentType, periodYear: p.periodYear, filingStatus: p.filingStatus,
     published: p.published, supersedesFileId: p.supersedesFileId,
     links: p.links, subjects: p.subjects, facts: p.facts,
-  }, i.dest_path, sha256, size))
+  }, i.dest_path, sha256, size), { skipAnalysis: await isPersonalContent(i.owner_id, p.documentType) })
   const { error: finErr } = await db().rpc("store_finalize_intent", { p_intent_id: p.intentId, p_file_id: result.fileId })
   if (finErr) console.error(`[crm-store] could not finalise upload slot ${p.intentId}:`, finErr.message)
   return finish(result, i.dest_path)

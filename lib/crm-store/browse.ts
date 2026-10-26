@@ -8,6 +8,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isInternalOwnerKind } from "./owner-kinds"
+import { isLockedFolder as isLockedFolderRule } from "./folder-rules"
 
 // store_* tables are not in the generated types until they reach production.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -129,7 +130,7 @@ async function folderKindSettings(): Promise<Map<string, { shown_through_company
 export const CLOSED_ACCOUNT_STATUSES = ["Closed", "Cancelled", "Offboarding"]
 
 type FolderRowLite = { id: string; name: string; kind: string; trashed_at: string | null; template_slug: string | null; parent_id: string | null }
-const toFolder = (d: FolderRowLite): BrowseFolder => ({ id: d.id, name: d.name, kind: d.kind, trashed: !!d.trashed_at, locked: d.template_slug !== null || d.parent_id === null })
+const toFolder = (d: FolderRowLite): BrowseFolder => ({ id: d.id, name: d.name, kind: d.kind, trashed: !!d.trashed_at, locked: isLockedFolderRule(d) })
 
 export async function folderContents(ownerId: string, folderId: string | null, opts: { throughCompany?: boolean } = {}): Promise<{ folder: BrowseFolder | null; path: BrowseFolder[]; folders: BrowseFolder[]; files: BrowseFile[]; people?: BrowsePerson[]; owner: BrowseOwnerInfo }> {
   const { data: own, error: oErr } = await db().from("store_owners").select("kind, account_id, lifecycle_override, accounts(company_name, status), contacts(full_name)").eq("id", ownerId).maybeSingle()
@@ -776,6 +777,8 @@ async function readIdentityIntoContact(contactId: string, slug: string, bytes: B
   }
 }
 
+export const NO_TYPE_TO_SHOW_MESSAGE = "Give this file a document type before showing it to the client."
+
 /**
  * Show / hide a NEW-store file for the client: the store's own flag FIRST (it refuses a staff-only type or
  * a never-visible draft), then the CRM documents row(s) the portal reads today — through the shared share
@@ -809,6 +812,8 @@ export async function setClientVisibility(fileId: string, visible: boolean, acto
   if (rErr) throw new Error(`Could not read the CRM listing — please try again (${rErr.message}).`)
   if (visible) {
     // every check BEFORE anything changes, each failing closed
+    // the portal closes a file with no type (client-store-docs): showing it would e-mail the client about a document they cannot open
+    if (!f.document_type) throw new Error(NO_TYPE_TO_SHOW_MESSAGE)
     const { data: so, error: soErr } = await db().rpc("store_type_staff_only", { p_document_type: f.document_type })
     if (soErr || so !== false) throw new Error(soErr ? "Could not check this document's type — please try again." : "This document is staff-only (it holds other people's personal data) and can never be shown to the client.")
     const { data: pers, error: pErr } = await db().rpc("store_file_is_personal", { p_file_id: fileId })

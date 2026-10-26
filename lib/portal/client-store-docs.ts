@@ -103,3 +103,58 @@ export async function dropStoreRowsClientCannotOpen<T extends ClientDocRow>(
 export async function clientMayOpen(row: ClientDocRow, deps?: ClientStoreDeps): Promise<boolean> {
   return (await dropStoreRowsClientCannotOpen([row], {}, deps)).length === 1
 }
+
+export interface ListedDocRow extends ClientDocRow {
+  category?: number | null
+  contact_id?: string | null
+}
+
+/**
+ * The rule for a page that LISTS documents (names, types, dates) to a client and does not already filter in SQL
+ * (the Tax page, a flow's page, the legacy signed-document fallback). Applies the CRM-row rule to EVERY row —
+ * not just store rows: shown by the flag, or a flow document at a client-safe stage — then another member's
+ * personal document, then the stored-file checks for `store:` rows. A hidden draft is never listed by name.
+ */
+export async function dropDocsClientCannotSee<T extends ListedDocRow>(
+  rows: T[],
+  viewerContactId: string | null | undefined,
+  deps: ClientStoreDeps = defaultDeps,
+): Promise<T[]> {
+  if (rows.length === 0) return rows
+  const need = Array.from(new Set(rows.filter((r) => r.portal_visible !== true && r.service_delivery_id).map((r) => r.service_delivery_id as string)))
+  const types = need.length > 0 ? await deps.serviceTypes(need) : new Map<string, string | null>()
+  const { isPersonalDocumentHiddenFrom } = await import("@/lib/documents/visibility-guard")
+  const kept = rows.filter((r) => {
+    const rowOk = shownToClientByRow({
+      portalVisible: r.portal_visible,
+      serviceType: r.service_delivery_id ? types.get(r.service_delivery_id) ?? null : null,
+      flowStage: r.flow_stage,
+    })
+    if (!rowOk) return false
+    if (r.category !== undefined && isPersonalDocumentHiddenFrom({ category: r.category ?? null, contact_id: r.contact_id ?? null }, viewerContactId)) return false
+    return true
+  })
+  return dropStoreRowsClientCannotOpen(kept, { applyRowRule: false }, deps)
+}
+
+/** Pure: may a correspondence file be served? Untyped is normal for correspondence; a typed file must not be staff-only / unknown; a personal paper outside a person's storage never. */
+export function correspondenceTypeAllowed(documentType: string | null, closed: boolean, personalOutsidePerson: boolean): boolean {
+  if (personalOutsidePerson) return false
+  if (!documentType) return true
+  return !closed
+}
+
+/**
+ * Pure: does the stored file still belong to the party the correspondence item names? Staff can re-home a file
+ * (person → company, person → person) without touching the correspondence row, so the item alone is not proof.
+ * The file's owner must be the item's company (account) or the item's person (contact). Fails CLOSED.
+ */
+export function correspondenceOwnerMatches(
+  item: { account_id: string | null; contact_id: string | null },
+  owner: { account_id: string | null; contact_id: string | null } | null | undefined,
+): boolean {
+  if (!owner) return false
+  if (item.account_id && owner.account_id && owner.account_id === item.account_id) return true
+  if (item.contact_id && owner.contact_id && owner.contact_id === item.contact_id) return true
+  return false
+}

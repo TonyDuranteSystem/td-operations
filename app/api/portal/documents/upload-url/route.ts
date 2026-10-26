@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
+import { safeUploadExtension } from '@/lib/portal/upload-path'
 
 /**
  * POST /api/portal/documents/upload-url
@@ -26,7 +27,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Generate unique path
-  const ext = file_name.split('.').pop()?.toLowerCase() || 'pdf'
+  const ext = safeUploadExtension(file_name)
   const storagePath = `${account_id}/${randomUUID()}.${ext}`
 
   // Create signed upload URL (valid for 10 minutes)

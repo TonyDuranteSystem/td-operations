@@ -342,6 +342,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
         const routed = await saveDocumentForAccount({
           accountId: agreement.account_id, name: scanName, bytes: Buffer.from(await file.arrayBuffer()), mimeType: file.type || "application/pdf",
           folder: "company", documentType: "operating_agreement", callerKey: `oa-handsigned-scan:${agreement.id}`, portalVisible: true,
+          // the hand-signed scan is a signed (locked) file: a different scan uploaded again becomes a replacement file, never lost
+          replaceIfLocked: true,
           row: { document_type_name: "Operating Agreement", category: 1, status: "classified" },
         })
         if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the signed scan was being saved — nothing was saved.")
