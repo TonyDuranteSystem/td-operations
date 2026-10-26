@@ -221,7 +221,7 @@ _Regenerated 2026-10-26. Every subsystem doc under `docs/systems/` (52 docs), wi
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-10-13)_
 - [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-10-25)_
 - [storage.md](storage.md) — CRM Storage _(verified 2026-10-26)_
-- [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-10-24)_
+- [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-10-26)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-19)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_
