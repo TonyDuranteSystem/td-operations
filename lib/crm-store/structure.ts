@@ -10,7 +10,8 @@
  * loops, names without "/" "\" or control characters, one live name per folder).
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { isLockedFolder as isLockedFolderRule, folderDeleteRefusal, parseYearFolderName, YEAR_RANGE_MESSAGE } from "./folder-rules"
+import { TRANSIENT_ACCESS_MESSAGE } from "./access-errors"
+import { isLockedFolder as isLockedFolderRule, folderDeleteRefusal, folderMoveRefusal, folderRenameRefusal, isYearFolderKind, CUSTOM_KIND, parseYearFolderName, YEAR_RANGE_MESSAGE, type FolderContents } from "./folder-rules"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
@@ -169,18 +170,20 @@ export function mayOpenPrivateArea(areaUserId: string | null, login: { id: strin
 /** A private "My files" area opens only for its login (or, for the owners' area, for every owner) — every route checks this. */
 export async function assertOwnerAccess(ownerId: string, login: { id: string | null; ownerOnly: boolean }): Promise<void> {
   const { data: o, error } = await db().from("store_owners").select("kind, private_user_id").eq("id", ownerId).maybeSingle()
-  if (error) throw new Error("Could not check access — please try again.")
+  if (error) throw new Error(TRANSIENT_ACCESS_MESSAGE)
   if (!o) throw new Error("Not found.")
   if (o.kind === "private" && !mayOpenPrivateArea(o.private_user_id, login, login.ownerOnly ? await ownersAreaUserId() : null)) throw new Error("Not found.")
 }
 export async function ownerOfFolder(folderId: string): Promise<string> {
   const { data, error } = await db().from("store_folders").select("owner_id").eq("id", folderId).maybeSingle()
-  if (error || !data) throw new Error("Folder not found.")
+  if (error) throw new Error(TRANSIENT_ACCESS_MESSAGE)    // a failed read is not "gone"
+  if (!data) throw new Error("Folder not found.")
   return data.owner_id as string
 }
 export async function ownerOfFile(fileId: string): Promise<string> {
   const { data, error } = await db().from("store_files").select("owner_id").eq("id", fileId).maybeSingle()
-  if (error || !data) throw new Error("File not found.")
+  if (error) throw new Error(TRANSIENT_ACCESS_MESSAGE)
+  if (!data) throw new Error("File not found.")
   return data.owner_id as string
 }
 
@@ -199,6 +202,12 @@ async function folder(folderId: string): Promise<FolderRow> {
  *  the Business / My files top folders) is locked — it can't be renamed, moved or deleted. */
 export function isLockedFolder(f: { template_slug: string | null; parent_id: string | null; kind?: string | null }): boolean {
   return isLockedFolderRule(f)
+}
+
+/** What is inside a folder (live files and live sub-folders, all levels) — read ONLY for a tax-year folder, the one kind that may change while empty. */
+async function contentsOf(f: { id: string; kind: string }): Promise<FolderContents | undefined> {
+  if (!isYearFolderKind(f.kind)) return undefined
+  return { liveFiles: (await filesUnder(f.id)).length, subFolders: (await descendantFolderKinds(f.id)).length }
 }
 
 /** The kinds of every folder below this one (all levels), for the delete check. */
@@ -284,7 +293,7 @@ export async function createTaxYear(taxFolderId: string, year: string, actorId: 
   const kind = await effectiveKind(taxFolderId)
   if (kind !== "tax" && kind !== "person_tax") throw new Error("A tax-year folder goes inside a Tax folder.")
   if (parseYearFolderName(year) === null) throw new Error(YEAR_RANGE_MESSAGE)
-  // a year folder is its own kind (so a file saved in it is known to be for that year) but not locked
+  // a year folder is its own kind (so a file saved in it is known to be for that year); it can be renamed or deleted only while empty (folder-rules.ts)
   return createFolder(taxFolderId, year.trim(), actorId, kind === "tax" ? "tax_year" : "person_tax_year")
 }
 
@@ -293,9 +302,12 @@ export { suggestTaxYear } from "./names"
 export async function renameFolder(folderId: string, name: string, actorId: string | null): Promise<{ name: string }> {
   const f = await folder(folderId)
   if (f.trashed_at) throw new Error("That folder is in the trash.")
-  if (isLockedFolder(f)) throw new Error(`"${f.name}" is one of the fixed folders and can't be renamed.`)
+  const renameRefusal = folderRenameRefusal(f, await contentsOf(f))
+  if (renameRefusal) throw new Error(renameRefusal)
   const clean = cleanFolderName(name)
   if (clean === f.name) return { name: clean }
+  // an (empty) year folder keeps its meaning only while its name is a year
+  if (isYearFolderKind(f.kind) && parseYearFolderName(clean) === null) throw new Error(YEAR_RANGE_MESSAGE)
   if (await nameTaken(f.owner_id, f.parent_id!, clean, f.id)) throw new Error(`"${clean}" already exists here.`)
   const { error } = await db().from("store_folders").update({ name: clean }).eq("id", folderId).is("trashed_at", null)
   if (error) throw new Error(`The folder could not be renamed (${error.message}).`)
@@ -316,16 +328,12 @@ export async function moveFolder(folderId: string, toParentId: string, actorId: 
   const f = await folder(folderId)
   const to = await folder(toParentId)
   if (f.trashed_at || to.trashed_at) throw new Error("That folder is in the trash.")
-  if (isLockedFolder(f)) throw new Error(`"${f.name}" is one of the fixed folders and can't be moved.`)
+  const moveRefusal = folderMoveRefusal(f)      // a tax-year folder is locked here too: it is never moved (a mistyped one is renamed or deleted while empty)
+  if (moveRefusal) throw new Error(moveRefusal)
   if (to.owner_id !== f.owner_id) throw new Error("A folder can only be moved within the same company's or person's storage.")
   if (to.kind === "contacts") throw new Error("\"2. Contacts\" shows each person's own storage — a folder can't go there.")
   if (to.id === f.parent_id) return { parentName: to.name }
   if (to.id === f.id) throw new Error("A folder can't go inside itself.")
-  // a year folder keeps its meaning only inside a Tax folder
-  if (f.kind === "tax_year" || f.kind === "person_tax_year") {
-    const want = f.kind === "tax_year" ? "tax" : "person_tax"
-    if ((await effectiveKind(to.id)) !== want) throw new Error(`"${f.name}" is a tax-year folder — it can only go inside a Tax folder.`)
-  }
   if (await nameTaken(f.owner_id, to.id, f.name, f.id)) throw new Error(`"${to.name}" already has a folder called "${f.name}".`)
   // "Shared with staff": the files keep their ticks only if the folder stays inside it (private areas only)
   const { data: ownerKindRow } = await db().from("store_owners").select("kind").eq("id", f.owner_id).maybeSingle()
@@ -388,15 +396,20 @@ async function refreshCategories(ownerId: string, folderId: string) {
 }
 
 /** What a folder delete / move would touch: every file (all levels, first 500 listed) and which the client sees. */
-export async function folderSummary(folderId: string): Promise<{ name: string; files: number; shown: number; list: Array<{ id: string; name: string; shown: boolean; byWorkspace: string | null }>; locked: boolean }> {
+export async function folderSummary(folderId: string): Promise<{ name: string; files: number; shown: number; list: Array<{ id: string; name: string; shown: boolean; byWorkspace: string | null }>; locked: boolean; moveRefusal: string | null; renameRefusal: string | null; deleteRefusal: string | null }> {
   const f = await folder(folderId)
   const files = await filesUnder(folderId)
+  const subKinds = await descendantFolderKinds(folderId)
+  const contents: FolderContents | undefined = isYearFolderKind(f.kind) ? { liveFiles: files.length, subFolders: subKinds.length } : undefined
+  const moveRefusal = folderMoveRefusal(f)
+  const renameRefusal = folderRenameRefusal(f, contents)
+  const deleteRefusal = folderDeleteRefusal(f, subKinds, contents)
   // a file its workspace always shows can't be hidden — the screen names it and never offers it for hiding
   const { workspaceShownFiles } = await import("./client-visibility")
   const ws = await workspaceShownFiles(files.filter((x) => x.visible).map((x) => x.id))
   const list = files.map((x) => ({ id: x.id, name: x.name, shown: x.visible, byWorkspace: ws.get(x.id) ?? null }))
     .sort((a, b) => Number(b.shown) - Number(a.shown) || a.name.localeCompare(b.name)).slice(0, 500)
-  return { name: f.name, files: files.length, shown: files.filter((x) => x.visible).length, list, locked: isLockedFolder(f) || folderDeleteRefusal(f, await descendantFolderKinds(folderId)) !== null }
+  return { name: f.name, files: files.length, shown: files.filter((x) => x.visible).length, list, locked: moveRefusal !== null || deleteRefusal !== null, moveRefusal, renameRefusal, deleteRefusal }
 }
 
 /** Hide from the client the given files (all must be under the folder); stops at the first failure and says which. */
@@ -436,7 +449,7 @@ export async function deleteFolder(folderId: string, actorId: string | null, hid
   const f = await folder(folderId)
   if (f.trashed_at) throw new Error("That folder is already in the trash.")
   // refused BEFORE any file is hidden or any CRM listing removed (the store's trash only takes folders staff created by hand)
-  const refusal = folderDeleteRefusal(f, await descendantFolderKinds(folderId))
+  const refusal = folderDeleteRefusal(f, await descendantFolderKinds(folderId), await contentsOf(f))
   if (refusal) throw new Error(refusal)
   await applyHide(folderId, hide, actorId)
   const files = await filesUnder(folderId)
@@ -451,7 +464,15 @@ export async function deleteFolder(folderId: string, actorId: string | null, hid
     }
     removed.push(...(data ?? []))
   }
+  // the database's trash takes only hand-made folders: an EMPTY tax-year folder (checked above) is made a plain folder for that one call,
+  // and put back as it was if the trash refuses. Only an untrashed folder of that exact kind is touched.
+  const yearKind = isYearFolderKind(f.kind) ? f.kind : null
+  if (yearKind) {
+    const { data: flipped, error: fErr } = await db().from("store_folders").update({ kind: CUSTOM_KIND }).eq("id", folderId).eq("kind", yearKind).is("trashed_at", null).select("id")
+    if (fErr || !flipped?.length) throw new Error(`The folder could not be deleted${fErr ? ` (${fErr.message})` : " — it changed while you were deleting it"}. Nothing was removed.`)
+  }
   const { data: batch, error } = await db().rpc("store_trash_folder", { p_folder_id: folderId, p_actor: actorId, p_reason: "Folder deleted by staff from the CRM" })
+  if (error && yearKind) await db().from("store_folders").update({ kind: yearKind }).eq("id", folderId).eq("kind", CUSTOM_KIND).is("trashed_at", null)
   if (error) {
     const lost: string[] = []
     for (const part of chunks(removed)) {

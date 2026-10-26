@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   HttpError, sameNameKey, isNetworkFailure, errorText, NETWORK_MESSAGE, isGoneError, fmtSize,
-  canShowToClient, cantShowReason, resetFailedToWaiting, hasHiddenPart, idsStillToMark, type ShowRuleFile,
+  canShowToClient, cantShowReason, resetFailedToWaiting, hasHiddenPart, idsStillToMark, markFingerprint, idsNeedingMark, type ShowRuleFile,
 } from '@/components/storage/store-ui-rules'
 
 describe('sameNameKey (matches the server key)', () => {
@@ -91,5 +91,19 @@ describe('small helpers', () => {
   })
   it('only files without a mark are asked for', () => {
     expect(idsStillToMark(['a', 'b', 'c', 'a'], { a: {} }, new Set(['c']))).toEqual(['b'])
+  })
+})
+
+describe('AI marks follow the file (a mark never describes an older copy)', () => {
+  const a = markFingerprint({ updatedAt: 't1', versionNo: 1, documentType: 'ein', sha256: 'x' })
+  it('a new version, a retype or a restore changes the fingerprint', () => {
+    expect(markFingerprint({ updatedAt: 't2', versionNo: 2, documentType: 'ein', sha256: 'y' })).not.toBe(a)
+    expect(markFingerprint({ updatedAt: 't1', versionNo: 1, documentType: 'w9', sha256: 'x' })).not.toBe(a)
+    expect(markFingerprint({ updatedAt: 't1', versionNo: 1, documentType: 'ein', sha256: 'x' })).toBe(a)
+  })
+  it('asks for new files and for files whose fingerprint changed, never for unchanged ones', () => {
+    const asked = new Map([['a', 'f1'], ['b', 'f1']])
+    expect(idsNeedingMark(['a', 'b', 'c', 'a'], { a: 'f1', b: 'f2', c: 'f1' }, asked)).toEqual(['b', 'c'])
+    expect(idsNeedingMark(['a'], {}, new Map([['a', '']]))).toEqual([])
   })
 })
