@@ -9,6 +9,10 @@ import { formatWhen, type StageOption } from "@/lib/marketing/lead-view"
 import type { Option } from "@/lib/marketing/settings-edit"
 import { MetaConnectionPanel } from "../meta-connection-panel"
 import { SettingsEditor } from "./settings-editor"
+import { InboxAddresses } from "./inbox-addresses"
+import { listMembers } from "@/lib/marketing/members"
+import { getMailDriver } from "@/lib/marketing/inbox/driver"
+import type { InboxMailbox } from "@/lib/marketing/inbox/mailboxes"
 
 export const dynamic = "force-dynamic"
 
@@ -29,6 +33,10 @@ export default async function MarketingSettingsPage({ searchParams }: { searchPa
   ]
   const s = team ? await getAllMarketingSettings(team.id) : null
   const terms = team ? await listCommissionTerms(team.id) : []
+  // Inbox addresses: who is on the team, and whether the system can still open each address (one cheap Gmail read each)
+  const inboxList = (s?.inbox_mailboxes ?? []) as InboxMailbox[]
+  const teamPeople = team ? (await listMembers(team.id)).filter(m => m.status !== "removed").map(m => ({ id: m.user_id, label: m.email ?? "(no email)" })) : []
+  const inboxRows = await Promise.all(inboxList.map(async b => ({ ...b, connected: (await (await getMailDriver()).ping(b.address).catch(() => ({ ok: false as const }))).ok })))
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-6">
@@ -60,6 +68,7 @@ export default async function MarketingSettingsPage({ searchParams }: { searchPa
             currencies={s.allowed_currencies as string[]}
             payoutCurrency={s.seller_payout_currency as string}
           />
+          <InboxAddresses teamId={team.id} rows={inboxRows} people={teamPeople} />
           <section className="rounded-xl border bg-white p-4 text-sm">
             <h2 className="text-sm font-semibold text-slate-600">Pipeline stages (in order)</h2>
             <p className="mt-2">{(s.pipeline_stages as StageOption[]).map(x => x.label).join(" → ")}</p>
