@@ -773,7 +773,8 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
           {messages.map((msg) => {
             const isOutbound = msg.direction === 'outbound'
             const isImage = msg.content_type === 'image'
-            const isOtherMedia = !isImage && msg.content_type !== 'text' && !!msg.media_url
+            const isVideo = msg.content_type === 'video' && !!msg.media_url
+            const isOtherMedia = !isImage && !isVideo && msg.content_type !== 'text' && !!msg.media_url
             // Outbox rows are a queued reply not yet sent (synthetic id "outbox:<uuid>") — the
             // "three dots" menu (react/pin/reply-to/tag/…) only applies to a real, sent message.
             const isRealMessage = !msg.id.startsWith('outbox:')
@@ -966,6 +967,26 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                         className="max-w-full rounded-lg mb-1"
                       />
                     </a>
+                  ) : isVideo ? (
+                    // Plays right in the chat — no second tab. preload=metadata so a chat with many videos
+                    // does not download them all on open; the link under it is the fallback (and the download).
+                    <div className="mb-1">
+                      <video
+                        src={msg.media_url ?? undefined}
+                        controls
+                        playsInline
+                        preload="metadata"
+                        className="max-w-full max-h-80 rounded-lg bg-black"
+                      />
+                      <a
+                        href={msg.media_url ?? undefined}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-blue-600 underline"
+                      >
+                        Open / download video
+                      </a>
+                    </div>
                   ) : msg.content_type === 'voice' && msg.voice ? (
                     <WhatsAppVoiceNote messageId={msg.id} voice={msg.voice} />
                   ) : isOtherMedia ? (
