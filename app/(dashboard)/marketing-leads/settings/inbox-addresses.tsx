@@ -44,7 +44,8 @@ export function InboxAddresses({ teamId, rows, people }: { teamId: string; rows:
     if (d) { setDone(`${a} is removed from the Inbox.`); router.refresh() }
   }
   async function toggle(a: AddressRow, id: string) {
-    const next = a.people.includes(id) ? a.people.filter(x => x !== id) : [...a.people, id]
+    const known = a.people.filter(x => people.some(p => p.id === x)) // people who left the team are dropped, so they cannot block a change
+    const next = known.includes(id) ? known.filter(x => x !== id) : [...known, id]
     const d = await call({ action: "update", address: a.address, people: next }, "Could not change who can open it. Please try again.")
     if (d) router.refresh()
   }

@@ -70,6 +70,7 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged }: {
   async function send() {
     const d = await post('/api/marketing/inbox/send', { ...payload(), sendKey: sendKey.current }, t('The email could not be sent. Nothing was sent; try again.'))
     if (d) onSent(typeof d.threadId === 'string' ? d.threadId : undefined)
+    else sendKey.current = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}` // a failed try must not block the corrected retry
   }
   async function saveDraft() {
     const d = await post('/api/marketing/inbox/drafts', payload(), t('The draft could not be saved. Please try again.'))

@@ -39,10 +39,24 @@ export interface ComposeInput {
 
 export type Composed = { ok: true; raw: string; text: string } | { ok: false; error: string }
 
+/** Split on commas/semicolons that are outside quotes and <angle brackets>, so "Doe, John" <j@x.com> stays one piece. */
+function splitAddresses(v: string): string[] {
+  const out: string[] = []
+  let cur = "", q = false, ang = false
+  for (const ch of v) {
+    if (ch === '"') q = !q
+    else if (!q && ch === "<") ang = true
+    else if (!q && ch === ">") ang = false
+    if ((ch === "," || ch === ";") && !q && !ang) { out.push(cur); cur = "" } else cur += ch
+  }
+  out.push(cur)
+  return out
+}
+
 /** "a@x.com, B <b@x.com>; c@x.com" -> the clean addresses, or an error naming the first bad one. */
 export function parseRecipients(value: unknown): { ok: true; list: string[] } | { ok: false; error: string } {
   if (value === undefined || value === null || value === "") return { ok: true, list: [] }
-  const parts = Array.isArray(value) ? value.map(String) : String(value).split(/[;,]/)
+  const parts = Array.isArray(value) ? value.map(String) : splitAddresses(String(value))
   const list: string[] = []
   for (const p of parts) {
     const raw = p.trim()

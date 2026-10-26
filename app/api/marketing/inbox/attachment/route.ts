@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
       headers: {
         ...NO_STORE,
         "Content-Type": inline ? mime : "application/octet-stream",
-        "Content-Disposition": inline ? "inline" : `attachment; filename="${name}"`,
+        "Content-Disposition": inline ? "inline" : `attachment; filename="${name.replace(/[^\x20-\x7e]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, ch => "%" + ch.charCodeAt(0).toString(16).toUpperCase())}`,
         "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "sandbox",
       },

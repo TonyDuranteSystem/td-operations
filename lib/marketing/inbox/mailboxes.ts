@@ -21,7 +21,8 @@ export interface Viewer { id: string; email: string | null; admin: boolean }
 /** The CRM's own mailboxes: never available to Marketing, whatever the setting says. */
 export function isCrmMailbox(address: string): boolean {
   const a = address.trim().toLowerCase()
-  return (OWN_MAILBOX_ADDRESSES as readonly string[]).includes(a) || /^(support|antonio)(\.[a-z]+)?@/.test(a)
+  const plain = a.replace(/\+[^@]*@/, "@")
+  return (OWN_MAILBOX_ADDRESSES as readonly string[]).includes(plain) || /^(support|antonio)(\.[a-z]+)?@/.test(plain)
 }
 
 export type AddressCheck = { ok: true; address: string } | { ok: false; error: string }
@@ -39,12 +40,11 @@ export function checkNewAddress(raw: unknown, existing: readonly string[]): Addr
   return { ok: true, address }
 }
 
-/** Does this person see this mailbox? Antonio: every one; a listed person: that one; the person it belongs to (his login address): his own. */
+/** Does this person see this mailbox? Antonio: every one; a person Antonio ticked: that one. Nothing else - a login address is NOT enough (a team owner can invite any address, so a matching login proves nothing). */
 export function mayOpen(box: InboxMailbox, viewer: Viewer): boolean {
   if (isCrmMailbox(box.address)) return false
   if (viewer.admin) return true
-  if (box.people.includes(viewer.id)) return true
-  return !!viewer.email && viewer.email.trim().toLowerCase() === box.address
+  return box.people.includes(viewer.id)
 }
 
 export function visibleMailboxes(list: readonly InboxMailbox[], viewer: Viewer): InboxMailbox[] {

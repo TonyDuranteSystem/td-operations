@@ -42,10 +42,21 @@ describe("who may open an address", () => {
   const rocco = { id: U1, email: "rocco@tonydurante.us", admin: false }
   const cristina = { id: U2, email: "cristina@tonydurante.us", admin: false }
   const antonio = { id: "33333333-3333-4333-8333-333333333333", email: "x@tonydurante.us", admin: true }
-  it("the person it belongs to (his own login address) and Antonio, not the others", () => {
-    expect(mayOpen(box(), rocco)).toBe(true)
-    expect(mayOpen(box(), antonio)).toBe(true)
-    expect(mayOpen(box(), cristina)).toBe(false)
+  it("Antonio and the ticked person, not the others", () => {
+    expect(mayOpen(box({ people: [U1] }), rocco)).toBe(true)
+    expect(mayOpen(box({ people: [U1] }), antonio)).toBe(true)
+    expect(mayOpen(box({ people: [U1] }), cristina)).toBe(false)
+  })
+  it("a login that merely has the address as its email gets nothing (an owner can invite any address)", () => {
+    expect(mayOpen(box({ people: [] }), rocco)).toBe(false)
+  })
+  it("plus variants of a CRM mailbox are CRM mailboxes too", () => {
+    expect(isCrmMailbox("support+x@tonydurante.us")).toBe(true)
+    expect(isCrmMailbox("Antonio.Durante+a@tonydurante.us")).toBe(true)
+  })
+  it("reply-all keeps a quoted name with a comma in one piece", () => {
+    const r = replyRecipients({ from: "A", fromEmail: "a@x.com", to: '"Doe, John" <j@x.com>, b@x.com', cc: "", outbound: false }, "me@tonydurante.us", true)
+    expect(r.to).toEqual(["a@x.com"]); expect(r.cc.sort()).toEqual(["b@x.com", "j@x.com"])
   })
   it("a person Antonio ticked", () => {
     expect(mayOpen(box({ people: [U2] }), cristina)).toBe(true)
@@ -57,7 +68,7 @@ describe("who may open an address", () => {
     expect(findOpenable([crm], antonio, "support@tonydurante.us")).toBeNull()
   })
   it("findOpenable gives the mailbox only for an exact, listed, allowed address", () => {
-    const list = [box(), box({ address: "marketing@tonydurante.us", people: [U2] })]
+    const list = [box({ people: [U1] }), box({ address: "marketing@tonydurante.us", people: [U2] })]
     expect(findOpenable(list, rocco, "ROCCO@tonydurante.us")?.address).toBe("rocco@tonydurante.us")
     expect(findOpenable(list, rocco, "marketing@tonydurante.us")).toBeNull()
     expect(findOpenable(list, cristina, "marketing@tonydurante.us")?.address).toBe("marketing@tonydurante.us")
