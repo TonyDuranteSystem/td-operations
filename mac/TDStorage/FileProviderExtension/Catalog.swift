@@ -149,6 +149,22 @@ actor Catalog {
     // MARK: one item by id
 
     /// where a storage's top folder sits: Business and My files are shown as their section, every other storage under its group
+    /// Where an item sits in Finder's tree. Anything directly inside a storage's top folder hangs under the storage's own entry (the top folder is not a Finder item),
+    /// anything deeper under its real folder. Without this a change in a top-level folder (e.g. a new folder at the top of Business) named a parent Finder does not have.
+    private func finderParent(owner: String, serverParent: String?) async -> ItemID {
+        let top = await topParent(of: owner)
+        guard let p = serverParent else { return top }
+        let topId = (try? await api.folder(owner: owner, folder: nil))?.folder?.id
+        return ParentResolver.isTopLevel(serverParent: p, topFolderId: topId) ? top : .folder(owner: owner, folder: p)
+    }
+
+    /// Is this folder a storage's own top folder (the CRM reports no parent for it)? The top folder is never a Finder item, so a change about it must not create one
+    /// (an earlier build did, which showed up as a stray "Business" folder inside Business and swallowed new top-level folders). false on any error: nothing is guessed.
+    func isTopFolder(folder: String) async -> Bool {
+        guard let it = try? await api.item(kind: "folder", id: folder) else { return false }
+        return it.parentId == nil
+    }
+
     private func topParent(of owner: String) async -> ItemID {
         guard let groups = try? await api.navigation() else { return .owner(owner) }
         for g in groups where g.owners.contains(where: { $0.id == owner }) {
@@ -178,12 +194,10 @@ actor Catalog {
             throw StorageAPIError.notFound
         case .folder(let owner, let folder):
             let it = try await api.item(kind: "folder", id: folder)
-            let top = await topParent(of: owner)
-            return FPItem(id: id, parent: it.parentId.map { .folder(owner: owner, folder: $0) } ?? top, filename: NameMapper.finderName(fromServer: it.name), isFolder: true, canSave: it.canSave ?? false)
+            return FPItem(id: id, parent: await finderParent(owner: owner, serverParent: it.parentId), filename: NameMapper.finderName(fromServer: it.name), isFolder: true, canSave: it.canSave ?? false)
         case .file(let owner, let file):
             let it = try await api.item(kind: "file", id: file)
-            let top = await topParent(of: owner)
-            let parent: ItemID = it.parentId.map { .folder(owner: owner, folder: $0) } ?? top
+            let parent = await finderParent(owner: owner, serverParent: it.parentId)
             return FPItem(id: id, parent: parent, filename: NameMapper.finderName(fromServer: it.name), isFolder: false, size: it.size, modified: date(it.updatedAt), versionTag: "\(it.size ?? 0)-\(it.updatedAt ?? "")", canUpdate: it.mine ?? false)
         case .link(let company, let folder, let target):
             let l = try await api.folder(owner: company, folder: folder)

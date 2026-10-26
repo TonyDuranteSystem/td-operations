@@ -35,6 +35,9 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const { contact_id: contactId, storage_path: storagePath, file_name: fileName, mime_type: mimeType, document_type: documentType = 'Other', category = 'Contacts' } = body
+    // HIDDEN from the client unless the staff member chose to show it (the page then asks, with the usual "tell the client?" pop-up,
+    // and shows it through the normal eye path). Nothing is sent to the client from here unless `visible` is true.
+    const wantVisible = body.visible === true
 
     if (!contactId || !storagePath || !fileName) {
       return NextResponse.json({ success: false, detail: 'Missing contact_id, storage_path, or file_name' }, { status: 400 })
@@ -97,19 +100,21 @@ export async function POST(req: NextRequest) {
         }
       }
       const dt = (documentType as string).toLowerCase()
-      const storeType = dt.includes('passport') ? 'passport' : dt.includes('itin') ? 'itin_letter' : /\bein\b/.test(dt) ? 'ein_letter_irs' : null
+      // A file saved hidden with NO type is closed to sharing ("choose its type first"), so the follow-up "show to client" would be refused:
+      // a generic file gets the plain client-shareable type up front, exactly as it did when uploads were saved visible.
+      const storeType = dt.includes('passport') ? 'passport' : dt.includes('itin') ? 'itin_letter' : /\bein\b/.test(dt) ? 'ein_letter_irs' : 'other_document'
       // an ITIN document (a letter, a form …) belongs in the person's ITIN folder; a passport follows the normal rule (Personal documents)
       const itinFolder: 'itin' | undefined = !dt.includes('passport') && dt.includes('itin') ? 'itin' : undefined
       const callerKey = `staff-contact-upload:${contactId}:${catInfo.num}:${createHash('sha256').update(buffer).digest('hex')}`
       const row = { document_type_name: documentType as string, category: catInfo.num, category_name: category as string, status: 'classified' }
       try {
         const routed = catInfo.num === 2
-          ? await saveDocumentForContact({ contactId, name: fileName, bytes: buffer, mimeType: fileMime, documentType: storeType, callerKey, accountId: linkedAccountId, viaAccountId: switchedViaAccountId ?? linkedAccountId, contactName: (contact.full_name as string | null) ?? null, portalVisible: true, row, folderKind: itinFolder })
+          ? await saveDocumentForContact({ contactId, name: fileName, bytes: buffer, mimeType: fileMime, documentType: storeType, callerKey, accountId: linkedAccountId, viaAccountId: switchedViaAccountId ?? linkedAccountId, contactName: (contact.full_name as string | null) ?? null, portalVisible: wantVisible, row, folderKind: itinFolder })
           : linkedAccountId
             ? await saveDocumentForAccount({
                 accountId: linkedAccountId, name: fileName, bytes: buffer, mimeType: fileMime,
                 folder: catInfo.num === 1 ? 'company' : catInfo.num === 3 ? 'tax' : catInfo.num === 4 ? 'banking' : 'correspondence',
-                documentType: storeType, callerKey, portalVisible: true, row: { ...row, contact_id: contactId },
+                documentType: storeType, callerKey, portalVisible: wantVisible, row: { ...row, contact_id: contactId },
               })
             : ({ route: 'drive' } as const)
         if (routed.route === 'store') stored = { pointer: routed.pointer, documentRowId: routed.documentRowId }
@@ -135,9 +140,11 @@ export async function POST(req: NextRequest) {
     const driveFile: { id: string; name: string } = { id: stored.pointer, name: fileName }
     {
       // the client is told about the new document exactly as for any upload (the record already exists, so the insert below is skipped)
-      const { notifyClientsOfNewDocument } = await import('@/lib/portal/document-alerts')
-      notifyClientsOfNewDocument(stored.documentRowId).catch((e) =>
-        console.warn('[upload-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
+      if (wantVisible) {
+        const { notifyClientsOfNewDocument } = await import('@/lib/portal/document-alerts')
+        notifyClientsOfNewDocument(stored.documentRowId).catch((e) =>
+          console.warn('[upload-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
+      }
     }
 
     const sideEffects: string[] = [`Saved to the new storage: ${fileName}`]
@@ -178,13 +185,13 @@ export async function POST(req: NextRequest) {
         status: 'classified',
         contact_id: contactId,
         account_id: accountId,
-        portal_visible: true,
+        portal_visible: wantVisible,
       }).select('id').single()
       sideEffects.push('Document record created')
 
       // Alert the client of the new document (in-portal + push; digest email for
       // non-push users). Fire-and-forget — never block the upload response.
-      if (newDoc?.id) {
+      if (newDoc?.id && wantVisible) {
         const { notifyClientsOfNewDocument } = await import('@/lib/portal/document-alerts')
         notifyClientsOfNewDocument(newDoc.id as string).catch((e) =>
           console.warn('[upload-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
@@ -281,7 +288,7 @@ export async function POST(req: NextRequest) {
       : `New document: ${documentType}`
     const chatMsg = `${docLabel}\n\n${fileName} is now available in your portal Documents section.`
 
-    try {
+    if (wantVisible) try {
       const { createPortalNotification } = await import('@/lib/portal/notifications')
       await createPortalNotification({
         contact_id: contactId,
@@ -297,7 +304,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Send portal chat message so client sees it in chat
-    try {
+    if (wantVisible) try {
       await supabaseAdmin.from('portal_messages').insert({
         contact_id: contactId,
         account_id: accountId,
@@ -311,7 +318,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Send email immediately (don't rely on digest cron)
-    try {
+    if (wantVisible) try {
       const { data: contactForEmail } = await supabaseAdmin
         .from('contacts')
         .select('email, full_name, language')
@@ -356,6 +363,7 @@ export async function POST(req: NextRequest) {
       success: true,
       detail: `${fileName} uploaded to ${catInfo.subfolder}`,
       driveFileId: driveFile.id,
+      documentId: stored.documentRowId,
       ocrData,
       side_effects: sideEffects,
     })

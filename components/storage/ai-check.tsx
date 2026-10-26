@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Check, AlertTriangle, Loader2, X, ChevronLeft, ChevronRight, ScanText } from 'lucide-react'
 import { SetTypeDialog } from './set-type-dialog'
-import { idsStillToMark } from './store-ui-rules'
+import { idsNeedingMark } from './store-ui-rules'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 export type AiMarkKind = 'none' | 'looks_right' | 'look' | 'conflict'
@@ -41,13 +41,17 @@ const money = (n: number) => `$${n.toFixed(2)}`
 // ───────────────────────────────────────────────────────────────────────── marks
 
 /** The marks of the files on screen. `available` is false where the AI check is not allowed (the buttons then stay hidden). */
-export function useAiMarks(ownerId: string | null, fileIds: string[]) {
+export function useAiMarks(ownerId: string | null, fileIds: string[], fingerprints: Record<string, string> = {}) {
   const [marks, setMarks] = useState<Record<string, FileMark>>({})
   const [available, setAvailable] = useState<boolean | null>(null)
   const key = useMemo(() => Array.from(new Set(fileIds)).sort().join(','), [fileIds])
+  // a file whose copy or type changed since its mark was asked for is asked again (a mark must never describe an older copy)
+  const fpKey = useMemo(() => Array.from(new Set(fileIds)).sort().map((id) => `${id}=${fingerprints[id] ?? ''}`).join('\n'), [fileIds, fingerprints])
+  const fpRef = useRef(fingerprints)
+  fpRef.current = fingerprints
   const seq = useRef(0)
-  /** the files whose marks were already asked for (in this storage) — a refresh asks only for files it has not seen */
-  const asked = useRef(new Set<string>())
+  /** the files whose marks were already asked for (in this storage), with the fingerprint they had then — a refresh asks only for new or changed files */
+  const asked = useRef(new Map<string, string>())
   const askedOwner = useRef<string | null>(null)
   const load = useCallback(async (ids: string[]) => {
     if (!ownerId || ids.length === 0) return
@@ -58,15 +62,21 @@ export function useAiMarks(ownerId: string | null, fileIds: string[]) {
         const r = await fetch(`/api/crm-store/understand/marks?owner=${encodeURIComponent(ownerId)}&ids=${part.join(',')}`, { cache: 'no-store' })
         if (!r.ok) { if (mine === seq.current) setAvailable(false); return }
         const j = (await r.json()) as { marks: Record<string, FileMark> }
-        if (mine === seq.current) { setAvailable(true); setMarks((m) => ({ ...m, ...j.marks })); for (const id of part) asked.current.add(id) }
+        if (mine === seq.current) {
+          setAvailable(true)
+          // the answer replaces the old mark of every id asked (a file the answer does not mention has no mark any more)
+          setMarks((m) => { const n = { ...m }; for (const id of part) delete n[id]; return { ...n, ...j.marks } })
+          for (const id of part) asked.current.set(id, fpRef.current[id] ?? '')
+        }
       }
     } catch { /* the marks are a convenience — the screen works without them */ }
   }, [ownerId])
   useEffect(() => {
-    if (askedOwner.current !== ownerId) { askedOwner.current = ownerId; asked.current = new Set() }
-    // automatic loading asks only for files not asked before; `reload` (after an AI check) asks for the ones it is given
-    void load(idsStillToMark(key ? key.split(',') : [], {}, asked.current))
-  }, [key, load, ownerId])
+    if (askedOwner.current !== ownerId) { askedOwner.current = ownerId; asked.current = new Map() }
+    // automatic loading asks for files not asked before AND files that changed since; `reload` (after an AI check) asks for the ones it is given
+    void load(idsNeedingMark(key ? key.split(',') : [], fpRef.current, asked.current))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fpKey carries the fingerprints (the ref reads the latest)
+  }, [key, fpKey, load, ownerId])
   const setOne = useCallback((id: string, m: FileMark) => setMarks((x) => ({ ...x, [id]: m })), [])
   return { marks, available, reload: load, setOne }
 }

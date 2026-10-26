@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/server"
 import { isAdmin, isOwnerOnly } from "@/lib/auth"
 import { canSeeInstallPage } from "@/lib/storage-app/install-access"
 import { loadRelease } from "@/lib/storage-app/release"
+import { listAllDevices } from "@/lib/storage-app/device-auth"
 import { ReleasePanel } from "./release-panel"
 
 export const dynamic = "force-dynamic"
@@ -25,6 +26,7 @@ export default async function StorageAppInstallPage() {
   const release = await loadRelease()
   const admin = isAdmin(user)
   const owner = isOwnerOnly(user)
+  const macs = owner ? (await listAllDevices()).filter((d) => !d.revoked_at) : []
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6 lg:p-8">
       <div>
@@ -55,6 +57,31 @@ export default async function StorageAppInstallPage() {
       </div>
 
       {owner && <ReleasePanel current={release ? { version: release.version, build: release.build, enabled: release.enabled, rolloutPercent: release.rolloutPercent } : null} />}
+
+      {owner && (
+        <div className="rounded-lg border bg-white p-5">
+          <h2 className="text-sm font-semibold text-zinc-800">Macs signed in</h2>
+          {macs.length === 0 ? <p className="mt-2 text-sm text-zinc-600">No Mac is signed in.</p> : (
+            <table className="mt-3 w-full text-left text-sm">
+              <thead className="text-muted-foreground"><tr><th className="py-1">Mac</th><th>Person</th><th>App version</th><th>Last seen</th></tr></thead>
+              <tbody>
+                {macs.map((m) => {
+                  const behind = !!release && release.enabled && m.app_build != null && m.app_build < release.build
+                  return (
+                    <tr key={m.id} className="border-t">
+                      <td className="py-2">{m.name}</td>
+                      <td>{m.email ?? ""}</td>
+                      <td>{m.app_version ? `${m.app_version} (${m.app_build ?? "?"})` : "not reported yet"}{behind ? <span className="ml-2 text-amber-700">newer version offered</span> : m.app_build != null && release && m.app_build >= release.build ? <span className="ml-2 text-green-700">up to date</span> : null}</td>
+                      <td>{m.last_seen_at ? new Date(m.last_seen_at).toLocaleString("en-US") : "never"}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+          <p className="mt-3 text-xs text-muted-foreground">A Mac shows its version after it has updated to 0.2.2 or newer; older versions do not report it. Sign a Mac out on <Link href="/storage-app/devices" className="underline">My devices</Link>.</p>
+        </div>
+      )}
 
       <div className="rounded-lg border bg-white p-5">
         <h2 className="text-sm font-semibold text-zinc-800">How to install</h2>

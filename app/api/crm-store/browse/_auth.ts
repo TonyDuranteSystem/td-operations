@@ -100,6 +100,8 @@ export async function denyUnlessAreaAccess(ref: { ownerId?: string | null; folde
     for (const o of Array.from(owners)) await assertOwnerAccess(o, login)
     return null
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Not found." }, { status: 404 })
+    // "Not found" (a gone or private thing) → 404, which the page treats as "leave this folder"; a failed check → 503, which it retries quietly
+    const { accessErrorStatus, accessErrorMessage } = await import("@/lib/crm-store/access-errors")
+    return NextResponse.json({ error: accessErrorMessage(e) }, { status: accessErrorStatus(e) })
   }
 }

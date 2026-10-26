@@ -93,13 +93,13 @@ describe("folder delete and year folders", () => {
     expect(isLockedFolder({ ...base, kind: "person_tax_year" })).toBe(true)
     expect(isLockedFolder({ ...base, kind: "custom" })).toBe(false)
     expect(isLockedFolder({ template_slug: null, parent_id: "p" })).toBe(false)
-    expect(folderDeleteRefusal({ ...base, kind: "tax_year" }, [])).toBe("A tax-year folder cannot be deleted from here.")
-    expect(folderDeleteRefusal({ ...base, kind: "person_tax_year" }, [])).toBe("A tax-year folder cannot be deleted from here.")
+    expect(folderDeleteRefusal({ ...base, kind: "tax_year" }, [])).toMatch(/only be deleted while it is empty/)   // contents unknown = refused
+    expect(folderDeleteRefusal({ ...base, kind: "person_tax_year" }, [])).toMatch(/only be deleted while it is empty/)
   })
   it("a folder staff made is deletable, unless it contains a standard folder", () => {
     expect(folderDeleteRefusal({ ...base, kind: "custom" }, ["custom", "custom"])).toBeNull()
     expect(folderDeleteRefusal({ ...base, kind: "custom" }, ["custom", "tax_year"])).toMatch(/contains a standard or tax-year folder/)
-    expect(folderDeleteRefusal({ ...base, kind: "tax" }, [])).toMatch(/standard folder/)
+    expect(folderDeleteRefusal({ ...base, kind: "tax" }, [])).toMatch(/fixed folders/)
     expect(folderDeleteRefusal({ ...base, template_slug: "company_standard", kind: "custom" }, [])).toMatch(/fixed folders/)
     expect(folderDeleteRefusal({ ...base, parent_id: null, kind: "custom" }, [])).toMatch(/fixed folders/)
   })

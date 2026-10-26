@@ -17,7 +17,7 @@
 	<key>TDDomainName</key><string>$(TD_DOMAIN_NAME)</string>
 	<key>TDKeychainService</key><string>$(TD_KEYCHAIN_SERVICE)</string>
 	<key>TDKeychainGroup</key><string>$(TD_KEYCHAIN_GROUP)</string>
-	<key>TDLayoutVersion</key><string>3</string>
+	<key>TDLayoutVersion</key><string>4</string>
 	<key>SUFeedURL</key><string>$(TD_SERVER_URL)/api/storage-app-release/appcast.xml</string>
 	<key>SUPublicEDKey</key><string>QyZK2Ugq/n7g5wnBwo0YzjQUo7PVjdINdK4KXxWyYu0=</string>
 	<key>SUEnableInstallerLauncherService</key><true/>

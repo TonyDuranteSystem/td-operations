@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { readFileSync } from "fs"
 import { join } from "path"
-import { buildAppcast, isOffered, parseRelease, rolloutBucket } from "@/lib/storage-app/release"
+import { buildAppcast, isOffered, latestBuildFor, parseAppVersionHeader, parseRelease, rolloutBucket } from "@/lib/storage-app/release"
 import { STORAGE_APP_RELEASE_PUBLIC_PATHS } from "@/lib/storage-app/public-paths"
 import { parseSettings } from "@/lib/storage-app/settings"
 
@@ -75,5 +75,27 @@ describe("update settings and routes", () => {
     readFileSync(join(root, "app", "api", "storage-app-release", "appcast.xml", "route.ts"), "utf8")
     expect(readFileSync(join(root, "middleware.ts"), "utf8")).toContain("STORAGE_APP_RELEASE_PUBLIC_PATHS.includes(pathname)")
     expect(readFileSync(join(root, "app", "api", "store-devices", "app-download", "route.ts"), "utf8")).toContain("canSeeInstallPage")
+  })
+})
+
+
+describe("update hint and app version header", () => {
+  const rel = (o: Record<string, unknown> = {}) => parseRelease({ ...good, build: 4, ...o })
+  it("a Mac is told the offered build only when it is offered to it", () => {
+    expect(latestBuildFor(rel(), "dev-1")).toBe(4)
+    expect(latestBuildFor(rel({ enabled: false }), "dev-1")).toBeNull()
+    expect(latestBuildFor(null, "dev-1")).toBeNull()
+    expect(latestBuildFor(rel({ rolloutPercent: 0 }), "dev-1")).toBeNull()
+  })
+  it("the hint follows the same roll-out share as the feed (never a hint the feed would not honour)", () => {
+    const id = "3f2b1c00-aaaa-bbbb-cccc-000000000001"
+    const b = rolloutBucket(id)
+    expect(latestBuildFor(rel({ rolloutPercent: b }), id)).toBeNull()
+    expect(latestBuildFor(rel({ rolloutPercent: b + 1 }), id)).toBe(4)
+  })
+  it("reads the version header and refuses anything odd", () => {
+    expect(parseAppVersionHeader("0.2.2;4")).toEqual({ version: "0.2.2", build: 4 })
+    expect(parseAppVersionHeader(" 1.0;12 ")).toEqual({ version: "1.0", build: 12 })
+    for (const bad of [null, undefined, "", "0.2.2", "x;4", "0.2.2;x", "0.2.2;4;5", "<script>;1", "0.2.2;99999999999"]) expect(parseAppVersionHeader(bad as string)).toBeNull()
   })
 })
