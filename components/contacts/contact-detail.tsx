@@ -3143,7 +3143,7 @@ function ContactDocumentsTab({
         if (decision.kind === 'cancel') { setTogglingVis(null); return }
         // A just-uploaded file is HIDDEN until staff say otherwise. Where no chat message can be offered (a personal document: passport,
         // ID, ITIN …) the pop-up above does not appear, so ask the plain question here — never show it silently.
-        if (opts?.fromUpload && decision.kind === 'show_only' && !window.confirm('Show this document to the client now? No chat message is offered for this kind of document; the client only gets the usual portal notification. Cancel keeps it hidden.')) {
+        if (opts?.fromUpload && decision.kind === 'show_only' && !window.confirm('Show this document to the client now? No chat message is offered for this kind of document. Cancel keeps it hidden.')) {
           setTogglingVis(null)
           return
         }
@@ -3240,7 +3240,7 @@ function ContactDocumentsTab({
       })
       const data = await res.json()
       if (data.success) {
-        toast.success(data.detail)
+        toast.success(data.documentId ? `${data.detail} — saved hidden from the client` : data.detail)
         if (data.side_effects?.length) toast.info(data.side_effects.join(' | '))
         setShowUpload(false)
         if (data.documentId) {

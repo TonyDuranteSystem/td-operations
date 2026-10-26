@@ -16434,6 +16434,8 @@ export type Database = {
       }
       storage_app_devices: {
         Row: {
+          app_build: number | null
+          app_version: string | null
           created_at: string
           id: string
           last_ip_trunc: string | null
@@ -16444,6 +16446,8 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          app_build?: number | null
+          app_version?: string | null
           created_at?: string
           id?: string
           last_ip_trunc?: string | null
@@ -16454,6 +16458,8 @@ export type Database = {
           user_id: string
         }
         Update: {
+          app_build?: number | null
+          app_version?: string | null
           created_at?: string
           id?: string
           last_ip_trunc?: string | null

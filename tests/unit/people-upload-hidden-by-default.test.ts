@@ -20,4 +20,7 @@ describe('People "Upload Document" is hidden and silent unless the staff member 
     expect(page).toContain('if (data.documentId)')
     expect(page).toMatch(/await handleToggleVisibility\(\{\s*id: data\.documentId/)
   })
+  it('gives a generic hidden upload the plain client-shareable type so "show to client" afterwards is not refused', () => {
+    expect(route).toMatch(/\? 'ein_letter_irs' : 'other_document'/)
+  })
 })

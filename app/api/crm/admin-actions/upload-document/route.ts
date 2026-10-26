@@ -100,7 +100,9 @@ export async function POST(req: NextRequest) {
         }
       }
       const dt = (documentType as string).toLowerCase()
-      const storeType = dt.includes('passport') ? 'passport' : dt.includes('itin') ? 'itin_letter' : /\bein\b/.test(dt) ? 'ein_letter_irs' : null
+      // A file saved hidden with NO type is closed to sharing ("choose its type first"), so the follow-up "show to client" would be refused:
+      // a generic file gets the plain client-shareable type up front, exactly as it did when uploads were saved visible.
+      const storeType = dt.includes('passport') ? 'passport' : dt.includes('itin') ? 'itin_letter' : /\bein\b/.test(dt) ? 'ein_letter_irs' : 'other_document'
       // an ITIN document (a letter, a form …) belongs in the person's ITIN folder; a passport follows the normal rule (Personal documents)
       const itinFolder: 'itin' | undefined = !dt.includes('passport') && dt.includes('itin') ? 'itin' : undefined
       const callerKey = `staff-contact-upload:${contactId}:${catInfo.num}:${createHash('sha256').update(buffer).digest('hex')}`
