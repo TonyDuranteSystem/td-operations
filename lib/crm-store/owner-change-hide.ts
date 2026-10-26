@@ -12,6 +12,9 @@ const db = () => supabaseAdmin as any
 
 export const OWNER_CHANGE_HIDDEN_NOTE = "The file is now hidden from the client because it changed owner — check it, then show it again if it should be shared."
 
+/** Said to staff when the put-back of the old visibility did not work (the file then stays hidden from the client). */
+export const RESTORE_FAILED_NOTE = "The file's earlier visibility could not be put back, so it stays hidden from the client — staff have been alerted; check it and show it again if it should be shared."
+
 export interface OwnerChangeRow { id: string; portal_visible: boolean | null; flow_stage: string | null; client_notified_at: string | null }
 
 /** Pure: was the file in front of any client, and what the CRM rows become. */
@@ -24,7 +27,7 @@ export function ownerChangeHidePlan(published: boolean, rows: OwnerChangeRow[]):
  * Hide the file from the client BEFORE it is re-homed. Returns what to tell staff and a `restore()` that puts the
  * old state back if the move then fails. Throws (nothing changed) if it cannot be hidden safely.
  */
-export async function hideForOwnerChange(fileId: string, actorId: string | null): Promise<{ note: string | null; restore: () => Promise<void> }> {
+export async function hideForOwnerChange(fileId: string, actorId: string | null): Promise<{ note: string | null; restore: () => Promise<boolean> }> {
   const { storePointer } = await import("./document-pointer")
   const pointer = storePointer(fileId)
   const { data: f, error: fErr } = await db().from("store_files").select("published").eq("id", fileId).maybeSingle()
@@ -34,11 +37,20 @@ export async function hideForOwnerChange(fileId: string, actorId: string | null)
   const before = (rows ?? []) as OwnerChangeRow[]
   const plan = ownerChangeHidePlan(f.published === true, before)
   const wasPublished = f.published === true
-  const restore = async () => {
-    if (wasPublished) await db().rpc("store_set_published", { p_file_id: fileId, p_published: true, p_actor: actorId })
-    for (const r of before) { const { id, ...fields } = r; await db().from("documents").update(fields).eq("id", id) }
+  // Never throws. Every step is checked; a failed one raises an alarm and the answer is false (the file stays hidden — the safe side).
+  const restore = async (): Promise<boolean> => {
+    const { rollBackOrAlarm } = await import("./event-log")
+    let ok = true
+    if (wasPublished) {
+      ok = (await rollBackOrAlarm("owner-change visibility put-back (store)", { fileId }, () => db().rpc("store_set_published", { p_file_id: fileId, p_published: true, p_actor: actorId }))) && ok
+    }
+    for (const r of before) {
+      const { id, ...fields } = r
+      ok = (await rollBackOrAlarm("owner-change visibility put-back (CRM row)", { fileId, documentId: id }, () => db().from("documents").update(fields).eq("id", id))) && ok
+    }
+    return ok
   }
-  if (!plan.wasVisible) return { note: null, restore: async () => {} }
+  if (!plan.wasVisible) return { note: null, restore: async () => true }
   if (wasPublished) {
     const { error } = await db().rpc("store_set_published", { p_file_id: fileId, p_published: false, p_actor: actorId })
     if (error) throw new Error(`The file could not be hidden from the client first, so it was not moved (${String(error.message).replace(/^store: /, "")}).`)
@@ -46,8 +58,8 @@ export async function hideForOwnerChange(fileId: string, actorId: string | null)
   if (before.length > 0) {
     const { error } = await db().from("documents").update({ ...plan.patch, updated_at: new Date().toISOString() }).eq("drive_file_id", pointer)
     if (error) {
-      await restore()
-      throw new Error(`The file could not be hidden from the client first, so it was not moved (${error.message}).`)
+      const back = await restore()
+      throw new Error(`The file could not be hidden from the client first, so it was not moved (${error.message}).${back ? "" : ` ${RESTORE_FAILED_NOTE}`}`)
     }
   }
   return { note: plan.note, restore }

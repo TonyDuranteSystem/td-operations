@@ -125,6 +125,7 @@ export async function POST(request: NextRequest) {
         // a client's own upload stays HIDDEN until staff review it (same as on a Drive company, where portal_visible defaults to false) — but it
         // carries the generic client type, so the day staff choose "show to client" it opens (an untyped stored file is closed to clients)
         accountId, name: fileName, bytes: fileBuffer, mimeType: mimeType || null, folder, documentType: 'other_document',
+        actor: user.id,   // recorded as the file's creator: the Tax page lists the client's own upload as "Waiting for review"
         // the same file uploaded twice is ONE stored file
         callerKey: `portal-upload:${accountId}:${person ? person.contactId : 'company'}:${categoryNum}:${createHash('sha256').update(fileBuffer).digest('hex')}`,
         person,

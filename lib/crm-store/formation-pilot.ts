@@ -187,7 +187,7 @@ export async function savePilotFile(p: PilotSave): Promise<WriteResult> {
     links: p.links, subjects: p.subjects, skipAnalysis: p.skipAnalysis, supersedesFileId,
   })
   let w: WriteResult = p.replaceIfLocked
-    ? await saveWithReplacement({ baseKey: p.callerKey, bytes: p.bytes, name: p.name, save: (a) => save(a.callerKey, a.supersedesFileId, a.name, a) })
+    ? await saveWithReplacement({ baseKey: p.callerKey, bytes: p.bytes, name: p.name, ownerId: p.ownerId, save: (a) => save(a.callerKey, a.supersedesFileId, a.name, a) })
     : await save(p.callerKey)
   // keyed on the trashed file: the next same-name upload becomes a VERSION of this new file, not a third
   // file; a replacement that was itself trashed again leads one step further (bounded).

@@ -9,6 +9,7 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { denyUnlessStoreStaff, denyUnlessStorePilotEnv, denyUnlessAreaAccess } from "../_auth"
+import { plainStoreError } from "@/lib/crm-store/lock-errors"
 
 export async function POST(req: NextRequest) {
   const denied = await denyUnlessStoreStaff()
@@ -42,6 +43,6 @@ export async function POST(req: NextRequest) {
     const r = await staffUploadToStore({ ownerId, folderId, storagePath, fileName, mimeType: mimeType ?? null, documentType: documentType ?? null, actorId: user?.id ?? null, personContactId: personContactId ?? null, displayName: displayName ?? null, visible, periodYear, filingAnswer, needsReview, viaCompanyOwnerId: viaCompanyOwnerId ?? null })
     return NextResponse.json(r)
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "The upload could not be saved." }, { status: 400 })
+    return NextResponse.json({ error: plainStoreError(e, "The upload could not be saved.") }, { status: 400 })
   }
 }
