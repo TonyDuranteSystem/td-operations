@@ -3237,7 +3237,18 @@ function ContactDocumentsTab({
         toast.success(data.detail)
         if (data.side_effects?.length) toast.info(data.side_effects.join(' | '))
         setShowUpload(false)
-        window.location.reload()
+        if (data.documentId) {
+          // The file is saved HIDDEN and nothing was sent. Now ask the same question as the eye: show it to the client, and tell
+          // them in chat or not? Cancel leaves it hidden.
+          await handleToggleVisibility({
+            id: data.documentId as string, file_name: file.name, document_type_name: uploadType, category_name: uploadCategory, category: null,
+            drive_file_id: null, drive_link: null, status: 'classified', processed_at: null, mime_type: file.type || null, file_size: file.size,
+            account_id: null, portal_visible: false, contact_id: contactId, confidence: null, updated_at: null,
+          })
+          router.refresh()
+        } else {
+          window.location.reload()
+        }
       } else {
         toast.error(data.detail || 'Upload failed')
       }
