@@ -14,7 +14,7 @@ const CATALOG: Array<{ key: string; label: string; href: string; built: boolean;
   { key: "board", label: "Board", href: "/marketing/board", built: true, when: p => p.includes("leads.read") },
   { key: "leads", label: "Leads", href: "/marketing/leads", built: true, when: p => p.includes("leads.read") },
   { key: "calendar", label: "Calendar", href: "/marketing/calendar", built: true, when: p => p.includes("leads.worklist") || p.includes("leads.pick") || p.includes("team.activity") },
-  { key: "inbox", label: "Inbox", href: "/marketing/inbox", built: false, when: p => p.includes("inbox") },
+  { key: "inbox", label: "Inbox", href: "/marketing/inbox", built: true, when: p => p.includes("inbox") },
   { key: "whatsapp", label: "WhatsApp", href: "/marketing/whatsapp", built: false, when: p => p.includes("whatsapp") },
   { key: "chat", label: "Chat", href: "/marketing/chat", built: true, when: p => p.includes("chat") },
   { key: "calls", label: "Calls", href: "/marketing/calls", built: false, when: p => p.includes("calls.host") },

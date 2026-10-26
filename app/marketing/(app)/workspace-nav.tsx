@@ -16,7 +16,19 @@ export function WorkspaceNav({ items }: { items: Item[] }) {
   const [order, setOrder] = useState<string[]>([])
   const [editing, setEditing] = useState(false)
   useEffect(() => { try { setOrder(parseSavedOrder(window.localStorage.getItem(NAV_ORDER_KEY))) } catch { /* the order is only a convenience */ } }, [])
-  const list = orderNav(shown, order)
+  // the Inbox's red number: unread emails across the addresses this person may open, asked once a minute (the server only talks to Gmail when he has an address)
+  const hasInbox = shown.some(i => i.key === 'inbox')
+  const [inboxUnread, setInboxUnread] = useState(0)
+  useEffect(() => {
+    if (!hasInbox) return
+    const load = () => fetch('/api/marketing/inbox/mailboxes').then(r => (r.ok ? r.json() : null)).then(d => {
+      if (d?.mailboxes) setInboxUnread((d.mailboxes as Array<{ unread: number | null }>).reduce((n, b) => n + (b.unread ?? 0), 0))
+    }).catch(() => {})
+    load()
+    const id = setInterval(load, 60_000)
+    return () => clearInterval(id)
+  }, [hasInbox])
+  const list = orderNav(shown.map(i => (i.key === 'inbox' && inboxUnread > 0 ? { ...i, badge: inboxUnread } : i)), order)
   const move = (index: number, by: -1 | 1) => {
     const next = moveNav(list, index, by).map(i => i.key)
     setOrder(next)
