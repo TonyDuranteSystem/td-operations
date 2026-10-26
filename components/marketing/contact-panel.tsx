@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { contactChips, type ContactState } from '@/lib/marketing/contact-state'
-import { fillTemplate, firstName, unfillTemplate, whatsappLink, type TemplateView } from '@/lib/marketing/templates'
+import { fillTemplate, firstName, unfillTemplate, whatsappWebLink, type TemplateView } from '@/lib/marketing/templates'
+import { WA_WINDOW_FEATURES, WA_WINDOW_NAME } from '@/lib/marketing/whatsapp-web'
 import { formatWhen } from '@/lib/marketing/lead-view'
 import { useLang, useT } from '@/components/marketing/lang-provider'
 import { localeFor } from '@/lib/marketing/i18n'
@@ -41,11 +42,13 @@ export function ContactPanel({ leadId, canAct, contact, leadName, phone, setterN
   // saving the text in the box as a template (owner only): 'new' asks for a name, 'update' replaces the wording of the template picked, in this language
   const [saving, setSaving] = useState<{ mode: 'new' | 'update'; name: string } | null>(null)
   const [savedNote, setSavedNote] = useState<string | null>(null)
+  // after WhatsApp Web was opened for this lead: the system cannot see inside WhatsApp, so it asks ONCE whether the message was sent
+  const [asking, setAsking] = useState<{ template: string | undefined } | null>(null)
 
   const tpl = templates.find(t => t.key === tplKey)
   const whenText = contact.appointmentAt ? fw(contact.appointmentAt) : ''
   const message = edited ?? (tpl ? fillTemplate(tpl.text, { name: firstName(leadName), setter: setterName, when: whenText }) : '')
-  const link = whatsappLink(phone, message)
+  const link = whatsappWebLink(phone, message)
   const chips = contactChips(contact, fw, t)
 
   // the text as a template: this lead's name, this setter's name and this call time go back to {name} {setter} {when}
@@ -70,15 +73,32 @@ export function ContactPanel({ leadId, canAct, contact, leadName, phone, setterN
     catch { setError(t('Could not copy. Select the text and copy it by hand.')) }
   }
 
-  async function send(body: Record<string, unknown>) {
+  async function send(body: Record<string, unknown>): Promise<boolean> {
     setBusy(true); setError(null)
     try {
       const res = await fetch(`/api/marketing/leads/${leadId}/action`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error ? t(d.error) : t('Could not save. Please try again.')) }
       router.refresh()
+      return true
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : t('Could not save. Please try again.'))
+      return false
     } finally { setBusy(false) }
+  }
+
+  // WhatsApp Web opens in its OWN window (the same one every time), straight on this lead's chat with the message written; the person presses Send there
+  function openWeb() {
+    if (!link) return
+    const w = window.open(link, WA_WINDOW_NAME, WA_WINDOW_FEATURES)
+    if (!w) { setError(t('Your browser blocked the WhatsApp window. Allow pop-ups for this site and try again.')); return }
+    w.focus()
+    setAsking({ template: tplKey || undefined })
+    void send({ action: 'whatsapp', state: 'opened', template: tplKey || undefined })
+  }
+  async function answer(sent: boolean) {
+    if (!asking) return
+    if (!sent) { setAsking(null); return }
+    if (await send({ action: 'whatsapp', state: 'sent', template: asking.template })) setAsking(null)
   }
 
   return (
@@ -124,14 +144,24 @@ export function ContactPanel({ leadId, canAct, contact, leadName, phone, setterN
 
           <div className="mt-3 flex flex-wrap gap-2">
             {link
-              ? <a className={`${btn} bg-emerald-600 text-white`} href={link} target="_blank" rel="noopener noreferrer" data-testid="open-whatsapp">{t('Open WhatsApp with this message')}</a>
+              ? <button type="button" className={`${btn} bg-emerald-600 text-white`} onClick={openWeb} data-testid="open-whatsapp">{t('Open this chat in WhatsApp Web')}</button>
               : <span className="self-center text-xs text-slate-500">{phone ? t('This number cannot be used for WhatsApp.') : t('No phone number to write to.')}</span>}
             <button type="button" className={btn} onClick={copy} data-testid="copy-message">{copied ? t('Copied') : t('Copy message')}</button>
             <button className={btn} disabled={busy} onClick={() => send({ action: 'whatsapp', state: 'sent', template: tplKey || undefined })}>{t('I sent it')}</button>
             <button className={btn} disabled={busy} onClick={() => send({ action: 'whatsapp', state: 'no_wa' })}>{t('No WhatsApp')}</button>
             <button className={btn} disabled={busy} onClick={() => send({ action: 'no_answer', via: 'call' })}>{t('No answer')}</button>
           </div>
-          <p className="mt-1 text-xs text-slate-400">{t('WhatsApp opens with the message typed in — you press Send there, then "I sent it" here.')}</p>
+          <p className="mt-1 text-xs text-slate-400">{t('WhatsApp Web opens in its own window with the message typed in. You press Send there; the system cannot press it for you.')}</p>
+          {asking && (
+            <div role="status" className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm" data-testid="did-you-send">
+              <p className="font-semibold text-emerald-900">{t('Did you send it?')}</p>
+              <p className="text-xs text-emerald-800">{t('This only writes the note on the lead. "No" writes nothing.')}</p>
+              <div className="mt-2 flex gap-2">
+                <button type="button" className={`${btn} bg-emerald-600 text-white`} disabled={busy} onClick={() => answer(true)} data-testid="sent-yes">{t('Yes, sent')}</button>
+                <button type="button" className={btn} disabled={busy} onClick={() => answer(false)} data-testid="sent-no">{t('No')}</button>
+              </div>
+            </div>
+          )}
 
         </>
       )}

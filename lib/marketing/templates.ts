@@ -142,12 +142,23 @@ export function fillTemplate(text: string, v: { name?: string | null; setter?: s
     .replace(/[ \t]{2,}/g, " ").replace(/ ([,.!?])/g, "$1").replace(/Buongiorno ,/g, "Buongiorno,").replace(/Hello ,/g, "Hello,")
 }
 
-/** wa.me address for a phone number ("+39 333 111 2233", "0039 333…") with the text typed in; null when the number is not usable. */
-export function whatsappLink(phone: string | null | undefined, text: string): string | null {
+/** The digits WhatsApp wants for a phone number ("+39 333 111 2233", "0039 333…" -> 393331112233); null when the number is not usable. */
+function whatsappDigits(phone: string | null | undefined): string | null {
   let d = (phone ?? "").replace(/[^\d]/g, "")
   if ((phone ?? "").trim().startsWith("00") || d.startsWith("00")) d = d.replace(/^00/, "")
-  if (d.length < 8 || d.length > 15) return null
-  return `https://wa.me/${d}?text=${encodeURIComponent(text)}`
+  return d.length < 8 || d.length > 15 ? null : d
+}
+
+/** wa.me address for a phone number with the text typed in; null when the number is not usable. */
+export function whatsappLink(phone: string | null | undefined, text: string): string | null {
+  const d = whatsappDigits(phone)
+  return d ? `https://wa.me/${d}?text=${encodeURIComponent(text)}` : null
+}
+
+/** The WhatsApp Web address that opens straight on that person's chat with the text written (the person still presses Send); null when the number is not usable. */
+export function whatsappWebLink(phone: string | null | undefined, text: string): string | null {
+  const d = whatsappDigits(phone)
+  return d ? `https://web.whatsapp.com/send?phone=${d}&text=${encodeURIComponent(text)}` : null
 }
 
 /**
