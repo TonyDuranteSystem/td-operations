@@ -42,6 +42,19 @@ export interface ClientStoreDeps {
   closed(pointers: string[]): Promise<Set<string>>
   /** pointers that are personal documents outside a person's own storage */
   personalOutsidePerson(pointers: string[]): Promise<Set<string>>
+  /** pointers of live stored files the signed-in client uploaded themselves through the portal (see isOwnPortalUpload) */
+  ownUploads?(pointers: string[], viewerUserId: string, accountId: string): Promise<Set<string>>
+}
+
+/**
+ * Pure: did THIS signed-in client upload the stored file through the portal? The portal upload route saves the file under the key
+ * `portal-upload:<account>:…` with the uploader's user id as the file's creator. A file saved before the creator was recorded has no
+ * creator: it is still shown (it is the company's own upload, listed by name only — it can't be opened while it is hidden).
+ */
+export function isOwnPortalUpload(f: { callerKey: string | null; createdBy: string | null; state?: string | null }, viewerUserId: string, accountId: string): boolean {
+  if (f.state && f.state !== "live") return false
+  if (!f.callerKey || !f.callerKey.startsWith(`portal-upload:${accountId}:`)) return false
+  return f.createdBy === null || f.createdBy === viewerUserId
 }
 
 const defaultDeps: ClientStoreDeps = {
@@ -61,6 +74,20 @@ const defaultDeps: ClientStoreDeps = {
   async personalOutsidePerson(pointers) {
     const { personalStoreFilesOutsidePerson } = await import("@/lib/crm-store/document-pointer")
     return personalStoreFilesOutsidePerson(pointers)
+  },
+  async ownUploads(pointers, viewerUserId, accountId) {
+    const { parseStorePointer, storePointer } = await import("@/lib/crm-store/document-pointer")
+    const ids = Array.from(new Set(pointers.map((v) => parseStorePointer(v)).filter((x): x is string => !!x)))
+    const out = new Set<string>()
+    if (ids.length === 0) return out
+    const { supabaseAdmin } = await import("@/lib/supabase-admin")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types
+    const { data, error } = await (supabaseAdmin as any).from("store_files").select("id, caller_key, created_by, state").in("id", ids)
+    if (error) throw new Error(`portal: could not read the uploads (${error.message})`)
+    for (const r of (data ?? []) as { id: string; caller_key: string | null; created_by: string | null; state: string }[]) {
+      if (isOwnPortalUpload({ callerKey: r.caller_key, createdBy: r.created_by, state: r.state }, viewerUserId, accountId)) out.add(storePointer(r.id))
+    }
+    return out
   },
 }
 
@@ -157,4 +184,31 @@ export function correspondenceOwnerMatches(
   if (item.account_id && owner.account_id && owner.account_id === item.account_id) return true
   if (item.contact_id && owner.contact_id && owner.contact_id === item.contact_id) return true
   return false
+}
+
+
+/**
+ * The Tax page: everything `dropDocsClientCannotSee` keeps, PLUS the client's own fresh uploads, which are saved hidden on purpose
+ * until staff review them. Those are listed by name with `waitingIds` marking them "Waiting for review" — they stay unopenable
+ * (the download route still applies the row rule). A closed file (staff-only / untyped), another member's personal paper and a file
+ * somebody else uploaded stay hidden. Newest first.
+ */
+export async function listDocsWithOwnUploads<T extends ListedDocRow & { created_at?: string | null }>(
+  rows: T[],
+  viewer: { contactId: string | null | undefined; userId: string; accountId: string },
+  deps: ClientStoreDeps = defaultDeps,
+): Promise<{ docs: T[]; waitingIds: Set<string> }> {
+  const shown = await dropDocsClientCannotSee(rows, viewer.contactId, deps)
+  const shownIds = new Set(shown.map((r) => r.id))
+  const rest = rows.filter((r) => !shownIds.has(r.id) && isStorePointer(r.drive_file_id) && r.portal_visible !== true)
+  if (rest.length === 0 || !deps.ownUploads) return { docs: shown, waitingIds: new Set() }
+  const { isPersonalDocumentHiddenFrom } = await import("@/lib/documents/visibility-guard")
+  const own = await deps.ownUploads(rest.map((r) => r.drive_file_id as string), viewer.userId, viewer.accountId)
+  const mine = rest.filter((r) => own.has(r.drive_file_id as string)
+    && !(r.category !== undefined && isPersonalDocumentHiddenFrom({ category: r.category ?? null, contact_id: r.contact_id ?? null }, viewer.contactId)))
+  // the stored-file checks still apply (a file staff made staff-only is closed), the CRM-row rule is what is waived
+  const open = await dropStoreRowsClientCannotOpen(mine, { applyRowRule: false }, deps)
+  const waitingIds = new Set(open.map((r) => r.id))
+  const docs = [...shown, ...open].sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
+  return { docs, waitingIds }
 }

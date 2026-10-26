@@ -46,8 +46,9 @@ export default async function TaxDocumentsPage() {
   const historyCutoff = await getHistoryCutoff(selectedAccountId, contactId)
   // Only what the client may actually see: shown by the flag or a client-safe flow stage, not another member's personal
   // document, and (for the new storage) not a closed file — a hidden draft return is never listed by name.
-  const { dropDocsClientCannotSee } = await import('@/lib/portal/client-store-docs')
-  const listable = await dropDocsClientCannotSee((uploadedDocsAll ?? []) as Array<NonNullable<typeof uploadedDocsAll>[number]>, contactId)
+  // The client's OWN fresh uploads are saved hidden until staff review them: they stay in the list, marked "Waiting for review".
+  const { listDocsWithOwnUploads } = await import('@/lib/portal/client-store-docs')
+  const { docs: listable, waitingIds } = await listDocsWithOwnUploads((uploadedDocsAll ?? []) as Array<NonNullable<typeof uploadedDocsAll>[number]>, { contactId, userId: user.id, accountId: selectedAccountId })
   const uploadedDocs = listable.filter(d => !isHiddenByHistoryCutoff(d, historyCutoff, contactId))
 
   const locale = getLocale(user)
@@ -133,7 +134,12 @@ export default async function TaxDocumentsPage() {
                   <FileText className="h-4 w-4 text-amber-500 shrink-0" />
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-zinc-900 truncate">{doc.file_name}</p>
-                    <p className="text-xs text-zinc-400">{doc.document_type_name}</p>
+                    <p className="text-xs text-zinc-400">
+                      {doc.document_type_name}
+                      {waitingIds.has(doc.id) && (
+                        <span className="ml-2 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">{t('taxDocs.waitingReview', locale)}</span>
+                      )}
+                    </p>
                   </div>
                 </div>
                 <p className="text-xs text-zinc-400 shrink-0">

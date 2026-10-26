@@ -646,6 +646,7 @@ export function registerITINFormTools(server: McpServer) {
               // the three generated forms are registered EXACTLY like the automatic path does (same key, type, category, case, visibility)
               callerKey: itinDoc ? `itin-form-doc:${applicantId}:${itinCaseId}:${fileName}` : `itin-docs:${sub.id}:${storeNameKey(fileName)}`,
               ...(itinDoc ? { portalVisible: true } : {}),
+              replaceIfLocked: true,   // a changed re-run of a locked/signed copy (passport, signed form) is saved as a replacement file, never a failed line
               row: itinDoc
                 ? { document_type_name: `ITIN ${label}`, category: 3, status: "classified", service_delivery_id: itinCaseId }
                 : { document_type_name: label, category: 1, status: "classified" },
@@ -663,7 +664,8 @@ export function registerITINFormTools(server: McpServer) {
               const { data: fileData } = await supabaseAdmin.storage.from("onboarding-uploads").download(path)
               if (fileData) await saveOne(path.split("/").pop() || "passport.pdf", path.split("/").pop() || "passport.pdf", Buffer.from(await fileData.arrayBuffer()), fileData.type || "application/octet-stream", "passport")
             } catch (e) {
-              results.push(`⚠️ Failed to copy ${path}: ${e instanceof Error ? e.message : String(e)}`)
+              const { plainStoreError } = await import("@/lib/crm-store/lock-errors")
+              results.push(`⚠️ The passport copy ${path.split("/").pop() ?? path} could not be saved: ${plainStoreError(e, "the storage did not accept it — try again.")}`)
             }
           }
         }

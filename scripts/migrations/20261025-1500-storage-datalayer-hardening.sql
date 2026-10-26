@@ -150,24 +150,9 @@ BEGIN
   RETURN true;
 END $$;
 
-CREATE OR REPLACE FUNCTION public.store_remove_link(p_file_id uuid, p_link_kind text, p_record_id uuid, p_actor uuid, p_reason text DEFAULT NULL)
-RETURNS boolean LANGUAGE plpgsql AS $$
-DECLARE
-  l record;
-  f record;
-  v_owner uuid;
-BEGIN
-  SELECT owner_id INTO v_owner FROM public.store_files WHERE id = p_file_id;
-  IF NOT FOUND THEN RETURN false; END IF;
-  PERFORM public.store_lock_owner(v_owner);   -- owner lock FIRST
-  SELECT * INTO l FROM public.store_record_links WHERE file_id = p_file_id AND link_kind = p_link_kind AND record_id = p_record_id FOR UPDATE;
-  IF NOT FOUND THEN RETURN false; END IF;
-  SELECT owner_id, folder_id, name INTO f FROM public.store_files WHERE id = p_file_id;
-  DELETE FROM public.store_record_links WHERE file_id = p_file_id AND link_kind = p_link_kind AND record_id = p_record_id;
-  INSERT INTO public.store_events (event, actor, owner_id, file_id, folder_id, name_snapshot, reason, details)
-  VALUES ('link_removed', p_actor, f.owner_id, p_file_id, f.folder_id, f.name, p_reason, to_jsonb(l) - 'file_id');
-  RETURN true;
-END $$;
+-- store_remove_link is NOT defined here any more: its current definition (hold freeze + owner-lock first) lives in
+-- 20261025-1800-storage-hold-sticks.sql. Re-running this file whole must never put an older copy back.
+
 
 -- ───────────────────────────────────────────────────────────────  2. rehome keeps no stale links / subjects
 -- Does a subject (a person or a company a file is "about") still belong with this owner? Generous on purpose (any membership row,
@@ -424,7 +409,7 @@ REVOKE ALL ON FUNCTION public.store_attach_formation(uuid, uuid, uuid, text) FRO
 REVOKE ALL ON FUNCTION public.store_rename_root(uuid, text, uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_set_published(uuid, boolean, uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_set_filing_status(uuid, text, uuid) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.store_remove_link(uuid, text, uuid, uuid, text) FROM PUBLIC, anon, authenticated;
+-- (store_remove_link REVOKE: see 20261025-1800-storage-hold-sticks.sql)
 REVOKE ALL ON FUNCTION public.store_rehome_file(uuid, uuid, uuid, text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_rehome_subtree(uuid, uuid, uuid, uuid, text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_abandoned_intents(integer) FROM PUBLIC, anon, authenticated;
