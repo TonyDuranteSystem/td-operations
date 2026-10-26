@@ -8,7 +8,7 @@
  * Example value:
  *   { "clientSaves": { "owners": ["<store owner id | account id | contact id>", …] | "all", "ownerKinds": ["company","person"], "folderKinds": ["custom","correspondence"] },
  *     "keepSecondsSensitive": 120, "keepSecondsNormal": 900, "maxSaveMB": 150, "readLimitMB": 500, "writeLimitMB": 500,
- *     "leaseHours": 24, "maxMacsPerLogin": 5, "resyncMinutes": 10, "updateCheckMinutes": 60, "requireSecondFactor": true, "sensitiveTypes": ["passport", …] }
+ *     "leaseHours": 24, "maxMacsPerLogin": 5, "resyncMinutes": 10, "updateCheckMinutes": 60, "updateHintSeconds": 60, "requireSecondFactor": true, "sensitiveTypes": ["passport", …] }
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { LEASE_MS, MAX_ACTIVE_DEVICES_PER_USER } from "./tokens"
@@ -27,6 +27,7 @@ export interface StorageAppSettings {
   maxMacsPerLogin: number
   resyncMinutes: number
   updateCheckMinutes: number
+  updateHintSeconds: number
   requireSecondFactor: boolean
   sensitiveTypes: string[]
 }
@@ -51,6 +52,7 @@ export function defaultSettings(env: Record<string, string | undefined> = proces
     maxMacsPerLogin: MAX_ACTIVE_DEVICES_PER_USER,
     resyncMinutes: 10,
     updateCheckMinutes: 60,
+    updateHintSeconds: 60,
     requireSecondFactor: true,
     sensitiveTypes: [...DEFAULT_SENSITIVE_TYPES],
   }
@@ -80,6 +82,7 @@ export function parseSettings(raw: unknown, env: Record<string, string | undefin
     leaseHours: num(r.leaseHours, 1, 720, d.leaseHours),
     maxMacsPerLogin: Math.round(num(r.maxMacsPerLogin, 1, 20, d.maxMacsPerLogin)),
     resyncMinutes: num(r.resyncMinutes, 1, 1440, d.resyncMinutes),
+    updateHintSeconds: num(r.updateHintSeconds, 30, 3600, d.updateHintSeconds),   // how often a Mac asks the CRM "who am I / is a newer build offered?" (the app follows it; 30 s .. 1 h)
     updateCheckMinutes: num(r.updateCheckMinutes, 60, 1440, d.updateCheckMinutes),   // how often a Mac looks for a new app version (never below an hour)
     requireSecondFactor: typeof r.requireSecondFactor === "boolean" ? r.requireSecondFactor : d.requireSecondFactor,
     sensitiveTypes: strList(r.sensitiveTypes) ?? d.sensitiveTypes,

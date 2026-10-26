@@ -68,6 +68,12 @@ describe("update settings and routes", () => {
     expect(parseSettings({}).updateCheckMinutes).toBe(60)
     expect(parseSettings({ updateCheckMinutes: 5 }).updateCheckMinutes).toBe(60)
     expect(parseSettings({ updateCheckMinutes: 180 }).updateCheckMinutes).toBe(180)
+    // the pace at which a Mac asks the CRM about a newer build: 60 s by default, kept between 30 s and 1 hour
+    expect(parseSettings({}).updateHintSeconds).toBe(60)
+    expect(parseSettings({ updateHintSeconds: 5 }).updateHintSeconds).toBe(60)
+    expect(parseSettings({ updateHintSeconds: 99999 }).updateHintSeconds).toBe(60)
+    expect(parseSettings({ updateHintSeconds: 30 }).updateHintSeconds).toBe(30)
+    expect(parseSettings({ updateHintSeconds: 120 }).updateHintSeconds).toBe(120)
   })
   it("the public feed list matches the route file, and the gatekeeper uses it", () => {
     const root = join(__dirname, "..", "..")
