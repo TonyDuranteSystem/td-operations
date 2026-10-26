@@ -211,7 +211,22 @@ interface Identity {
   showsPhoto: boolean
 }
 
-function identityFor(sender: SignatureSender): Identity {
+const esc = (v: string): string => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+const clean = (v: string | null | undefined): string => (v ?? "").replace(/[\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80)
+
+function identityFor(sender: SignatureSender, custom?: SignatureIdentityOverride): Identity {
+  const base = baseIdentityFor(sender)
+  if (!custom) return base
+  return {
+    ...base,
+    name: clean(custom.name) || base.name,
+    title: clean(custom.title) || base.title,
+    phone: clean(custom.phone) || base.phone,
+    email: clean(custom.email) || base.email,
+  }
+}
+
+function baseIdentityFor(sender: SignatureSender): Identity {
   return sender === "antonio"
     ? {
         name: ANTONIO_NAME,
@@ -255,9 +270,18 @@ export function signatureLogoUrl(baseUrl: string = APP_BASE_URL): string {
 
 // ─── Options ────────────────────────────────────────────────
 
+/**
+ * A person's own details on the company block (TD Marketing, 2026-10-26): the Marketing team writes from its own addresses (rocco@…), which are neither support@ nor Antonio's. Each field
+ * left empty keeps the company's own (name, phone); the title is shown only when given; the email is the mailbox the email leaves from. Free text from the admin settings, so every field is
+ * escaped before it reaches the HTML.
+ */
+export interface SignatureIdentityOverride { name?: string | null; title?: string | null; phone?: string | null; email?: string | null }
+
 export interface SignatureOptions {
   /** Which mailbox this email leaves from. */
   sender: SignatureSender
+  /** A person's own name / title / phone / email on the COMPANY block (the sender is then "support": company artwork, no portrait). */
+  identity?: SignatureIdentityOverride
   /** What the sender picked for this one email. */
   variant: SignatureVariant
   /**
@@ -277,7 +301,7 @@ export interface SignatureOptions {
  */
 export function buildSignatureText(options: SignatureOptions): string {
   if (!hasSignature(options.variant)) return ""
-  const id = identityFor(options.sender)
+  const id = identityFor(options.sender, options.identity)
   const lines: string[] = []
 
   if (options.includeSignoff !== false) lines.push(SIGNOFF, "")
@@ -296,16 +320,16 @@ function detailRows(id: Identity): string {
     `<div style="font-size:13px;line-height:1.5">${content}</div>`
 
   return [
-    `<div style="font-size:16px;font-weight:bold;color:${INK};line-height:1.4">${id.name}</div>`,
+    `<div style="font-size:16px;font-weight:bold;color:${INK};line-height:1.4">${esc(id.name)}</div>`,
     id.title
-      ? `<div style="font-size:13px;font-weight:bold;color:${BRAND_RED};letter-spacing:0.3px;padding-bottom:6px">${id.title}</div>`
+      ? `<div style="font-size:13px;font-weight:bold;color:${BRAND_RED};letter-spacing:0.3px;padding-bottom:6px">${esc(id.title)}</div>`
       : `<div style="height:6px;font-size:1px">&nbsp;</div>`,
-    row(`<span style="color:${MUTED}">${id.address}</span>`),
+    row(`<span style="color:${MUTED}">${esc(id.address)}</span>`),
     row(
-      `<a href="tel:${id.phone.replace(/[^\d+]/g, "")}" style="color:${MUTED};text-decoration:none">${id.phone}</a>`
+      `<a href="tel:${id.phone.replace(/[^\d+]/g, "")}" style="color:${MUTED};text-decoration:none">${esc(id.phone)}</a>`
     ),
     row(
-      `<a href="mailto:${id.email}" style="color:${BRAND_RED};text-decoration:none">${id.email}</a>`
+      `<a href="mailto:${esc(id.email)}" style="color:${BRAND_RED};text-decoration:none">${esc(id.email)}</a>`
     ),
   ].join("")
 }
@@ -322,7 +346,7 @@ export function buildSignatureHtml(options: SignatureOptions): string {
   const { sender, variant } = options
   if (!hasSignature(variant)) return ""
   const baseUrl = options.baseUrl ?? APP_BASE_URL
-  const id = identityFor(sender)
+  const id = identityFor(sender, options.identity)
   const withImages = variant !== "text"
   const photoUrl = id.showsPhoto ? signaturePhotoUrl(variant, baseUrl) : null
 
@@ -351,7 +375,7 @@ export function buildSignatureHtml(options: SignatureOptions): string {
   if (photoUrl) {
     avatarCell =
       `<td valign="top" style="padding-right:16px">` +
-      `<img src="${photoUrl}" width="96" height="96" alt="${id.name}" ` +
+      `<img src="${photoUrl}" width="96" height="96" alt="${esc(id.name)}" ` +
       `style="display:block;width:96px;height:96px;border-radius:48px;border:2px solid ${RULE}" />` +
       `</td>`
   } else if (withImages) {

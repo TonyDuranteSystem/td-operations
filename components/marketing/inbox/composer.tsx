@@ -27,6 +27,14 @@ interface Staged { path: string; name: string; mime_type: string; size: number }
 const MAX_TOTAL = 18 * 1024 * 1024
 const htmlEscape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 /** plain text typed or kept in a draft -> the editor's html */
+/** A saved draft holds its signature in a marked block; the editor cannot hold that layout, so it is lifted out here and added back (in the chosen style) when the email is sent. */
+export function withoutSignature(html: string): string {
+  if (typeof DOMParser === 'undefined' || !html.includes('data-td-signature')) return html
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  doc.querySelectorAll('[data-td-signature]').forEach(el => el.remove())
+  return doc.body.innerHTML
+}
+
 export const textToEditorHtml = (text: string): string => text.split(/\n{2,}/).map(p => `<p>${htmlEscape(p).replace(/\n/g, '<br>')}</p>`).join('') || '<p></p>'
 
 /** Throw away one staged upload (best effort: a stale one is also swept by the server after a day). */
@@ -62,6 +70,8 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged, onDir
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [touched, setTouched] = useState(false)
+  // the signature picked for THIS email (as in the CRM Inbox): new emails start Full, answers Compact
+  const [sigVariant, setSigVariant] = useState<'gala' | 'text' | 'none'>(seed.mode === 'new' ? 'gala' : 'text')
   const filesRef = useRef<Staged[]>([])
   const sentRef = useRef(false)
   const sendingRef = useRef(false)
@@ -74,7 +84,7 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged, onDir
   useEffect(() => () => onDirty?.(false), [onDirty])
 
   const payload = () => ({
-    complete: seed.complete === true,
+    complete: seed.complete === true, signatureVariant: sigVariant,
     address, mode: seed.mode, threadId: seed.threadId, messageId: seed.messageId, to, cc, bcc, subject,
     messageHtml: editorRef.current?.getHTML() ?? '', style, draftId,
     attachments: files.map(f => ({ path: f.path, name: f.name, mime_type: f.mime_type })),
@@ -168,6 +178,14 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged, onDir
           <input type="file" multiple className="sr-only" disabled={busy || uploading} onChange={e => { void attach(Array.from(e.target.files ?? [])); e.target.value = '' }} data-testid="composer-attach" /></label>
         <button type="button" className={btn} disabled={busy} onClick={saveDraft} data-testid="composer-save-draft">{t('Save draft')}</button>
         <button type="button" className={btn} disabled={busy} onClick={discard} data-testid="composer-discard">{draftId ? t('Discard draft') : t('Close')}</button>
+        <label className="flex items-center gap-1 text-xs text-slate-500">{t('Signature')}
+          <select value={sigVariant} disabled={busy} onChange={e => setSigVariant(e.target.value as 'gala' | 'text' | 'none')} data-testid="composer-signature"
+            className="rounded-md border bg-white px-1.5 py-1 text-xs text-slate-700 disabled:opacity-50">
+            <option value="gala">{t('Full')}</option>
+            <option value="text">{t('Compact')}</option>
+            <option value="none">{t('No signature')}</option>
+          </select>
+        </label>
         <span className="text-xs text-slate-400">{t('Cmd/Ctrl+Enter sends')}</span>
       </div>
       {note && <p role="status" className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800" data-testid="composer-note">{note}</p>}

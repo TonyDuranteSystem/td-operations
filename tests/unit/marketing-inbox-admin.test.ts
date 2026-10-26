@@ -37,38 +37,40 @@ describe("checking an address before it is saved", () => {
     expect(await checkMailbox("t", "nobody@tonydurante.us")).toMatchObject({ ok: false, error: "cannot open nobody@tonydurante.us" })
   })
   it("an address already in the list is refused", async () => {
-    state.list = [{ address: "rocco@tonydurante.us", people: [], signature: "" }]
+    state.list = [{ address: "rocco@tonydurante.us", people: [], signature_name: "", signature_title: "", signature_phone: "" }]
     expect(await checkMailbox("t", "rocco@tonydurante.us")).toMatchObject({ ok: false, error: "That address is already added." })
   })
 })
 
 describe("saving an address", () => {
   it("saves with the people ticked, re-checking everything (a CRM address cannot be saved by skipping the check)", async () => {
-    const r = await addMailbox({ teamId: "t", address: "rocco@tonydurante.us", people: [U1, U2], signature: " Rocco\r\nTD Marketing ", actor: "antonio@x" })
+    const r = await addMailbox({ teamId: "t", address: "rocco@tonydurante.us", people: [U1, U2], signature: { name: " Rocco\r\nBianchi ", title: "Sales", phone: "+39 333 1" }, actor: "antonio@x" })
     expect(r.ok).toBe(true)
     expect(state.writes).toHaveLength(1)
-    expect((state.writes[0] as { value: unknown[] }).value).toEqual([{ address: "rocco@tonydurante.us", people: [U1, U2], signature: "Rocco\nTD Marketing" }])
-    expect(await addMailbox({ teamId: "t", address: "support@tonydurante.us", people: [], signature: "", actor: "a" })).toMatchObject({ ok: false })
+    expect((state.writes[0] as { value: unknown[] }).value).toEqual([{ address: "rocco@tonydurante.us", people: [U1, U2], signature_name: "Rocco Bianchi", signature_title: "Sales", signature_phone: "+39 333 1" }])
+    expect(await addMailbox({ teamId: "t", address: "support@tonydurante.us", people: [], actor: "a" })).toMatchObject({ ok: false })
     expect(state.writes).toHaveLength(1)
   })
   it("people must be members of the team (not strangers, not removed members)", async () => {
-    expect(await addMailbox({ teamId: "t", address: "ale@tonydurante.us", people: ["00000000-0000-4000-8000-000000000000"], signature: "", actor: "a" })).toMatchObject({ ok: false, error: "Choose people from the team." })
-    expect(await addMailbox({ teamId: "t", address: "ale@tonydurante.us", people: [GONE], signature: "", actor: "a" })).toMatchObject({ ok: false })
-    expect(await addMailbox({ teamId: "t", address: "ale@tonydurante.us", people: "x", signature: "", actor: "a" })).toMatchObject({ ok: false })
+    expect(await addMailbox({ teamId: "t", address: "ale@tonydurante.us", people: ["00000000-0000-4000-8000-000000000000"], actor: "a" })).toMatchObject({ ok: false, error: "Choose people from the team." })
+    expect(await addMailbox({ teamId: "t", address: "ale@tonydurante.us", people: [GONE], actor: "a" })).toMatchObject({ ok: false })
+    expect(await addMailbox({ teamId: "t", address: "ale@tonydurante.us", people: "x", actor: "a" })).toMatchObject({ ok: false })
     expect(state.writes).toHaveLength(0)
   })
   it("an address nobody is ticked for defaults to the person it belongs to", async () => {
-    const r = await addMailbox({ teamId: "t", address: "rocco@tonydurante.us", people: undefined, signature: undefined, actor: "a" })
-    expect(r.ok && r.data[0]).toEqual({ address: "rocco@tonydurante.us", people: [U1], signature: "" })
+    const r = await addMailbox({ teamId: "t", address: "rocco@tonydurante.us", people: undefined, actor: "a" })
+    expect(r.ok && r.data[0]).toEqual({ address: "rocco@tonydurante.us", people: [U1], signature_name: "", signature_title: "", signature_phone: "" })
   })
-  it("a signature is cut to 600 characters", async () => {
-    const r = await addMailbox({ teamId: "t", address: "rocco@tonydurante.us", people: [], signature: "x".repeat(900), actor: "a" })
-    expect(r.ok && r.data[0].signature.length).toBe(600)
+  it("each signature line is one plain line of at most 80 characters", async () => {
+    const r = await addMailbox({ teamId: "t", address: "rocco@tonydurante.us", people: [], signature: { name: "x".repeat(300), title: "a\u0000\nb\tc", phone: 5 }, actor: "a" })
+    expect(r.ok && r.data[0].signature_name.length).toBe(80)
+    expect(r.ok && r.data[0].signature_title).toBe("a b c")
+    expect(r.ok && r.data[0].signature_phone).toBe("")
   })
 })
 
 describe("changing and removing", () => {
-  beforeEach(() => { state.list = [{ address: "rocco@tonydurante.us", people: [], signature: "" }, { address: "marketing@tonydurante.us", people: [U2], signature: "Team" }] })
+  beforeEach(() => { state.list = [{ address: "rocco@tonydurante.us", people: [], signature_name: "", signature_title: "", signature_phone: "" }, { address: "marketing@tonydurante.us", people: [U2], signature_name: "Team", signature_title: "", signature_phone: "" }] })
   it("changes who may open one address and leaves the others alone", async () => {
     const r = await updateMailbox({ teamId: "t", address: "rocco@tonydurante.us", people: [U2], actor: "a" })
     expect(r.ok && r.data.map(b => b.people)).toEqual([[U2], [U2]])

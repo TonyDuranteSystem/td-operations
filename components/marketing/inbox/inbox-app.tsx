@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLang, useT } from '@/components/marketing/lang-provider'
 import { localeFor } from '@/lib/marketing/i18n'
 import { EmailHtmlFrame } from '@/components/inbox/email-html-frame'
-import { Composer, textToEditorHtml, type ComposerSeed } from '@/components/marketing/inbox/composer'
+import { Composer, textToEditorHtml, withoutSignature, type ComposerSeed } from '@/components/marketing/inbox/composer'
 import type { Folder, MailAttachment, MailMessage, ThreadAction, ThreadRow } from '@/lib/marketing/inbox/mail-types'
 
 interface Box { address: string; unread: number | null }
@@ -138,7 +138,7 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
     })
   }
   // The draft comes back exactly as saved: its own To / Cc / Bcc, its formatting, and - when it answers an email - the same conversation (the earlier email supplies the reply headers). Its text already holds
-  // the signature and the quoted original, so the server is told not to add them again.
+  // the quoted original, so the server is told not to add that again; the signature is taken out for editing and added back on send.
   const editDraft = () => {
     if (!thread) return
     const di = thread.messages.map(m => m.draft).lastIndexOf(true)
@@ -148,7 +148,7 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
     setComposer({
       mode: prev ? 'reply' : 'new', threadId: prev ? thread.id : undefined, messageId: prev?.id,
       to: addressList(draftMsg.to || ''), cc: addressList(draftMsg.cc || ''), bcc: addressList(draftMsg.bcc || ''),
-      subject: draftMsg.subject || thread.subject, html: draftMsg.html || textToEditorHtml(draftMsg.text), draftId: thread.draftId, complete: true,
+      subject: draftMsg.subject || thread.subject, html: draftMsg.html ? withoutSignature(draftMsg.html) : textToEditorHtml(draftMsg.text), draftId: thread.draftId, complete: true,
     })
   }
   const copyLink = () => {
