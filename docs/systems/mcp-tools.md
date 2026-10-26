@@ -81,3 +81,6 @@ _Source: this is an operational rule in CLAUDE.md (R096), confirmed by `.mcp.jso
 - Active tool groups: `grep -v '//' "app/api/[transport]/route.ts" | grep 'register.*Tools'`.
 - Read `lib/mcp/instructions.ts` (the standing instructions) and `lib/mcp/safe-send.ts` (the send contract).
 - Note (R096): sandbox via `mcp__td-ops-sandbox__*` / `psql`; `mcp__af7d85f2-*` hits production.
+
+## `my_files_write` on a locked file (2026-10-25, sandbox)
+_Last verified against code: 2026-10-25._ `my_files_write` with `if_exists: new_version` on a file that takes no new version (signed, passport/ID, replaced, amended) now answers a plain refusal ("… Send if_exists copy or use another name.") instead of a generic internal error (`lib/crm-store/my-files-access.ts` maps `StoreLockedFileError` through `plainStoreError`). My-files saves never queue the AI reader. See storage.md "Producers around the lock rules".

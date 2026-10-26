@@ -14,6 +14,7 @@
 import { randomUUID } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { saveBytesToStore, StoreFrozenFileError } from "./writer"
+import { plainStoreError } from "./lock-errors"
 import { effectiveKind, isLockedFolder, ownersAreaUserId } from "./structure"
 import { storeNameKey } from "./rules"
 import { checkDropContent, checkDropName, decodeDropContent, sha256Of } from "./my-files-drop-rules"
@@ -298,6 +299,8 @@ export async function writeMyFile(input: { path?: unknown; name?: unknown; text?
       })
     } catch (e) {
       if (e instanceof StoreFrozenFileError) throw new Refuse("That file is marked as filed and cannot be changed.")
+      // a file that takes no new version (signed, passport/ID, replaced, amended) is a plain refusal, never a generic internal error
+      if (e instanceof Error && e.name === "StoreLockedFileError") throw new Refuse(`${plainStoreError(e)} Send if_exists "copy" or use another name.`)
       throw e
     }
     if (res.status === "trashed") throw new Refuse("That file was deleted from Storage earlier. Use another name.")

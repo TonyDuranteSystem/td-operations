@@ -697,7 +697,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
                     contactId: membContactId, personName: memberName, fileName, bytes, mimeType,
                     row: { document_type_name: 'Passport', category: 2, category_name: 'Contacts', contact_id: membContactId, account_id, portal_visible: true },
                   })
-                  if (saved.status !== 'saved') throw new Error("This person's storage could not be found — the passport was not saved")
+                  if (saved.status !== 'saved') throw new Error(`The passport was NOT saved: ${saved.reason ?? "this person's storage could not be found"}`)
                   const routed = { pointer: saved.pointer }
                   result.steps.push(step(`member_${i + 1}_passport`, 'ok', `Saved to the new storage: ${routed.pointer}`))
                   const { extractAndStorePassportData } = await import('@/lib/jobs/passport-writeback')
