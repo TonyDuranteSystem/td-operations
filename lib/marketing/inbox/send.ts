@@ -8,9 +8,22 @@ import { deleteStaged, loadStaged } from "@/lib/marketing/inbox/staging"
 import type { MailDriver } from "@/lib/marketing/inbox/driver"
 import type { InboxMailbox } from "@/lib/marketing/inbox/mailboxes"
 import type { MailMessage } from "@/lib/marketing/inbox/mail-types"
+import { buildSignature, parseSignatureVariant, type SignatureVariant } from "@/lib/email/signature"
 
 const MODES: readonly ComposeMode[] = ["new", "reply", "replyAll", "forward"]
 const ID = /^[A-Za-z0-9_-]{1,200}$/
+
+/**
+ * The signature for this email: the one the person picked next to Send (Full / Compact / none; new emails default to Full, answers to Compact - the CRM Inbox's own defaults), built by the shared
+ * builder from the mailbox's saved name / title / phone. Nothing from the browser but the choice itself.
+ */
+export function signatureFor(box: InboxMailbox, mode: ComposeMode, picked: unknown): { html: string; text: string } | null {
+  const raw = parseSignatureVariant(picked, mode === "new" ? "gala" : "text")
+  const variant: SignatureVariant = raw === "hat" ? "gala" : raw // the portrait is Antonio's own; it is never offered here
+  if (variant === "none") return null
+  const sig = buildSignature({ sender: "support", variant, includeSignoff: false, identity: { name: box.signature_name, title: box.signature_title, phone: box.signature_phone, email: box.address } })
+  return sig.html ? sig : null
+}
 
 export type SendResult = { ok: true; threadId?: string; draftId?: string } | { ok: false; error: string; status: number }
 
@@ -39,17 +52,21 @@ export async function sendOrDraft(input: {
   let answered: MailMessage | undefined
   if (mode !== "new" && threadId) {
     const t = await driver.thread(box.address, threadId).catch(() => null)
-    answered = t?.messages.find(m => m.id === body.messageId) ?? t?.messages[t.messages.length - 1]
+    // never an unsent draft: it must not be quoted to the person (nor give its own id as the reply header)
+    const real = (t?.messages ?? []).filter(m => !m.draft)
+    answered = real.find(m => m.id === body.messageId) ?? real[real.length - 1]
     if (!answered) return { ok: false, error: "The email you are answering could not be found.", status: 400 }
   }
 
   const staged = draft ? { ok: true as const, files: [], paths: [] as string[] } : await loadStaged(input.teamId, input.userId, body.attachments)
   if (staged.ok === false) return { ok: false, error: staged.error, status: 400 }
 
+  // an edited draft already holds the quoted original in its text, so that is not added again; the signature is lifted out of it on opening and added back here, so it keeps its full layout
+  const complete = body.complete === true
   const composed = composeMessage({
     from: box.address, to: body.to, cc: body.cc, bcc: body.bcc, subject: body.subject, messageHtml: body.messageHtml, message: body.message, style: body.style,
-    signature: box.signature, inReplyTo: mode === "forward" ? undefined : answered?.messageIdHeader, references: mode === "forward" ? undefined : answered?.references,
-    quote: answered ? { from: answered.from, date: answered.date, text: answered.text } : null, attachments: staged.files, draft,
+    signature: signatureFor(box, mode, body.signatureVariant), inReplyTo: mode === "forward" ? undefined : answered?.messageIdHeader, references: mode === "forward" ? undefined : answered?.references,
+    quote: answered && !complete ? { from: answered.from, date: answered.date, text: answered.text } : null, attachments: staged.files, draft,
   })
   if (composed.ok === false) return { ok: false, error: composed.error, status: 400 }
 

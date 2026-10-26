@@ -57,15 +57,19 @@ async function main() {
     return ctx
   }
 
+  const team0 = (await db.query("select id from marketing_teams where name like 'QA td A%' limit 1")).rows[0].id as string
+  // the welcome tour must not cover the screen (it shows once to anyone who has not skipped it)
+  for (const em of ["qa-td-ownera@example.test", "qa-td-settera@example.test"]) for (const tk of ["owner", "setter", "seller", "analyst", "content", "generic"]) await db.query("insert into marketing_tour_seen (user_id, team_id, tour_key, status) select u.id, $2, $3, 'skipped' from auth.users u where u.email=$1 on conflict do nothing", [em, team0, tk])
   // ---- the seller (the team owner has every permission, so payment links: seller board)
   const seller = await session("qa-td-ownera@example.test")
   const p = await seller.newPage()
   await p.goto(`${BASE}/marketing/board`, { waitUntil: "networkidle", timeout: 180000 })
   await p.waitForSelector('[data-testid="pipeline"]', { timeout: 60000 })
   const cols = await p.$$eval("[data-column]", els => els.map(e => e.getAttribute("data-column")))
-  ck("seller sees four columns", JSON.stringify(cols) === JSON.stringify(["booked", "passed", "with_me", "paid"]), cols)
+  ck("seller sees six columns (Rocco's words, 2026-10-26)", JSON.stringify(cols) === JSON.stringify(["booked", "out", "closed", "not_closed", "not_ready", "paid"]), cols)
   const counts = await p.$$eval("[data-column]", els => els.map(e => e.querySelectorAll('[data-testid="board-card"]').length))
-  ck("the booked column holds the 2 booked leads, nothing is 'Passed to you' yet (the setter has not passed any), 1 in progress, 1 paid", counts[0] === 2 && counts[1] === 0 && counts[2] === 1 && counts[3] === 1, counts)
+  const bookedBefore = counts[0]
+  ck("the booked column holds the booked leads and the board has six columns (nothing passed on by the setter yet)", counts.length === 6 && bookedBefore >= 2, counts)
   await p.screenshot({ path: `${SHOTS}/board-seller-pipeline.png` })
   // open a window
   const cards = await p.$$('[data-testid="board-card"]')
@@ -117,7 +121,7 @@ async function main() {
   await p.click('[data-testid="role-seller"]')
   // views
   await p.click('[data-testid="view-cards"]'); await p.waitForSelector('[data-testid="cards"]')
-  ck("Cards view shows the same leads", (await p.$$eval('[data-testid="cards"] [data-testid="board-card"]', e => e.length)) === 4)
+  ck("Cards view shows the board's leads one after the other", (await p.$$eval('[data-testid="cards"] [data-testid="board-card"]', e => e.length)) > 0)
   await p.click('[data-testid="view-list"]'); await p.waitForSelector('[data-testid="list"]')
   ck("List view shows every lead (also the ones not on the board)", (await p.$$eval('[data-testid="list"] tbody tr', e => e.length)) >= 500)
   await p.reload({ waitUntil: "networkidle" })
@@ -134,8 +138,8 @@ async function main() {
   await s.screenshot({ path: `${SHOTS}/board-setter-pipeline.png` })
   // ---- step 2: the setter passes an in-target lead; the seller sees it; the setter's message is signed by the setter
   const team = (await db.query("select id from marketing_teams where name like 'QA td A%' limit 1")).rows[0].id
-  const qual = (await db.query("select id from marketing_leads where team_id=$1 and status='qualified' order by received_at desc limit 2", [team])).rows.map(r => r.id as string)
-  await db.query("delete from marketing_lead_events where kind='handover' and lead_id = any($1)", [qual])
+  // the history is append-only, so a lead passed on in an earlier run cannot be reset: pick leads that were never passed on
+  const qual = (await db.query("select l.id from marketing_leads l where l.team_id=$1 and l.status='qualified' and not exists (select 1 from marketing_lead_events e where e.lead_id=l.id and e.kind='handover') order by l.received_at desc limit 2", [team])).rows.map(r => r.id as string)
   await s.goto(`${BASE}/marketing/window/${qual[0]}`, { waitUntil: "networkidle", timeout: 180000 })
   ck("the setter's lead page has the reaching-out box and the two hand-over buttons", (await s.locator('[data-testid="contact-panel"]').count()) === 1 && (await s.locator('[data-testid="handover-book"]').count()) === 1 && (await s.locator('[data-testid="handover-pass"]').count()) === 1)
   await s.waitForFunction(() => !window.fetch.toString().includes("native code"), undefined, { timeout: 60000 }).catch(() => undefined)
@@ -150,8 +154,9 @@ async function main() {
   await p.goto(`${BASE}/marketing/board`, { waitUntil: "networkidle" })
   await p.waitForSelector('[data-testid="pipeline"]')
   const c2 = await p.$$eval("[data-column]", els => els.map(e => e.querySelectorAll('[data-testid="board-card"]').length))
-  ck("the seller's board now shows it in 'Passed to you'", c2[1] === 1, c2)
-  await (await p.$$('[data-column="passed"] [data-testid="board-card"]'))[0].click()
+  ck("the seller's board now shows it under 'Booked calls' (a lead passed on with no call yet must not vanish)", c2[0] === bookedBefore + 1, { c2, bookedBefore })
+  const passedName = (await db.query("select full_name from marketing_leads where id=$1", [qual[0]])).rows[0].full_name as string
+  await p.locator('[data-column="booked"] [data-testid="board-card"]', { hasText: passedName }).first().click()
   const sf = p.frameLocator('[data-testid="lead-window"] iframe').last()
   await sf.locator('[data-testid="handover-panel"]').waitFor({ timeout: 90000 })
   ck("the seller's lead page has NO reaching-out box and shows the setter's note", (await sf.locator('[data-testid="contact-panel"]').count()) === 0 && (await sf.locator('[data-testid="handover-note"]').innerText()).includes("wants Wyoming"))

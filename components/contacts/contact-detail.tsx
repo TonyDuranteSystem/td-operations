@@ -3065,6 +3065,13 @@ function ContactDocumentsTab({
   const storeOwner = useStoreOwnerForContact(contactId, !driveFolderId || documents.some((d) => (d.drive_file_id ?? '').startsWith('store:')))
   const personStoreId = storeOwner.data?.ownerId ?? null
   const personStoreSection = personStoreId ? <StoreReadOnlyPanel ownerId={personStoreId} who="person" /> : null
+  // the check itself failed (not "this person has no storage"): say so and offer Retry — never the quiet Drive / empty view
+  const personStoreError = storeOwner.isError && !storeOwner.data ? (
+    <div className="rounded-md bg-red-50 px-3 py-3 text-sm text-red-700" role="alert">
+      Could not check where this person&apos;s files are kept — {storeOwner.error instanceof Error ? storeOwner.error.message : 'please try again.'}{' '}
+      <button type="button" onClick={() => { void storeOwner.refetch() }} className="font-medium underline">Retry</button>
+    </div>
+  ) : null
   const [uploading, setUploading] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
   const [uploadType, setUploadType] = useState('Passport')
@@ -3109,7 +3116,7 @@ function ContactDocumentsTab({
     }
   }
 
-  const handleToggleVisibility = async (doc: ContactDocumentRecord) => {
+  const handleToggleVisibility = async (doc: ContactDocumentRecord, opts?: { fromUpload?: boolean }) => {
     // This tab's document list merges in every document on any account this
     // contact is linked to (see the account_id query in
     // app/(dashboard)/contacts/[id]/page.tsx), not just documents already
@@ -3134,6 +3141,12 @@ function ContactDocumentsTab({
       if (!doc.portal_visible) {
         decision = await decideShare([{ id: doc.id, name: doc.file_name, source: 'document' }])
         if (decision.kind === 'cancel') { setTogglingVis(null); return }
+        // A just-uploaded file is HIDDEN until staff say otherwise. Where no chat message can be offered (a personal document: passport,
+        // ID, ITIN …) the pop-up above does not appear, so ask the plain question here — never show it silently.
+        if (opts?.fromUpload && decision.kind === 'show_only' && !window.confirm('Show this document to the client now? No chat message is offered for this kind of document. Cancel keeps it hidden.')) {
+          setTogglingVis(null)
+          return
+        }
       }
       const result = await toggleDocumentPortalVisibility(doc.id, !doc.portal_visible, undefined, suppressesAutoChat(decision) ? { suppressChat: true, ...(isSilentShow(decision) ? { silent: true } : {}) } : undefined)
       if (result.success) {
@@ -3227,10 +3240,21 @@ function ContactDocumentsTab({
       })
       const data = await res.json()
       if (data.success) {
-        toast.success(data.detail)
+        toast.success(data.documentId ? `${data.detail} — saved hidden from the client` : data.detail)
         if (data.side_effects?.length) toast.info(data.side_effects.join(' | '))
         setShowUpload(false)
-        window.location.reload()
+        if (data.documentId) {
+          // The file is saved HIDDEN and nothing was sent. Now ask the same question as the eye: show it to the client, and tell
+          // them in chat or not? Cancel leaves it hidden.
+          await handleToggleVisibility({
+            id: data.documentId as string, file_name: file.name, document_type_name: uploadType, category_name: uploadCategory, category: null,
+            drive_file_id: null, drive_link: null, status: 'classified', processed_at: null, mime_type: file.type || null, file_size: file.size,
+            account_id: null, portal_visible: false, contact_id: contactId, confidence: null, updated_at: null,
+          }, { fromUpload: true })
+          router.refresh()
+        } else {
+          window.location.reload()
+        }
       } else {
         toast.error(data.detail || 'Upload failed')
       }
@@ -3418,6 +3442,7 @@ function ContactDocumentsTab({
           {!personStoreId && uploadButton}
         </div>
         {!personStoreId && uploadPanel}
+        {personStoreError}
         {personStoreId ? personStoreSection : folderCreateSection}
         {!personStoreId && fileBrowserSection}
         {!driveFolderId && !personStoreId && (
@@ -3454,6 +3479,7 @@ function ContactDocumentsTab({
       {!personStoreId && fileBrowserSection}
       {!personStoreId && uploadPanel}
 
+      {personStoreError}
       {/* Scope tabs: Personal (contact's own files) + one per company the contact belongs to */}
       <div className="flex flex-wrap gap-2 border-b pb-2">
         {docScopes.map(scope => (

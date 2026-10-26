@@ -46,6 +46,10 @@ async function main() {
 
     const who = await http("/api/storage-app/whoami", bearer(tokens.access_token))
     check("2 whoami with the token and no cookie → 200", who.status === 200 && who.body?.userId === user.id, `status ${who.status} ${who.location ?? ""}`)
+    // the app reports its version in a header and is told which build is offered to it (update hint)
+    const who2 = await http("/api/storage-app/whoami", { headers: { authorization: `Bearer ${tokens.access_token}`, "x-td-app-version": "0.2.2;4" } })
+    const { data: vrow } = await admin.from("storage_app_devices").select("app_version, app_build").eq("id", tokens.device_id).maybeSingle()
+    check("2b whoami answers latestBuild (a build number or null) and records the reported app version", who2.status === 200 && who2.body && "latestBuild" in who2.body && vrow?.app_version === "0.2.2" && vrow?.app_build === 4, `status ${who2.status} latestBuild=${JSON.stringify(who2.body?.latestBuild)} recorded=${JSON.stringify(vrow)}`)
     const nav = await http("/api/storage-app/navigation", bearer(tokens.access_token))
     check("3 navigation → 200 with groups", nav.status === 200 && Array.isArray(nav.body?.groups) && nav.body.groups.length > 0, `status ${nav.status}`)
     const owner = nav.body?.groups?.flatMap((g: { owners: { id: string }[] }) => g.owners)?.[0]?.id

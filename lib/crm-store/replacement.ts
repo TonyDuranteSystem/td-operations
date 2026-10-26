@@ -19,11 +19,29 @@ import { isLockRefusal } from "./lock-errors"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => supabaseAdmin as any
 
-export interface ChainHead { fileId: string; versionId: string | null; sha256: string | null; name: string; live: boolean; documentType?: string | null; periodYear?: number | null }
+export interface ChainHead { ownerId?: string | null; fileId: string; versionId: string | null; sha256: string | null; name: string; live: boolean; documentType?: string | null; periodYear?: number | null }
 
 export interface ReplacementDeps {
   /** the newest file of the replacement chain that starts at the file saved under `callerKey` (null = no such file) */
   chainHead: (callerKey: string) => Promise<ChainHead | null>
+  /** after a replacement was saved: hide the replaced file from the client (its CRM row stays, for history) */
+  retire?: (replacedFileId: string) => Promise<void>
+}
+
+/** Longest replacement chain followed (a guard against a loop in the data, not a limit anyone should meet). */
+export const MAX_CHAIN_HOPS = 200
+
+/** Follow `next` from `start` to the END of the chain; a visited set stops a cycle, the cap stops anything else. */
+export async function walkChainToEnd(start: string, next: (id: string) => Promise<string | null>, cap: number = MAX_CHAIN_HOPS): Promise<string> {
+  const seen = new Set<string>([start])
+  let cur = start
+  for (let hop = 0; hop < cap; hop++) {
+    const n = await next(cur)
+    if (!n || seen.has(n)) break
+    seen.add(n)
+    cur = n
+  }
+  return cur
 }
 
 /** The caller key of a replacement copy: the original key plus the first 8 characters of its SHA-256. */
@@ -43,21 +61,24 @@ export const defaultReplacementDeps: ReplacementDeps = {
   chainHead: async (callerKey) => {
     const { data: f } = await db().from("store_files").select("id").eq("caller_key", callerKey).neq("state", "purged").maybeSingle()
     if (!f) return null
-    let cur = f.id as string
-    for (let hop = 0; hop < 12; hop++) {
-      const { data: next } = await db().from("store_files").select("id").eq("supersedes_file_id", cur).eq("state", "live").order("created_at", { ascending: false }).limit(1)
-      if (!next || next.length === 0) break
-      cur = next[0].id as string
-    }
-    const { data: head } = await db().from("store_files").select("id, name, state, current_version_id, document_type, period_year").eq("id", cur).maybeSingle()
+    const cur = await walkChainToEnd(f.id as string, async (id) => {
+      const { data: next } = await db().from("store_files").select("id").eq("supersedes_file_id", id).eq("state", "live").order("created_at", { ascending: false }).limit(1)
+      return next && next.length > 0 ? (next[0].id as string) : null
+    })
+    const { data: head } = await db().from("store_files").select("id, owner_id, name, state, current_version_id, document_type, period_year").eq("id", cur).maybeSingle()
     if (!head) return null
     let sha: string | null = null
     if (head.current_version_id) {
       const { data: v } = await db().from("store_file_versions").select("sha256").eq("id", head.current_version_id).maybeSingle()
       sha = (v?.sha256 as string | undefined) ?? null
     }
-    return { fileId: head.id as string, versionId: (head.current_version_id as string | null) ?? null, sha256: sha, name: head.name as string, live: head.state === "live", documentType: (head.document_type as string | null) ?? null, periodYear: (head.period_year as number | null) ?? null }
+    return { ownerId: (head.owner_id as string | null) ?? null, fileId: head.id as string, versionId: (head.current_version_id as string | null) ?? null, sha256: sha, name: head.name as string, live: head.state === "live", documentType: (head.document_type as string | null) ?? null, periodYear: (head.period_year as number | null) ?? null }
   },
+}
+
+defaultReplacementDeps.retire = async (replacedFileId) => {
+  const { setClientVisibility } = await import("./browse")
+  await setClientVisibility(replacedFileId, false, null, { silent: true, suppressChat: true })
 }
 
 export type ReplacementResult = WriteResult & { replacedFileId?: string }
@@ -70,6 +91,8 @@ export async function saveWithReplacement(p: {
   save: (a: { callerKey: string; supersedesFileId: string | null; name: string; documentType?: string | null; periodYear?: number | null }) => Promise<WriteResult>
   deps?: ReplacementDeps
   now?: Date
+  /** the owner the NEW file is saved in: a file in another owner cannot be "replaced" (the store refuses), so it is saved as a fresh file */
+  ownerId?: string | null
 }): Promise<ReplacementResult> {
   try {
     return await p.save({ callerKey: p.baseKey, supersedesFileId: null, name: p.name })
@@ -81,10 +104,20 @@ export async function saveWithReplacement(p: {
     if (head.sha256 === sha) return { status: "unchanged", fileId: head.fileId, versionId: head.versionId, name: head.name }
     // the replacement must carry the replaced file's document type and year (the store refuses an amendment of another kind), even
     // when staff re-typed the file since it was saved
+    // the old file lives in ANOTHER owner (re-homed since): the store cannot mark it replaced — save a fresh file, never an error
+    if (p.ownerId && head.ownerId && head.ownerId !== p.ownerId) {
+      return await p.save({ callerKey: replacementKey(p.baseKey, sha), supersedesFileId: null, name: p.name })
+    }
     const w = await p.save({
       callerKey: replacementKey(p.baseKey, sha), supersedesFileId: head.fileId, name: replacementName(p.name, p.now),
       documentType: head.documentType ?? undefined, periodYear: head.periodYear ?? undefined,
     })
+    // the replaced file's CRM row would still be shown next to the new one ("X Signed.pdf" AND "X (new copy …).pdf"): hide it, keep it for history
+    if (w.status === "created") {
+      try { await (p.deps ?? defaultReplacementDeps).retire?.(head.fileId) } catch (e) {
+        console.warn("[crm-store] the replaced file stays visible to the client:", e instanceof Error ? e.message : e)
+      }
+    }
     return { ...w, replacedFileId: head.fileId }
   }
 }

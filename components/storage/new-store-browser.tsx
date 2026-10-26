@@ -45,7 +45,7 @@ import { buildDocumentShareMessage } from '@/lib/portal/document-share-text'
 import { ChangePersonDialog } from './change-person-dialog'
 import { DriveImportDialog } from './drive-import-dialog'
 import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keepBothName } from '@/lib/crm-store/names'
-import { HttpError, sameNameKey, errorText, isGoneError, fmtSize, canShowToClient, cantShowReason, resetFailedToWaiting, hasHiddenPart } from './store-ui-rules'
+import { HttpError, sameNameKey, errorText, isGoneError, fmtSize, canShowToClient, cantShowReason, resetFailedToWaiting, hasHiddenPart, markFingerprint } from './store-ui-rules'
 import { trapTabKey } from './focus-trap'
 
 interface Fold { id: string; name: string; kind: string; trashed: boolean; locked?: boolean }
@@ -320,7 +320,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const ctxOpenedAt = useRef(0)
   // the AI check inside the storage (job 685467b5): marks of the files on screen, and the side panel that shows the document next to what the AI found
   const visibleFileIds = useMemo(() => Object.values(loaded).flatMap((c) => c.files.filter((f) => f.state === 'live').map((f) => f.id)), [loaded])
-  const ai = useAiMarks(ownerId, visibleFileIds)
+  const aiFingerprints = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const c of Object.values(loaded)) for (const f of c.files) if (f.state === 'live') out[f.id] = markFingerprint(f)
+    return out
+  }, [loaded])
+  const ai = useAiMarks(ownerId, visibleFileIds, aiFingerprints)
   const [aiFile, setAiFile] = useState<string | null>(null)
   const [typing, setTyping] = useState<File_ | null>(null)
   const [changingPerson, setChangingPerson] = useState<File_ | null>(null)
@@ -345,7 +350,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [newFolder, setNewFolder] = useState<NewFolder | null>(null)
   const [dragFile, setDragFile] = useState<{ id: string; from: string | null } | null>(null)
   const [dropOn, setDropOn] = useState<string | null>(null)
-  const [asking, setAsking] = useState<Asking | null>(null)
+  const [asking, setAskingState] = useState<Asking | null>(null)
+  const askingRef = useRef<Asking | null>(null)
+  /** per tax-year folder: may it be renamed / deleted right now (only while empty) — read from the server when its menu opens */
+  const [yearEdit, setYearEdit] = useState<Record<string, { rename: boolean; del: boolean }>>({})
+  const setAsking = useCallback((a: Asking | null) => { askingRef.current = a; setAskingState(a) }, [])
   // the "tell the client?" pop-up shown when the eye makes hidden files visible (shared with the other eyes)
   const { decide: decideShare, sendChat: sendShareChat, dialog: shareDialog } = useShareMessagePrompt()
   const [picking, setPicking] = useState<Picking | null>(null)
@@ -443,8 +452,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const ask = useCallback((slug: string, fallbackTitle: string, body: React.ReactNode, choices: Asking['choices']) => new Promise<string>((resolve) => {
     const q = questions?.[slug]
     if (q && !q.enabled) { resolve('__default__'); return }
-    setAsking({ slug, fallbackTitle, body, choices, resolve })
-  }), [questions])
+    // a question still open when another is asked is answered "cancel" first, so the action waiting on it ends (and frees its file) instead of hanging
+    askingRef.current?.resolve('cancel')
+    const next: Asking = { slug, fallbackTitle, body, choices, resolve }
+    askingRef.current = next
+    setAsking(next)
+  }), [questions, setAsking])
   // folder pickers answer a folder; only the one that passes `newPeople` can also answer a person (asked with pick<PickResult>)
   const pick = useCallback(<T extends PickResult = FolderPick>(props: Picking['props']) => new Promise<T | null>((resolve) => {
     setPicking({ props, resolve: resolve as Picking['resolve'] })
@@ -1116,6 +1129,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const runDrop = async (retryFailed = false) => {
     if (!drop || dropRunning) return
     const batch: DropBatch = retryFailed ? { ...drop, items: resetFailedToWaiting(drop.items) } : drop
+    const retriedIdx = new Set(retryFailed ? drop.items.flatMap((x, idx) => (x.status === 'failed' ? [idx] : [])) : [])   // only THESE were tried before
     if (batch.folder.kind === 'contacts' && !batch.person) { toast.error('Choose whose documents these are first.'); return }
     if (batch.items.some((i) => i.status === 'waiting' && !i.type)) { toast.error('Choose a document type for every file.'); return }
     if (retryFailed) setDrop(batch)
@@ -1158,7 +1172,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         }
       }
       // dragged files always arrive HIDDEN from the client (decision #85); every question still applies
-      const out = await doUploadWith(it.file, { folder: into, typeSlug: it.type, personId: batch.person, displayName: it.name, visible: false, batch: true, taxMemo })
+      const out = await doUploadWith(it.file, { folder: into, typeSlug: it.type, personId: batch.person, displayName: it.name, visible: false, batch: true, retryOfFailed: retriedIdx.has(i), taxMemo })
       if (out === 'saved') saved++; else if (out === 'cancelled') skipped++; else failed++
       setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: out } : x)) }))
     }
@@ -1506,7 +1520,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
    * here: it returns WHAT to hide; the server hides only after all its own checks pass, in the same request.
    */
   const settleVisibleInside = async (f: Fold, action: 'move' | 'delete'): Promise<{ go: boolean; files: number; stillShown: number; hide: 'none' | 'all' | { ids: string[] } }> => {
-    const s = await getJson<{ files: number; shown: number; list: { id: string; name: string; shown: boolean; byWorkspace?: string | null }[] }>(`/api/crm-store/browse/folder/${f.id}/summary`)
+    const s = await getJson<{ files: number; shown: number; moveRefusal?: string | null; deleteRefusal?: string | null; list: { id: string; name: string; shown: boolean; byWorkspace?: string | null }[] }>(`/api/crm-store/browse/folder/${f.id}/summary`)
+    // the server's own rule, said BEFORE any question (a custom folder holding a year folder used to ask up to three questions and then be refused)
+    const refusal = action === 'delete' ? s.deleteRefusal : s.moveRefusal
+    if (refusal) throw new Error(refusal)
     if (s.shown === 0) return { go: true, files: s.files, stillShown: 0, hide: 'none' }
     // files a workspace always shows can't be hidden: listed as such, never offered in "hide"
     const locked = s.list.filter((x) => x.shown && x.byWorkspace)
@@ -1746,7 +1763,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
    * ONE upload through every question — used by the Upload panel and by files dragged in from the computer
    * (`batch`: several in a row — no panel close / refresh per file). Returns what happened to this file.
    */
-  const doUploadWith = async (file: File, o: { folder: Fold | null; typeSlug: string; personId: string; displayName: string; visible: boolean; batch?: boolean; taxMemo?: Map<string, { folder: Fold; year: number | null }> }): Promise<UploadOutcome> => {
+  const doUploadWith = async (file: File, o: { folder: Fold | null; typeSlug: string; personId: string; displayName: string; visible: boolean; batch?: boolean; retryOfFailed?: boolean; taxMemo?: Map<string, { folder: Fold; year: number | null }> }): Promise<UploadOutcome> => {
     const upFolderObj = o.folder, upType = o.typeSlug, upPerson = o.personId, upName = o.displayName, upVisible = o.visible
     const upIsContacts = upFolderObj?.kind === 'contacts'
     if (!ownerId || !upFolderObj) { toast.error('Choose the folder first.'); return 'failed' }
@@ -1861,6 +1878,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         : null
       const sha = await sha256OfFile(file)
       const nameKey = sameNameKey(name, file.type)   // the SAME key the server uses (an iPhone photo is saved as .jpg; accents compared composed)
+      // "Retry failed": the first try may have SAVED the file and only lost the answer — the same bytes already in this folder mean it is done
+      // (otherwise the same-name question would offer "keep both" and make a second copy)
+      if (o.retryOfFailed && sha && here) {
+        const already = await getJson<{ files: { fileId: string }[] }>(`/api/crm-store/browse/identical?sha=${sha}`).then((r) => r.files.find((h) => here.files.some((x) => x.id === h.fileId))).catch(() => undefined)
+        if (already) { toast.message(`"${name}" is already saved here (the earlier try went through) — nothing was added.`); return 'saved' }
+      }
       const same = here?.files.find((x) => sameNameKey(x.name, x.mimeType) === nameKey)
       if (same && !(sha && same.sha256 === sha)) {
         const suggestion = keepBothName(name, (here?.files ?? []).map((x) => x.name))
@@ -1957,7 +1980,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       return 'failed'
     } finally {
       URL.revokeObjectURL(localUrl)
-      setAsking(null)
+      // NOT setAsking(null): a question opened meanwhile by another action (the eye, Move, Delete folder) belongs to THAT action — wiping it would
+      // leave its promise unresolved and the file busy for ever. Each question closes itself when it is answered.
       if (!o.batch) setUploading(false)
       if (fileInput.current) fileInput.current.value = ''
     }
@@ -2034,14 +2058,38 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     </>
   )
 
+  /**
+   * Rename / Move / Delete of a folder — what the SERVER says is allowed (folder-rules.ts, read through the folder summary): a hand-made folder
+   * has all three; a tax-year folder has Rename and Delete only while it is EMPTY (never Move); a fixed folder has none.
+   */
+  const isYearFold = (f: Fold) => f.kind === 'tax_year' || f.kind === 'person_tax_year'
+  const loadYearEdit = (f: Fold) => {
+    if (!isYearFold(f)) return
+    setYearEdit((y) => { const n = { ...y }; delete n[f.id]; return n })
+    getJson<{ renameRefusal?: string | null; deleteRefusal?: string | null }>(`/api/crm-store/browse/folder/${f.id}/summary`)
+      .then((s) => setYearEdit((y) => ({ ...y, [f.id]: { rename: !s.renameRefusal, del: !s.deleteRefusal } })))
+      .catch(() => { /* the menu simply offers nothing more; the server still decides */ })
+  }
+  const hasFolderMenu = (f: Fold) => !f.trashed && (!f.locked || isYearFold(f))
+  const folderEditItems = (f: Fold, parentId: string | null, left: boolean) => {
+    const year = isYearFold(f)
+    const canRename = year ? !!yearEdit[f.id]?.rename : !f.locked
+    const canDelete = year ? !!yearEdit[f.id]?.del : !f.locked
+    return (
+      <>
+        {canRename && <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name, folder: true, ...(left ? { left: true } : {}) }) }} />}
+        {!f.locked && <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFolder(f, parentId)} />}
+        {canDelete && <MenuItem icon={Trash2} label="Delete" danger onClick={() => deleteFolder(f)} />}
+      </>
+    )
+  }
+
   /** the folder menu — shared by the row's "…" button and the right-click menu (which also lists the buttons that only show on hover) */
   const folderMenuItems = (f: Fold, parentId: string | null, extras: boolean) => (
     <>
       {extras && f.kind !== 'root' && <MenuItem icon={Upload} label="Upload here" onClick={() => { setMenuFor(null); void openUpload(f.id) }} />}
       <MenuItem icon={FolderPlus} label="New folder inside" onClick={() => startNewFolder(f.id)} />
-                  <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name, folder: true }) }} />
-                  <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFolder(f, parentId)} />
-                  <MenuItem icon={Trash2} label="Delete" danger onClick={() => deleteFolder(f)} />
+      {folderEditItems(f, parentId, false)}
       {extras && f.kind !== 'contacts' && <MenuItem icon={Download} label="Download as zip" onClick={() => { setMenuFor(null); void downloadZip(f) }} />}
       {extras && (f.kind === 'tax' || f.kind === 'person_tax') && <MenuItem icon={CalendarPlus} label="New tax year" onClick={() => { setMenuFor(null); startNewFolder(f.id, true) }} />}
     </>
@@ -2051,6 +2099,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const openCtx = (e: React.MouseEvent, c: CtxBody) => {
     e.preventDefault(); e.stopPropagation()
     setMenuFor(null)
+    if (c.kind === 'folder') loadYearEdit(c.folder)
     ctxOpenedAt.current = Date.now()
     setCtx({ ...c, x: e.clientX, y: e.clientY })
   }
@@ -2218,8 +2267,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     return (
       <li key={f.id}>
         <div
-          // a fixed (locked) or trashed folder has no menu: it keeps the browser's own, and does not borrow the empty-space menu of the folder around it
-          onContextMenu={(e) => { if (f.locked || f.trashed || renaming?.id === f.id) { e.stopPropagation(); return } openCtx(e, { kind: 'folder', folder: f, parentId }) }}
+          // a fixed (locked) or trashed folder has no menu: it keeps the browser's own, and does not borrow the empty-space menu of the folder around it. A tax-year folder has one (upload, new folder, zip; rename / delete only while empty).
+          onContextMenu={(e) => { if (!hasFolderMenu(f) || renaming?.id === f.id) { e.stopPropagation(); return } openCtx(e, { kind: 'folder', folder: f, parentId }) }}
           onDragOver={(e) => { if (canDrop || (isComputerDrag(e) && f.kind !== 'root' && !f.trashed)) { e.preventDefault(); e.stopPropagation(); setDropOn(f.id) } }}
           onDragLeave={() => setDropOn((d) => (d === f.id ? null : d))}
           onDrop={(e) => { if (isComputerDrag(e)) { void onComputerDrop(e, f); return } e.preventDefault(); e.stopPropagation(); if (canDrop) onDropInto(f, where) }}
@@ -2270,9 +2319,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               )}
             </div>
           )}
-          {!f.locked && !f.trashed && (
+          {hasFolderMenu(f) && (
             <div className="relative">
-              <FastTooltip label="Folder actions"><button type="button" aria-label="Folder actions" onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === `folder:${f.id}` ? null : `folder:${f.id}`) }}
+              <FastTooltip label="Folder actions"><button type="button" aria-label="Folder actions" onClick={(e) => { e.stopPropagation(); if (menuFor !== `folder:${f.id}`) loadYearEdit(f); setMenuFor(menuFor === `folder:${f.id}` ? null : `folder:${f.id}`) }}
                 className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><MoreHorizontal className="h-4 w-4" /></button></FastTooltip>
               {menuFor === `folder:${f.id}` && (
                 <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
@@ -2281,7 +2330,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               )}
             </div>
           )}
-          {f.locked && <FastTooltip label="A fixed folder — it can't be renamed, moved or deleted"><Lock className="mr-1 h-3.5 w-3.5 text-zinc-300" /></FastTooltip>}
+          {f.locked && !isYearFold(f) && <FastTooltip label="A fixed folder — it can't be renamed, moved or deleted"><Lock className="mr-1 h-3.5 w-3.5 text-zinc-300" /></FastTooltip>}
         </div>
         {isOpen && c && (
           <ul
@@ -2594,15 +2643,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 </button>
               </FastTooltip>
             )}
-            {inFolderView && viewFolder && !viewFolder.locked && !viewFolder.trashed && (
+            {inFolderView && viewFolder && hasFolderMenu(viewFolder) && (
               <div className="relative">
-                <FastTooltip label="Folder actions"><button type="button" aria-label="Folder actions" onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === `folder:${viewFolder.id}` ? null : `folder:${viewFolder.id}`) }}
+                <FastTooltip label="Folder actions"><button type="button" aria-label="Folder actions" onClick={(e) => { e.stopPropagation(); if (menuFor !== `folder:${viewFolder.id}`) loadYearEdit(viewFolder); setMenuFor(menuFor === `folder:${viewFolder.id}` ? null : `folder:${viewFolder.id}`) }}
                   className="rounded-md border border-zinc-200 p-1 hover:bg-zinc-50"><MoreHorizontal className="h-4 w-4" /></button></FastTooltip>
                 {menuFor === `folder:${viewFolder.id}` && (
                   <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
-                    <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: viewFolder.id, value: viewFolder.name, folder: true }) }} />
-                    <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFolder(viewFolder, selPath.length > 1 ? selPath[selPath.length - 2].id : (root.folder?.id ?? null))} />
-                    <MenuItem icon={Trash2} label="Delete" danger onClick={() => deleteFolder(viewFolder)} />
+                    {folderEditItems(viewFolder, selPath.length > 1 ? selPath[selPath.length - 2].id : (root.folder?.id ?? null), false)}
                   </div>
                 )}
               </div>
@@ -3177,15 +3224,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               }} className="hidden rounded p-0.5 text-zinc-500 hover:bg-zinc-100 group-hover:inline-flex"><FolderPlus className="h-3.5 w-3.5" /></button>
             </FastTooltip>
           )}
-          {!f.locked ? (
+          {!f.locked || isYearFold(f) ? (
             <div className="relative">
-              <button type="button" aria-label="Folder actions" onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === menuKey ? null : menuKey) }}
+              <button type="button" aria-label="Folder actions" onClick={(e) => { e.stopPropagation(); if (menuFor !== menuKey) loadYearEdit(f); setMenuFor(menuFor === menuKey ? null : menuKey) }}
                 className="hidden rounded p-0.5 text-zinc-500 hover:bg-zinc-100 group-hover:inline-flex"><MoreHorizontal className="h-3.5 w-3.5" /></button>
               {menuFor === menuKey && (
                 <div className="absolute right-0 z-30 mt-1 w-48 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
-                  <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name, folder: true, left: true }) }} />
-                  <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFolder(f, parentId)} />
-                  <MenuItem icon={Trash2} label="Delete" danger onClick={() => deleteFolder(f)} />
+                  {folderEditItems(f, parentId, true)}
                 </div>
               )}
             </div>

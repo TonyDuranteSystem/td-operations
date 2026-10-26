@@ -198,12 +198,12 @@ _Regenerated 2026-10-26. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-25)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-21)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-23)_
-- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-21)_
+- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-26)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-24)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-23)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-10-26)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-25)_
-- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-23)_
+- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-26)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-23)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-26)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-21)_
@@ -220,9 +220,9 @@ _Regenerated 2026-10-26. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-10-26)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-10-13)_
-- [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-10-22)_
-- [storage.md](storage.md) — CRM Storage _(verified 2026-10-25)_
-- [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-10-24)_
+- [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-10-26)_
+- [storage.md](storage.md) — CRM Storage _(verified 2026-10-26)_
+- [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-10-26)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-19)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_

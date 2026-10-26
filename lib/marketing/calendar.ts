@@ -53,11 +53,11 @@ export const romeTime = (iso: string): string => fmtTime.format(new Date(iso))
 export const romeDayKey = (d: Date): string => fmtKey.format(d)
 export const romeDayLabel = (d: Date, lang: Lang = "en"): string => (lang === "en" ? fmtDay : new Intl.DateTimeFormat(localeFor(lang), { timeZone: ROME, weekday: "short", day: "numeric", month: "short" })).format(d).replace(",", "").replace(/\.$/, "")
 
-/** Who set each lead's current call back: the actor of the lead's NEWEST "call back" row, a View-as row included (if Antonio changed the time while looking in, it is his, not the earlier setter's). Returns the actor's email. */
+/** Who set each lead's current call back: the actor of the lead's NEWEST "call back" or "not ready now" row, a View-as row included (if Antonio changed the time while looking in, it is his, not the earlier setter's). Returns the actor's email. */
 export function latestSetters(events: readonly CalEvent[]): Map<string, { actor: string; at: string }> {
   const out = new Map<string, { actor: string; at: string }>()
   for (const e of events) {
-    if (e.data?.outcome !== "call_back") continue
+    if (e.data?.outcome !== "call_back" && e.data?.outcome !== "not_ready") continue
     const cur = out.get(e.lead_id)
     if (!cur || e.created_at > cur.at) out.set(e.lead_id, { actor: e.actor, at: e.created_at })
   }

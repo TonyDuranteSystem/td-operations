@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { formatMoney, isExpiredLink, parseAmountToCents, saleStatusLabel, type SaleRow } from '@/lib/marketing/sales'
+import { shortCodeFor } from '@/lib/marketing/short-pay'
 import { splitCents } from '@/lib/marketing/commission'
 import { useT } from '@/components/marketing/lang-provider'
 
@@ -15,10 +16,12 @@ export interface PaymentLinkProps {
   /** the split in force for THIS seller, per kind (null = terms not set) */
   splits: Record<string, { sellerPct: number; tdPct: number; basis: string } | null>
   sales: SaleRow[]
+  /** the start of the short address (the client-facing domain + /pay/s/) */
+  shortBase?: string
 }
 
 /** The "Payment link" box on a lead: kind, amount, currency, the split that will be saved, then the link to copy. Every server answer is shown as written. */
-export function PaymentLinkPanel({ leadId, kinds, currencies, confirmAbove, splits, sales }: PaymentLinkProps) {
+export function PaymentLinkPanel({ leadId, kinds, currencies, confirmAbove, splits, sales, shortBase }: PaymentLinkProps) {
   const router = useRouter()
   const t = useT()
   const [kind, setKind] = useState('')
@@ -108,7 +111,7 @@ export function PaymentLinkPanel({ leadId, kinds, currencies, confirmAbove, spli
                   <span>{t(kinds.find(k => k.key === s.kind)?.label ?? s.kind)} · <b>{formatMoney(s.amount_cents, s.currency)}</b></span>
                   <span className="flex items-center gap-3">
                     <span className={s.status === 'paid' ? 'text-emerald-700' : 'text-slate-500'}>{t(saleStatusLabel(s))}</span>
-                    {s.status === 'link_created' && !expired && s.checkout_url && <button className="text-xs underline" onClick={() => copy(s.checkout_url!)}>{t('Copy link')}</button>}
+                    {s.status === 'link_created' && !expired && s.checkout_url && <button className="text-xs underline" onClick={() => copy(shortBase && shortCodeFor(s.id) ? `${shortBase}${shortCodeFor(s.id)}` : s.checkout_url!)}>{t('Copy link')}</button>}
                   </span>
                   {s.needs_attention && <p className="w-full text-xs text-amber-800">{s.needs_attention}</p>}
                 </li>

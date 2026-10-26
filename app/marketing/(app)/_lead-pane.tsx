@@ -97,6 +97,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
         checklist={checklist}
         reasons={reasons}
         afterHref={afterHref}
+        role={role}
       />
 
       {paymentLink && <PaymentLinkPanel {...paymentLink} />}

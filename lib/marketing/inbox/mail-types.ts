@@ -24,6 +24,8 @@ export interface MailMessage {
   fromEmail: string
   to: string
   cc: string
+  /** only a draft carries its Bcc (a sent or received email never shows it) */
+  bcc: string
   date: string
   subject: string
   /** sanitized HTML for a real HTML email; null when the email is plain text */
@@ -31,6 +33,8 @@ export interface MailMessage {
   /** the plain text (also what the preview and the quote use) */
   text: string
   unread: boolean
+  /** an unsent draft sitting inside the conversation (never to be quoted or answered) */
+  draft: boolean
   outbound: boolean
   attachments: MailAttachment[]
   /** headers a reply needs */

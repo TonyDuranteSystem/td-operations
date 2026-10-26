@@ -90,6 +90,16 @@ export function hasHiddenPart(relativeOrName: string): boolean {
   return relativeOrName.split('/').some((p) => p.startsWith('.'))
 }
 
+/** What makes an AI mark go stale: the file's current copy and type. A new version, a retype or a restore changes it. */
+export function markFingerprint(f: { updatedAt?: string | null; versionNo?: number | null; documentType?: string | null; sha256?: string | null }): string {
+  return [f.updatedAt ?? '', f.versionNo ?? '', f.documentType ?? '', f.sha256 ?? ''].join('|')
+}
+
+/** Ids whose mark must be (re)asked: never asked before, or whose fingerprint changed since they were. */
+export function idsNeedingMark(ids: string[], fingerprints: Record<string, string>, askedFp: Map<string, string>): string[] {
+  return Array.from(new Set(ids)).filter((id) => !askedFp.has(id) || askedFp.get(id) !== (fingerprints[id] ?? ''))
+}
+
 /** Ids from `ids` that have no mark yet — the marks of the files already known are not requested again. */
 export function idsStillToMark(ids: string[], known: Record<string, unknown>, asked: Set<string>): string[] {
   return Array.from(new Set(ids)).filter((id) => !(id in known) && !asked.has(id))

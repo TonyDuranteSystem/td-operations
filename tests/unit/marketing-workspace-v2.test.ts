@@ -85,9 +85,10 @@ describe("the dark look covers every colour class the screens use", () => {
 })
 
 describe("the seller's board words", () => {
-  it("are the clearer ones: 'To book with you' and 'After the call', both translated", () => {
+  it("are Rocco's six, in his words, all translated", () => {
     const labels = columnsFor("seller").map(c => c.label)
-    expect(labels).toEqual(["Booked calls", "To book with you", "After the call", "Paid"])
+    expect(labels).toEqual(["Booked calls", "Not in target", "Closed", "Not closed", "Not ready now", "Paid"])
+    expect(labels.map(l => IT[l])).toEqual(["Chiamate fissate", "Fuori target", "Chiuso", "Non chiuso", "Non pronto ora", "Pagato"])
     for (const l of labels) expect(IT[l], l).toBeTruthy()
   })
 })

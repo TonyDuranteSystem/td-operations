@@ -27,6 +27,9 @@ export const MARKETING_SETTING_DEFS = {
       { key: "qualified", label: "Qualified" },
       { key: "booked", label: "Booked" },
       { key: "showed", label: "Showed" },
+      { key: "not_ready", label: "Not ready now" },
+      { key: "closed", label: "Closed" },
+      { key: "not_closed", label: "Not closed" },
       { key: "paid_call", label: "Paid call" },
       { key: "upsell_won", label: "Upsell won" },
       { key: "not_in_target", label: "Not in target" },
@@ -40,6 +43,15 @@ export const MARKETING_SETTING_DEFS = {
       call_back: z.string().trim().min(1).max(40),
     }),
     fallback: { good: "qualified", not_in_target: "not_in_target", call_back: "contacted" } as { good: string; not_in_target: string; call_back: string },
+  },
+  /** Which stage each result the SELLER presses after the call moves a lead to (Rocco: "Not ready now" with a come-back day, "Closed", "Not closed"). The keys must exist in pipeline_stages. */
+  seller_result_stages: {
+    schema: z.object({
+      not_ready: z.string().trim().min(1).max(40),
+      closed: z.string().trim().min(1).max(40),
+      not_closed: z.string().trim().min(1).max(40),
+    }),
+    fallback: { not_ready: "not_ready", closed: "closed", not_closed: "not_closed" } as { not_ready: string; closed: string; not_closed: string },
   },
   /** Why a lead is marked "not in target" (a reason is required). */
   not_in_target_reasons: {
@@ -115,9 +127,11 @@ export const MARKETING_SETTING_DEFS = {
     schema: z.array(z.object({
       address: z.string().trim().toLowerCase().regex(/^[a-z0-9._+-]{1,64}@tonydurante\.us$/),
       people: z.array(z.string().uuid()).max(60),
-      signature: z.string().max(600),
+      signature_name: z.string().max(80).default(""),
+      signature_title: z.string().max(80).default(""),
+      signature_phone: z.string().max(80).default(""),
     })).max(20).refine(l => new Set(l.map(m => m.address)).size === l.length, "Each address once"),
-    fallback: [] as Array<{ address: string; people: string[]; signature: string }>,
+    fallback: [] as Array<{ address: string; people: string[]; signature_name: string; signature_title: string; signature_phone: string }>,
   },
   /** Which team the leads arriving from Meta belong to. Empty text = no team chosen: the only ACTIVE team if there is exactly one, else nobody's yet (Antonio sees them and assigns). */
   lead_intake_team_id: { schema: z.union([z.string().uuid(), z.literal("")]), fallback: "" as string },

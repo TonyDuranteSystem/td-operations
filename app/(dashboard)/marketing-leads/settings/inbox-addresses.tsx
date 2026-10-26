@@ -1,10 +1,44 @@
 "use client"
 
-import { useState } from "react"
+import { Fragment, useState } from "react"
 import { useRouter } from "next/navigation"
+import { buildSignatureHtml } from "@/lib/email/signature"
 
-export interface AddressRow { address: string; people: string[]; signature: string; connected: boolean }
+export interface AddressRow { address: string; people: string[]; signature_name: string; signature_title: string; signature_phone: string; connected: boolean }
+interface Sig { name: string; title: string; phone: string }
 export interface PersonOption { id: string; label: string }
+
+/** The signature fields and what they produce: the same company block the CRM Inbox sends (Full = with the logo and badges, Compact = small mark). Empty fields keep the company's own. */
+function SignatureEditor({ address, value, onChange, disabled }: { address: string; value: Sig; onChange: (v: Sig) => void; disabled?: boolean }) {
+  const field = "w-full rounded-lg border px-3 py-1.5 text-sm"
+  const html = (variant: "gala" | "text") => buildSignatureHtml({ sender: "support", variant, includeSignoff: false, identity: { name: value.name, title: value.title, phone: value.phone, email: address } })
+  return (
+    <div className="space-y-2" data-testid="signature-editor">
+      <div className="grid gap-2 sm:grid-cols-3">
+        <label className="text-xs text-slate-500">Name<input className={field} maxLength={80} value={value.name} disabled={disabled} placeholder="Tony Durante LLC" onChange={e => onChange({ ...value, name: e.target.value })} data-testid="sig-name" /></label>
+        <label className="text-xs text-slate-500">Title<input className={field} maxLength={80} value={value.title} disabled={disabled} placeholder="e.g. Sales, Tony Durante LLC" onChange={e => onChange({ ...value, title: e.target.value })} data-testid="sig-title" /></label>
+        <label className="text-xs text-slate-500">Phone<input className={field} maxLength={80} value={value.phone} disabled={disabled} placeholder="+1 (727) 452-1093" onChange={e => onChange({ ...value, phone: e.target.value })} data-testid="sig-phone" /></label>
+      </div>
+      <p className="text-xs text-slate-500">Under every email written from {address} the person picks <b>Full</b>, <b>Compact</b> or <b>No signature</b> next to Send, exactly as in the CRM Inbox. The address of the company is added; leave a box empty to keep the company&apos;s own.</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div><p className="text-xs font-medium text-slate-500">Full</p><div className="overflow-auto rounded-lg border bg-white p-2" data-testid="sig-preview-full" dangerouslySetInnerHTML={{ __html: html("gala") }} /></div>
+        <div><p className="text-xs font-medium text-slate-500">Compact</p><div className="overflow-auto rounded-lg border bg-white p-2" data-testid="sig-preview-compact" dangerouslySetInnerHTML={{ __html: html("text") }} /></div>
+      </div>
+    </div>
+  )
+}
+
+/** The signature of one saved address: edit and save it on its own. */
+function RowSignature({ row, busy, onSave }: { row: AddressRow; busy: boolean; onSave: (s: Sig) => void }) {
+  const [v, setV] = useState<Sig>({ name: row.signature_name, title: row.signature_title, phone: row.signature_phone })
+  const same = v.name === row.signature_name && v.title === row.signature_title && v.phone === row.signature_phone
+  return (
+    <div className="space-y-2">
+      <SignatureEditor address={row.address} value={v} onChange={setV} disabled={busy} />
+      <button type="button" className="rounded-lg border bg-slate-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50" disabled={busy || same} onClick={() => onSave(v)} data-testid={`sig-save-${row.address}`}>Save signature</button>
+    </div>
+  )
+}
 
 /** CRM > Marketing > Settings > Inbox addresses (dev job 9aec66fa). Antonio adds an address (the system checks it can open it first), ticks who may open it, and can remove it. Every server answer is shown as written (R099). */
 export function InboxAddresses({ teamId, rows, people }: { teamId: string; rows: AddressRow[]; people: PersonOption[] }) {
@@ -12,7 +46,7 @@ export function InboxAddresses({ teamId, rows, people }: { teamId: string; rows:
   const [address, setAddress] = useState("")
   const [checked, setChecked] = useState<{ address: string } | null>(null)
   const [ticks, setTicks] = useState<string[]>([])
-  const [signature, setSignature] = useState("")
+  const [signature, setSignature] = useState<Sig>({ name: "", title: "", phone: "" })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<string | null>(null)
@@ -37,11 +71,15 @@ export function InboxAddresses({ teamId, rows, people }: { teamId: string; rows:
   async function save() {
     if (!checked) return
     const d = await call({ action: "add", address: checked.address, people: ticks, signature }, "Could not save the address. Please try again.")
-    if (d) { setDone(`${checked.address} is added. It now appears in the Inbox of the people you chose.`); setChecked(null); setAddress(""); setSignature(""); setTicks([]); router.refresh() }
+    if (d) { setDone(`${checked.address} is added. It now appears in the Inbox of the people you chose.`); setChecked(null); setAddress(""); setSignature({ name: "", title: "", phone: "" }); setTicks([]); router.refresh() }
   }
   async function remove(a: string) {
     const d = await call({ action: "remove", address: a }, "Could not remove the address. Please try again.")
     if (d) { setDone(`${a} is removed from the Inbox.`); router.refresh() }
+  }
+  async function saveSignature(a: AddressRow, sig: Sig) {
+    const d = await call({ action: "update", address: a.address, signature: sig }, "Could not save the signature. Please try again.")
+    if (d) { setDone(`The signature of ${a.address} is saved.`); router.refresh() }
   }
   async function toggle(a: AddressRow, id: string) {
     const known = a.people.filter(x => people.some(p => p.id === x)) // people who left the team are dropped, so they cannot block a change
@@ -58,10 +96,11 @@ export function InboxAddresses({ teamId, rows, people }: { teamId: string; rows:
 
       {rows.length === 0 ? <p className="mt-3 text-sm text-slate-500">No address yet. The Inbox shows nothing until you add one.</p> : (
         <table className="mt-3 w-full text-left text-sm">
-          <thead className="border-b text-xs text-slate-500"><tr><th className="py-2 pr-3">Address</th><th className="pr-3">Status</th><th className="pr-3">Who can open it (besides you and the person it belongs to)</th><th /></tr></thead>
+          <thead className="border-b text-xs text-slate-500"><tr><th className="py-2 pr-3">Address</th><th className="pr-3">Status</th><th className="pr-3">Who can open it (besides you)</th><th /></tr></thead>
           <tbody className="divide-y">
             {rows.map(r => (
-              <tr key={r.address} data-testid="inbox-address-row">
+              <Fragment key={r.address}>
+              <tr data-testid="inbox-address-row">
                 <td className="py-2 pr-3 font-medium">{r.address}</td>
                 <td className="pr-3">{r.connected ? <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 text-xs text-emerald-800">connected</span> : <span className="rounded-full border border-rose-300 bg-rose-50 px-2 text-xs text-rose-800">cannot be opened</span>}</td>
                 <td className="pr-3">
@@ -72,6 +111,12 @@ export function InboxAddresses({ teamId, rows, people }: { teamId: string; rows:
                 </td>
                 <td><button className="rounded-lg border px-2 py-1 text-xs" disabled={busy} onClick={() => remove(r.address)} data-testid={`inbox-remove-${r.address}`}>Remove</button></td>
               </tr>
+              <tr><td colSpan={4} className="pb-4 pt-1">
+                <details data-testid={`sig-details-${r.address}`}><summary className="cursor-pointer text-xs font-medium text-slate-600">Signature of {r.address}{r.signature_name || r.signature_title || r.signature_phone ? "" : " (the company's own)"}</summary>
+                  <div className="mt-2"><RowSignature row={r} busy={busy} onSave={sig => saveSignature(r, sig)} /></div>
+                </details>
+              </td></tr>
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -88,14 +133,12 @@ export function InboxAddresses({ teamId, rows, people }: { teamId: string; rows:
             <p><span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 text-xs text-emerald-800">connected: the system can open {checked.address}</span></p>
             <div>
               <p className="text-sm font-medium">Who can open it?</p>
-              <p className="text-xs text-slate-500">You always can. The person it belongs to (the team login with this address) always can.</p>
+              <p className="text-xs text-slate-500">You always can. Nobody else can unless you tick them here.</p>
               <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
                 {people.map(p => <label key={p.id} className="flex items-center gap-1 text-sm"><input type="checkbox" checked={ticks.includes(p.id)} onChange={() => setTicks(ticks.includes(p.id) ? ticks.filter(x => x !== p.id) : [...ticks, p.id])} data-testid={`inbox-new-person-${p.id}`} />{p.label}</label>)}
               </div>
             </div>
-            <label className="block text-sm"><span className="font-medium">Signature</span> <span className="text-xs text-slate-500">(text added under every email written from this address; optional)</span>
-              <textarea className="mt-1 w-full rounded-lg border px-3 py-2 text-sm" rows={3} maxLength={600} value={signature} onChange={e => setSignature(e.target.value)} />
-            </label>
+            <div><p className="text-sm font-medium">Signature</p><SignatureEditor address={checked.address} value={signature} onChange={setSignature} disabled={busy} /></div>
             <button className={`${btn} bg-slate-900 text-white`} disabled={busy} onClick={save} data-testid="inbox-save">Save</button>
           </div>
         )}

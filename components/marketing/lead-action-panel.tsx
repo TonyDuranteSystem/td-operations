@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { useT } from '@/components/marketing/lang-provider'
 
 interface Option { key: string; label: string }
-type Mode = null | 'good' | 'not_in_target' | 'call_back' | 'note'
+type Mode = null | 'good' | 'not_in_target' | 'call_back' | 'not_ready' | 'closed' | 'not_closed' | 'note'
 
 interface Props {
   leadId: string
@@ -19,10 +19,12 @@ interface Props {
   reasons: Option[]
   /** after Good / Not in target / Call back: go here (the next lead in the call list) instead of staying on this lead */
   afterHref?: string
+  /** the seller (Rocco) presses the results after the call: Not in target, Not ready now (with a day), Closed, Not closed. The setter keeps Good / Not in target / Call back later. */
+  role?: 'setter' | 'seller'
 }
 
 /** The buttons a setter or the owner uses on one lead. Every server answer (including the refusals) is shown as the server wrote it. */
-export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, checklist, reasons, afterHref }: Props) {
+export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, checklist, reasons, afterHref, role = 'setter' }: Props) {
   const router = useRouter()
   const t = useT()
   const [mode, setMode] = useState<Mode>(null)
@@ -46,7 +48,7 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
         throw new Error(d.error ? t(d.error) : t('Could not save. Please try again.'))
       }
       setMode(null); setNote(''); setTicked([]); setReason(''); setWhen('')
-      if (afterHref !== undefined && ['good', 'not_in_target', 'call_back'].includes(String(body.action))) router.push(afterHref)
+      if (afterHref !== undefined && ['good', 'not_in_target', 'call_back', 'not_ready', 'closed', 'not_closed'].includes(String(body.action))) router.push(afterHref)
       else router.refresh()
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : t('Could not save. Please try again.'))
@@ -64,9 +66,12 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
       <div className="mt-3 flex flex-wrap gap-2" data-testid="lead-result">
         {canPick && claim === 'free' && <button className={`${btn} bg-slate-900 text-white`} disabled={busy} onClick={() => send({ action: 'claim' })}>{t('Pick this lead')}</button>}
         {canPick && (claim === 'me' || (claim === 'other' && isOwner)) && <button className={btn} disabled={busy} onClick={() => send({ action: 'release' })}>{t('Give it back')}</button>}
-        {markOk && <button className={`${btn} ${mode === 'good' ? 'border-emerald-600 bg-emerald-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'good' ? null : 'good')}>{t('Good')}</button>}
+        {markOk && role === 'setter' && <button className={`${btn} ${mode === 'good' ? 'border-emerald-600 bg-emerald-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'good' ? null : 'good')}>{t('Good')}</button>}
         {markOk && <button className={`${btn} ${mode === 'not_in_target' ? 'border-rose-600 bg-rose-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'not_in_target' ? null : 'not_in_target')}>{t('Not in target')}</button>}
-        {markOk && <button className={`${btn} ${mode === 'call_back' ? 'border-sky-600 bg-sky-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'call_back' ? null : 'call_back')}>{t('Call back later')}</button>}
+        {markOk && role === 'setter' && <button className={`${btn} ${mode === 'call_back' ? 'border-sky-600 bg-sky-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'call_back' ? null : 'call_back')}>{t('Call back later')}</button>}
+        {markOk && role === 'seller' && <button className={`${btn} ${mode === 'not_ready' ? 'border-sky-600 bg-sky-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'not_ready' ? null : 'not_ready')} data-testid="result-not-ready">{t('Not ready now')}</button>}
+        {markOk && role === 'seller' && <button className={`${btn} ${mode === 'closed' ? 'border-emerald-600 bg-emerald-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'closed' ? null : 'closed')} data-testid="result-closed">{t('Closed')}</button>}
+        {markOk && role === 'seller' && <button className={`${btn} ${mode === 'not_closed' ? 'border-slate-600 bg-slate-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'not_closed' ? null : 'not_closed')} data-testid="result-not-closed">{t('Not closed')}</button>}
         {markOk && <button className={`${btn} ${mode === 'note' ? 'border-slate-600 bg-slate-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'note' ? null : 'note')}>{t('Add a note')}</button>}
       </div>
 
@@ -94,9 +99,9 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
               </select>
             </label>
           )}
-          {mode === 'call_back' && (
+          {(mode === 'call_back' || mode === 'not_ready') && (
             <label className="block">
-              <span className="text-slate-500">{t('Day and time to call back (Rome time)')}</span>
+              <span className="text-slate-500">{mode === 'not_ready' ? t('Day and time to come back (Rome time)') : t('Day and time to call back (Rome time)')}</span>
               <input type="datetime-local" className="mt-1 w-full rounded-lg border px-3 py-2" value={when} onChange={e => setWhen(e.target.value)} />
             </label>
           )}
@@ -106,11 +111,13 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
           </label>
           <button
             className={`${btn} bg-slate-900 text-white`}
-            disabled={busy || (mode === 'not_in_target' && !reason) || (mode === 'call_back' && !when) || (mode === 'note' && !note.trim())}
+            disabled={busy || (mode === 'not_in_target' && !reason) || ((mode === 'call_back' || mode === 'not_ready') && !when) || (mode === 'note' && !note.trim())}
             onClick={() => {
               const n = note.trim() || undefined
               if (mode === 'good') return send({ action: 'good', ticked, note: n })
               if (mode === 'not_in_target') return send({ action: 'not_in_target', reason, note: n })
+              if (mode === 'closed' || mode === 'not_closed') return send({ action: mode, note: n })
+              if (mode === 'not_ready') return send({ action: 'not_ready', callbackAt: romeLocalToIso(when) ?? '', note: n })
               if (mode === 'call_back') return send({ action: 'call_back', callbackAt: romeLocalToIso(when) ?? '', note: n })
               return send({ action: 'note', note: n })
             }}

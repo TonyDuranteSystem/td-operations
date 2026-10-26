@@ -24,3 +24,16 @@ export function staffFileHeaders(mimeType: string | null | undefined, fileName: 
 export function canPreviewInline(mimeType: string | null | undefined): boolean {
   return INLINE_SAFE_TYPES.has((mimeType ?? "").split(";")[0].trim().toLowerCase())
 }
+
+/**
+ * Headers for a chat attachment (the client's or staff's upload, untrusted). Same as staffFileHeaders plus `Content-Security-Policy:
+ * sandbox` for anything shown inline — EXCEPT a PDF: Chromium's built-in PDF viewer refuses a sandboxed document (the attachment would
+ * show a blank/blocked frame), so a PDF is always a download (still nosniff). Images and text stay inline, sandboxed.
+ */
+export function chatAttachmentHeaders(mimeType: string | null | undefined, fileName: string): Record<string, string> {
+  const h = staffFileHeaders(mimeType, fileName)
+  if (h["Content-Type"] === "application/pdf") {
+    return { ...h, "Content-Disposition": h["Content-Disposition"].replace(/^inline/, "attachment"), "Content-Security-Policy": "sandbox" }
+  }
+  return { ...h, "Content-Security-Policy": "sandbox" }
+}

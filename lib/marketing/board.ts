@@ -47,10 +47,14 @@ const SETTER_COLUMNS: readonly BoardColumn[] = [
   { key: "booked", label: "Call booked", stages: ["booked", "showed"] },
   { key: "paid", label: "Paid", stages: ["paid_call", "upsell_won"] },
 ]
+// Rocco's six columns (his own words, 2026-10-26). A lead the setter passed on but nobody has booked yet still shows under "Booked calls" so it never disappears; a call
+// that has taken place stays there until Rocco presses a result.
 const SELLER_COLUMNS: readonly BoardColumn[] = [
-  { key: "booked", label: "Booked calls", stages: ["booked"] },
-  { key: "passed", label: "To book with you", stages: ["qualified"] },
-  { key: "with_me", label: "After the call", stages: ["showed"] },
+  { key: "booked", label: "Booked calls", stages: ["booked", "showed", "qualified"] },
+  { key: "out", label: "Not in target", stages: ["not_in_target"] },
+  { key: "closed", label: "Closed", stages: ["closed"] },
+  { key: "not_closed", label: "Not closed", stages: ["not_closed"] },
+  { key: "not_ready", label: "Not ready now", stages: ["not_ready"] },
   { key: "paid", label: "Paid", stages: ["paid_call", "upsell_won"] },
 ]
 
@@ -61,10 +65,14 @@ export function columnOf(role: BoardRole, stage: string): string | null {
   return columnsFor(role).find(c => c.stages.includes(stage))?.key ?? null
 }
 
-/** The column a CARD sits in. For the seller an in-target lead appears (in "Passed to you") only once the setter has passed it on; until then it is the setter's. */
-export function columnOfCard(role: BoardRole, card: Pick<BoardCard, "stage" | "handedOver">): string | null {
+/** The column a CARD sits in. For the seller an in-target lead appears only once the setter has passed it on; until then it is the setter's. Likewise a turned-down lead only if it reached him. */
+export function columnOfCard(role: BoardRole, card: Pick<BoardCard, "stage" | "handedOver"> & { apptAt?: string | null }): string | null {
   const key = columnOf(role, card.stage)
-  return role === "seller" && key === "passed" && !card.handedOver ? null : key
+  if (role !== "seller") return key
+  if (card.stage === "qualified" && !card.handedOver) return null
+  // a lead the setter turned down before it ever reached Rocco (not passed on, no call booked) is not on his board
+  if (card.stage === "not_in_target" && !card.handedOver && !card.apptAt) return null
+  return key
 }
 
 export interface BoardCard {

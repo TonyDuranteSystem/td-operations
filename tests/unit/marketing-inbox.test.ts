@@ -5,13 +5,13 @@ import { listParams, parseThreadFull, parseThreadRow } from "@/lib/marketing/inb
 import { fakeMailAllowed } from "@/lib/marketing/inbox/driver"
 import { createFakeDriver } from "@/lib/marketing/inbox/fake-driver"
 import { firstTimeSeen, sendOrDraft } from "@/lib/marketing/inbox/send"
-import { isOwnInboxPath, newInboxPath } from "@/lib/marketing/inbox/staging"
+import { isOwnInboxPath, newInboxPath, staleStaged } from "@/lib/marketing/inbox/staging"
 
 vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: { storage: { from: () => ({ download: async () => ({ error: { message: "none" } }), remove: async () => ({}) }) } } }))
 
 const U1 = "11111111-1111-4111-8111-111111111111"
 const U2 = "22222222-2222-4222-8222-222222222222"
-const box = (over: Partial<InboxMailbox> = {}): InboxMailbox => ({ address: "rocco@tonydurante.us", people: [], signature: "", ...over })
+const box = (over: Partial<InboxMailbox> = {}): InboxMailbox => ({ address: "rocco@tonydurante.us", people: [], signature_name: "", signature_title: "", signature_phone: "", ...over })
 
 describe("which address may be added", () => {
   it("accepts a company address, in lower case", () => {
@@ -129,14 +129,14 @@ describe("composeMessage", () => {
     }
   })
   it("adds the signature and the quoted original to both halves", () => {
-    const r = composeMessage({ ...base, signature: "Rocco\nTD Marketing", quote: { from: "Giulia", date: "2026-10-25T10:00:00Z", text: "Can I pay in two parts?" } })
+    const r = composeMessage({ ...base, signature: { html: "<div>SIGNATURE-BLOCK</div>", text: "Rocco\nTD Marketing" }, quote: { from: "Giulia", date: "2026-10-25T10:00:00Z", text: "Can I pay in two parts?" } })
     expect(r.ok).toBe(true)
     if (r.ok) {
       const m = decode(r.raw)
       const parts = Array.from(m.matchAll(/Content-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+?)\r\n--/g)).map(x => Buffer.from(x[1].replace(/\r\n/g, ""), "base64").toString("utf8"))
-      expect(parts[0]).toContain("-- \r\nRocco\nTD Marketing")
+      expect(parts[0]).toContain("Rocco\nTD Marketing")
       expect(parts[0]).toContain("> Can I pay in two parts?")
-      expect(parts[1]).toContain("Rocco<br />TD Marketing")
+      expect(parts[1]).toContain("SIGNATURE-BLOCK")
       expect(parts[1]).toContain("gmail_quote")
     }
   })
@@ -245,7 +245,7 @@ describe("staged attachments belong to one person", () => {
 })
 
 describe("sending (against the in-memory mailbox)", () => {
-  const mk = () => ({ driver: createFakeDriver(), b: box({ signature: "Rocco" }) })
+  const mk = () => ({ driver: createFakeDriver(), b: box({ signature_name: "Rocco" }) })
   const base = { teamId: "t", userId: "u" }
   it("a new email goes to Sent, from the mailbox itself", async () => {
     const { driver, b } = mk()
@@ -312,5 +312,61 @@ describe("the in-memory mailbox behaves like a mailbox", () => {
     const d = createFakeDriver()
     await d.act("a@tonydurante.us", "t1", "trash")
     expect((await d.list("b@tonydurante.us", "inbox", "", null)).rows.length).toBe(3)
+  })
+})
+
+describe("editing a saved draft", () => {
+  const base = { teamId: "t", userId: "u" }
+  it("keeps Bcc, and sending it does NOT add the signature or the quote a second time", async () => {
+    const driver = createFakeDriver()
+    const b = box({ signature_name: "Rocco SIG" })
+    const saved = await sendOrDraft({ ...base, box: b, driver, draft: true, body: { mode: "reply", threadId: "t1", messageId: "m1", to: "giulia@example.test", bcc: "boss@example.test", subject: "Re: x", message: "Yes two parts" } })
+    expect(saved.ok && saved.draftId).toBeTruthy()
+    const draftThread = (await driver.list(b.address, "drafts", "", null)).rows[0]
+    const full = (await driver.thread(b.address, draftThread.id))!
+    const draftMsg = full.messages[full.messages.length - 1]
+    expect(draftMsg.bcc).toContain("boss@example.test")
+    expect(draftMsg.text.match(/Rocco SIG/g)?.length).toBe(1)
+    expect(draftMsg.text).toContain("10225 Ulmerton Rd")
+    // send it again as an edited ("complete") draft: the text is used as it is
+    const sent = await sendOrDraft({ ...base, box: b, driver, draft: false, body: { mode: "reply", threadId: "t1", messageId: "m1", to: "giulia@example.test", subject: "Re: x", message: "Yes two parts", complete: true, draftId: saved.ok ? saved.draftId : undefined } })
+    expect(sent.ok).toBe(true)
+    const t1 = (await driver.thread(b.address, "t1"))!
+    const last = t1.messages[t1.messages.length - 1]
+    expect(last.text.match(/Rocco SIG/g)?.length).toBe(1)
+    expect((await driver.list(b.address, "drafts", "", null)).rows).toHaveLength(0)
+  })
+})
+
+describe("old staged uploads", () => {
+  const folder = "t/inbox/u/"
+  const now = Date.parse("2026-10-26T12:00:00Z")
+  const id = (n: number) => `${String(n).repeat(8)}-aaaa-4aaa-8aaa-${String(n).repeat(12)}.pdf`
+  it("only our own files older than a day are named for deletion", () => {
+    const list = [
+      { name: id(1), created_at: "2026-10-25T10:00:00Z" },
+      { name: id(2), created_at: "2026-10-26T11:00:00Z" },
+      { name: "notes.txt", created_at: "2026-10-01T10:00:00Z" },
+      { name: id(3), created_at: null },
+    ]
+    expect(staleStaged(list, folder, now)).toEqual([`${folder}${id(1)}`])
+  })
+})
+
+describe("an unsent draft inside a conversation", () => {
+  const base = { teamId: "t", userId: "u" }
+  it("is never quoted: a reply that names the draft's own id answers the last real email instead", async () => {
+    const driver = createFakeDriver()
+    const b = box({})
+    await sendOrDraft({ ...base, box: b, driver, draft: true, body: { mode: "reply", threadId: "t1", messageId: "m1", to: "giulia@example.test", subject: "Re: x", message: "SECRET DRAFT WORDS" } })
+    const th = (await driver.thread(b.address, "t1"))!
+    const draftMsg = th.messages.find(m => m.draft)!
+    expect(draftMsg).toBeTruthy()
+    const r = await sendOrDraft({ ...base, box: b, driver, draft: false, body: { mode: "reply", threadId: "t1", messageId: draftMsg.id, to: "giulia@example.test", subject: "Re: x", message: "Real answer" } })
+    expect(r.ok).toBe(true)
+    const after = (await driver.thread(b.address, "t1"))!
+    const sent = after.messages.filter(m => !m.draft).pop()!
+    expect(sent.text).toContain("Real answer")
+    expect(sent.text).not.toContain("SECRET DRAFT WORDS")
   })
 })

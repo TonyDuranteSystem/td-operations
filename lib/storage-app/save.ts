@@ -20,6 +20,7 @@ import { logAppEvent } from "./device-auth"
 import { checkDestination, checkNewFile, saveCallerKey, isItemKey, isClientOwnerKind, type SaveRefusal } from "./save-rules"
 import { getSettings, clientSaveAllowed, type StorageAppSettings } from "./settings"
 import { ensureClientFileRecords, refreshClientRow } from "./client-records"
+import { releaseSlotClaim } from "./slot-lease"
 import { answerForAppend, parseBaseVersionNo, slotBelongsToUpdate, updateCallerKey } from "./update-rules"
 import { lockText } from "@/lib/crm-store/new-version-rules"
 
@@ -215,15 +216,18 @@ async function saveUpdate(p: { settings: StorageAppSettings; user: User; deviceI
     throw new Error(`Could not claim the upload slot (${cErr.message}).`)
   }
   const { data: blob, error: dErr } = await db().storage.from(STORE_STAGING_BUCKET).download(slot.staging_path as string)
-  if (dErr || !blob) { await back(); return refuse(409, "not_uploaded", "The file did not arrive. Try saving again.") }
-  const bytes = Buffer.from(await blob.arrayBuffer())
+  // the lease taken above is given back on every exit that leaves the slot open, so the Mac's retry is not told "busy" for 15 minutes
+  const releaseClaim = () => releaseSlotClaim(db(), p.intentId as string)
+  if (dErr || !blob) { await releaseClaim(); await back(); return refuse(409, "not_uploaded", "The file did not arrive. Try saving again.") }
+  let bytes: Buffer
+  try { bytes = Buffer.from(await blob.arrayBuffer()) } catch (e) { await releaseClaim(); await back(); throw e }
   const mimeType = (slot.mime_type as string | null) || blob.type || null
   // the version the Mac started from (OPTIONAL — a Mac that does not send it keeps today's "last write wins, history kept")
   const baseVersionNo = parseBaseVersionNo(p.baseVersionNo)
   let res
   try {
     res = await appendVersionBytes({ fileId: own.id, bytes, mimeType, expectedVersionNo: baseVersionNo, actor: p.user.id, source: "mac", deviceId: p.deviceId })
-  } catch (e) { await back(); throw e }
+  } catch (e) { await releaseClaim(); await back(); throw e }
   const answer = answerForAppend(res, own.id, own.owner_id, own.name, size)
   const closeSlot = async (fileId: string | null) => {
     await db().from("store_upload_intents").update({ consumed_at: new Date().toISOString(), ...(fileId ? { file_id: fileId } : {}) }).eq("id", p.intentId).is("consumed_at", null)

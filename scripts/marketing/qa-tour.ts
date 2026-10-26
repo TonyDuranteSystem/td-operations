@@ -194,7 +194,7 @@ async function main() {
   const sel = await open(sess.seller, "/marketing/today")
   const t3 = await walk(sel)
   await sel.close()
-  ck("T3 the seller's tour: 5 steps, starting with Today", t3.total === 5 && t3.titles[0] === "Today: what needs you now" && t3.titles[4] === "Reports: what works", t3.titles)
+  ck("T3 the seller's tour: 6 steps, Today then the Board", t3.total === 6 && t3.titles[0] === "Today: what needs you now" && t3.titles[1] === "Board: your leads in six columns" && t3.titles[5] === "Reports: what works", t3.titles)
   const al = await open(sess.ale, "/marketing/board")
   const t4 = await walk(al)
   await al.close()

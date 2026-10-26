@@ -56,6 +56,17 @@ export function isOffered(rel: Release | null, deviceId: string | null): boolean
   return rolloutBucket(deviceId) < rel.rolloutPercent
 }
 
+/** PURE: the newest build THIS Mac is being offered (the app compares it with its own and checks for the update at once instead of waiting for the hourly check). null = nothing offered to it. */
+export function latestBuildFor(rel: Release | null, deviceId: string | null): number | null {
+  return rel && isOffered(rel, deviceId) ? rel.build : null
+}
+
+/** PURE: the version the Mac app reports in its `X-TD-App-Version` header, written "<version>;<build>" (e.g. "0.2.2;4"). Anything else → null. */
+export function parseAppVersionHeader(h: string | null | undefined): { version: string; build: number } | null {
+  const m = /^(\d+(?:\.\d+){0,3});(\d{1,9})$/.exec((h ?? "").trim())
+  return m ? { version: m[1], build: Number(m[2]) } : null
+}
+
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 
 /** PURE: the Sparkle feed. `null` release or `null` url = an empty feed (nothing to install). */

@@ -22,7 +22,7 @@ export function ReleasePanel({ current }: { current: Current }) {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null)
 
-  async function publish() {
+  async function publish(offerNow = false) {
     if (!zip || !pkg) return
     setBusy(true); setNote(null)
     try {
@@ -31,7 +31,12 @@ export function ReleasePanel({ current }: { current: Current }) {
       const up = await createClient().storage.from(BUCKET).uploadToSignedUrl(prep.path, prep.token, zip)
       if (up.error) throw new Error("The upload did not work. Please try again.")
       const done = await post("/api/store-devices/app-release/finish", { package: parsed })
-      setNote({ ok: true, text: `Version ${done.version} is published but NOT offered to the Macs yet. Press “Offer to Macs” when you are ready.` })
+      if (offerNow) {
+        await post("/api/store-devices/app-release/offer", { enabled: true })
+        setNote({ ok: true, text: `Version ${done.version} is published and OFFERED to the Macs. They pick it up within about 5 minutes.` })
+      } else {
+        setNote({ ok: true, text: `Version ${done.version} is published but NOT offered to the Macs yet. Press “Offer to Macs” when you are ready.` })
+      }
       setZip(null); setPkg(null)
       router.refresh()
     } catch (e) {
@@ -65,7 +70,10 @@ export function ReleasePanel({ current }: { current: Current }) {
         <div className="font-medium text-zinc-800">New version</div>
         <label className="block text-xs text-zinc-600">The zip file<input type="file" accept=".zip" className="mt-1 block text-xs" onChange={(e) => setZip(e.target.files?.[0] ?? null)} /></label>
         <label className="block text-xs text-zinc-600">The package file (ends in .release.json)<input type="file" accept=".json" className="mt-1 block text-xs" onChange={(e) => setPkg(e.target.files?.[0] ?? null)} /></label>
-        <button className={`${btn} bg-blue-600 text-white hover:bg-blue-700`} disabled={busy || !zip || !pkg} onClick={publish}>{busy ? "Working…" : "Publish (paused)"}</button>
+        <div className="flex flex-wrap gap-2">
+          <button className={`${btn} bg-blue-600 text-white hover:bg-blue-700`} disabled={busy || !zip || !pkg} onClick={() => publish(true)}>{busy ? "Working…" : "Publish and offer to Macs"}</button>
+          <button className={`${btn} hover:bg-zinc-50`} disabled={busy || !zip || !pkg} onClick={() => publish(false)}>Publish (paused)</button>
+        </div>
       </div>
       {note && <p className={`mt-3 text-sm ${note.ok ? "text-green-700" : "text-red-700"}`}>{note.text}</p>}
     </div>

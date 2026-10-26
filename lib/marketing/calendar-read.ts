@@ -18,7 +18,7 @@ export async function loadCalendarData(db: Db, teamId: string): Promise<{ leads:
   for (let i = 0; i < leads.length; i += 100) {
     const chunk = leads.slice(i, i + 100).map(l => l.id)
     const { rows, truncated: t } = await readPaged<CalEvent>((from, to) =>
-      db.from("marketing_lead_events").select("lead_id, actor, created_at, data").in("lead_id", chunk).eq("kind", "status_changed").eq("data->>outcome", "call_back")
+      db.from("marketing_lead_events").select("lead_id, actor, created_at, data").in("lead_id", chunk).eq("kind", "status_changed").in("data->>outcome", ["call_back", "not_ready"])
         .order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, to), 5000)
     events.push(...rows); evCut = evCut || t
   }

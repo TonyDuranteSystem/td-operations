@@ -9,6 +9,7 @@ export const maxDuration = 120
 import { NextRequest, NextResponse } from "next/server"
 import { mydriveGate, logDriveUse } from "../_gate"
 import { denyUnlessStorePilotEnv, denyUnlessAreaAccess } from "../../browse/_auth"
+import { plainStoreError } from "@/lib/crm-store/lock-errors"
 
 export async function POST(req: NextRequest) {
   const g = await mydriveGate()
@@ -47,6 +48,6 @@ export async function POST(req: NextRequest) {
     if (account !== resolveDriveAccount("me")) await logDriveUse(g, "drive_copy", account, { driveFileId, name: plan.name, into: { ownerId, folderId } })
     return NextResponse.json({ outcome: r.write === "unchanged" ? "unchanged" : "saved", write: r.write })
   } catch (e) {
-    return NextResponse.json({ outcome: "failed", message: e instanceof Error ? e.message : "The file could not be copied." })
+    return NextResponse.json({ outcome: "failed", message: plainStoreError(e, "The file could not be copied.") })
   }
 }

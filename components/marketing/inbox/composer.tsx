@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useT } from '@/components/marketing/lang-provider'
 import { RichEditor, type RichEditorHandle } from '@/components/inbox/rich-editor'
 import { DEFAULT_RICH_STYLE, type RichStyle } from '@/lib/inbox/rich-text'
@@ -11,10 +11,15 @@ export interface ComposerSeed {
   messageId?: string
   to: string[]
   cc: string[]
+  bcc?: string[]
   subject: string
   /** the editor's starting html */
   html: string
   draftId?: string
+  /** an edited draft: its text already holds the signature and the quoted original, so the server must not add them again */
+  complete?: boolean
+  /** makes a second "New email" press start a fresh box */
+  nonce?: number
 }
 
 interface Staged { path: string; name: string; mime_type: string; size: number }
@@ -22,25 +27,40 @@ interface Staged { path: string; name: string; mime_type: string; size: number }
 const MAX_TOTAL = 18 * 1024 * 1024
 const htmlEscape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 /** plain text typed or kept in a draft -> the editor's html */
+/** A saved draft holds its signature in a marked block; the editor cannot hold that layout, so it is lifted out here and added back (in the chosen style) when the email is sent. */
+export function withoutSignature(html: string): string {
+  if (typeof DOMParser === 'undefined' || !html.includes('data-td-signature')) return html
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  doc.querySelectorAll('[data-td-signature]').forEach(el => el.remove())
+  return doc.body.innerHTML
+}
+
 export const textToEditorHtml = (text: string): string => text.split(/\n{2,}/).map(p => `<p>${htmlEscape(p).replace(/\n/g, '<br>')}</p>`).join('') || '<p></p>'
+
+/** Throw away one staged upload (best effort: a stale one is also swept by the server after a day). */
+function dropStaged(address: string, path: string) {
+  void fetch('/api/marketing/inbox/attachments', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address, path }), keepalive: true }).catch(() => {})
+}
 
 /**
  * TD Marketing — writing an email in the Inbox (dev job 9aec66fa): To / Cc / Bcc, Subject, the same formatting editor the CRM reply uses, attachments (uploaded straight to private storage, never through
  * our server), Save draft, Send. The server decides everything that matters (sender, quoted original, signature, who may be written to); this only collects what the person typed. Every server answer is shown as written (R099).
  */
-export function Composer({ address, seed, onClose, onSent, onDraftChanged }: {
+export function Composer({ address, seed, onClose, onSent, onDraftChanged, onDirty }: {
   address: string
   seed: ComposerSeed
   onClose: () => void
   onSent: (threadId?: string) => void
   onDraftChanged: () => void
+  /** whether there is something typed that would be lost if the box closed (the list asks before throwing it away) */
+  onDirty?: (dirty: boolean) => void
 }) {
   const t = useT()
   const editorRef = useRef<RichEditorHandle>(null)
   const [to, setTo] = useState(seed.to.join(', '))
   const [cc, setCc] = useState(seed.cc.join(', '))
-  const [bcc, setBcc] = useState('')
-  const [showCc, setShowCc] = useState(seed.cc.length > 0)
+  const [bcc, setBcc] = useState((seed.bcc ?? []).join(', '))
+  const [showCc, setShowCc] = useState(seed.cc.length > 0 || (seed.bcc ?? []).length > 0)
   const [subject, setSubject] = useState(seed.subject)
   const [style, setStyle] = useState<RichStyle>(DEFAULT_RICH_STYLE)
   const [files, setFiles] = useState<Staged[]>([])
@@ -49,9 +69,22 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged }: {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
+  const [touched, setTouched] = useState(false)
+  // the signature picked for THIS email (as in the CRM Inbox): new emails start Full, answers Compact
+  const [sigVariant, setSigVariant] = useState<'gala' | 'text' | 'none'>(seed.mode === 'new' ? 'gala' : 'text')
+  const filesRef = useRef<Staged[]>([])
+  const sentRef = useRef(false)
+  const sendingRef = useRef(false)
   const sendKey = useRef<string>(`${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`)
 
+  useEffect(() => { filesRef.current = files }, [files])
+  useEffect(() => { onDirty?.(touched || files.length > 0) }, [touched, files.length, onDirty])
+  // closed without sending (another folder, another address, Close): the uploaded files are thrown away, not left in storage
+  useEffect(() => () => { if (!sentRef.current && !sendingRef.current) filesRef.current.forEach(f => dropStaged(address, f.path)) }, [address])
+  useEffect(() => () => onDirty?.(false), [onDirty])
+
   const payload = () => ({
+    complete: seed.complete === true, signatureVariant: sigVariant,
     address, mode: seed.mode, threadId: seed.threadId, messageId: seed.messageId, to, cc, bcc, subject,
     messageHtml: editorRef.current?.getHTML() ?? '', style, draftId,
     attachments: files.map(f => ({ path: f.path, name: f.name, mime_type: f.mime_type })),
@@ -68,17 +101,22 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged }: {
   }
 
   async function send() {
+    sendingRef.current = true // while a send is in flight, closing the box must not delete the files the server is about to read
     const d = await post('/api/marketing/inbox/send', { ...payload(), sendKey: sendKey.current }, t('The email could not be sent. Nothing was sent; try again.'))
-    if (d) onSent(typeof d.threadId === 'string' ? d.threadId : undefined)
+    if (!d) sendingRef.current = false
+    if (d) { sentRef.current = true; onSent(typeof d.threadId === 'string' ? d.threadId : undefined) }
     else sendKey.current = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}` // a failed try must not block the corrected retry
   }
   async function saveDraft() {
     const d = await post('/api/marketing/inbox/drafts', payload(), t('The draft could not be saved. Please try again.'))
-    if (d && typeof d.draftId === 'string') { setDraftId(d.draftId); setNote(t('Draft saved. Attachments are not kept in a draft.')); onDraftChanged() }
+    if (d && typeof d.draftId === 'string') { setDraftId(d.draftId); setTouched(false); setNote(t('Draft saved. Attachments are not kept in a draft.')); onDraftChanged() }
   }
   async function discard() {
+    // typed words or a saved draft are not thrown away by one stray click
+    if ((touched || draftId || files.length > 0) && !window.confirm(draftId ? t('Delete this draft?') : t('Throw away the email you are writing?'))) return
     if (draftId) {
-      await fetch(`/api/marketing/inbox/drafts?address=${encodeURIComponent(address)}&draftId=${encodeURIComponent(draftId)}`, { method: 'DELETE' }).catch(() => {})
+      const res = await fetch(`/api/marketing/inbox/drafts?address=${encodeURIComponent(address)}&draftId=${encodeURIComponent(draftId)}`, { method: 'DELETE' }).catch(() => null)
+      if (!res || !res.ok) { setError(t('The draft could not be deleted. Please try again.')); return }
       onDraftChanged()
     }
     onClose()
@@ -110,19 +148,19 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged }: {
     <div className="space-y-2 rounded-xl border bg-white p-3" data-testid="composer">
       <div className="flex items-center gap-2 text-sm"><span className="w-12 text-slate-500">{t('From')}</span><span className="text-slate-700" data-testid="composer-from">{address}</span></div>
       <div className="flex items-center gap-2 text-sm"><label className="w-12 text-slate-500" htmlFor="cmp-to">{t('To')}</label>
-        <input id="cmp-to" className={field} value={to} onChange={e => setTo(e.target.value)} autoComplete="off" data-testid="composer-to" />
+        <input id="cmp-to" className={field} value={to} onChange={e => { setTo(e.target.value); setTouched(true) }} autoComplete="off" data-testid="composer-to" />
         {!showCc && <button type="button" className="shrink-0 text-xs text-slate-500 underline" onClick={() => setShowCc(true)} data-testid="composer-show-cc">{t('Cc / Bcc')}</button>}
       </div>
       {showCc && (
         <>
-          <div className="flex items-center gap-2 text-sm"><label className="w-12 text-slate-500" htmlFor="cmp-cc">Cc</label><input id="cmp-cc" className={field} value={cc} onChange={e => setCc(e.target.value)} autoComplete="off" data-testid="composer-cc" /></div>
-          <div className="flex items-center gap-2 text-sm"><label className="w-12 text-slate-500" htmlFor="cmp-bcc">Bcc</label><input id="cmp-bcc" className={field} value={bcc} onChange={e => setBcc(e.target.value)} autoComplete="off" data-testid="composer-bcc" /></div>
+          <div className="flex items-center gap-2 text-sm"><label className="w-12 text-slate-500" htmlFor="cmp-cc">Cc</label><input id="cmp-cc" className={field} value={cc} onChange={e => { setCc(e.target.value); setTouched(true) }} autoComplete="off" data-testid="composer-cc" /></div>
+          <div className="flex items-center gap-2 text-sm"><label className="w-12 text-slate-500" htmlFor="cmp-bcc">Bcc</label><input id="cmp-bcc" className={field} value={bcc} onChange={e => { setBcc(e.target.value); setTouched(true) }} autoComplete="off" data-testid="composer-bcc" /></div>
         </>
       )}
       <div className="flex items-center gap-2 text-sm"><label className="w-12 text-slate-500" htmlFor="cmp-subject">{t('Subject')}</label>
-        <input id="cmp-subject" className={field} value={subject} onChange={e => setSubject(e.target.value)} autoComplete="off" data-testid="composer-subject" /></div>
+        <input id="cmp-subject" className={field} value={subject} onChange={e => { setSubject(e.target.value); setTouched(true) }} autoComplete="off" data-testid="composer-subject" /></div>
       <RichEditor
-        ref={editorRef} initialHtml={seed.html} style={style} onStyleChange={setStyle} toolbar="full" onChange={() => {}} onFocus={() => {}} onSend={() => { if (!busy && !uploading) void send() }}
+        ref={editorRef} initialHtml={seed.html} style={style} onStyleChange={setStyle} toolbar="full" onChange={() => setTouched(true)} onFocus={() => {}} onSend={() => { if (!busy && !uploading) void send() }}
         onPasteFiles={pasted => { void attach(pasted) }} placeholder={t('Write your message')}
         surfaceClassName="min-h-[180px] max-h-[360px] overflow-auto rounded-b-lg border bg-white px-3 py-2 text-sm" autoFocus
       />
@@ -130,7 +168,7 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged }: {
         <ul className="flex flex-wrap gap-2" data-testid="composer-files">
           {files.map(f => (
             <li key={f.path} className="flex items-center gap-1 rounded-full border bg-slate-50 px-2 py-0.5 text-xs">&#128206; {f.name}
-              <button type="button" aria-label={t('Remove')} className="text-slate-500" onClick={() => setFiles(l => l.filter(x => x.path !== f.path))}>&times;</button></li>
+              <button type="button" aria-label={t('Remove')} className="text-slate-500" onClick={() => { setFiles(l => l.filter(x => x.path !== f.path)); dropStaged(address, f.path) }}>&times;</button></li>
           ))}
         </ul>
       )}
@@ -140,6 +178,14 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged }: {
           <input type="file" multiple className="sr-only" disabled={busy || uploading} onChange={e => { void attach(Array.from(e.target.files ?? [])); e.target.value = '' }} data-testid="composer-attach" /></label>
         <button type="button" className={btn} disabled={busy} onClick={saveDraft} data-testid="composer-save-draft">{t('Save draft')}</button>
         <button type="button" className={btn} disabled={busy} onClick={discard} data-testid="composer-discard">{draftId ? t('Discard draft') : t('Close')}</button>
+        <label className="flex items-center gap-1 text-xs text-slate-500">{t('Signature')}
+          <select value={sigVariant} disabled={busy} onChange={e => setSigVariant(e.target.value as 'gala' | 'text' | 'none')} data-testid="composer-signature"
+            className="rounded-md border bg-white px-1.5 py-1 text-xs text-slate-700 disabled:opacity-50">
+            <option value="gala">{t('Full')}</option>
+            <option value="text">{t('Compact')}</option>
+            <option value="none">{t('No signature')}</option>
+          </select>
+        </label>
         <span className="text-xs text-slate-400">{t('Cmd/Ctrl+Enter sends')}</span>
       </div>
       {note && <p role="status" className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800" data-testid="composer-note">{note}</p>}

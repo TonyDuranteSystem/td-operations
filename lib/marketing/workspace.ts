@@ -52,10 +52,11 @@ export interface QueueLead extends MasterLead { meta_created_time: string | null
  * The setter's call list: first the call backs due today (earliest first; the late ones are the top of the list), then the new leads nobody has worked,
  * oldest first (the one waiting longest is called first). A lead someone else picked is not on the list.
  */
-export function callQueue<T extends QueueLead>(leads: readonly T[], firstStage: string, me: string, now: Date): T[] {
+export function callQueue<T extends QueueLead>(leads: readonly T[], firstStage: string, me: string, now: Date, aside: readonly string[] = []): T[] {
   const dayEnd = romeStartOfNextDay(now).getTime()
   const mineOrFree = (l: T) => l.claimed_by === null || l.claimed_by === me
-  const callbacks = leads.filter(l => mineOrFree(l) && dueBy(l, dayEnd)).sort((a, b) => String(a.callback_at).localeCompare(String(b.callback_at)))
+  // a lead the seller put aside ("not ready now") has its own come-back day: it is his, not the setter's list
+  const callbacks = leads.filter(l => mineOrFree(l) && !aside.includes(l.status) && dueBy(l, dayEnd)).sort((a, b) => String(a.callback_at).localeCompare(String(b.callback_at)))
   const ids = new Set(callbacks.map(l => l.id))
   const fresh = leads.filter(l => mineOrFree(l) && !ids.has(l.id) && l.status === firstStage && l.callback_at === null).sort((a, b) => arrival(a) - arrival(b))
   return [...callbacks, ...fresh]
@@ -89,6 +90,8 @@ export function todayModel(i: {
   outcomeStages: OutcomeStages; me: string; now: Date
   /** stages that mean "a sale was paid" (from the settings); default: the built-in two */
   paidStages?: readonly string[]
+  /** the seller's results after the call (default: the built-in three): a lead there is not "open" any more */
+  sellerStages?: readonly string[]
 }): TodayModel {
   const nowMs = i.now.getTime()
   const dayEnd = romeStartOfNextDay(i.now).getTime()
@@ -96,7 +99,7 @@ export function todayModel(i: {
     .sort((a, b) => String(a.callback_at).localeCompare(String(b.callback_at)))
     .map(lead => ({ lead, late: new Date(lead.callback_at as string).getTime() < nowMs }))
   const goodWaiting = i.leads.filter(l => l.status === i.outcomeStages.good && l.claimed_by === null).sort((a, b) => arrival(a) - arrival(b))
-  const done = new Set([i.outcomeStages.not_in_target, ...(i.paidStages?.length ? i.paidStages : ["paid_call", "upsell_won"])])
+  const done = new Set([i.outcomeStages.not_in_target, ...(i.sellerStages ?? ["not_ready", "closed", "not_closed"]), ...(i.paidStages?.length ? i.paidStages : ["paid_call", "upsell_won"])])
   const mine = i.leads.filter(l => l.claimed_by === i.me && !done.has(l.status)).sort((a, b) => String(b.claimed_at ?? "").localeCompare(String(a.claimed_at ?? "")))
   const people = buildMasterView({ leads: i.leads, events: i.events, members: i.members, stages: i.stages, now: i.now, paidStages: i.paidStages }).people
   const firstStage = i.stages[0]?.key

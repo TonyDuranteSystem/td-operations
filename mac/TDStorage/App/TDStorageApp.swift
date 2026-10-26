@@ -20,7 +20,7 @@ struct TDStorageApp: App {
     var body: some Scene {
         WindowGroup("TD Storage") {
             ContentView().environmentObject(model).frame(minWidth: 420, minHeight: 300)
-                .task { await model.start(); TDStorageApp.gate.setInterval(minutes: model.updateCheckMinutes) }
+                .task { model.onNewerBuild = { TDStorageApp.gate.checkNow() }; await model.start(); TDStorageApp.gate.setInterval(minutes: model.updateCheckMinutes) }
         }
         .windowResizability(.contentSize)
     }
@@ -30,6 +30,8 @@ struct TDStorageApp: App {
 /// CRM which Mac is asking (the CRM uses it for gradual roll-outs). The check pace is the CRM's `updateCheckMinutes` setting (never below an hour).
 final class UpdateGate: NSObject, SPUUpdaterDelegate {
     weak var updater: SPUUpdater?
+    /// Look for an update right now (the CRM said a newer build is offered to this Mac). Sparkle ignores it while a check or download is already running.
+    func checkNow() { updater?.checkForUpdatesInBackground() }
     func setInterval(minutes: Double?) {
         guard let m = minutes, m >= 60, let u = updater else { return }
         u.updateCheckInterval = m * 60
@@ -62,6 +64,15 @@ final class AppModel: ObservableObject {
     @Published var browserProblem: String?
     /// how often the CRM wants this Mac to look for a new version (nil until the CRM has said)
     @Published var updateCheckMinutes: Double?
+    /// set by the app: look for an update now. Called at most every 10 minutes, when the CRM reports a build newer than this one.
+    var onNewerBuild: (() -> Void)?
+    private var lastUpdateNudge = Date.distantPast
+    private var currentBuild: Int { Int((info["CFBundleVersion"] as? String) ?? "") ?? 0 }
+    private func noteLatest(_ latest: Int?) {
+        guard let latest, latest > currentBuild, Date().timeIntervalSince(lastUpdateNudge) > 600 else { return }
+        lastUpdateNudge = Date()
+        onNewerBuild?()
+    }
     /// FileVault is NO LONGER required (Antonio, 2026-10-17: the Mac mini is a server and must restart its services by itself, so its disk
     /// stays unencrypted). Instead the CRM tells every Mac to remove its copy of an opened file after 15 minutes (2 minutes for passports,
     /// IDs and ITIN papers). The app only shows a note when FileVault is off.
@@ -92,6 +103,7 @@ final class AppModel: ObservableObject {
         do {
             let me = try await api.whoami()
             updateCheckMinutes = me.updateCheckMinutes
+            noteLatest(me.latestBuild)
             state = .signedIn(me.email ?? "signed in")
             enableStartAtLogin()
             do { try await register() } catch {
@@ -163,7 +175,7 @@ final class AppModel: ObservableObject {
     private func checkLease() async {
         guard store.load() != nil else { return }
         if lease.isExpired() { await wipe(); state = .problem(leaseMessage); return }
-        do { _ = try await api.whoami() }
+        do { noteLatest(try await api.whoami().latestBuild) }
         catch StorageAPIError.deviceRevoked { await wipe(); state = .signedOut }
         catch StorageAPIError.notSignedIn { await wipe(); state = .signedOut }
         catch { /* offline for now: the lease keeps running */ }

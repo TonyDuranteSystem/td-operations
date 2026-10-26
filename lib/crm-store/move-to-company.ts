@@ -47,8 +47,9 @@ export async function moveFileToCompany(fileId: string, toFolderId: string, acto
   const hidden = await hideForOwnerChange(f.id, actorId)
   const { error: rhErr } = await db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: to.id, p_actor: actorId, p_reason: `Moved to ${company}` })
   if (rhErr) {
-    await hidden.restore().catch((b) => console.error("[crm-store] could not restore visibility after a refused move:", b))
-    throw new Error(`The file could not be moved (${String(rhErr.message).replace(/^store: /, "")}).`)
+    const shown = await hidden.restore()
+    const { RESTORE_FAILED_NOTE } = await import("./owner-change-hide")
+    throw new Error(`${shown ? "" : `${RESTORE_FAILED_NOTE} `}The file could not be moved (${String(rhErr.message).replace(/^store: /, "")}).`)
   }
   const { storePointer } = await import("./document-pointer")
   const { error: rErr } = await db().from("documents").update({ account_id: accountId, category: cat.num, category_name: cat.name, updated_at: new Date().toISOString() }).eq("drive_file_id", storePointer(f.id))
@@ -59,8 +60,9 @@ export async function moveFileToCompany(fileId: string, toFolderId: string, acto
       () => db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: f.folder_id, p_actor: actorId, p_reason: "Move failed — put back" }))
     // the put-back failed: the file stays hidden from the client (it is in an unexpected place) and staff are told plainly
     if (!back) throw new Error(unexpectedPlaceMessage(`The CRM list could not be updated (${rErr.message}).`))
-    await hidden.restore().catch((b) => console.error("[crm-store] could not restore visibility after a failed move:", b))
-    throw new Error(`The CRM list could not be updated, so the file was not moved (${rErr.message}) — please try again.`)
+    const shown = await hidden.restore()
+    const { RESTORE_FAILED_NOTE } = await import("./owner-change-hide")
+    throw new Error(`The CRM list could not be updated, so the file was not moved (${rErr.message}) — please try again.${shown ? "" : ` ${RESTORE_FAILED_NOTE}`}`)
   }
   return { folderName: to.name, company, note: hidden.note }
 }

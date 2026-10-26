@@ -20,7 +20,8 @@ const CANONICAL_LATEST: Record<string, string> = {
   store_file_self_visible: "20260926-1900-crm-store-s6-formation-pilot.sql",
   store_import_claim: "20260929-1100-crm-store-drive-import-claim-guard.sql",
   store_purge_pending_objects: "20261025-1500-storage-datalayer-hardening.sql",
-  store_rehome_file: "20261025-1500-storage-datalayer-hardening.sql",
+  store_rehome_reconcile: "20261026-0900-storage-rehome-freeze-hold.sql",
+  store_rehome_file:"20261025-1500-storage-datalayer-hardening.sql",
   store_rehome_subtree: "20261025-1500-storage-datalayer-hardening.sql",
   store_remove_link: "20261025-1800-storage-hold-sticks.sql",
   store_rename_root: "20261025-1500-storage-datalayer-hardening.sql",
@@ -52,6 +53,14 @@ describe("repeated store_* function definitions", () => {
       expect(files[files.length - 1], `${fn} was redefined in a newer file — update CANONICAL_LATEST and docs/systems/storage.md`).toBe(latest)
     })
   }
+  it("store_remove_link lives ONLY in the hold-sticks file (an older copy in the hardening file would revert the hold freeze if re-run whole)", () => {
+    expect(defs.get("store_remove_link")).toContain("20261025-1800-storage-hold-sticks.sql")
+    const hardening = readFileSync(join(process.cwd(), "scripts/migrations/20261025-1500-storage-datalayer-hardening.sql"), "utf8")
+    expect(hardening).not.toMatch(/CREATE OR REPLACE FUNCTION public\.store_remove_link\(/)
+    const sticks = readFileSync(join(process.cwd(), "scripts/migrations/20261025-1800-storage-hold-sticks.sql"), "utf8")
+    expect(sticks).toContain("held_slug")
+    expect(sticks).toContain("store_lock_owner")
+  })
   it("every pinned function really is defined in more than one file (otherwise it does not belong in the map)", () => {
     for (const fn of Object.keys(CANONICAL_LATEST)) expect((defs.get(fn) ?? []).length, fn).toBeGreaterThan(1)
   })
