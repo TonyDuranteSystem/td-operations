@@ -39,17 +39,21 @@ export async function sendOrDraft(input: {
   let answered: MailMessage | undefined
   if (mode !== "new" && threadId) {
     const t = await driver.thread(box.address, threadId).catch(() => null)
-    answered = t?.messages.find(m => m.id === body.messageId) ?? t?.messages[t.messages.length - 1]
+    // never an unsent draft: it must not be quoted to the person (nor give its own id as the reply header)
+    const real = (t?.messages ?? []).filter(m => !m.draft)
+    answered = real.find(m => m.id === body.messageId) ?? real[real.length - 1]
     if (!answered) return { ok: false, error: "The email you are answering could not be found.", status: 400 }
   }
 
   const staged = draft ? { ok: true as const, files: [], paths: [] as string[] } : await loadStaged(input.teamId, input.userId, body.attachments)
   if (staged.ok === false) return { ok: false, error: staged.error, status: 400 }
 
+  // an edited draft already holds its signature and the quoted original in its text: adding them again would double them
+  const complete = body.complete === true
   const composed = composeMessage({
     from: box.address, to: body.to, cc: body.cc, bcc: body.bcc, subject: body.subject, messageHtml: body.messageHtml, message: body.message, style: body.style,
-    signature: box.signature, inReplyTo: mode === "forward" ? undefined : answered?.messageIdHeader, references: mode === "forward" ? undefined : answered?.references,
-    quote: answered ? { from: answered.from, date: answered.date, text: answered.text } : null, attachments: staged.files, draft,
+    signature: complete ? "" : box.signature, inReplyTo: mode === "forward" ? undefined : answered?.messageIdHeader, references: mode === "forward" ? undefined : answered?.references,
+    quote: answered && !complete ? { from: answered.from, date: answered.date, text: answered.text } : null, attachments: staged.files, draft,
   })
   if (composed.ok === false) return { ok: false, error: composed.error, status: 400 }
 

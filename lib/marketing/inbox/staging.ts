@@ -28,8 +28,27 @@ export function isOwnInboxPath(path: unknown, teamId: string, userId: string): p
   return path.startsWith(prefix) && UUID_PATH.test(path.slice(prefix.length))
 }
 
+/** Staged files nobody sent are thrown away after a day (closed browser, lost connection): the names of the stale ones in a listing of the person's folder. */
+export const STALE_STAGED_MS = 24 * 3600 * 1000
+export function staleStaged(listing: ReadonlyArray<{ name?: string; created_at?: string | null }>, folder: string, now: number): string[] {
+  return listing
+    .filter(o => typeof o.name === "string" && UUID_PATH.test(o.name) && o.created_at && now - Date.parse(o.created_at) > STALE_STAGED_MS)
+    .map(o => `${folder}${o.name}`)
+}
+
+/** Best effort and bounded: never lets a failed clean-up stop an upload. */
+export async function sweepStaleStaged(teamId: string, userId: string, now = Date.now()): Promise<void> {
+  try {
+    const folder = inboxFolder(teamId, userId)
+    const { data } = await storage().from(BUCKET).list(folder.replace(/\/$/, ""), { limit: 200 })
+    const old = staleStaged(Array.isArray(data) ? data : [], folder, now)
+    if (old.length) await storage().from(BUCKET).remove(old)
+  } catch { /* the clean-up is only housekeeping */ }
+}
+
 export async function createInboxUploadUrl(teamId: string, userId: string, fileName: unknown): Promise<{ ok: true; signedUrl: string; token: string; path: string } | { ok: false; error: string; status: number }> {
   if (typeof fileName !== "string" || !fileName.trim()) return { ok: false, error: "file_name required", status: 400 }
+  await sweepStaleStaged(teamId, userId)
   const path = newInboxPath(teamId, userId, fileName)
   const { data, error } = await storage().from(BUCKET).createSignedUploadUrl(path)
   if (error || !data) return { ok: false, error: "Could not start the upload. Please try again.", status: 500 }

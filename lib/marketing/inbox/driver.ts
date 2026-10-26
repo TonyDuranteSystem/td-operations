@@ -53,8 +53,16 @@ const realDriver: MailDriver = {
     }
     const t = parseThreadFull(raw, address, attachmentUrlFor(address))
     if (raw.messages.some(m => m.labelIds?.includes("DRAFT"))) {
-      const drafts = (await gmailGet("/drafts", { maxResults: "100" }, address).catch(() => ({}))) as { drafts?: Array<{ id: string; message?: { threadId?: string } }> }
-      t.draftId = drafts.drafts?.find(d => d.message?.threadId === id)?.id
+      // the draft's id is only found by listing the drafts: up to 500 of them, a page at a time
+      const draftMsgId = [...raw.messages].reverse().find(m => m.labelIds?.includes("DRAFT"))?.id
+      let pageToken: string | undefined
+      for (let page = 0; page < 5 && !t.draftId; page++) {
+        const drafts = (await gmailGet("/drafts", { maxResults: "100", ...(pageToken ? { pageToken } : {}) }, address).catch(() => ({}))) as { drafts?: Array<{ id: string; message?: { id?: string; threadId?: string } }>; nextPageToken?: string }
+        // the draft whose message is the one marked DRAFT in this conversation (matched by message, not only by conversation)
+        t.draftId = (drafts.drafts?.find(d => d.message?.id === draftMsgId) ?? drafts.drafts?.find(d => d.message?.threadId === id))?.id
+        pageToken = drafts.nextPageToken
+        if (!pageToken) break
+      }
     }
     return t
   },
@@ -68,8 +76,9 @@ const realDriver: MailDriver = {
     return { id: r.id ?? "", threadId: r.threadId ?? threadId ?? "" }
   },
   async saveDraft(address, raw, threadId, replaceDraftId) {
-    if (replaceDraftId) await gmailDelete(`/drafts/${encodeURIComponent(replaceDraftId)}`, address).catch(() => {})
+    // the new draft first, the old one after: a failure in between must never leave the person with no draft at all
     const r = (await gmailPost("/drafts", { message: { raw, ...(threadId ? { threadId } : {}) } }, address)) as { id: string }
+    if (replaceDraftId) await gmailDelete(`/drafts/${encodeURIComponent(replaceDraftId)}`, address).catch(() => {})
     return { draftId: r.id }
   },
   async deleteDraft(address, draftId) { await gmailDelete(`/drafts/${encodeURIComponent(draftId)}`, address) },

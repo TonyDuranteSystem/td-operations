@@ -85,11 +85,13 @@ export function parseThreadFull(
       fromEmail: emailOf(from),
       to: getHeader(h, "To"),
       cc: getHeader(h, "Cc"),
+      bcc: getHeader(h, "Bcc"),
       date: safeEmailDate(getHeader(h, "Date"), msg.internalDate),
       subject: decodeHtmlEntities(getHeader(h, "Subject")),
       html: extracted.isHtml ? sanitizeEmailHtml(body) : null,
       text,
       unread: !!msg.labelIds?.includes("UNREAD"),
+      draft: !!msg.labelIds?.includes("DRAFT"),
       outbound: emailOf(from) === mailbox,
       attachments: extractAttachments(msg.payload)
         .filter(a => !used.has(a.attachmentId))

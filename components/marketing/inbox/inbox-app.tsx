@@ -22,6 +22,20 @@ const sizeText = (n: number) => (n >= 1_048_576 ? `${(n / 1_048_576).toFixed(1)}
  * and the actions (Reply, Reply all, Forward, Archive, Delete, Mark unread, Star, Print, Copy link). It reads and writes only through /api/marketing/inbox/*, which only ever opens an address this person may open.
  * Every server answer is shown as written (R099).
  */
+/** "\"Doe, John\" <j@x.com>, b@x.com" -> ["j@x.com", "b@x.com"]: split on commas outside quotes, keep the <address> (the server checks every one again before anything is saved or sent). */
+function addressList(h: string): string[] {
+  const parts: string[] = []
+  let cur = '', q = false, ang = false
+  for (const ch of h) {
+    if (ch === '"') q = !q
+    else if (!q && ch === '<') ang = true
+    else if (!q && ch === '>') ang = false
+    if ((ch === ',' || ch === ';') && !q && !ang) { parts.push(cur); cur = '' } else cur += ch
+  }
+  parts.push(cur)
+  return parts.map(x => x.trim()).filter(Boolean).map(x => /<([^<>]+)>\s*$/.exec(x)?.[1]?.trim() ?? x)
+}
+
 export function InboxApp({ initialBoxes, startAddress, startThread }: { initialBoxes: string[]; startAddress?: string; startThread?: string }) {
   const t = useT()
   const lang = useLang()
@@ -39,6 +53,14 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
   const [thread, setThread] = useState<Thread | null>(null)
   const [threadError, setThreadError] = useState<string | null>(null)
   const [composer, setComposer] = useState<ComposerSeed | null>(null)
+  const composerDirty = useRef(false)
+  const composerRef = useRef<ComposerSeed | null>(null)
+  // the open email is read again after a send / a saved or deleted draft, so the reader never shows an old version (an old draft could be edited and sent twice)
+  const [threadTick, setThreadTick] = useState(0)
+  const setDirty = useCallback((d: boolean) => { composerDirty.current = d }, [])
+  /** a half-written email is never thrown away silently: leaving it (another folder, address or email) asks first */
+  composerRef.current = composer
+  const leaveComposer = (): boolean => !composer || !composerDirty.current || window.confirm(t('Throw away the email you are writing?'))
   const [toast, setToast] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
   const loadSeq = useRef(0)
@@ -89,7 +111,7 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
         }
       })
       .catch(e => { if (seq === threadSeq.current) setThreadError(e instanceof Error ? e.message : t('Could not open this email. Please try again.')) })
-  }, [selected, address, t])
+  }, [selected, address, t, threadTick])
 
   const act = useCallback(async (action: ThreadAction) => {
     if (!selected) return
@@ -104,7 +126,8 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
     } catch (e) { flash(e instanceof Error && e.message ? e.message : t('That did not work. Please try again.')) }
   }, [selected, address, t])
 
-  const lastReal = thread ? thread.messages[thread.messages.length - 1] : null
+  // the email Reply / Forward answer: the newest one that is not an unsent draft
+  const lastReal = thread ? ([...thread.messages].reverse().find(m => !m.draft) ?? thread.messages[thread.messages.length - 1]) : null
   const openReply = (mode: 'reply' | 'replyAll' | 'forward') => {
     if (!thread || !lastReal) return
     const s = lastReal.suggest
@@ -114,10 +137,18 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
       subject: mode === 'forward' ? s.subjectFwd : s.subjectRe, html: '<p></p>',
     })
   }
+  // The draft comes back exactly as saved: its own To / Cc / Bcc, its formatting, and - when it answers an email - the same conversation (the earlier email supplies the reply headers). Its text already holds
+  // the signature and the quoted original, so the server is told not to add them again.
   const editDraft = () => {
-    if (!thread || !lastReal) return
+    if (!thread) return
+    const di = thread.messages.map(m => m.draft).lastIndexOf(true)
+    const draftMsg = di >= 0 ? thread.messages[di] : thread.messages[thread.messages.length - 1]
+    const before = thread.messages.slice(0, di >= 0 ? di : -1).filter(m => !m.draft)
+    const prev = before.length ? before[before.length - 1] : null
     setComposer({
-      mode: 'new', to: (lastReal.to || '').split(',').map(x => x.trim()).filter(Boolean), cc: [], subject: lastReal.subject || thread.subject, html: textToEditorHtml(lastReal.text), draftId: thread.draftId,
+      mode: prev ? 'reply' : 'new', threadId: prev ? thread.id : undefined, messageId: prev?.id,
+      to: addressList(draftMsg.to || ''), cc: addressList(draftMsg.cc || ''), bcc: addressList(draftMsg.bcc || ''),
+      subject: draftMsg.subject || thread.subject, html: draftMsg.html || textToEditorHtml(draftMsg.text), draftId: thread.draftId, complete: true,
     })
   }
   const copyLink = () => {
@@ -134,8 +165,8 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
     w.document.write(`<title>${esc(thread.subject)}</title><body style="font:14px Arial">${thread.messages.map(m => `<h3>${esc(m.subject || thread.subject)}</h3><p>${esc(m.from)} &lt;${esc(m.fromEmail)}&gt;<br>${esc(new Date(m.date).toLocaleString(localeFor(lang)))}</p><pre style="white-space:pre-wrap;font:inherit">${esc(m.text)}</pre><hr>`).join('')}</body>`)
     w.document.close(); w.focus(); w.print()
   }
-  const switchBox = (a: string) => { setAddress(a); setFolder('inbox'); setTokens([]); setQ(''); setQInput(''); setSelected(null); setComposer(null) }
-  const switchFolder = (f: Folder) => { setFolder(f); setTokens([]); setSelected(null); setComposer(null) }
+  const switchBox = (a: string) => { if (!leaveComposer()) return; setAddress(a); setFolder('inbox'); setTokens([]); setQ(''); setQInput(''); setSelected(null); setComposer(null) }
+  const switchFolder = (f: Folder) => { if (!leaveComposer()) return; setFolder(f); setTokens([]); setSelected(null); setComposer(null) }
   const dateText = (iso: string) => new Date(iso).toLocaleString(localeFor(lang), { dateStyle: 'medium', timeStyle: 'short' })
   const dlHref = (a: MailAttachment) => `/api/marketing/inbox/attachment?address=${encodeURIComponent(address)}&messageId=${encodeURIComponent(a.messageId)}&attachmentId=${encodeURIComponent(a.attachmentId)}&filename=${encodeURIComponent(a.filename)}`
 
@@ -162,7 +193,7 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
           <button key={f} type="button" onClick={() => switchFolder(f)} aria-pressed={f === folder} data-testid={`inbox-folder-${f}`}
             className={`${btn} ${f === folder ? 'border-slate-900 bg-slate-900 text-white' : ''}`}>{t(FOLDER_LABEL[f])}</button>
         ))}
-        <button type="button" className={`${btn} bg-slate-900 text-white`} data-testid="inbox-new" onClick={() => { setSelected(null); setComposer({ mode: 'new', to: [], cc: [], subject: '', html: '<p></p>' }) }}>+ {t('New email')}</button>
+        <button type="button" className={`${btn} bg-slate-900 text-white`} data-testid="inbox-new" onClick={() => { if (!leaveComposer()) return; setSelected(null); setComposer({ mode: 'new', to: [], cc: [], subject: '', html: '<p></p>', nonce: Date.now() }) }}>+ {t('New email')}</button>
       </div>
 
       {toast && <p role="status" className="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white" data-testid="inbox-toast">{toast}</p>}
@@ -174,7 +205,7 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
             {!loading && listError && <p role="alert" className="m-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800" data-testid="inbox-list-error">{listError}</p>}
             {!loading && !listError && rows.length === 0 && <p className="p-4 text-sm text-slate-500" data-testid="inbox-empty">{q ? t('Nothing found.') : t('Nothing here.')}</p>}
             {!loading && rows.map(r => (
-              <button key={r.id} type="button" onClick={() => { setSelected(r.id); setComposer(null) }} data-testid="inbox-row" data-unread={r.unread ? '1' : '0'}
+              <button key={r.id} type="button" onClick={() => { if (!leaveComposer()) return; setSelected(r.id); setComposer(null) }} data-testid="inbox-row" data-unread={r.unread ? '1' : '0'}
                 className={`block w-full border-b px-3 py-2 text-left ${r.id === selected ? 'bg-slate-100' : 'hover:bg-slate-50'}`}>
                 <span className={`flex items-baseline justify-between gap-2 ${r.unread ? 'font-semibold' : ''}`}>
                   <span className="truncate">{r.unread ? '● ' : ''}{r.who || t('(no sender)')}</span>
@@ -193,9 +224,15 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
 
         <div className="min-w-0 p-4" data-testid="inbox-reader">
           {composer && (
-            <Composer key={`${composer.mode}-${composer.threadId ?? 'new'}-${composer.draftId ?? ''}-${composer.messageId ?? ''}`} address={address} seed={composer}
-              onClose={() => setComposer(null)} onDraftChanged={() => setTick(x => x + 1)}
-              onSent={threadId => { setComposer(null); flash(t('Sent from {address}.', { address })); setTick(x => x + 1); if (threadId && composer.mode !== 'new') setSelected(threadId) }} />
+            <Composer key={`${composer.mode}-${composer.threadId ?? 'new'}-${composer.draftId ?? ''}-${composer.messageId ?? ''}-${composer.nonce ?? 0}`} address={address} seed={composer}
+              onClose={() => setComposer(null)} onDirty={setDirty} onDraftChanged={() => { setTick(x => x + 1); setThreadTick(x => x + 1) }}
+              onSent={threadId => {
+                const still = composerRef.current === composer // false when the person already moved on while it was being sent
+                flash(t('Sent from {address}.', { address })); setTick(x => x + 1); setThreadTick(x => x + 1)
+                if (!still) return
+                setComposer(null)
+                if (threadId && composer.mode !== 'new') setSelected(threadId)
+              }} />
           )}
           {!composer && !selected && <p className="text-sm text-slate-500" data-testid="inbox-pick">{t('Choose an email on the left, or write a new one.')}</p>}
           {!composer && selected && threadError && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800" data-testid="inbox-thread-error">{threadError}</p>}
