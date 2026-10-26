@@ -18,6 +18,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { randomUUID } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { createClient } from "@/lib/supabase/server"
+import { isStaffUser } from "@/lib/auth"
 import { validateStorageName, escapeIlikePattern } from "@/lib/crm-storage/name-guard"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -26,6 +28,9 @@ const db = supabaseAdmin as any
 export async function POST(req: NextRequest) {
   const denied = await requireStaffRoute()
   if (denied) return denied
+  // the storage bucket itself accepts only admin / team logins: a partner passes the gate above but their upload would fail after the whole transfer, so say no HERE
+  const { data: { user } } = await createClient().auth.getUser()
+  if (!isStaffUser(user)) return NextResponse.json({ error: "Only the TD team can upload files here." }, { status: 403 })
 
   const body = await req.json().catch(() => ({}))
   const nameCheck = validateStorageName(body.file_name)

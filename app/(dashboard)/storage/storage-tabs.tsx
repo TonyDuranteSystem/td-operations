@@ -33,12 +33,12 @@ export function StorageTabs() {
     try { window.localStorage.setItem(TAB_KEY, id) } catch { /* storage blocked */ }
   }
   const btn = (id: 'new' | 'types', label: string) => (
-    <FastTooltip label={busy && tab !== id ? 'An upload is running — wait until it has finished.' : ''}>
+    <FastTooltip label={busy && tab !== id ? 'Finish or close the upload window first.' : ''}>
     <button
       type="button"
       onClick={() => choose(id)}
       disabled={busy && tab !== id}
-      aria-label={busy && tab !== id ? `${label} — an upload is running, wait until it has finished` : undefined}
+      aria-label={busy && tab !== id ? `${label} — finish or close the upload window first` : undefined}
       className={`rounded-md px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50 ${tab === id ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-100'}`}
     >
       {label}
