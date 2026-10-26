@@ -8,9 +8,10 @@
  *   lazy-loaded, for Move and for "Choose another place…".
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { trapTabKey } from '@/components/storage/focus-trap'
 import { folderNameProblem } from '@/lib/crm-store/names'
+import { errorText } from '@/components/storage/store-ui-rules'
 import { ChevronDown, ChevronRight, Folder, FolderOpen, Loader2, X, Building2, User, Hammer, Briefcase, Lock } from 'lucide-react'
 
 export interface StoreQuestion { enabled: boolean; title: string; choices: Record<string, string> }
@@ -123,15 +124,20 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
     getJson<{ groups: NavGroup[] }>('/api/crm-store/browse/navigation').then((d) => setGroups(d.groups)).catch((e) => setError(e instanceof Error ? e.message : 'Could not load the list.'))
   }, [chooseOwner, owner])
 
+  /** the storage the picker shows RIGHT NOW: a slower answer for the storage that was shown before must not land on the new one */
+  const shownOwner = useRef<string | null>(owner?.id ?? null)
+  shownOwner.current = owner?.id ?? null
   const load = useCallback(async (oid: string, folderId: string | null) => {
     const key = folderId ?? 'root'
     setLoading((l) => new Set(l).add(key))
     try {
       const r = await getJson<{ folder: PickFolder | null; folders: PickFolder[] }>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(oid)}${folderId ? `&folder=${encodeURIComponent(folderId)}` : ''}`)
+      if (shownOwner.current !== oid) return
       if (!folderId) { setRootId(r.folder?.id ?? null); setRootFolder(r.folder); if (r.folder) setOpen(new Set([r.folder.id])) }
       if (r.folder) setNodes((n) => ({ ...n, [r.folder!.id]: r.folders }))
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not open the folder.')
+      if (shownOwner.current !== oid) return
+      setError(errorText(e, 'Could not open the folder.'))
     } finally {
       setLoading((l) => { const n = new Set(l); n.delete(key); return n })
     }

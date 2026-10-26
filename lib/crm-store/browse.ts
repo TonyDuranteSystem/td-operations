@@ -300,15 +300,24 @@ export async function readFileForStaff(fileId: string): Promise<{ bytes: Buffer;
 
 /** The company's owner in the NEW store (a live, not study-only storage; anything else → null). */
 export async function storeOwnerForAccount(accountId: string): Promise<string | null> {
+  try {
+    return await storeOwnerForAccountOrThrow(accountId)
+  } catch {
+    return null // server flows that fall back when there is no storage keep this lenient answer
+  }
+}
+
+/**
+ * Same answer, but a database error THROWS instead of reading as "this company has no storage" — for the screens: they must say
+ * "could not check" (with Retry), never "No files to show here". null still means there really is no (live) storage.
+ */
+export async function storeOwnerForAccountOrThrow(accountId: string): Promise<string | null> {
   // No environment gate (Drive cutover, dev job ad09ea91): the answer is exact data — a live, not study-only, storage.
   // Production has none yet, so this still answers null there today; the day a company is switched it answers.
-  try {
-    // a storage made by a study copy is not the company's storage yet (the CRM keeps using Drive for it)
-    const { data } = await db().from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).limit(1)
-    return ((data ?? [])[0]?.id as string | undefined) ?? null
-  } catch {
-    return null
-  }
+  // a storage made by a study copy is not the company's storage yet (the CRM keeps using Drive for it)
+  const { data, error } = await db().from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).limit(1)
+  if (error) throw new Error(`store owner lookup: ${error.message}`)
+  return ((data ?? [])[0]?.id as string | undefined) ?? null
 }
 
 export interface BrowseVersion { id: string; versionNo: number; unmerged: boolean; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null }
@@ -350,15 +359,21 @@ export async function readVersionForStaff(fileId: string, versionId: string): Pr
 
 /** A person's own LIVE (not study-only) storage in the NEW store, or null. */
 export async function storeOwnerForContact(contactId: string): Promise<string | null> {
-  // No environment gate (Drive cutover Phase A2, dev job ad09ea91): like storeOwnerForAccount the answer is exact data — a live,
-  // not study-only, storage. Production has none yet, so it still answers null there today; the day a person is switched it
-  // answers, and the contact page shows the storage instead of the Drive upload form.
   try {
-    const { data } = await db().from("store_owners").select("id").eq("contact_id", contactId).eq("kind", "person").eq("study_only", false).limit(1)
-    return ((data ?? [])[0]?.id as string | undefined) ?? null
+    return await storeOwnerForContactOrThrow(contactId)
   } catch {
     return null
   }
+}
+
+/** Same answer, but a database error THROWS (the screen says "could not check", not "no storage"). */
+export async function storeOwnerForContactOrThrow(contactId: string): Promise<string | null> {
+  // No environment gate (Drive cutover Phase A2, dev job ad09ea91): like storeOwnerForAccount the answer is exact data — a live,
+  // not study-only, storage. Production has none yet, so it still answers null there today; the day a person is switched it
+  // answers, and the contact page shows the storage instead of the Drive upload form.
+  const { data, error } = await db().from("store_owners").select("id").eq("contact_id", contactId).eq("kind", "person").eq("study_only", false).limit(1)
+  if (error) throw new Error(`store owner lookup: ${error.message}`)
+  return ((data ?? [])[0]?.id as string | undefined) ?? null
 }
 
 /**
@@ -388,8 +403,13 @@ export async function storeFilesShownForAccount(accountId: string, ownerId: stri
       if (pids.length > 0) {
         // only the person folders the company page shows (never a person's ITIN / Tax — those stay on their own page)
         const kinds = await folderKindSettings()
-        const { data: folders, error: fErr } = await db().from("store_folders").select("id, parent_id, kind").in("owner_id", pids).is("trashed_at", null)
-        if (fErr) return null
+        // paged: the people's folders can pass the 1000-row cap of one request (a missing folder would hide its files from the company page)
+        const { readAllPages } = await import("./paged")
+        let folders: Array<{ id: string; parent_id: string | null; kind: string }>
+        try {
+          folders = await readAllPages<{ id: string; parent_id: string | null; kind: string }>((from, to) =>
+            db().from("store_folders").select("id, parent_id, kind").in("owner_id", pids).is("trashed_at", null).order("id").range(from, to))
+        } catch { return null }
         const byId = new Map(((folders ?? []) as { id: string; parent_id: string | null; kind: string }[]).map((f) => [f.id, f]))
         const okFolder = (id: string): boolean => {
           for (let cur = byId.get(id), i = 0; cur && i < 50; cur = cur.parent_id ? byId.get(cur.parent_id) : undefined, i++) {

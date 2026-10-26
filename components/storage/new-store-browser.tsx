@@ -45,6 +45,8 @@ import { buildDocumentShareMessage } from '@/lib/portal/document-share-text'
 import { ChangePersonDialog } from './change-person-dialog'
 import { DriveImportDialog } from './drive-import-dialog'
 import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keepBothName } from '@/lib/crm-store/names'
+import { HttpError, sameNameKey, errorText, isGoneError, fmtSize, canShowToClient, cantShowReason, resetFailedToWaiting, hasHiddenPart } from './store-ui-rules'
+import { trapTabKey } from './focus-trap'
 
 interface Fold { id: string; name: string; kind: string; trashed: boolean; locked?: boolean }
 /** the right-click menu: what was clicked (the menu items are the SAME ones the row's "…" button shows) */
@@ -83,11 +85,13 @@ export function useStoreOwnerForAccount(accountId: string, enabled: boolean) {
     queryKey: ['crm-store-owner-for-account', accountId],
     queryFn: async () => {
       const r = await fetch(`/api/crm-store/browse/owner-for-account?account=${encodeURIComponent(accountId)}`)
-      if (!r.ok) return { ownerId: null, shownFileIds: [] }
+      // a failed answer is an ERROR (the screen says so and offers Retry) — never "this company has no storage"
+      if (!r.ok) throw new HttpError(((await r.json().catch(() => ({}))) as { error?: string }).error || 'Could not check where this company\'s files are kept.', r.status)
       return r.json()
     },
     enabled,
     staleTime: 60_000,
+    retry: 1,
   })
 }
 
@@ -97,11 +101,12 @@ export function useStoreOwnerForContact(contactId: string, enabled: boolean) {
     queryKey: ['crm-store-owner-for-contact', contactId],
     queryFn: async () => {
       const r = await fetch(`/api/crm-store/browse/owner-for-contact?contact=${encodeURIComponent(contactId)}`)
-      if (!r.ok) return { ownerId: null }
+      if (!r.ok) throw new HttpError(((await r.json().catch(() => ({}))) as { error?: string }).error || 'Could not check where this person\'s files are kept.', r.status)
       return r.json()
     },
     enabled,
     staleTime: 60_000,
+    retry: 1,
   })
 }
 
@@ -114,18 +119,19 @@ const INLINE_TYPES = new Set(['application/pdf', 'image/png', 'image/jpeg', 'ima
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: 'no-store' })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error((data as { error?: string }).error || 'Could not load the new storage — please try again.')
+  if (!res.ok) throw new HttpError((data as { error?: string }).error || 'Could not load the new storage — please try again.', res.status)
   return data as T
 }
 
 async function postJson<T>(url: string, body: unknown, fallback: string): Promise<T> {
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error((data as { error?: string }).error || fallback)
+  if (!res.ok) throw new HttpError((data as { error?: string }).error || fallback, res.status)
   return data as T
 }
 
-const errMsg = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback)
+/** the server's own words; a dropped connection reads "Network problem — check your connection and try again." (R099) */
+const errMsg = errorText
 
 const ownerIcon = (k: string) => (k === 'company' ? Building2 : k === 'person' ? User : k === 'formation' ? Hammer : k === 'business' ? Briefcase : k === 'private' ? Lock : Folder)
 
@@ -195,7 +201,6 @@ const fileIcon = (mime: string | null) => {
   if (m.includes('sheet') || m.includes('excel') || m.includes('csv')) return FileSpreadsheet
   return FileText
 }
-const fmtSize = (n: number | null) => (n == null ? '' : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / (1024 * 1024)).toFixed(1)} MB`)
 const fmtDate = (d: string) => { try { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) } catch { return '' } }
 /** "Oct 4" — or "Oct 4, 2025" when it is not this year: the narrow column on each file row */
 const fmtShort = (d: string) => { try { const x = new Date(d); return x.toLocaleDateString('en-US', x.getFullYear() === new Date().getFullYear() ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: '2-digit' }) } catch { return '' } }
@@ -262,7 +267,7 @@ interface Picking { props: Omit<React.ComponentProps<typeof FolderPicker>, 'onPi
 interface NewFolder { parentId: string; value: string; year?: boolean; siblings: string[]; left?: boolean }
 interface TreeNode { root?: Fold | null; folders: Fold[] }
 
-export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company', openOwnerId, openFolderId }: { ownerId?: string; scopedKind?: string; openOwnerId?: string; openFolderId?: string } = {}) {
+export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company', openOwnerId, openFolderId, onBusyChange }: { ownerId?: string; scopedKind?: string; openOwnerId?: string; openFolderId?: string; /** tells the page whether an upload / group action is running (the tab must not be switched meanwhile) */ onBusyChange?: (busy: boolean) => void } = {}) {
   const [groups, setGroups] = useState<NavGroup[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [ownerId, setOwnerId] = useState<string | null>(scopedOwnerId ?? null)
@@ -353,6 +358,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // the trash of the open storage, and files dragged in from the computer
   const [trashOpen, setTrashOpen] = useState(false)
   const [trash, setTrash] = useState<TrashBatch[] | null>(null)
+  /** a failed read is said as a failure (with Retry) — never shown as an empty list */
+  const [trashError, setTrashError] = useState<string | null>(null)
+  const [sharedError, setSharedError] = useState<string | null>(null)
+  const [filterError, setFilterError] = useState<string | null>(null)
   const [restoring, setRestoring] = useState<string | null>(null)
   const [drop, setDrop] = useState<DropBatch | null>(null)
   /** a plain drop / upload into the firm's own areas (Business, My files): no type, no limit */
@@ -377,17 +386,33 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [allMax, setAllMax] = useState(500)
   const [detailsFor, setDetailsFor] = useState<string | null>(null)
   // Escape closes the Trash window / the details panel (not while a question, picker or preview is open on top)
+  const overlayOnTop = !!(asking || picking || preview || signConfirm || lockNote || editing || typing || changingPerson || sharing || mergeList || myDriveFor || importOpen || previewVersion || ocrDocId || ctx)
   useEffect(() => {
     if (!trashOpen && !detailsFor) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || asking || picking || preview) return
-      if (detailsFor) setDetailsFor(null)
+      if (e.key !== 'Escape' || overlayOnTop) return
+      if (detailsFor) closeDetails()
       else setTrashOpen(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [trashOpen, detailsFor, asking, picking, preview])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- closeDetails only touches state setters and a ref
+  }, [trashOpen, detailsFor, overlayOnTop])
+  // Escape closes the small confirm / note windows (and only them — not the Details panel behind)
+  useEffect(() => {
+    if (!signConfirm && !lockNote) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || asking || picking) return
+      if (signConfirm) setSignConfirm(null); else setLockNote(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [signConfirm, lockNote, asking, picking])
   const [details, setDetails] = useState<FileDetails | null>(null)
+  /** each open of the details / versions panel gets a number; a slower, older answer never lands on a newer pick (or on a closed panel) */
+  const detailsSeq = useRef(0)
+  const versionsSeq = useRef(0)
+  const closeDetails = () => { detailsSeq.current++; setDetailsFor(null); setDetails(null) }
   const [dropRunning, setDropRunning] = useState(false)
   const [sharedFiles, setSharedFiles] = useState<{ id: string; name: string; where: string; mimeType: string | null; size: number | null; updatedAt: string; sharedAt: string }[] | null>(null)
   const dragRef = useRef<{ id: string; from: string | null } | null>(null)
@@ -586,17 +611,29 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     const seq = ++refreshSeq.current
     try {
       const people = Object.values(loaded).flatMap((x) => x.people ?? [])
+      const fetchOnce = async (key: string) => {
+        if (key.startsWith('person:')) {
+          const p = people.find((pp) => personKey(pp.contactId) === key)
+          return p?.ownerId ? [key, await fetchInto(p.ownerId, null, true)] as const : null
+        }
+        return [key, await fetchInto(folderOwner.current.get(key) ?? ownerId, key, viaCompany.current.has(key))] as const
+      }
       const fetchKey = async (key: string) => {
+        const gone = () => { if (key === focusRef.current) { focusRef.current = null; setFocus(null) } return null }
         try {
-          if (key.startsWith('person:')) {
-            const p = people.find((pp) => personKey(pp.contactId) === key)
-            return p?.ownerId ? [key, await fetchInto(p.ownerId, null, true)] as const : null
+          return await fetchOnce(key)
+        } catch (e) {
+          // the folder shown on the right is really gone (deleted / moved away — the server says "not found"): back to the storage's top
+          if (isGoneError(e)) return gone()
+          // anything else (a connection blip, a wake-up, a server hiccup) is NOT "the folder is gone": stay in the folder, try once more quietly
+          await new Promise((r) => setTimeout(r, 1200))
+          try {
+            return await fetchOnce(key)
+          } catch (e2) {
+            if (isGoneError(e2)) return gone()
+            if (key === focusRef.current) toast.message(`${errMsg(e2, 'Could not refresh.')} Showing what was loaded before.`, { id: 'store-refresh-failed' })
+            return null // the folder stays as it was on screen
           }
-          return [key, await fetchInto(folderOwner.current.get(key) ?? ownerId, key, viaCompany.current.has(key))] as const
-        } catch {
-          // the folder shown on the right is gone (deleted / moved away): back to the storage's top
-          if (key === focusRef.current) { focusRef.current = null; setFocus(null) }
-          return null
         }
       }
       const apply = (entries: Array<readonly [string, Contents] | null>) => {
@@ -611,7 +648,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       const [r, firstEntries] = await Promise.all([fetchInto(ownerId, null), Promise.all(first.map(fetchKey))])
       if (ownerIdRef.current !== ownerId || seq !== refreshSeq.current) return
       // what is reloaded: everything open, plus the storage's top folders (their counts show even when closed)
-      const rest = Array.from(new Set([...Array.from(expandedRef.current), ...r.folders.map((x) => x.id)])).filter((k) => !first.includes(k))
+      // the folders ABOVE the one on the right stay loaded too: the Upload panel's Folder list walks down from the top and needs every level
+      // to reach a deep folder (without them it showed blank at depth 3 and below)
+      const above = focusRef.current ? (loaded[focusRef.current]?.path ?? []).filter((x) => x.kind !== 'root' && x.kind !== 'business_root' && x.kind !== 'private_root' && x.id !== focusRef.current).map((x) => x.id) : []
+      const rest = Array.from(new Set([...Array.from(expandedRef.current), ...above, ...r.folders.map((x) => x.id)])).filter((k) => !first.includes(k))
       // a CLOSED folder's saved contents are not reloaded, so they may be out of date (e.g. a restored folder
       // still counting a file as shown): drop them — they are read again, fresh, when the folder is opened.
       // "2. Contacts" lists (who the people are) are kept: the upload's "Whose document?" reads them.
@@ -631,28 +671,32 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   }, [ownerId, fetchInto, loaded, scopedOwnerId, loadNav, refreshTree])
 
   const openVersions = async (fileId: string) => {
+    const my = ++versionsSeq.current
     if (versionsFor === fileId) { setVersionsFor(null); return }
     setMenuFor(null)
     setVersionsFor(fileId)
     setVersions(null)
     try {
-      setVersions((await getJson<{ versions: NonNullable<typeof versions> }>(`/api/crm-store/browse/file/${fileId}/versions`)).versions)
+      const list = (await getJson<{ versions: NonNullable<typeof versions> }>(`/api/crm-store/browse/file/${fileId}/versions`)).versions
+      if (my === versionsSeq.current) setVersions(list)
     } catch (e) {
+      if (my !== versionsSeq.current) return
       setVersionsFor(null)
       toast.error(errMsg(e, 'Could not load the versions.'))
     }
   }
 
   /** "Make this the current copy": the older copy is saved again as a NEW version (nothing is deleted) */
-  const makeCurrent = async (f: File_, versionNo: number) => {
+  const makeCurrent = (f: File_, versionNo: number) => withBusy(f.id, async () => {
     if (f.versionNo == null) { toast.error('The current version of this file could not be read — reload the page and try again.'); return }
     try {
       const r = await postJson<{ status: string; message: string }>(`/api/crm-store/browse/file/${f.id}/restore`, { versionNo, baseVersionNo: f.versionNo }, 'The older copy could not be restored.')
       if (r.status === 'versioned') toast.success(r.message); else toast.error(r.message)
     } catch (e) { toast.error(errMsg(e, 'The older copy could not be restored.')) }
+    versionsSeq.current++
     setVersionsFor(null)
-    void refreshAll()
-  }
+    await refreshAll()   // held until the screen has the new version number: a second click can't restore from the old one
+  })
 
   const doMarkSigned = async (f: File_) => {
     setSignConfirm(null)
@@ -671,10 +715,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setEditing({ id: f.id, name: f.name, mimeType: f.mimeType, size: f.size, versionNo: f.versionNo, ownerId: ownerId ?? '', clientVisible: f.clientVisible, alwaysShown: !!f.shownByWorkspace })
   }
 
+  /** one action at a time per file — the ref answers at once (two quick clicks land before the screen re-draws with the busy state) */
+  const busyIds = useRef(new Set<string>())
   const withBusy = async (id: string, fn: () => Promise<void>) => {
-    if (busyFiles.has(id)) return
+    if (busyFiles.has(id) || busyIds.current.has(id)) return
+    busyIds.current.add(id)
     setBusyFiles((b) => new Set(b).add(id))
-    try { await fn() } finally { setBusyFiles((b) => { const n = new Set(b); n.delete(id); return n }) }
+    try { await fn() } finally { busyIds.current.delete(id); setBusyFiles((b) => { const n = new Set(b); n.delete(id); return n }) }
   }
 
   const ownerLabelOf = (oid: string | undefined | null) => {
@@ -858,28 +905,36 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     }
   }
 
+  const sharedSeq = useRef(0)
   const openSharedWithMe = async () => {
+    const my = ++sharedSeq.current
     setSharedView(true)
     setSharedFiles(null)
+    setSharedError(null)
     try {
-      setSharedFiles((await getJson<{ files: NonNullable<typeof sharedFiles> }>('/api/crm-store/browse/shared-with-me')).files)
+      const list = (await getJson<{ files: NonNullable<typeof sharedFiles> }>('/api/crm-store/browse/shared-with-me')).files
+      if (my === sharedSeq.current) setSharedFiles(list)
     } catch (e) {
-      toast.error(errMsg(e, 'Could not read the files shared with you.'))
-      setSharedFiles([])
+      if (my !== sharedSeq.current) return
+      setSharedError(errMsg(e, 'Could not read the files shared with you.'))   // said as a failure with Retry — not as "nothing shared"
     }
   }
 
   // ───────────────────────────────────────── trash
 
+  const trashSeq = useRef(0)
   const openTrash = async () => {
     if (!ownerId) return
+    const my = ++trashSeq.current
     setTrashOpen(true)
     setTrash(null)
+    setTrashError(null)
     try {
-      setTrash((await getJson<{ batches: TrashBatch[] }>(`/api/crm-store/browse/trash?owner=${encodeURIComponent(ownerId)}`)).batches)
+      const batches = (await getJson<{ batches: TrashBatch[] }>(`/api/crm-store/browse/trash?owner=${encodeURIComponent(ownerId)}`)).batches
+      if (my === trashSeq.current && ownerIdRef.current === ownerId) setTrash(batches)
     } catch (e) {
-      toast.error(errMsg(e, 'Could not read the trash.'))
-      setTrash([])
+      if (my !== trashSeq.current) return
+      setTrashError(errMsg(e, 'Could not read the trash.'))   // never shown as "The trash is empty."
     }
   }
 
@@ -1057,23 +1112,26 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setDrop({ folder, person: r.person, items: found.map(({ file, path }) => ({ file, path, type: r.type, name: r.name, status: 'waiting' })) })
   }
 
-  const runDrop = async () => {
-    if (!drop) return
-    if (drop.folder.kind === 'contacts' && !drop.person) { toast.error('Choose whose documents these are first.'); return }
-    if (drop.items.some((i) => i.status === 'waiting' && !i.type)) { toast.error('Choose a document type for every file.'); return }
+  /** `retryFailed`: the files that failed go back to "waiting" and are tried again (the ones already saved or skipped are left alone) */
+  const runDrop = async (retryFailed = false) => {
+    if (!drop || dropRunning) return
+    const batch: DropBatch = retryFailed ? { ...drop, items: resetFailedToWaiting(drop.items) } : drop
+    if (batch.folder.kind === 'contacts' && !batch.person) { toast.error('Choose whose documents these are first.'); return }
+    if (batch.items.some((i) => i.status === 'waiting' && !i.type)) { toast.error('Choose a document type for every file.'); return }
+    if (retryFailed) setDrop(batch)
     setDropRunning(true)
     setUploading(true)
     let saved = 0, skipped = 0, failed = 0
     const madePaths = new Map<string, Fold | null>() // null = that path could not be made (said once)
     const taxMemo = new Map<string, { folder: Fold; year: number | null }>()
-    const oidOfDrop = folderOwner.current.get(drop.folder.id) ?? ownerId ?? ''
-    const viaDrop = viaCompany.current.has(drop.folder.id)
-    for (let i = 0; i < drop.items.length; i++) {
-      const it = drop.items[i]
+    const oidOfDrop = folderOwner.current.get(batch.folder.id) ?? ownerId ?? ''
+    const viaDrop = viaCompany.current.has(batch.folder.id)
+    for (let i = 0; i < batch.items.length; i++) {
+      const it = batch.items[i]
       if (it.status !== 'waiting') continue
       setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: 'uploading' } : x)) }))
       // a dropped folder: its sub-folders are made (or reused) under the target, once per path
-      let into: Fold = drop.folder
+      let into: Fold = batch.folder
       if (it.path.length) {
         const key = it.path.join('/')
         const known = madePaths.get(key)
@@ -1085,7 +1143,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         if (known) into = known
         else {
           try {
-            const r = await postJson<{ id: string; kind: string }>(`/api/crm-store/browse/folder/${drop.folder.id}/ensure-path`, { path: it.path }, 'The folders could not be created.')
+            const r = await postJson<{ id: string; kind: string }>(`/api/crm-store/browse/folder/${batch.folder.id}/ensure-path`, { path: it.path }, 'The folders could not be created.')
             into = { id: r.id, name: it.path[it.path.length - 1], kind: r.kind, trashed: false, locked: false }
             folderOwner.current.set(r.id, oidOfDrop)
             if (viaDrop) viaCompany.current.add(r.id)
@@ -1100,7 +1158,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         }
       }
       // dragged files always arrive HIDDEN from the client (decision #85); every question still applies
-      const out = await doUploadWith(it.file, { folder: into, typeSlug: it.type, personId: drop.person, displayName: it.name, visible: false, batch: true, taxMemo })
+      const out = await doUploadWith(it.file, { folder: into, typeSlug: it.type, personId: batch.person, displayName: it.name, visible: false, batch: true, taxMemo })
       if (out === 'saved') saved++; else if (out === 'cancelled') skipped++; else failed++
       setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: out } : x)) }))
     }
@@ -1109,7 +1167,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     toast.success(`${saved} ${saved === 1 ? 'file' : 'files'} uploaded — hidden from the client${skipped ? `, ${skipped} skipped` : ''}${failed ? `, ${failed} failed` : ''}`)
     if (saved && root?.owner.kind === 'private') toast.message('Files in Shared with staff are shared with nobody yet — use "Not shared" on each one to choose who can see it.')
     await refreshAll()
-    if (!failed) setDrop(null)
+    if (!failed && !batch.items.some((x) => x.status === 'failed')) setDrop(null)
   }
 
   // ───────────────────────────────────────── many files: sort, filters, details, group actions
@@ -1146,24 +1204,28 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     const my = ++filterSeq.current
     setFilterKind(k)
     setFiltered(null)
+    setFilterError(null)
     if (!k || !ownerId) return
     try {
       const r = (await getJson<{ files: FilteredFile[] }>(`/api/crm-store/browse/filter?owner=${encodeURIComponent(ownerId)}&kind=${k}`)).files
       if (my === filterSeq.current) setFiltered(r)
     } catch (e) {
       if (my !== filterSeq.current) return
-      toast.error(errMsg(e, 'Could not filter the files.'))
-      setFiltered([])
+      setFilterError(errMsg(e, 'Could not load the files.'))   // never shown as "This storage has no files yet."
+
     }
   }
 
   const openDetails = async (fileId: string) => {
+    const my = ++detailsSeq.current
     setMenuFor(null)
     setDetailsFor(fileId)
     setDetails(null)
     try {
-      setDetails(await getJson<FileDetails>(`/api/crm-store/browse/file/${fileId}/details`))
+      const d = await getJson<FileDetails>(`/api/crm-store/browse/file/${fileId}/details`)
+      if (my === detailsSeq.current) setDetails(d)
     } catch (e) {
+      if (my !== detailsSeq.current) return
       toast.error(errMsg(e, "Could not read the file's details."))
       setDetailsFor(null)
     }
@@ -1798,7 +1860,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         ? await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(landsIn.ownerId)}&folder=${encodeURIComponent(landsIn.folderId)}${landsIn.via ? '&via=company' : ''}`)
         : null
       const sha = await sha256OfFile(file)
-      const same = here?.files.find((x) => x.name.toLowerCase() === name.toLowerCase())
+      const nameKey = sameNameKey(name, file.type)   // the SAME key the server uses (an iPhone photo is saved as .jpg; accents compared composed)
+      const same = here?.files.find((x) => sameNameKey(x.name, x.mimeType) === nameKey)
       if (same && !(sha && same.sha256 === sha)) {
         const suggestion = keepBothName(name, (here?.files ?? []).map((x) => x.name))
         const a = await ask('same_name_different_content', 'A file with this name is already here',
@@ -1827,7 +1890,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             </>,
             [
               { key: 'dont_add', tone: sameStorage ? 'primary' : 'plain' },
-              ...(sameStorage ? [{ key: 'rename_existing', disabled: h.name.toLowerCase() === name.toLowerCase() }] : []),
+              ...(sameStorage ? [{ key: 'rename_existing', disabled: sameNameKey(h.name, h.mimeType) === nameKey }] : []),
               { key: 'second_copy', tone: sameStorage ? 'plain' as const : 'primary' as const },
               { key: 'cancel' },
             ])
@@ -1904,6 +1967,18 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // hand (Antonio 2026-10-23, LAN→WiFi). Never in the middle of an upload, a pop-up or a group action — that would reset it.
   const busyRef = useRef(false)
   busyRef.current = uploading || dropRunning || !!drop || !!plain || bulkBusy
+  // an upload / group action running: warn before the page is closed, and tell the page so it keeps this tab open (leaving the tab would
+  // unmount the screen while the upload carries on and a question could stall unseen)
+  const working = uploading || dropRunning || bulkBusy
+  useEffect(() => {
+    if (!working) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [working])
+  const tabLocked = working || !!plain || !!drop
+  useEffect(() => { onBusyChange?.(tabLocked) }, [tabLocked, onBusyChange])
+  useEffect(() => () => { onBusyChange?.(false) }, [onBusyChange])
   const refreshAllRef = useRef(refreshAll)
   refreshAllRef.current = refreshAll
   useEffect(() => onReconnected(() => { if (!busyRef.current) void refreshAllRef.current() }), [])
@@ -1983,15 +2058,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const fileRow = (f: File_, inFolder: Fold | null, depth: number) => {
     const Icon = fileIcon(f.mimeType)
     const busy = busyFiles.has(f.id)
-    const canShare = !f.staffOnly && f.state === 'live' && (f.listed || f.clientVisible) && f.filingStatus !== 'draft'
-      && (f.clientVisible || (!!f.documentType && !(f.personal && !f.inPersonStorage)))
+    const canShare = canShowToClient(f)
     const internal = isInternalOwnerKind(ownerKind)
-    const cantShowWhy = f.filingStatus === 'draft' ? 'A draft return — never shown to the client until it is marked filed (menu → Mark filed)'
-      : f.staffOnly ? 'Staff only — it holds other people\'s personal data and is never shown to a client'
-      : internal ? 'Internal folders — never shown to a client'
-        : !f.listed ? 'Not linked to the CRM list — the client cannot see it'
-          : !f.documentType ? 'It needs a document type before it can be shown'
-            : "A person's document can only be shown from their own storage"
+    const cantShowWhy = cantShowReason(f, internal)
     return (
       <li key={f.id}
         onContextMenu={(e) => {
@@ -2000,7 +2069,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           openCtx(e, selectedFiles.size >= 2 && selectedFiles.has(f.id) ? { kind: 'selection' } : { kind: 'file', f, inFolder })
         }}
         draggable={!renaming}
-        onDragStart={() => { const d = { id: f.id, from: inFolder?.id ?? null }; dragRef.current = d; setDragFile(d) }}
+        onDragStart={(e) => { const d = { id: f.id, from: inFolder?.id ?? null }; dragRef.current = d; setDragFile(d); try { e.dataTransfer.setData('text/plain', f.name); e.dataTransfer.effectAllowed = 'move' } catch { /* Firefox needs data to start a drag; nothing else reads it */ } }}
         onDragEnd={() => { setDragFile(null); setDropOn(null) }}
         className="group relative flex items-start gap-2 py-2 text-sm hover:bg-zinc-50/70" style={{ paddingLeft: `${depth * 20 + 22}px` }}>
         <input type="checkbox" aria-label={`Select ${f.name}`} checked={selectedFiles.has(f.id)} onChange={() => toggleSelect(f, inFolder?.id ?? null)}
@@ -2063,7 +2132,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                           View
                         </button>
                         {!v.current && !f.lockKind && f.state === 'live' && (
-                          <button type="button" className="text-blue-700 hover:underline" onClick={() => void makeCurrent(f, v.versionNo)}>
+                          <button type="button" disabled={busy} className="text-blue-700 hover:underline disabled:opacity-50" onClick={() => void makeCurrent(f, v.versionNo)}>
                             {v.unmerged ? 'Apply this edit' : 'Make this the current copy'} (saved as v{Math.max(0, ...(versions ?? []).map((x) => x.versionNo)) + 1})
                           </button>
                         )}
@@ -2095,7 +2164,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             </FastTooltip>
           )}
         </div>
-        <FastTooltip label={`Added to the storage ${fmtDate(f.updatedAt)}`}>
+        <FastTooltip label={`Last changed ${fmtDate(f.updatedAt)}`}>
           <span className="hidden w-14 shrink-0 pt-1 text-right font-mono text-xs text-zinc-500 sm:block">{fmtShort(f.updatedAt)}</span>
         </FastTooltip>
         <span className="hidden w-16 shrink-0 pt-1 text-right font-mono text-xs text-zinc-500 sm:block">{fmtSize(f.size)}</span>
@@ -2303,7 +2372,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             <option value="date">Sort: newest first</option>
           </select>
         </div>
-        {filtered === null && <p className="py-3 text-sm text-zinc-500">Loading…</p>}
+        {filtered === null && !filterError && <p className="py-3 text-sm text-zinc-500">Loading…</p>}
+        {filterError && (
+          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">Could not load the files — {filterError}{' '}
+            <button type="button" onClick={() => { void openFilter('all') }} className="font-medium underline">Retry</button></p>
+        )}
         {filtered && (
           <p className="mb-1 text-xs text-zinc-400">{list.length === all.length ? `${all.length} ${all.length === 1 ? 'file' : 'files'}` : `${list.length} of ${all.length} files`}</p>
         )}
@@ -2337,7 +2410,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                     </span>
                   </FastTooltip>
                 )}
-                <FastTooltip label={`Added to the storage ${fmtDate(ff.updatedAt)}`}><span className="hidden w-14 shrink-0 pt-1 text-right font-mono text-xs text-zinc-500 sm:block">{fmtShort(ff.updatedAt)}</span></FastTooltip>
+                <FastTooltip label={`Last changed ${fmtDate(ff.updatedAt)}`}><span className="hidden w-14 shrink-0 pt-1 text-right font-mono text-xs text-zinc-500 sm:block">{fmtShort(ff.updatedAt)}</span></FastTooltip>
                 <span className="hidden w-16 shrink-0 pt-1 text-right font-mono text-xs text-zinc-500 sm:block">{fmtSize(ff.size)}</span>
                 <div className="relative">
                   <FastTooltip label="More"><button type="button" aria-label="More" onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === menuKey ? null : menuKey) }} className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><MoreHorizontal className="h-4 w-4" /></button></FastTooltip>
@@ -2418,7 +2491,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             <span className="font-medium text-zinc-800">Shared with me</span>
             <span className="text-xs text-zinc-400">files the owners shared with you — open or download</span>
           </div>
-          {sharedFiles === null && <p className="text-sm text-zinc-500">Loading…</p>}
+          {sharedFiles === null && !sharedError && <p className="text-sm text-zinc-500">Loading…</p>}
+          {sharedError && (
+            <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">Could not load the files shared with you — {sharedError}{' '}
+              <button type="button" onClick={() => { void openSharedWithMe() }} className="font-medium underline">Retry</button></p>
+          )}
           {sharedFiles && sharedFiles.length === 0 && <p className="text-sm text-zinc-500">Nothing has been shared with you yet.</p>}
           <ul className="divide-y divide-zinc-50">
             {(sharedFiles ?? []).map((sf) => {
@@ -2489,7 +2566,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             </div>
           )}
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
-            {renaming?.id === viewFolder?.id && renaming?.folder && inFolderView ? (
+            {renaming?.id === viewFolder?.id && renaming?.folder && !renaming?.left && inFolderView ? (
               <input autoFocus value={renaming.value} onChange={(e) => setRenaming({ id: renaming.id, value: e.target.value, folder: true })}
                 onKeyDown={(e) => { if (e.key === 'Enter' && viewFolder) doRenameFolder(viewFolder, renaming.value); if (e.key === 'Escape') { renameDone.current = true; setRenaming(null) } }}
                 onBlur={() => { if (viewFolder) doRenameFolder(viewFolder, renaming.value) }}
@@ -2629,7 +2706,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               </label>
               <label className="cursor-pointer rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50">Choose a folder
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any -- webkitdirectory is not in React's input typings */}
-                <input type="file" multiple className="hidden" {...({ webkitdirectory: '', directory: '' } as any)} onChange={(e) => { const list = Array.from(e.target.files ?? []); e.target.value = ''; if (!list.length) return; const { items, skipped, folders } = filterPlainDrop(itemsFromFileList(list.map((file) => ({ file, relative: (file as File & { webkitRelativePath?: string }).webkitRelativePath })))); plainFolders.current = new Map(); setPlain({ folder: viewFolder, items, skipped, folders }); setUploadOpen(false) }} />
+                <input type="file" multiple className="hidden" {...({ webkitdirectory: '', directory: '' } as any)} onChange={(e) => { const list = Array.from(e.target.files ?? []).filter((f) => !hasHiddenPart((f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name)); e.target.value = ''; if (!list.length) return; const { items, skipped, folders } = filterPlainDrop(itemsFromFileList(list.map((file) => ({ file, relative: (file as File & { webkitRelativePath?: string }).webkitRelativePath })))); plainFolders.current = new Map(); setPlain({ folder: viewFolder, items, skipped, folders }); setUploadOpen(false) }} />
               </label>
               {myDriveProbe?.allowed && <button type="button" onClick={() => { setMyDriveFor(viewFolder); setUploadOpen(false) }} className="rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50" data-testid="my-drive-open">From my Google Drive</button>}
               <button type="button" onClick={() => setUploadOpen(false)} className="text-xs text-zinc-500 hover:underline">Cancel</button>
@@ -2701,7 +2778,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                   const target = upOptions.find((o) => o.f.id === upFolder)?.f ?? viewFolder
                   const pick = (list: File[], withPath: boolean) => {
                     if (!target || target.trashed || target.kind === 'root') { toast.error('Choose the folder first.'); return }
-                    const found = list.filter((f) => !f.name.startsWith('.')).map((file) => {
+                    const found = list.filter((f) => !hasHiddenPart((f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name)).map((file) => {
                       const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? ''
                       return { file, path: withPath && rel.includes('/') ? rel.split('/').slice(0, -1) : [] }
                     })
@@ -2720,7 +2797,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                     </>
                   )
                 })()}
-                <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" className="text-sm"
+                <input ref={fileInput} type="file" className="text-sm"
                   disabled={uploading || !upFolder || !upType || upType === '__custom__' || (upIsContacts && !upPerson)}
                   onChange={(e) => { const file = e.target.files?.[0]; if (file) doUpload(file) }} />
                 {uploading && <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />}
@@ -2770,7 +2847,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       )}
       {signConfirm && (
         <div className="fixed inset-0 z-[80] grid place-items-center bg-black/40 px-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setSignConfirm(null) }}>
-          <div role="dialog" aria-modal="true" aria-label="Mark as signed" className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+          <div role="dialog" aria-modal="true" aria-label="Mark as signed" onKeyDown={(e) => trapTabKey(e)} className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
             <p className="text-sm text-zinc-700">Mark <b>{signConfirm.name}</b> as a signed document? From then on it can never be edited in place — only a replacement file can be added.</p>
             <div className="mt-4 flex justify-end gap-2">
               <button type="button" autoFocus onClick={() => setSignConfirm(null)} className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50">Cancel</button>
@@ -2782,7 +2859,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       {editing && <NewVersionDialog target={editing} onClose={() => setEditing(null)} onSaved={() => { void refreshAll() }} />}
       {lockNote && (
         <div className="fixed inset-0 z-[80] grid place-items-center bg-black/40 px-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setLockNote(null) }}>
-          <div role="dialog" aria-modal="true" aria-label="This file can't be edited in place" className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+          <div role="dialog" aria-modal="true" aria-label="This file can't be edited in place" onKeyDown={(e) => trapTabKey(e)} className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
             <p className="text-sm text-zinc-700">{lockNote}</p>
             <div className="mt-4 flex justify-end"><button type="button" autoFocus onClick={() => setLockNote(null)} className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">Close</button></div>
           </div>
@@ -2846,7 +2923,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           <div className="mb-3 flex items-center gap-2">
             <Layers className="h-4 w-4 text-zinc-500" />
             <h3 className="min-w-0 flex-1 truncate text-base font-semibold">{details?.name ?? 'Details'}</h3>
-            <button type="button" onClick={() => { setDetailsFor(null); setDetails(null) }} aria-label="Close" className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
+            <button type="button" onClick={closeDetails} aria-label="Close" className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
           </div>
           {!details ? <p className="text-sm text-zinc-500">Loading…</p> : (
             <dl className="min-h-0 flex-1 space-y-2 overflow-y-auto text-sm">
@@ -2905,7 +2982,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             </div>
             <p className="mb-3 text-xs text-zinc-500">Deleted files and folders stay here for 90 days, then they are deleted for good. Anything restored comes back hidden from the client{root?.owner.kind === 'private' ? ' and shared with nobody' : ''}.{root?.owner.kind === 'company' ? " A person's own document (passport, ID…) deleted from 2. Contacts is listed here too, marked with whose storage it is, and goes back to that person's storage." : ''}</p>
             <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto">
-              {trash === null && <li className="text-sm text-zinc-500">Loading…</li>}
+              {trash === null && !trashError && <li className="text-sm text-zinc-500">Loading…</li>}
+              {trashError && (
+                <li className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">Could not load the trash — {trashError}{' '}
+                  <button type="button" onClick={() => { void openTrash() }} className="font-medium underline">Retry</button></li>
+              )}
               {trash && trash.length === 0 && <li className="text-sm text-zinc-500">The trash is empty.</li>}
               {(trash ?? []).map((b) => (
                 <li key={b.batchId} className="rounded-lg border border-zinc-200 p-2 text-sm">
@@ -2995,6 +3076,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             <div className="mt-3 flex items-center gap-2 border-t border-zinc-100 pt-3">
               <span className="flex-1 text-xs text-zinc-500">{drop.items.filter((x) => x.status === 'saved').length} of {drop.items.length} uploaded</span>
               <button type="button" disabled={dropRunning} onClick={() => setDrop(null)} className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm disabled:opacity-50">{drop.items.some((x) => x.status === 'saved') ? 'Close' : 'Cancel'}</button>
+              {!dropRunning && drop.items.some((x) => x.status === 'failed') && (
+                <button type="button" onClick={() => { void runDrop(true) }} data-testid="drop-retry-failed"
+                  className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm text-red-700 hover:bg-red-50">Retry failed ({drop.items.filter((x) => x.status === 'failed').length})</button>
+              )}
               <button type="button" disabled={dropRunning || !drop.items.some((x) => x.status === 'waiting')} onClick={() => { void runDrop() }}
                 className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50">{dropRunning ? 'Uploading…' : 'Upload'}</button>
             </div>
