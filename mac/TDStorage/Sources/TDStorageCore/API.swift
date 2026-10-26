@@ -132,12 +132,19 @@ public final class StorageAPI: @unchecked Sendable {
 
     // MARK: plumbing
 
+    /// "<version>;<build>" of THIS app, sent on every call so the CRM can show the owner which Mac runs which version.
+    static var appVersionHeader: String {
+        let i = Bundle.main.infoDictionary ?? [:]
+        return "\(i["CFBundleShortVersionString"] as? String ?? "0");\(i["CFBundleVersion"] as? String ?? "0")"
+    }
+
     private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
         try await authorized { token in
             var comps = URLComponents(url: self.baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
             if !query.isEmpty { comps.queryItems = query }
             var req = URLRequest(url: comps.url!)
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            req.setValue(StorageAPI.appVersionHeader, forHTTPHeaderField: "X-TD-App-Version")
             return req
         }
     }

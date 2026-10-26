@@ -217,15 +217,28 @@ export async function verifyAccessToken(token: string, ip?: string | null): Prom
   return { user, deviceId: row.device_id }
 }
 
-export async function listDevices(userId: string): Promise<Array<{ id: string; name: string; created_at: string; last_seen_at: string | null; revoked_at: string | null }>> {
-  const { data } = await db().from("storage_app_devices").select("id, name, created_at, last_seen_at, revoked_at").eq("user_id", userId).order("created_at", { ascending: false })
-  return data ?? []
+export interface DeviceRow { id: string; name: string; created_at: string; last_seen_at: string | null; revoked_at: string | null; app_version?: string | null; app_build?: number | null }
+
+/** The Mac told us which app version it runs (header on its "who am I" call). BEST EFFORT: a failure (e.g. the columns not created yet) never affects the call. */
+export async function recordAppVersion(deviceId: string, v: { version: string; build: number }): Promise<void> {
+  try { await db().from("storage_app_devices").update({ app_version: v.version, app_build: v.build }).eq("id", deviceId) } catch { /* optional information */ }
+}
+
+/** Select with the version columns; if they do not exist yet (migration not run) read the older shape. */
+async function selectDevices(cols: string, build: (q: any) => any): Promise<any[]> { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const withVersion = await build(db().from("storage_app_devices").select(`${cols}, app_version, app_build`))
+  if (!withVersion.error) return withVersion.data ?? []
+  const plain = await build(db().from("storage_app_devices").select(cols))
+  return plain.data ?? []
+}
+
+export async function listDevices(userId: string): Promise<DeviceRow[]> {
+  return selectDevices("id, name, created_at, last_seen_at, revoked_at", (q) => q.eq("user_id", userId).order("created_at", { ascending: false }))
 }
 
 /** For an OWNER: every Mac that is signed in (or was), with the person's email — the "sign a leaver's Mac out" view. */
-export async function listAllDevices(): Promise<Array<{ id: string; user_id: string; email: string | null; name: string; created_at: string; last_seen_at: string | null; revoked_at: string | null }>> {
-  const { data } = await db().from("storage_app_devices").select("id, user_id, name, created_at, last_seen_at, revoked_at").order("created_at", { ascending: false }).limit(500)
-  const rows = (data ?? []) as Array<{ id: string; user_id: string; name: string; created_at: string; last_seen_at: string | null; revoked_at: string | null }>
+export async function listAllDevices(): Promise<Array<DeviceRow & { user_id: string; email: string | null }>> {
+  const rows = (await selectDevices("id, user_id, name, created_at, last_seen_at, revoked_at", (q) => q.order("created_at", { ascending: false }).limit(500))) as Array<DeviceRow & { user_id: string }>
   const emails = new Map<string, string | null>()
   for (const uid of Array.from(new Set(rows.map((r) => r.user_id)))) emails.set(uid, (await liveUser(uid))?.email ?? null)
   return rows.map((r) => ({ ...r, email: emails.get(r.user_id) ?? null }))
