@@ -61,12 +61,12 @@ export function LeadBoard({ cards, truncated }: { cards: BoardCard[]; truncated:
             ))}
           </div>
         )}
-        <p className="text-xs text-slate-500">{hidden > 0 && view !== 'list' ? t('{n} leads that are not on the board (for example "Not in target") are in the List view.', { n: hidden }) : ''}</p>
+        <p className="text-xs text-slate-500">{hidden > 0 && view !== 'list' ? t('{n} leads that are not on the board are in the List view.', { n: hidden }) : ''}</p>
       </div>
       {truncated && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{t('Showing the newest 500 leads. Use the Leads page filters to find older ones.')}</p>}
 
       {view === 'pipeline' && (
-        <div className="grid gap-3 overflow-x-auto pb-2" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(15rem, 1fr))` }} data-testid="pipeline">
+        <div className="grid gap-3 overflow-x-auto pb-2" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(${columns.length > 5 ? '11rem' : '15rem'}, 1fr))` }} data-testid="pipeline">
           {columns.map(col => {
             const list = cardsInColumn(role, col.key, cards)
             return (

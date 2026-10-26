@@ -59,7 +59,7 @@ describe("the steps a person is shown", () => {
   it("the default roles get exactly the steps of the approved mockup", () => {
     expect(stepsFor("owner", ALL).map(s => s.screen)).toEqual(["board", "leads", "calendar", "chat", "templates", "team", "money"])
     expect(stepsFor("setter", bundles.setter).map(s => s.screen)).toEqual(["call-list", "call-list", "calendar", "chat", "templates", "my-numbers"])
-    expect(stepsFor("seller", bundles.seller).map(s => s.screen)).toEqual(["today", "calendar", "chat", "templates", "reports"])
+    expect(stepsFor("seller", bundles.seller).map(s => s.screen)).toEqual(["today", "board", "calendar", "chat", "templates", "reports"])
     expect(stepsFor("analyst", bundles.analyst).map(s => s.screen)).toEqual(["board", "activity", "calendar", "reports"])
     expect(stepsFor("content", bundles.content).map(s => s.screen)).toEqual(["board", "reports", "chat"])
   })

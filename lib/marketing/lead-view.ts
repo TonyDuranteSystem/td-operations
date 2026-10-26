@@ -96,6 +96,9 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
       const to = t(stageLabel(stages, typeof data.to === "string" ? data.to : null))
       if (data.outcome === "not_in_target") return `${t("Not in target ({reason})", { reason: t(reasons.find(r => r.key === data.reason)?.label ?? String(data.reason ?? "")) })}${note}`
       if (data.outcome === "call_back") return `${t("Call back on {when}", { when: fw(typeof data.callback_at === "string" ? data.callback_at : null) })}${note}`
+      if (data.outcome === "not_ready") return `${t("Not ready now — come back on {when}", { when: fw(typeof data.callback_at === "string" ? data.callback_at : null) })}${note}`
+      if (data.outcome === "closed") return `${t("Closed")}${note}`
+      if (data.outcome === "not_closed") return `${t("Not closed")}${note}`
       if (data.outcome === "good") return `${t("Good — moved to {to}", { to })}${note}`
       return `${t("Moved to {to}", { to })}${note}`
     }

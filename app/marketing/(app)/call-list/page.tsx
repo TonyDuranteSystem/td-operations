@@ -30,13 +30,14 @@ export default async function MarketingCallList() {
   }
   const db = leadDb()
   const teamId = g.ctx.team.id
-  const [allRaw, stages] = await Promise.all([
+  const [allRaw, stages, sellerStages] = await Promise.all([
     listTeamLeads(db, teamId, 1000),
     getMarketingSetting('pipeline_stages', teamId) as Promise<StageOption[]>,
+    getMarketingSetting('seller_result_stages', teamId) as Promise<{ not_ready: string }>,
   ])
   const all = withoutPhone(allRaw, g.ctx.permissions)
   const now = new Date()
-  const queue = callQueue(all, stages[0]?.key ?? 'new', g.ctx.user.id, now)
+  const queue = callQueue(all, stages[0]?.key ?? 'new', g.ctx.user.id, now, [sellerStages.not_ready])
   const waitText = (l: (typeof queue)[number]) => {
     if (l.callback_at) { const late = now.getTime() - new Date(l.callback_at).getTime(); return late > 0 ? { t: t('Call back {age} late', { age: age(late) }), c: 'text-red-700' } : { t: t('Call back {when}', { when: fw(l.callback_at) }), c: 'text-sky-700' } }
     return { t: t('Waiting {age}', { age: age(now.getTime() - new Date(l.meta_created_time ?? l.received_at).getTime()) }), c: 'text-slate-500' }

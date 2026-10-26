@@ -21,7 +21,7 @@ describe("marketing settings schema", () => {
   it("a default is a copy: changing it never changes the next caller's", () => {
     const a = defaultForSetting("pipeline_stages")
     a.push({ key: "x", label: "X" })
-    expect(defaultForSetting("pipeline_stages").length).toBe(8)
+    expect(defaultForSetting("pipeline_stages").length).toBe(11)
   })
   it("rejects unknown keys and bad shapes with a plain message", () => {
     expect(parseSettingValue("nope", 1)).toEqual({ ok: false, error: 'Unknown setting "nope".' })

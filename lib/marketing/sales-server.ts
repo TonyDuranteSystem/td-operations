@@ -8,6 +8,8 @@ import { readPaged } from "@/lib/marketing/paged"
 import { getTeamLead } from "@/lib/marketing/leads-read"
 import { getMarketingSetting, listCommissionTerms } from "@/lib/marketing/settings"
 import { termInForce } from "@/lib/marketing/commission"
+import { shortPayUrl } from "@/lib/marketing/short-pay"
+import { APP_BASE_URL } from "@/lib/config"
 import {
   applyTermToSale, canPayOut, formatMoney, planLink, planPaid, planRefund, snapshotForSale, stageForPaidSale,
   type LinkInput, type PaidFacts, type SaleRow,
@@ -67,7 +69,8 @@ export async function createSaleLink(
   }).eq("id", saleId)
   if (upErr) return { ok: false, status: 500, error: "The link was made but could not be saved. Tell Antonio." }
   await addEvent(db, lead.id, "payment_link_created", actor, { sale_id: saleId, kind: plan.kind, amount_cents: plan.amountCents, currency: plan.currency, terms_set: snap.seller_cents !== null, ...(ctx.viaViewAs ? { via_view_as: true } : {}) })
-  return { ok: true, saleId, url: made.checkoutUrl }
+  // Rocco gets the SHORT address; the long Stripe page stays behind it (the long one is the fallback if a short one cannot be made)
+  return { ok: true, saleId, url: shortPayUrl(APP_BASE_URL, saleId) ?? made.checkoutUrl }
 }
 
 /** Metadata stamped on the Stripe session (and its payment). `payment_kind` keeps the client-sales machinery out of it. */
@@ -200,5 +203,5 @@ export async function loadPaymentLinkView(db: Db, ctx: { teamId: string; userId:
     const t = termInForce(terms, { teamId: ctx.teamId, kind: k.key, personRef: ctx.userId, at: now })
     splits[k.key] = t ? { sellerPct: t.seller_pct, tdPct: t.td_pct, basis: t.basis } : null
   }
-  return { ...settings, splits, sales: ((sales.data ?? []) as SaleRow[]) }
+  return { ...settings, splits, sales: ((sales.data ?? []) as SaleRow[]), shortBase: `${APP_BASE_URL}/pay/s/` }
 }
