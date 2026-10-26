@@ -156,6 +156,8 @@ async function main() {
 
   // ---- B. Rocco's Inbox
   const oi = await open(sess.owner, "/marketing/inbox")
+  let dialogAnswer = true
+  oi.on("dialog", d => { void (dialogAnswer ? d.accept() : d.dismiss()) })
   await T(oi, "inbox").waitFor({ timeout: 90000 })
   await oi.getByTestId("inbox-row").first().waitFor({ timeout: 60000 })
   ck("B1 the owner sees ONE address button (rocco@) and its three emails", (await oi.locator('[data-testid^="inbox-box-"]').count()) === 1 && (await oi.getByTestId("inbox-row").count()) === 3)
@@ -271,8 +273,6 @@ async function main() {
   ck("B20 a bad recipient is refused with the reason, nothing is sent", /does not look like an email/.test(await T(oi, "composer-error").innerText()))
   await T(oi, "composer-discard").click()
   // ---- B+. a saved draft comes back as saved; abandoned uploads are thrown away; a half-written email is not lost silently
-  let dialogAnswer = true
-  oi.on("dialog", d => { void (dialogAnswer ? d.accept() : d.dismiss()) })
   const staged = async () => Number((await db.query("select count(*)::int c from storage.objects where bucket_id='marketing-chat' and name like $1", [`${teamA.id}/inbox/%`])).rows[0].c)
   await T(oi, "inbox-folder-inbox").click()
   await oi.waitForTimeout(1500)
@@ -319,6 +319,15 @@ async function main() {
   await T(oi, "composer-discard").click()
   for (let i = 0; i < 20 && (await staged()) !== before; i++) await oi.waitForTimeout(300)
   ck("B27 closing the email without sending deletes the stored copy", (await staged()) === before, { now: await staged(), before })
+  // a second "New email" press starts a fresh, empty box
+  await T(oi, "inbox-new").click()
+  await T(oi, "composer").waitFor({ timeout: 30000 })
+  await T(oi, "composer-subject").fill("typed before")
+  await T(oi, "inbox-new").click()
+  await oi.waitForTimeout(800)
+  ck("B30 pressing New email again (OK) gives a fresh empty box", (await T(oi, "composer-subject").inputValue()) === "", await T(oi, "composer-subject").inputValue())
+  await T(oi, "composer-discard").click()
+  await oi.waitForTimeout(500)
   // a half-written email is not thrown away silently
   await T(oi, "inbox-new").click()
   await T(oi, "composer").waitFor({ timeout: 30000 })

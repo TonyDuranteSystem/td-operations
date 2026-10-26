@@ -351,3 +351,21 @@ describe("old staged uploads", () => {
     expect(staleStaged(list, folder, now)).toEqual([`${folder}${id(1)}`])
   })
 })
+
+describe("an unsent draft inside a conversation", () => {
+  const base = { teamId: "t", userId: "u" }
+  it("is never quoted: a reply that names the draft's own id answers the last real email instead", async () => {
+    const driver = createFakeDriver()
+    const b = box({ signature: "" })
+    await sendOrDraft({ ...base, box: b, driver, draft: true, body: { mode: "reply", threadId: "t1", messageId: "m1", to: "giulia@example.test", subject: "Re: x", message: "SECRET DRAFT WORDS" } })
+    const th = (await driver.thread(b.address, "t1"))!
+    const draftMsg = th.messages.find(m => m.draft)!
+    expect(draftMsg).toBeTruthy()
+    const r = await sendOrDraft({ ...base, box: b, driver, draft: false, body: { mode: "reply", threadId: "t1", messageId: draftMsg.id, to: "giulia@example.test", subject: "Re: x", message: "Real answer" } })
+    expect(r.ok).toBe(true)
+    const after = (await driver.thread(b.address, "t1"))!
+    const sent = after.messages.filter(m => !m.draft).pop()!
+    expect(sent.text).toContain("Real answer")
+    expect(sent.text).not.toContain("SECRET DRAFT WORDS")
+  })
+})

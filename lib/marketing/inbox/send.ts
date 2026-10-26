@@ -39,7 +39,9 @@ export async function sendOrDraft(input: {
   let answered: MailMessage | undefined
   if (mode !== "new" && threadId) {
     const t = await driver.thread(box.address, threadId).catch(() => null)
-    answered = t?.messages.find(m => m.id === body.messageId) ?? t?.messages[t.messages.length - 1]
+    // never an unsent draft: it must not be quoted to the person (nor give its own id as the reply header)
+    const real = (t?.messages ?? []).filter(m => !m.draft)
+    answered = real.find(m => m.id === body.messageId) ?? real[real.length - 1]
     if (!answered) return { ok: false, error: "The email you are answering could not be found.", status: 400 }
   }
 

@@ -122,7 +122,8 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
     } catch (e) { flash(e instanceof Error && e.message ? e.message : t('That did not work. Please try again.')) }
   }, [selected, address, t])
 
-  const lastReal = thread ? thread.messages[thread.messages.length - 1] : null
+  // the email Reply / Forward answer: the newest one that is not an unsent draft
+  const lastReal = thread ? ([...thread.messages].reverse().find(m => !m.draft) ?? thread.messages[thread.messages.length - 1]) : null
   const openReply = (mode: 'reply' | 'replyAll' | 'forward') => {
     if (!thread || !lastReal) return
     const s = lastReal.suggest
@@ -135,13 +136,15 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
   // The draft comes back exactly as saved: its own To / Cc / Bcc, its formatting, and - when it answers an email - the same conversation (the earlier email supplies the reply headers). Its text already holds
   // the signature and the quoted original, so the server is told not to add them again.
   const editDraft = () => {
-    if (!thread || !lastReal) return
-    const before = thread.messages.slice(0, -1)
+    if (!thread) return
+    const di = thread.messages.map(m => m.draft).lastIndexOf(true)
+    const draftMsg = di >= 0 ? thread.messages[di] : thread.messages[thread.messages.length - 1]
+    const before = thread.messages.slice(0, di >= 0 ? di : -1).filter(m => !m.draft)
     const prev = before.length ? before[before.length - 1] : null
     setComposer({
       mode: prev ? 'reply' : 'new', threadId: prev ? thread.id : undefined, messageId: prev?.id,
-      to: addressList(lastReal.to || ''), cc: addressList(lastReal.cc || ''), bcc: addressList(lastReal.bcc || ''),
-      subject: lastReal.subject || thread.subject, html: lastReal.html || textToEditorHtml(lastReal.text), draftId: thread.draftId, complete: true,
+      to: addressList(draftMsg.to || ''), cc: addressList(draftMsg.cc || ''), bcc: addressList(draftMsg.bcc || ''),
+      subject: draftMsg.subject || thread.subject, html: draftMsg.html || textToEditorHtml(draftMsg.text), draftId: thread.draftId, complete: true,
     })
   }
   const copyLink = () => {
@@ -186,7 +189,7 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
           <button key={f} type="button" onClick={() => switchFolder(f)} aria-pressed={f === folder} data-testid={`inbox-folder-${f}`}
             className={`${btn} ${f === folder ? 'border-slate-900 bg-slate-900 text-white' : ''}`}>{t(FOLDER_LABEL[f])}</button>
         ))}
-        <button type="button" className={`${btn} bg-slate-900 text-white`} data-testid="inbox-new" onClick={() => { if (!leaveComposer()) return; setSelected(null); setComposer({ mode: 'new', to: [], cc: [], subject: '', html: '<p></p>' }) }}>+ {t('New email')}</button>
+        <button type="button" className={`${btn} bg-slate-900 text-white`} data-testid="inbox-new" onClick={() => { if (!leaveComposer()) return; setSelected(null); setComposer({ mode: 'new', to: [], cc: [], subject: '', html: '<p></p>', nonce: Date.now() }) }}>+ {t('New email')}</button>
       </div>
 
       {toast && <p role="status" className="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white" data-testid="inbox-toast">{toast}</p>}
@@ -217,9 +220,9 @@ export function InboxApp({ initialBoxes, startAddress, startThread }: { initialB
 
         <div className="min-w-0 p-4" data-testid="inbox-reader">
           {composer && (
-            <Composer key={`${composer.mode}-${composer.threadId ?? 'new'}-${composer.draftId ?? ''}-${composer.messageId ?? ''}`} address={address} seed={composer}
+            <Composer key={`${composer.mode}-${composer.threadId ?? 'new'}-${composer.draftId ?? ''}-${composer.messageId ?? ''}-${composer.nonce ?? 0}`} address={address} seed={composer}
               onClose={() => setComposer(null)} onDirty={setDirty} onDraftChanged={() => setTick(x => x + 1)}
-              onSent={threadId => { setComposer(null); flash(t('Sent from {address}.', { address })); setTick(x => x + 1); if (threadId && composer.mode !== 'new') setSelected(threadId) }} />
+              onSent={threadId => { setComposer(cur => (cur === composer ? null : cur)); flash(t('Sent from {address}.', { address })); setTick(x => x + 1); if (threadId && composer.mode !== 'new') setSelected(threadId) }} />
           )}
           {!composer && !selected && <p className="text-sm text-slate-500" data-testid="inbox-pick">{t('Choose an email on the left, or write a new one.')}</p>}
           {!composer && selected && threadError && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800" data-testid="inbox-thread-error">{threadError}</p>}

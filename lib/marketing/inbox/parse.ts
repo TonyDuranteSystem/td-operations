@@ -91,6 +91,7 @@ export function parseThreadFull(
       html: extracted.isHtml ? sanitizeEmailHtml(body) : null,
       text,
       unread: !!msg.labelIds?.includes("UNREAD"),
+      draft: !!msg.labelIds?.includes("DRAFT"),
       outbound: emailOf(from) === mailbox,
       attachments: extractAttachments(msg.payload)
         .filter(a => !used.has(a.attachmentId))

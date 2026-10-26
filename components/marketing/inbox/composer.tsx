@@ -18,6 +18,8 @@ export interface ComposerSeed {
   draftId?: string
   /** an edited draft: its text already holds the signature and the quoted original, so the server must not add them again */
   complete?: boolean
+  /** makes a second "New email" press start a fresh box */
+  nonce?: number
 }
 
 interface Staged { path: string; name: string; mime_type: string; size: number }
@@ -62,12 +64,13 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged, onDir
   const [touched, setTouched] = useState(false)
   const filesRef = useRef<Staged[]>([])
   const sentRef = useRef(false)
+  const sendingRef = useRef(false)
   const sendKey = useRef<string>(`${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`)
 
   useEffect(() => { filesRef.current = files }, [files])
   useEffect(() => { onDirty?.(touched || files.length > 0) }, [touched, files.length, onDirty])
   // closed without sending (another folder, another address, Close): the uploaded files are thrown away, not left in storage
-  useEffect(() => () => { if (!sentRef.current) filesRef.current.forEach(f => dropStaged(address, f.path)) }, [address])
+  useEffect(() => () => { if (!sentRef.current && !sendingRef.current) filesRef.current.forEach(f => dropStaged(address, f.path)) }, [address])
   useEffect(() => () => onDirty?.(false), [onDirty])
 
   const payload = () => ({
@@ -88,7 +91,9 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged, onDir
   }
 
   async function send() {
+    sendingRef.current = true // while a send is in flight, closing the box must not delete the files the server is about to read
     const d = await post('/api/marketing/inbox/send', { ...payload(), sendKey: sendKey.current }, t('The email could not be sent. Nothing was sent; try again.'))
+    if (!d) sendingRef.current = false
     if (d) { sentRef.current = true; onSent(typeof d.threadId === 'string' ? d.threadId : undefined) }
     else sendKey.current = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}` // a failed try must not block the corrected retry
   }
@@ -97,6 +102,8 @@ export function Composer({ address, seed, onClose, onSent, onDraftChanged, onDir
     if (d && typeof d.draftId === 'string') { setDraftId(d.draftId); setTouched(false); setNote(t('Draft saved. Attachments are not kept in a draft.')); onDraftChanged() }
   }
   async function discard() {
+    // typed words or a saved draft are not thrown away by one stray click
+    if ((touched || draftId) && !window.confirm(draftId ? t('Delete this draft?') : t('Throw away the email you are writing?'))) return
     if (draftId) {
       await fetch(`/api/marketing/inbox/drafts?address=${encodeURIComponent(address)}&draftId=${encodeURIComponent(draftId)}`, { method: 'DELETE' }).catch(() => {})
       onDraftChanged()

@@ -33,6 +33,8 @@ export interface MailMessage {
   /** the plain text (also what the preview and the quote use) */
   text: string
   unread: boolean
+  /** an unsent draft sitting inside the conversation (never to be quoted or answered) */
+  draft: boolean
   outbound: boolean
   attachments: MailAttachment[]
   /** headers a reply needs */

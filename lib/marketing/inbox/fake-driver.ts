@@ -10,7 +10,7 @@ interface FakeThread { id: string; labels: Set<string>; messages: MailMessage[];
 interface Box { threads: FakeThread[]; seq: number }
 
 const msg = (id: string, over: Partial<MailMessage>): MailMessage => ({
-  id, from: "Someone", fromEmail: "someone@example.test", to: "", cc: "", bcc: "", date: new Date().toISOString(), subject: "", html: null, text: "", unread: false, outbound: false,
+  id, from: "Someone", fromEmail: "someone@example.test", to: "", cc: "", bcc: "", date: new Date().toISOString(), subject: "", html: null, text: "", unread: false, draft: false, outbound: false,
   attachments: [], messageIdHeader: `<${id}@fake.test>`, references: "", ...over,
 })
 
@@ -103,7 +103,7 @@ export function createFakeDriver(): MailDriver {
       if (replaceDraftId) removeDraft(b, replaceDraftId)
       const r = readRaw(raw)
       b.seq++
-      const m = msg(`m${b.seq}`, { from: address, fromEmail: address, to: r.to, cc: r.cc, bcc: r.bcc, subject: r.subject, text: r.text, outbound: true })
+      const m = msg(`m${b.seq}`, { from: address, fromEmail: address, to: r.to, cc: r.cc, bcc: r.bcc, subject: r.subject, text: r.text, outbound: true, draft: true })
       const draftId = `d${b.seq}`
       const existing = threadId ? b.threads.find(t => t.id === threadId) : undefined
       // like Gmail: a draft that answers an email lives INSIDE that conversation, as its newest message
