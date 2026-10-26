@@ -623,6 +623,7 @@ export async function staffUploadToStore(p: {
     && (typeRow.metadata?.draft_never_visible !== true || filedReturn)
   // replacing a file the client sees with an answer of "hidden": hide it BEFORE the new copy is saved, so the
   // client never sees the new copy, not even for a moment (and not at all if a later step fails)
+  let hiddenSameId: string | null = null     // set when WE hid the old copy above: shown again if the new copy cannot be saved
   if (sameLive && !wantVisible) {
     const sameId = (same ?? []).find((f: { state: string }) => f.state === "live")?.id as string | undefined
     if (sameId) {
@@ -635,12 +636,26 @@ export async function staffUploadToStore(p: {
         const { workspaceShownFiles, workspaceShownMessage } = await import("./client-visibility")
         const ws = (await workspaceShownFiles([sameId])).get(sameId)
         if (ws) throw new Error(`${workspaceShownMessage(old.name as string, ws)} A new copy would be shown too — use "Keep both" to save it as a separate hidden file.`)
+        // a signed / passport-ID / replaced / amended file takes no new version either: refuse BEFORE hiding it, so the
+        // client never loses sight of a file whose new copy then cannot be saved
+        const { data: lockKind, error: lkErr } = await db().rpc("store_lock_class", { p_file_id: sameId })
+        if (lkErr) throw new Error(`Could not check the file being replaced — please try again (${lkErr.message}).`)
+        const { sameNameLockRefusal } = await import("./new-version-rules")
+        const refusal = sameNameLockRefusal(typeof lockKind === "string" ? lockKind : null, old.name as string)
+        if (refusal) throw new Error(refusal)
         await setClientVisibility(sameId, false, p.actorId)
+        hiddenSameId = sameId
       })
     }
   }
   // the year the staff member chose, else the nearest year folder above (Tax › 2024 › Bank → 2024)
   const yearToSave = p.periodYear ?? await (await import("./structure")).nearestYear(targetFolderId)
+  const reshowOld = async () => {
+    if (!hiddenSameId) return
+    try { await setClientVisibility(hiddenSameId, true, p.actorId, { silent: true }) } catch (e) {
+      console.error("[crm-store] could not show the old copy to the client again after a refused upload:", e instanceof Error ? e.message : e)
+    }
+  }
   const w = await removeStagedOnFailure(p.storagePath, () => saveBytesToStore({
     ownerId: targetOwnerId, folderId: targetFolderId, name: fileName, mimeType, bytes,
     callerKey, contentChanged: true, convertHeic: true,
@@ -650,8 +665,9 @@ export async function staffUploadToStore(p: {
     ...(yearToSave ? { periodYear: yearToSave } : {}),
     // a type that is never shown as a draft is a DRAFT unless staff said it is the filed return
     ...(typeRow.metadata?.draft_never_visible === true ? { filingStatus: (p.filingAnswer === "filed" && !p.needsReview ? "filed" : "draft") as "filed" | "draft" } : {}),
-  }))
+  })).catch(async (e: unknown) => { await reshowOld(); throw e })
   if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") {
+    await reshowOld()
     await supabaseAdmin.storage.from("onboarding-uploads").remove([p.storagePath]).catch(() => {})
     throw new Error(saveRefusalMessage(w.status))
   }

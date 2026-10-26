@@ -3065,6 +3065,13 @@ function ContactDocumentsTab({
   const storeOwner = useStoreOwnerForContact(contactId, !driveFolderId || documents.some((d) => (d.drive_file_id ?? '').startsWith('store:')))
   const personStoreId = storeOwner.data?.ownerId ?? null
   const personStoreSection = personStoreId ? <StoreReadOnlyPanel ownerId={personStoreId} who="person" /> : null
+  // the check itself failed (not "this person has no storage"): say so and offer Retry — never the quiet Drive / empty view
+  const personStoreError = storeOwner.isError && !storeOwner.data ? (
+    <div className="rounded-md bg-red-50 px-3 py-3 text-sm text-red-700" role="alert">
+      Could not check where this person&apos;s files are kept — {storeOwner.error instanceof Error ? storeOwner.error.message : 'please try again.'}{' '}
+      <button type="button" onClick={() => { void storeOwner.refetch() }} className="font-medium underline">Retry</button>
+    </div>
+  ) : null
   const [uploading, setUploading] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
   const [uploadType, setUploadType] = useState('Passport')
@@ -3418,6 +3425,7 @@ function ContactDocumentsTab({
           {!personStoreId && uploadButton}
         </div>
         {!personStoreId && uploadPanel}
+        {personStoreError}
         {personStoreId ? personStoreSection : folderCreateSection}
         {!personStoreId && fileBrowserSection}
         {!driveFolderId && !personStoreId && (
@@ -3454,6 +3462,7 @@ function ContactDocumentsTab({
       {!personStoreId && fileBrowserSection}
       {!personStoreId && uploadPanel}
 
+      {personStoreError}
       {/* Scope tabs: Personal (contact's own files) + one per company the contact belongs to */}
       <div className="flex flex-wrap gap-2 border-b pb-2">
         {docScopes.map(scope => (

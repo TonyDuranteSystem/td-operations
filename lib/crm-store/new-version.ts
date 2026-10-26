@@ -58,6 +58,11 @@ function plainWhen(iso: string | null | undefined): string | null {
 
 const removeStaged = (path: string) => db().storage.from(STAGING_BUCKET).remove([path]).catch(() => {})
 
+/** The sentence added to a reply when the file could not be shown to the client again after a refused save. */
+export function reshowFailedNote(e: unknown): string {
+  return `The file stays hidden from the client: ${e instanceof Error && e.message ? e.message : "it could not be shown again"} — show it again from the file's menu if it should be shared.`
+}
+
 export async function saveNewVersionFromStaged(r: NewVersionRequest): Promise<NewVersionReply & { warnings?: string[] }> {
   if (!r.storagePath.startsWith(STAGING_PREFIX) || r.storagePath.includes("..")) return { status: "refused", message: "That upload is not valid — please choose the file again." }
   const info = await currentInfo(r.fileId)
@@ -106,9 +111,13 @@ export async function saveNewVersionFromStaged(r: NewVersionRequest): Promise<Ne
       } catch (e) { await removeStaged(r.storagePath); return { status: "refused", message: e instanceof Error ? e.message : "The file could not be hidden from the client, so nothing was saved." } }
     }
   }
-  const reshowIfNotSaved = async (saved: boolean) => {
-    if (!hiddenByUs || saved) return
-    try { const { setClientVisibility } = await import("./browse"); await setClientVisibility(r.fileId, true, r.actor.userId, { silent: true }) } catch (e) { console.error("[crm-store] could not show the file to the client again after a refused save:", e instanceof Error ? e.message : e) }
+  // the file is shown again when the save did not go through; if THAT fails too, staff are told plainly (never only a log line)
+  const reshowIfNotSaved = async (saved: boolean): Promise<string | null> => {
+    if (!hiddenByUs || saved) return null
+    try { const { setClientVisibility } = await import("./browse"); await setClientVisibility(r.fileId, true, r.actor.userId, { silent: true }); return null } catch (e) {
+      console.error("[crm-store] could not show the file to the client again after a refused save:", e instanceof Error ? e.message : e)
+      return reshowFailedNote(e)
+    }
   }
   let res
   try {
@@ -120,10 +129,11 @@ export async function saveNewVersionFromStaged(r: NewVersionRequest): Promise<Ne
   } catch (e) {
     console.error("[crm-store] new version failed:", e instanceof Error ? e.message : e)
     await removeStaged(r.storagePath)
-    await reshowIfNotSaved(false)
-    return { status: "refused", message: "The new version could not be saved — please try again." }
+    const note = await reshowIfNotSaved(false)
+    return { status: "refused", message: `The new version could not be saved — please try again.${note ? ` ${note}` : ""}` }
   }
-  await reshowIfNotSaved(res.status === "versioned")
+  const reshowNote = await reshowIfNotSaved(res.status === "versioned")
+  const reply = async (): Promise<NewVersionReply & { warnings?: string[] }> => {
   const name = res.name ?? info.name
   if (res.status === "needs_confirmation") {
     // the page confirms, then stages the same file again (the token is tied to the file's content, so it still fits)
@@ -138,6 +148,9 @@ export async function saveNewVersionFromStaged(r: NewVersionRequest): Promise<Ne
   if (res.status === "locked" || res.status === "frozen") return { status: res.status, kind: res.kind ?? (res.status === "frozen" ? "filed" : null), message: lockText(res.status === "frozen" ? "filed" : res.kind, name) }
   if (res.status === "unchanged") return { status: "unchanged", alreadyApplied: res.alreadyApplied, message: statusMessage("unchanged", name) }
   return { status: res.status === "trashed" ? "trashed" : "not_found", message: statusMessage(res.status, name) }
+  }
+  const rep = await reply()
+  return reshowNote ? { ...rep, message: `${rep.message} ${reshowNote}` } as typeof rep : rep
 }
 
 /** "Make this the current copy": the old version's bytes saved again as a NEW version (nothing is deleted or rewritten). */

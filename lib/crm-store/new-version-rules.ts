@@ -62,3 +62,12 @@ export function statusMessage(status: string, name: string): string {
   if (status === "unchanged") return `Nothing changed — this is the same as the current version of "${name}".`
   return `The file was not saved (the storage answered "${status}") — please try again.`
 }
+
+/**
+ * A staff upload with the SAME NAME as a file that takes no new version (signed, passport/ID, replaced, amended, filed):
+ * the plain refusal, or null when the old file may take a new version. Asked BEFORE the old copy is hidden from the client.
+ */
+export function sameNameLockRefusal(lockKind: string | null | undefined, name: string): string | null {
+  if (!lockKind) return null
+  return `${lockText(lockKind, name)} Add the new file under another name, or use "Upload edited version" on the file.`
+}

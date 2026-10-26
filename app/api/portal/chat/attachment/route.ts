@@ -4,7 +4,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { isDashboardUser } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
-import { staffFileHeaders } from '@/lib/crm-store/serve'
+import { chatAttachmentHeaders } from '@/lib/crm-store/serve'
 
 export const dynamic = 'force-dynamic'
 
@@ -66,13 +66,12 @@ export async function GET(request: NextRequest) {
 
   const arrayBuffer = await blob.arrayBuffer()
   // The stored type was chosen by the uploader (a client): untrusted. Same rule as the CRM file viewer — only types that cannot run script
-  // on our origin are shown inline, everything else downloads as bytes. nosniff + CSP sandbox are always on (stored XSS fix, 2026-10-25).
+  // on our origin are shown inline, everything else downloads as bytes. nosniff + CSP sandbox are always on; a PDF is a download (the PDF viewer refuses a sandboxed frame) (stored XSS fix, 2026-10-25).
   const fileName = segments[segments.length - 1] || 'attachment'
   return new NextResponse(arrayBuffer, {
     status: 200,
     headers: {
-      ...staffFileHeaders(blob.type, fileName),
-      'Content-Security-Policy': 'sandbox',
+      ...chatAttachmentHeaders(blob.type, fileName),
       // Private: never let a shared CDN/cache serve this without re-auth.
       'Cache-Control': 'private, no-store',
     },
