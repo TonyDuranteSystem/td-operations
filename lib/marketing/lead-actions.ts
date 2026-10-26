@@ -24,7 +24,7 @@ export const leadActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("not_in_target"), reason: z.string().trim().min(1).max(40), note: note.optional() }),
   z.object({ action: z.literal("call_back"), callbackAt: z.string().min(10).max(40), note: note.optional() }),
   // reaching out (the team's sheet: "WhatsApp sent / no WhatsApp", "NR + date", the booked call)
-  z.object({ action: z.literal("whatsapp"), state: z.enum(["sent", "no_wa"]), template: z.string().trim().max(60).optional(), note: note.optional() }),
+  z.object({ action: z.literal("whatsapp"), state: z.enum(["sent", "no_wa", "opened"]), template: z.string().trim().max(60).optional(), note: note.optional() }),
   z.object({ action: z.literal("no_answer"), via: z.enum(["whatsapp", "call"]).default("call"), note: note.optional() }),
   // at = a day and time; null cancels the booked call
   z.object({ action: z.literal("appointment"), at: z.string().min(10).max(40).nullable(), note: note.optional() }),
@@ -128,7 +128,7 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
 
     case "whatsapp": {
       return { ok: true, change: {
-        patch: movedToContacted(lead, s),
+        patch: input.state === "opened" ? {} : movedToContacted(lead, s), // only opening WhatsApp Web is not yet a reach-out
         event: { kind: "whatsapp", data: { state: input.state, template: input.template ?? null, note: input.note ?? null } },
       } }
     }

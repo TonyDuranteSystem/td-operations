@@ -142,12 +142,30 @@ export function fillTemplate(text: string, v: { name?: string | null; setter?: s
     .replace(/[ \t]{2,}/g, " ").replace(/ ([,.!?])/g, "$1").replace(/Buongiorno ,/g, "Buongiorno,").replace(/Hello ,/g, "Hello,")
 }
 
-/** wa.me address for a phone number ("+39 333 111 2233", "0039 333…") with the text typed in; null when the number is not usable. */
+/** The digits WhatsApp wants for a phone number ("+39 333 111 2233", "0039 333…" -> 393331112233); null when the number is not usable. */
+function whatsappDigits(phone: string | null | undefined): string | null {
+  const raw = (phone ?? "").trim()
+  // letters (an extension like "int. 12", "ext", "x") or two numbers in one field can never be turned into one safe chat address
+  if (/[a-z]/i.test(raw) || /[\/;|]/.test(raw)) return null
+  const noTrunk = raw.replace(/\(0\)/g, "") // "+39 (0)333…" - the trunk zero is not part of the international number
+  const international = noTrunk.startsWith("+") || noTrunk.startsWith("00")
+  let d = noTrunk.replace(/[^\d]/g, "")
+  if (d.startsWith("00")) d = d.replace(/^00/, "")
+  // a number with no country code could open the chat of a stranger in another country (WhatsApp reads its first digits as the country): only a full international number is used
+  if (!international && d.length < 11) return null
+  return d.length < 8 || d.length > 15 ? null : d
+}
+
+/** wa.me address for a phone number with the text typed in; null when the number is not usable. */
 export function whatsappLink(phone: string | null | undefined, text: string): string | null {
-  let d = (phone ?? "").replace(/[^\d]/g, "")
-  if ((phone ?? "").trim().startsWith("00") || d.startsWith("00")) d = d.replace(/^00/, "")
-  if (d.length < 8 || d.length > 15) return null
-  return `https://wa.me/${d}?text=${encodeURIComponent(text)}`
+  const d = whatsappDigits(phone)
+  return d ? `https://wa.me/${d}?text=${encodeURIComponent(text)}` : null
+}
+
+/** The WhatsApp Web address that opens straight on that person's chat with the text written (the person still presses Send); null when the number is not usable. */
+export function whatsappWebLink(phone: string | null | undefined, text: string): string | null {
+  const d = whatsappDigits(phone)
+  return d ? `https://web.whatsapp.com/send?phone=${d}&text=${encodeURIComponent(text)}` : null
 }
 
 /**
@@ -164,7 +182,8 @@ export function messageSigner(i: {
 }): string {
   if (i.claimedLabel) return i.nameOf(i.claimedLabel)
   const setterKinds = new Set(["whatsapp", "attempt", "claimed"])
-  const mine = i.events.filter(e => setterKinds.has(e.kind) && e.actor && e.actor !== "system" && e.data?.via_view_as !== true).sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+  // only opening WhatsApp Web is not yet work on the lead: it must not make the person the lead's setter
+  const mine = i.events.filter(e => setterKinds.has(e.kind) && !(e.kind === "whatsapp" && e.data?.state === "opened") && e.actor && e.actor !== "system" && e.data?.via_view_as !== true).sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
   if (mine) return i.nameOf(mine.actor)
   return i.viewingAs ? "" : i.viewerName
 }
