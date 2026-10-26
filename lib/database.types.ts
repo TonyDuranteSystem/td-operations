@@ -17490,6 +17490,8 @@ export type Database = {
           document_type: string | null
           filing_status: string
           folder_id: string
+          held_basis_year: number | null
+          held_slug: string | null
           id: string
           marked_signed_at: string | null
           name: string
@@ -17517,6 +17519,8 @@ export type Database = {
           document_type?: string | null
           filing_status?: string
           folder_id: string
+          held_basis_year?: number | null
+          held_slug?: string | null
           id?: string
           marked_signed_at?: string | null
           name: string
@@ -17544,6 +17548,8 @@ export type Database = {
           document_type?: string | null
           filing_status?: string
           folder_id?: string
+          held_basis_year?: number | null
+          held_slug?: string | null
           id?: string
           marked_signed_at?: string | null
           name?: string
@@ -17570,6 +17576,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "store_file_versions"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "store_files_current_version_same_file_fk"
+            columns: ["current_version_id", "id"]
+            isOneToOne: false
+            referencedRelation: "store_file_versions"
+            referencedColumns: ["id", "file_id"]
           },
           {
             foreignKeyName: "store_files_folder_id_fkey"
@@ -22488,6 +22501,15 @@ export type Database = {
         }
         Returns: undefined
       }
+      store_rehome_reconcile: {
+        Args: {
+          p_actor: string
+          p_file_ids: string[]
+          p_from_owner: string
+          p_to_owner: string
+        }
+        Returns: number
+      }
       store_rehome_subtree: {
         Args: {
           p_actor: string
@@ -22564,6 +22586,15 @@ export type Database = {
       }
       store_staging_upload_allowed: {
         Args: { p_object_name: string }
+        Returns: boolean
+      }
+      store_subject_belongs: {
+        Args: {
+          p_account_id: string
+          p_contact_id: string
+          p_kind: string
+          p_owner_id: string
+        }
         Returns: boolean
       }
       store_subtree_files: {
