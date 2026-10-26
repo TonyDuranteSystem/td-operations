@@ -115,7 +115,7 @@ function Bubble({
         style={{ transform: dx ? `translateX(${dx}px)` : undefined, transition: dx ? 'none' : 'transform 150ms' }}
         className={cn(
           'relative max-w-[82%] select-none rounded-2xl px-3 py-2 shadow-sm [-webkit-touch-callout:none] [-webkit-user-select:none]',
-          mine ? 'rounded-br-md bg-[#fbe3e5] text-zinc-900' : 'rounded-bl-md border border-zinc-200 bg-white text-zinc-900',
+          mine ? 'rounded-br-md bg-sky-100 text-zinc-900' : 'rounded-bl-md border border-zinc-200 bg-white text-zinc-900',
           highlighted && 'ring-2 ring-amber-400',
         )}
       >
