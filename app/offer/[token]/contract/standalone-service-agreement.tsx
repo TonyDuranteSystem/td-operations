@@ -7,6 +7,8 @@ import type { Offer } from '@/lib/types/offer'
 import { contractVersionLabel } from '@/lib/offers/contract-version'
 import { euroBankAddress } from '@/lib/offers/bank-address'
 import type { StandaloneAgreementType } from '@/lib/offers/standalone-contract-types'
+import { planAgreements } from '@/lib/offers/standalone-agreement-lines'
+import { isNoChargeFee } from '@/lib/offers/fee-label'
 
 function today() {
   return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -109,6 +111,8 @@ export const SERVICE_CONTENT = {
         { bold: 'Acknowledge processing times', rest: ' are determined by the IRS (typically 7-11 weeks) and are outside the Service Provider\'s control.' },
       ],
     },
+    workPhrase: 'the ITIN application',
+    liabilityPhrase: "the IRS's decision on the application or its processing time, or for consequences",
     signatureText: 'By signing below, I confirm that I have read and agree to the terms of this ITIN Application Service Agreement. I acknowledge my responsibility to provide accurate and complete personal information for the application.',
     successNote: 'Once payment is received, we will begin preparing your ITIN application immediately.',
   },
@@ -149,6 +153,8 @@ export const SERVICE_CONTENT = {
         { bold: 'Respond to requests for information', rest: ' within five (5) business days of receiving the request.' },
       ],
     },
+    workPhrase: 'the company closure',
+    liabilityPhrase: 'the timing or outcome of any state or IRS processing of the closure, or for consequences',
     signatureText: 'By signing below, I confirm that I have read and agree to the terms of this Company Closure Service Agreement. I authorize Tony Durante LLC to proceed with the dissolution of my LLC and acknowledge that this process is irreversible once the state filing is submitted.',
     successNote: 'Once payment is received, we will begin the closure process. You will receive the official closure documents from the Secretary of State by email.',
   },
@@ -356,12 +362,144 @@ export const SERVICE_CONTENT = {
   },
 } as const
 
-export default function StandaloneServiceAgreement({ offer, token, contractType = 'tax_return', cred }: StandaloneServiceAgreementProps) {
-  const ct = SERVICE_CONTENT[contractType]
+type AgreementContent = (typeof SERVICE_CONTENT)[StandaloneAgreementType]
+
+function phrasesFor(ct: AgreementContent) {
   // Per-type wording for the Payment / Liability sections (defaults = the tax-return text).
   const extra = ct as { workPhrase?: string; liabilityPhrase?: string }
-  const workPhrase = extra.workPhrase ?? 'the tax return preparation'
-  const liabilityPhrase = extra.liabilityPhrase ?? 'penalties, interest, or additional taxes'
+  return {
+    workPhrase: extra.workPhrase ?? 'the tax return preparation',
+    liabilityPhrase: extra.liabilityPhrase ?? 'penalties, interest, or additional taxes',
+  }
+}
+
+// Quantity-aware closing text for ITIN (Design B: one contract covers N members)
+function scopeClosingFor(type: StandaloneAgreementType, ct: AgreementContent, service: { quantity?: number } | undefined): string {
+  const itinQuantity = (type === 'itin' && service?.quantity && Number(service.quantity) > 1)
+    ? Number(service.quantity)
+    : null
+  return type === 'itin' && itinQuantity
+    ? `This Agreement covers up to ${itinQuantity} ITIN applications (one per member of the company). Each member's individual application is initiated separately through their own client portal dashboard. Any applications beyond ${itinQuantity} require a separate agreement.`
+    : ct.scope.closing
+}
+
+interface AgreementBodyProps {
+  ct: AgreementContent
+  clientName: string
+  serviceName: string
+  serviceDesc: string
+  fee: string
+  includes: string[]
+  scopeClosing: string
+  workPhrase: string
+  liabilityPhrase: string
+}
+
+/** One agreement's parties, service summary and sections 1-8 (no signature — that is the page's). */
+function AgreementBody({ ct, clientName, serviceName, serviceDesc, fee, includes, scopeClosing, workPhrase, liabilityPhrase }: AgreementBodyProps) {
+  // a $0 / "included" service still gets its agreement, but says so instead of "$0 payable in full"
+  const noCharge = isNoChargeFee(fee)
+  return (
+    <>
+        {/* PARTIES */}
+        <p>This {ct.shortTitle} (&ldquo;<strong>Agreement</strong>&rdquo;) is entered into as of <strong>{today()}</strong>, by and between:</p>
+        <p style={{ margin: '14px 0' }}><strong>Tony Durante LLC</strong>, a Florida limited liability company (&ldquo;<strong>Service Provider</strong>&rdquo;), and</p>
+        <p style={{ margin: '14px 0' }}><strong>{clientName || '[Client Name]'}</strong> (&ldquo;<strong>Client</strong>&rdquo;).</p>
+
+        {/* SERVICE SUMMARY */}
+        <table className="contract-key-terms">
+          <caption>Service Summary</caption>
+          <tbody>
+            <tr><th>Service</th><td>{serviceName}</td></tr>
+            {serviceDesc && <tr><th>Description</th><td>{serviceDesc}</td></tr>}
+            <tr><th>Fee</th><td>{noCharge ? 'Included \u2014 no separate charge' : <>{fee} (one-time)</>}</td></tr>
+            {includes.length > 0 && (
+              <tr><th>Includes</th><td>{(includes as string[]).map((item, i) => <span key={i}>{item}{i < includes.length - 1 ? ', ' : ''}</span>)}</td></tr>
+            )}
+          </tbody>
+        </table>
+
+        {/* SECTION 1 — SCOPE */}
+        <div className="contract-section">
+          <h3>1. Scope of Service</h3>
+          <p>{ct.scope.intro}</p>
+          <ul>
+            {ct.scope.items.map((item, i) => <li key={i}>{item}</li>)}
+          </ul>
+          <p><strong>{scopeClosing}</strong></p>
+        </div>
+
+        {/* SECTION 2 — CLIENT RESPONSIBILITIES */}
+        <div className="contract-section">
+          <h3>2. Client Responsibilities</h3>
+          <p>{ct.clientDuties.intro}</p>
+          <ol type="a">
+            {ct.clientDuties.items.map((item, i) => <li key={i}><strong>{item.bold}</strong>{item.rest}</li>)}
+          </ol>
+        </div>
+
+        {/* SECTION 3 — PROCEDURE */}
+        <div className="contract-section">
+          <h3>3. Service Procedure</h3>
+          <p>{ct.procedure.intro}</p>
+          <ol>
+            {ct.procedure.steps.map((step, i) => <li key={i}><strong>{step.title}</strong> &mdash; {step.desc}</li>)}
+          </ol>
+        </div>
+
+        {/* SECTION 4 — SERVICE PROVIDER COMMITMENTS */}
+        <div className="contract-section">
+          <h3>4. Service Provider Commitments</h3>
+          <p>The Service Provider agrees to:</p>
+          <ol type="a">
+            {ct.commitments.map((item, i) => <li key={i}>{item}</li>)}
+          </ol>
+        </div>
+
+        {/* SECTION 5 — PAYMENT */}
+        <div className="contract-section">
+          <h3>5. Payment</h3>
+          {noCharge ? (
+            <p>No service fee is payable to the Service Provider for this service itself; it is included in your offer. Any third-party or government charges described in this Agreement remain the Client&rsquo;s responsibility.</p>
+          ) : (
+            <>
+              <p>The total fee for this service is <strong>{fee}</strong>, payable in full before {workPhrase} begins. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
+              <p><strong>All fees are non-refundable</strong> once {workPhrase} has commenced.</p>
+            </>
+          )}
+        </div>
+
+        {/* SECTION 6 — LIMITATION OF LIABILITY */}
+        <div className="contract-section">
+          <h3>6. Limitation of Liability</h3>
+          <p>The Service Provider&rsquo;s total liability under this Agreement shall not exceed the fee paid by the Client. The Service Provider is not liable for {liabilityPhrase} resulting from inaccurate, incomplete, or late information provided by the Client.</p>
+        </div>
+
+        {/* SECTION 7 — GOVERNING LAW */}
+        <div className="contract-section">
+          <h3>7. Governing Law</h3>
+          <p>This Agreement is governed by the laws of the State of Florida. Any disputes shall be resolved through binding arbitration in Pinellas County, Florida, under AAA rules.</p>
+        </div>
+
+        {/* SECTION 8 — ELECTRONIC SIGNATURES */}
+        <div className="contract-section">
+          <h3>8. Electronic Signatures</h3>
+          <p>Electronic signatures on this Agreement are valid and binding under the ESIGN Act (15 U.S.C. &sect; 7001) and UETA (Fla. Stat. &sect; 668.50).</p>
+        </div>
+
+    </>
+  )
+}
+
+export default function StandaloneServiceAgreement({ offer, token, contractType = 'tax_return', cred }: StandaloneServiceAgreementProps) {
+  // What this page shows (lib/offers/standalone-agreement-lines.ts). The view route sets
+  // `multi_agreements` from the switch; OFF (or absent) = the original single agreement.
+  const plan = planAgreements(offer, contractType, offer.multi_agreements === true)
+  const agreements = plan.entries
+  const multi = plan.mode === 'multi'
+  const mainType: StandaloneAgreementType = agreements[0]?.type ?? contractType
+  const ct = SERVICE_CONTENT[mainType]
+  const { workPhrase, liabilityPhrase } = phrasesFor(ct)
   const [signing, setSigning] = useState(false)
   // Blocking on a failed write makes RETRY a real path. The PDF-capture step
   // DESTRUCTIVELY rewrites the DOM (inputs -> spans, canvases -> imgs), so a
@@ -382,21 +520,18 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
   const sigPadRef = useRef<any>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
 
-  // Extract service info from offer — prefer the service matching contractType
-  const service = offer.services?.find(s => s.contract_type === contractType)
-    ?? offer.services?.[0]
+  // The service this (single) agreement is for — chosen by planAgreements
+  const service = agreements[0]?.line
   const serviceName = service?.name || 'Tax Return'
   const serviceDesc = service?.description || ''
   const fee = service?.price || ''
   const includes = service?.includes || []
 
-  // Quantity-aware closing text for ITIN (Design B: one contract covers N members)
-  const itinQuantity = (contractType === 'itin' && service?.quantity && Number(service.quantity) > 1)
-    ? Number(service.quantity)
-    : null
-  const scopeClosing = contractType === 'itin' && itinQuantity
-    ? `This Agreement covers up to ${itinQuantity} ITIN applications (one per member of the company). Each member's individual application is initiated separately through their own client portal dashboard. Any applications beyond ${itinQuantity} require a separate agreement.`
-    : ct.scope.closing
+  const scopeClosing = scopeClosingFor(mainType, ct, service)
+
+  // The message after signing speaks for the whole document, not for the first service only.
+  const successNote = multi ? 'Once payment is received, we will begin working on your services.' : ct.successNote
+  const pdfName = multi ? 'Service_Agreements' : ct.pdfPrefix
 
   // Init signature pad
   useEffect(() => {
@@ -478,7 +613,7 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
       // Generate PDF
       const opt = {
         margin: [0.5, 0.6, 0.7, 0.6] as [number, number, number, number],
-        filename: `Tony_Durante_${ct.pdfPrefix}_${token}.pdf`,
+        filename: `Tony_Durante_${pdfName}_${token}.pdf`,
         image: { type: 'jpeg' as const, quality: 0.95 },
         html2canvas: { scale: 2, useCORS: true, letterRendering: true },
         jsPDF: { unit: 'in' as const, format: 'letter' as const, orientation: 'portrait' as const },
@@ -490,7 +625,7 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
       // N0 (dev job f907220c): upload through a one-time link, then the server checks the
       // PDF, writes the contracts row, flips the offer to signed and runs the follow-up.
       setStatusMsg('Uploading signed agreement...')
-      await uploadAndSignOffer(cred, pdfBlob, `Tony_Durante_${ct.pdfPrefix}_${token}.pdf`, { client_name: name, client_email: email }, offer.language)
+      await uploadAndSignOffer(cred, pdfBlob, `Tony_Durante_${pdfName}_${token}.pdf`, { client_name: name, client_email: email }, offer.language)
 
       // Show payment options — ensure real bank details (replace placeholders)
       const { ensureBankDetails } = await import('./bank-defaults')
@@ -504,7 +639,7 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
       if ((hasCard || hasBank) && successEl && bodyRef.current) {
         bodyRef.current.style.display = 'none'
         let sh = '<div class="contract-success-panel"><div class="contract-success-icon">&#10004;</div>'
-        sh += '<h2 style="color:var(--c-green);font-size:18pt;margin-bottom:8px">Agreement Signed!</h2>'
+        sh += `<h2 style="color:var(--c-green);font-size:18pt;margin-bottom:8px">${multi ? 'Agreements Signed!' : 'Agreement Signed!'}</h2>`
         sh += '<p style="font-size:12pt;margin-bottom:28px;color:var(--c-muted)">Choose how you want to pay:</p>'
 
         sh += '<div id="payment-choice">'
@@ -557,7 +692,7 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
           sh += '</div></div></div>'
         }
 
-        sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">${ct.successNote}</p>`
+        sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">${successNote}</p>`
         sh += `<a href="${esc(cred.code ? `/offer/${encodeURIComponent(token)}/${encodeURIComponent(cred.code)}` : `/offer/${encodeURIComponent(token)}`)}" class="contract-success-link">&larr; Back to Offer</a>`
         sh += '</div>'
         successEl.innerHTML = sh
@@ -628,88 +763,37 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
         <div className="contract-header">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/images/logo.jpg" alt="Tony Durante LLC" />
-          <h1>{ct.title}</h1>
+          <h1>{multi ? 'Service Agreements' : ct.title}</h1>
         </div>
 
-        {/* PARTIES */}
-        <p>This {ct.shortTitle} (&ldquo;<strong>Agreement</strong>&rdquo;) is entered into as of <strong>{today()}</strong>, by and between:</p>
-        <p style={{ margin: '14px 0' }}><strong>Tony Durante LLC</strong>, a Florida limited liability company (&ldquo;<strong>Service Provider</strong>&rdquo;), and</p>
-        <p style={{ margin: '14px 0' }}><strong>{name || '[Client Name]'}</strong> (&ldquo;<strong>Client</strong>&rdquo;).</p>
+        {multi ? (
+          <>
+            <div className="contract-section" data-agreements-intro>
+              <p>
+                This document contains <strong>{agreements.length} agreements</strong>, for the following services in your offer:
+              </p>
+              <ol>
+                {agreements.map(({ type, line }, i) => <li key={i}>{SERVICE_CONTENT[type].title} &mdash; {line.name}</li>)}
+              </ol>
+              <p>You sign once, at the end of the document. Your signature accepts every agreement listed above.</p>
+            </div>
 
-        {/* SERVICE SUMMARY */}
-        <table className="contract-key-terms">
-          <caption>Service Summary</caption>
-          <tbody>
-            <tr><th>Service</th><td>{serviceName}</td></tr>
-            {serviceDesc && <tr><th>Description</th><td>{serviceDesc}</td></tr>}
-            <tr><th>Fee</th><td>{fee} (one-time)</td></tr>
-            {includes.length > 0 && (
-              <tr><th>Includes</th><td>{(includes as string[]).map((item, i) => <span key={i}>{item}{i < includes.length - 1 ? ', ' : ''}</span>)}</td></tr>
-            )}
-          </tbody>
-        </table>
-
-        {/* SECTION 1 — SCOPE */}
-        <div className="contract-section">
-          <h3>1. Scope of Service</h3>
-          <p>{ct.scope.intro}</p>
-          <ul>
-            {ct.scope.items.map((item, i) => <li key={i}>{item}</li>)}
-          </ul>
-          <p><strong>{scopeClosing}</strong></p>
-        </div>
-
-        {/* SECTION 2 — CLIENT RESPONSIBILITIES */}
-        <div className="contract-section">
-          <h3>2. Client Responsibilities</h3>
-          <p>{ct.clientDuties.intro}</p>
-          <ol type="a">
-            {ct.clientDuties.items.map((item, i) => <li key={i}><strong>{item.bold}</strong>{item.rest}</li>)}
-          </ol>
-        </div>
-
-        {/* SECTION 3 — PROCEDURE */}
-        <div className="contract-section">
-          <h3>3. Service Procedure</h3>
-          <p>{ct.procedure.intro}</p>
-          <ol>
-            {ct.procedure.steps.map((step, i) => <li key={i}><strong>{step.title}</strong> &mdash; {step.desc}</li>)}
-          </ol>
-        </div>
-
-        {/* SECTION 4 — SERVICE PROVIDER COMMITMENTS */}
-        <div className="contract-section">
-          <h3>4. Service Provider Commitments</h3>
-          <p>The Service Provider agrees to:</p>
-          <ol type="a">
-            {ct.commitments.map((item, i) => <li key={i}>{item}</li>)}
-          </ol>
-        </div>
-
-        {/* SECTION 5 — PAYMENT */}
-        <div className="contract-section">
-          <h3>5. Payment</h3>
-          <p>The total fee for this service is <strong>{fee}</strong>, payable in full before {workPhrase} begins. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
-          <p><strong>All fees are non-refundable</strong> once {workPhrase} has commenced.</p>
-        </div>
-
-        {/* SECTION 6 — LIMITATION OF LIABILITY */}
-        <div className="contract-section">
-          <h3>6. Limitation of Liability</h3>
-          <p>The Service Provider&rsquo;s total liability under this Agreement shall not exceed the fee paid by the Client. The Service Provider is not liable for {liabilityPhrase} resulting from inaccurate, incomplete, or late information provided by the Client.</p>
-        </div>
-
-        {/* SECTION 7 — GOVERNING LAW */}
-        <div className="contract-section">
-          <h3>7. Governing Law</h3>
-          <p>This Agreement is governed by the laws of the State of Florida. Any disputes shall be resolved through binding arbitration in Pinellas County, Florida, under AAA rules.</p>
-        </div>
-
-        {/* SECTION 8 — ELECTRONIC SIGNATURES */}
-        <div className="contract-section">
-          <h3>8. Electronic Signatures</h3>
-          <p>Electronic signatures on this Agreement are valid and binding under the ESIGN Act (15 U.S.C. &sect; 7001) and UETA (Fla. Stat. &sect; 668.50).</p>
-        </div>
+            {/* ONE AGREEMENT PER SERVICE — same wording a single-service offer shows; one signature covers all */}
+            {agreements.map(({ type, line }, i) => {
+              const xct = SERVICE_CONTENT[type]
+              const ph = phrasesFor(xct)
+              return (
+                <div key={i} data-agreement={type} style={i > 0 ? { pageBreakBefore: 'always', marginTop: 48 } : undefined}>
+                  <div className="contract-part-divider"><h2>{xct.title}</h2></div>
+                  <AgreementBody ct={xct} clientName={name} serviceName={line.name || xct.shortTitle} serviceDesc={line.description || ''} fee={line.price || ''} includes={(line.includes || []) as string[]} scopeClosing={scopeClosingFor(type, xct, line)} workPhrase={ph.workPhrase} liabilityPhrase={ph.liabilityPhrase} />
+                </div>
+              )
+            })}
+          </>
+        ) : (
+          /* AGREEMENT — parties, summary and sections 1-8 */
+          <AgreementBody ct={ct} clientName={name} serviceName={serviceName} serviceDesc={serviceDesc} fee={fee} includes={includes as string[]} scopeClosing={scopeClosing} workPhrase={workPhrase} liabilityPhrase={liabilityPhrase} />
+        )}
 
         {/* CLIENT INFORMATION */}
         <table className="contract-client-form" id="tax-client-form">
@@ -729,9 +813,22 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
         {/* SIGNATURE */}
         <div className="contract-sig-section">
           <h3 style={{ textAlign: 'center' }}>Acceptance &amp; Signature</h3>
-          <p className="contract-text-center contract-text-muted" style={{ marginBottom: 16, fontSize: '9.5pt' }}>
-            {ct.signatureText}
-          </p>
+          {!multi ? (
+            <p className="contract-text-center contract-text-muted" style={{ marginBottom: 16, fontSize: '9.5pt' }}>
+              {ct.signatureText}
+            </p>
+          ) : (
+            <div data-combined-acceptance>
+              <p className="contract-text-center contract-text-muted" style={{ marginBottom: 8, fontSize: '9.5pt' }}>
+                <strong>By signing once below, I accept each of the {agreements.length} agreements in this document:</strong>
+              </p>
+              {Array.from(new Set(agreements.map(({ type }) => type))).map((type) => (
+                <p key={type} className="contract-text-center contract-text-muted" style={{ marginBottom: 10, fontSize: '9.5pt' }}>
+                  <strong>{SERVICE_CONTENT[type].title}.</strong> {SERVICE_CONTENT[type].signatureText}
+                </p>
+              ))}
+            </div>
+          )}
           <div className="contract-sig-grid">
             <div className="contract-sig-block">
               <div className="contract-sig-label">Service Provider</div>
@@ -766,7 +863,7 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
       {/* ACTION BAR */}
       <div className="contract-action-bar" id="tax-action-bar">
         <button className="contract-btn contract-btn-sign" onClick={signAgreement} disabled={!ready || signing}>
-          {signing ? 'Generating PDF...' : 'Sign & Accept Agreement'}
+          {signing ? 'Generating PDF...' : multi ? 'Sign & Accept All Agreements' : 'Sign & Accept Agreement'}
         </button>
         <div className={`contract-status-msg ${statusType === 'error' ? 'contract-error-msg' : statusType === 'success' ? 'contract-success-msg' : ''}`}>
           {statusMsg}

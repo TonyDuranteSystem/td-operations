@@ -149,6 +149,9 @@ export interface Offer {
   entity_type?: 'Single Member LLC' | 'Multi Member LLC' | 'C-Corp Elected'
   // Multi-option offers (dev job 3c1bb5fa). See lib/offers/package-pick.ts.
   packages?: OfferPackageOption[]
+  // Set by the public view route from the switch `short_contract_multi_agreements` (lib/offers/multi-agreements-switch.ts);
+  // true = a short-contract offer shows every service's agreement and takes one signature. Not a database column.
+  multi_agreements?: boolean
   selected_package_key?: string | null
   package_locked_at?: string | null
 }

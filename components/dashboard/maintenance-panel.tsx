@@ -41,6 +41,54 @@ export function MaintenancePanel() {
   const [winSaving, setWinSaving] = useState(false)
   const [winResult, setWinResult] = useState<Result | null>(null)
 
+  // Several agreements in one short contract (app_settings.short_contract_multi_agreements) — flexible-offer slice 2.
+  // OFF by default: while off, a short-contract offer shows only its main agreement, exactly as before.
+  const MULTI_KEY = 'short_contract_multi_agreements'
+  const [multiOn, setMultiOn] = useState(false)
+  const [multiLoaded, setMultiLoaded] = useState(false)
+  const [multiSaving, setMultiSaving] = useState(false)
+  const [multiResult, setMultiResult] = useState<Result | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/app-settings?key=${MULTI_KEY}`)
+      .then(r => r.json())
+      // default OFF: only on when explicitly stored true
+      .then(d => { if (!cancelled) setMultiOn(d.value === true) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setMultiLoaded(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  const handleToggleMulti = async () => {
+    const next = !multiOn
+    setMultiSaving(true)
+    setMultiResult(null)
+    try {
+      const res = await fetch('/api/app-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: MULTI_KEY, value: next }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setMultiResult({ kind: 'error', message: data.error || 'Save failed' })
+        return
+      }
+      setMultiOn(next)
+      setMultiResult({
+        kind: 'ok',
+        message: next
+          ? 'Several agreements in one contract is ON. Clients opening a short-contract offer with 2+ services now see every agreement and sign once.'
+          : 'Several agreements in one contract is OFF. Clients see only the main service\'s agreement, as before.',
+      })
+    } catch {
+      setMultiResult({ kind: 'error', message: 'Save failed' })
+    } finally {
+      setMultiSaving(false)
+    }
+  }
+
   useEffect(() => {
     let cancelled = false
     fetch(`/api/app-settings?key=${WIN_KEY}`)
@@ -412,6 +460,48 @@ export function MaintenancePanel() {
                 : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
             }`}>
               {winResult.message}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-blue-100 pt-3 mt-2">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <AppWindow className="h-3.5 w-3.5 text-blue-600" />
+            <span className="text-xs font-medium text-blue-900">Several agreements in one contract</span>
+          </div>
+          <p className="text-xs text-muted-foreground mb-2">
+            When on, an offer with two or more services that each have their own short contract (for example Tax Return +
+            Consulting Call) shows the client EVERY service&apos;s agreement in one document, and the client signs once.
+            When off, the client sees only the main service&apos;s agreement, as before, and staff get a warning when they
+            create such an offer. Off by default; while it is off nothing changes for clients. Staff previews (the preview
+            button on an offer) always show the new document, so you can test it while this is off. Takes effect the next
+            time a client opens the contract.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleToggleMulti}
+              aria-pressed={multiOn}
+              disabled={!multiLoaded || multiSaving}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-colors disabled:opacity-50 ${
+                multiOn
+                  ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
+                  : 'bg-zinc-100 text-zinc-600 border-zinc-300 hover:bg-zinc-200'
+              }`}
+            >
+              {multiSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {multiOn ? 'On' : 'Off'}
+            </button>
+            <span className="text-xs text-muted-foreground">
+              {multiLoaded ? (multiOn ? 'Several agreements in one contract is on' : 'Several agreements in one contract is off') : 'Loading…'}
+            </span>
+          </div>
+          {multiResult && (
+            <div className={`mt-2 text-xs p-2.5 rounded-md ${
+              multiResult.kind === 'error'
+                ? 'bg-red-50 text-red-700 border border-red-200'
+                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+            }`}>
+              {multiResult.message}
             </div>
           )}
         </div>

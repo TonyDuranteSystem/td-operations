@@ -92,6 +92,10 @@ export function parsePriceQuirk(raw: unknown): number {
 const RECURRING_RE = /\/(year|anno|month|mese)/i
 const INCLUDED_RE = /includ|inclus/i
 
+/** The engine's own tests for a price that is not a one-off charge — shared so other code cannot drift from them. */
+export const isRecurringPrice = (raw: unknown): boolean => RECURRING_RE.test(String(raw ?? ""))
+export const isIncludedPrice = (raw: unknown): boolean => INCLUDED_RE.test(String(raw ?? ""))
+
 /**
  * Does this paid offer sell a Tax Return? Antonio 2026-09-27: onboarding and
  * tax return always sit on the SAME invoice — with its own price the tax

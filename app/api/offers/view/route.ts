@@ -3,6 +3,8 @@ import { readOfferRequest } from '@/lib/offers/public-offer-request'
 import { resolvePublicOfferAccess } from '@/lib/offers/public-offer-access'
 import { toPublicOfferView, toPublicRenewalView } from '@/lib/offers/public-offer-view'
 import { signRenewalPass } from '@/lib/offers/renewal-pass'
+import { multiAgreementsEnabled } from '@/lib/offers/multi-agreements-switch'
+import { isStandaloneAgreementType } from '@/lib/offers/standalone-contract-types'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,9 +37,15 @@ export async function POST(req: NextRequest) {
     })
   }
 
+  // Flexible-offer slice 2: the switch for "several agreements in one short contract, signed once".
+  // OFF by default; a staff preview always sees it ON so it can be tested before clients get it.
+  // Only short-contract offers use it — formation / onboarding never read the setting.
+  const multi_agreements = isStandaloneAgreementType((access.offer as { contract_type?: unknown } | null)?.contract_type)
+    ? await multiAgreementsEnabled({ staffPreview: access.staffPreview })
+    : false
   return NextResponse.json({
     kind: 'offer',
-    offer: toPublicOfferView(access.offer),
+    offer: { ...toPublicOfferView(access.offer), multi_agreements },
     staffPreview: access.staffPreview,
   })
 }
