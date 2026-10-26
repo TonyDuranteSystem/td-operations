@@ -11,11 +11,11 @@ import { leadActionSchema, planLeadAction, type ActionSettings, type Actor, type
 export type ActionResult = { ok: true } | { ok: false; status: 400 | 404 | 409 | 500; error: string }
 
 export async function loadActionSettings(teamId: string): Promise<ActionSettings> {
-  const [stages, reasons, checklist, outcomeStages, sellerStages] = await Promise.all([
+  const [stages, reasons, checklist, outcomeStages, sellerStages, saleStages] = await Promise.all([
     getMarketingSetting("pipeline_stages", teamId), getMarketingSetting("not_in_target_reasons", teamId),
-    getMarketingSetting("qualification_checklist", teamId), getMarketingSetting("setter_outcome_stages", teamId), getMarketingSetting("seller_result_stages", teamId),
+    getMarketingSetting("qualification_checklist", teamId), getMarketingSetting("setter_outcome_stages", teamId), getMarketingSetting("seller_result_stages", teamId), getMarketingSetting("sale_kind_stages", teamId),
   ])
-  return { stages, reasons, checklist, outcomeStages, sellerStages } as ActionSettings
+  return { stages, reasons, checklist, outcomeStages, sellerStages, paidStages: Array.from(new Set(Object.values(saleStages as Record<string, string>))) } as ActionSettings
 }
 
 export function parseLeadAction(body: unknown): { ok: true; value: LeadActionInput } | { ok: false; error: string } {

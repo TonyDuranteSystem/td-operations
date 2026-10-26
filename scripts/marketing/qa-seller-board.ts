@@ -78,7 +78,6 @@ async function main() {
   const ids = (await db.query("select id from marketing_leads where team_id=$1 and status not in ('paid_call','upsell_won') order by received_at desc limit 4", [team])).rows.map(r => r.id as string)
   ck("S3 the QA team has leads to work with", ids.length >= 4, ids.length)
   await db.query("update marketing_leads set status='showed', claimed_by=null, claimed_by_label=null, callback_at=null, not_in_target_reason=null where id = any($1)", [ids])
-  await db.query("delete from marketing_lead_events where lead_id = any($1) and kind='status_changed'", [ids])
   const stageOf = async (id: string) => (await db.query("select status, callback_at from marketing_leads where id=$1", [id])).rows[0] as { status: string; callback_at: Date | null }
   async function openLead(id: string) {
     await p.goto(`${BASE}/marketing/window/${id}?role=seller`, { waitUntil: "networkidle", timeout: 180000 })
@@ -113,7 +112,8 @@ async function main() {
   await p.waitForTimeout(1500)
   const nr = await stageOf(ids[2])
   ck("S10 Not ready now, six months away, is accepted and stores the day", nr.status === "not_ready" && nr.callback_at !== null && nr.callback_at.getTime() > Date.now() + 150 * 24 * 3600 * 1000, nr)
-  // Not in target
+  // Not in target (a lead the setter passed on to Rocco; one the setter turned down before it reached him is not on his board)
+  await db.query("insert into marketing_lead_events (lead_id, kind, actor, data) values ($1,'handover','qa','{}'::jsonb)", [ids[3]])
   await openLead(ids[3])
   await p.getByRole("button", { name: "Not in target" }).first().click()
   await p.locator("select").first().selectOption({ index: 1 })
@@ -136,6 +136,10 @@ async function main() {
   ck("S14 Rocco's Italian words are on the board", ["Chiamate fissate", "Fuori target", "Chiuso", "Non chiuso", "Non pronto ora", "Pagato"].every(w => itHeads.includes(w)), itHeads)
   await p.screenshot({ path: `${SHOTS}/seller-six-columns-it.png` })
   await p.evaluate(async () => { await fetch("/api/marketing/lang", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lang: "en" }) }) })
+
+  // pressing the same result twice, or a result on a lead that has paid, is refused
+  const same = await p.evaluate(async id => { const r = await fetch(`/api/marketing/leads/${id}/action`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "closed" }) }); return r.status }, ids[0])
+  ck("S14b pressing Closed on a lead that is already Closed is refused (no duplicate history)", same === 409, same)
 
   // a new booked call brings a Not closed lead back to the booked calls
   const at = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString()

@@ -65,10 +65,14 @@ export function columnOf(role: BoardRole, stage: string): string | null {
   return columnsFor(role).find(c => c.stages.includes(stage))?.key ?? null
 }
 
-/** The column a CARD sits in. For the seller an in-target lead appears only once the setter has passed it on; until then it is the setter's. */
-export function columnOfCard(role: BoardRole, card: Pick<BoardCard, "stage" | "handedOver">): string | null {
+/** The column a CARD sits in. For the seller an in-target lead appears only once the setter has passed it on; until then it is the setter's. Likewise a turned-down lead only if it reached him. */
+export function columnOfCard(role: BoardRole, card: Pick<BoardCard, "stage" | "handedOver"> & { apptAt?: string | null }): string | null {
   const key = columnOf(role, card.stage)
-  return role === "seller" && card.stage === "qualified" && !card.handedOver ? null : key
+  if (role !== "seller") return key
+  if (card.stage === "qualified" && !card.handedOver) return null
+  // a lead the setter turned down before it ever reached Rocco (not passed on, no call booked) is not on his board
+  if (card.stage === "not_in_target" && !card.handedOver && !card.apptAt) return null
+  return key
 }
 
 export interface BoardCard {

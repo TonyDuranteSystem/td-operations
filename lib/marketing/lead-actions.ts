@@ -13,6 +13,8 @@ export interface ActionSettings {
   reasons: readonly Option[]
   checklist: readonly string[]
   outcomeStages: { good: string; not_in_target: string; call_back: string }
+  /** the stages a paid sale moves a lead to: a paid lead is not pulled out of Paid by a result */
+  paidStages?: readonly string[]
   /** where the seller's results after the call put a lead */
   sellerStages?: { not_ready: string; closed: string; not_closed: string }
 }
@@ -81,6 +83,13 @@ function movedToBooked(lead: LeadFacts, s: ActionSettings): Record<string, unkno
   if (lead.status === sellerOf(s).not_ready || lead.status === sellerOf(s).not_closed) return { status: "booked", callback_at: null }
   if (cur >= 0 && cur >= booked) return {}
   return { status: "booked" }
+}
+
+/** The seller's results never undo a payment: a lead that has paid stays in Paid, and pressing the result a lead already has changes nothing (a new day for "not ready now" is allowed). */
+function sellerResultGuard(action: "closed" | "not_closed" | "not_ready", lead: LeadFacts, s: ActionSettings): Plan | null {
+  if ((s.paidStages ?? ["paid_call", "upsell_won"]).includes(lead.status)) return fail(409, "This lead has already paid, so nothing is changed.")
+  if (action !== "not_ready" && lead.status === (action === "closed" ? sellerOf(s).closed : sellerOf(s).not_closed)) return fail(409, "This lead already has this result.")
+  return null
 }
 
 export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: Actor, s: ActionSettings, now: Date): Plan {
@@ -168,7 +177,8 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
       const at = new Date(input.at)
       if (Number.isNaN(at.getTime())) return fail(400, "Pick a valid day and time.")
       if (at.getTime() < now.getTime() - GRACE_MS) return fail(400, "That time has already passed. Pick a day and time in the future.")
-      if (at.getTime() > now.getTime() + MAX_AHEAD_MS) return fail(400, "That is too far away. Pick a day within the next six months.")
+      const farOk = input.target === "callback" && lead.status === sellerOf(s).not_ready ? NOT_READY_MAX_AHEAD_MS : MAX_AHEAD_MS // a "not ready now" day was allowed up to a year, so it can be moved up to a year
+      if (at.getTime() > now.getTime() + farOk) return fail(400, farOk === NOT_READY_MAX_AHEAD_MS ? "That is too far away. Pick a day within the next year." : "That is too far away. Pick a day within the next six months.")
       if (input.reason === "Other" && !input.note) return fail(400, "Tell us why: write a few words.")
       const from = typeof input.from === "string" && !Number.isNaN(Date.parse(input.from)) ? new Date(input.from).toISOString() : null
       // only a call that STILL STANDS can be moved: a stale page must never bring back a cancelled booking or reopen a lead that has moved on
@@ -199,6 +209,8 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
 
     case "closed":
     case "not_closed": {
+      const refused = sellerResultGuard(input.action, lead, s)
+      if (refused) return refused
       const target = input.action === "closed" ? sellerOf(s).closed : sellerOf(s).not_closed
       if (!stageExists(target)) return fail(400, `The stage for "${input.action === "closed" ? "Closed" : "Not closed"}" is not set up. Ask Antonio.`)
       return { ok: true, change: {
@@ -209,6 +221,7 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
 
     case "not_ready":
     case "call_back": {
+      if (input.action === "not_ready") { const refused = sellerResultGuard("not_ready", lead, s); if (refused) return refused }
       const at = new Date(input.callbackAt)
       if (Number.isNaN(at.getTime())) return fail(400, "Pick a valid day and time.")
       if (at.getTime() < now.getTime() - GRACE_MS) return fail(400, "That time has already passed. Pick a day and time in the future.")

@@ -33,9 +33,13 @@ export default async function MarketingBoard() {
   const teamId = g.ctx.team.id
   const userId = g.ctx.user.id
   const stages = (await getMarketingSetting('pipeline_stages', teamId)) as StageOption[]
-  const sellerStages = (await getMarketingSetting('seller_result_stages', teamId)) as { not_ready: string }
+  const sellerStages = (await getMarketingSetting('seller_result_stages', teamId)) as { not_ready: string; closed: string; not_closed: string }
   const res = await listTeamLeadsCapped(db, teamId, 500, { order: 'newest' })
-  const leads = withoutPhone(res.rows, g.ctx.permissions)
+  // the seller's results can sit for months (a lead "not ready now" until next spring): they must not fall off the newest-500 window, so each is also read on its own
+  const longLived = await Promise.all([sellerStages.not_ready, sellerStages.closed, sellerStages.not_closed].map(stage => listTeamLeadsCapped(db, teamId, 500, { stage, order: 'newest' })))
+  const seenIds = new Set(res.rows.map(r => r.id))
+  const extra = longLived.flatMap(r => r.rows).filter(r => !seenIds.has(r.id) && seenIds.add(r.id))
+  const leads = withoutPhone([...res.rows, ...extra], g.ctx.permissions)
   const seesNotes = canSeeNotes(g.ctx.permissions)
   // the chat: my unread numbers on the cards (only for people who may chat)
   const chatOn = hasPermission(g.ctx.permissions, 'chat')

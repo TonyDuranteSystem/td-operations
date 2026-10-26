@@ -52,10 +52,11 @@ export interface QueueLead extends MasterLead { meta_created_time: string | null
  * The setter's call list: first the call backs due today (earliest first; the late ones are the top of the list), then the new leads nobody has worked,
  * oldest first (the one waiting longest is called first). A lead someone else picked is not on the list.
  */
-export function callQueue<T extends QueueLead>(leads: readonly T[], firstStage: string, me: string, now: Date): T[] {
+export function callQueue<T extends QueueLead>(leads: readonly T[], firstStage: string, me: string, now: Date, aside: readonly string[] = []): T[] {
   const dayEnd = romeStartOfNextDay(now).getTime()
   const mineOrFree = (l: T) => l.claimed_by === null || l.claimed_by === me
-  const callbacks = leads.filter(l => mineOrFree(l) && dueBy(l, dayEnd)).sort((a, b) => String(a.callback_at).localeCompare(String(b.callback_at)))
+  // a lead the seller put aside ("not ready now") has its own come-back day: it is his, not the setter's list
+  const callbacks = leads.filter(l => mineOrFree(l) && !aside.includes(l.status) && dueBy(l, dayEnd)).sort((a, b) => String(a.callback_at).localeCompare(String(b.callback_at)))
   const ids = new Set(callbacks.map(l => l.id))
   const fresh = leads.filter(l => mineOrFree(l) && !ids.has(l.id) && l.status === firstStage && l.callback_at === null).sort((a, b) => arrival(a) - arrival(b))
   return [...callbacks, ...fresh]

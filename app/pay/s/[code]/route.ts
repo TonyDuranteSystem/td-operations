@@ -20,13 +20,18 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ cod
   const { code } = await params
   const range = idRangeFor(code)
   if (!range) return page("Link not found", "This payment link is not valid. Please ask the person who sent it for a new one.", 404)
-  const { data } = await supabaseAdmin.from("marketing_sales").select("id, status, checkout_url, link_expires_at").gte("id", range.lo).lte("id", range.hi).limit(2)
+  const { data, error } = await supabaseAdmin.from("marketing_sales").select("id, status, checkout_url, link_expires_at").gte("id", range.lo).lte("id", range.hi).limit(2)
+  // a database problem is not "link not found" (that would make people ask for a second link and pay twice)
+  if (error) return page("Please try again", "We could not open this payment link right now. Please try again in a minute; do not ask for a new link yet.", 503)
   const rows = data ?? []
   if (rows.length !== 1) return page("Link not found", "This payment link is not valid. Please ask the person who sent it for a new one.", 404)
   const sale = rows[0]
   if (sale.status === "paid" || sale.status === "partly_refunded" || sale.status === "refunded") return page("Already paid", "This payment was already received. Thank you.", 200)
+  if (sale.status === "failed") return page("Link not available", "This payment link could not be completed. Please ask the person who sent it for a new one.", 410)
   if (sale.status !== "link_created" || !sale.checkout_url || isExpiredLink({ status: "link_created", link_expires_at: sale.link_expires_at ?? null })) {
     return page("This link has expired", "Payment links work for 23 hours. Please ask the person who sent it for a new one.", 410)
   }
-  return NextResponse.redirect(sale.checkout_url, 302)
+  const res = NextResponse.redirect(sale.checkout_url, 302)
+  res.headers.set("cache-control", "no-store")
+  return res
 }
