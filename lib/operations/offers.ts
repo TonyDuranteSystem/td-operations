@@ -30,7 +30,7 @@ import { parsePriceQuirk, resolveOfferCurrency, ambiguousDotPrices } from "@/lib
 import { signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
 import { validatePackages } from "@/lib/offers/package-pick"
 import type { Json } from "@/lib/database.types"
-import type { StandaloneAgreementType } from "@/lib/offers/standalone-contract-types"
+import type { ShortContractType } from "@/lib/offers/standalone-contract-types"
 import { agreementCoverageGap, agreementCoverageWarnings } from "@/lib/offers/standalone-agreement-lines"
 import { multiAgreementsEnabled } from "@/lib/offers/multi-agreements-switch"
 
@@ -223,7 +223,7 @@ async function warnIfCreditWentUnattached(input: {
 
 // ─── Types ────────────────────────────────────────────────────
 
-export type OfferContractType = "formation" | "onboarding" | "tax_return" | "itin" | "renewal" | StandaloneAgreementType
+export type OfferContractType = "formation" | "onboarding" | "tax_return" | "itin" | "renewal" | ShortContractType
 export type OfferPaymentType = "checkout" | "bank_transfer" | "none" | "both"
 export type OfferPaymentGateway = "whop" | "stripe"
 export type OfferLanguage = "en" | "it"

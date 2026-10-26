@@ -11,6 +11,8 @@ import { CreateOfferDialog } from './create-offer-dialog'
 import { WelcomeLinkButton, type WelcomeLinkButtonHandle } from './welcome-link-button'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
+import { OfferBlockedDialog } from './offer-blocked-dialog'
+import type { ReadinessBlocker } from '@/lib/offers/service-readiness'
 import { canResetPackagePick } from '@/lib/offers/package-pick-status'
 import type { OfferPackageOption } from '@/lib/types/offer'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -169,6 +171,8 @@ function OfferCard({
   const [activatingNow, setActivatingNow] = useState(false)
   const [sendingOffer, setSendingOffer] = useState(false)
   const [showSendConfirm, setShowSendConfirm] = useState(false)
+  /** Why the server refused to publish (a service not ready) — shown as a pop-up with links to fix it. */
+  const [blockedBy, setBlockedBy] = useState<ReadinessBlocker[] | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [showUndoPickConfirm, setShowUndoPickConfirm] = useState(false)
@@ -239,6 +243,11 @@ function OfferCard({
       })
       const data = await res.json()
       if (!res.ok) {
+        if (Array.isArray(data.blockers) && data.blockers.length > 0) {
+          setShowSendConfirm(false)
+          setBlockedBy(data.blockers)
+          return
+        }
         toast.error(data.error || 'Failed to publish offer')
         return
       }
@@ -570,6 +579,8 @@ function OfferCard({
           }}
         />
       )}
+
+      {blockedBy && <OfferBlockedDialog blockers={blockedBy} onClose={() => setBlockedBy(null)} />}
 
       {/* Undo Pick dialog */}
       <ConfirmDestructiveDialog

@@ -15,6 +15,7 @@
 import { revalidatePath } from "next/cache"
 import { createClient } from "@/lib/supabase/server"
 import { isAdmin } from "@/lib/auth"
+import { contractTypeToKeep, typedCustomContractTypeProblem } from "@/lib/offers/standalone-contract-types"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { SETTINGS_ACTOR_HEADER, settingsActor } from "@/lib/services/settings-actor"
 import { stepSettingsProblems } from "@/lib/services/step-settings"
@@ -265,13 +266,24 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
     if (basics.id) {
       const { data: prior, error: priorErr } = await supabaseAdmin
         .from("service_catalog")
-        .select("pipeline")
+        .select("pipeline, contract_type")
         .eq("id", basics.id)
         .maybeSingle()
       if (priorErr) {
         return { ok: false, error: `Could not read the current pipeline name: ${priorErr.message}` }
       }
       previousPipeline = (prior as { pipeline?: string | null } | null)?.pipeline ?? null
+      // A service that has its OWN contract (custom_<service>, set by the Contract card) keeps that type whatever this
+      // page was holding: a page opened before the contract was created, or an edit of the box, must not unlink the
+      // stored contract from the service (offers would then refuse it, or sign nothing).
+      const storedType = (prior as { contract_type?: string | null } | null)?.contract_type
+      // (a typed custom_* type that is not this service's own is refused: two services must never share a contract)
+      const typedProblem = typedCustomContractTypeProblem(storedType, basics.contract_type)
+      if (typedProblem) return { ok: false, error: `${typedProblem} Nothing has been changed.` }
+      row.contract_type = contractTypeToKeep(storedType, row.contract_type)
+    } else {
+      const typedProblem = typedCustomContractTypeProblem(null, basics.contract_type)
+      if (typedProblem) return { ok: false, error: `${typedProblem} Nothing has been changed.` }
     }
 
     // Checked BEFORE the service row is written (N1a P2): this refusal used to run after the update, so a refused

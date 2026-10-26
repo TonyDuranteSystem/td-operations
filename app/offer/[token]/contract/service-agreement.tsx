@@ -8,9 +8,10 @@ import { computeOfferTotals } from '@/lib/offers/compute-offer-totals'
 import { buildAnnualMaintenanceWording } from '@/lib/offers/annual-maintenance-wording'
 import type { Offer } from '@/lib/types/offer'
 import { contractVersionLabel } from '@/lib/offers/contract-version'
-import { SERVICE_CONTENT } from './standalone-service-agreement'
+import { contractWordingFor, ContractNotReady } from './standalone-service-agreement'
+import { InlineText, AgreementBody } from '@/components/contracts/agreement-body'
 import { euroBankAddress } from '@/lib/offers/bank-address'
-import { isStandaloneAgreementType, type StandaloneAgreementType } from '@/lib/offers/standalone-contract-types'
+import { isStandaloneAgreementType, isCustomContractType, type ShortContractType } from '@/lib/offers/standalone-contract-types'
 
 function today() {
   return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -521,6 +522,9 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
   const phoneInvalid = form.phone && !isValidPhone(form.phone)
   const zipInvalid = form.zip && !isValidZip(form.zip)
 
+  // A NEW service's agreement whose wording is missing: show nothing and take no signature (same as the short-contract page).
+  if (addonServices.some((svc) => isCustomContractType((svc as any).contract_type) && !contractWordingFor((svc as any).contract_type, offer))) return <ContractNotReady />
+
   return (
     <>
       <div id="success-state-svc" style={{ display: 'none' }} />
@@ -750,14 +754,27 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
 
         {/* ADDON STANDALONE AGREEMENTS — rendered inline for multi-contract offers */}
         {addonServices.map((svc) => {
-          const svcCt = (svc as any).contract_type as StandaloneAgreementType
-          const ct = SERVICE_CONTENT[svcCt]
-          if (!ct) return null
+          const svcCt = (svc as any).contract_type as ShortContractType
+          const ct = contractWordingFor(svcCt, offer)
+          if (!ct) {
+            // a NEW service's agreement whose wording is missing must never vanish quietly from what the client signs
+            return isCustomContractType(svcCt) ? (
+              <div key={`addon_${svcCt}_missing`} className="contract-section" data-contract-not-ready style={{ pageBreakBefore: 'always', marginTop: 48 }}>
+                <p><strong>The agreement for {svc.name} is being prepared.</strong> We will send it to you shortly. If you have any questions, please write to support@tonydurante.us.</p>
+              </div>
+            ) : null
+          }
           const addonKey = `addon_${svcCt}`
           const svcFee = svc.price || ''
           return (
             <div key={addonKey} style={{ pageBreakBefore: 'always', marginTop: 48 }}>
               <div className="contract-part-divider"><h2>{ct.title}</h2></div>
+
+              {isCustomContractType(svcCt) ? (
+                // a NEW service's agreement reads exactly as the owner approved it (the preview uses the same body)
+                <AgreementBody ct={ct} clientName={form.name || ''} serviceName={svc.name || ''} serviceDesc={svc.description || ''} fee={svcFee} includes={(svc.includes || []) as string[]} scopeClosing={ct.scope.closing} workPhrase={ct.workPhrase ?? ''} liabilityPhrase={ct.liabilityPhrase ?? ''} />
+              ) : (
+              <>
 
               <p>This {ct.shortTitle} (&ldquo;<strong>Agreement</strong>&rdquo;) is entered into as of <strong>{today()}</strong>, by and between:</p>
               <p style={{ margin: '14px 0' }}><strong>Tony Durante LLC</strong>, a Florida limited liability company (&ldquo;<strong>Service Provider</strong>&rdquo;), and</p>
@@ -777,27 +794,27 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
 
               <div className="contract-section">
                 <h3>1. Scope of Service</h3>
-                <p>{ct.scope.intro}</p>
-                <ul>{ct.scope.items.map((item, i) => <li key={i}>{item}</li>)}</ul>
+                <p><InlineText text={ct.scope.intro} /></p>
+                <ul>{ct.scope.items.map((item, i) => <li key={i}><InlineText text={item} /></li>)}</ul>
                 <p><strong>{ct.scope.closing}</strong></p>
               </div>
 
               <div className="contract-section">
                 <h3>2. Client Responsibilities</h3>
-                <p>{ct.clientDuties.intro}</p>
-                <ol type="a">{ct.clientDuties.items.map((item, i) => <li key={i}><strong>{item.bold}</strong>{item.rest}</li>)}</ol>
+                <p><InlineText text={ct.clientDuties.intro} /></p>
+                <ol type="a">{ct.clientDuties.items.map((item, i) => <li key={i}><strong>{item.bold}</strong><InlineText text={item.rest} /></li>)}</ol>
               </div>
 
               <div className="contract-section">
                 <h3>3. Service Procedure</h3>
-                <p>{ct.procedure.intro}</p>
-                <ol>{ct.procedure.steps.map((step, i) => <li key={i}><strong>{step.title}</strong> &mdash; {step.desc}</li>)}</ol>
+                <p><InlineText text={ct.procedure.intro} /></p>
+                <ol>{ct.procedure.steps.map((step, i) => <li key={i}><strong>{step.title}</strong> &mdash; <InlineText text={step.desc} /></li>)}</ol>
               </div>
 
               <div className="contract-section">
                 <h3>4. Service Provider Commitments</h3>
                 <p>The Service Provider agrees to:</p>
-                <ol type="a">{ct.commitments.map((item, i) => <li key={i}>{item}</li>)}</ol>
+                <ol type="a">{ct.commitments.map((item, i) => <li key={i}><InlineText text={item} /></li>)}</ol>
               </div>
 
               <div className="contract-section">
@@ -820,6 +837,8 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
                 <h3>8. Electronic Signatures</h3>
                 <p>Electronic signatures on this Agreement are valid and binding under the ESIGN Act (15 U.S.C. &sect; 7001) and UETA (Fla. Stat. &sect; 668.50).</p>
               </div>
+              </>
+              )}
 
               <div className="contract-sig-section">
                 <h3 style={{ textAlign: 'center' }}>{ct.shortTitle} &mdash; Signature</h3>

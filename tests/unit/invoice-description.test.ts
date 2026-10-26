@@ -35,3 +35,20 @@ describe("getInvoiceDescription — closure contracts (S1 E2E ★8)", () => {
     expect(getInvoiceDescription("closure", [], "Quinto Esempio Ventures")).toBe("Company Closure Package - Quinto Esempio Ventures")
   })
 })
+
+describe("getInvoiceDescription — a NEW service's contract type has no label of its own (2026-10-25 proof, finding 3)", () => {
+  it("is named after what was bought, not the generic 'Service Package'", () => {
+    expect(getInvoiceDescription("custom_apostille", [], "Mario Rossi", [{ name: "Apostille", price: "$150" }])).toBe("Apostille - Mario Rossi")
+    expect(getInvoiceDescription("custom_apostille", [], "X", [{ name: "Apostille" }, { name: "Consulting Call" }, { name: "Apostille" }])).toBe("Apostille + Consulting Call - X")
+  })
+  it("unticked optional lines are not named", () => {
+    expect(getInvoiceDescription("custom_apostille", [], "X", [{ name: "Apostille" }, { name: "Gift", optional: true }])).toBe("Apostille - X")
+  })
+  it("with no usable lines it keeps the old wording; labelled types are unchanged", () => {
+    expect(getInvoiceDescription("custom_apostille", [], "X", [])).toBe("Service Package - X")
+    expect(getInvoiceDescription("custom_apostille", [], "X")).toBe("Service Package - X")
+    expect(getInvoiceDescription("tax_return", [], "X", [{ name: "Tax Return" }, { name: "Consulting Call" }])).toBe("Tax Return Package - X")
+    expect(getInvoiceDescription("custom_apostille", ["Apostille"], "X", [{ name: "Other" }])).toBe("Apostille - X")
+  })
+})
+

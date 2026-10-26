@@ -21,6 +21,8 @@ import {
 } from "@/lib/tasks/workflow-handler-params"
 import { introspect } from "@/lib/forms/schema-introspection"
 import { SchemaForm } from "@/components/forms/schema-form"
+import { ContractCard } from "@/components/service-contracts/contract-card"
+import { customContractTypeForSlug } from "@/lib/offers/standalone-contract-types"
 import type { CatalogValidityIssue } from "@/lib/tasks/catalog-validity"
 
 interface Props {
@@ -397,6 +399,11 @@ export function ServiceEditClient({ mode, initial, waitKinds }: Props) {
           setWorkflow((w) => ({ ...w, enabled: true, actions }))
         }
       />
+      <ContractCard
+        entryId={mode === "edit" ? basics.id : null}
+        contractTypeInBox={basics.contract_type ?? ""}
+        onContractType={(t) => patchBasics({ contract_type: t })}
+      />
       <WorkflowSection
         pipeline={basics.pipeline ?? ""}
         workflow={workflow}
@@ -475,6 +482,12 @@ export function ServiceEditClient({ mode, initial, waitKinds }: Props) {
 
 // ── Basics section ─────────────────────────────────────────────────────
 
+/** The service's OWN contract type (set by the Contract card from its short name) — never a half-typed "custom_x". */
+function ownContractType(basics: ServiceBasicsDraft): boolean {
+  const t = (basics.contract_type ?? "").trim()
+  return !!t && !!basics.slug && customContractTypeForSlug(basics.slug) === t
+}
+
 function BasicsSection({
   basics,
   patch,
@@ -546,13 +559,21 @@ function BasicsSection({
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Contract type" hint="Optional. Used by OA/contract generation.">
+        <Field
+          label="Contract type"
+          hint={
+            ownContractType(basics)
+              ? "Set by the system: this service has its own contract (see the Contract card below)."
+              : "Optional. Used by OA/contract generation."
+          }
+        >
           <input
             type="text"
             value={basics.contract_type ?? ""}
             onChange={(e) => patch({ contract_type: e.target.value })}
+            disabled={ownContractType(basics)}
             placeholder="formation"
-            className={inputClass}
+            className={`${inputClass} ${ownContractType(basics) ? "bg-zinc-50 text-zinc-500 font-mono" : ""}`}
           />
         </Field>
         <Field label="Default price">

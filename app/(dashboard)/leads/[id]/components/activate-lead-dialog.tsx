@@ -4,6 +4,8 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { Rocket, Loader2, X, CheckCircle2, AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
+import { OfferBlockedDialog } from '@/components/offers/offer-blocked-dialog'
+import type { ReadinessBlocker } from '@/lib/offers/service-readiness'
 
 interface ActivateLeadDialogProps {
   open: boolean
@@ -24,6 +26,8 @@ export function ActivateLeadDialog({
 }: ActivateLeadDialogProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
+  /** Why the server refused to activate (a service not ready) — shown as a pop-up with links to fix it. */
+  const [blockedBy, setBlockedBy] = useState<ReadinessBlocker[] | null>(null)
   const [result, setResult] = useState<{
     success: boolean
     message: string
@@ -43,6 +47,10 @@ export function ActivateLeadDialog({
         const data = await res.json()
 
         if (!res.ok) {
+          if (Array.isArray(data.blockers) && data.blockers.length > 0) {
+            setBlockedBy(data.blockers)
+            return
+          }
           toast.error(data.error || 'Failed to activate lead')
           return
         }
@@ -67,6 +75,10 @@ export function ActivateLeadDialog({
   }
 
   if (!open) return null
+
+  if (blockedBy) {
+    return <OfferBlockedDialog blockers={blockedBy} title="This lead can’t be activated yet" retryText="Once this is fixed, activate the lead again." onClose={() => setBlockedBy(null)} />
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">

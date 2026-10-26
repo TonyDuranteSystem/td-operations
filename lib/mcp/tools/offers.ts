@@ -18,7 +18,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import { publishOffer, resendOfferEmail } from "@/lib/offers/publish"
 import { clientFacingPartLabel, validatePaymentPlan } from "@/lib/offers/payment-plan"
 import { createOffer, type OfferContractType, type OfferPaymentType, type OfferPaymentGateway } from "@/lib/operations/offers"
-import { STANDALONE_AGREEMENT_TYPES } from "@/lib/offers/standalone-contract-types"
+import { STANDALONE_AGREEMENT_TYPES, CUSTOM_CONTRACT_TYPE_PATTERN } from "@/lib/offers/standalone-contract-types"
 import { FORMATION_STATE_CODES, normalizeFormationState } from "@/lib/formation/states"
 
 // ─── Gmail Draft Helper ─────────────────────────────────────
@@ -401,7 +401,7 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
       effective_date: z.string().optional().describe("Contract effective date (YYYY-MM-DD)"),
       expires_at: z.string().optional().describe("Expiry timestamp (ISO 8601)"),
       // Contract type
-      contract_type: z.enum(["formation", "onboarding", ...STANDALONE_AGREEMENT_TYPES]).optional().describe("Contract type: 'formation' (default, LLC to create — full MSA+SOW with formation timeline), 'onboarding' (LLC already exists, client new or existing — MSA+SOW without formation timeline), 'tax_return' (standalone tax filing — lightweight agreement), 'itin' (standalone ITIN application — lightweight agreement), 'closure' (company dissolution — 3-step closure: Secretary of State filing, IRS EIN closure, registered agent cancellation + closure document delivery), 'company_change_name' (name change of an EXISTING LLC), 'ein_change_name' (IRS EIN name change), 'shipping', 'public_notary', 'consulting_call' — each a short standalone agreement. Annual renewal agreements are managed separately via annual_agreements table."),
+      contract_type: z.union([z.enum(["formation", "onboarding", ...STANDALONE_AGREEMENT_TYPES]), z.string().regex(CUSTOM_CONTRACT_TYPE_PATTERN)]).optional().describe("Contract type: 'formation' (default, LLC to create — full MSA+SOW with formation timeline), 'onboarding' (LLC already exists, client new or existing — MSA+SOW without formation timeline), 'tax_return' (standalone tax filing — lightweight agreement), 'itin' (standalone ITIN application — lightweight agreement), 'closure' (company dissolution — 3-step closure: Secretary of State filing, IRS EIN closure, registered agent cancellation + closure document delivery), 'company_change_name' (name change of an EXISTING LLC), 'ein_change_name' (IRS EIN name change), 'shipping', 'public_notary', 'consulting_call' — each a short standalone agreement — or 'custom_<service>' for a NEW service created in the Service Catalog (its wording is the contract approved in the Service Catalog). Annual renewal agreements are managed separately via annual_agreements table."),
       // Entity type — drives downstream formation form shape, SS-4 content, OA members, tax routing
       entity_type: z.enum(["SMLLC", "MMLLC", "Corp"]).optional().describe("Entity type: 'SMLLC' (single-member LLC — default behavior for formation offers), 'MMLLC' (multi-member LLC — client fills multiple members + per-member passports in formation form), 'Corp' (C-Corp). Set explicitly for any multi-member offer so downstream automation (formation form, SS-4, OA, tax) knows the entity shape. If omitted, downstream code falls back to legacy derivation (service-name string match)."),
       // Formation state — pinned on the offer, shown to the client, and used as the downstream default (WS-B)

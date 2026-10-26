@@ -5,7 +5,7 @@
 
 // ─── JSONB Sub-types ────────────────────────────────────────
 
-import type { StandaloneAgreementType } from '@/lib/offers/standalone-contract-types'
+import type { ShortContractType } from '@/lib/offers/standalone-contract-types'
 
 export interface OfferIssue {
   title: string
@@ -135,7 +135,7 @@ export interface Offer {
   currency?: string
   installment_currency?: string
   // Contract type
-  contract_type?: 'formation' | 'onboarding' | 'tax_return' | 'itin' | StandaloneAgreementType
+  contract_type?: 'formation' | 'onboarding' | 'tax_return' | 'itin' | ShortContractType
   // Pipelines to create when client pays (automation)
   bundled_pipelines?: string[]
   // Client selections (set when client signs, based on optional services chosen)
@@ -152,6 +152,9 @@ export interface Offer {
   // Set by the public view route from the switch `short_contract_multi_agreements` (lib/offers/multi-agreements-switch.ts);
   // true = a short-contract offer shows every service's agreement and takes one signature. Not a database column.
   multi_agreements?: boolean
+  // The frozen wording of the NEW services (custom_*) on this offer, taken when the offer was sent
+  // (lib/offers/contract-texts-snapshot.ts): { type: { version, hash, content, snapshot_at } }.
+  contract_texts?: Record<string, { version: number; hash: string; content: unknown; snapshot_at?: string }> | null
   selected_package_key?: string | null
   package_locked_at?: string | null
 }

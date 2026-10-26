@@ -226,3 +226,89 @@ describe('switch ON, MCP-style offer: the offer\'s own line has no type of its o
     }
   })
 })
+
+describe('a NEW service: its wording comes from the frozen copy on the offer', () => {
+  const wording = (title: string, extra: Record<string, unknown> = {}) => ({
+    title, shortTitle: title, pdfPrefix: 'Apostille_Agreement',
+    scope: { intro: 'The Service Provider agrees to obtain an apostille. This includes:', items: ['Checking the document;', 'Submitting it.'], closing: 'One apostille only.' },
+    procedure: { intro: 'The apostille follows these steps:', steps: [{ title: 'Received', desc: 'The Client sends the document.' }] },
+    commitments: ['Submit the document promptly;'],
+    clientDuties: { intro: 'The Client agrees to:', items: [{ bold: 'Send a legible document', rest: ';' }] },
+    signatureText: 'By signing below, I confirm that I have read and agree to the terms of this Apostille Service Agreement.',
+    successNote: 'Once payment is received, we will begin the apostille.',
+    workPhrase: 'the apostille', liabilityPhrase: 'the acceptance of the document by any authority, or for consequences',
+    ...extra,
+  })
+  const snap = (content: unknown, version = 1) => ({ custom_apostille: { version, hash: 'h1', content, snapshot_at: '2026-10-26T00:00:00Z' } })
+  const APO = { name: 'Apostille', price: '$150', contract_type: 'custom_apostille' }
+  const custom = (extra: Record<string, unknown> = {}) => html('custom_apostille', { services: [APO], contract_texts: snap(wording('Apostille Service Agreement')), ...extra })
+
+  it('renders its own title, fee, wording, work phrase and acceptance text', () => {
+    const h = custom()
+    expect(h).toContain('Apostille Service Agreement')
+    expect(h).toContain('$150')
+    expect(h).toContain('The Service Provider agrees to obtain an apostille')
+    expect(h).toContain('payable in full before the apostille begins')
+    expect(h).toContain('not liable for the acceptance of the document by any authority, or for consequences')
+    expect(h).toContain('agree to the terms of this Apostille Service Agreement')
+    expect(h).not.toContain('data-contract-not-ready')
+    expect((h.match(/<canvas/g) || []).length).toBe(1)
+  })
+
+  it('uses the FROZEN version on the offer: a different version number or text on another offer changes only that offer', () => {
+    const a = html('custom_apostille', { services: [APO], contract_texts: snap(wording('Apostille Service Agreement'), 1) })
+    const b = html('custom_apostille', { services: [APO], contract_texts: snap(wording('Apostille Agreement (revised)'), 2) })
+    expect(a).toContain('Apostille Service Agreement')
+    expect(a).not.toContain('(revised)')
+    expect(b).toContain('Apostille Agreement (revised)')
+  })
+
+  it('missing copy: a polite notice, no contract, no signature box, no sign button', () => {
+    for (const texts of [undefined, null, {}, snap({ title: 'only a title' }), { custom_other: snap(wording('x')).custom_apostille }]) {
+      const h = html('custom_apostille', { services: [APO], contract_texts: texts })
+      expect(h).toContain('data-contract-not-ready')
+      expect(h).toContain('Your agreement is being prepared')
+      expect(h).not.toContain('<canvas')
+      expect(h).not.toContain('Sign &amp; Accept')
+    }
+  })
+
+  it('unsafe wording is never rendered: markup makes it "not ready" instead of reaching the page', () => {
+    const h = custom({ contract_texts: snap(wording('Apostille Service Agreement', { successNote: '<img src=x onerror=alert(1)>' })) })
+    expect(h).toContain('data-contract-not-ready')
+    expect(h).not.toContain('onerror')
+  })
+
+  it('a built-in contract never needs the copy', () => {
+    const h = html('consulting_call')
+    expect(h).not.toContain('data-contract-not-ready')
+  })
+
+  it('switch ON, a bundle of a built-in service and a NEW one: each agreement uses its own wording, signed once', () => {
+    const h = html('consulting_call', {
+      multi_agreements: true,
+      services: [{ name: 'Consulting Call', price: '$100', contract_type: 'consulting_call' }, APO],
+      contract_texts: snap(wording('Apostille Service Agreement')),
+    })
+    expect(h).toContain('This document contains <strong>2 agreements</strong>')
+    expect(h).toContain('Consulting Call Service Agreement')
+    expect(h).toContain('Apostille Service Agreement')
+    expect((h.match(/<canvas/g) || []).length).toBe(1)
+  })
+
+  it('switch ON, a bundle with a NEW service whose copy is missing: the whole document waits (never a partial contract)', () => {
+    const h = html('consulting_call', {
+      multi_agreements: true,
+      services: [{ name: 'Consulting Call', price: '$100', contract_type: 'consulting_call' }, APO],
+    })
+    expect(h).toContain('data-contract-not-ready')
+    expect(h).not.toContain('<canvas')
+  })
+
+  it('switch OFF, a bundle where the NEW service is the second line: only the main (built-in) agreement, as before', () => {
+    const h = html('consulting_call', { services: [{ name: 'Consulting Call', price: '$100', contract_type: 'consulting_call' }, APO] })
+    expect(h).toContain('Consulting Call Service Agreement')
+    expect(h).not.toContain('data-contract-not-ready')
+  })
+})
+
