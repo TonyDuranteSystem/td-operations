@@ -80,7 +80,7 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
     case "claimed": return t("Picked")
     case "released": return t("Given back")
     case "note": return t("Note: {text}", { text: typeof data.text === "string" ? data.text : "" })
-    case "whatsapp": return `${data.state === "no_wa" ? t("No WhatsApp on this number") : t("WhatsApp sent")}${note}`
+    case "whatsapp": return `${data.state === "no_wa" ? t("No WhatsApp on this number") : data.state === "opened" ? t("WhatsApp Web opened") : t("WhatsApp sent")}${note}`
     case "attempt": return `${t("No answer ({via})", { via: data.via === "whatsapp" ? "WhatsApp" : t("call") })}${note}`
     case "appointment": if (data.rescheduled === true && data.at) return `${t("Call moved to {when}. Reason: {reason}", { when: fw(typeof data.at === "string" ? data.at : null), reason: t(String(data.reason ?? "")) })}${note}`
       return data.at ? `${t("Call booked for {when}", { when: fw(typeof data.at === "string" ? data.at : null) })}${note}` : `${t("Booked call cancelled")}${note}`

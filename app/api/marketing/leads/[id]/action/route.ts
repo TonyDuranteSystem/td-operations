@@ -17,7 +17,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (g.res) return g.res
   const parsed = parseLeadAction(await req.json().catch(() => null))
   if (parsed.ok === false) return NextResponse.json({ error: parsed.error }, { status: 400, headers: NO_STORE })
-  if (!hasPermission(g.ctx.permissions, permissionFor(parsed.value.action))) {
+  // the WhatsApp notes (opened / sent / no WhatsApp) also need the WhatsApp right, the same one the menu item and the screen need
+  if (!hasPermission(g.ctx.permissions, permissionFor(parsed.value.action)) || (parsed.value.action === "whatsapp" && !hasPermission(g.ctx.permissions, "whatsapp"))) {
     return NextResponse.json({ error: "You are not allowed to do this.", code: "NO_PERMISSION" }, { status: 403, headers: NO_STORE })
   }
   const { id } = await params
