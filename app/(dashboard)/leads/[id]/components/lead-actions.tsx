@@ -17,6 +17,8 @@ import { ConfirmPaymentDialog } from './confirm-payment-dialog'
 import { ConvertLeadDialog } from './convert-lead-dialog'
 import { CreateOfferDialog } from './create-offer-dialog'
 import { ActivateLeadDialog } from './activate-lead-dialog'
+import { OfferBlockedDialog } from '@/components/offers/offer-blocked-dialog'
+import type { ReadinessBlocker } from '@/lib/offers/service-readiness'
 import {
   DeleteLeadDialog,
   DeleteOfferDialog,
@@ -88,6 +90,8 @@ export function LeadActions({
 
   // Send/resend/revise offer state
   const [sendingOffer, setSendingOffer] = useState(false)
+  /** Why the server refused to send the offer (a service not ready) — shown as a pop-up with links to fix it. */
+  const [blockedBy, setBlockedBy] = useState<ReadinessBlocker[] | null>(null)
   const [resendingOffer, setResendingOffer] = useState(false)
   const [revisingOffer, setRevisingOffer] = useState(false)
   const [settingDiscussion, setSettingDiscussion] = useState(false)
@@ -158,6 +162,10 @@ export function LeadActions({
       const data = await res.json()
 
       if (!res.ok) {
+        if (Array.isArray(data.blockers) && data.blockers.length > 0) {
+          setBlockedBy(data.blockers)
+          return
+        }
         toast.error(data.error || 'Failed to send offer')
         return
       }
@@ -551,6 +559,8 @@ export function LeadActions({
         leadReferrer={leadReferrer}
         leadReferrerType={leadReferrerType}
       />
+
+      {blockedBy && <OfferBlockedDialog blockers={blockedBy} onClose={() => setBlockedBy(null)} />}
 
       <ActivateLeadDialog
         open={showActivateLead}

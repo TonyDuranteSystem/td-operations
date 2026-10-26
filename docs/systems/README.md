@@ -94,6 +94,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [billing-invoicing.md](billing-invoicing.md) | Billing & invoicing — the 4 money domains, invoice numbers, credit netting | ✅ written |
 | [formation.md](formation.md) | Company formation lifecycle — signed→EIN→active, the EIN hand-off, tiers | ✅ written |
 | [offers.md](offers.md) | Offers & contracts — publish→sign→pay→activate, the 3 states (R094) | ✅ written |
+| [service-contracts.md](service-contracts.md) | Service contracts — stored, versioned, owner-approved wording for NEW services, frozen on every offer | ✅ written |
 | [banking-bankfeed.md](banking-bankfeed.md) | Banking applications + bank-feed auto-reconciliation (matcher, td_bank_feeds) | ✅ written |
 | [pnl-engine.md](pnl-engine.md) | P&L / Balance Sheet engine — one `buildPnlWorkbook`, `/tools/pnl` (client + external), K-1/M-2 | ✅ written |
 | [td-books.md](td-books.md) | TD Books (My Finances) — `td_books_transactions`, invoice-first routing target, S-corp books foundation | ✅ written |

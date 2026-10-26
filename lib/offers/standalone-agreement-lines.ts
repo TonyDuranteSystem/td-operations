@@ -1,9 +1,9 @@
-import { isStandaloneAgreementType, type StandaloneAgreementType } from '@/lib/offers/standalone-contract-types'
+import { isStandaloneAgreementType, type ShortContractType } from '@/lib/offers/standalone-contract-types'
 import { isIncludedPrice, isRecurringPrice, parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 import type { OfferService } from '@/lib/types/offer'
 
 export interface AgreementEntry {
-  type: StandaloneAgreementType
+  type: ShortContractType
   line: OfferService
 }
 

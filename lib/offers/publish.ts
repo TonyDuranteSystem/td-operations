@@ -20,7 +20,8 @@
  */
 
 import { yearlyFeeMissingReason } from "@/lib/offers/annual-maintenance-wording"
-import { offerServicesReadinessProblem } from "@/lib/offers/service-readiness"
+import { offerServicesReadiness, type ReadinessBlocker } from "@/lib/offers/service-readiness"
+import { ensureOfferContractTexts } from "@/lib/offers/contract-texts-snapshot"
 import { openPixelImg } from '@/lib/email/open-pixel'
 import crypto from "node:crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -38,6 +39,8 @@ export interface PublishOfferResult {
   success: boolean
   alreadySent: boolean
   error?: string
+  /** When the refusal is "this offer's services are not ready": each reason with a link to fix it (the CRM pop-up shows these). */
+  blockers?: ReadinessBlocker[]
   portalCreated: boolean
   portalAlreadyExisted: boolean
   emailType: "portal_access" | "portal_notification" | "none"
@@ -56,7 +59,7 @@ export async function publishOffer(
   // ─── 1. Fetch and validate offer ───
   const { data: offer, error: fetchError } = await supabaseAdmin
     .from("offers")
-    .select("id, token, client_name, client_email, language, status, access_code, lead_id, account_id, services, bundled_pipelines, recurring_costs, installment_currency")
+    .select("id, token, client_name, client_email, language, status, access_code, lead_id, account_id, services, bundled_pipelines, recurring_costs, installment_currency, contract_type")
     .eq("token", token)
     .single()
 
@@ -103,13 +106,26 @@ export async function publishOffer(
   // or after it was switched off — the client would pay and nothing could start. Only services the
   // old hard-coded list does not know are checked (flexible-offer track, Step 0). Placed after the
   // draft test so re-sending an already-sent offer still gets the "only drafts" answer.
-  const servicesNotReady = await offerServicesReadinessProblem({
+  const readiness = await offerServicesReadiness({
     services: offer.services,
     bundledPipelines: offer.bundled_pipelines,
     packages: (pk as unknown as { packages?: unknown } | null)?.packages ?? null,
+    contractType: offer.contract_type ?? null,
   })
-  if (servicesNotReady) {
-    return fail(`Cannot publish: ${servicesNotReady}`)
+  if (readiness.problem) {
+    return { ...fail(`Cannot publish: ${readiness.problem}`), blockers: readiness.blockers }
+  }
+
+  // Freeze the approved wording of every NEW service's contract onto the offer (offers.contract_texts): the
+  // client's contract page renders from this copy, so a later version can never change what was shown or signed.
+  // An offer with no new service never touches the contract store.
+  try {
+    const frozen = await ensureOfferContractTexts(token, { refresh: true })
+    if (frozen.missing.length > 0) {
+      return fail(`Cannot publish: no approved contract wording for ${frozen.missing.join(", ")} — approve the service's contract in the Service Catalog first.`)
+    }
+  } catch (e) {
+    return fail(`Cannot publish: could not save the contract wording on the offer (${e instanceof Error ? e.message : String(e)}) — try again.`)
   }
 
   // ─── 2. Create or find portal user ───

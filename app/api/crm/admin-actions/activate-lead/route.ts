@@ -3,7 +3,8 @@ import type { User } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
-import { offerReadinessProblemForToken } from '@/lib/offers/service-readiness'
+import { offerReadinessForToken } from '@/lib/offers/service-readiness'
+import { ensureOfferContractTexts } from '@/lib/offers/contract-texts-snapshot'
 
 export async function POST(req: NextRequest) {
   try {
@@ -50,9 +51,19 @@ export async function POST(req: NextRequest) {
 
     // This button sends portal credentials for a DRAFT offer without going through publishOffer, so it needs the same
     // check: a new service with no steps (or switched off) would be paid for and then never start.
-    const servicesNotReady = await offerReadinessProblemForToken(offer.token)
-    if (servicesNotReady) {
-      return NextResponse.json({ error: `Cannot activate: ${servicesNotReady}` }, { status: 400 })
+    const readiness = await offerReadinessForToken(offer.token)
+    if (readiness.problem) {
+      return NextResponse.json({ error: `Cannot activate: ${readiness.problem}`, blockers: readiness.blockers }, { status: 400 })
+    }
+    // The client signs from the frozen copy of the new services' approved wording; take it now (same as Send).
+    try {
+      // a fresh copy only for a DRAFT (it is being sent now); an offer already sent/viewed/signed keeps the wording it carries
+      const frozen = await ensureOfferContractTexts(offer.token, offer.status === 'draft' ? { refresh: true } : {})
+      if (frozen.missing.length > 0) {
+        return NextResponse.json({ error: `Cannot activate: no approved contract wording for ${frozen.missing.join(', ')} — approve the service's contract in the Service Catalog first.` }, { status: 400 })
+      }
+    } catch (e) {
+      return NextResponse.json({ error: `Cannot activate: could not save the contract wording on the offer (${e instanceof Error ? e.message : String(e)}) — try again.` }, { status: 500 })
     }
 
     // Check if portal login already exists.

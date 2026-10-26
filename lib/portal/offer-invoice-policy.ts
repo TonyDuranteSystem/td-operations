@@ -113,5 +113,16 @@ export function getInvoiceDescription(
       return `${names.join(" + ")} - ${client_name}`
     }
   }
+  // A contract type with no label of its own (a NEW service's custom_* type, an unknown one) is named after
+  // what was bought — never the generic "Service Package" (2026-10-25 proof, finding 3).
+  if (getServiceLabel(contract_type) === "Service" && Array.isArray(services)) {
+    const names = Array.from(new Set(
+      (services as Array<Record<string, unknown> | null>)
+        .filter((l): l is Record<string, unknown> => !!l && typeof l === "object" && !l.optional)
+        .map((l) => (typeof l.name === "string" ? l.name.trim() : ""))
+        .filter(Boolean),
+    ))
+    if (names.length > 0) return `${names.join(" + ")} - ${client_name}`
+  }
   return `${getServiceLabel(contract_type)} Package - ${client_name}`
 }

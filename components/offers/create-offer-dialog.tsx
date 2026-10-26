@@ -2449,7 +2449,7 @@ export function CreateOfferDialog({
           {selected.length > 0 && untypedFallback && (
             <div className="flex items-start gap-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">
               <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
-              <span>None of the selected services has its own contract, so this offer will use the full LLC formation agreement. Check the contract before sending.</span>
+              <span>None of the selected services has its own contract, so this offer will use the full LLC formation agreement. Check the contract before sending. If one of them is a new service, create its contract first (Service Catalog → the service → Contract), then create this offer.</span>
             </div>
           )}
           {selected.length > 0 && (

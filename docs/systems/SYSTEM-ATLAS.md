@@ -105,8 +105,8 @@ _Regenerated 2026-10-26 by directory scan._
 
 - CRM dashboard pages (56): `accounts` `addresses` `audit` `bofa-intake` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `forms` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `marketing-leads` `new-calendar` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `research` `sandbox-mail` `service-catalog` `services` `storage` `storage-app` `system-health` `tasks` `tax-returns` `td-talk` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
 - Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
-- API route groups (100)
-- Code modules (87): `accounts` `ai-agent` `archive` `audit` `auth` `billing` `bofa-intake` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `closure` `code-tasks` `contacts` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `embed` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `forms-hub` `harbor-compliance` `hooks` `inbox` `incoming-payments` `internal` `itin` `job-notes` `jobs` `leads` `lease` `marketing` `mcp` `media` `members` `messaging` `nav` `new-calendar` `notes` `notifications` `oa` `offers` `open-services` `operations` `partners` `payments` `pdf` `per-record-activity` `portal` `portal-chats` `public-forms` `push` `research` `schemas` `security` `services` `ss4` `storage` `storage-app` `supabase` `system-health` `talk` `tasks` `tax` `td-communication` `team` `theme` `todo-board` `types` `ui` `utils` `windows`
+- API route groups (101)
+- Code modules (88): `accounts` `ai-agent` `archive` `audit` `auth` `billing` `bofa-intake` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `closure` `code-tasks` `contacts` `contracts` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `embed` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `forms-hub` `harbor-compliance` `hooks` `inbox` `incoming-payments` `internal` `itin` `job-notes` `jobs` `leads` `lease` `marketing` `mcp` `media` `members` `messaging` `nav` `new-calendar` `notes` `notifications` `oa` `offers` `open-services` `operations` `partners` `payments` `pdf` `per-record-activity` `portal` `portal-chats` `public-forms` `push` `research` `schemas` `security` `services` `ss4` `storage` `storage-app` `supabase` `system-health` `talk` `tasks` `tax` `td-communication` `team` `theme` `todo-board` `types` `ui` `utils` `windows`
 - Database tables: 302 _(ground truth: `lib/database.types.ts`)_
 <!-- /GENERATED:surface -->
 
@@ -176,7 +176,7 @@ _Regenerated 2026-10-26 from the R-rule list in CLAUDE.md — **42 rules**, high
 
 ## Appendix E — Subsystem deep docs
 <!-- GENERATED:deep-docs -->
-_Regenerated 2026-10-26. Every subsystem doc under `docs/systems/` (52 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
+_Regenerated 2026-10-26. Every subsystem doc under `docs/systems/` (53 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-10-13)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-10-18)_
@@ -205,7 +205,7 @@ _Regenerated 2026-10-26. Every subsystem doc under `docs/systems/` (52 docs), wi
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-25)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-23)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-23)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-25)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-26)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-21)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-10-22)_
@@ -217,6 +217,7 @@ _Regenerated 2026-10-26. Every subsystem doc under `docs/systems/` (52 docs), wi
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-10-23)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-10-23)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
+- [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-10-26)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-10-13)_
 - [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-10-22)_

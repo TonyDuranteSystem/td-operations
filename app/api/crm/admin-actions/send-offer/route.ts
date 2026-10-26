@@ -37,7 +37,7 @@ export async function POST(request: Request) {
 
     if (!result.success) {
       const status = result.alreadySent ? 409 : 400
-      return NextResponse.json({ error: result.error }, { status })
+      return NextResponse.json({ error: result.error, ...(result.blockers?.length ? { blockers: result.blockers } : {}) }, { status })
     }
 
     return NextResponse.json({

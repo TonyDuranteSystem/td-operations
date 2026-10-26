@@ -6,13 +6,12 @@ import { uploadAndSignOffer, submitWireReceipt, type OfferCredential } from '@/l
 import type { Offer } from '@/lib/types/offer'
 import { contractVersionLabel } from '@/lib/offers/contract-version'
 import { euroBankAddress } from '@/lib/offers/bank-address'
-import type { StandaloneAgreementType } from '@/lib/offers/standalone-contract-types'
+import { isBuiltInAgreementType, isCustomContractType, type ShortContractType } from '@/lib/offers/standalone-contract-types'
+import { wordingFromSnapshot, type ContractWording } from '@/lib/contracts/contract-wording'
 import { planAgreements } from '@/lib/offers/standalone-agreement-lines'
-import { isNoChargeFee } from '@/lib/offers/fee-label'
+import { AgreementBody, contractToday } from '@/components/contracts/agreement-body'
 
-function today() {
-  return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-}
+const today = contractToday
 
 function esc(v: string) {
   const d = document.createElement('div')
@@ -23,7 +22,7 @@ function esc(v: string) {
 interface StandaloneServiceAgreementProps {
   offer: Offer
   token: string
-  contractType?: StandaloneAgreementType
+  contractType?: ShortContractType
   /** The offer's access code (N0) — every write goes through /api/offers with it. */
   cred: OfferCredential
 }
@@ -362,7 +361,18 @@ export const SERVICE_CONTENT = {
   },
 } as const
 
-type AgreementContent = (typeof SERVICE_CONTENT)[StandaloneAgreementType]
+type AgreementContent = ContractWording
+
+/**
+ * The wording of one short contract: the eight built-in types live in SERVICE_CONTENT (code); a NEW service's
+ * wording is the frozen copy on the offer (offers.contract_texts, taken when the offer was sent) — never the
+ * live store. Null when there is none (the page then shows the "being prepared" notice, never a wrong contract).
+ */
+export function contractWordingFor(type: string, offer: { contract_texts?: unknown } | null | undefined): ContractWording | null {
+  if (isBuiltInAgreementType(type)) return SERVICE_CONTENT[type]
+  if (isCustomContractType(type)) return wordingFromSnapshot(offer?.contract_texts, type)
+  return null
+}
 
 function phrasesFor(ct: AgreementContent) {
   // Per-type wording for the Payment / Liability sections (defaults = the tax-return text).
@@ -374,7 +384,7 @@ function phrasesFor(ct: AgreementContent) {
 }
 
 // Quantity-aware closing text for ITIN (Design B: one contract covers N members)
-function scopeClosingFor(type: StandaloneAgreementType, ct: AgreementContent, service: { quantity?: number } | undefined): string {
+function scopeClosingFor(type: ShortContractType, ct: AgreementContent, service: { quantity?: number } | undefined): string {
   const itinQuantity = (type === 'itin' && service?.quantity && Number(service.quantity) > 1)
     ? Number(service.quantity)
     : null
@@ -383,122 +393,33 @@ function scopeClosingFor(type: StandaloneAgreementType, ct: AgreementContent, se
     : ct.scope.closing
 }
 
-interface AgreementBodyProps {
-  ct: AgreementContent
-  clientName: string
-  serviceName: string
-  serviceDesc: string
-  fee: string
-  includes: string[]
-  scopeClosing: string
-  workPhrase: string
-  liabilityPhrase: string
-}
-
-/** One agreement's parties, service summary and sections 1-8 (no signature — that is the page's). */
-function AgreementBody({ ct, clientName, serviceName, serviceDesc, fee, includes, scopeClosing, workPhrase, liabilityPhrase }: AgreementBodyProps) {
-  // a $0 / "included" service still gets its agreement, but says so instead of "$0 payable in full"
-  const noCharge = isNoChargeFee(fee)
+/** Shown instead of a contract that cannot be rendered (its wording is missing). The client never sees a wrong or blank contract. */
+export function ContractNotReady() {
   return (
-    <>
-        {/* PARTIES */}
-        <p>This {ct.shortTitle} (&ldquo;<strong>Agreement</strong>&rdquo;) is entered into as of <strong>{today()}</strong>, by and between:</p>
-        <p style={{ margin: '14px 0' }}><strong>Tony Durante LLC</strong>, a Florida limited liability company (&ldquo;<strong>Service Provider</strong>&rdquo;), and</p>
-        <p style={{ margin: '14px 0' }}><strong>{clientName || '[Client Name]'}</strong> (&ldquo;<strong>Client</strong>&rdquo;).</p>
-
-        {/* SERVICE SUMMARY */}
-        <table className="contract-key-terms">
-          <caption>Service Summary</caption>
-          <tbody>
-            <tr><th>Service</th><td>{serviceName}</td></tr>
-            {serviceDesc && <tr><th>Description</th><td>{serviceDesc}</td></tr>}
-            <tr><th>Fee</th><td>{noCharge ? 'Included \u2014 no separate charge' : <>{fee} (one-time)</>}</td></tr>
-            {includes.length > 0 && (
-              <tr><th>Includes</th><td>{(includes as string[]).map((item, i) => <span key={i}>{item}{i < includes.length - 1 ? ', ' : ''}</span>)}</td></tr>
-            )}
-          </tbody>
-        </table>
-
-        {/* SECTION 1 — SCOPE */}
-        <div className="contract-section">
-          <h3>1. Scope of Service</h3>
-          <p>{ct.scope.intro}</p>
-          <ul>
-            {ct.scope.items.map((item, i) => <li key={i}>{item}</li>)}
-          </ul>
-          <p><strong>{scopeClosing}</strong></p>
-        </div>
-
-        {/* SECTION 2 — CLIENT RESPONSIBILITIES */}
-        <div className="contract-section">
-          <h3>2. Client Responsibilities</h3>
-          <p>{ct.clientDuties.intro}</p>
-          <ol type="a">
-            {ct.clientDuties.items.map((item, i) => <li key={i}><strong>{item.bold}</strong>{item.rest}</li>)}
-          </ol>
-        </div>
-
-        {/* SECTION 3 — PROCEDURE */}
-        <div className="contract-section">
-          <h3>3. Service Procedure</h3>
-          <p>{ct.procedure.intro}</p>
-          <ol>
-            {ct.procedure.steps.map((step, i) => <li key={i}><strong>{step.title}</strong> &mdash; {step.desc}</li>)}
-          </ol>
-        </div>
-
-        {/* SECTION 4 — SERVICE PROVIDER COMMITMENTS */}
-        <div className="contract-section">
-          <h3>4. Service Provider Commitments</h3>
-          <p>The Service Provider agrees to:</p>
-          <ol type="a">
-            {ct.commitments.map((item, i) => <li key={i}>{item}</li>)}
-          </ol>
-        </div>
-
-        {/* SECTION 5 — PAYMENT */}
-        <div className="contract-section">
-          <h3>5. Payment</h3>
-          {noCharge ? (
-            <p>No service fee is payable to the Service Provider for this service itself; it is included in your offer. Any third-party or government charges described in this Agreement remain the Client&rsquo;s responsibility.</p>
-          ) : (
-            <>
-              <p>The total fee for this service is <strong>{fee}</strong>, payable in full before {workPhrase} begins. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
-              <p><strong>All fees are non-refundable</strong> once {workPhrase} has commenced.</p>
-            </>
-          )}
-        </div>
-
-        {/* SECTION 6 — LIMITATION OF LIABILITY */}
-        <div className="contract-section">
-          <h3>6. Limitation of Liability</h3>
-          <p>The Service Provider&rsquo;s total liability under this Agreement shall not exceed the fee paid by the Client. The Service Provider is not liable for {liabilityPhrase} resulting from inaccurate, incomplete, or late information provided by the Client.</p>
-        </div>
-
-        {/* SECTION 7 — GOVERNING LAW */}
-        <div className="contract-section">
-          <h3>7. Governing Law</h3>
-          <p>This Agreement is governed by the laws of the State of Florida. Any disputes shall be resolved through binding arbitration in Pinellas County, Florida, under AAA rules.</p>
-        </div>
-
-        {/* SECTION 8 — ELECTRONIC SIGNATURES */}
-        <div className="contract-section">
-          <h3>8. Electronic Signatures</h3>
-          <p>Electronic signatures on this Agreement are valid and binding under the ESIGN Act (15 U.S.C. &sect; 7001) and UETA (Fla. Stat. &sect; 668.50).</p>
-        </div>
-
-    </>
+    <div className="contract-section" data-contract-not-ready style={{ maxWidth: 560, margin: '80px auto', textAlign: 'center' }}>
+      <h2>Your agreement is being prepared</h2>
+      <p style={{ textAlign: 'center' }}>We are finishing your agreement and will send it to you shortly. If you have any questions, please write to support@tonydurante.us.</p>
+    </div>
   )
 }
 
-export default function StandaloneServiceAgreement({ offer, token, contractType = 'tax_return', cred }: StandaloneServiceAgreementProps) {
+export default function StandaloneServiceAgreement(props: StandaloneServiceAgreementProps) {
+  const { offer, contractType = 'tax_return' } = props
+  const plan = planAgreements(offer, contractType, offer.multi_agreements === true)
+  const types = plan.entries.length > 0 ? plan.entries.map((e) => e.type) : [contractType]
+  if (types.some((t) => !contractWordingFor(t, offer))) return <ContractNotReady />
+  return <StandaloneServiceAgreementPage {...props} />
+}
+
+function StandaloneServiceAgreementPage({ offer, token, contractType = 'tax_return', cred }: StandaloneServiceAgreementProps) {
   // What this page shows (lib/offers/standalone-agreement-lines.ts). The view route sets
   // `multi_agreements` from the switch; OFF (or absent) = the original single agreement.
   const plan = planAgreements(offer, contractType, offer.multi_agreements === true)
   const agreements = plan.entries
   const multi = plan.mode === 'multi'
-  const mainType: StandaloneAgreementType = agreements[0]?.type ?? contractType
-  const ct = SERVICE_CONTENT[mainType]
+  const mainType: ShortContractType = agreements[0]?.type ?? contractType
+  const ct = contractWordingFor(mainType, offer) as ContractWording // the wrapper guarantees it exists
+  const wording = (t: ShortContractType) => contractWordingFor(t, offer) as ContractWording
   const { workPhrase, liabilityPhrase } = phrasesFor(ct)
   const [signing, setSigning] = useState(false)
   // Blocking on a failed write makes RETRY a real path. The PDF-capture step
@@ -692,7 +613,7 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
           sh += '</div></div></div>'
         }
 
-        sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">${successNote}</p>`
+        sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">${esc(successNote)}</p>`
         sh += `<a href="${esc(cred.code ? `/offer/${encodeURIComponent(token)}/${encodeURIComponent(cred.code)}` : `/offer/${encodeURIComponent(token)}`)}" class="contract-success-link">&larr; Back to Offer</a>`
         sh += '</div>'
         successEl.innerHTML = sh
@@ -773,14 +694,14 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
                 This document contains <strong>{agreements.length} agreements</strong>, for the following services in your offer:
               </p>
               <ol>
-                {agreements.map(({ type, line }, i) => <li key={i}>{SERVICE_CONTENT[type].title} &mdash; {line.name}</li>)}
+                {agreements.map(({ type, line }, i) => <li key={i}>{wording(type).title} &mdash; {line.name}</li>)}
               </ol>
               <p>You sign once, at the end of the document. Your signature accepts every agreement listed above.</p>
             </div>
 
             {/* ONE AGREEMENT PER SERVICE — same wording a single-service offer shows; one signature covers all */}
             {agreements.map(({ type, line }, i) => {
-              const xct = SERVICE_CONTENT[type]
+              const xct = wording(type)
               const ph = phrasesFor(xct)
               return (
                 <div key={i} data-agreement={type} style={i > 0 ? { pageBreakBefore: 'always', marginTop: 48 } : undefined}>
@@ -824,7 +745,7 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
               </p>
               {Array.from(new Set(agreements.map(({ type }) => type))).map((type) => (
                 <p key={type} className="contract-text-center contract-text-muted" style={{ marginBottom: 10, fontSize: '9.5pt' }}>
-                  <strong>{SERVICE_CONTENT[type].title}.</strong> {SERVICE_CONTENT[type].signatureText}
+                  <strong>{wording(type).title}.</strong> {wording(type).signatureText}
                 </p>
               ))}
             </div>

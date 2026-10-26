@@ -40,7 +40,9 @@ import {
   serviceReadinessProblem,
 } from "@/lib/offers/service-readiness"
 
-const activeApostille = { slug: "apostille", display_name: "Apostille", status: "active", metadata: { pipeline: "Apostille" } }
+// The Step 0 tests are about steps / switched-off / spelling, so this sample service carries a BUILT-IN contract type (its contract is
+// in code and needs no approval). What happens when the contract is missing or still a draft is in offer-service-readiness-contracts.test.ts.
+const activeApostille = { id: "e1", slug: "apostille", display_name: "Apostille", status: "active", metadata: { pipeline: "Apostille", contract_type: "shipping" } }
 
 beforeEach(() => {
   db.catalog = { data: [], error: null }
@@ -221,22 +223,42 @@ describe("wiring", () => {
   it("publishOffer checks the offer's services after the draft test and before any portal user or email", () => {
     const src = read("lib/offers/publish.ts")
     const statusGate = src.indexOf(`offer.status !== "draft"`)
-    const gate = src.indexOf("offerServicesReadinessProblem({")
+    const gate = src.indexOf("offerServicesReadiness({")
     const firstSideEffect = src.indexOf("autoCreatePortalUser({")
     expect(statusGate).toBeGreaterThan(0)
     expect(gate).toBeGreaterThan(statusGate)
     expect(firstSideEffect).toBeGreaterThan(gate)
-    expect(src).toMatch(/Cannot publish: \$\{servicesNotReady\}/)
+    expect(src).toMatch(/Cannot publish: \$\{readiness\.problem\}/)
+    expect(src).toMatch(/blockers: readiness\.blockers/)
     expect(src).toContain("bundledPipelines: offer.bundled_pipelines")
   })
 
   it("Activate Lead runs the same check before it creates a login or changes any status", () => {
     const src = read("app/api/crm/admin-actions/activate-lead/route.ts")
-    const gate = src.indexOf("offerReadinessProblemForToken(offer.token)")
+    const gate = src.indexOf("offerReadinessForToken(offer.token)")
     expect(gate).toBeGreaterThan(0)
     expect(src.indexOf("createUser({")).toBeGreaterThan(gate)
     expect(src.indexOf(".update({ status: 'sent' })")).toBeGreaterThan(gate)
-    expect(src).toMatch(/Cannot activate: \$\{servicesNotReady\}/)
+    expect(src).toMatch(/Cannot activate: \$\{readiness\.problem\}/)
+    expect(src).toMatch(/blockers: readiness\.blockers/)
+  })
+})
+
+describe("wiring — when the wording is frozen (bug-hunter findings, 2026-10-26)", () => {
+  const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8")
+  it("Activate Lead takes a FRESH copy only for a draft; an offer already out keeps the wording it carries", () => {
+    const src = read("app/api/crm/admin-actions/activate-lead/route.ts")
+    expect(src).toMatch(/ensureOfferContractTexts\(offer\.token, offer\.status === 'draft' \? \{ refresh: true \} : \{\}\)/)
+  })
+  it("publishOffer takes a fresh copy at the real send", () => {
+    expect(read("lib/offers/publish.ts")).toMatch(/ensureOfferContractTexts\(token, \{ refresh: true \}\)/)
+  })
+  it("the formation and onboarding pages: a new service's add-on agreement uses the shared body (approved phrases) and blocks signing when its wording is missing", () => {
+    for (const f of ["app/offer/[token]/contract/page.tsx", "app/offer/[token]/contract/service-agreement.tsx"]) {
+      const src = read(f)
+      expect(src, f).toMatch(/isCustomContractType\(svcCt\) \? \(\s*\/\/[^\n]*\n\s*<AgreementBody /)
+      expect(src, f).toMatch(/addonServices\.some\([^\n]*isCustomContractType[^\n]*return <ContractNotReady \/>/)
+    }
   })
 })
 
