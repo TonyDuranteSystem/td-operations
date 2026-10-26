@@ -31,6 +31,8 @@ import { signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
 import { validatePackages } from "@/lib/offers/package-pick"
 import type { Json } from "@/lib/database.types"
 import type { StandaloneAgreementType } from "@/lib/offers/standalone-contract-types"
+import { agreementCoverageGap, agreementCoverageWarnings } from "@/lib/offers/standalone-agreement-lines"
+import { multiAgreementsEnabled } from "@/lib/offers/multi-agreements-switch"
 
 // ─── JSONB validation ───────────────────────────────────────
 
@@ -991,6 +993,20 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         referrer_auto_filled: referralAutoFilled,
       },
     })
+
+    // Flexible-offer slice 2: a short-contract offer whose billed services would NOT all be in the
+    // contract the client signs (the switch is OFF, or a line has no contract of its own). Staff hear
+    // it now, with the fix; the client never sees an internal problem. Never blocks creating the offer.
+    try {
+      const multi = await multiAgreementsEnabled()
+      creditWarnings.push(
+        ...agreementCoverageWarnings(
+          agreementCoverageGap({ services: params.services }, params.contract_type, multi),
+        ),
+      )
+    } catch (e) {
+      console.warn("[createOffer] agreement coverage check failed:", e instanceof Error ? e.message : e)
+    }
 
     return {
       success: true,
