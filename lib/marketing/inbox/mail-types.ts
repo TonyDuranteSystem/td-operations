@@ -24,6 +24,8 @@ export interface MailMessage {
   fromEmail: string
   to: string
   cc: string
+  /** only a draft carries its Bcc (a sent or received email never shows it) */
+  bcc: string
   date: string
   subject: string
   /** sanitized HTML for a real HTML email; null when the email is plain text */

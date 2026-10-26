@@ -857,4 +857,5 @@ export const IT: Record<string, string> = {
   "Open WhatsApp Web": "Apri WhatsApp Web",
   "It will ask for the QR code the first time.": "La prima volta chiederà il codice QR.",
   "WhatsApp Web opened": "WhatsApp Web aperto",
+  "Throw away the email you are writing?": "Scartare l'email che stai scrivendo?",
 }
