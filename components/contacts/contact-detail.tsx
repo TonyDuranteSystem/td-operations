@@ -3116,7 +3116,7 @@ function ContactDocumentsTab({
     }
   }
 
-  const handleToggleVisibility = async (doc: ContactDocumentRecord) => {
+  const handleToggleVisibility = async (doc: ContactDocumentRecord, opts?: { fromUpload?: boolean }) => {
     // This tab's document list merges in every document on any account this
     // contact is linked to (see the account_id query in
     // app/(dashboard)/contacts/[id]/page.tsx), not just documents already
@@ -3141,6 +3141,12 @@ function ContactDocumentsTab({
       if (!doc.portal_visible) {
         decision = await decideShare([{ id: doc.id, name: doc.file_name, source: 'document' }])
         if (decision.kind === 'cancel') { setTogglingVis(null); return }
+        // A just-uploaded file is HIDDEN until staff say otherwise. Where no chat message can be offered (a personal document: passport,
+        // ID, ITIN …) the pop-up above does not appear, so ask the plain question here — never show it silently.
+        if (opts?.fromUpload && decision.kind === 'show_only' && !window.confirm('Show this document to the client now? No chat message is offered for this kind of document; the client only gets the usual portal notification. Cancel keeps it hidden.')) {
+          setTogglingVis(null)
+          return
+        }
       }
       const result = await toggleDocumentPortalVisibility(doc.id, !doc.portal_visible, undefined, suppressesAutoChat(decision) ? { suppressChat: true, ...(isSilentShow(decision) ? { silent: true } : {}) } : undefined)
       if (result.success) {
@@ -3244,7 +3250,7 @@ function ContactDocumentsTab({
             id: data.documentId as string, file_name: file.name, document_type_name: uploadType, category_name: uploadCategory, category: null,
             drive_file_id: null, drive_link: null, status: 'classified', processed_at: null, mime_type: file.type || null, file_size: file.size,
             account_id: null, portal_visible: false, contact_id: contactId, confidence: null, updated_at: null,
-          })
+          }, { fromUpload: true })
           router.refresh()
         } else {
           window.location.reload()
