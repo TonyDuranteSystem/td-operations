@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { whatsappLink, whatsappWebLink } from "@/lib/marketing/templates"
+import { messageSigner, whatsappLink, whatsappWebLink } from "@/lib/marketing/templates"
 import { whatsappDay, WA_WINDOW_NAME } from "@/lib/marketing/whatsapp-web"
 import { leadActionSchema, planLeadAction, type ActionSettings, type Actor } from "@/lib/marketing/lead-actions"
 import { contactState } from "@/lib/marketing/contact-state"
@@ -14,6 +14,14 @@ describe("whatsappWebLink", () => {
     expect(whatsappWebLink("12345", "x")).toBeNull()
     expect(whatsappWebLink(null, "x")).toBeNull()
     expect(whatsappWebLink("1".repeat(16), "x")).toBeNull()
+  })
+  it("never builds a chat address from a number that could be a stranger's", () => {
+    for (const bad of ["+39 333 123 4567 int. 12", "+39 333 123 4567 ext 5", "(305) 555-0100", "333 1234567", "+39 333 1234567 / 06 123456", "tel 3331234567"]) expect(whatsappWebLink(bad, "x")).toBeNull()
+  })
+  it("drops the trunk zero in brackets and accepts a full international number written any way", () => {
+    expect(whatsappWebLink("+39 (0)333 1234567", "x")).toContain("phone=393331234567")
+    expect(whatsappWebLink("+1 (305) 555-0100", "x")).toContain("phone=13055550100")
+    expect(whatsappWebLink("393331234567", "x")).toContain("phone=393331234567")
   })
   it("the old wa.me link still works the same", () => {
     expect(whatsappLink("+39 333 123 4567", "a b")).toBe("https://wa.me/393331234567?text=a%20b")
@@ -34,8 +42,8 @@ describe("whatsappDay (one person, Rome day)", () => {
     const events = [ev("a", "opened", "2026-10-26T08:00:00Z", "rocco@x.com"), ev("b", "opened", "2026-10-24T08:00:00Z"), ev("c", "opened", "2026-10-26T08:00:00Z", "cristina@x.com", { via_view_as: true }), { lead_id: "d", kind: "note", actor: "cristina@x.com", created_at: "2026-10-26T08:00:00Z", data: {} }]
     expect(whatsappDay(events, "cristina@x.com", now)).toEqual({ opened: 0, sent: 0 })
   })
-  it("a sent note with no opened note the same day is not counted", () => {
-    expect(whatsappDay([ev("a", "sent", "2026-10-26T08:00:00Z")], "cristina@x.com", now)).toEqual({ opened: 0, sent: 0 })
+  it("a sent note counts even when the lead was opened another day or sent with the old button", () => {
+    expect(whatsappDay([ev("a", "sent", "2026-10-26T08:00:00Z")], "cristina@x.com", now)).toEqual({ opened: 0, sent: 1 })
   })
 })
 
@@ -50,6 +58,11 @@ describe("the whatsapp action with state 'opened'", () => {
     expect(leadActionSchema.safeParse({ action: "whatsapp", state: "opened", template: "first_contact" }).success).toBe(true)
     expect(planLeadAction({ action: "whatsapp", state: "opened", template: "first_contact" }, { claimed_by: null, status: "new" }, actor, settings, NOW))
       .toMatchObject({ ok: true, change: { patch: {}, event: { kind: "whatsapp", data: { state: "opened", template: "first_contact" } } } })
+  })
+  it("an 'opened' note does not make the person the lead's signer", () => {
+    const nameOf = (a: string) => a
+    expect(messageSigner({ claimedLabel: null, events: [{ kind: "whatsapp", actor: "a@x.com", created_at: "2026-10-26T08:00:00Z", data: { state: "opened" } }], viewerName: "Bea", viewingAs: false, nameOf })).toBe("Bea")
+    expect(messageSigner({ claimedLabel: null, events: [{ kind: "whatsapp", actor: "a@x.com", created_at: "2026-10-26T08:00:00Z", data: { state: "sent" } }], viewerName: "Bea", viewingAs: false, nameOf })).toBe("a@x.com")
   })
   it("'sent' still moves a new lead to contacted", () => {
     expect(planLeadAction({ action: "whatsapp", state: "sent" }, { claimed_by: null, status: "new" }, actor, settings, NOW)).toMatchObject({ ok: true, change: { patch: { status: "contacted" } } })

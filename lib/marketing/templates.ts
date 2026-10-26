@@ -144,8 +144,15 @@ export function fillTemplate(text: string, v: { name?: string | null; setter?: s
 
 /** The digits WhatsApp wants for a phone number ("+39 333 111 2233", "0039 333…" -> 393331112233); null when the number is not usable. */
 function whatsappDigits(phone: string | null | undefined): string | null {
-  let d = (phone ?? "").replace(/[^\d]/g, "")
-  if ((phone ?? "").trim().startsWith("00") || d.startsWith("00")) d = d.replace(/^00/, "")
+  const raw = (phone ?? "").trim()
+  // letters (an extension like "int. 12", "ext", "x") or two numbers in one field can never be turned into one safe chat address
+  if (/[a-z]/i.test(raw) || /[\/;|]/.test(raw)) return null
+  const noTrunk = raw.replace(/\(0\)/g, "") // "+39 (0)333…" - the trunk zero is not part of the international number
+  const international = noTrunk.startsWith("+") || noTrunk.startsWith("00")
+  let d = noTrunk.replace(/[^\d]/g, "")
+  if (d.startsWith("00")) d = d.replace(/^00/, "")
+  // a number with no country code could open the chat of a stranger in another country (WhatsApp reads its first digits as the country): only a full international number is used
+  if (!international && d.length < 11) return null
   return d.length < 8 || d.length > 15 ? null : d
 }
 
@@ -175,7 +182,8 @@ export function messageSigner(i: {
 }): string {
   if (i.claimedLabel) return i.nameOf(i.claimedLabel)
   const setterKinds = new Set(["whatsapp", "attempt", "claimed"])
-  const mine = i.events.filter(e => setterKinds.has(e.kind) && e.actor && e.actor !== "system" && e.data?.via_view_as !== true).sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+  // only opening WhatsApp Web is not yet work on the lead: it must not make the person the lead's setter
+  const mine = i.events.filter(e => setterKinds.has(e.kind) && !(e.kind === "whatsapp" && e.data?.state === "opened") && e.actor && e.actor !== "system" && e.data?.via_view_as !== true).sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
   if (mine) return i.nameOf(mine.actor)
   return i.viewingAs ? "" : i.viewerName
 }

@@ -84,7 +84,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
 
       {setterNote && <SetterNoteBlock note={setterNote} ticks={lead.qualification} />}
 
-      {role === 'setter' && <ContactPanel leadId={lead.id} canAct={canAct} contact={contact} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} setterName={signer} templates={templates} canEditTemplates={isOwner} />}
+      {role === 'setter' && <ContactPanel leadId={lead.id} canAct={canAct} contact={contact} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} setterName={signer} templates={templates} canEditTemplates={isOwner} canWhatsApp={hasPermission(permissions, 'whatsapp')} />}
 
       <HandoverPanel leadId={lead.id} role={role} canAct={canAct} contact={contact} />
 

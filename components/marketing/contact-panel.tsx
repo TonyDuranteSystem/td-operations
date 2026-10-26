@@ -19,6 +19,8 @@ interface Props {
   phone: string | null
   setterName: string
   templates: TemplateView[]
+  /** the WhatsApp right: without it there is no WhatsApp Web button (the server refuses the notes too) */
+  canWhatsApp?: boolean
   /** the team owner may save the text in the box as a template (everyone may use the templates) */
   canEditTemplates?: boolean
 }
@@ -27,7 +29,7 @@ const btn = 'rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50
 const TONE = { ok: 'bg-emerald-50 text-emerald-800 border-emerald-200', warn: 'bg-amber-50 text-amber-800 border-amber-200', info: 'bg-sky-50 text-sky-800 border-sky-200' } as const
 
 /** The daily reaching-out: the WhatsApp with the message typed in, "sent / no WhatsApp / no answer", and the booked call. Every server answer is shown as the server wrote it. */
-export function ContactPanel({ leadId, canAct, contact, leadName, phone, setterName, templates, canEditTemplates }: Props) {
+export function ContactPanel({ leadId, canAct, contact, leadName, phone, setterName, templates, canEditTemplates, canWhatsApp = true }: Props) {
   const router = useRouter()
   const t = useT()
   const lang = useLang()
@@ -48,7 +50,7 @@ export function ContactPanel({ leadId, canAct, contact, leadName, phone, setterN
   const tpl = templates.find(t => t.key === tplKey)
   const whenText = contact.appointmentAt ? fw(contact.appointmentAt) : ''
   const message = edited ?? (tpl ? fillTemplate(tpl.text, { name: firstName(leadName), setter: setterName, when: whenText }) : '')
-  const link = whatsappWebLink(phone, message)
+  const link = canWhatsApp ? whatsappWebLink(phone, message) : null
   const chips = contactChips(contact, fw, t)
 
   // the text as a template: this lead's name, this setter's name and this call time go back to {name} {setter} {when}
@@ -145,9 +147,9 @@ export function ContactPanel({ leadId, canAct, contact, leadName, phone, setterN
           <div className="mt-3 flex flex-wrap gap-2">
             {link
               ? <button type="button" className={`${btn} bg-emerald-600 text-white`} onClick={openWeb} data-testid="open-whatsapp">{t('Open this chat in WhatsApp Web')}</button>
-              : <span className="self-center text-xs text-slate-500">{phone ? t('This number cannot be used for WhatsApp.') : t('No phone number to write to.')}</span>}
+              : <span className="self-center text-xs text-slate-500">{!canWhatsApp ? t('You do not have access to WhatsApp. Ask your team owner.') : phone ? t('This number cannot be used for WhatsApp.') : t('No phone number to write to.')}</span>}
             <button type="button" className={btn} onClick={copy} data-testid="copy-message">{copied ? t('Copied') : t('Copy message')}</button>
-            <button className={btn} disabled={busy} onClick={() => send({ action: 'whatsapp', state: 'sent', template: tplKey || undefined })}>{t('I sent it')}</button>
+            <button className={btn} disabled={busy || asking !== null} onClick={() => send({ action: 'whatsapp', state: 'sent', template: tplKey || undefined })}>{t('I sent it')}</button>
             <button className={btn} disabled={busy} onClick={() => send({ action: 'whatsapp', state: 'no_wa' })}>{t('No WhatsApp')}</button>
             <button className={btn} disabled={busy} onClick={() => send({ action: 'no_answer', via: 'call' })}>{t('No answer')}</button>
           </div>

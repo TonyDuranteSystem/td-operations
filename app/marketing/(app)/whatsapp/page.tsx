@@ -42,9 +42,8 @@ export default async function MarketingWhatsApp() {
         {truncated && <p role="status" className="mt-2 text-xs text-amber-800">{t('Some older records are not included in these numbers because there are too many.')}</p>}
         <dl className="mt-2 grid gap-3 sm:grid-cols-2">
           <div><dt className="text-xs text-slate-500">{t('Leads you opened in WhatsApp today')}</dt><dd className="text-3xl font-semibold" data-testid="wa-opened">{day.opened}</dd></div>
-          <div><dt className="text-xs text-slate-500">{t('Of those, you confirmed sent')}</dt><dd className="text-3xl font-semibold" data-testid="wa-sent">{day.sent}</dd></div>
+          <div><dt className="text-xs text-slate-500">{t('Messages you confirmed sent today')}</dt><dd className="text-3xl font-semibold" data-testid="wa-sent">{day.sent}</dd></div>
         </dl>
-        <p className="mt-2 text-xs text-slate-500">{t('Your team owner sees everyone\'s in the team activity.')}</p>
       </section>
       <section className={tile} data-testid="wa-habits">
         <h2 className="text-sm font-semibold text-slate-600">{t('Good habits (shown, not enforced)')}</h2>

@@ -11,7 +11,7 @@ export const WA_WEB_HOME = "https://web.whatsapp.com/"
 
 interface WaEvent { lead_id: string; kind: string; actor: string; created_at: string; data?: Record<string, unknown> | null }
 
-/** One person's WhatsApp day (Rome time): the leads he opened in WhatsApp Web, and of those how many he confirmed sent. A lead counts once however often he opened it; "View as" rows never count. */
+/** One person's WhatsApp day (Rome time): the leads he opened in WhatsApp Web, and the leads he confirmed sent (by either button). A lead counts once however often; "View as" rows never count. */
 export function whatsappDay(events: readonly WaEvent[], me: string, now: Date): { opened: number; sent: number } {
   const today = romeDayKey(now)
   const opened = new Set<string>(), sent = new Set<string>()
@@ -21,5 +21,5 @@ export function whatsappDay(events: readonly WaEvent[], me: string, now: Date): 
     if (e.data?.state === "opened") opened.add(e.lead_id)
     else if (e.data?.state === "sent") sent.add(e.lead_id)
   }
-  return { opened: opened.size, sent: Array.from(sent).filter(id => opened.has(id)).length }
+  return { opened: opened.size, sent: sent.size }
 }
