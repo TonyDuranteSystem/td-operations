@@ -12,8 +12,10 @@ export interface InboxMailbox {
   address: string
   /** logins (user ids) who may open it, besides the person it belongs to and Antonio */
   people: string[]
-  /** plain text added under every email written from this address ("" = none) */
-  signature: string
+  /** the person's details on the signature (the same company block the CRM Inbox uses); "" = the company's own */
+  signature_name: string
+  signature_title: string
+  signature_phone: string
 }
 
 export interface Viewer { id: string; email: string | null; admin: boolean }

@@ -860,4 +860,9 @@ export const IT: Record<string, string> = {
   "Throw away the email you are writing?": "Scartare l'email che stai scrivendo?",
   "Delete this draft?": "Eliminare questa bozza?",
   "The draft could not be deleted. Please try again.": "Non è stato possibile eliminare la bozza. Riprova.",
+  "Signature": "Firma",
+  "Full": "Completa",
+  "Compact": "Compatta",
+  "No signature": "Nessuna firma",
+  "This draft already has its signature.": "Questa bozza ha già la sua firma.",
 }

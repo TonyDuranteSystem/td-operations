@@ -115,9 +115,11 @@ export const MARKETING_SETTING_DEFS = {
     schema: z.array(z.object({
       address: z.string().trim().toLowerCase().regex(/^[a-z0-9._+-]{1,64}@tonydurante\.us$/),
       people: z.array(z.string().uuid()).max(60),
-      signature: z.string().max(600),
+      signature_name: z.string().max(80).default(""),
+      signature_title: z.string().max(80).default(""),
+      signature_phone: z.string().max(80).default(""),
     })).max(20).refine(l => new Set(l.map(m => m.address)).size === l.length, "Each address once"),
-    fallback: [] as Array<{ address: string; people: string[]; signature: string }>,
+    fallback: [] as Array<{ address: string; people: string[]; signature_name: string; signature_title: string; signature_phone: string }>,
   },
   /** Which team the leads arriving from Meta belong to. Empty text = no team chosen: the only ACTIVE team if there is exactly one, else nobody's yet (Antonio sees them and assigns). */
   lead_intake_team_id: { schema: z.union([z.string().uuid(), z.literal("")]), fallback: "" as string },

@@ -26,7 +26,9 @@ export async function checkMailbox(teamId: string, raw: unknown): Promise<Res<{ 
   return { ok: true, data: { address: c.address, people: defaultPeople(c.address, await activeMembers(teamId)) } }
 }
 
-const cleanSignature = (v: unknown): string => (typeof v === "string" ? v.replace(/\r/g, "").trim().slice(0, 600) : "")
+/** One line of the signature (name / title / phone): plain text, no line breaks, at most 80 characters. */
+const cleanLine = (v: unknown): string => (typeof v === "string" ? v.replace(/[\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) : "")
+export interface SignatureInput { name?: unknown; title?: unknown; phone?: unknown }
 
 async function cleanPeople(teamId: string, v: unknown): Promise<Res<string[]>> {
   if (v === undefined || v === null) return { ok: true, data: [] }
@@ -38,17 +40,17 @@ async function cleanPeople(teamId: string, v: unknown): Promise<Res<string[]>> {
 }
 
 /** Step 2: save a new address (everything is checked again here). */
-export async function addMailbox(input: { teamId: string; address: unknown; people: unknown; signature: unknown; actor: string }): Promise<Res<InboxMailbox[]>> {
+export async function addMailbox(input: { teamId: string; address: unknown; people: unknown; signature?: SignatureInput; actor: string }): Promise<Res<InboxMailbox[]>> {
   const checked = await checkMailbox(input.teamId, input.address)
   if (checked.ok === false) return checked
   const people = await cleanPeople(input.teamId, input.people ?? checked.data.people)
   if (people.ok === false) return people
-  const next: InboxMailbox[] = [...(await teamMailboxes(input.teamId)), { address: checked.data.address, people: people.data, signature: cleanSignature(input.signature) }]
+  const next: InboxMailbox[] = [...(await teamMailboxes(input.teamId)), { address: checked.data.address, people: people.data, signature_name: cleanLine(input.signature?.name), signature_title: cleanLine(input.signature?.title), signature_phone: cleanLine(input.signature?.phone) }]
   const w = await setMarketingSetting({ key: "inbox_mailboxes", value: next, teamId: input.teamId, actor: input.actor })
   return w.ok === false ? fail(w.error) : { ok: true, data: next }
 }
 
-export async function updateMailbox(input: { teamId: string; address: unknown; people?: unknown; signature?: unknown; actor: string }): Promise<Res<InboxMailbox[]>> {
+export async function updateMailbox(input: { teamId: string; address: unknown; people?: unknown; signature?: SignatureInput; actor: string }): Promise<Res<InboxMailbox[]>> {
   const list = await teamMailboxes(input.teamId)
   const i = list.findIndex(b => b.address === input.address)
   if (i < 0) return fail("That address is not in the list.")
@@ -58,7 +60,11 @@ export async function updateMailbox(input: { teamId: string; address: unknown; p
     if (people.ok === false) return people
     next[i].people = people.data
   }
-  if (input.signature !== undefined) next[i].signature = cleanSignature(input.signature)
+  if (input.signature !== undefined) {
+    next[i].signature_name = cleanLine(input.signature.name)
+    next[i].signature_title = cleanLine(input.signature.title)
+    next[i].signature_phone = cleanLine(input.signature.phone)
+  }
   const w = await setMarketingSetting({ key: "inbox_mailboxes", value: next, teamId: input.teamId, actor: input.actor })
   return w.ok === false ? fail(w.error) : { ok: true, data: next }
 }

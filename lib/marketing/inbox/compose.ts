@@ -26,7 +26,8 @@ export interface ComposeInput {
   messageHtml?: unknown
   message?: unknown
   style?: unknown
-  signature?: string
+  /** the signature, already built (lib/email/signature.ts): both halves, or none */
+  signature?: { html: string; text: string } | null
   /** a reply / forward: the headers of the message answered and its quoted text */
   inReplyTo?: string
   references?: string
@@ -112,9 +113,9 @@ export function composeMessage(input: ComposeInput): Composed {
   const total = files.reduce((n, f) => n + Math.floor(f.content.length * 0.75), 0)
   if (total > MAX_ATTACHMENT_BYTES) return { ok: false, error: "The attachments are too big. Keep them under 18 MB together." }
 
-  const signature = (input.signature ?? "").trim()
-  const sigText = signature ? `\r\n\r\n-- \r\n${signature}` : ""
-  const sigHtml = signature ? `<div style="margin-top:14px;color:#5f6368">-- <br />${textToHtml(signature)}</div>` : ""
+  // the signature sits between the message and the quoted history, as in every mail client; its HTML is built by the one shared builder (the same block the CRM Inbox sends)
+  const sigText = input.signature?.text ? `\r\n\r\n${input.signature.text}` : ""
+  const sigHtml = input.signature?.html ?? ""
   const quote = input.quote ? quoteBlocks(input.quote) : { plain: "", html: "" }
 
   const messageHtml = body.rich ? `${richBodyOpenTag(body.rich.style ?? DEFAULT_RICH_STYLE)}${body.rich.html}</div>` : textToHtml(text)

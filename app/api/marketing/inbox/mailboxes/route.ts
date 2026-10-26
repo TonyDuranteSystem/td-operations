@@ -10,6 +10,6 @@ export async function GET() {
   if (g.res) return g.res
   const mine = visibleMailboxes(await teamMailboxes(g.ctx.team.id), viewerOf(g.ctx))
   const driver = await getMailDriver()
-  const boxes = await Promise.all(mine.map(async b => ({ address: b.address, signature: b.signature, unread: await driver.unread(b.address).catch(() => null) })))
+  const boxes = await Promise.all(mine.map(async b => ({ address: b.address, unread: await driver.unread(b.address).catch(() => null) })))
   return NextResponse.json({ mailboxes: boxes }, { headers: NO_STORE })
 }
