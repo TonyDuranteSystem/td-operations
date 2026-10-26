@@ -81,6 +81,8 @@ final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
                     }
                     guard let id else { continue }
                     if c.op == .delete { deleted.append(FPItem.identifier(for: id)); continue }
+                    // a storage's top folder is not a Finder item: never create one, and clear one an earlier build made
+                    if case .folder(_, let fid) = id, await catalog.isTopFolder(folder: fid) { deleted.append(FPItem.identifier(for: id)); continue }
                     if let item = try? await catalog.item(for: id) { updated.append(item) }
                 }
                 if !updated.isEmpty { observer.didUpdate(updated) }
