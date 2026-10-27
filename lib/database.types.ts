@@ -11875,6 +11875,7 @@ export type Database = {
           client_name: string
           commission_released_at: string | null
           contact_id: string | null
+          contract_texts: Json | null
           contract_type: string | null
           contract_version: string | null
           cost_summary: Json | null
@@ -11949,6 +11950,7 @@ export type Database = {
           client_name: string
           commission_released_at?: string | null
           contact_id?: string | null
+          contract_texts?: Json | null
           contract_type?: string | null
           contract_version?: string | null
           cost_summary?: Json | null
@@ -12023,6 +12025,7 @@ export type Database = {
           client_name?: string
           commission_released_at?: string | null
           contact_id?: string | null
+          contract_texts?: Json | null
           contract_type?: string | null
           contract_version?: string | null
           cost_summary?: Json | null
@@ -15191,6 +15194,72 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      service_contract_texts: {
+        Row: {
+          approved_at: string | null
+          approved_by: string | null
+          content: Json
+          content_hash: string
+          contract_type: string
+          created_at: string
+          created_by: string
+          id: string
+          note: string | null
+          service_entry_id: string
+          source: string
+          status: string
+          superseded_at: string | null
+          version: number
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
+          content: Json
+          content_hash?: string
+          contract_type: string
+          created_at?: string
+          created_by: string
+          id?: string
+          note?: string | null
+          service_entry_id: string
+          source?: string
+          status?: string
+          superseded_at?: string | null
+          version?: number
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by?: string | null
+          content?: Json
+          content_hash?: string
+          contract_type?: string
+          created_at?: string
+          created_by?: string
+          id?: string
+          note?: string | null
+          service_entry_id?: string
+          source?: string
+          status?: string
+          superseded_at?: string | null
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "service_contract_texts_service_entry_id_fkey"
+            columns: ["service_entry_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "service_contract_texts_service_entry_id_fkey"
+            columns: ["service_entry_id"]
+            isOneToOne: false
+            referencedRelation: "service_catalog"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       service_deliveries: {
         Row: {
@@ -21649,6 +21718,10 @@ export type Database = {
           p_delivery_id?: string
         }
         Returns: string
+      }
+      approve_service_contract_text: {
+        Args: { p_approved_by: string; p_expected_hash: string; p_id: string }
+        Returns: Json
       }
       archive_meta_merge: {
         Args: { p_id: string; p_patch: Json; p_table: string }

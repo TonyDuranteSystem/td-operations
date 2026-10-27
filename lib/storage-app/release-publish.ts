@@ -6,7 +6,7 @@
  */
 import { createPublicKey, verify } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { RELEASE_BUCKET, RELEASE_KEY, type Release, parseRelease } from "./release"
+import { RELEASE_BUCKET, RELEASE_KEY, type Release, loadRelease, parseRelease } from "./release"
 
 /** The PUBLIC half of the update key (the same value baked into every app as SUPublicEDKey). Public by nature — safe in code. */
 export const UPDATE_PUBLIC_KEY = "QyZK2Ugq/n7g5wnBwo0YzjQUo7PVjdINdK4KXxWyYu0="
@@ -85,4 +85,20 @@ export async function setOffering(current: Release | null, change: { enabled?: b
   const saved = parseRelease(value)
   if (!saved) throw new Error("The release record is not valid.")
   return saved
+}
+
+export type PrepareResult = { ok: true; path: string; token: string } | { ok: false; status: number; error: string }
+
+/** Step 1 of publishing, shared by the owner's panel and the build-machine door: check the package numbers, then hand out a one-time upload address for the zip. */
+export async function prepareUpload(b: Record<string, unknown>): Promise<PrepareResult> {
+  const check = parseRelease({ version: b.version, build: b.build, edSignature: "x", length: b.length, path: "x/x.zip", enabled: false })
+  if (!check) return { ok: false, status: 400, error: "The package file is not valid (version, build or size)." }
+  if (check.length > 200 * 1024 * 1024) return { ok: false, status: 400, error: "The zip is too big (over 200 MB)." }
+  const current = await loadRelease()
+  if (!buildIsNewer(current, check.build)) return { ok: false, status: 409, error: `Build ${check.build} is not newer than the published build ${current?.build}. Make a new build number.` }
+  try { await ensureBucket() } catch (e) { return { ok: false, status: 500, error: e instanceof Error ? e.message : "Could not prepare the upload." } }
+  const path = zipPathFor(check.version)
+  const { data, error } = await supabaseAdmin.storage.from(RELEASE_BUCKET).createSignedUploadUrl(path, { upsert: true })
+  if (error || !data) return { ok: false, status: 500, error: "Could not prepare the upload. Try again." }
+  return { ok: true, path, token: data.token }
 }
