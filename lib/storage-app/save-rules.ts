@@ -10,8 +10,10 @@ import { clientSaveAllowed, type ClientSaves } from "./settings"
 export const CLIENT_OWNER_KINDS: ReadonlySet<string> = new Set(["company", "person", "formation"])
 export const isClientOwnerKind = (kind: string | null | undefined): boolean => !!kind && CLIENT_OWNER_KINDS.has(kind)
 
-/** The CRM writer's inline-registration cap: the ABSOLUTE ceiling for one saved file (the `maxSaveMB` setting can only lower it). */
-export const MAX_SAVE_BYTES = 150 * 1024 * 1024
+/** The ABSOLUTE ceiling for one NEW saved file (the `maxSaveMB` setting can only lower it). Files over the writer's inline cap are registered in the background. */
+export const MAX_SAVE_BYTES = 2048 * 1024 * 1024
+/** A new VERSION of a file already saved is added from memory (the safe save reads the staged bytes), so it keeps the writer's inline cap. */
+export const MAX_UPDATE_BYTES = 150 * 1024 * 1024
 export const MAX_NAME_BYTES = 255
 
 /** Names a Mac never saves: system junk and other apps' temporary names. KNOWN patterns only (mirrors NameMapper.isJunk in the Mac app) — a real file such as "Q3.sb-final.pdf" is kept. */

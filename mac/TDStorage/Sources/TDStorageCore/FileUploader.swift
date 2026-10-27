@@ -9,7 +9,7 @@ public final class FileUploader: @unchecked Sendable {
         if let session { self.session = session } else {
             let cfg = URLSessionConfiguration.ephemeral
             cfg.httpCookieStorage = nil; cfg.httpShouldSetCookies = false; cfg.urlCache = nil
-            cfg.timeoutIntervalForResource = 600
+            cfg.timeoutIntervalForResource = 7200      // a 2 GB video on a slow line takes a long time; the request stops only after 60 s of silence
             self.session = URLSession(configuration: cfg)
         }
     }

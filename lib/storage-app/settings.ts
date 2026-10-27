@@ -7,7 +7,7 @@
  *
  * Example value:
  *   { "clientSaves": { "owners": ["<store owner id | account id | contact id>", …] | "all", "ownerKinds": ["company","person"], "folderKinds": ["custom","correspondence"] },
- *     "keepSecondsSensitive": 120, "keepSecondsNormal": 900, "maxSaveMB": 150, "readLimitMB": 500, "writeLimitMB": 500,
+ *     "keepSecondsSensitive": 120, "keepSecondsNormal": 900, "maxSaveMB": 2048, "readLimitMB": 2048, "writeLimitMB": 5120,
  *     "leaseHours": 24, "maxMacsPerLogin": 5, "resyncMinutes": 10, "updateCheckMinutes": 60, "updateHintSeconds": 60, "requireSecondFactor": true, "sensitiveTypes": ["passport", …] }
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -36,8 +36,9 @@ export const DEFAULT_SENSITIVE_TYPES: readonly string[] = [
   "passport", "id_document", "itin_letter", "form_w_7", "form_w_7_coa", "form_1040_nr", "itin_application", "itin_schedule_oi",
 ]
 
-/** The inline-registration cap of the CRM's writer: a Mac save can never be bigger than this, whatever the setting says. */
-export const ABSOLUTE_MAX_SAVE_MB = 150
+/** The biggest NEW file a Mac may save, whatever the setting says (2026-10-27, Antonio: Zoom recordings of ~1 GB). Anything over the writer's inline cap (150 MB)
+ *  is registered by a background job while the Mac waits (see saveFromSlot); updating a file that is already saved stays at the inline cap. */
+export const ABSOLUTE_MAX_SAVE_MB = 2048
 
 export function defaultSettings(env: Record<string, string | undefined> = process.env): StorageAppSettings {
   const mb = (v: string | undefined, d: number) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d }
@@ -46,8 +47,8 @@ export function defaultSettings(env: Record<string, string | undefined> = proces
     keepSecondsSensitive: 120,
     keepSecondsNormal: 900,
     maxSaveMB: ABSOLUTE_MAX_SAVE_MB,
-    readLimitMB: mb(env.STORAGE_APP_READ_LIMIT_MB, 500),
-    writeLimitMB: mb(env.STORAGE_APP_WRITE_LIMIT_MB, 500),
+    readLimitMB: mb(env.STORAGE_APP_READ_LIMIT_MB, 2048),
+    writeLimitMB: mb(env.STORAGE_APP_WRITE_LIMIT_MB, 5120),
     leaseHours: LEASE_MS / 3_600_000,
     maxMacsPerLogin: MAX_ACTIVE_DEVICES_PER_USER,
     resyncMinutes: 10,

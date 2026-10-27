@@ -62,6 +62,12 @@ public struct ItemInfo: Codable, Equatable {
 public struct UploadSlot: Codable, Equatable {
     public var intentId: String?; public var uploadUrl: String?; public var maxBytes: Int?
     public var alreadySaved: Bool?; public var fileId: String?; public var ownerId: String?; public var name: String?
+    /// The bytes of this file are already in the CRM (an earlier try finished the upload but the answer was lost, or the CRM is already registering a big file): do not send them again.
+    public var alreadyUploaded: Bool?
+}
+/// POST /api/storage-app/save for a NEW file: either the saved file, or `pending` — a big file the CRM is still registering in the background (ask again).
+public struct SaveReply: Codable, Equatable {
+    public var fileId: String?; public var ownerId: String?; public var name: String?; public var size: Int?; public var pending: Bool?
 }
 /// POST /api/storage-app/save — the file as the CRM stored it (the name may differ if the CRM had to change it).
 public struct SavedFile: Codable, Equatable { public var fileId: String; public var ownerId: String; public var name: String; public var size: Int? }

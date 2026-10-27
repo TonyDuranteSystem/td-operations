@@ -119,6 +119,18 @@ public final class StorageAPI: @unchecked Sendable {
         if let replaceFileId { body["replaceFileId"] = replaceFileId }
         return try await postAuthorized("api/storage-app/save", body)
     }
+    /// Saving a NEW file whose bytes are already uploaded. A BIG file (over 150 MB) is registered by the CRM in the background, so the answer can be
+    /// "pending": ask again every few seconds (up to `maxWait`) until the file exists. Small files answer at once.
+    public func saveWaiting(intentId: String, itemKey: String, maxWait: TimeInterval = 3600, pause: @Sendable (Int) async throws -> Void = { n in try await Task.sleep(nanoseconds: UInt64(min(10, 3 + n)) * 1_000_000_000) }) async throws -> SavedFile {
+        let started = Date()
+        var round = 0
+        while true {
+            let reply: SaveReply = try await postAuthorized("api/storage-app/save", ["intentId": intentId, "itemKey": itemKey])
+            if let id = reply.fileId, reply.pending != true { return SavedFile(fileId: id, ownerId: reply.ownerId ?? "", name: reply.name ?? "", size: reply.size) }
+            if Date().timeIntervalSince(started) > maxWait { throw StorageAPIError.transport("The CRM is still saving this big file. Finder will try again.") }
+            try await pause(round); round += 1
+        }
+    }
     public func item(kind: String, id: String) async throws -> ItemInfo {
         try await get("api/storage-app/item", query: [URLQueryItem(name: "kind", value: kind), URLQueryItem(name: "id", value: id)])
     }

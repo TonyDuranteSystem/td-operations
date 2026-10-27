@@ -415,6 +415,41 @@ final class SaveNewFileTests: XCTestCase {
         let slot = try await api().uploadSlot(ownerId: "o1", folderId: "f1", name: "a.pdf", size: 10, mimeType: nil, itemKey: "k")
         XCTAssertEqual(slot.alreadySaved, true); XCTAssertEqual(slot.fileId, "x1")
     }
+    func testBytesAlreadyUploadedAreRecognised() async throws {
+        StubProtocol.handler = { _ in (200, #"{"intentId":"i1","alreadyUploaded":true,"maxBytes":2147483648}"#) }
+        let slot = try await api().uploadSlot(ownerId: "o1", folderId: "f1", name: "zoom.mp4", size: 800_000_000, mimeType: "video/mp4", itemKey: "k")
+        XCTAssertEqual(slot.alreadyUploaded, true); XCTAssertNil(slot.uploadUrl); XCTAssertEqual(slot.intentId, "i1")
+    }
+    func testABigFileIsWaitedForUntilTheCRMHasRegisteredIt() async throws {
+        final class Counter: @unchecked Sendable { var n = 0 }
+        let c = Counter()
+        StubProtocol.handler = { _ in
+            c.n += 1
+            return c.n < 3 ? (202, #"{"pending":true,"jobId":"j1"}"#) : (200, #"{"fileId":"x9","ownerId":"o1","name":"zoom.mp4","size":800000000}"#)
+        }
+        let paused = Counter()
+        let saved = try await api().saveWaiting(intentId: "i1", itemKey: "k", pause: { _ in paused.n += 1 })
+        XCTAssertEqual(saved.fileId, "x9"); XCTAssertEqual(saved.name, "zoom.mp4")
+        XCTAssertEqual(c.n, 3, "asked until the file exists"); XCTAssertEqual(paused.n, 2, "waited between the asks")
+        XCTAssertEqual(StubProtocol.seen.last!.url!.path, "/api/storage-app/save")
+    }
+    func testASmallFileAnswersAtOnceWithoutWaiting() async throws {
+        StubProtocol.handler = { _ in (200, #"{"fileId":"x1","ownerId":"o1","name":"a.pdf","size":10}"#) }
+        let saved = try await api().saveWaiting(intentId: "i1", itemKey: "k", pause: { _ in XCTFail("must not wait") })
+        XCTAssertEqual(saved.fileId, "x1"); XCTAssertEqual(StubProtocol.seen.count, 1)
+    }
+    func testWaitingStopsWhenTheCRMSaysTheBigSaveGaveUp() async {
+        StubProtocol.handler = { _ in (409, #"{"error":"register_failed","message":"This big file could not be saved. Try again, or add it in the CRM."}"#) }
+        do { _ = try await api().saveWaiting(intentId: "i1", itemKey: "k", pause: { _ in XCTFail("must not wait") }); XCTFail("should throw") }
+        catch StorageAPIError.refused(let m) { XCTAssertTrue(m.contains("could not be saved")) }
+        catch { XCTFail("\(error)") }
+    }
+    func testWaitingGivesUpAfterTheLongestWait() async {
+        StubProtocol.handler = { _ in (202, #"{"pending":true}"#) }
+        do { _ = try await api().saveWaiting(intentId: "i1", itemKey: "k", maxWait: -1, pause: { _ in }); XCTFail("should throw") }
+        catch StorageAPIError.transport(let m) { XCTAssertTrue(m.contains("still saving")) }   // Finder is told to try again later, the file is not lost
+        catch { XCTFail("\(error)") }
+    }
     func testANameTakenOrAWrongFolderIsAPlainRefusal() async {
         for code in [409, 413, 422] {
             StubProtocol.handler = { _ in (code, #"{"error":"exists","message":"A file with this name is already in this folder. Open the CRM to replace it."}"#) }
