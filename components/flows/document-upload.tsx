@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Upload, Loader2, CheckCircle2, FileUp, X } from 'lucide-react'
 import { PrincipalOfficeCheck } from '@/components/calendar/principal-office-check'
 import { EMPTY_PRINCIPAL_OFFICE_DRAFT, principalOfficeAnswer, type PrincipalOfficeDraft } from '@/lib/principal-office-draft'
+import { pickersFromPreflight } from '@/lib/flows/materialize-preflight-response'
 
 /** Window event fired after a flow document upload succeeds. The sibling
  *  DocumentViewer listens for it to re-fetch live (a server router.refresh()
@@ -236,17 +237,16 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
               .then((r) => r.json()).catch(() => ({})),
           ])
           if (dateRes?.formation_date) setFormationDate(dateRes.formation_date)
-          if (preRes?.applicable && preRes.ok === false) {
-            // needs_state and needs_entity_type are independent — a formation
-            // can need both at once, and both fields must show together so
-            // fixing one doesn't just reveal the other on the next attempt
-            // (2026-09-11 bug-hunter catch).
-            if (preRes.needs_entity_type) setEntityTypeNeeded(true)
-            if (preRes.needs_state) setFormationStateNeeded(true)
-            if (!preRes.needs_entity_type && !preRes.needs_state && preRes.error) {
-              setPreflightBlocked(preRes.error)
-            }
-          }
+          // needs_state and needs_entity_type are independent — a formation can
+          // need both at once, and both fields must show together so fixing one
+          // doesn't just reveal the other on the next attempt. pickersFromPreflight
+          // also falls back on `failure`, so a state / LLC-type problem always gets
+          // its picker (2026-10-27: the route had dropped the flags, leaving staff
+          // with an error and a locked Confirm button).
+          const pickers = pickersFromPreflight(preRes)
+          if (pickers.entityType) setEntityTypeNeeded(true)
+          if (pickers.state) setFormationStateNeeded(true)
+          if (pickers.blocked) setPreflightBlocked(pickers.blocked)
         } catch {
           // ignore — staff enter the date manually; the server-side gate
           // still refuses with an actionable message if something is missing
