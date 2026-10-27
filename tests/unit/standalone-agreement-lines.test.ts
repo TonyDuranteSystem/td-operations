@@ -136,6 +136,9 @@ describe('agreementCoverageGap + warnings — a billed service with no agreement
     expect(w[0]).toContain('"Consulting Call" is on this offer')
     expect(w[0]).toContain('is OFF')
     expect(w[0]).toContain("main service's agreement")
+    // the switch stays OFF until the whole project is tested (Antonio, 2026-10-26): the message must never tell staff to turn it on
+    expect(w[0]).not.toMatch(/turn it on/i)
+    expect(w[0]).toContain('in its own offer')
   })
 
   it('switch ON never blames the switch: a typed service is always covered, an untyped one is called out as having no contract', () => {
