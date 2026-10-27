@@ -614,7 +614,7 @@ final class UpdateHintTests: XCTestCase {
 final class KeepAliveTests: XCTestCase {
     func testAPersonChoosingQuitIsRefusedButTheSystemAndUpdatesAreNot() {
         XCTAssertTrue(KeepAlive.shouldStay(reason: nil, allowed: false))                                   // Cmd+Q / Dock > Quit
-        for r in ["shut", "rest", "rlgo", "quia"] { XCTAssertFalse(KeepAlive.shouldStay(reason: KeepAlive.fourCC(r), allowed: false), r) }   // shut down, restart, log out, quit all
+        for r in ["shut", "rest", "rlgo", "logo", "quia"] { XCTAssertFalse(KeepAlive.shouldStay(reason: KeepAlive.fourCC(r), allowed: false), r) }   // shut down, restart, log out, quit all
         XCTAssertFalse(KeepAlive.shouldStay(reason: nil, allowed: true))                                    // an update installing / power-off announced
         XCTAssertTrue(KeepAlive.shouldStay(reason: KeepAlive.fourCC("zzzz"), allowed: false))              // an unknown reason is treated like a person's Quit
     }

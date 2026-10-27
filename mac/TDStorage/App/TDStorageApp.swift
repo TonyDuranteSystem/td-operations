@@ -38,10 +38,10 @@ final class UpdateGate: NSObject, SPUUpdaterDelegate {
         u.updateCheckInterval = m * 60
     }
     func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { QuitGuard.allowQuit = true; immediateInstallHandler() }   // the update itself may quit the app
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { QuitGuard.allowQuitBriefly(); immediateInstallHandler() }   // the update itself may quit the app
         return true
     }
-    func updaterWillRelaunchApplication(_ updater: SPUUpdater) { QuitGuard.allowQuit = true }
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) { QuitGuard.allowQuitBriefly() }
     func feedParameters(for updater: SPUUpdater, sendingSystemProfile sendingProfile: Bool) -> [[String: String]] {
         let info = Bundle.main.infoDictionary ?? [:]
         let store = KeychainTokenStore(service: info["TDKeychainService"] as? String ?? "td-storage", accessGroup: info["TDKeychainGroup"] as? String)
@@ -55,10 +55,16 @@ final class UpdateGate: NSObject, SPUUpdaterDelegate {
 /// ending it; the Mac's own shutdown / restart / logout, and an update installing, are never refused (see KeepAlive.shouldStay).
 final class QuitGuard: NSObject, NSApplicationDelegate {
     static var allowQuit = false
+    /// Quitting is allowed for a minute: long enough for an update to install or a shutdown / logout to go through, short enough that a cancelled one
+    /// (an install that failed, a logout someone cancelled) can never leave the guard switched off for good.
+    static func allowQuitBriefly() {
+        allowQuit = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + KeepAlive.allowSeconds) { allowQuit = false }
+    }
     private var powerOff: NSObjectProtocol?
     func applicationDidFinishLaunching(_ notification: Notification) {
         // posted by macOS before a shutdown, restart or logout — from then on every quit is allowed
-        powerOff = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { _ in QuitGuard.allowQuit = true }
+        powerOff = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { _ in QuitGuard.allowQuitBriefly() }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let event = NSAppleEventManager.shared().currentAppleEvent
