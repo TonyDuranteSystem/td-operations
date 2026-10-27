@@ -50,7 +50,7 @@ export default async function MarketingAppLayout({ children }: { children: React
   const autoStart = !ctx.viewAs && ownSteps.length > 0 && !seen
   const previews: Partial<Record<TourKey, ResolvedStep[]>> | null = ctx.role === 'owner' && hasPermission(ctx.permissions, 'team.manage')
     ? Object.fromEntries(PREVIEW_TOURS.map(k => [k, resolveTour(k, MARKETING_PERMISSIONS, lang)])) : null
-  const nav = modulesFor(ctx.permissions).map(m => (m.key === 'chat' ? { ...m, badge: chatUnread } : m))
+  const nav = modulesFor(ctx.permissions).map(m => (m.key === 'chat' || m.key === 'home' ? { ...m, badge: chatUnread } : m))
   return (
     <LangProvider lang={lang}>
     <TourProvider own={{ key: tourKey, steps: ownSteps }} previews={previews} autoStart={autoStart} recordable={!ctx.viewAs}>
