@@ -211,7 +211,7 @@ _Regenerated 2026-10-27. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-10-22)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
-- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-10-23)_
+- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-10-27)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
 - [portal.md](portal.md) — Client Portal _(verified 2026-10-27)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-10-23)_
