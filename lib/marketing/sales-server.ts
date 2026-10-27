@@ -8,6 +8,7 @@ import { readPaged } from "@/lib/marketing/paged"
 import { getTeamLead } from "@/lib/marketing/leads-read"
 import { getMarketingSetting, listCommissionTerms } from "@/lib/marketing/settings"
 import { termInForce } from "@/lib/marketing/commission"
+import type { SellerResultStages } from "@/lib/marketing/settings-schema"
 import { shortPayUrl } from "@/lib/marketing/short-pay"
 import { APP_BASE_URL } from "@/lib/config"
 import {
@@ -101,9 +102,11 @@ export async function recordPaidSession(db: Db, session: { id: string; payment_i
 export async function moveLeadAfterLinkSent(db: Db, leadId: string, teamId: string, saleId: string, actor: string) {
   try {
     const [seller, stages, kindMap] = await Promise.all([getMarketingSetting("seller_result_stages", teamId), getMarketingSetting("pipeline_stages", teamId), getMarketingSetting("sale_kind_stages", teamId)])
-    const target = (seller as { closed: string }).closed
+    const sellerStages = seller as SellerResultStages
+    const target = sellerStages.closed
     if (!(stages as { key: string }[]).some(s => s.key === target)) return
-    const paidStages = new Set(Object.values(kindMap as Record<string, string>))
+    // a lead that has paid, or is past paying (booking link sent, upsell, waiting, archived), is never pulled back to "Link sent" by another link (an upsell link, for instance)
+    const paidStages = new Set([...Object.values(kindMap as Record<string, string>), sellerStages.booking_link ?? "booking_link", sellerStages.upsell ?? "upsell", sellerStages.waiting ?? "waiting", sellerStages.archived ?? "archived"])
     for (let attempt = 0; attempt < 2; attempt++) {
       const { data: lead } = await db.from("marketing_leads").select("status").eq("id", leadId).eq("team_id", teamId).maybeSingle()
       if (!lead || lead.status === target || paidStages.has(lead.status)) return

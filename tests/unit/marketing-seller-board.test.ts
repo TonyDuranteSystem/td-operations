@@ -83,11 +83,11 @@ describe("the short payment address", () => {
 
 describe("the seller's tour explains every column", () => {
   const perms = ["leads.read", "payment_links.create", "calls.host", "leads.pick", "leads.mark", "chat", "calendar.read", "reports.read", "templates.use"]
-  it("names the six columns and the four results in English and in Italian", () => {
+  it("names every column and result of Rocco's path in English and in Italian (27 Oct 2026)", () => {
     const en = resolveTour("seller", perms, "en").find(s => s.screen === "board")
     const it_ = resolveTour("seller", perms, "it").find(s => s.screen === "board")
-    for (const w of ["Booked calls", "Not in target", "Not ready now", "Link sent", "Not closed", "Paid"]) expect(en?.body, w).toContain(w)
-    for (const w of ["Chiamate fissate", "Fuori target", "Non pronto ora", "Link inviato", "Non chiuso", "Pagato"]) expect(it_?.body, w).toContain(w)
+    for (const w of ["Interested lead", "Contacted", "Link sent", "Not in target", "Not ready now", "Paid", "Booking link sent", "Upsell", "Waiting", "Archive", "Incoming messages"]) expect(en?.body, w).toContain(w)
+    for (const w of ["Lead interessato", "Contattato", "Link inviato", "Fuori target", "Non pronto ora", "Pagato", "Link prenotazione inviato", "Upsell", "In attesa", "Archivia", "Messaggi in arrivo"]) expect(it_?.body, w).toContain(w)
   })
 })
 

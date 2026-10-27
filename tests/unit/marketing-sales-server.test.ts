@@ -50,6 +50,12 @@ describe("createSaleLink", () => {
     db.rows("marketing_leads")[0].status = "paid_call"
     await createSaleLink(asDb(), ctx, LEAD, { kind: "upsell", amount: "500", currency: "EUR" }, ok)
     expect(db.rows("marketing_leads")[0].status).toBe("paid_call")
+    // past paying (booking link sent, upsell, waiting, archived): a new link, an upsell link for instance, never pulls the lead back to Link sent
+    for (const later of ["booking_link", "upsell", "waiting", "archived"]) {
+      db.rows("marketing_leads")[0].status = later
+      await createSaleLink(asDb(), ctx, LEAD, { kind: "upsell", amount: "500", currency: "EUR" }, ok)
+      expect(db.rows("marketing_leads")[0].status).toBe(later)
+    }
   })
   it("another team's lead id finds nothing", async () => {
     const r = await createSaleLink(asDb(), { ...ctx, teamId: "99999999-9999-9999-9999-999999999999" }, LEAD, { kind: "strategic_call", amount: "10", currency: "EUR" }, ok)

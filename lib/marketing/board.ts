@@ -44,18 +44,24 @@ const SETTER_COLUMNS: readonly BoardColumn[] = [
   { key: "to_contact", label: "To contact", stages: ["new"] },
   { key: "tried", label: "Tried, no answer", stages: ["contacted"] },
   { key: "in_target", label: "In target", stages: ["qualified"] },
-  { key: "booked", label: "Call booked", stages: ["booked", "showed"] },
-  { key: "paid", label: "Paid", stages: ["paid_call", "upsell_won"] },
+  // what she passes to Rocco; it leaves her board when he marks the lead Contacted
+  { key: "booked", label: "Interested lead", stages: ["booked", "showed"] },
+  { key: "out", label: "Out of target", stages: ["not_in_target"] },
 ]
-// Rocco's six columns (his own words, 2026-10-26). A lead the setter passed on but nobody has booked yet still shows under "Booked calls" so it never disappears; a call
-// that has taken place stays there until Rocco presses a result.
+// Rocco's board (the call of 27 Oct 2026): Interested lead, Contacted, Link sent, Not in target, Not ready now, Paid, Booking link sent, Upsell, Waiting, Archived. A lead the setter passed on but
+// nobody has booked yet still shows under "Interested lead" so it never disappears. A lead with a new chat message sits in "Incoming messages" (first column, only while there is something unread).
 const SELLER_COLUMNS: readonly BoardColumn[] = [
-  { key: "booked", label: "Booked calls", stages: ["booked", "showed", "qualified"] },
-  { key: "out", label: "Not in target", stages: ["not_in_target"] },
+  { key: "incoming", label: "Incoming messages", stages: [] },
+  { key: "booked", label: "Interested lead", stages: ["booked", "showed", "qualified"] },
+  { key: "contacted", label: "Contacted", stages: ["seller_contacted"] },
   { key: "closed", label: "Link sent", stages: ["closed"] },
-  { key: "not_closed", label: "Not closed", stages: ["not_closed"] },
+  { key: "out", label: "Not in target", stages: ["not_in_target"] },
   { key: "not_ready", label: "Not ready now", stages: ["not_ready"] },
   { key: "paid", label: "Paid", stages: ["paid_call", "upsell_won"] },
+  { key: "booking_link", label: "Booking link sent", stages: ["booking_link"] },
+  { key: "upsell", label: "Upsell", stages: ["upsell"] },
+  { key: "waiting", label: "Waiting", stages: ["waiting"] },
+  { key: "archived", label: "Archived", stages: ["archived"] },
 ]
 
 export const columnsFor = (role: BoardRole): readonly BoardColumn[] => (role === "seller" ? SELLER_COLUMNS : SETTER_COLUMNS)
@@ -65,13 +71,15 @@ export function columnOf(role: BoardRole, stage: string): string | null {
   return columnsFor(role).find(c => c.stages.includes(stage))?.key ?? null
 }
 
-/** The column a CARD sits in. For the seller an in-target lead appears only once the setter has passed it on; until then it is the setter's. Likewise a turned-down lead only if it reached him. */
-export function columnOfCard(role: BoardRole, card: Pick<BoardCard, "stage" | "handedOver"> & { apptAt?: string | null }): string | null {
+/** The column a CARD sits in. For the seller an in-target lead appears only once the setter has passed it on; until then it is the setter's. Likewise a turned-down lead only if it reached him.
+ *  A lead of the seller's board that has an unread chat message sits in "Incoming messages" until it is read. */
+export function columnOfCard(role: BoardRole, card: Pick<BoardCard, "stage" | "handedOver"> & { apptAt?: string | null; unread?: number }): string | null {
   const key = columnOf(role, card.stage)
   if (role !== "seller") return key
   if (card.stage === "qualified" && !card.handedOver) return null
   // a lead the setter turned down before it ever reached Rocco (not passed on, no call booked) is not on his board
   if (card.stage === "not_in_target" && !card.handedOver && !card.apptAt) return null
+  if (key !== null && (card.unread ?? 0) > 0) return "incoming"
   return key
 }
 
@@ -97,6 +105,8 @@ export interface BoardCard {
   existingClient: boolean
   /** my unread chat messages in this lead */
   unread: number
+  /** who wrote the newest message I have not read: the setter (green on the card) or Antonio / anyone else (red); null when nothing is unread */
+  incomingFrom?: "setter" | "owner" | null
   /** the setter passed this lead to the seller */
   handedOver: boolean
 }

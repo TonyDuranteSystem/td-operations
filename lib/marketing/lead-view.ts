@@ -86,6 +86,7 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
       return data.at ? `${t("Call booked for {when}", { when: fw(typeof data.at === "string" ? data.at : null) })}${note}` : `${t("Booked call cancelled")}${note}`
     case "callback_moved": return `${t("Call back moved to {when}. Reason: {reason}", { when: fw(typeof data.callback_at === "string" ? data.callback_at : null), reason: t(String(data.reason ?? "")) })}${note}`
     case "handover": return `${t("Passed to Rocco, no call booked yet")}${note}`
+    case "booking_link": return `${t("Booking link sent by {via}: {url}", { via: data.via === "email" ? t("email") : data.via === "copied" ? t("copy") : "WhatsApp", url: typeof data.url === "string" ? data.url : "" })}${note}`
     case "payment_link_created": return t("Payment link created")
     case "payment_received": return t("Payment received")
     case "sale_refunded": return t("Sale refunded")
@@ -99,6 +100,10 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
       if (data.outcome === "not_ready") return `${t("Not ready now — come back on {when}", { when: fw(typeof data.callback_at === "string" ? data.callback_at : null) })}${note}`
       if (data.outcome === "closed" || data.outcome === "link_sent") return `${t("Link sent")}${note}`
       if (data.outcome === "not_closed") return `${t("Not closed")}${note}`
+      if (data.outcome === "contacted") return `${t("Contacted")}${note}`
+      if (data.outcome === "upsell") return `${t("Upsell")}${note}`
+      if (data.outcome === "waiting") return `${t("Waiting")}${note}`
+      if (data.outcome === "archive") return `${t("Archived")}${note}`
       if (data.outcome === "good") return `${t("Good — moved to {to}", { to })}${note}`
       return `${t("Moved to {to}", { to })}${note}`
     }

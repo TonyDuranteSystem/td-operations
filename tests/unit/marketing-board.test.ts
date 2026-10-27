@@ -12,19 +12,19 @@ describe("the lead board: who sees which columns", () => {
     expect(boardRole(["leads.read", "leads.worklist"])).toBe("setter")
     expect(boardRole([])).toBe("setter")
   })
-  it("the setter has five columns and the seller six (Rocco's own words, 2026-10-26)", () => {
-    expect(columnsFor("setter").map(c => c.key)).toEqual(["to_contact", "tried", "in_target", "booked", "paid"])
-    expect(columnsFor("seller").map(c => c.key)).toEqual(["booked", "out", "closed", "not_closed", "not_ready", "paid"])
+  it("the setter has five columns (no Paid) and Rocco ten plus Incoming messages (the call of 27 Oct 2026)", () => {
+    expect(columnsFor("setter").map(c => c.key)).toEqual(["to_contact", "tried", "in_target", "booked", "out"])
+    expect(columnsFor("seller").map(c => c.key)).toEqual(["incoming", "booked", "contacted", "closed", "out", "not_ready", "paid", "booking_link", "upsell", "waiting", "archived"])
   })
   it("every column stage is a real pipeline stage (a renamed stage must not silently empty a column)", () => {
     const real = new Set(MARKETING_SETTING_DEFS.pipeline_stages.fallback.map(s => s.key))
     for (const role of ["setter", "seller"] as const) for (const c of columnsFor(role)) for (const st of c.stages) expect(real.has(st)).toBe(true)
   })
-  it("a stage sits in one column per role; 'not in target' is a column for the seller only", () => {
+  it("a stage sits in one column per role; 'not in target' is a column for both (the setter marks wrong people out too)", () => {
     for (const role of ["setter", "seller"] as const) {
       const seen = columnsFor(role).flatMap(c => c.stages)
       expect(new Set(seen).size).toBe(seen.length)
-      expect(columnOf(role, "not_in_target")).toBe(role === "seller" ? "out" : null)
+      expect(columnOf(role, "not_in_target")).toBe("out")
       expect(columnOf(role, "nonsense")).toBeNull()
     }
     expect(columnOf("setter", "qualified")).toBe("in_target")
@@ -33,7 +33,14 @@ describe("the lead board: who sees which columns", () => {
     expect(columnOf("seller", "showed")).toBe("booked")
     expect(columnOf("seller", "not_ready")).toBe("not_ready")
     expect(columnOf("seller", "closed")).toBe("closed")
-    expect(columnOf("seller", "not_closed")).toBe("not_closed")
+    expect(columnOf("seller", "not_closed")).toBeNull() // "Not closed" is gone from Rocco's board
+    expect(columnOf("seller", "seller_contacted")).toBe("contacted")
+    expect(columnOf("seller", "booking_link")).toBe("booking_link")
+    expect(columnOf("seller", "upsell")).toBe("upsell")
+    expect(columnOf("seller", "waiting")).toBe("waiting")
+    expect(columnOf("seller", "archived")).toBe("archived")
+    expect(columnOf("setter", "paid_call")).toBeNull() // Paid is not on the setter's board
+    expect(columnOf("setter", "seller_contacted")).toBeNull() // once Rocco has contacted the lead it leaves hers
     expect(columnOf("setter", "closed")).toBeNull()
   })
   it("booked calls are listed soonest first; the other columns newest first", () => {
@@ -45,7 +52,7 @@ describe("the lead board: who sees which columns", () => {
   })
   it("the Cards view is the columns one after the other; leads at no column are counted, not lost", () => {
     const cards = [card("p", "paid_call"), card("n", "new"), card("x", "not_in_target")]
-    expect(boardCards("setter", cards).map(c => c.id)).toEqual(["n", "p"])
+    expect(boardCards("setter", cards).map(c => c.id)).toEqual(["n", "x"])
     expect(hiddenCount("setter", cards)).toBe(1)
   })
   it("the saved view is one of the three, anything else falls back to the pipeline", () => {

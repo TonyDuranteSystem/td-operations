@@ -76,7 +76,7 @@ export function HandoverPanel({ leadId, role, canAct, contact }: { leadId: strin
                 <textarea className="mt-1 w-full rounded-lg border px-3 py-2" rows={3} value={note} onChange={e => setNote(e.target.value)} placeholder={t('For example: in target, wants to start within a month, asks about Wyoming')} data-testid="pass-note" /></label>
               <button type="button" className={`${btn} bg-slate-900 text-white`} disabled={busy} data-testid="pass-confirm"
                 onClick={() => send({ action: 'handover', ...(note.trim() ? { note: note.trim() } : {}) })}>{t('Pass to Rocco')}</button>
-              <p className="text-xs text-slate-500">{t('The lead appears under "Booked calls" on his board.')}</p>
+              <p className="text-xs text-slate-500">{t('The lead appears under "Interested lead" on his board.')}</p>
             </div>
           )}
         </>

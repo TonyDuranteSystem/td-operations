@@ -5,6 +5,7 @@
  */
 import { z } from "zod"
 import type { MarketingPermission } from "@/lib/marketing/permissions"
+import type { SellerResultStages } from "@/lib/marketing/settings-schema"
 
 export interface Option { key: string; label: string }
 
@@ -16,7 +17,7 @@ export interface ActionSettings {
   /** the stages a paid sale moves a lead to: a paid lead is not pulled out of Paid by a result */
   paidStages?: readonly string[]
   /** where the seller's results after the call put a lead */
-  sellerStages?: { not_ready: string; closed: string; not_closed: string }
+  sellerStages?: SellerResultStages
 }
 
 const note = z.string().trim().max(2000)
@@ -31,6 +32,12 @@ export const leadActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("not_ready"), callbackAt: z.string().min(10).max(40), note: note.optional() }),
   z.object({ action: z.literal("closed"), note: note.optional() }),
   z.object({ action: z.literal("not_closed"), note: note.optional() }),
+  // Rocco's path after the handover (27 Oct 2026): he has reached the lead; after the lead PAID he sends his booking (Calendly) link; after the consultation: upsell, waiting, or archive
+  z.object({ action: z.literal("contacted"), note: note.optional() }),
+  z.object({ action: z.literal("booking_link"), url: z.string().trim().max(500).refine(u => /^https:\/\/[^\s/]+\.[^\s/]+/i.test(u), "Use a link that starts with https://"), via: z.enum(["whatsapp", "email", "copied"]).default("whatsapp"), note: note.optional() }),
+  z.object({ action: z.literal("upsell"), note: note.optional() }),
+  z.object({ action: z.literal("waiting"), note: note.optional() }),
+  z.object({ action: z.literal("archive"), note: note.optional() }),
   // reaching out (the team's sheet: "WhatsApp sent / no WhatsApp", "NR + date", the booked call)
   z.object({ action: z.literal("whatsapp"), state: z.enum(["sent", "no_wa", "opened"]), template: z.string().trim().max(60).optional(), note: note.optional() }),
   z.object({ action: z.literal("no_answer"), via: z.enum(["whatsapp", "call"]).default("call"), note: note.optional() }),
@@ -65,7 +72,13 @@ const MAX_AHEAD_MS = 180 * 24 * 3600 * 1000
 const NOT_READY_MAX_AHEAD_MS = 366 * 24 * 3600 * 1000 // "not ready now" may be a year away: Rocco: "today no, maybe in six months"
 const GRACE_MS = 5 * 60 * 1000
 
-const sellerOf = (s: ActionSettings) => s.sellerStages ?? { not_ready: "not_ready", closed: "closed", not_closed: "not_closed" }
+const SELLER_DEFAULTS: Required<SellerResultStages> = { not_ready: "not_ready", closed: "closed", not_closed: "not_closed", contacted: "seller_contacted", booking_link: "booking_link", upsell: "upsell", waiting: "waiting", archived: "archived" }
+/** Where each seller result puts a lead: the team's setting, with the built-in key for any result a stored setting does not have yet. */
+export type StageFacts = Pick<ActionSettings, "sellerStages" | "paidStages">
+export const sellerOf = (s: StageFacts): Required<SellerResultStages> => ({ ...SELLER_DEFAULTS, ...(s.sellerStages ?? {}) })
+/** The stages a lead is in once it has PAID (the booking link, the upsell, waiting, archived follow): no payment link, no "link sent" and no "contacted" pulls it back. */
+const afterPaymentStages = (s: StageFacts): string[] => [...(s.paidStages ?? ["paid_call", "upsell_won"]), sellerOf(s).booking_link, sellerOf(s).upsell, sellerOf(s).waiting, sellerOf(s).archived]
+export const hasPaidOrLater = (status: string, s: StageFacts): boolean => afterPaymentStages(s).includes(status)
 const keyIndex = (stages: readonly Option[], k: string) => stages.findIndex(x => x.key === k)
 
 /** "Contacted" has one meaning: the FIRST reach-out moves a brand-new lead out of the first stage (to the stage the team uses for "contacted"); a lead already further along is left where it is. */
@@ -215,6 +228,45 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
       if (!stageExists(target)) return fail(400, `The stage for "${input.action === "closed" ? "Link sent" : "Not closed"}" is not set up. Ask Antonio.`)
       return { ok: true, change: {
         patch: { status: target, callback_at: null, not_in_target_reason: null },
+        event: { kind: "status_changed", data: { from: lead.status, to: target, outcome: input.action, note: input.note ?? null } },
+      } }
+    }
+
+    case "contacted": {
+      if (lead.status === s.outcomeStages.not_in_target) return fail(409, "This lead is marked Not in target. Change that first if you want to mark it Contacted.")
+      if (hasPaidOrLater(lead.status, s)) return fail(409, "This lead has already paid, so nothing is changed.")
+      const target = sellerOf(s).contacted
+      if (lead.status === target) return fail(409, "This lead already has this result.")
+      if (!stageExists(target)) return fail(400, "The stage for \"Contacted\" is not set up. Ask Antonio.")
+      return { ok: true, change: {
+        patch: { status: target, callback_at: null, not_in_target_reason: null },
+        event: { kind: "status_changed", data: { from: lead.status, to: target, outcome: "contacted", note: input.note ?? null } },
+      } }
+    }
+
+    case "booking_link": {
+      // only after the lead has PAID: the link is what Rocco sends once the payment is in
+      if (!hasPaidOrLater(lead.status, s) || lead.status === sellerOf(s).archived) return fail(409, "Send the booking link after the lead has paid.")
+      const target = sellerOf(s).booking_link
+      // a lead that has just paid moves to "Booking link sent"; one that is already further along (upsell, waiting) stays where it is, the link is only written in the history
+      const moves = (s.paidStages ?? ["paid_call", "upsell_won"]).includes(lead.status) && stageExists(target)
+      return { ok: true, change: {
+        patch: moves ? { status: target, callback_at: null } : {},
+        event: { kind: "booking_link", data: { url: input.url, via: input.via, from: lead.status, to: moves ? target : lead.status, note: input.note ?? null } },
+      } }
+    }
+
+    case "upsell":
+    case "waiting":
+    case "archive": {
+      const target = input.action === "upsell" ? sellerOf(s).upsell : input.action === "waiting" ? sellerOf(s).waiting : sellerOf(s).archived
+      const word = input.action === "upsell" ? "Upsell" : input.action === "waiting" ? "Waiting" : "Archived"
+      // upsell and waiting are what follows a consultation: only a lead that has paid
+      if (input.action !== "archive" && !hasPaidOrLater(lead.status, s)) return fail(409, `Only a lead that has paid can go to ${word}.`)
+      if (lead.status === target) return fail(409, "This lead already has this result.")
+      if (!stageExists(target)) return fail(400, `The stage for "${word}" is not set up. Ask Antonio.`)
+      return { ok: true, change: {
+        patch: { status: target, callback_at: null },
         event: { kind: "status_changed", data: { from: lead.status, to: target, outcome: input.action, note: input.note ?? null } },
       } }
     }
