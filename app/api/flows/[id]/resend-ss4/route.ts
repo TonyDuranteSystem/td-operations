@@ -21,6 +21,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { logAction } from '@/lib/mcp/action-log'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { checkSs4StateGate } from '@/lib/operations/ss4-state-gate'
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await requireStaffRoute()
@@ -39,7 +40,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
 
     const { data: ss4 } = await supabaseAdmin
       .from('ss4_applications')
-      .select('id, status, company_name, contact_id, entity_type, responsible_party_name')
+      .select('id, status, company_name, contact_id, entity_type, responsible_party_name, county_and_state')
       .eq('account_id', sd.account_id)
       .maybeSingle()
 
@@ -67,6 +68,15 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       return NextResponse.json({ success: true, status: 'awaiting_signature', message: 'Already awaiting the client’s signature.' })
     }
 
+    // ── STATE GATE (dev job ff2b73d7) ── the client must never be asked to sign an SS-4 whose registered agent is not in the company's
+    // own state. A signed SS-4 is locked from the in-place refresh, so when the agent is now right but the saved Line 6 still carries
+    // the old state, the gate hands back the corrected Line 6 and it is written in THIS update — the client signs the corrected form.
+    const stateGate = await checkSs4StateGate(sd.account_id, { context: 'resend', allowStaleLine6: true })
+    if (!stateGate.ok) {
+      return NextResponse.json({ success: false, error: stateGate.message }, { status: stateGate.kind === 'read_error' ? 503 : 409 })
+    }
+    const line6Fix = stateGate.line6Fix ?? null
+
     // Re-open: clear the signature and drop back to awaiting_signature. Token +
     // access_code are preserved so the client's existing signing link still
     // works. pdf_signed_drive_id is cleared (the next signature regenerates it).
@@ -79,6 +89,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
         signed_at: null,
         signed_ip: null,
         pdf_signed_drive_id: null,
+        ...(line6Fix ? { county_and_state: line6Fix } : {}),
         updated_at: new Date().toISOString(),
       })
       .eq('id', ss4.id)
@@ -94,7 +105,12 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       record_id: ss4.id,
       account_id: sd.account_id,
       summary: `SS-4 re-opened for re-signature: ${ss4.company_name}`,
-      details: { source: 'flow-resend-ss4', from: ss4.status, to: 'awaiting_signature' },
+      details: {
+        source: 'flow-resend-ss4',
+        from: ss4.status,
+        to: 'awaiting_signature',
+        ...(line6Fix ? { line_6_corrected_to: line6Fix, line_6_was: ss4.county_and_state ?? null } : {}),
+      },
     })
 
     // Tell the signer they need to sign AGAIN (chat + immediate email +

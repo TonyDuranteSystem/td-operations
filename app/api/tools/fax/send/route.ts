@@ -55,8 +55,12 @@ import { isStoreStaffUser } from '@/lib/crm-store/access'
 import { parseSaveChoice, validateDestination, verifyProposalStillHolds, realResolveDeps, saveToDestination, realDestinationDeps, realFileDeps, type FiledCopy, type SaveChoiceSave } from '@/lib/crm-store/save-destination'
 import { claimSend, finishClaim, abandonClaim, realClaimDeps, HISTORY_NOT_SAVED_SENTENCE } from '@/lib/fax/send-claim'
 import { isFaxStagingPath, FAX_STAGING_BUCKET, faxSizeProblem } from '@/lib/fax/staged-upload'
+import { checkSs4StateGate } from '@/lib/operations/ss4-state-gate'
 
 const MAX_COVER_LENGTH = 2000
+
+/** Stored documents that ARE an SS-4 (or the IRS package that contains it): sending one is gated on the company's registered-agent state. */
+const SS4_DOCUMENT_TYPES = new Set(['SS-4 + Articles (IRS Package)', 'Form SS-4 (Signed)', 'Form SS-4 (Unsigned)', 'SS-4'])
 
 /** Best-effort MIME from a filename extension (uploads carry no MIME). */
 function mimeFromName(name: string): string {
@@ -158,6 +162,43 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
         },
         { status: 409 },
       )
+    }
+  }
+
+  // SS-4 STATE GATE (dev job ff2b73d7). Faxing the IRS is irreversible, so an SS-4 whose registered agent — or the state printed on its
+  // Line 6 — is not in the company's own state must never go out (Tanto per: a New Mexico company faxed with "Sheridan County, Wyoming").
+  // It applies to the SS-4 panel (dedupe flag) and to any send of a stored SS-4 document. No override: fix the agent, re-send for
+  // signature. A check that cannot be completed stops the send ("nothing was sent"), it never passes.
+  {
+    let gateAccountId: string | null = null
+    if (dedupeSdId) {
+      const { data: gateSd, error: gateSdErr } = await supabaseAdmin
+        .from('service_deliveries')
+        .select('account_id')
+        .eq('id', dedupeSdId)
+        .maybeSingle()
+      if (gateSdErr) {
+        return NextResponse.json({ success: false, error: 'Could not check the SS-4 against its company. The fax was NOT sent. Please try again.' }, { status: 503 })
+      }
+      gateAccountId = (gateSd?.account_id as string | null) ?? null
+    }
+    if (!gateAccountId && documentId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- document_type_name is not in the generated types
+      const { data: gateDoc, error: gateDocErr } = await (supabaseAdmin as any)
+        .from('documents')
+        .select('account_id, document_type_name')
+        .eq('id', documentId)
+        .maybeSingle()
+      if (gateDocErr) {
+        return NextResponse.json({ success: false, error: 'Could not check the document before faxing it. The fax was NOT sent. Please try again.' }, { status: 503 })
+      }
+      if (gateDoc && SS4_DOCUMENT_TYPES.has(String(gateDoc.document_type_name ?? ''))) gateAccountId = (gateDoc.account_id as string | null) ?? null
+    }
+    if (gateAccountId) {
+      const gate = await checkSs4StateGate(gateAccountId, { context: 'fax' })
+      if (!gate.ok) {
+        return NextResponse.json({ success: false, error: gate.message }, { status: gate.kind === 'read_error' ? 503 : 409 })
+      }
     }
   }
 

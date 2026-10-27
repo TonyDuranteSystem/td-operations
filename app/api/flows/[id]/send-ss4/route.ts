@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { logAction } from '@/lib/mcp/action-log'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { checkSs4StateGate } from '@/lib/operations/ss4-state-gate'
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await requireStaffRoute()
@@ -74,6 +75,13 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
         },
         { status: 409 },
       )
+    }
+
+    // ── STATE GATE (dev job ff2b73d7) ── the client must never sign an SS-4 whose registered agent (or printed Line 6) is not in the
+    // company's own state. No override: fix the agent, regenerate, send.
+    const stateGate = await checkSs4StateGate(sd.account_id, { context: 'send' })
+    if (!stateGate.ok) {
+      return NextResponse.json({ success: false, error: stateGate.message }, { status: stateGate.kind === 'read_error' ? 503 : 409 })
     }
 
     const { error: updErr } = await supabaseAdmin

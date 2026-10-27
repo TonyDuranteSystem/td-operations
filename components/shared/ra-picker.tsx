@@ -7,6 +7,7 @@ import { AddressDropdown } from '@/components/shared/address-dropdown'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { AddressRow } from '@/lib/addresses'
 import { updateAccountField } from '@/app/(dashboard)/accounts/actions'
+import { checkAgentInCompanyState } from '@/lib/formation/registered-agent-state'
 
 export interface RAPickerProps {
   accountId: string
@@ -14,6 +15,9 @@ export interface RAPickerProps {
   value: string | null       // accounts.registered_agent_id
   verified: boolean          // accounts.ra_link_verified
   onChange: () => void       // call after any successful mutation; parent re-fetches account
+  /** accounts.state_of_formation ("New Mexico" / "NM"). When known the picker offers only agents in that state and flags a linked
+   *  agent that is not — a registered agent must be in the company's own state (dev job ff2b73d7). */
+  companyState?: string | null
 }
 
 interface RAForm {
@@ -149,6 +153,7 @@ export function RAPicker({
   value,
   verified,
   onChange,
+  companyState = null,
 }: RAPickerProps) {
   // AddressDropdown is re-mounted by changing this key after any mutation.
   const [dropdownKey, setDropdownKey] = useState(0)
@@ -165,6 +170,11 @@ export function RAPicker({
   const [verifySaving, setVerifySaving] = useState(false)
 
   const selectedRow = fetchedRows.find(r => r.id === value) ?? null
+
+  // A linked agent that is not in the company's state (e.g. the Wyoming agent on a New Mexico company) is flagged in red and cannot be
+  // marked verified. Only a definite mismatch is flagged; a company with no state set yet cannot be compared.
+  const stateCheck = selectedRow && companyState ? checkAgentInCompanyState({ companyState, agentState: selectedRow.state }) : null
+  const stateProblem = stateCheck && !stateCheck.ok && stateCheck.problem === 'mismatch' ? stateCheck.message ?? null : null
 
   // ── Fetch registry rows ────────────────────────────────────────────────────
 
@@ -269,6 +279,15 @@ export function RAPicker({
 
   // Save Add New — POST /api/addresses, then link the new row to this account
   const handleSaveAdd = async () => {
+    // A new entry for a company must be in the company's own state — checked BEFORE it is created, so a refused link never leaves a
+    // stray entry behind in the registry.
+    if (companyState) {
+      const c = checkAgentInCompanyState({ companyState, agentState: form.state })
+      if (!c.ok && c.problem !== 'company_state_unknown') {
+        toast.error(c.problem === 'agent_state_unknown' ? 'Enter the state as a US state, like NM or New Mexico.' : c.message ?? 'The registered agent must be in the company\'s state.')
+        return
+      }
+    }
     setSaving(true)
     try {
       const res = await fetch('/api/addresses', {
@@ -312,6 +331,10 @@ export function RAPicker({
 
   // Flip ra_link_verified → true
   const handleVerify = async () => {
+    if (stateProblem) {
+      toast.error(stateProblem)
+      return
+    }
     setVerifySaving(true)
     try {
       const r = await updateAccountField(accountId, 'ra_link_verified', 'true', accountUpdatedAt)
@@ -348,6 +371,7 @@ export function RAPicker({
           onChange={handleDropdownChange}
           disabled={pickSaving || saving}
           className="flex-1 min-w-0"
+          onlyState={companyState}
         />
 
         {/* Edit button — only when a row is selected */}
@@ -402,8 +426,16 @@ export function RAPicker({
         </div>
       )}
 
+      {/* Wrong-state agent — red, and it cannot be marked verified */}
+      {stateProblem && (
+        <div role="alert" className="flex items-start gap-1.5 rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
+          <ShieldAlert className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+          <span>{stateProblem}</span>
+        </div>
+      )}
+
       {/* Verification status — only when a row is selected */}
-      {value && (
+      {value && !stateProblem && (
         <div className="flex items-center gap-2 pl-0.5">
           {verified ? (
             <span className="flex items-center gap-1 text-xs text-green-700">

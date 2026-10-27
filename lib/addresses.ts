@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/lib/database.types'
 import { TD_OFFICE } from '@/lib/td-address'
+import { STATE_NAMES } from '@/lib/formation/registered-agent-state'
 
 // Full row shape returned by GET /api/addresses (includes computed linked_account_count).
 export interface AddressRow {
@@ -185,19 +186,6 @@ export function resolveMailingAddress(
   const realRow = isTdLargoAddressRow(mailingRow) ? null : mailingRow
   const realLegacy = isTdLargoAddressRow({ address_line1: legacyPhysical }) ? null : legacyPhysical
   return formatAddressString(realRow) ?? realLegacy ?? null
-}
-
-const STATE_NAMES: Record<string, string> = {
-  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California',
-  CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia',
-  HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa',
-  KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
-  MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri',
-  MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey',
-  NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio',
-  OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina',
-  SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont',
-  VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
 }
 
 // Builds SS-4 Line 6 string from structured registry columns.

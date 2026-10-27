@@ -1894,6 +1894,7 @@ export function AuditPanel({
             value={raId}
             verified={raVerified}
             onChange={refreshAddressData}
+            companyState={stateOfFormation || null}
           />
         </Section>
 
