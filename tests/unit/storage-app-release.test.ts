@@ -77,8 +77,9 @@ describe("update settings and routes", () => {
   })
   it("the public feed list matches the route file, and the gatekeeper uses it", () => {
     const root = join(__dirname, "..", "..")
-    expect(STORAGE_APP_RELEASE_PUBLIC_PATHS).toEqual(["/api/storage-app-release/appcast.xml"])
+    expect(STORAGE_APP_RELEASE_PUBLIC_PATHS).toEqual(["/api/storage-app-release/appcast.xml", "/api/storage-app-release/stage"])
     readFileSync(join(root, "app", "api", "storage-app-release", "appcast.xml", "route.ts"), "utf8")
+    expect(readFileSync(join(root, "app", "api", "storage-app-release", "stage", "route.ts"), "utf8")).toContain("requireStageToken")
     expect(readFileSync(join(root, "middleware.ts"), "utf8")).toContain("STORAGE_APP_RELEASE_PUBLIC_PATHS.includes(pathname)")
     expect(readFileSync(join(root, "app", "api", "store-devices", "app-download", "route.ts"), "utf8")).toContain("canSeeInstallPage")
   })
