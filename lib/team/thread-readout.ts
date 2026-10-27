@@ -78,6 +78,43 @@ export function formatThreadReadout(args: {
   return lines.join('\n')
 }
 
+/**
+ * A TD Talk message link: https://crm.tonydurante.us/td-talk?thread=<chat id>&message=<message id> ("Copy link" in the
+ * message menu). Works for direct messages, groups and channels. Returns null when the link carries no `message`.
+ */
+export function parseMessageLink(link: string): { threadId: string; messageId: string } | null {
+  const trimmed = (link ?? '').trim()
+  if (!trimmed) return null
+  let params: URLSearchParams
+  try { params = new URL(trimmed, 'https://crm.tonydurante.us').searchParams } catch { return null }
+  const threadId = params.get('thread')
+  const messageId = params.get('message')
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!threadId || !messageId || !uuid.test(threadId) || !uuid.test(messageId)) return null
+  return { threadId, messageId }
+}
+
+export interface MessageReadoutAttachment { name?: string | null; url?: string | null; mime_type?: string | null; transcript?: { text?: string; english?: string | null } | null }
+export interface MessageReadoutMessage extends Omit<ThreadReadoutMessage, 'attachments'> { id: string; attachments?: MessageReadoutAttachment[] | null }
+
+/** Plain text of one linked message with the messages around it; the linked one is marked and its files are listed with their addresses. */
+export function formatMessageReadout(args: { chatLabel: string; linkedId: string; messages: MessageReadoutMessage[] }): string {
+  const lines: string[] = [`TD Talk chat: ${args.chatLabel}`, 'The message the link points at is marked ">>>"; the others are context.', '']
+  for (const m of args.messages) {
+    const mark = m.id === args.linkedId ? '>>> ' : '    '
+    const who = m.sender_name || 'Unknown'
+    const when = formatTimestamp(m.created_at)
+    if (m.deleted_at) { lines.push(`${mark}[${when}] ${who}: (message deleted)`); continue }
+    lines.push(`${mark}[${when}] ${who}: ${(m.message ?? '').trim()}`)
+    for (const a of m.attachments ?? []) {
+      lines.push(`${mark}    attachment: ${a.name || 'file'}${a.mime_type ? ` (${a.mime_type})` : ''} — ${a.url ?? 'no address'}`)
+      const text = a.transcript?.english || a.transcript?.text
+      if (text) lines.push(`${mark}    voice note text: ${text}`)
+    }
+  }
+  return lines.join('\n')
+}
+
 function formatTimestamp(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso

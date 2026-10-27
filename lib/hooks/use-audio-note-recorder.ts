@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fragmentedMp4ToFlat } from '@/lib/media/fmp4-to-flat'
+import { stopPlayingAudio } from '@/lib/media/stop-playing-audio'
 
 interface UseAudioNoteRecorderOptions {
   /** Called with the finished recording, ready to attach and send like any other file. */
@@ -71,6 +72,8 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
     if (isRecording || startingRef.current) return
     startingRef.current = true
     try {
+      // a voice note that is playing must stop first: on an iPhone the microphone comes back empty while sound plays
+      stopPlayingAudio()
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
       })

@@ -74,6 +74,8 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQ, setSearchQ] = useState('')
   const [highlightId, setHighlightId] = useState<string | null>(null)
+  // a message link (?message=<id>): once the chat's messages are on screen, scroll to it and flash it — once
+  const pendingJumpRef = useRef<string | null>(typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('message'))
   const messagesRef = useRef<TalkMessage[]>([])
   const [peerTyping, setPeerTyping] = useState<{ userId: string; kind: TypingKind } | null>(null)
   // groups: who is in the open group, how far each member has read, and the New-group / Group-info screens
@@ -343,6 +345,13 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     try { await navigator.clipboard.writeText(m.message); toast.success('Copied') } catch { toast.error('Could not copy.') }
   }, [])
 
+  // "Copy link": opens this chat at this message; a Claude session reads it with the team chat tool
+  const copyLink = useCallback(async (m: TalkMessage) => {
+    setSheetMsg(null)
+    const url = `${window.location.origin}${base}?thread=${encodeURIComponent(selectedIdRef.current ?? '')}&message=${encodeURIComponent(m.id)}`
+    try { await navigator.clipboard.writeText(url); toast.success('Link copied.') } catch { toast.error('Could not copy.') }
+  }, [base])
+
   const edit = useCallback(async (id: string, text: string): Promise<boolean> => {
     if (!text.trim()) { toast.error('A message cannot be empty. Delete it instead.'); return false }
     try {
@@ -380,6 +389,14 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
       setTimeout(() => setHighlightId(cur => cur === id ? null : cur), 1800)
     }, 120)
   }, [])
+
+  useEffect(() => {
+    const id = pendingJumpRef.current
+    if (!id || loadingMsgs || messages.length === 0) return
+    pendingJumpRef.current = null
+    // a chat shows only its newest 500: a link to an older message (or into a chat this person is not in) opens the chat and says so
+    jumpTo(id)
+  }, [messages, loadingMsgs, jumpTo])
 
   // ── groups ──
   const createNewGroup = useCallback(async (name: string, memberIds: string[]) => {
@@ -623,6 +640,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
           onReact={emoji => void react(sheetMsg, emoji)}
           onReply={() => { setMode({ kind: 'reply', message: sheetMsg, who: sheetMsg.sender_id === meId ? 'yourself' : sheetMsg.sender_name }); setSheetMsg(null) }}
           onCopy={() => void copyText(sheetMsg)}
+          onCopyLink={() => void copyLink(sheetMsg)}
           onEdit={() => { setMode({ kind: 'edit', message: sheetMsg }); setSheetMsg(null) }}
           onDelete={() => void remove(sheetMsg)}
         />
