@@ -3,6 +3,9 @@ import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { isSecureAdmin } from "@/lib/auth"
 import { adminMemberContext } from "@/lib/marketing/guard"
+import { loadOwnerHome } from "@/lib/marketing/home-server"
+import { OwnerHomePanels } from "@/components/marketing/owner-home-panels"
+import { makeT } from "@/lib/marketing/i18n"
 import { leadDb } from "@/lib/marketing/meta-leads/service"
 import { ageText } from "@/lib/marketing/master-view"
 import { loadMasterData } from "@/lib/marketing/master-read"
@@ -25,7 +28,8 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
   if (!user || !isSecureAdmin(user)) redirect("/")
   const sp = await searchParams
   // the button into the team's workspace only works once he has joined a team (the Teams page has the button that does it)
-  const joined = (await adminMemberContext({ id: user.id, email: user.email })).ok
+  const member = await adminMemberContext({ id: user.id, email: user.email })
+  const joined = member.ok
 
   const db = leadDb()
   const teams = await listTeams()
@@ -44,6 +48,9 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
   ]
   const connected = connection.every(c => c.ok)
   const lastCheckMs = master?.lastCheckAt ? Date.now() - new Date(master.lastCheckAt).getTime() : null
+  // his own dashboard (messages for him, what waits on Rocco, today's calls) is read only when the team on this page is the one he has joined
+  const tEn = makeT("en")
+  const home = member.ok && team && member.ctx.team.id === team.id ? await loadOwnerHome(member.ctx, new Date(), "Unnamed lead") : null
   const maxFunnel = master ? Math.max(1, ...master.view.funnel.map(f => f.count)) : 1
 
   return (
@@ -96,6 +103,8 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
               </div>
             ))}
           </section>
+
+          {home && <OwnerHomePanels model={home.model} mode="crm" t={tEn} locale="en-US" chatAny={home.chatAny} />}
 
           <div className="grid gap-4 md:grid-cols-[1.2fr_1fr]">
             <section className="rounded-xl border bg-white p-4">
