@@ -52,7 +52,7 @@ const SETTER_COLUMNS: readonly BoardColumn[] = [
 const SELLER_COLUMNS: readonly BoardColumn[] = [
   { key: "booked", label: "Booked calls", stages: ["booked", "showed", "qualified"] },
   { key: "out", label: "Not in target", stages: ["not_in_target"] },
-  { key: "closed", label: "Closed", stages: ["closed"] },
+  { key: "closed", label: "Link sent", stages: ["closed"] },
   { key: "not_closed", label: "Not closed", stages: ["not_closed"] },
   { key: "not_ready", label: "Not ready now", stages: ["not_ready"] },
   { key: "paid", label: "Paid", stages: ["paid_call", "upsell_won"] },

@@ -58,8 +58,8 @@ describe("the seller's results after the call (Rocco, 2026-10-26)", () => {
   it("the history says what happened in plain words, in both languages", () => {
     const stages = settings.stages
     const en = makeT("en"); const it_ = makeT("it")
-    expect(eventText("status_changed", { outcome: "closed", to: "closed" }, stages, [], en, "en-GB")).toBe("Closed")
-    expect(eventText("status_changed", { outcome: "closed", to: "closed" }, stages, [], it_, "it-IT")).toBe("Chiuso")
+    expect(eventText("status_changed", { outcome: "closed", to: "closed" }, stages, [], en, "en-GB")).toBe("Link sent")
+    expect(eventText("status_changed", { outcome: "closed", to: "closed" }, stages, [], it_, "it-IT")).toBe("Link inviato")
     expect(eventText("status_changed", { outcome: "not_closed", to: "not_closed" }, stages, [], it_, "it-IT")).toBe("Non chiuso")
     expect(eventText("status_changed", { outcome: "not_ready", to: "not_ready", callback_at: "2027-01-01T10:00:00Z" }, stages, [], it_, "it-IT")).toMatch(/^Non pronto ora — richiamare il /)
   })
@@ -86,8 +86,8 @@ describe("the seller's tour explains every column", () => {
   it("names the six columns and the four results in English and in Italian", () => {
     const en = resolveTour("seller", perms, "en").find(s => s.screen === "board")
     const it_ = resolveTour("seller", perms, "it").find(s => s.screen === "board")
-    for (const w of ["Booked calls", "Not in target", "Not ready now", "Closed", "Not closed", "Paid"]) expect(en?.body, w).toContain(w)
-    for (const w of ["Chiamate fissate", "Fuori target", "Non pronto ora", "Chiuso", "Non chiuso", "Pagato"]) expect(it_?.body, w).toContain(w)
+    for (const w of ["Booked calls", "Not in target", "Not ready now", "Link sent", "Not closed", "Paid"]) expect(en?.body, w).toContain(w)
+    for (const w of ["Chiamate fissate", "Fuori target", "Non pronto ora", "Link inviato", "Non chiuso", "Pagato"]) expect(it_?.body, w).toContain(w)
   })
 })
 

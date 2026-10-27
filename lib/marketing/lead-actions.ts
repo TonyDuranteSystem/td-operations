@@ -212,7 +212,7 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
       const refused = sellerResultGuard(input.action, lead, s)
       if (refused) return refused
       const target = input.action === "closed" ? sellerOf(s).closed : sellerOf(s).not_closed
-      if (!stageExists(target)) return fail(400, `The stage for "${input.action === "closed" ? "Closed" : "Not closed"}" is not set up. Ask Antonio.`)
+      if (!stageExists(target)) return fail(400, `The stage for "${input.action === "closed" ? "Link sent" : "Not closed"}" is not set up. Ask Antonio.`)
       return { ok: true, change: {
         patch: { status: target, callback_at: null, not_in_target_reason: null },
         event: { kind: "status_changed", data: { from: lead.status, to: target, outcome: input.action, note: input.note ?? null } },

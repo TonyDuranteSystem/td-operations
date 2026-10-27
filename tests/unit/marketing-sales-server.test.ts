@@ -7,7 +7,8 @@ const SETTINGS: Record<string, unknown> = {
   allowed_currencies: ["USD", "EUR"],
   confirm_above_amount: null,
   sale_kind_stages: { strategic_call: "paid_call", upsell: "upsell_won" },
-  pipeline_stages: [{ key: "new" }, { key: "qualified" }, { key: "paid_call" }, { key: "upsell_won" }],
+  seller_result_stages: { not_ready: "not_ready", closed: "closed", not_closed: "not_closed" },
+  pipeline_stages: [{ key: "new" }, { key: "qualified" }, { key: "closed" }, { key: "paid_call" }, { key: "upsell_won" }],
 }
 let TERMS: unknown[] = []
 vi.mock("@/lib/marketing/settings", () => ({
@@ -41,6 +42,14 @@ describe("createSaleLink", () => {
     const row = db.rows("marketing_sales")[0]
     expect(row).toMatchObject({ team_id: TEAM, lead_id: LEAD, amount_cents: 100000, currency: "EUR", status: "link_created", seller_cents: 80000, td_cents: 20000, stripe_session_id: "cs_1", created_by: "rocco@x.com" })
     expect(db.rows("marketing_lead_events")[0]).toMatchObject({ kind: "payment_link_created", lead_id: LEAD })
+  })
+  it("every link moves the lead to Link sent, with a line in the history; a lead that already paid stays Paid", async () => {
+    await createSaleLink(asDb(), ctx, LEAD, { kind: "strategic_call", amount: "1000", currency: "EUR" }, ok)
+    expect(db.rows("marketing_leads")[0].status).toBe("closed")
+    expect(db.rows("marketing_lead_events").find(e => e.kind === "status_changed")).toMatchObject({ data: { from: "qualified", to: "closed", outcome: "link_sent" } })
+    db.rows("marketing_leads")[0].status = "paid_call"
+    await createSaleLink(asDb(), ctx, LEAD, { kind: "upsell", amount: "500", currency: "EUR" }, ok)
+    expect(db.rows("marketing_leads")[0].status).toBe("paid_call")
   })
   it("another team's lead id finds nothing", async () => {
     const r = await createSaleLink(asDb(), { ...ctx, teamId: "99999999-9999-9999-9999-999999999999" }, LEAD, { kind: "strategic_call", amount: "10", currency: "EUR" }, ok)

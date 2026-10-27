@@ -28,7 +28,7 @@ export const MARKETING_SETTING_DEFS = {
       { key: "booked", label: "Booked" },
       { key: "showed", label: "Showed" },
       { key: "not_ready", label: "Not ready now" },
-      { key: "closed", label: "Closed" },
+      { key: "closed", label: "Link sent" },
       { key: "not_closed", label: "Not closed" },
       { key: "paid_call", label: "Paid call" },
       { key: "upsell_won", label: "Upsell won" },
