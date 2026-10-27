@@ -23,6 +23,7 @@ import { ContactLanguageField } from '@/components/portal-chats/contact-language
 import { sortPortalThreads } from '@/lib/portal-chats/sort-threads'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { isChatEventMessage } from '@/lib/portal/chat-scope'
+import { applyLandingToUrl, parseStaffChatTab, parseStaffChatTopic, pickUnreadTopicToOpen } from '@/lib/portal/staff-chat-landing'
 import { subscribeToDashboardPush } from '@/lib/push/dashboard-push'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
@@ -411,7 +412,7 @@ export default function PortalChatsPage() {
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
   // Right-pane sub-tab: Messages | What's New (incoming client-action notes) | To Do (cards)
-  const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'ideas' | 'todo' | 'email' | 'worker'>('messages')
+  const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'ideas' | 'todo' | 'email' | 'worker'>(parseStaffChatTab(urlParams.get('tab')) ?? 'messages')
   // "Select" mode: tick several messages of the open conversation and delete them together (Luca 2026-10-23: six messages, one by one).
   const [selectMode, setSelectMode] = useState(false)
   const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(new Set())
@@ -435,7 +436,11 @@ export default function PortalChatsPage() {
   // the identifiers — the existing effects reload that thread's messages from
   // them, exactly as a deep link does.
   useSelectionHistory(
-    { account: selectedAccountId, contact: selectedContactId, thread: selectedThreadId, view: sidebarView },
+    // `topic: null` is a constant, not state: choosing a conversation always resets the topic to General (or the
+    // unread one), so the entry it pushes must not carry the previous chat's `?topic=` — Next re-asserts the
+    // pushed address a moment later and would put the stale topic back. Topic clicks write the address themselves
+    // (effect below, replace, no Back step).
+    { account: selectedAccountId, contact: selectedContactId, thread: selectedThreadId, view: sidebarView, topic: null },
     (v) => {
       // Bug-hunter review, 2026-09-05 (round 3, before ship): whether this
       // restore is landing on the SAME client conversation must be captured
@@ -555,7 +560,8 @@ export default function PortalChatsPage() {
   const prevTotalUnreadRef = useRef(-1)
   const queryClient = useQueryClient()
   // Topic-as-thread state for admin
-  const [adminActiveTopic, setAdminActiveTopic] = useState<string | null>(null)
+  // Starts from `?topic=` so a refresh keeps the topic tab (2026-10-27).
+  const [adminActiveTopic, setAdminActiveTopic] = useState<string | null>(parseStaffChatTopic(urlParams.get('topic')))
   const [adminCreatingTopic, setAdminCreatingTopic] = useState(false)
   const [adminNewTopicInput, setAdminNewTopicInput] = useState('')
   const { playSound } = useNotificationSound()
@@ -2004,12 +2010,43 @@ export default function PortalChatsPage() {
     },
   })
 
-  // Reset topic when thread changes
+  // Reset topic when thread changes. The very first run (page load / refresh) keeps the
+  // topic restored from `?topic=`; only a REAL change of conversation resets it.
+  const topicConversationRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
+    const key = selectedAccountId ? `a:${selectedAccountId}` : selectedContactId ? `c:${selectedContactId}` : null
+    if (topicConversationRef.current === undefined) { topicConversationRef.current = key; return }
+    if (topicConversationRef.current === key) return
+    topicConversationRef.current = key
     setAdminActiveTopic(null)
     setAdminCreatingTopic(false)
     setAdminNewTopicInput('')
   }, [selectedAccountId, selectedContactId])
+
+  // Open on the topic that has the unread message (2026-10-27, Antonio) instead of always General.
+  // Once per opened conversation, only if nothing else already chose a place: a restored `?topic=`,
+  // a message deep link, or a tab the person already clicked all win.
+  const autoTopicConversationRef = useRef<string | null>(null)
+  useEffect(() => {
+    const key = selectedAccountId ? `a:${selectedAccountId}` : selectedContactId ? `c:${selectedContactId}` : null
+    if (!key) { autoTopicConversationRef.current = null; return }
+    if (autoTopicConversationRef.current === key) return
+    if (messagesLoading || !messages) return
+    autoTopicConversationRef.current = key
+    if (adminActiveTopic !== null || targetMessageId) return
+    const topic = pickUnreadTopicToOpen(messages)
+    if (topic) setAdminActiveTopic(topic)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAccountId, selectedContactId, messages, messagesLoading])
+
+  // Keep the topic and sub-tab in the address bar (replace, never a new Back step) so a refresh
+  // lands in the same place. Defaults are removed, other keys untouched.
+  useEffect(() => {
+    try {
+      const next = applyLandingToUrl(window.location.href, { topic: adminActiveTopic, tab: chatViewMode })
+      if (next !== window.location.href) window.history.replaceState(window.history.state, '', next)
+    } catch { /* History API unavailable — the page still works, a refresh just starts at General */ }
+  }, [adminActiveTopic, chatViewMode, selectedAccountId, selectedContactId])
 
   // Reset the "addressed to" pick when the thread changes — same trigger as
   // topic above. Belt-and-braces alongside the resets in the thread-click
