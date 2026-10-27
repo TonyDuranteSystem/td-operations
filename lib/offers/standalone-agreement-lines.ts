@@ -141,7 +141,7 @@ export function agreementCoverageWarnings(gap: CoverageGap): string[] {
   const h = gap.hiddenBySwitch
   if (h.length > 0) {
     out.push(
-      `${list(h)} ${h.length > 1 ? 'are' : 'is'} on this offer, but the client's contract will show only the main service's agreement, because the switch "Several agreements in one contract" (Dev Tools) is OFF. Turn it on, or sell the extra service in its own offer.`,
+      `${list(h)} ${h.length > 1 ? 'are' : 'is'} on this offer, but the client's contract will show only the main service's agreement, because the switch "Several agreements in one contract" (Dev Tools) is OFF. To give the client a separate agreement for the extra service, sell it in its own offer.`,
     )
   }
   const w = gap.withoutContract

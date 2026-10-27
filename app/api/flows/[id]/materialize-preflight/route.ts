@@ -14,8 +14,12 @@
  * ask ahead. Staff-only (middleware). Mutates nothing.
  *
  * Response: { applicable: false } for non-formation / already-materialized
- * flows, else { applicable: true, ok, failure?, error?, chosen_name?,
- * state_code?, state_source?, entity_code?, entity_source? }.
+ * flows, else { applicable: true, ok, failure, error, needs_state,
+ * needs_entity_type, chosen_name, state_code, state_source, entity_code,
+ * entity_source } — built by buildPreflightResponseBody so the window that
+ * reads it (components/flows/document-upload.tsx) can never lose a field again
+ * (2026-10-27: needs_state / needs_entity_type were missing, so the state
+ * picker never appeared).
  */
 
 export const dynamic = 'force-dynamic'
@@ -25,6 +29,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { preflightFormationMaterialization } from '@/lib/operations/formation-materialize'
 import { filedName, type NameCheck } from '@/lib/flows/name-checks'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { buildPreflightResponseBody } from '@/lib/flows/materialize-preflight-response'
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await requireStaffRoute()
@@ -50,18 +55,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       chosen_name: confirmedName,
     })
 
-    return NextResponse.json({
-      success: true,
-      applicable: true,
-      ok: pre.ok,
-      failure: pre.failure ?? null,
-      error: pre.error ?? null,
-      chosen_name: pre.chosen_name ?? confirmedName ?? null,
-      state_code: pre.state_code ?? null,
-      state_source: pre.state_source ?? null,
-      entity_code: pre.entity_code ?? null,
-      entity_source: pre.entity_source ?? null,
-    })
+    return NextResponse.json(buildPreflightResponseBody(pre, confirmedName))
   } catch (e) {
     return NextResponse.json(
       { success: false, error: e instanceof Error ? e.message : String(e) },
