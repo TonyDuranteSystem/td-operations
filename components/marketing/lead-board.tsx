@@ -67,12 +67,13 @@ export function LeadBoard({ cards, truncated }: { cards: BoardCard[]; truncated:
       {truncated && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{t('Showing the newest 500 leads. Use the Leads page filters to find older ones.')}</p>}
 
       {view === 'pipeline' && (
-        <div className="grid gap-3 overflow-x-auto pb-2" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(${columns.length > 5 ? '11rem' : '15rem'}, 1fr))` }} data-testid="pipeline">
+        // the board is as tall as the screen (the columns scroll inside it), so the sideways scroll bar is always on screen and reachable with a mouse
+        <div className="grid max-h-[calc(100vh-20rem)] min-h-[20rem] gap-3 overflow-auto pb-2" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(${columns.length > 5 ? '11rem' : '15rem'}, 1fr))` }} data-testid="pipeline">
           {columns.map(col => {
             const list = cardsInColumn(role, col.key, cards)
             return (
               <section key={col.key} aria-label={t(col.label)} className="min-w-0 rounded-xl bg-slate-100 p-2" data-column={col.key}>
-                <h2 className="px-1 pb-2 text-xs font-semibold text-slate-600">{columnTitle(col, list.length, t)}</h2>
+                <h2 className="sticky top-0 z-10 -mx-2 -mt-2 rounded-t-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600">{columnTitle(col, list.length, t)}</h2>
                 <div className="space-y-2">{list.length === 0 ? <p className="px-1 py-3 text-xs text-slate-400">{t('Nothing here.')}</p> : list.map(cardButton)}</div>
               </section>
             )
