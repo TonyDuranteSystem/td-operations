@@ -6,7 +6,7 @@
  *
  *   npx tsx scripts/storage-app-release-stage.ts --zip <TDStorage.zip> --version 0.2.4 --build 6 [--notes "text"] [--min-system 13.0] [--site https://crm.tonydurante.us]
  *
- * Token: `op read op://Private/TD Storage release upload/password` (override the item with --token-ref, or set TD_STAGE_TOKEN for a sandbox test).
+ * Token: `op read op://Personal/TD Storage release upload/password` (override the item with --token-ref, or set TD_STAGE_TOKEN for a sandbox test).
  */
 import { execFileSync } from "child_process"
 import { readFileSync, statSync } from "fs"
@@ -34,7 +34,7 @@ async function main() {
   if (!edSignature || length !== statSync(zip).size) throw new Error(`Signing failed: ${out}`)
   if (!verifyUpdateSignature(bytes, edSignature)) throw new Error("The signature does not verify against the CRM's public key — the key in this keychain is not the app's key.")
 
-  const token = process.env.TD_STAGE_TOKEN ?? execFileSync("op", ["read", arg("token-ref") ?? "op://Private/TD Storage release upload/password"], { encoding: "utf8" }).trim()
+  const token = process.env.TD_STAGE_TOKEN ?? execFileSync("op", ["read", arg("token-ref") ?? "op://Personal/TD Storage release upload/password"], { encoding: "utf8" }).trim()
   const prep = await post(site, token, { action: "prepare", version, build, length })
   const { path, token: uploadToken, supabaseUrl, anonKey } = prep as { path: string; token: string; supabaseUrl: string; anonKey: string }
   const up = await createClient(supabaseUrl, anonKey, { auth: { persistSession: false } }).storage.from(RELEASE_BUCKET).uploadToSignedUrl(path, uploadToken, bytes, { contentType: "application/zip" })
