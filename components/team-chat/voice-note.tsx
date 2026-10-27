@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
+import { stopPlayingAudio } from '@/lib/media/stop-playing-audio'
 import { transcriptLines, type VoiceTranscript } from '@/lib/team/voice-text'
 import { useTalkI18n } from '@/components/talk/talk-i18n'
 
@@ -47,7 +48,25 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
     }).then(r => r.json()).then(d => { if (d?.ok && d.flattened_at) setRepairedAt(d.flattened_at as string) }).catch(() => {})
   }, [messageId, index, flat, apiBase])
   // a new address after the repair makes the browser load the corrected file instead of its cached copy
-  const stamp = repairedAt ?? flattenedAt ?? null
+  const latest = repairedAt ?? flattenedAt ?? null
+  // the corrected address is only swapped in while the note is idle: swapping it mid-play (or right as someone taps play)
+  // reloads the whole file, which is the "delay" after the first tap on an older note
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const [stamp, setStamp] = useState<string | null>(flattenedAt ?? null)
+  const [near, setNear] = useState(false)
+  const swapIfIdle = useCallback(() => {
+    const a = audioRef.current
+    if (!a || a.ended || (a.paused && a.currentTime === 0)) setStamp(cur => cur === latest ? cur : latest)
+  }, [latest])
+  useEffect(() => { if (latest !== stamp) swapIfIdle() }, [latest, stamp, swapIfIdle])
+  // start loading the file once the note is on (or near) the screen, so the tap plays at once
+  useEffect(() => {
+    const el = audioRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') { setNear(true); return }
+    const io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { setNear(true); io.disconnect() } }, { rootMargin: '300px' })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [])
   const src = stamp ? `${url}?v=${encodeURIComponent(stamp)}` : url
 
   const show = async () => {
@@ -70,7 +89,10 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
   const muted = tone === 'dark' ? 'text-white/70' : 'text-zinc-500'
   return (
     <div className="flex flex-col gap-1" data-testid="voice-note">
-      <audio key={src} controls preload="metadata" src={src} className="h-10 w-60 max-w-full" onError={onBroken} data-testid="talk-voice-note" />
+      <audio
+        ref={audioRef} controls preload={near ? 'auto' : 'metadata'} src={src} className="h-10 w-60 max-w-full" onError={onBroken}
+        onPlay={e => stopPlayingAudio(e.currentTarget)} onEnded={swapIfIdle} data-testid="talk-voice-note"
+      />
       <button
         type="button"
         onClick={show}

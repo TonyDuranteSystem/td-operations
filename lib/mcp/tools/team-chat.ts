@@ -1,10 +1,22 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { postTeamMessage } from "@/lib/team/post-message"
-import { parseThreadLink, formatThreadReadout } from "@/lib/team/thread-readout"
+import { parseThreadLink, parseMessageLink, formatThreadReadout, formatMessageReadout } from "@/lib/team/thread-readout"
 import { resolveThreadTitle } from "@/lib/team/thread-title"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { listAllAuthUsers } from "@/lib/auth-admin-helpers"
+import { listAllAuthUsers, findAuthUserByEmail } from "@/lib/auth-admin-helpers"
+import { assertThreadAccess } from "@/lib/team/groups"
+import { getMcpAuthContext } from "@/lib/mcp/auth-context"
+
+const PRIVATE_DENIED = "❌ That is a private chat (a direct message or a group) and I could not confirm you are in it, so I will not read it."
+
+/** A group or direct message is private to its people. Reads here use the service role, so check the caller is one of them; an unknown caller is refused (fails closed). Returns a refusal text, or null when allowed. */
+async function refusePrivateChat(threadId: string): Promise<string | null> {
+  const email = getMcpAuthContext()?.email?.trim()
+  const user = email ? await findAuthUserByEmail(email) : null
+  const access = await assertThreadAccess(threadId, user?.id ?? "")
+  return access.allowed ? null : PRIVATE_DENIED
+}
 
 const attachmentSchema = z.object({
   url: z.string().describe("File URL — must already be hosted on our own Storage (e.g. from portal_chat_attach_file). An off-site URL is rejected."),
@@ -77,17 +89,43 @@ ATTACHING A FILE — pass attachments (same shape as portal_chat_send). Every ur
 
 Antonio copies a thread's link via "Copy link" in its ⋯ menu (Team Chat → any channel like td-bug/td-dev → a thread's actions menu) and pastes it here. This tool resolves that link straight to the channel + thread and returns its full content: title, status, assignee, and every message in order — so you don't need him to re-explain a bug or request that's already written up in Team Chat.
 
+It also accepts a TD Talk MESSAGE link (…/td-talk?thread=<id>&message=<id>, from "Copy link" in a message's menu in TD Talk): it returns that message with a few around it, any attached files with their addresses, and voice-note text if one was made.
+
 Give it the ENTIRE pasted link (e.g. https://crm.tonydurante.us/team-chat?thread=<id>&root=<id>) as-is — do not edit or shorten it. READ-ONLY.`,
     {
       link: z.string().describe('The full thread link copied from Team Chat\'s "Copy link" thread action.'),
     },
     async ({ link }) => {
+      const msgLink = parseMessageLink(link)
+      if (msgLink) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const sb = supabaseAdmin as any
+          const { data: chat } = await sb.from("internal_threads").select("id, channel_name, channel_slug, thread_type, title").eq("id", msgLink.threadId).single()
+          const { data: target } = await sb.from("internal_messages").select("id, created_at").eq("id", msgLink.messageId).eq("thread_id", msgLink.threadId).single()
+          if (!chat || !target) return { content: [{ type: "text" as const, text: "❌ That chat or message no longer exists." }] }
+          const refused = await refusePrivateChat(msgLink.threadId)
+          if (refused) return { content: [{ type: "text" as const, text: refused }] }
+          const cols = "id, message, sender_name, created_at, deleted_at, attachments"
+          const [{ data: before }, { data: after }] = await Promise.all([
+            sb.from("internal_messages").select(cols).eq("thread_id", msgLink.threadId).lte("created_at", target.created_at).order("created_at", { ascending: false }).limit(6),
+            sb.from("internal_messages").select(cols).eq("thread_id", msgLink.threadId).gt("created_at", target.created_at).order("created_at", { ascending: true }).limit(3),
+          ])
+          const messages = [...((before ?? []) as any[]).reverse(), ...((after ?? []) as any[])] // eslint-disable-line @typescript-eslint/no-explicit-any
+          const chatLabel = chat.thread_type === "dm" ? "direct message" : chat.channel_slug || chat.channel_name || chat.title || chat.thread_type
+          return { content: [{ type: "text" as const, text: formatMessageReadout({ chatLabel, linkedId: msgLink.messageId, messages }) }] }
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: `❌ Could not read that message: ${e instanceof Error ? e.message : String(e)}` }] }
+        }
+      }
       const parsed = parseThreadLink(link)
       if ("error" in parsed) {
         return { content: [{ type: "text" as const, text: `❌ ${parsed.error}` }] }
       }
       const { channelId, rootId } = parsed
       try {
+        const refused = await refusePrivateChat(channelId)
+        if (refused) return { content: [{ type: "text" as const, text: refused }] }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { data: channel } = await (supabaseAdmin as any)
           .from("internal_threads")

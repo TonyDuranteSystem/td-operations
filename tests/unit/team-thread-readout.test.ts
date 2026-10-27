@@ -111,3 +111,33 @@ describe('formatThreadReadout', () => {
     expect(text).toContain('Unknown: hi')
   })
 })
+
+describe('message links (TD Talk)', () => {
+  const T = '11111111-1111-4111-8111-111111111111'
+  const M = '22222222-2222-4222-8222-222222222222'
+  it('parses a message link', async () => {
+    const { parseMessageLink } = await import('@/lib/team/thread-readout')
+    expect(parseMessageLink(`https://crm.tonydurante.us/td-talk?thread=${T}&message=${M}`)).toEqual({ threadId: T, messageId: M })
+  })
+  it('refuses links without a message or with bad ids', async () => {
+    const { parseMessageLink } = await import('@/lib/team/thread-readout')
+    expect(parseMessageLink(`/td-talk?thread=${T}`)).toBeNull()
+    expect(parseMessageLink(`/td-talk?thread=x&message=${M}`)).toBeNull()
+    expect(parseMessageLink('')).toBeNull()
+  })
+  it('marks the linked message, lists files and voice text, hides deleted bodies', async () => {
+    const { formatMessageReadout } = await import('@/lib/team/thread-readout')
+    const out = formatMessageReadout({
+      chatLabel: 'direct message', linkedId: M,
+      messages: [
+        { id: 'a', sender_name: 'Luca', created_at: '2026-10-27T10:00:00Z', message: 'secretbody', deleted_at: '2026-10-27T11:00:00Z' },
+        { id: M, sender_name: 'Antonio', created_at: '2026-10-27T10:01:00Z', message: 'see this', attachments: [{ name: 'shot.png', url: 'https://x/shot.png', mime_type: 'image/png' }, { name: 'v.m4a', url: 'https://x/v.m4a', transcript: { text: 'ciao', english: 'hello' } }] },
+      ],
+    })
+    expect(out).toContain('(message deleted)')
+    expect(out).not.toContain('secretbody')
+    expect(out).toContain('>>> [2026-10-27 10:01] Antonio: see this')
+    expect(out).toContain('https://x/shot.png')
+    expect(out).toContain('voice note text: hello')
+  })
+})

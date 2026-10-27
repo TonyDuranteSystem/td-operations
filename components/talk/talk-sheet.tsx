@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Copy, CornerUpLeft, Pencil, Trash2 } from 'lucide-react'
+import { Copy, CornerUpLeft, Link2, Pencil, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTalkI18n } from '@/components/talk/talk-i18n'
 import { REACTION_EMOJIS, canDelete, canEdit, reactionSummary, snippet, type TalkMessage } from '@/lib/talk/chat-model'
@@ -11,7 +11,7 @@ import { REACTION_EMOJIS, canDelete, canEdit, reactionSummary, snippet, type Tal
  * (the last two only on my own messages). Delete asks once more. It is a bottom sheet so it is easy to reach with a thumb.
  */
 export function TalkMessageSheet({
-  message, meId, onClose, onReact, onReply, onCopy, onEdit, onDelete,
+  message, meId, onClose, onReact, onReply, onCopy, onCopyLink, onEdit, onDelete,
 }: {
   message: TalkMessage
   meId: string
@@ -19,6 +19,8 @@ export function TalkMessageSheet({
   onReact: (emoji: string) => void
   onReply: () => void
   onCopy: () => void
+  /** Only TD Talk / Team Chat pass this: a Claude session can read those links. */
+  onCopyLink?: () => void
   onEdit: () => void
   onDelete: () => void
 }) {
@@ -70,6 +72,7 @@ export function TalkMessageSheet({
             )}
             {!message.deleted_at && <Row icon={<CornerUpLeft className="h-5 w-5" />} label={t('Reply')} onClick={onReply} testId="talk-act-reply" />}
             {hasText && !message.deleted_at && <Row icon={<Copy className="h-5 w-5" />} label={t('Copy text')} onClick={onCopy} testId="talk-act-copy" />}
+            {onCopyLink && !message.deleted_at && <Row icon={<Link2 className="h-5 w-5" />} label={t('Copy link')} onClick={onCopyLink} testId="talk-act-copy-link" />}
             {canEdit(message, meId) && <Row icon={<Pencil className="h-5 w-5" />} label={t('Edit')} onClick={onEdit} testId="talk-act-edit" />}
             {canDelete(message, meId) && <Row icon={<Trash2 className="h-5 w-5" />} label={t('Delete')} onClick={() => setConfirming(true)} danger testId="talk-act-delete" />}
           </>
