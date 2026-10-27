@@ -131,10 +131,15 @@ export async function loadChat(ctx: MarketingContext, leadId: string, markRead: 
   const me = ctx.user.id
   // the ticks wait for the people who work the leads (the setter, the seller), not for the ad person who only watches
   // (a paused person is not waited for: his ticks would never turn blue)
-  const memberIds = members.filter(m => m.status === "active" && isInvolved(m.permissions)).map(m => m.id).filter(id => id !== me)
+  // (nor is a setter: she does not see Antonio's and Rocco's messages, so her read marker would never pass them)
+  const memberIds = members.filter(m => m.status === "active" && isInvolved(m.permissions) && !isSetterOnly(m.permissions)).map(m => m.id).filter(id => id !== me)
+  const shown = await shape(rows, (reacts ?? []) as ChatReaction[])
+  // a setter is never handed the id of a message she may not see (a quote-reply to one)
+  const shownIds = new Set(rows.map(r => r.id))
+  const messages = isSetterOnly(ctx.permissions) ? shown.map(m => (m.reply_to_id && !shownIds.has(m.reply_to_id) ? { ...m, reply_to_id: null } : m)) : shown
   return {
     me,
-    messages: await shape(rows, (reacts ?? []) as ChatReaction[]),
+    messages,
     members: members.filter(m => m.status === "active" && isInvolved(m.permissions)).map(m => ({ id: m.id, name: m.name })),
     // the ticks: how far every OTHER person who can chat has read / received it
     member_ids: memberIds,
@@ -204,8 +209,14 @@ export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body
 
 async function messageInTeam(ctx: MarketingContext, id: string): Promise<(ChatMessageRow & { lead_id: string }) | null> {
   if (!isUuid(id)) return null
-  const { data } = await db().from("marketing_lead_messages").select(`${MESSAGE_COLS}, lead_id`).eq("id", id).eq("team_id", ctx.team.id).maybeSingle()
-  return (data as (ChatMessageRow & { lead_id: string }) | null) ?? null
+  const restricted = isSetterOnly(ctx.permissions)
+  const run = (cols: string) => db().from("marketing_lead_messages").select(cols).eq("id", id).eq("team_id", ctx.team.id).maybeSingle()
+  let res = await run(restricted ? `${MESSAGE_COLS}, lead_id, mentions` : `${MESSAGE_COLS}, lead_id`)
+  if (restricted && res.error?.code === "42703") res = await run(`${MESSAGE_COLS}, lead_id`)
+  const m = (res.data as unknown as (ChatMessageRow & { lead_id: string; mentions?: string[] | null }) | null) ?? null
+  // a message a setter may not see does not exist for her: no edit, delete, reaction or transcript
+  if (m && restricted && !visibleToSetter(m, ctx.user.id, await setterIdsOf(ctx.team.id))) return null
+  return m
 }
 
 export async function editChatMessage(ctx: MarketingContext, id: string, text: unknown): Promise<{ ok: true; message: { message: string; edited_at: string } } | { ok: false; error: string; status: number }> {
@@ -218,7 +229,7 @@ export async function editChatMessage(ctx: MarketingContext, id: string, text: u
   const edited_at = new Date().toISOString()
   const { error } = await db().from("marketing_lead_messages").update({ message: c.message, edited_at, original_message: m.message }).eq("id", id).is("deleted_at", null)
   if (error) return { ok: false, error: "Could not edit the message.", status: 500 }
-  if (c.message.includes("@")) await remention(ctx, m, c.message)
+  if (c.message.includes("@") || m.message.includes("@")) await remention(ctx, m, c.message)
   return { ok: true, message: { message: c.message, edited_at } }
 }
 
@@ -227,10 +238,10 @@ async function remention(ctx: MarketingContext, m: ChatMessageRow & { lead_id: s
   try {
     const members = await chatMembers(ctx.team.id)
     const now = parseMentions(text, members.filter(x => isInvolved(x.permissions)).map(x => ({ id: x.id, name: x.name })), ctx.user.id)
-    if (now.length === 0) return
     const { data: before, error: readErr } = await db().from("marketing_lead_messages").select("mentions, lead_id").eq("id", m.id).maybeSingle()
     if (readErr) return
     const was = ((before?.mentions ?? []) as string[])
+    if (now.length === 0 && was.length === 0) return
     const { error } = await db().from("marketing_lead_messages").update({ mentions: now }).eq("id", m.id)
     if (error) return
     const to = pushRecipients(members.map(x => ({ user_id: x.id, status: x.status, permissions: x.permissions })), ctx.user.id, now).filter(id => now.includes(id) && !was.includes(id))

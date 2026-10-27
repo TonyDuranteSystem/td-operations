@@ -18,8 +18,8 @@ const rocco: Actor = { id: "r", email: "rocco@x.com", role: "member" }
 const lead = (status: string, extra: Record<string, unknown> = {}) => ({ claimed_by: null, status, ...extra })
 
 describe("the seller's results after the call (Rocco, 2026-10-26)", () => {
-  it("are marks (need the 'mark' right) and validate their shape", () => {
-    for (const a of ["not_ready", "closed", "not_closed"] as const) expect(permissionFor(a)).toBe("leads.mark")
+  it("are the seller's marks (they need the seller's right to pick leads: a setter has 'mark' but not 'pick') and validate their shape", () => {
+    for (const a of ["not_ready", "closed", "not_closed"] as const) expect(permissionFor(a)).toBe("leads.pick")
     expect(leadActionSchema.safeParse({ action: "closed" }).success).toBe(true)
     expect(leadActionSchema.safeParse({ action: "not_closed", note: "price" }).success).toBe(true)
     expect(leadActionSchema.safeParse({ action: "not_ready" }).success).toBe(false) // a day to come back is required

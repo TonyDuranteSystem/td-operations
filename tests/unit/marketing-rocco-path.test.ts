@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { planLeadAction, leadActionSchema, hasPaidOrLater, sellerOf, type ActionSettings, type Actor } from "@/lib/marketing/lead-actions"
+import { planLeadAction, leadActionSchema, hasPaidOrLater, onSellerSide, permissionFor, sellerOf, type ActionSettings, type Actor } from "@/lib/marketing/lead-actions"
 import { columnOfCard, columnsFor, type BoardCard } from "@/lib/marketing/board"
 import { isSetterOnly, visibleToSetter, pushRecipients } from "@/lib/marketing/lead-chat"
 import { MARKETING_SETTING_DEFS } from "@/lib/marketing/settings-schema"
@@ -32,9 +32,17 @@ describe("Rocco's path: the stages exist and are in the order of the path", () =
     const s = sellerOf({ sellerStages: { not_ready: "nr", closed: "c", not_closed: "nc" } })
     expect(s).toMatchObject({ not_ready: "nr", contacted: "seller_contacted", booking_link: "booking_link", upsell: "upsell", waiting: "waiting", archived: "archived" })
   })
-  it("paid, or past paying, is one idea: Paid, Booking link sent, Upsell, Waiting, Archived (and the paid stages of the sale kinds)", () => {
-    for (const k of ["paid_call", "upsell_won", "booking_link", "upsell", "waiting", "archived"]) expect(hasPaidOrLater(k, settings)).toBe(true)
-    for (const k of ["new", "qualified", "booked", "seller_contacted", "closed", "not_ready", "not_in_target"]) expect(hasPaidOrLater(k, settings)).toBe(false)
+  it("paid, or past paying, is one idea: Paid, Booking link sent, Upsell, Waiting (and the paid stages of the sale kinds); Archived is not: a lead archived without paying can be worked again", () => {
+    for (const k of ["paid_call", "upsell_won", "booking_link", "upsell", "waiting"]) expect(hasPaidOrLater(k, settings)).toBe(true)
+    for (const k of ["new", "qualified", "booked", "seller_contacted", "closed", "not_ready", "not_in_target", "archived"]) expect(hasPaidOrLater(k, settings)).toBe(false)
+  })
+  it("Rocco's side of the road is every stage from Contacted on, archived included; the setter's own stages are not", () => {
+    for (const k of ["seller_contacted", "closed", "not_ready", "not_closed", "paid_call", "booking_link", "upsell", "waiting", "archived"]) expect(onSellerSide(k, settings), k).toBe(true)
+    for (const k of ["new", "contacted", "qualified", "booked", "showed", "not_in_target"]) expect(onSellerSide(k, settings), k).toBe(false)
+  })
+  it("the seller's buttons need the seller's right (leads.pick), the setter's keep leads.mark", () => {
+    for (const a of ["contacted", "booking_link", "upsell", "waiting", "archive", "not_ready", "closed", "not_closed"] as const) expect(permissionFor(a), a).toBe("leads.pick")
+    for (const a of ["good", "call_back", "not_in_target", "note", "whatsapp", "appointment", "handover"] as const) expect(permissionFor(a), a).toBe("leads.mark")
   })
 })
 
@@ -50,6 +58,9 @@ describe("Contacted", () => {
     expect(plan({ action: "contacted" }, "booking_link")).toMatchObject({ ok: false, status: 409 })
     expect(plan({ action: "contacted" }, "not_in_target")).toMatchObject({ ok: false, status: 409 })
   })
+  it("a lead archived without paying can be worked again (it is not a dead end)", () => {
+    expect(plan({ action: "contacted" }, "archived")).toMatchObject({ ok: true, change: { patch: { status: "seller_contacted" } } })
+  })
   it("a lead that was Not ready now can be contacted again", () => {
     expect(plan({ action: "contacted" }, "not_ready")).toMatchObject({ ok: true, change: { patch: { status: "seller_contacted", callback_at: null } } })
   })
@@ -60,7 +71,7 @@ describe("the booking link", () => {
   it("only after the lead has paid", () => {
     expect(plan({ action: "booking_link", url, via: "whatsapp" }, "closed")).toMatchObject({ ok: false, status: 409 })
     expect(plan({ action: "booking_link", url, via: "whatsapp" }, "booked")).toMatchObject({ ok: false, status: 409 })
-    expect(plan({ action: "booking_link", url, via: "email" }, "archived")).toMatchObject({ ok: false, status: 409 })
+    expect(plan({ action: "booking_link", url, via: "email" }, "archived")).toMatchObject({ ok: false, status: 409 }) // archived without paying: no booking link either
   })
   it("a lead that has just paid moves to Booking link sent; the link and how it was sent are in the history", () => {
     const p = plan({ action: "booking_link", url, via: "email" }, "paid_call")
@@ -73,7 +84,7 @@ describe("the booking link", () => {
     expect(p.ok && p.change.event).toMatchObject({ kind: "booking_link", data: { to: "upsell" } })
   })
   it("the link must be a real https address", () => {
-    for (const bad of ["calendly.com/x", "http://calendly.com/x", "javascript:alert(1)", "https://", "https://nodot", "https://a b.com/x"]) {
+    for (const bad of ["calendly.com/x", "http://calendly.com/x", "javascript:alert(1)", "https://", "https://nodot", "https://a b.com/x", "https://calendly.com/x y", "https://calendly.com/x\nhttps://evil.example"]) {
       expect(leadActionSchema.safeParse({ action: "booking_link", url: bad }).success, bad).toBe(false)
     }
     expect(leadActionSchema.safeParse({ action: "booking_link", url }).success).toBe(true)
@@ -95,6 +106,14 @@ describe("Upsell, Waiting, Archive", () => {
   it("a stage that is not set up is refused in plain words", () => {
     const bare = { ...settings, stages: stages.filter(s => s.key !== "upsell") }
     expect(planLeadAction({ action: "upsell" }, at("booking_link"), rocco, bare, NOW)).toMatchObject({ ok: false, status: 400 })
+  })
+  it("a setter's Good and Call back later never pull back a lead that has moved on to Rocco", () => {
+    for (const status of ["seller_contacted", "closed", "paid_call", "booking_link", "upsell", "waiting", "archived"]) {
+      expect(plan({ action: "good", ticked: [] }, status), status).toMatchObject({ ok: false, status: 409 })
+      expect(plan({ action: "call_back", callbackAt: "2026-10-28T10:00:00Z" }, status), status).toMatchObject({ ok: false, status: 409 })
+    }
+    expect(plan({ action: "good", ticked: [] }, "contacted")).toMatchObject({ ok: true })
+    expect(plan({ action: "call_back", callbackAt: "2026-10-28T10:00:00Z" }, "booked")).toMatchObject({ ok: true })
   })
   it("after the consultation Not in target is still possible", () => {
     expect(plan({ action: "not_in_target", reason: "other" }, "booking_link")).toMatchObject({ ok: true, change: { patch: { status: "not_in_target" } } })

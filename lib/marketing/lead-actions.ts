@@ -34,7 +34,7 @@ export const leadActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("not_closed"), note: note.optional() }),
   // Rocco's path after the handover (27 Oct 2026): he has reached the lead; after the lead PAID he sends his booking (Calendly) link; after the consultation: upsell, waiting, or archive
   z.object({ action: z.literal("contacted"), note: note.optional() }),
-  z.object({ action: z.literal("booking_link"), url: z.string().trim().max(500).refine(u => /^https:\/\/[^\s/]+\.[^\s/]+/i.test(u), "Use a link that starts with https://"), via: z.enum(["whatsapp", "email", "copied"]).default("whatsapp"), note: note.optional() }),
+  z.object({ action: z.literal("booking_link"), url: z.string().trim().max(500).refine(u => /^https:\/\/[^\s/]+\.[^\s/]+\S*$/i.test(u), "Use a link that starts with https://"), via: z.enum(["whatsapp", "email", "copied"]).default("whatsapp"), note: note.optional() }),
   z.object({ action: z.literal("upsell"), note: note.optional() }),
   z.object({ action: z.literal("waiting"), note: note.optional() }),
   z.object({ action: z.literal("archive"), note: note.optional() }),
@@ -52,8 +52,10 @@ export type LeadActionInput = z.infer<typeof leadActionSchema>
 
 /** The permission each action needs. */
 export function permissionFor(a: LeadActionInput["action"]): MarketingPermission {
-  return a === "claim" || a === "release" ? "leads.pick" : "leads.mark"
+  // the seller's own buttons need the seller's right to pick leads (a setter has leads.mark but not leads.pick): the screen hides them from her, and the server refuses them too
+  return a === "claim" || a === "release" || SELLER_ONLY_ACTIONS.has(a) ? "leads.pick" : "leads.mark"
 }
+const SELLER_ONLY_ACTIONS: ReadonlySet<string> = new Set(["not_ready", "closed", "not_closed", "contacted", "booking_link", "upsell", "waiting", "archive"])
 
 /** `callback_at` and `appointment_at` (the booked call that still stands) are only given when moving a call needs them. */
 export interface LeadFacts { claimed_by: string | null; status: string; callback_at?: string | null; appointment_at?: string | null }
@@ -76,9 +78,11 @@ const SELLER_DEFAULTS: Required<SellerResultStages> = { not_ready: "not_ready", 
 /** Where each seller result puts a lead: the team's setting, with the built-in key for any result a stored setting does not have yet. */
 export type StageFacts = Pick<ActionSettings, "sellerStages" | "paidStages">
 export const sellerOf = (s: StageFacts): Required<SellerResultStages> => ({ ...SELLER_DEFAULTS, ...(s.sellerStages ?? {}) })
-/** The stages a lead is in once it has PAID (the booking link, the upsell, waiting, archived follow): no payment link, no "link sent" and no "contacted" pulls it back. */
-const afterPaymentStages = (s: StageFacts): string[] => [...(s.paidStages ?? ["paid_call", "upsell_won"]), sellerOf(s).booking_link, sellerOf(s).upsell, sellerOf(s).waiting, sellerOf(s).archived]
+/** The stages a lead is in once it has PAID (the booking link, the upsell and waiting follow): no payment link, no "link sent" and no "contacted" pulls it back. Archived is NOT one of them: a lead archived without paying can be worked again. */
+const afterPaymentStages = (s: StageFacts): string[] => [...(s.paidStages ?? ["paid_call", "upsell_won"]), sellerOf(s).booking_link, sellerOf(s).upsell, sellerOf(s).waiting]
 export const hasPaidOrLater = (status: string, s: StageFacts): boolean => afterPaymentStages(s).includes(status)
+/** Every stage on Rocco's side of the road (contacted, link sent, not ready, not closed, the paid ones, archived): the setter's Good / Call back later do not pull such a lead back to hers. */
+export const onSellerSide = (status: string, s: StageFacts): boolean => [sellerOf(s).contacted, sellerOf(s).closed, sellerOf(s).not_ready, sellerOf(s).not_closed, sellerOf(s).archived, ...afterPaymentStages(s)].includes(status)
 const keyIndex = (stages: readonly Option[], k: string) => stages.findIndex(x => x.key === k)
 
 /** "Contacted" has one meaning: the FIRST reach-out moves a brand-new lead out of the first stage (to the stage the team uses for "contacted"); a lead already further along is left where it is. */
@@ -137,6 +141,7 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
       return { ok: true, change: { patch: {}, event: { kind: "note", data: { text: input.note } } } }
 
     case "good": {
+      if (onSellerSide(lead.status, s)) return fail(409, "This lead has already moved on to Rocco, so nothing is changed.")
       const unknown = input.ticked.filter(t => !s.checklist.includes(t))
       if (unknown.length) return fail(400, "That checklist item does not exist any more. Reload the page.")
       const target = s.outcomeStages.good
@@ -246,7 +251,7 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
 
     case "booking_link": {
       // only after the lead has PAID: the link is what Rocco sends once the payment is in
-      if (!hasPaidOrLater(lead.status, s) || lead.status === sellerOf(s).archived) return fail(409, "Send the booking link after the lead has paid.")
+      if (!hasPaidOrLater(lead.status, s)) return fail(409, "Send the booking link after the lead has paid.")
       const target = sellerOf(s).booking_link
       // a lead that has just paid moves to "Booking link sent"; one that is already further along (upsell, waiting) stays where it is, the link is only written in the history
       const moves = (s.paidStages ?? ["paid_call", "upsell_won"]).includes(lead.status) && stageExists(target)
@@ -273,6 +278,7 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
 
     case "not_ready":
     case "call_back": {
+      if (input.action === "call_back" && onSellerSide(lead.status, s)) return fail(409, "This lead has already moved on to Rocco, so nothing is changed.")
       if (input.action === "not_ready") { const refused = sellerResultGuard("not_ready", lead, s); if (refused) return refused }
       const at = new Date(input.callbackAt)
       if (Number.isNaN(at.getTime())) return fail(400, "Pick a valid day and time.")

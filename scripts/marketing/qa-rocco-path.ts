@@ -105,7 +105,8 @@ async function main() {
     await p.screenshot({ path: `${SHOTS}/rocco-interested-buttons.png` })
     await p.click('[data-testid="result-contacted"]')
     await p.getByRole("button", { name: "Save" }).click()
-    await p.waitForTimeout(1500)
+    // a freshly started dev server compiles the action route on the first press: wait for the stage instead of a fixed pause
+    for (let k = 0; k < 40 && (await stageOf(LA)) !== "seller_contacted"; k++) await p.waitForTimeout(500)
     ck("R5 Contacted moves the lead to Contacted", (await stageOf(LA)) === "seller_contacted", await stageOf(LA))
     ck("R6 the history says Contacted", (await p.locator("ol").innerText()).includes("Contacted"))
     const again = await p.evaluate(async id => (await fetch(`/api/marketing/leads/${id}/action`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "contacted" }) })).status, LA)
@@ -155,11 +156,12 @@ async function main() {
     await p.click('[data-testid="result-archive"]'); await p.getByRole("button", { name: "Save" }).click(); await p.waitForTimeout(1500)
     ck("R22 Archive closes it", (await stageOf(LB)) === "archived", await stageOf(LB))
     await p.waitForTimeout(500)
-    ck("R23 an archived lead offers no more result buttons and no booking box", (await buttons()).filter(b => ["Upsell", "Waiting", "Archive", "Contacted"].includes(b)).length === 0 && (await p.locator('[data-testid="booking-link-panel"]').count()) === 0)
+    const b4 = await buttons()
+    ck("R23 an archived lead offers Contacted and Not ready now again (not a dead end) but no Archive, Upsell, Waiting and no booking box", ["Contacted", "Not ready now"].every(b => (b4 ?? []).includes(b)) && (b4 ?? []).filter(b => ["Upsell", "Waiting", "Archive"].includes(b)).length === 0 && (await p.locator('[data-testid="booking-link-panel"]').count()) === 0, b4)
 
     // a payment link never pulls a lead that is past paying back to Link sent (planner level, through the server)
     const noPull = await p.evaluate(async id => (await fetch(`/api/marketing/leads/${id}/action`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "contacted" }) })).status, LB)
-    ck("R24 'Contacted' on an archived lead is refused", noPull === 409, noPull)
+    ck("R24 'Contacted' on an archived lead works (it comes back to Contacted)", noPull === 200 && (await stageOf(LB)) === "seller_contacted", { noPull, now: await stageOf(LB) })
 
     // Link sent -> not ready now / not in target are still ways out
     await db.query("update marketing_leads set status='closed' where id=$1", [LC])
@@ -247,6 +249,9 @@ async function main() {
     await s.goto(`${BASE}/marketing/chat`, { waitUntil: "networkidle", timeout: 180000 })
     const chatText = await s.locator("body").innerText()
     ck("S14 the setter's Chat page shows her lead and not Antonio's", /Chats about leads|lead/i.test(chatText) && !/call this one today/.test(chatText), chatText.slice(0, 300))
+    const act = async (id: string, body: Record<string, unknown>) => s.evaluate(async a => (await fetch(`/api/marketing/leads/${a.id}/action`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(a.body) })).status, { id, body })
+    ck("S15 a setter cannot press the seller's buttons through the API (Archive, Contacted, Upsell, booking link are refused)", [await act(LC, { action: "archive" }), await act(LC, { action: "contacted" }), await act(LC, { action: "upsell" }), await act(LC, { action: "booking_link", url: "https://calendly.com/x", via: "email" })].every(c => c === 403))
+    ck("S16 a setter's Good on a lead that has moved on to Rocco is refused", (await act(LA, { action: "good", ticked: [] })) === 409)
     await s.screenshot({ path: `${SHOTS}/setter-chat.png` })
   } finally {
     await db.query("delete from marketing_settings where team_id=$1 and key='inbox_mailboxes'", [team])

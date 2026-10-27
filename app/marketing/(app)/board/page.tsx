@@ -12,6 +12,7 @@ import { loadLeadActivity } from '@/lib/marketing/note-read'
 import { contactChips, EMPTY_CONTACT } from '@/lib/marketing/contact-state'
 import type { BoardCard } from '@/lib/marketing/board'
 import type { SellerResultStages } from '@/lib/marketing/settings-schema'
+import { sellerOf } from '@/lib/marketing/lead-actions'
 import { LeadBoard } from '@/components/marketing/lead-board'
 import { unreadDetailByLead } from '@/lib/marketing/lead-chat-server'
 
@@ -38,7 +39,7 @@ export default async function MarketingBoard() {
   const paidStages = Object.values((await getMarketingSetting('sale_kind_stages', teamId)) as Record<string, string>)
   const res = await listTeamLeadsCapped(db, teamId, 500, { order: 'newest' })
   // the seller's results can sit for months (a lead "not ready now" until next spring): they must not fall off the newest-500 window, so each is also read on its own
-  const longLivedStages = Array.from(new Set([...Object.values(sellerStages).filter((v): v is string => typeof v === 'string'), ...paidStages]))
+  const longLivedStages = Array.from(new Set([...Object.values(sellerOf({ sellerStages })), ...paidStages]))
   const longLived = await Promise.all(longLivedStages.map(stage => listTeamLeadsCapped(db, teamId, 500, { stage, order: 'newest' })))
   const seenIds = new Set(res.rows.map(r => r.id))
   const extra = longLived.flatMap(r => r.rows).filter(r => !seenIds.has(r.id) && seenIds.add(r.id))

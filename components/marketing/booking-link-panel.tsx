@@ -8,7 +8,7 @@ import { useT } from '@/components/marketing/lang-provider'
 
 const REMEMBER_KEY = 'tdm_booking_link'
 const btn = 'rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50'
-const isHttps = (u: string) => /^https:\/\/[^\s/]+\.[^\s/]+/i.test(u.trim())
+const isHttps = (u: string) => /^https:\/\/[^\s/]+\.[^\s/]+\S*$/i.test(u.trim())
 const firstName = (full: string | null) => (full ?? '').trim().split(/\s+/)[0] ?? ''
 
 interface Props {
@@ -38,6 +38,8 @@ export function BookingLinkPanel({ leadId, leadName, phone, email, lastLink, can
   const [error, setError] = useState<string | null>(null)
   const [asking, setAsking] = useState(false)
   const [done, setDone] = useState<string | null>(null)
+  // the email went out but the note on the lead failed: the next press only records it, it never sends a second email
+  const [emailed, setEmailed] = useState<string | null>(null)
 
   useEffect(() => {
     if (lastLink) return
@@ -74,14 +76,17 @@ export function BookingLinkPanel({ leadId, leadName, phone, email, lastLink, can
     if (!email) return
     setBusy(true); setError(null)
     try {
-      const boxes = await fetch('/api/marketing/inbox/mailboxes').then(r => (r.ok ? r.json() : null)).catch(() => null)
-      const address = (boxes?.mailboxes as Array<{ address: string }> | undefined)?.[0]?.address
-      if (!address) throw new Error(t('No mailbox is set up for you yet. Antonio adds one in CRM > Marketing > Settings.'))
-      const res = await fetch('/api/marketing/inbox/send', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address, mode: 'new', to: email, subject: t('Book your consultation'), message, sendKey: `booking-${leadId}-${Date.now()}` }),
-      })
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error ? t(d.error) : t('The email could not be sent. Nothing was sent; try again.')) }
+      if (emailed !== url.trim()) {
+        const boxes = await fetch('/api/marketing/inbox/mailboxes').then(r => (r.ok ? r.json() : null)).catch(() => null)
+        const address = (boxes?.mailboxes as Array<{ address: string }> | undefined)?.[0]?.address
+        if (!address) throw new Error(t('No mailbox is set up for you yet. Antonio adds one in CRM > Marketing > Settings.'))
+        const res = await fetch('/api/marketing/inbox/send', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address, mode: 'new', to: email, subject: t('Book your consultation'), message, sendKey: `booking-${leadId}-${Date.now()}` }),
+        })
+        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error ? t(d.error) : t('The email could not be sent. Nothing was sent; try again.')) }
+        setEmailed(url.trim())
+      }
       setBusy(false)
       if (await record('email')) setDone(t('Email sent. The lead is now under "Booking link sent".'))
     } catch (e) {
