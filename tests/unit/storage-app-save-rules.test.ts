@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { checkDestination, checkNewFile, cleanFileName, isJunkName, isItemKey, saveCallerKey, isClientOwnerKind, MAX_SAVE_BYTES } from "@/lib/storage-app/save-rules"
+import { checkDestination, checkNewFile, cleanFileName, isJunkName, isItemKey, saveCallerKey, isClientOwnerKind, MAX_SAVE_BYTES, MAX_UPDATE_BYTES } from "@/lib/storage-app/save-rules"
 import { defaultSettings, type ClientSaves } from "@/lib/storage-app/settings"
 
 const ON: ClientSaves = { owners: "all", ownerKinds: ["company", "person"], folderKinds: ["custom", "correspondence"] }
@@ -57,7 +57,14 @@ describe("what a Mac may save", () => {
     expect(cleanFileName("")).toBeNull(); expect(cleanFileName("..")).toBeNull(); expect(cleanFileName(5)).toBeNull()
     expect(cleanFileName("x".repeat(256))).toBeNull()
   })
-  it("size is required and capped at 150 MB", () => {
+  it("a new file may be up to 2 GB, a new version of a saved file only 150 MB", () => {
+    expect(MAX_SAVE_BYTES).toBe(2048 * 1024 * 1024)
+    expect(MAX_UPDATE_BYTES).toBe(150 * 1024 * 1024)
+    expect(checkNewFile({ name: "zoom.mp4", size: 795 * 1024 * 1024 }).ok).toBe(true)
+    expect(checkNewFile({ name: "zoom.mp4", size: MAX_SAVE_BYTES }).ok).toBe(true)
+    expect(checkNewFile({ name: "zoom.mp4", size: 151 * 1024 * 1024 }, MAX_UPDATE_BYTES)).toMatchObject({ ok: false, code: "too_big" })
+  })
+  it("size is required and capped at the biggest allowed file", () => {
     expect(checkNewFile({ name: "a.pdf", size: 10 }).ok).toBe(true)
     expect(checkNewFile({ name: "a.pdf", size: 0 }).ok).toBe(true)
     expect(checkNewFile({ name: "a.pdf", size: MAX_SAVE_BYTES + 1 })).toMatchObject({ ok: false, code: "too_big" })

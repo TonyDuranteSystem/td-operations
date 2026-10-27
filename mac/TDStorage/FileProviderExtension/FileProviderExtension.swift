@@ -133,7 +133,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 let slot = try await api.uploadSlot(ownerId: owner, folderId: folder, name: name, size: size, mimeType: mime, itemKey: key)
                 var fileId = slot.alreadySaved == true ? slot.fileId : nil
                 if fileId == nil {
-                    guard let intent = slot.intentId, let address = slot.uploadUrl else { throw StorageAPIError.badResponse }
+                    guard let intent = slot.intentId else { throw StorageAPIError.badResponse }
+                    // the bytes may already be in the CRM (a lost answer, or a big file the CRM is still registering): then only the save is asked again
+                    if slot.alreadyUploaded != true {
+                    guard let address = slot.uploadUrl else { throw StorageAPIError.badResponse }
                     var source = url
                     var emptyTemp: URL?
                     if source == nil { let t = FileManager.default.temporaryDirectory.appendingPathComponent("tds-empty-" + UUID().uuidString); FileManager.default.createFile(atPath: t.path, contents: Data()); source = t; emptyTemp = t }
@@ -141,7 +144,9 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     try await uploader.upload(file: source!, to: address, mimeType: mime)
                     // it must not have changed while it was uploading (then the system asks again and the new content is saved)
                     if let before = url.flatMap({ FileStability.snapshot(of: $0) }), before.size != size { Trace.log("createItem.changedDuringUpload", ["name": name, "was": size, "now": before.size]); throw StorageAPIError.transport("The file changed while it was being saved.") }
-                    fileId = try await api.save(intentId: intent, itemKey: key).fileId
+                    }
+                    // a big file is registered by the CRM in the background: wait for it (the call answers "pending" until the file exists)
+                    fileId = try await api.saveWaiting(intentId: intent, itemKey: key).fileId
                 }
                 let id = ItemID.file(owner: owner, file: fileId!).shown(via: parentID?.viaLink)
                 let item = try await catalog.item(for: id).replacingModified(modified)

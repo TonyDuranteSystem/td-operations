@@ -103,8 +103,8 @@ async function main() {
       const j = await slot(t.access_token, { ownerId, folderId, name: junk, size: 5, mimeType: null, itemKey: randomUUID() })
       check(`16 junk name ${junk} → 422 ignored`, j.status === 422 && j.body?.error === "ignored", `status ${j.status}`)
     }
-    const huge = await slot(t.access_token, { ownerId, folderId, name: `huge ${stamp}.bin`, size: 200 * 1024 * 1024, mimeType: null, itemKey: randomUUID() })
-    check("17 a 200 MB file → 413 too_big", huge.status === 413 && huge.body?.error === "too_big", `status ${huge.status}`)
+    const huge = await slot(t.access_token, { ownerId, folderId, name: `huge ${stamp}.bin`, size: 3 * 1024 * 1024 * 1024, mimeType: null, itemKey: randomUUID() })
+    check("17 a 3 GB file → 413 too_big", huge.status === 413 && huge.body?.error === "too_big", `status ${huge.status}`)
     const top = await slot(t.access_token, { ownerId, folderId: rootF.id, name: `top ${stamp}.txt`, size: 5, mimeType: null, itemKey: randomUUID() })
     check("18 a storage's top folder → 422", top.status === 422 && top.body?.error === "not_allowed", `status ${top.status} ${JSON.stringify(top.body)}`)
     const { data: coOwner } = await admin.from("store_owners").select("id").eq("kind", "company").eq("study_only", false).limit(1).maybeSingle()

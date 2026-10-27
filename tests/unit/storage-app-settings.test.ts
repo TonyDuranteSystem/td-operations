@@ -15,9 +15,15 @@ describe("the one settings row of the Mac app: safe defaults", () => {
       expect(s.resyncMinutes).toBe(10)
     }
   })
-  it("the hourly limits read their env fallbacks, junk falls back to 500", () => {
+  it("big Zoom videos fit: a new file up to 2 GB, 5 GB saved and 2 GB opened per hour (Antonio 2026-10-27)", () => {
+    const d = defaultSettings({})
+    expect(ABSOLUTE_MAX_SAVE_MB).toBe(2048)
+    expect(d.maxSaveMB).toBe(2048); expect(d.writeLimitMB).toBe(5120); expect(d.readLimitMB).toBe(2048)
+    expect(d.writeLimitMB).toBeGreaterThan(d.maxSaveMB)      // the hourly allowance holds more than one biggest file
+  })
+  it("the hourly limits read their env fallbacks, junk falls back to 2048 (2 GB per hour)", () => {
     expect(defaultSettings({ STORAGE_APP_READ_LIMIT_MB: "2.5" }).readLimitMB).toBe(2.5)
-    for (const bad of ["", "abc", "0", "-5", "NaN", undefined]) expect(defaultSettings({ STORAGE_APP_READ_LIMIT_MB: bad }).readLimitMB).toBe(500)
+    for (const bad of ["", "abc", "0", "-5", "NaN", undefined]) expect(defaultSettings({ STORAGE_APP_READ_LIMIT_MB: bad }).readLimitMB).toBe(2048)
   })
 })
 
