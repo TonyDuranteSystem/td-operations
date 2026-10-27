@@ -6,6 +6,7 @@ import ServiceManagement
 
 @main
 struct TDStorageApp: App {
+    @NSApplicationDelegateAdaptor(QuitGuard.self) private var quitGuard
     @StateObject private var model = AppModel()
     // Automatic updates (Sparkle 2): the app asks the CRM's update feed at every start and then hourly (the CRM can change the pace), downloads a
     // newer signed version by itself and installs it + reopens once the app is idle. Nobody has to do anything. Which version is offered
@@ -37,15 +38,43 @@ final class UpdateGate: NSObject, SPUUpdaterDelegate {
         u.updateCheckInterval = m * 60
     }
     func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { immediateInstallHandler() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { QuitGuard.allowQuitBriefly(); immediateInstallHandler() }   // the update itself may quit the app
         return true
     }
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) { QuitGuard.allowQuitBriefly() }
     func feedParameters(for updater: SPUUpdater, sendingSystemProfile sendingProfile: Bool) -> [[String: String]] {
         let info = Bundle.main.infoDictionary ?? [:]
         let store = KeychainTokenStore(service: info["TDKeychainService"] as? String ?? "td-storage", accessGroup: info["TDKeychainGroup"] as? String)
         var out: [[String: String]] = []
         if let d = store.load()?.deviceId { out.append(["key": "device", "value": d]) }
         return out
+    }
+}
+
+/// Keeps the app running all day, so a new version can arrive at any moment (it starts at login by itself). Choosing Quit hides the app instead of
+/// ending it; the Mac's own shutdown / restart / logout, and an update installing, are never refused (see KeepAlive.shouldStay).
+final class QuitGuard: NSObject, NSApplicationDelegate {
+    static var allowQuit = false
+    /// Quitting is allowed for a minute: long enough for an update to install or a shutdown / logout to go through, short enough that a cancelled one
+    /// (an install that failed, a logout someone cancelled) can never leave the guard switched off for good.
+    static func allowQuitBriefly() {
+        allowQuit = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + KeepAlive.allowSeconds) { allowQuit = false }
+    }
+    private var powerOff: NSObjectProtocol?
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // posted by macOS before a shutdown, restart or logout — from then on every quit is allowed
+        powerOff = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { _ in QuitGuard.allowQuitBriefly() }
+    }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        let why = AEKeyword(KeepAlive.fourCC("why?"))
+        let code = (event?.attributeDescriptor(forKeyword: why) ?? event?.paramDescriptor(forKeyword: why))?.enumCodeValue
+        if KeepAlive.shouldStay(reason: code.map { UInt32($0) }, allowed: QuitGuard.allowQuit) {
+            NSApp.hide(nil)
+            return .terminateCancel
+        }
+        return .terminateNow
     }
 }
 
