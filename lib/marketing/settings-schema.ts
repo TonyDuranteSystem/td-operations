@@ -17,6 +17,9 @@ const optionList = z
   .max(40)
   .refine(l => new Set(l.map(o => o.key)).size === l.length, "Each key must be unique")
 
+/** Where each result the seller presses puts a lead (stage keys of pipeline_stages). The last five were added after the first three; a team's stored value may not have them. */
+export interface SellerResultStages { not_ready: string; closed: string; not_closed: string; contacted?: string; booking_link?: string; upsell?: string; waiting?: string; archived?: string }
+
 export const MARKETING_SETTING_DEFS = {
   /** The steps a lead moves through. Order matters; the first one is where a new lead lands. */
   pipeline_stages: {
@@ -27,11 +30,18 @@ export const MARKETING_SETTING_DEFS = {
       { key: "qualified", label: "Qualified" },
       { key: "booked", label: "Booked" },
       { key: "showed", label: "Showed" },
+      // Rocco's path after the setter hands a lead over (the call of 27 Oct 2026): Contacted, Link sent, Paid, Booking link sent, then Upsell / Waiting, and Archived closes it.
+      // The order matters: a lead at one of these is "past" Booked, so booking a call never pulls it back.
+      { key: "seller_contacted", label: "Seller contacted" },
       { key: "not_ready", label: "Not ready now" },
-      { key: "closed", label: "Closed" },
+      { key: "closed", label: "Link sent" },
       { key: "not_closed", label: "Not closed" },
       { key: "paid_call", label: "Paid call" },
+      { key: "booking_link", label: "Booking link sent" },
+      { key: "upsell", label: "Upsell" },
+      { key: "waiting", label: "Waiting" },
       { key: "upsell_won", label: "Upsell won" },
+      { key: "archived", label: "Archived" },
       { key: "not_in_target", label: "Not in target" },
     ],
   },
@@ -50,8 +60,14 @@ export const MARKETING_SETTING_DEFS = {
       not_ready: z.string().trim().min(1).max(40),
       closed: z.string().trim().min(1).max(40),
       not_closed: z.string().trim().min(1).max(40),
+      // Rocco's later steps; a team that stored the three above before these existed gets the built-in keys
+      contacted: z.string().trim().min(1).max(40).optional(),
+      booking_link: z.string().trim().min(1).max(40).optional(),
+      upsell: z.string().trim().min(1).max(40).optional(),
+      waiting: z.string().trim().min(1).max(40).optional(),
+      archived: z.string().trim().min(1).max(40).optional(),
     }),
-    fallback: { not_ready: "not_ready", closed: "closed", not_closed: "not_closed" } as { not_ready: string; closed: string; not_closed: string },
+    fallback: { not_ready: "not_ready", closed: "closed", not_closed: "not_closed", contacted: "seller_contacted", booking_link: "booking_link", upsell: "upsell", waiting: "waiting", archived: "archived" } as SellerResultStages,
   },
   /** Why a lead is marked "not in target" (a reason is required). */
   not_in_target_reasons: {
@@ -85,7 +101,8 @@ export const MARKETING_SETTING_DEFS = {
     schema: z.record(z.string().trim().min(1).max(60), z.array(z.string().trim().min(1).max(60)).max(60)),
     fallback: {
       // calls and filters leads: no payment links, no Money, no export, no team management
-      setter: ["leads.read", "leads.call", "leads.mark", "leads.worklist", "team.notes", "whatsapp", "chat", "inbox"],
+      // no inbox: the setter has no email address of her own (27 Oct 2026, Rocco and Antonio)
+      setter: ["leads.read", "leads.call", "leads.mark", "leads.worklist", "team.notes", "whatsapp", "chat"],
       // ads, video, posts: chat, content, reports; reads leads
       content: ["chat", "inbox", "content.manage", "reports.read", "leads.read"],
       // contacts the leads the setters pass: works them, sends the free-call link, no money screens

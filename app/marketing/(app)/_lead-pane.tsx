@@ -14,6 +14,9 @@ import { HandoverPanel } from '@/components/marketing/handover-panel'
 import { getLang } from '@/lib/marketing/lang'
 import { localeFor, makeT } from '@/lib/marketing/i18n'
 import { getMarketingSetting } from '@/lib/marketing/settings'
+import type { SellerResultStages } from '@/lib/marketing/settings-schema'
+import { hasPaidOrLater, sellerOf } from '@/lib/marketing/lead-actions'
+import { BookingLinkPanel } from '@/components/marketing/booking-link-panel'
 
 interface Props {
   lead: LeadRow
@@ -61,6 +64,11 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
   // the seller (Rocco) and the setter see different lead pages: the setter's reaching-out box is the setter's work, not his
   const role = roleIn ?? boardRole(permissions)
   const signer = messageSigner({ claimedLabel: lead.claimed_by_label, events, viewerName: myName ?? '', viewingAs: viewingAs === true, nameOf: personName })
+  // where the lead is on Rocco's path: paid or past paying, at "Contacted", archived (the buttons and the booking link box follow)
+  const sellerSettings = lead.team_id ? { sellerStages: (await getMarketingSetting('seller_result_stages', lead.team_id)) as SellerResultStages, paidStages: Array.from(new Set(Object.values((await getMarketingSetting('sale_kind_stages', lead.team_id)) as Record<string, string>))) } : { sellerStages: undefined, paidStages: undefined }
+  const sellerKeys = sellerOf(sellerSettings)
+  const afterPay = hasPaidOrLater(lead.status, sellerSettings)
+  const lastBookingLink = [...events].reverse().map(e => (e.kind === 'booking_link' && typeof e.data?.url === 'string' ? e.data.url : null)).find(u => u !== null) ?? null
   const where = [lead.campaign_name, lead.adset_name, lead.ad_name].filter(Boolean)
   return (
     <div className="space-y-4">
@@ -98,7 +106,12 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
         reasons={reasons}
         afterHref={afterHref}
         role={role}
+        afterPay={afterPay}
+        atContacted={lead.status === sellerKeys.contacted}
+        archived={lead.status === sellerKeys.archived}
       />
+
+      {role === 'seller' && afterPay && lead.status !== sellerKeys.archived && <BookingLinkPanel leadId={lead.id} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} email={lead.email} lastLink={lastBookingLink} canAct={canAct} canWhatsApp={hasPermission(permissions, 'whatsapp')} canEmail={hasPermission(permissions, 'inbox')} />}
 
       {paymentLink && <PaymentLinkPanel {...paymentLink} />}
 

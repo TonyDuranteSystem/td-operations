@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { useT } from '@/components/marketing/lang-provider'
 
 interface Option { key: string; label: string }
-type Mode = null | 'good' | 'not_in_target' | 'call_back' | 'not_ready' | 'closed' | 'not_closed' | 'note'
+type Mode = null | 'good' | 'not_in_target' | 'call_back' | 'not_ready' | 'closed' | 'not_closed' | 'contacted' | 'upsell' | 'waiting' | 'archive' | 'note'
 
 interface Props {
   leadId: string
@@ -19,12 +19,18 @@ interface Props {
   reasons: Option[]
   /** after Good / Not in target / Call back: go here (the next lead in the call list) instead of staying on this lead */
   afterHref?: string
-  /** the seller (Rocco) presses the results after the call: Not in target, Not ready now (with a day), Closed, Not closed. The setter keeps Good / Not in target / Call back later. */
+  /** the seller (Rocco) presses Contacted, Not in target, Not ready now (with a day) and, once the lead has paid, Upsell / Waiting; Archive closes it. The setter keeps Good / Not in target / Call back later. */
   role?: 'setter' | 'seller'
+  /** the lead has paid or is past paying (booking link sent, upsell, waiting, archived) */
+  afterPay?: boolean
+  /** the lead is already at the seller's "Contacted" step */
+  atContacted?: boolean
+  /** the lead is archived */
+  archived?: boolean
 }
 
 /** The buttons a setter or the owner uses on one lead. Every server answer (including the refusals) is shown as the server wrote it. */
-export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, checklist, reasons, afterHref, role = 'setter' }: Props) {
+export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, checklist, reasons, afterHref, role = 'setter', afterPay = false, atContacted = false, archived = false }: Props) {
   const router = useRouter()
   const t = useT()
   const [mode, setMode] = useState<Mode>(null)
@@ -69,9 +75,11 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
         {markOk && role === 'setter' && <button className={`${btn} ${mode === 'good' ? 'border-emerald-600 bg-emerald-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'good' ? null : 'good')}>{t('Good')}</button>}
         {markOk && <button className={`${btn} ${mode === 'not_in_target' ? 'border-rose-600 bg-rose-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'not_in_target' ? null : 'not_in_target')}>{t('Not in target')}</button>}
         {markOk && role === 'setter' && <button className={`${btn} ${mode === 'call_back' ? 'border-sky-600 bg-sky-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'call_back' ? null : 'call_back')}>{t('Call back later')}</button>}
-        {markOk && role === 'seller' && <button className={`${btn} ${mode === 'not_ready' ? 'border-sky-600 bg-sky-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'not_ready' ? null : 'not_ready')} data-testid="result-not-ready">{t('Not ready now')}</button>}
-        {markOk && role === 'seller' && <button className={`${btn} ${mode === 'closed' ? 'border-emerald-600 bg-emerald-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'closed' ? null : 'closed')} data-testid="result-closed">{t('Closed')}</button>}
-        {markOk && role === 'seller' && <button className={`${btn} ${mode === 'not_closed' ? 'border-slate-600 bg-slate-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'not_closed' ? null : 'not_closed')} data-testid="result-not-closed">{t('Not closed')}</button>}
+        {markOk && role === 'seller' && !afterPay && !atContacted && <button className={`${btn} ${mode === 'contacted' ? 'border-emerald-600 bg-emerald-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'contacted' ? null : 'contacted')} data-testid="result-contacted">{t('Contacted')}</button>}
+        {markOk && role === 'seller' && !afterPay && <button className={`${btn} ${mode === 'not_ready' ? 'border-sky-600 bg-sky-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'not_ready' ? null : 'not_ready')} data-testid="result-not-ready">{t('Not ready now')}</button>}
+        {markOk && role === 'seller' && afterPay && !archived && <button className={`${btn} ${mode === 'upsell' ? 'border-violet-600 bg-violet-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'upsell' ? null : 'upsell')} data-testid="result-upsell">{t('Upsell')}</button>}
+        {markOk && role === 'seller' && afterPay && !archived && <button className={`${btn} ${mode === 'waiting' ? 'border-amber-600 bg-amber-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'waiting' ? null : 'waiting')} data-testid="result-waiting">{t('Waiting')}</button>}
+        {markOk && role === 'seller' && !archived && <button className={`${btn} ${mode === 'archive' ? 'border-slate-600 bg-slate-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'archive' ? null : 'archive')} data-testid="result-archive">{t('Archive')}</button>}
         {markOk && <button className={`${btn} ${mode === 'note' ? 'border-slate-600 bg-slate-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'note' ? null : 'note')}>{t('Add a note')}</button>}
       </div>
 
@@ -116,7 +124,7 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
               const n = note.trim() || undefined
               if (mode === 'good') return send({ action: 'good', ticked, note: n })
               if (mode === 'not_in_target') return send({ action: 'not_in_target', reason, note: n })
-              if (mode === 'closed' || mode === 'not_closed') return send({ action: mode, note: n })
+              if (mode === 'closed' || mode === 'not_closed' || mode === 'contacted' || mode === 'upsell' || mode === 'waiting' || mode === 'archive') return send({ action: mode, note: n })
               if (mode === 'not_ready') return send({ action: 'not_ready', callbackAt: romeLocalToIso(when) ?? '', note: n })
               if (mode === 'call_back') return send({ action: 'call_back', callbackAt: romeLocalToIso(when) ?? '', note: n })
               return send({ action: 'note', note: n })

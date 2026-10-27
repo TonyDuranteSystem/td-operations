@@ -86,16 +86,15 @@ async function main() {
 
   await openLead(ids[0])
   const btns = (await p.locator('[data-testid="lead-result"] button').allInnerTexts()).map(x => x.trim())
-  ck("S4 the seller's result buttons are Not in target, Not ready now, Closed, Not closed (no Good, no Call back later)", ["Not in target", "Not ready now", "Closed", "Not closed"].every(b => btns.includes(b)) && !btns.includes("Good") && !btns.includes("Call back later"), btns)
+  ck("S4 the seller's result buttons are Not in target, Not ready now, Not closed (Link sent is automatic, no button) (no Good, no Call back later)", ["Not in target", "Not ready now", "Not closed"].every(b => btns.includes(b)) && !btns.includes("Closed") && !btns.includes("Good") && !btns.includes("Call back later"), btns)
   await p.screenshot({ path: `${SHOTS}/seller-result-buttons.png` })
   // Closed
-  await p.click('[data-testid="result-closed"]')
-  await p.getByRole("button", { name: "Save" }).click()
-  await p.waitForTimeout(1500)
-  ck("S5 Closed moves the lead to Closed", (await stageOf(ids[0])).status === "closed", await stageOf(ids[0]))
+  await p.evaluate(async id => { await fetch(`/api/marketing/leads/${id}/action`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "closed" }) }) }, ids[0])
+  await p.reload({ waitUntil: "networkidle" })
+  ck("S5 the Link sent stage holds the lead", (await stageOf(ids[0])).status === "closed", await stageOf(ids[0]))
   const hist = (await db.query("select kind, data from marketing_lead_events where lead_id=$1 and kind='status_changed' order by id desc limit 1", [ids[0]])).rows[0]
   ck("S6 the history line records the outcome", hist?.data?.outcome === "closed", hist)
-  ck("S7 the lead page reads 'Closed' in the history", (await p.locator("ol").innerText()).includes("Closed"))
+  ck("S7 the lead page reads 'Link sent' in the history", (await p.locator("ol").innerText()).includes("Link sent"))
   // Not closed
   await openLead(ids[1])
   await p.click('[data-testid="result-not-closed"]')
@@ -133,7 +132,7 @@ async function main() {
   await p.evaluate(async () => { await fetch("/api/marketing/lang", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lang: "it" }) }) })
   await p.reload({ waitUntil: "networkidle" })
   const itHeads = (await p.$$eval("[data-column]", els => els.map(e => (e.textContent ?? "").slice(0, 40)))).join(" | ")
-  ck("S14 Rocco's Italian words are on the board", ["Chiamate fissate", "Fuori target", "Chiuso", "Non chiuso", "Non pronto ora", "Pagato"].every(w => itHeads.includes(w)), itHeads)
+  ck("S14 Rocco's Italian words are on the board", ["Chiamate fissate", "Fuori target", "Link inviato", "Non chiuso", "Non pronto ora", "Pagato"].every(w => itHeads.includes(w)), itHeads)
   await p.screenshot({ path: `${SHOTS}/seller-six-columns-it.png` })
   await p.evaluate(async () => { await fetch("/api/marketing/lang", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lang: "en" }) }) })
 

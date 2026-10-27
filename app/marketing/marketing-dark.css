@@ -75,6 +75,9 @@
 [data-tdm-theme="dark"] .border-sky-600{border-color:#85b7eb}
 [data-tdm-theme="dark"] .border-rose-300{border-color:#7a3a35}
 [data-tdm-theme="dark"] .border-rose-600{border-color:#ff7b6b}
+[data-tdm-theme="dark"] .border-amber-600{border-color:#c9a24a}
+[data-tdm-theme="dark"] .border-emerald-500{border-color:#7fd49a}
+[data-tdm-theme="dark"] .border-red-500{border-color:#ff7b6b}
 [data-tdm-theme="dark"] .border-red-100{border-color:#5a2a28}
 [data-tdm-theme="dark"] .border-red-300{border-color:#7a3a35}
 [data-tdm-theme="dark"] .border-emerald-200{border-color:#2f5a3d}
@@ -167,6 +170,9 @@
 [data-tdm-theme="system"] .border-sky-600{border-color:#85b7eb}
 [data-tdm-theme="system"] .border-rose-300{border-color:#7a3a35}
 [data-tdm-theme="system"] .border-rose-600{border-color:#ff7b6b}
+[data-tdm-theme="system"] .border-amber-600{border-color:#c9a24a}
+[data-tdm-theme="system"] .border-emerald-500{border-color:#7fd49a}
+[data-tdm-theme="system"] .border-red-500{border-color:#ff7b6b}
 [data-tdm-theme="system"] .border-red-100{border-color:#5a2a28}
 [data-tdm-theme="system"] .border-red-300{border-color:#7a3a35}
 [data-tdm-theme="system"] .border-emerald-200{border-color:#2f5a3d}

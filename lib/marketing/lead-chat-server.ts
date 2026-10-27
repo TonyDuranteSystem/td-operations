@@ -16,7 +16,7 @@ import type { Bundles } from "@/lib/marketing/access"
 import { sendMarketingPush } from "@/lib/marketing/push"
 import { parseMentions, threadPush } from "@/lib/marketing/team-chat"
 import {
-  BUCKET, SIGNED_URL_SECONDS, URL_CACHE_SECONDS, checkEdit, isInvolved, checkEmoji, checkSend, chatUrlFor, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, pushRecipients, toTalkMessage, unreadCount,
+  BUCKET, SIGNED_URL_SECONDS, URL_CACHE_SECONDS, checkEdit, isInvolved, isSetterOnly, visibleToSetter, checkEmoji, checkSend, chatUrlFor, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, pushRecipients, toTalkMessage, unreadCount,
   type ChatMessageRow, type ChatReaction, type StoredAttachment,
 } from "@/lib/marketing/lead-chat"
 
@@ -60,6 +60,25 @@ export async function chatMembers(teamId: string): Promise<ChatMember[]> {
   return list
 }
 
+/** The ids of the team's setters (setter only: no picking, no hosting, no payment links). In a lead's chat a setter sees only their messages and the ones that name her. */
+async function setterIdsOf(teamId: string): Promise<Set<string>> {
+  return new Set((await chatMembers(teamId)).filter(m => isSetterOnly(m.permissions)).map(m => m.id))
+}
+
+/**
+ * Messages of a lead's team, for a viewer. A setter (setter only) gets only what she wrote, what other setters wrote and what names her with @; everybody else gets everything.
+ * `mentions` is read only for a setter, and a database without that column (migration not run) simply shows her her own and other setters' messages.
+ */
+async function readMessages<T extends { sender_id: string }>(
+  ctx: MarketingContext, cols: string, run: (cols: string) => PromiseLike<{ data: unknown; error: { code?: string } | null }>,
+): Promise<T[]> {
+  if (!isSetterOnly(ctx.permissions)) return (((await run(cols)).data ?? []) as T[])
+  let res = await run(`${cols}, mentions`)
+  if (res.error?.code === "42703") res = await run(cols)
+  const setters = await setterIdsOf(ctx.team.id)
+  return ((res.data ?? []) as T[]).filter(m => visibleToSetter(m as T & { mentions?: string[] | null }, ctx.user.id, setters))
+}
+
 async function loadChatMembers(teamId: string): Promise<ChatMember[]> {
   const bundles = (await getMarketingSetting("permission_bundles", teamId)) as Bundles
   const rows = await listMembers(teamId)
@@ -99,23 +118,28 @@ export async function shape(rows: ChatMessageRow[], reactions: ChatReaction[]) {
 /** One lead's chat: the newest messages (oldest first), who has read and received how far, who can chat. `markRead` follows TD Talk's rule: only while the person is looking. */
 export async function loadChat(ctx: MarketingContext, leadId: string, markRead: boolean) {
   const d = db()
-  const [{ data: rowsDesc }, { data: reads }, { data: deliveries }, members] = await Promise.all([
-    d.from("marketing_lead_messages").select(MESSAGE_COLS).eq("team_id", ctx.team.id).eq("lead_id", leadId).order("created_at", { ascending: false }).limit(LOAD_LIMIT),
+  const [rowsDesc, { data: reads }, { data: deliveries }, members] = await Promise.all([
+    readMessages<ChatMessageRow>(ctx, MESSAGE_COLS, cols => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).eq("lead_id", leadId).order("created_at", { ascending: false }).limit(LOAD_LIMIT)),
     d.from("marketing_lead_chat_reads").select("user_id, last_read_at").eq("lead_id", leadId),
     d.from("marketing_lead_chat_delivery").select("user_id, delivered_at").eq("lead_id", leadId),
     chatMembers(ctx.team.id),
   ])
-  const rows = ((rowsDesc ?? []) as ChatMessageRow[]).slice().reverse()
+  const rows = rowsDesc.slice().reverse()
   const ids = rows.map(r => r.id)
   const { data: reacts } = ids.length ? await d.from("marketing_lead_message_reactions").select("message_id, user_id, user_name, emoji").in("message_id", ids) : { data: [] }
   if (markRead) await markLeadRead(ctx, leadId)
   const me = ctx.user.id
   // the ticks wait for the people who work the leads (the setter, the seller), not for the ad person who only watches
   // (a paused person is not waited for: his ticks would never turn blue)
-  const memberIds = members.filter(m => m.status === "active" && isInvolved(m.permissions)).map(m => m.id).filter(id => id !== me)
+  // (nor is a setter: she does not see Antonio's and Rocco's messages, so her read marker would never pass them)
+  const memberIds = members.filter(m => m.status === "active" && isInvolved(m.permissions) && !isSetterOnly(m.permissions)).map(m => m.id).filter(id => id !== me)
+  const shown = await shape(rows, (reacts ?? []) as ChatReaction[])
+  // a setter is never handed the id of a message she may not see (a quote-reply to one)
+  const shownIds = new Set(rows.map(r => r.id))
+  const messages = isSetterOnly(ctx.permissions) ? shown.map(m => (m.reply_to_id && !shownIds.has(m.reply_to_id) ? { ...m, reply_to_id: null } : m)) : shown
   return {
     me,
-    messages: await shape(rows, (reacts ?? []) as ChatReaction[]),
+    messages,
     members: members.filter(m => m.status === "active" && isInvolved(m.permissions)).map(m => ({ id: m.id, name: m.name })),
     // the ticks: how far every OTHER person who can chat has read / received it
     member_ids: memberIds,
@@ -166,7 +190,7 @@ export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body
   const [message] = await shape([row as ChatMessageRow], [])
   // tell the others (never the sender); a failed notification never fails the message
   try {
-    const to = pushRecipients(members.map(m => ({ user_id: m.id, status: m.status, permissions: m.permissions })), ctx.user.id)
+    const to = pushRecipients(members.map(m => ({ user_id: m.id, status: m.status, permissions: m.permissions })), ctx.user.id, mentions)
     // a lead with no name is shown by its email, never its phone number (a notification can sit on a lock screen)
     const leadName = lead.full_name || lead.email || "Lead"
     const preview = previewLine({ message: c.message, attachments: c.attachments, deleted_at: null })
@@ -185,8 +209,14 @@ export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body
 
 async function messageInTeam(ctx: MarketingContext, id: string): Promise<(ChatMessageRow & { lead_id: string }) | null> {
   if (!isUuid(id)) return null
-  const { data } = await db().from("marketing_lead_messages").select(`${MESSAGE_COLS}, lead_id`).eq("id", id).eq("team_id", ctx.team.id).maybeSingle()
-  return (data as (ChatMessageRow & { lead_id: string }) | null) ?? null
+  const restricted = isSetterOnly(ctx.permissions)
+  const run = (cols: string) => db().from("marketing_lead_messages").select(cols).eq("id", id).eq("team_id", ctx.team.id).maybeSingle()
+  let res = await run(restricted ? `${MESSAGE_COLS}, lead_id, mentions` : `${MESSAGE_COLS}, lead_id`)
+  if (restricted && res.error?.code === "42703") res = await run(`${MESSAGE_COLS}, lead_id`)
+  const m = (res.data as unknown as (ChatMessageRow & { lead_id: string; mentions?: string[] | null }) | null) ?? null
+  // a message a setter may not see does not exist for her: no edit, delete, reaction or transcript
+  if (m && restricted && !visibleToSetter(m, ctx.user.id, await setterIdsOf(ctx.team.id))) return null
+  return m
 }
 
 export async function editChatMessage(ctx: MarketingContext, id: string, text: unknown): Promise<{ ok: true; message: { message: string; edited_at: string } } | { ok: false; error: string; status: number }> {
@@ -199,7 +229,7 @@ export async function editChatMessage(ctx: MarketingContext, id: string, text: u
   const edited_at = new Date().toISOString()
   const { error } = await db().from("marketing_lead_messages").update({ message: c.message, edited_at, original_message: m.message }).eq("id", id).is("deleted_at", null)
   if (error) return { ok: false, error: "Could not edit the message.", status: 500 }
-  if (c.message.includes("@")) await remention(ctx, m, c.message)
+  if (c.message.includes("@") || m.message.includes("@")) await remention(ctx, m, c.message)
   return { ok: true, message: { message: c.message, edited_at } }
 }
 
@@ -208,13 +238,13 @@ async function remention(ctx: MarketingContext, m: ChatMessageRow & { lead_id: s
   try {
     const members = await chatMembers(ctx.team.id)
     const now = parseMentions(text, members.filter(x => isInvolved(x.permissions)).map(x => ({ id: x.id, name: x.name })), ctx.user.id)
-    if (now.length === 0) return
     const { data: before, error: readErr } = await db().from("marketing_lead_messages").select("mentions, lead_id").eq("id", m.id).maybeSingle()
     if (readErr) return
     const was = ((before?.mentions ?? []) as string[])
+    if (now.length === 0 && was.length === 0) return
     const { error } = await db().from("marketing_lead_messages").update({ mentions: now }).eq("id", m.id)
     if (error) return
-    const to = pushRecipients(members.map(x => ({ user_id: x.id, status: x.status, permissions: x.permissions })), ctx.user.id).filter(id => now.includes(id) && !was.includes(id))
+    const to = pushRecipients(members.map(x => ({ user_id: x.id, status: x.status, permissions: x.permissions })), ctx.user.id, now).filter(id => now.includes(id) && !was.includes(id))
     if (to.length === 0) return
     const { data: lead } = await db().from("marketing_leads").select("full_name, email").eq("id", m.lead_id).eq("team_id", ctx.team.id).maybeSingle()
     await Promise.race([
@@ -283,26 +313,43 @@ export async function downloadFile(path: string): Promise<Blob | null> {
 }
 
 /** How many unread messages I have in each lead of my team (leads with none are left out). */
-export const unreadByLead = (ctx: MarketingContext): Promise<Map<string, number>> => unreadFor(ctx.team.id, ctx.user.id)
+export async function unreadByLead(ctx: MarketingContext): Promise<Map<string, number>> {
+  return new Map(Array.from((await unreadDetailByLead(ctx)).entries()).map(([lead, u]) => [lead, u.n]))
+}
+
+/** My unread numbers per lead, and who wrote the newest unread message: a setter ("setter") or anybody else, Antonio included ("owner"). A setter sees only the messages she may see. */
+export async function unreadDetailByLead(ctx: MarketingContext): Promise<Map<string, { n: number; from: "setter" | "owner" }>> {
+  const setters = await setterIdsOf(ctx.team.id).catch(() => new Set<string>())
+  return unreadFor(ctx, setters)
+}
 
 /** Only messages from the last 90 days are counted as unread (the number is recomputed on every screen, so it must not grow with the whole history). */
 export const UNREAD_LOOKBACK_DAYS = 90
 const CHAT_ROW_CAP = 5000
 
-async function unreadFor(teamId: string, userId: string): Promise<Map<string, number>> {
+async function unreadFor(ctx: MarketingContext, setters: ReadonlySet<string>): Promise<Map<string, { n: number; from: "setter" | "owner" }>> {
   const d = db()
+  const teamId = ctx.team.id
+  const userId = ctx.user.id
   const since = new Date(Date.now() - UNREAD_LOOKBACK_DAYS * 86_400_000).toISOString()
-  const [{ data: reads, error: e1 }, { data: msgs, error: e2 }] = await Promise.all([
+  const [{ data: reads, error: e1 }, msgs] = await Promise.all([
     d.from("marketing_lead_chat_reads").select("lead_id, last_read_at").eq("user_id", userId).eq("team_id", teamId),
-    d.from("marketing_lead_messages").select("lead_id, sender_id, created_at, deleted_at").eq("team_id", teamId).neq("sender_id", userId).is("deleted_at", null).gte("created_at", since).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP),
+    readMessages<{ lead_id: string; sender_id: string; created_at: string; deleted_at: string | null }>(ctx, "lead_id, sender_id, created_at, deleted_at", cols => d.from("marketing_lead_messages").select(cols).eq("team_id", teamId).neq("sender_id", userId).is("deleted_at", null).gte("created_at", since).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP)),
   ])
   // a failed read is a zero on the screen; at least leave a trace in the server log
-  if (e1 || e2) console.error("[marketing] unread count failed:", (e1 ?? e2)?.message)
+  if (e1) console.error("[marketing] unread count failed:", e1.message)
   const readAt = new Map(((reads ?? []) as Array<{ lead_id: string; last_read_at: string }>).map(r => [r.lead_id, r.last_read_at]))
   const by = new Map<string, Array<{ sender_id: string; created_at: string; deleted_at: string | null }>>()
-  for (const m of (msgs ?? []) as Array<{ lead_id: string; sender_id: string; created_at: string; deleted_at: string | null }>) by.set(m.lead_id, [...(by.get(m.lead_id) ?? []), m])
-  const out = new Map<string, number>()
-  for (const [lead, list] of Array.from(by)) { const n = unreadCount(list, userId, readAt.get(lead) ?? null); if (n > 0) out.set(lead, n) }
+  for (const m of msgs) by.set(m.lead_id, [...(by.get(m.lead_id) ?? []), m])
+  const out = new Map<string, { n: number; from: "setter" | "owner" }>()
+  for (const [lead, list] of Array.from(by)) {
+    const n = unreadCount(list, userId, readAt.get(lead) ?? null)
+    if (n === 0) continue
+    // the list is newest first: the first unread one says who wrote the newest
+    const last = readAt.get(lead) ?? null
+    const newest = list.find(m => !m.deleted_at && (!last || m.created_at > last))
+    out.set(lead, { n, from: newest && setters.has(newest.sender_id) ? "setter" : "owner" })
+  }
   return out
 }
 
@@ -311,9 +358,9 @@ export interface Conversation { leadId: string; name: string; last: string; last
 /** Every lead of my team that has a chat: the newest line, who wrote it, and my unread number. Newest first. */
 export async function listConversations(ctx: MarketingContext): Promise<Conversation[]> {
   const d = db()
-  const { data: msgs } = await d.from("marketing_lead_messages").select(`${MESSAGE_COLS}, lead_id`).eq("team_id", ctx.team.id).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP)
+  const msgs = await readMessages<ChatMessageRow & { lead_id: string }>(ctx, `${MESSAGE_COLS}, lead_id`, cols => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP))
   const newest = new Map<string, ChatMessageRow & { lead_id: string }>()
-  for (const m of (msgs ?? []) as Array<ChatMessageRow & { lead_id: string }>) if (!newest.has(m.lead_id)) newest.set(m.lead_id, m)
+  for (const m of msgs) if (!newest.has(m.lead_id)) newest.set(m.lead_id, m)
   if (newest.size === 0) return []
   // the lead names, a hundred at a time (hundreds of ids in one request make the address too long and the whole lookup fails)
   const ids = Array.from(newest.keys())

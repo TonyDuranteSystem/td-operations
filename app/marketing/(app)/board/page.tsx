@@ -11,8 +11,10 @@ import { canSeeNotes, withoutPhone } from '@/lib/marketing/lead-privacy'
 import { loadLeadActivity } from '@/lib/marketing/note-read'
 import { contactChips, EMPTY_CONTACT } from '@/lib/marketing/contact-state'
 import type { BoardCard } from '@/lib/marketing/board'
+import type { SellerResultStages } from '@/lib/marketing/settings-schema'
+import { sellerOf } from '@/lib/marketing/lead-actions'
 import { LeadBoard } from '@/components/marketing/lead-board'
-import { unreadByLead } from '@/lib/marketing/lead-chat-server'
+import { unreadDetailByLead } from '@/lib/marketing/lead-chat-server'
 
 export const dynamic = 'force-dynamic'
 
@@ -33,17 +35,19 @@ export default async function MarketingBoard() {
   const teamId = g.ctx.team.id
   const userId = g.ctx.user.id
   const stages = (await getMarketingSetting('pipeline_stages', teamId)) as StageOption[]
-  const sellerStages = (await getMarketingSetting('seller_result_stages', teamId)) as { not_ready: string; closed: string; not_closed: string }
+  const sellerStages = (await getMarketingSetting('seller_result_stages', teamId)) as SellerResultStages
+  const paidStages = Object.values((await getMarketingSetting('sale_kind_stages', teamId)) as Record<string, string>)
   const res = await listTeamLeadsCapped(db, teamId, 500, { order: 'newest' })
   // the seller's results can sit for months (a lead "not ready now" until next spring): they must not fall off the newest-500 window, so each is also read on its own
-  const longLived = await Promise.all([sellerStages.not_ready, sellerStages.closed, sellerStages.not_closed].map(stage => listTeamLeadsCapped(db, teamId, 500, { stage, order: 'newest' })))
+  const longLivedStages = Array.from(new Set([...Object.values(sellerOf({ sellerStages })), ...paidStages]))
+  const longLived = await Promise.all(longLivedStages.map(stage => listTeamLeadsCapped(db, teamId, 500, { stage, order: 'newest' })))
   const seenIds = new Set(res.rows.map(r => r.id))
   const extra = longLived.flatMap(r => r.rows).filter(r => !seenIds.has(r.id) && seenIds.add(r.id))
   const leads = withoutPhone([...res.rows, ...extra], g.ctx.permissions)
   const seesNotes = canSeeNotes(g.ctx.permissions)
   // the chat: my unread numbers on the cards (only for people who may chat)
   const chatOn = hasPermission(g.ctx.permissions, 'chat')
-  const unread = chatOn ? await unreadByLead(g.ctx) : new Map<string, number>()
+  const unread = chatOn ? await unreadDetailByLead(g.ctx) : new Map<string, { n: number; from: 'setter' | 'owner' }>()
   const activity = leads.length > 0 ? await loadLeadActivity(db, leads.map(l => l.id)) : null
   const fw = (iso: string | null | undefined) => formatWhen(iso, 'Europe/Rome', localeFor(lang))
   const cards: BoardCard[] = leads.map(l => {
@@ -63,7 +67,8 @@ export default async function MarketingBoard() {
       ad: l.ad_name,
       existingClient: clientFlagText(l.existing_client) !== null,
       handedOver: contact.handedOverAt !== null,
-      unread: unread.get(l.id) ?? 0,
+      unread: unread.get(l.id)?.n ?? 0,
+      incomingFrom: unread.get(l.id)?.from ?? null,
     }
   })
   return (

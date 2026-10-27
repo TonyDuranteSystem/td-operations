@@ -18,8 +18,8 @@ const rocco: Actor = { id: "r", email: "rocco@x.com", role: "member" }
 const lead = (status: string, extra: Record<string, unknown> = {}) => ({ claimed_by: null, status, ...extra })
 
 describe("the seller's results after the call (Rocco, 2026-10-26)", () => {
-  it("are marks (need the 'mark' right) and validate their shape", () => {
-    for (const a of ["not_ready", "closed", "not_closed"] as const) expect(permissionFor(a)).toBe("leads.mark")
+  it("are the seller's marks (they need the seller's right to pick leads: a setter has 'mark' but not 'pick') and validate their shape", () => {
+    for (const a of ["not_ready", "closed", "not_closed"] as const) expect(permissionFor(a)).toBe("leads.pick")
     expect(leadActionSchema.safeParse({ action: "closed" }).success).toBe(true)
     expect(leadActionSchema.safeParse({ action: "not_closed", note: "price" }).success).toBe(true)
     expect(leadActionSchema.safeParse({ action: "not_ready" }).success).toBe(false) // a day to come back is required
@@ -58,8 +58,8 @@ describe("the seller's results after the call (Rocco, 2026-10-26)", () => {
   it("the history says what happened in plain words, in both languages", () => {
     const stages = settings.stages
     const en = makeT("en"); const it_ = makeT("it")
-    expect(eventText("status_changed", { outcome: "closed", to: "closed" }, stages, [], en, "en-GB")).toBe("Closed")
-    expect(eventText("status_changed", { outcome: "closed", to: "closed" }, stages, [], it_, "it-IT")).toBe("Chiuso")
+    expect(eventText("status_changed", { outcome: "closed", to: "closed" }, stages, [], en, "en-GB")).toBe("Link sent")
+    expect(eventText("status_changed", { outcome: "closed", to: "closed" }, stages, [], it_, "it-IT")).toBe("Link inviato")
     expect(eventText("status_changed", { outcome: "not_closed", to: "not_closed" }, stages, [], it_, "it-IT")).toBe("Non chiuso")
     expect(eventText("status_changed", { outcome: "not_ready", to: "not_ready", callback_at: "2027-01-01T10:00:00Z" }, stages, [], it_, "it-IT")).toMatch(/^Non pronto ora — richiamare il /)
   })
@@ -83,11 +83,11 @@ describe("the short payment address", () => {
 
 describe("the seller's tour explains every column", () => {
   const perms = ["leads.read", "payment_links.create", "calls.host", "leads.pick", "leads.mark", "chat", "calendar.read", "reports.read", "templates.use"]
-  it("names the six columns and the four results in English and in Italian", () => {
+  it("names every column and result of Rocco's path in English and in Italian (27 Oct 2026)", () => {
     const en = resolveTour("seller", perms, "en").find(s => s.screen === "board")
     const it_ = resolveTour("seller", perms, "it").find(s => s.screen === "board")
-    for (const w of ["Booked calls", "Not in target", "Not ready now", "Closed", "Not closed", "Paid"]) expect(en?.body, w).toContain(w)
-    for (const w of ["Chiamate fissate", "Fuori target", "Non pronto ora", "Chiuso", "Non chiuso", "Pagato"]) expect(it_?.body, w).toContain(w)
+    for (const w of ["Interested lead", "Contacted", "Link sent", "Not in target", "Not ready now", "Paid", "Booking link sent", "Upsell", "Waiting", "Archive", "Incoming messages"]) expect(en?.body, w).toContain(w)
+    for (const w of ["Lead interessato", "Contattato", "Link inviato", "Fuori target", "Non pronto ora", "Pagato", "Link prenotazione inviato", "Upsell", "In attesa", "Archivia", "Messaggi in arrivo"]) expect(it_?.body, w).toContain(w)
   })
 })
 

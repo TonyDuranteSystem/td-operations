@@ -140,9 +140,25 @@ export function isInvolved(permissions: readonly string[]): boolean {
   return permissions.includes(CHAT_PERMISSION) && (permissions.includes("leads.mark") || permissions.includes("leads.pick"))
 }
 
-/** Who is told about a new message: every active, involved team member except the sender. */
-export function pushRecipients(members: ReadonlyArray<{ user_id: string; status?: string; permissions: readonly string[] }>, senderId: string): string[] {
-  return Array.from(new Set(members.filter(m => m.user_id !== senderId && m.status !== "removed" && m.status !== "paused" && isInvolved(m.permissions)).map(m => m.user_id)))
+/**
+ * A setter: she works the first calls but picks no leads, hosts no calls and creates no payment links (the setter bundle). The owner and the seller are never "setter only".
+ * In a lead's chat she sees only what she wrote and what names her with @ (27 Oct 2026, Antonio: "she sees her own chat with Rocco, not ours"): a message between Antonio and Rocco stays between them.
+ */
+export function isSetterOnly(permissions: readonly string[]): boolean {
+  return permissions.includes("leads.worklist") && !permissions.includes("leads.pick") && !permissions.includes("calls.host") && !permissions.includes("payment_links.create")
+}
+
+/** Whether a setter may see this message: she wrote it, another setter wrote it, or it names her with @. */
+export function visibleToSetter(m: { sender_id: string; mentions?: readonly string[] | null }, viewerId: string, setterIds: ReadonlySet<string>): boolean {
+  return setterIds.has(m.sender_id) || (m.mentions ?? []).includes(viewerId)
+}
+
+/** Who is told about a new message: every active, involved team member except the sender. A setter is told only when the message names her (she does not see the others, so she is not notified of them). */
+export function pushRecipients(members: ReadonlyArray<{ user_id: string; status?: string; permissions: readonly string[] }>, senderId: string, mentioned: readonly string[] = []): string[] {
+  return Array.from(new Set(members
+    .filter(m => m.user_id !== senderId && m.status !== "removed" && m.status !== "paused" && isInvolved(m.permissions))
+    .filter(m => !isSetterOnly(m.permissions) || mentioned.includes(m.user_id))
+    .map(m => m.user_id)))
 }
 
 /** The line shown in the Messages list and in a notification: the words, else what was attached. */
