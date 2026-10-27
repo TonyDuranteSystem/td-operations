@@ -34,7 +34,7 @@ import { stageNotificationText } from "@/lib/services/step-settings"
 import { buildClosureFollowUpCards, WRAP_UP_STAGE_NAME, type ClosureStepTask } from "@/lib/services/closure-cascade"
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
-import { filedName, type NameCheck } from "@/lib/flows/name-checks"
+import { filedName, filedLegalName, type NameCheck } from "@/lib/flows/name-checks"
 import { CHANGE_NAME_STAGES } from "@/lib/flows/change-name-stages"
 
 // ─── Types ────────────────────────────────────────────────
@@ -78,6 +78,12 @@ export interface AdvanceStageParams {
    * tool used to be the only place with. Ignored for other transitions.
    */
   formation_state?: "NM" | "WY" | "FL" | "DE"
+  /**
+   * The company LEGAL name staff confirmed in the Articles upload window (validated by the upload route and saved on the
+   * filed name). Wins over the filed name; without it the legal name is the filed / wizard name run through the shared
+   * ending rule (lib/flows/legal-name.ts, job 80cce1cb).
+   */
+  legal_name?: string
   /**
    * The cycle year a renewal filing is FOR (Mark Filed dialog). Drives the
    * completion roll: the record moves to the anniversary in year+1
@@ -265,6 +271,7 @@ export async function advanceServiceDelivery(
         contact_id: delivery.contact_id,
         chosen_name: preConfirmedName,
         formation_state: params.formation_state ?? null,
+        legal_name: params.legal_name ?? filedLegalName((preNcRow?.name_checks as NameCheck[] | null) ?? null),
         entity_type: params.entity_type ?? null,
       })
       if (!pre.ok) {
@@ -275,9 +282,12 @@ export async function advanceServiceDelivery(
         const asks: string[] = []
         if (pre.needs_state) asks.push("the formation state")
         if (pre.needs_entity_type) asks.push("the LLC type (single- or multi-member)")
+        const parts: string[] = []
+        if (asks.length > 0) parts.push(`Choose ${asks.join(" and ")}`)
+        if (pre.needs_legal_name) parts.push("Enter the company legal name exactly as printed on the Articles")
         const hint =
-          asks.length > 0
-            ? ` Choose ${asks.join(" and ")} in the Articles upload dialog, then retry.`
+          parts.length > 0
+            ? ` ${parts.join(". ")} in the Articles upload dialog, then retry.`
             : pre.failure === "missing_chosen_name"
               ? " Mark the state-approved name as filed in Name Checks first, then retry."
               : ""
@@ -1124,6 +1134,9 @@ export async function advanceServiceDelivery(
         const mat = await materializeFormationCompany({
           contact_id: delivery.contact_id,
           chosen_name: confirmedName ?? undefined,
+          // The staff-confirmed legal name (this request's, else the one saved on the filed name) — the SAME value the
+          // pre-check above used, so the gate and the creation can never disagree.
+          legal_name: params.legal_name ?? filedLegalName((ncRow?.name_checks as NameCheck[] | null) ?? null) ?? undefined,
           // A staff-supplied override (2026-09-11, dev job cb771564) always wins
           // — same rank as entity_type below. Otherwise: WS-B amendment (hunter
           // re-attack finding 2) — pass a state only when some tier actually

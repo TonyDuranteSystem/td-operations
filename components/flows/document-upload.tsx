@@ -6,6 +6,8 @@ import { Upload, Loader2, CheckCircle2, FileUp, X } from 'lucide-react'
 import { PrincipalOfficeCheck } from '@/components/calendar/principal-office-check'
 import { EMPTY_PRINCIPAL_OFFICE_DRAFT, principalOfficeAnswer, type PrincipalOfficeDraft } from '@/lib/principal-office-draft'
 import { pickersFromPreflight } from '@/lib/flows/materialize-preflight-response'
+import { hasValidLlcEnding } from '@/lib/flows/legal-name'
+import { suggestLegalName, legalNameNeedsDifferTick } from '@/lib/flows/legal-name-prefill'
 
 /** Window event fired after a flow document upload succeeds. The sibling
  *  DocumentViewer listens for it to re-fetch live (a server router.refresh()
@@ -102,6 +104,16 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
   // Deterministic blocker the staff cannot resolve from this modal (no filed
   // name / no formation data) — shown up front, confirm disabled.
   const [preflightBlocked, setPreflightBlocked] = useState<string | null>(null)
+  // Company legal name: the ONE field staff confirm on the Articles window (job 80cce1cb). Prefilled from the Articles when the
+  // words match the filed name, else from the filed name + the LLC-ending rule. The company, its folder and the SS-4 carry it.
+  const [legalNameShown, setLegalNameShown] = useState(false)
+  const [legalName, setLegalName] = useState('')
+  const [legalReference, setLegalReference] = useState('')
+  const [articlesName, setArticlesName] = useState<string | null>(null)
+  const [articlesDiffers, setArticlesDiffers] = useState(false)
+  const [differTick, setDifferTick] = useState(false)
+  const [legalNameProblem, setLegalNameProblem] = useState<string | null>(null)
+  const legalNeedsTick = legalNameShown && legalNameNeedsDifferTick(legalName, legalReference)
 
   function handlePick(e: React.ChangeEvent<HTMLInputElement>) {
     const picked = e.target.files?.[0] ?? null
@@ -153,6 +165,8 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
     confirmedDate?: string,
     confirmedEntityType?: 'SMLLC' | 'MMLLC' | '',
     confirmedFormationState?: 'NM' | 'WY' | 'FL' | 'DE' | '',
+    confirmedLegalName?: string,
+    legalNameDiffers?: boolean,
   ) {
     const apiRes = await fetch(`/api/flows/${serviceDeliveryId}/upload-document`, {
       method: 'POST',
@@ -168,6 +182,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         ...(confirmedDate ? { formation_date: confirmedDate } : {}),
         ...(confirmedEntityType ? { entity_type: confirmedEntityType } : {}),
         ...(confirmedFormationState ? { formation_state: confirmedFormationState } : {}),
+        ...(confirmedLegalName ? { legal_name: confirmedLegalName, legal_name_differs: legalNameDiffers === true } : {}),
         ...(requirePrincipalOffice ? { principal_office: principalOfficeAnswer(principalOffice) } : {}),
       }),
     })
@@ -222,6 +237,13 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         setFormationStateNeeded(false)
         setFormationStateOverride('')
         setPreflightBlocked(null)
+        setLegalNameShown(false)
+        setLegalName('')
+        setLegalReference('')
+        setArticlesName(null)
+        setArticlesDiffers(false)
+        setDifferTick(false)
+        setLegalNameProblem(null)
         setConfirming(true)
         setPrefilling(true)
         try {
@@ -247,6 +269,22 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
           if (pickers.entityType) setEntityTypeNeeded(true)
           if (pickers.state) setFormationStateNeeded(true)
           if (pickers.blocked) setPreflightBlocked(pickers.blocked)
+          setLegalNameProblem(pickers.nameProblem)
+          // The legal-name field is shown whenever the check answered for this formation (not on a failed lookup).
+          if (preRes?.applicable) {
+            const reference = typeof preRes.chosen_name === 'string' ? preRes.chosen_name : ''
+            const prefill = suggestLegalName({
+              referenceName: reference,
+              legalName: typeof preRes.legal_name === 'string' ? preRes.legal_name : null,
+              articlesName: typeof dateRes?.articles_name === 'string' ? dateRes.articles_name : null,
+            })
+            setLegalReference(reference)
+            setLegalName(prefill.value)
+            setArticlesName(prefill.articlesName)
+            setArticlesDiffers(prefill.articlesDiffers)
+            setDifferTick(false)
+            setLegalNameShown(true)
+          }
         } catch {
           // ignore — staff enter the date manually; the server-side gate
           // still refuses with an actionable message if something is missing
@@ -283,11 +321,34 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
       setError('Choose the formation state before continuing.')
       return
     }
+    if (legalNameShown) {
+      if (!legalName.trim()) {
+        setError('Enter the company legal name exactly as it is printed on the Articles.')
+        return
+      }
+      if (!hasValidLlcEnding(legalName)) {
+        setError('The company legal name must end in LLC, L.L.C. or Limited Liability Company, as printed on the Articles.')
+        return
+      }
+      if (legalNeedsTick && !differTick) {
+        setError('This name has different words from the filed name. Tick "The Articles name differs from the filed name" if the Articles really print it this way, or correct the name.')
+        return
+      }
+    }
     setUploading(true)
     setError(null)
     setWarn(null)
     try {
-      await commitUpload(stagedPathRef.current, file.name, file.type, formationDate, entityType, formationStateOverride)
+      await commitUpload(
+        stagedPathRef.current,
+        file.name,
+        file.type,
+        formationDate,
+        entityType,
+        formationStateOverride,
+        legalNameShown ? legalName : undefined,
+        legalNameShown ? legalNeedsTick && differTick : undefined,
+      )
       setConfirming(false)
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Upload failed — please try again.')
@@ -399,6 +460,49 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
             {prefilling && <p className="mt-2 text-xs text-zinc-500">Reading the date from the Articles…</p>}
             {!prefilling && formationDate && (
               <p className="mt-2 text-xs text-emerald-700">Pre-filled from the uploaded Articles — confirm it&apos;s correct.</p>
+            )}
+            {legalNameShown && (
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-zinc-700">
+                  Company legal name
+                  <input
+                    type="text"
+                    value={legalName}
+                    maxLength={120}
+                    onChange={(e) => setLegalName(e.target.value)}
+                    disabled={uploading}
+                    className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                  />
+                </label>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Exactly as printed on the Articles — the company, its storage folder and the SS-4 will carry this name.
+                </p>
+                {articlesName && !articlesDiffers && (
+                  <p className="mt-1 text-xs text-emerald-700">Read from the Articles: <strong>{articlesName}</strong> — confirm it&apos;s correct.</p>
+                )}
+                {articlesName && articlesDiffers && (
+                  <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    The Articles seem to print a different name: <strong>{articlesName}</strong> (filed name: {legalReference || '—'}).
+                    <button
+                      type="button"
+                      onClick={() => { setLegalName(articlesName); setDifferTick(true) }}
+                      disabled={uploading}
+                      className="ml-2 font-medium underline"
+                    >
+                      Use the Articles name
+                    </button>
+                  </div>
+                )}
+                {legalNameProblem && (
+                  <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">{legalNameProblem}</p>
+                )}
+                {legalNeedsTick && (
+                  <label className="mt-2 flex items-start gap-2 text-xs text-zinc-700">
+                    <input type="checkbox" checked={differTick} onChange={(e) => setDifferTick(e.target.checked)} disabled={uploading} className="mt-0.5" />
+                    <span>The Articles name differs from the filed name{legalReference ? ` (“${legalReference}”)` : ''}</span>
+                  </label>
+                )}
+              </div>
             )}
             {entityTypeNeeded && (
               <label className="mt-4 block text-sm font-medium text-zinc-700">

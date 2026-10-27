@@ -14,6 +14,7 @@ import { GoBackButton } from '@/components/flows/go-back-button'
 import { ItinOriginCard, type ItinOrigin } from '@/components/flows/itin-origin-card'
 import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
 import { filedName, type NameCheck } from '@/lib/flows/name-checks'
+import { displayLegalName } from '@/lib/flows/legal-name'
 import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from '@/components/flows/types'
 
 export const dynamic = 'force-dynamic'
@@ -57,7 +58,9 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
       .eq('id', params.id)
       .maybeSingle()
     formationFiledName = filedName((ncRow?.name_checks as NameCheck[] | null) ?? null)
-    if (sd.stage === 'Articles Received') companyCreatedName = formationFiledName
+    // The banner shows the REAL company name once the company exists (set just below from the account), else the filed name
+    // with the LLC ending — never the bare filed name ("Company Created — Tanto per" next to a company called "Tanto per LLC").
+    if (sd.stage === 'Articles Received') companyCreatedName = displayLegalName(formationFiledName)
   }
 
   const [{ data: accountRow }, { data: stageRows }] = await Promise.all([
@@ -76,6 +79,10 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
       .eq('service_type', sd.service_type)
       .order('stage_order', { ascending: true }),
   ])
+
+  if (companyCreatedName && (accountRow as { company_name?: string | null } | null)?.company_name) {
+    companyCreatedName = (accountRow as { company_name: string }).company_name
+  }
 
   // Cast via unknown: stage_layout was added by the S0 migration but the
   // generated DB types haven't been regenerated yet (gen:types pending).

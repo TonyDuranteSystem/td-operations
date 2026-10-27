@@ -44,6 +44,7 @@ import { resolveMemberContactId } from "@/lib/members/resolve-member-contact"
 import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identity"
 import { upsertMemberRow } from "@/lib/members/write-member-row"
 import { syncTier } from "./sync-tier"
+import { resolveFormationLegalName, sameCompanyName } from "@/lib/flows/legal-name"
 
 const STATE_NAME_FROM_CODE: Record<string, string> = {
   NM: "New Mexico",
@@ -81,6 +82,13 @@ export interface MaterializeFormationParams {
    * chosen_name_final. Existing callers omit this and keep the wizard lookup.
    */
   chosen_name?: string
+  /**
+   * The company legal name staff CONFIRMED in the Articles upload window (saved on the filed name before the advance,
+   * so every retry / stepper / tool path reads the same value). Wins over `chosen_name` and is used untouched; without
+   * it the name is the filed / wizard name run through the shared legal-name rule (the LLC ending is guaranteed —
+   * lib/flows/legal-name.ts, job 80cce1cb).
+   */
+  legal_name?: string
   actor?: string
 }
 
@@ -97,6 +105,7 @@ export interface MaterializeFormationResult {
     | "materialized_with_member_errors"
     | "already_materialized"
     | "missing_chosen_name"
+    | "invalid_name"
     | "missing_submission"
     | "invalid_state"
     | "missing_entity_type"
@@ -244,11 +253,23 @@ export async function fetchFormationSourceData(contactId: string): Promise<Forma
   return selectFormationSource({ sub: sub ?? null, wp: wp ?? null })
 }
 
+/**
+ * The name the legal name is judged against: the filed name, else the wizard's final / chosen name — the same fallback
+ * order the pre-check and the materializer use. The upload route validates a staff-confirmed legal name against it.
+ */
+export async function formationReferenceName(contactId: string, filed: string | null | undefined): Promise<string> {
+  const f = String(filed ?? "").trim()
+  if (f) return f
+  const src = await fetchFormationSourceData(contactId)
+  return String(src.wizardData.chosen_name_final || src.wizardData.chosen_name || "").trim()
+}
+
 // ─── Deterministic preflight (dry-run of the materialization gates) ──────────
 
 export type FormationPreflightFailure =
   | "missing_submission"
   | "missing_chosen_name"
+  | "invalid_name"
   | "invalid_state"
   | "missing_entity_type"
 
@@ -270,6 +291,10 @@ export interface FormationMaterializePreflightResult {
   /** True when the entity type could not be resolved automatically —
    *  independent of whether state also failed. */
   needs_entity_type?: boolean
+  /** The name cannot be used as it stands (ends in Inc / Corp / LP…) — staff must confirm the real legal name. */
+  needs_legal_name?: boolean
+  /** The company legal name the company would be created with (filed name + the ending rule), when there is one. */
+  legal_name?: string
   state_code?: FormationStateCode
   state_source?: "wizard" | "submission" | "offer" | "admin"
   entity_code?: "SMLLC" | "MMLLC"
@@ -307,6 +332,8 @@ export async function preflightFormationMaterialization(input: {
   formation_state?: FormationStateCode | null
   /** Staff-supplied LLC-type override (wins over every other source). */
   entity_type?: "SMLLC" | "MMLLC" | null
+  /** The legal name staff confirmed on the filed name (name_checks) — wins, untouched. */
+  legal_name?: string | null
 }): Promise<FormationMaterializePreflightResult> {
   const src = await fetchFormationSourceData(input.contact_id)
 
@@ -319,10 +346,14 @@ export async function preflightFormationMaterialization(input: {
     }
   }
 
-  const chosenName = String(
-    input.chosen_name || src.wizardData.chosen_name_final || src.wizardData.chosen_name || "",
-  ).trim()
-  if (!chosenName) {
+  // ONE resolver decides the name (pre-check, advance gate and materializer all call it — lib/flows/legal-name.ts).
+  const resolvedName = resolveFormationLegalName({
+    confirmedLegalName: input.legal_name,
+    filedName: input.chosen_name,
+    wizardFinalName: src.wizardData.chosen_name_final,
+    wizardChosenName: src.wizardData.chosen_name,
+  })
+  if (!resolvedName.ok && resolvedName.reason === "empty") {
     return {
       ok: false,
       failure: "missing_chosen_name",
@@ -330,6 +361,10 @@ export async function preflightFormationMaterialization(input: {
         "No confirmed company name yet. Mark the filed LLC name first (Name checks → the name the state approved).",
     }
   }
+  // A name that cannot be used as it stands (Inc / Corp / too long) does NOT return early: the state and entity-type
+  // checks below still run, so staff see every blocker at once and can fix them together in the upload window.
+  const nameError = resolvedName.ok ? null : resolvedName.detail
+  const chosenName = resolvedName.ok ? resolvedName.name : resolvedName.base
 
   // State and entity-type are checked INDEPENDENTLY — neither short-circuits
   // the other — so a formation missing BOTH is reported as needing both at
@@ -370,23 +405,25 @@ export async function preflightFormationMaterialization(input: {
   })
   const entityUnresolved = resolution.source === "corporation_manual" || !resolution.wizardCode || !resolution.accountLabel
 
-  if (stateError || entityUnresolved) {
+  if (stateError || entityUnresolved || nameError) {
+    // State is the primary reason when several are missing, then the entity type, then the name — the order these
+    // checks have always run in, unchanged for callers that only look at `failure`.
+    const reasons = [stateError, entityUnresolved ? resolution.detail : null, nameError].filter((r): r is string => !!r)
     return {
       ok: false,
-      // State reported as the primary reason when both are missing, matching
-      // the order these checks have always run in — unchanged for callers
-      // that only look at `failure`.
-      failure: stateError ? "invalid_state" : "missing_entity_type",
-      error: stateError ? (entityUnresolved ? `${stateError} Also: ${resolution.detail}` : stateError) : resolution.detail,
+      failure: stateError ? "invalid_state" : entityUnresolved ? "missing_entity_type" : "invalid_name",
+      error: reasons.length > 1 ? `${reasons[0]} Also: ${reasons.slice(1).join(" Also: ")}` : reasons[0],
       chosen_name: chosenName,
       needs_state: !!stateError,
       needs_entity_type: entityUnresolved,
+      needs_legal_name: !!nameError,
     }
   }
 
   return {
     ok: true,
     chosen_name: chosenName,
+    legal_name: chosenName,
     state_code: stateCode ?? undefined,
     state_source: stateSource ?? undefined,
     entity_code: resolution.wizardCode,
@@ -453,8 +490,15 @@ export async function materializeFormationCompany(
       })
     }
 
-    const chosenName = String(params.chosen_name || wizardData.chosen_name_final || wizardData.chosen_name || "").trim()
-    if (!chosenName) {
+    // The SAME resolver as the pre-check and the advance gate (lib/flows/legal-name.ts): the company is created with its
+    // full legal name — the staff-confirmed one, else the filed / wizard name with the LLC ending guaranteed.
+    const resolvedName = resolveFormationLegalName({
+      confirmedLegalName: params.legal_name,
+      filedName: params.chosen_name,
+      wizardFinalName: wizardData.chosen_name_final,
+      wizardChosenName: wizardData.chosen_name,
+    })
+    if (!resolvedName.ok && resolvedName.reason === "empty") {
       return {
         success: false,
         outcome: "missing_chosen_name",
@@ -462,7 +506,21 @@ export async function materializeFormationCompany(
         error: "No chosen LLC name on wizard data. Use 'Confirm Selected Name' on the contact page first.",
       }
     }
-    steps.push({ step: "fetch_chosen_name", status: "ok", detail: chosenName })
+    if (!resolvedName.ok) {
+      return { success: false, outcome: "invalid_name", steps, error: resolvedName.detail }
+    }
+    const chosenName = resolvedName.name
+    const rawName = String(params.chosen_name || wizardData.chosen_name_final || wizardData.chosen_name || "").trim()
+    steps.push({
+      step: "fetch_chosen_name",
+      status: "ok",
+      detail:
+        resolvedName.change === "added"
+          ? `${chosenName} (the LLC ending was added to "${rawName}")`
+          : resolvedName.change === "recased"
+            ? `${chosenName} (the ending was corrected from "${rawName}")`
+            : chosenName,
+    })
 
     // 3. Idempotency — skip only if THIS formation's company already exists for
     // the contact, matched by the chosen company name. An existing client
@@ -479,11 +537,13 @@ export async function materializeFormationCompany(
       .eq("contact_id", params.contact_id)
 
     if (existingLinks && existingLinks.length > 0) {
-      const chosenLower = chosenName.toLowerCase().trim()
+      // Same company = same name apart from capitals / punctuation / the LLC ending — so a company created BEFORE the
+      // ending rule as "Tanto per" is still recognised on a retry as "Tanto per LLC" (a raw lowercase compare would
+      // have created a second company).
       const sameCompany = existingLinks.find(l => {
         const acc = l.accounts as unknown as { id: string; company_name: string; status: string } | null
         return acc && acc.status !== "Cancelled" && acc.status !== "Closed" &&
-          (acc.company_name || "").toLowerCase().trim() === chosenLower
+          sameCompanyName(acc.company_name, chosenName)
       })
       if (sameCompany) {
         const acc = sameCompany.accounts as unknown as { id: string; company_name: string; status: string }

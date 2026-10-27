@@ -170,6 +170,40 @@ describe('advanceServiceDelivery §4b — deterministic materialization refusal 
     expect(writes.filter((w) => w.table === 'service_deliveries')).toEqual([])
   })
 
+  it('REFUSES the advance on invalid_name (ends in Inc / Corp…) and says to ENTER the legal name — job 80cce1cb', async () => {
+    const writes = installFrom()
+    vi.mocked(preflightFormationMaterialization).mockResolvedValue({
+      ok: false,
+      failure: 'invalid_name',
+      error: 'The name "Acme Inc" ends in "Inc", which is not an LLC ending.',
+      needs_legal_name: true,
+    })
+
+    const r = await advanceServiceDelivery({
+      delivery_id: 'sd-1',
+      target_stage: 'Articles Received',
+      actor: 'test',
+    })
+
+    expect(r.success).toBe(false)
+    expect(r.error).toContain('Cannot create the company record')
+    expect(r.error).toContain('Enter the company legal name exactly as printed on the Articles')
+    expect(r.error).not.toContain('Choose')
+    expect(writes.filter((w) => w.table === 'service_deliveries')).toEqual([])
+  })
+
+  it('passes the staff-confirmed legal name (this request\'s) into the preflight AND the materializer — the same value, so the gate and the creation cannot disagree — job 80cce1cb', async () => {
+    installFrom()
+    vi.mocked(preflightFormationMaterialization).mockResolvedValue({ ok: true })
+    await advanceServiceDelivery({
+      delivery_id: 'sd-1',
+      target_stage: 'Articles Received',
+      actor: 'test',
+      legal_name: 'Tanto Per LLC',
+    })
+    expect(vi.mocked(preflightFormationMaterialization).mock.calls[0][0]).toMatchObject({ legal_name: 'Tanto Per LLC' })
+  })
+
   it('passes the staff formation_state override into the preflight', async () => {
     installFrom()
     vi.mocked(preflightFormationMaterialization).mockResolvedValue({

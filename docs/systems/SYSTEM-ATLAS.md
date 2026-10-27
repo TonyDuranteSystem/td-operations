@@ -196,7 +196,7 @@ _Regenerated 2026-10-27. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-21)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-21)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-27)_
-- [formation.md](formation.md) — Company Formation _(verified 2026-10-21)_
+- [formation.md](formation.md) — Company Formation _(verified 2026-10-27)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-23)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-26)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-24)_
@@ -213,7 +213,7 @@ _Regenerated 2026-10-27. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-10-23)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-10-25)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-10-27)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-10-23)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-10-23)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_

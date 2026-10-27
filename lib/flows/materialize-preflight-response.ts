@@ -19,6 +19,10 @@ export interface PreflightResponseBody {
   needs_state: boolean
   /** The LLC type could not be worked out automatically — the window must show the LLC-type picker. */
   needs_entity_type: boolean
+  /** The name cannot be used as it stands (ends in Inc / Corp / LP…) — staff must confirm the real legal name in the window. */
+  needs_legal_name: boolean
+  /** The company legal name the company would be created with (filed name + the LLC-ending rule), or null when there is none yet. */
+  legal_name: string | null
   chosen_name: string | null
   state_code: string | null
   state_source: string | null
@@ -39,6 +43,8 @@ export function buildPreflightResponseBody(
     error: pre.error ?? null,
     needs_state: pre.needs_state === true,
     needs_entity_type: pre.needs_entity_type === true,
+    needs_legal_name: pre.needs_legal_name === true,
+    legal_name: pre.legal_name ?? null,
     chosen_name: pre.chosen_name ?? confirmedName ?? null,
     state_code: pre.state_code ?? null,
     state_source: pre.state_source ?? null,
@@ -52,6 +58,8 @@ export interface PreflightPickers {
   state: boolean
   /** Show the "LLC type" picker. */
   entityType: boolean
+  /** The name problem to show next to the legal-name field (the field itself is always shown on the Articles window), or null. */
+  nameProblem: string | null
   /** A blocker staff cannot fix with a picker (e.g. no name marked as filed yet) — shown as text, Confirm stays locked. */
   blocked: string | null
 }
@@ -64,16 +72,20 @@ export interface PreflightPickers {
  * has nothing a picker can fix is returned as `blocked` text, and never silently swallowed.
  */
 export function pickersFromPreflight(res: Partial<PreflightResponseBody> | null | undefined): PreflightPickers {
-  const none: PreflightPickers = { state: false, entityType: false, blocked: null }
+  const none: PreflightPickers = { state: false, entityType: false, nameProblem: null, blocked: null }
   if (!res || !res.applicable || res.ok !== false) return none
 
   let state = res.needs_state === true
   let entityType = res.needs_entity_type === true
-  if (!state && !entityType) {
+  let name = res.needs_legal_name === true
+  if (!state && !entityType && !name) {
     if (res.failure === 'invalid_state') state = true
     else if (res.failure === 'missing_entity_type') entityType = true
+    else if (res.failure === 'invalid_name') name = true
   }
-  if (state || entityType) return { state, entityType, blocked: null }
+  // A name problem is shown next to the legal-name field (staff fix it right there) — it never locks the window.
+  const nameProblem = name ? res.error || 'The company name cannot be used as it stands — enter the legal name as printed on the Articles.' : null
+  if (state || entityType || name) return { state, entityType, nameProblem, blocked: null }
 
-  return { state: false, entityType: false, blocked: res.error || 'The company cannot be created yet.' }
+  return { state: false, entityType: false, nameProblem: null, blocked: res.error || 'The company cannot be created yet.' }
 }

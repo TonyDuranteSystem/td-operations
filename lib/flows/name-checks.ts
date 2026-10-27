@@ -41,6 +41,12 @@ export interface NameCheck {
   sos_result?: string | null
   /** The client's free-text note when they rejected this proposed name. */
   note?: string | null
+  /**
+   * The company LEGAL name staff confirmed in the Articles upload window (the name exactly as printed on the Articles).
+   * Saved on the FILED entry before the advance so every retry / stepper / tool path creates the same company name
+   * (job 80cce1cb). Absent = the name is derived from `name` by the shared legal-name rule (lib/flows/legal-name.ts).
+   */
+  legal_name?: string | null
 }
 
 /** Display metadata per status (label + emoji) for the staff panel + badges. */
@@ -321,6 +327,13 @@ export function filedName(checks: NameCheck[] | null | undefined): string | null
   if (!Array.isArray(checks)) return null
   const filed = checks.find((c) => c.status === 'filed')
   return filed ? str(filed.name) : null
+}
+
+/** The staff-confirmed legal name saved on the filed entry, or null (then the legal name is derived from the filed name). Pure. */
+export function filedLegalName(checks: NameCheck[] | null | undefined): string | null {
+  if (!Array.isArray(checks)) return null
+  const filed = checks.find((c) => c.status === 'filed')
+  return filed ? str(filed.legal_name) : null
 }
 
 const CONFIRMED_ENOUGH_RANK: Partial<Record<NameCheckStatus, number>> = {

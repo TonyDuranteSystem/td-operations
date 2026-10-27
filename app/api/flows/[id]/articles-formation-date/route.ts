@@ -7,6 +7,9 @@
  * storage_path to get a suggested filing date that staff confirm/correct before
  * the upload commits and materializes the company.
  *
+ * Also returns `articles_name` — the company name printed on the Articles (null when it cannot be read with confidence) —
+ * which only PREFILLS the window's "Company legal name" field; staff confirm it (job 80cce1cb).
+ *
  * Never throws to the caller — on any failure it returns { formation_date: null }
  * and the UI falls back to manual entry. [id] = service_delivery_id (audit only).
  */
@@ -17,7 +20,7 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { ocrRawContent } from '@/lib/docai'
-import { parseFormationDate } from '@/lib/articles-parse'
+import { parseFormationDate, parseArticlesCompanyName } from '@/lib/articles-parse'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function GET(req: NextRequest, { params: _params }: { params: { id: string } }) {
@@ -44,8 +47,10 @@ export async function GET(req: NextRequest, { params: _params }: { params: { id:
       fileName,
     )
     const formationDate = ocr?.fullText ? parseFormationDate(ocr.fullText) : null
+    // The company name printed on the Articles — PREFILL only for the window's "Company legal name" field (staff confirm it).
+    const articlesName = ocr?.fullText ? parseArticlesCompanyName(ocr.fullText) : null
 
-    return NextResponse.json({ success: true, formation_date: formationDate })
+    return NextResponse.json({ success: true, formation_date: formationDate, articles_name: articlesName })
   } catch (e) {
     // Best-effort: never block the workspace. UI falls back to manual entry.
     return NextResponse.json({ success: true, formation_date: null, reason: e instanceof Error ? e.message : 'ocr_failed' })
