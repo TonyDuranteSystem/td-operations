@@ -13,6 +13,8 @@
  * which is why the workspace path fell back to today() and produced wrong dates.
  */
 
+import { cleanNameText, hasValidLlcEnding, MAX_LEGAL_NAME_LENGTH } from "@/lib/flows/legal-name"
+
 export interface ArticlesParsed {
   company_name: string | null
   entity_type: string | null
@@ -128,7 +130,8 @@ export function parseArticlesText(text: string): ArticlesParsed {
   }
   if (result.company_name) {
     const cn = result.company_name.toLowerCase()
-    if (cn.includes("corp") || cn.includes("inc")) result.entity_type = "C-Corp Elected"
+    // Whole words only: "Lincoln Partners LLC" / "Zinc LLC" are not corporations (a substring test flagged them).
+    if (/\b(corp|corporation|inc|incorporated)\b/.test(cn)) result.entity_type = "C-Corp Elected"
   }
 
   // ── State of Formation ──
@@ -182,4 +185,46 @@ export function parseArticlesText(text: string): ArticlesParsed {
   }
 
   return result
+}
+
+// ─── The company name printed on the Articles (prefill for the upload window's "Company legal name" field) ────────────────────────
+
+const NAME_LABELS: RegExp[] = [
+  /limited\s+liability\s+company\s+name\s*[:;]?\s*([^\n]+)((?:\n[^\n]*)?)/i,
+  /name\s+of\s+(?:the\s+)?(?:limited\s+liability\s+company|LLC|entity|domestic\s+LLC)\s*(?:is|shall\s+be)?\s*[:;]?\s*([^\n]+)((?:\n[^\n]*)?)/i,
+  /entity\s+name\s*[:;]?\s*([^\n]+)((?:\n[^\n]*)?)/i,
+  /company\s+name\s*[:;]?\s*([^\n]+)((?:\n[^\n]*)?)/i,
+  /the\s+name\s+of\s+(?:this|the)\s+(?:limited\s+liability\s+)?company\s+(?:is|shall\s+be)\s*[:;]?\s*([^\n]+)((?:\n[^\n]*)?)/i,
+  /(?:first|1\.|article\s+(?:i|1)\b)[^\n]{0,40}?name[^\n]{0,60}?(?:is|shall\s+be)\s*[:;]?\s*([^\n]+)((?:\n[^\n]*)?)/i,
+]
+// A second line that is only the ending ("Tanto Per" / "LLC") — the name wrapped.
+const LONE_ENDING = /^\s*(llc|l\.\s?l\.\s?c\.?|pllc|limited liability company)\s*[.,;]?\s*$/i
+// Instruction / label text that is NOT a company name.
+const NOT_A_NAME = /(must\s+(include|contain|end)|designator|required|shall\s+include|should|please|example|e\.g\.|\(|:|\bname\s+of\b|secretary\s+of\s+state|effective\s+date)/i
+
+/**
+ * The company name as printed on the Articles, or null when it cannot be read with confidence. PREFILL ONLY (staff confirm it in the
+ * upload window): it never decorates a name — a candidate without a valid LLC ending is rejected, never completed — and it keeps the
+ * Articles' own capitals and a dotted ending's final period ("Acme L.L.C."). A name wrapped onto a second line ("Tanto Per" / "LLC")
+ * is joined. Synthetic WY / FL / DE layouts are tested; only the NM layout is a real sample.
+ */
+export function parseArticlesCompanyName(text: string): string | null {
+  if (typeof text !== "string" || !text) return null
+  for (const pat of NAME_LABELS) {
+    const m = text.match(pat)
+    if (!m) continue
+    let candidate = cleanNameText(m[1])
+    const nextLine = cleanNameText(m[2])
+    // The captured line is just the label's tail or empty → the name is on the next line.
+    if (!candidate) continue
+    if (nextLine && LONE_ENDING.test(nextLine) && !hasValidLlcEnding(candidate)) candidate = `${candidate} ${nextLine}`
+    candidate = candidate.replace(/^["'\u2018\u201C]+|["'\u2019\u201D]+$/g, "").replace(/[;,\s]+$/, "").trim()
+    // A sentence full stop is not part of the name — but "L.L.C." keeps its dot.
+    if (candidate.endsWith(".") && !/\b(l\.\s?l\.\s?c|l\.\s?c|p\.\s?l\.\s?l\.\s?c)\.$/i.test(candidate)) candidate = candidate.slice(0, -1).trim()
+    if (candidate.length < 3 || candidate.length > MAX_LEGAL_NAME_LENGTH) continue
+    if (NOT_A_NAME.test(candidate)) continue
+    if (!hasValidLlcEnding(candidate)) continue
+    return candidate
+  }
+  return null
 }

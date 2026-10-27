@@ -16,6 +16,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { CHANGE_NAME_STAGES } from '@/lib/flows/change-name-stages'
 import { nameDedupeKey, type NameCheck } from '@/lib/flows/name-checks'
+import { hasValidLlcEnding } from '@/lib/flows/legal-name'
 import { applyAccountNameChange, undoAccountNameChange } from '@/lib/operations/account-name-change'
 
 export const OPEN_LEASE_STATUSES = ['draft', 'sent', 'viewed'] as const
@@ -138,6 +139,18 @@ export interface ApplyNameResult {
   alreadyApplied?: boolean
 }
 
+/**
+ * PURE: an LLC that is renamed must stay an LLC by name — the typed new name must carry a valid ending (LLC, L.L.C., Limited Liability
+ * Company…), exactly as the state's document prints it. A company whose CURRENT name has no LLC ending (a corporation, a legacy record) is
+ * not held to it. Returns the plain sentence for staff, or null (job 80cce1cb — before this, typing "Acme" for "Old Name LLC" saved a
+ * company named "Acme" without its ending).
+ */
+export function newNameEndingProblem(currentName: string | null | undefined, typedName: string): string | null {
+  if (!hasValidLlcEnding(currentName)) return null
+  if (hasValidLlcEnding(typedName)) return null
+  return `The new name "${typedName}" has no LLC ending. Type it exactly as the state's document prints it — it must end in LLC, L.L.C. or Limited Liability Company.`
+}
+
 export async function applyNewName(p: { sdId: string; typedName: string; confirmMismatch?: boolean; actorId: string; actorLabel: string }): Promise<ApplyNameResult> {
   const typed = (p.typedName ?? '').replace(/\s+/g, ' ').trim()
   if (!typed) return { ok: false, error: 'Type the new name exactly as printed on the state\'s document.' }
@@ -148,6 +161,8 @@ export async function applyNewName(p: { sdId: string; typedName: string; confirm
   if (state.applied) return { ok: true, alreadyApplied: true, oldName: state.applied.oldName ?? undefined, newName: state.applied.newName ?? undefined }
   if (state.blockers.length > 0) return { ok: false, error: state.blockers.join(' ') }
   if (!state.currentName) return { ok: false, error: 'The company has no name on record.' }
+  const endingProblem = newNameEndingProblem(state.currentName, typed)
+  if (endingProblem) return { ok: false, error: endingProblem }
 
   if (typedNameDiffersFromFiled(typed, state.filedName) && !p.confirmMismatch) {
     return {

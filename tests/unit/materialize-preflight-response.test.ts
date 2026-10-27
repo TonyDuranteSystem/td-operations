@@ -40,13 +40,13 @@ describe("buildPreflightResponseBody — the answer carries both flags (the regr
 
 describe("pickersFromPreflight — what the Articles window shows", () => {
   it("state missing: the state picker shows, no blocking text", () => {
-    expect(pickersFromPreflight(buildPreflightResponseBody(noState, "x"))).toEqual({ state: true, entityType: false, blocked: null })
+    expect(pickersFromPreflight(buildPreflightResponseBody(noState, "x"))).toEqual({ state: true, entityType: false, nameProblem: null, blocked: null })
   })
   it("LLC type missing: the LLC-type picker shows", () => {
-    expect(pickersFromPreflight(buildPreflightResponseBody(noEntity, "x"))).toEqual({ state: false, entityType: true, blocked: null })
+    expect(pickersFromPreflight(buildPreflightResponseBody(noEntity, "x"))).toEqual({ state: false, entityType: true, nameProblem: null, blocked: null })
   })
   it("both missing: both pickers show together (fixing one must not just reveal the other)", () => {
-    expect(pickersFromPreflight(buildPreflightResponseBody(noBoth, "x"))).toEqual({ state: true, entityType: true, blocked: null })
+    expect(pickersFromPreflight(buildPreflightResponseBody(noBoth, "x"))).toEqual({ state: true, entityType: true, nameProblem: null, blocked: null })
   })
   it("a problem no picker can fix (no filed name yet) is shown as text and the window stays locked", () => {
     const p = pickersFromPreflight(buildPreflightResponseBody(noName, null))
@@ -60,12 +60,12 @@ describe("pickersFromPreflight — what the Articles window shows", () => {
   it("an answer WITHOUT the flags (the old broken shape) still gets the right picker from `failure`", () => {
     // exactly what the route used to send for Alessandro Girino's formation
     const old = { success: true, applicable: true, ok: false, failure: "invalid_state", error: STATE_ERROR } as never
-    expect(pickersFromPreflight(old)).toEqual({ state: true, entityType: false, blocked: null })
+    expect(pickersFromPreflight(old)).toEqual({ state: true, entityType: false, nameProblem: null, blocked: null })
     const oldEntity = { success: true, applicable: true, ok: false, failure: "missing_entity_type", error: "x" } as never
-    expect(pickersFromPreflight(oldEntity)).toEqual({ state: false, entityType: true, blocked: null })
+    expect(pickersFromPreflight(oldEntity)).toEqual({ state: false, entityType: true, nameProblem: null, blocked: null })
   })
   it("nothing to show when the check passes, does not apply, failed to load, or is empty", () => {
-    const none = { state: false, entityType: false, blocked: null }
+    const none = { state: false, entityType: false, nameProblem: null, blocked: null }
     expect(pickersFromPreflight(buildPreflightResponseBody(fine, "x"))).toEqual(none)
     expect(pickersFromPreflight({ success: true, applicable: false } as never)).toEqual(none)
     expect(pickersFromPreflight({})).toEqual(none)
@@ -113,7 +113,7 @@ describe("GET /api/flows/[id]/materialize-preflight — end to end through the r
     expect(status).toBe(200)
     expect(body.needs_state).toBe(true)
     expect(body.needs_entity_type).toBe(false)
-    expect(pickersFromPreflight(body)).toEqual({ state: true, entityType: false, blocked: null })
+    expect(pickersFromPreflight(body)).toEqual({ state: true, entityType: false, nameProblem: null, blocked: null })
   })
   it("both missing → both flags in the HTTP answer", async () => {
     h.pre = noBoth
@@ -125,7 +125,7 @@ describe("GET /api/flows/[id]/materialize-preflight — end to end through the r
     h.pre = fine
     const { body } = await call()
     expect(body).toMatchObject({ ok: true, needs_state: false, needs_entity_type: false })
-    expect(pickersFromPreflight(body)).toEqual({ state: false, entityType: false, blocked: null })
+    expect(pickersFromPreflight(body)).toEqual({ state: false, entityType: false, nameProblem: null, blocked: null })
   })
   it("not applicable (already has a company, or not a formation): nothing to ask", async () => {
     h.sd = { id: "sd-1", service_type: "Company Formation", account_id: "acct-1", contact_id: "c-1", name_checks: [] }
@@ -136,5 +136,34 @@ describe("GET /api/flows/[id]/materialize-preflight — end to end through the r
   it("unknown flow → 404, not a crash", async () => {
     h.sd = null
     expect((await call()).status).toBe(404)
+  })
+})
+
+// ─── Job 80cce1cb: the legal name travels in the same answer ─────────────────────────────────────────────────
+
+describe("legal name in the check's answer", () => {
+  it("carries legal_name and needs_legal_name from the check", () => {
+    const ok = buildPreflightResponseBody({ ok: true, chosen_name: "Tanto per LLC", legal_name: "Tanto per LLC" }, "Tanto per")
+    expect(ok).toMatchObject({ ok: true, needs_legal_name: false, legal_name: "Tanto per LLC", chosen_name: "Tanto per LLC" })
+    const bad = buildPreflightResponseBody({ ok: false, failure: "invalid_name", error: 'The name "Acme Inc" ends in "Inc", which is not an LLC ending.', needs_legal_name: true, chosen_name: "Acme Inc" }, "Acme Inc")
+    expect(bad).toMatchObject({ ok: false, failure: "invalid_name", needs_legal_name: true, legal_name: null })
+  })
+
+  it("a name problem is shown next to the legal-name field and NEVER locks the window", () => {
+    const body = buildPreflightResponseBody({ ok: false, failure: "invalid_name", error: "not an LLC ending", needs_legal_name: true }, "Acme Inc")
+    const p = pickersFromPreflight(body)
+    expect(p.nameProblem).toContain("not an LLC ending")
+    expect(p.blocked).toBeNull()
+  })
+
+  it("an answer without the flag still gets the name problem from `failure` (invalid_name)", () => {
+    const p = pickersFromPreflight({ applicable: true, ok: false, failure: "invalid_name", error: "not an LLC ending" })
+    expect(p).toEqual({ state: false, entityType: false, nameProblem: "not an LLC ending", blocked: null })
+  })
+
+  it("state + name together: both are reported", () => {
+    const p = pickersFromPreflight({ applicable: true, ok: false, failure: "invalid_state", error: "x", needs_state: true, needs_legal_name: true })
+    expect(p.state).toBe(true)
+    expect(p.nameProblem).toBe("x")
   })
 })

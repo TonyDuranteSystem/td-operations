@@ -27,7 +27,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { preflightFormationMaterialization } from '@/lib/operations/formation-materialize'
-import { filedName, type NameCheck } from '@/lib/flows/name-checks'
+import { filedName, filedLegalName, type NameCheck } from '@/lib/flows/name-checks'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { buildPreflightResponseBody } from '@/lib/flows/materialize-preflight-response'
 
@@ -49,10 +49,12 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ success: true, applicable: false })
     }
 
-    const confirmedName = filedName((sd.name_checks as NameCheck[] | null) ?? null)
+    const checks = (sd.name_checks as NameCheck[] | null) ?? null
+    const confirmedName = filedName(checks)
     const pre = await preflightFormationMaterialization({
       contact_id: sd.contact_id,
       chosen_name: confirmedName,
+      legal_name: filedLegalName(checks),
     })
 
     return NextResponse.json(buildPreflightResponseBody(pre, confirmedName))

@@ -22,6 +22,7 @@
  */
 
 import { CHANGE_NAME_STAGES } from '@/lib/flows/change-name-stages'
+import { displayLegalName } from '@/lib/flows/legal-name'
 
 export type NameLoopKey = 'formation' | 'change_name'
 
@@ -118,9 +119,13 @@ export interface DecisionCopy {
   options: Record<string, unknown>
 }
 
-/** "Acme" → "Acme LLC" (the card's hero title); a name that already says LLC is left alone. */
+/**
+ * "Acme" → "Acme LLC" (the card's hero title); a name that already carries a valid ending (LLC, L.L.C., Limited Liability Company…)
+ * is left alone. The same rule as the company's legal name (lib/flows/legal-name.ts) and TOTAL — it never refuses: a name that ends
+ * in Inc / Corp is shown as it is (staff are told at "Send to client", the refusal lives in the formation gate, not in a display).
+ */
 export function displayNameFor(name: string): string {
-  return /llc\b/i.test(name) ? name : `${name} LLC`
+  return displayLegalName(name)
 }
 
 /** The approval card for ONE available name. */

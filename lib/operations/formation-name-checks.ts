@@ -34,6 +34,7 @@ import {
   type NameLoopPolicy,
 } from '@/lib/flows/name-loop-policy'
 import { CHANGE_NAME_STAGES } from '@/lib/flows/change-name-stages'
+import { legalNameFor } from '@/lib/flows/legal-name'
 import { createDecisionRequest } from '@/lib/operations/decision-request'
 import { buildFlowTopic, deriveFlowYear } from '@/lib/flows/resolve-flows'
 import { notifyClientOfAdminMessage } from '@/lib/portal/notifications'
@@ -676,6 +677,12 @@ export async function handleNameAction(params: {
     if (policy.oneAtATime && anotherNameInProgress(checks, params.nameIndex)) {
       return { ok: false, error: 'Another name is already with the client, accepted or filed. Withdraw it or finish it before sending a different one.' }
     }
+    // A formation name that ends in Inc / Corp / LP… can never be an LLC's name: tell staff NOW, before the client sees
+    // "Acme Inc. LLC" on their approval card (the same rule refuses it again when the company is created).
+    if (policy.key === 'formation') {
+      const lc = legalNameFor(entry.name)
+      if (!lc.ok && lc.reason === 'blocked_ending') return { ok: false, error: lc.detail }
+    }
     const stateResult = await resolveStateFor(policy, row)
     if (!stateResult.ok) return { ok: false, error: stateResult.error }
     const state = stateResult.state
@@ -1005,4 +1012,34 @@ export async function applyNameDecisionResponse(
       /* best-effort */
     }
   }
+}
+
+export interface SaveLegalNameResult {
+  ok: boolean
+  error?: string
+  /** True when the name was written onto the filed entry (false = nothing is filed yet, so there is nothing to attach it to). */
+  saved?: boolean
+}
+
+/**
+ * Saves the company LEGAL name staff confirmed in the Articles upload window onto the FILED name, BEFORE the advance, so every
+ * later path (a retry after a partial failure, the stage stepper, a tool) creates the company with the same name instead of
+ * re-deriving a different one (job 80cce1cb). The caller has already validated it (validateConfirmedLegalName). Refused once the
+ * company exists (a rename after that is "Fix spelling" / Change Name). Version-guarded like every other save of the names.
+ * When no name is filed yet (the wizard-name fallback) there is nothing to attach it to — it is still passed to the advance.
+ */
+export async function saveConfirmedLegalName(params: { sdId: string; legalName: string }): Promise<SaveLegalNameResult> {
+  const loaded = await loadWithChecks(params.sdId)
+  if (!loaded) return { ok: false, error: 'Flow not found.' }
+  const { row, checks } = loaded
+  if (row.service_type !== 'Company Formation') return { ok: false, error: 'Only a Company Formation has a company legal name to confirm.' }
+  if (row.account_id) {
+    return { ok: false, error: 'The company already exists — its name can only be changed with "Fix spelling" on the company.' }
+  }
+  const filed = checks.find((c) => c.status === 'filed')
+  if (!filed) return { ok: true, saved: false }
+  if (filed.legal_name === params.legalName) return { ok: true, saved: true }
+  filed.legal_name = params.legalName
+  const written = await writeNameChecks(params.sdId, checks, row.updated_at)
+  return written.ok ? { ok: true, saved: true } : { ok: false, error: written.error }
 }

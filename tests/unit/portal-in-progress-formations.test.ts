@@ -90,7 +90,8 @@ describe('getInProgressFormations — client-facing label', () => {
     })
     const r = await getInProgressFormations(CONTACT_ID)
     expect(r).toHaveLength(1)
-    expect(r[0].label).toBe('Salemark llc')
+    // the client sees the same name the company will get (lib/flows/legal-name.ts): the lowercase "llc" is corrected
+    expect(r[0].label).toBe('Salemark LLC')
   })
 
   it('REGRESSION PIN: does not silently fall back to the generic placeholder when name_checks has a confirmed name and wizard_progress has none', async () => {
@@ -102,7 +103,8 @@ describe('getInProgressFormations — client-facing label', () => {
       wizardData: { chosen_name: null, chosen_name_final: null },
     })
     const r = await getInProgressFormations(CONTACT_ID)
-    expect(r[0].label).toBe('Salemark llc')
+    // the client sees the same name the company will get (lib/flows/legal-name.ts): the lowercase "llc" is corrected
+    expect(r[0].label).toBe('Salemark LLC')
     expect(r[0].label).not.toBe('Company Formation')
   })
 

@@ -14,6 +14,7 @@ import { normalizeStageHistory } from '@/lib/stage-history-helpers'
 import { resolveTaxWizardEligibility } from '@/lib/tax/wizard-eligibility'
 import { completeWizardFormTitle, startWizardFormTitle } from '@/lib/portal/wizard-labels'
 import { confirmedClientFacingName, type NameCheck } from '@/lib/flows/name-checks'
+import { displayLegalName } from '@/lib/flows/legal-name'
 
 /**
  * Portal data queries. All use supabaseAdmin (service role, bypasses RLS)
@@ -493,6 +494,8 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
       const wd = (wp?.data ?? {}) as Record<string, unknown>
       chosenName = String(wd.chosen_name_final || wd.chosen_name || '').trim()
     }
+    // The client sees the same name the company will get ("Tanto per LLC", as on their approval card), not the bare one.
+    chosenName = displayLegalName(chosenName)
   }
 
   return sds.map(sd => ({

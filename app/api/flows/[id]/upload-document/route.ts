@@ -35,6 +35,10 @@ import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { NO_STORAGE_REASON_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 import { parsePrincipalOfficeDecision, applyPrincipalOfficeDecision, type PrincipalOfficeDecision } from '@/lib/operations/principal-office'
 import { isClientSafeFlowDoc } from '@/lib/flows/flow-doc-visibility'
+import { filedName, type NameCheck } from '@/lib/flows/name-checks'
+import { validateConfirmedLegalName } from '@/lib/flows/legal-name'
+import { formationReferenceName } from '@/lib/operations/formation-materialize'
+import { saveConfirmedLegalName } from '@/lib/operations/formation-name-checks'
 import { GENERIC_CLIENT_TYPE } from '@/lib/crm-store/save-for-account'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
@@ -74,6 +78,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       body.formation_state === 'NM' || body.formation_state === 'WY' || body.formation_state === 'FL' || body.formation_state === 'DE'
         ? body.formation_state
         : undefined
+    // The company LEGAL name staff confirmed in the Articles window (the name exactly as printed on the Articles), and whether
+    // staff ticked that it really differs from the filed name. Validated below, BEFORE anything is saved (job 80cce1cb).
+    const legalNameInput: string | undefined = typeof body.legal_name === 'string' ? body.legal_name : undefined
+    const legalNameDiffers: boolean = body.legal_name_differs === true
     // Default true: every existing upload stage auto-advances. A caller can opt
     // out (auto_advance:false) when a separate action owns the advance — e.g. the
     // Tax Return "Tax Return Prepared" stage, where "Send for Signature" advances.
@@ -115,6 +123,28 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const accountId = (sd.account_id as string | null) ?? null
     const contactId = (sd.contact_id as string | null) ?? null
     const flowStage = flowStageInput ?? (sd.stage as string | null) ?? null
+
+    // Company Formation Articles: the confirmed legal name must carry a valid ending and be the filed name apart from capitals /
+    // punctuation / ending (or be ticked as different) — refused with a plain sentence BEFORE the file is saved, so the staged
+    // upload stays and staff just correct the field and press Confirm again (no half-done upload, no free-text rename).
+    let confirmedLegalName: string | undefined
+    if (legalNameInput !== undefined && sd.service_type === 'Company Formation' && !accountId && contactId) {
+      const { data: ncRow } = await supabaseAdmin.from('service_deliveries').select('name_checks').eq('id', serviceDeliveryId).maybeSingle()
+      const filed = filedName(((ncRow as { name_checks?: unknown } | null)?.name_checks as NameCheck[] | null) ?? null)
+      const reference = await formationReferenceName(contactId, filed)
+      const checked = validateConfirmedLegalName({ confirmed: legalNameInput, referenceName: reference, articlesDiffer: legalNameDiffers })
+      if (!checked.ok) {
+        return NextResponse.json({ success: false, detail: checked.error, error: checked.error }, { status: 400 })
+      }
+      confirmedLegalName = checked.name
+      // Save it on the filed name NOW (before the file is stored) so a retry / the stepper / a tool create the same company name,
+      // and a failure here leaves nothing half-done.
+      const saved = await saveConfirmedLegalName({ sdId: serviceDeliveryId, legalName: confirmedLegalName })
+      if (!saved.ok) {
+        const msg = saved.error || 'The company legal name could not be saved — please try again.'
+        return NextResponse.json({ success: false, detail: msg, error: msg }, { status: 409 })
+      }
+    }
 
     // State Annual Report: the filing receipt must come with the principal-address answer (unchanged, or the new address) —
     // the same rule the Calendar "Mark filed" dialog and the To-Do card enforce. Without it this upload was a way to file
@@ -461,6 +491,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           formation_date: formationDate,
           entity_type: entityType,
           formation_state: formationState,
+          legal_name: confirmedLegalName,
           actor: 'flow-upload',
           notes: `Document uploaded: ${fileName}`,
         })
