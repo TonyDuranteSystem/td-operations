@@ -28,6 +28,9 @@ export interface Ss4StateGateResult {
   message?: string
   /** allowStaleLine6 only: the Line 6 text to write when the saved one carries the wrong state (agent now right). */
   line6Fix?: string | null
+  /** The company's own state as a two-letter code (null when not set) and its name — set whenever the company was read. */
+  companyState?: string | null
+  companyName?: string | null
 }
 
 const NEXT_STEP: Record<Ss4GateContext, { agent: string; line6: string }> = {
@@ -88,6 +91,7 @@ export async function checkSs4StateGate(
   if (ssRes.error) return { ok: false, kind: 'read_error', message: READ_ERROR }
 
   const account = accRes.data as { company_name: string | null; state_of_formation: string | null; registered_agent_id: string | null }
+  const meta = { companyState: stateCode(account.state_of_formation), companyName: account.company_name }
   const storedLine6 = (ssRes.data?.county_and_state as string | null | undefined) ?? null
   const line6 = opts.line6Override && opts.line6Override.trim() ? opts.line6Override : storedLine6
 
@@ -101,7 +105,7 @@ export async function checkSs4StateGate(
   // 1. The registered agent itself.
   if (agent) {
     const c = checkAgentInCompanyState({ companyState: account.state_of_formation, agentState: agent.state, companyName: account.company_name })
-    if (!c.ok) return { ok: false, kind: 'agent', message: `${c.message} ${NEXT_STEP[context].agent}` }
+    if (!c.ok) return { ok: false, kind: 'agent', message: `${c.message} ${NEXT_STEP[context].agent}`, ...meta }
   }
 
   // 2. What is printed on Line 6. (A blank Line 6 is not this gate's job: the send and signing steps already refuse a blank one.)
@@ -109,10 +113,10 @@ export async function checkSs4StateGate(
     const c = checkLine6InCompanyState({ companyState: account.state_of_formation, line6, companyName: account.company_name })
     if (!c.ok) {
       const fixable = !!opts.allowStaleLine6 && !!agent && !!agent.county && !!agent.state && !!stateCode(account.state_of_formation)
-      if (fixable) return { ok: true, line6Fix: formatCountyAndState(agent!.county as string, agent!.state as string) }
-      return { ok: false, kind: 'line6', message: `${c.message} ${NEXT_STEP[context].line6}` }
+      if (fixable) return { ok: true, line6Fix: formatCountyAndState(agent!.county as string, agent!.state as string), ...meta }
+      return { ok: false, kind: 'line6', message: `${c.message} ${NEXT_STEP[context].line6}`, ...meta }
     }
   }
 
-  return { ok: true, line6Fix: null }
+  return { ok: true, line6Fix: null, ...meta }
 }

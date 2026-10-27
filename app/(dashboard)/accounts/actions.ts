@@ -121,6 +121,9 @@ export async function updateAccountField(
   // agent put "Wyoming" on a New Mexico company's SS-4 that was faxed to the IRS. Refused here, on the server, so no screen can link
   // one. Clearing the agent (an empty value) is always allowed.
   if (field === 'registered_agent_id' && typeof coercedValue === 'string' && coercedValue) {
+    // staff only: this check reads with the service key and its refusal names the company and its states
+    const { data: { user: checkUser } } = await createClient().auth.getUser()
+    if (!checkUser || !isStaffUser(checkUser)) return { success: false, error: 'Not allowed.' }
     const { registeredAgentStateProblem } = await import('@/lib/operations/ss4-state-gate')
     const problem = await registeredAgentStateProblem(accountId, coercedValue)
     if (problem) return { success: false, error: problem }

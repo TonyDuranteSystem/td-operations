@@ -336,6 +336,8 @@ export interface Ss4RefreshResult {
   changed?: string[]
   /** True when the responsible party contact changed (refreshed only). */
   signerChanged?: boolean
+  /** A problem staff must act on although the refresh itself worked: the registered agent is in the wrong state, so Line 6 was NOT updated. */
+  warning?: string
   ss4?: {
     id: string
     token: string
@@ -599,7 +601,7 @@ export async function refreshSS4(args: {
 
     if (computation.kind === "unchanged") {
       // No write → no audit row (the kept-pick note travels in the response).
-      return { ok: true, outcome: "unchanged", message: keptPickMessage, ss4: identity(row) }
+      return { ok: true, outcome: "unchanged", message: keptPickMessage, warning: raStateNote, ss4: identity(row) }
     }
 
     // ── ROUND-5 INVARIANT: a signer CHANGE gets full picker semantics. ──
@@ -672,6 +674,7 @@ export async function refreshSS4(args: {
     return {
       ok: true,
       outcome: "refreshed",
+      warning: raStateNote,
       message: signerSwap
         ? `The responsible party changed — the previous signer's link was revoked, their prompts were cleared, and the SS-4 is back in draft. Send it to the new signer when ready.${keptPickMessage ? ` ${keptPickMessage}` : ""}`
         : keptPickMessage,

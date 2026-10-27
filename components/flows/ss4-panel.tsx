@@ -148,7 +148,13 @@ export function Ss4Panel({ serviceDeliveryId, accountId }: Ss4PanelProps) {
             ? 'Refreshed — the responsible party changed; the new signer has been notified.'
             : 'Refreshed — the responsible party changed. The draft is NOT sent yet; use "Send to Client for Signature" when ready.'
           : 'Refreshed from current account and member data — same client link.'
-      setInfo(data.note ? `${base} ${data.note}` : base)
+      // a wrong-state registered agent (Line 6 NOT updated) is a warning in red, never the calm blue "refreshed" line
+      if (data.warning) {
+        setInfo(null)
+        setError(String(data.warning))
+      } else {
+        setInfo(data.note ? `${base} ${data.note}` : base)
+      }
       // Re-read from the server instead of trusting the regenerate response:
       // it omits the responsible-party fields, and setting it directly blanked
       // the card's signer block until a page reload (council minor, 2026-08-10).

@@ -422,6 +422,8 @@ describe("refreshSS4", () => {
     expect(r.message).toContain("Line 6 was NOT updated from the registered agent")
     expect(r.message).toContain("Wyoming")
     expect(r.message).toContain("New Mexico")
+    // also handed back as a WARNING (the SS-4 panel shows it in red, never as the calm "refreshed" line)
+    expect(r.warning).toContain("Line 6 was NOT updated")
   })
 
   it("RIGHT-STATE AGENT: Line 6 still follows the agent (the stale Wyoming line is corrected to the New Mexico agent)", async () => {
@@ -432,6 +434,7 @@ describe("refreshSS4", () => {
     const upd = updateCalls.find((u) => u.table === "ss4_applications")
     expect(upd?.values.county_and_state).toBe("Bernalillo County, New Mexico")
     expect(r.message ?? "").not.toContain("NOT updated")
+    expect(r.warning).toBeUndefined()
   })
 
   it("locked (TOCTOU): the client signed between read and write — no notify, clear message", async () => {

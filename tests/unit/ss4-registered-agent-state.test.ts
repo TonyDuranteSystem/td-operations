@@ -22,10 +22,11 @@ const fx = vi.hoisted(() => ({
   inserts: [] as Array<{ table: string; values: Record<string, unknown> }>,
   logs: [] as Array<Record<string, unknown>>,
   notified: 0,
+  updateRows: [{ id: 'ss4-1' }] as Array<{ id: string }>,
 }))
 
 function resolve(table: string, op: string) {
-  if (op === 'update') return { data: [{ id: 'ss4-1' }], error: null }
+  if (op === 'update') return { data: fx.updateRows, error: null }
   if (op === 'insert') return { data: { id: 'ss4-new', token: 'tok', access_code: 'code', status: 'draft' }, error: null }
   if (table === 'service_deliveries') return { data: fx.sd, error: null }
   if (table === 'accounts') return fx.fail.accounts ? { data: null, error: { message: 'boom' } } : { data: fx.account, error: null }
@@ -83,6 +84,7 @@ beforeEach(() => {
   fx.inserts = []
   fx.logs = []
   fx.notified = 0
+  fx.updateRows = [{ id: 'ss4-1' }]
 })
 
 // ── the pure rule ────────────────────────────────────────────────────────────
@@ -372,6 +374,37 @@ describe('resend-ss4 route (signed SS-4 → back to the client)', () => {
     expect(res.status).toBe(200)
     const upd = fx.updates.find((u) => u.table === 'ss4_applications')
     expect('county_and_state' in (upd?.values ?? {})).toBe(false)
+  })
+
+  it('a FAX-FAILED SS-4 can be re-opened (the fax may have failed because of the wrong state) — it used to answer "success" and write nothing', async () => {
+    fx.ss4 = { ...fx.ss4, status: 'fax_failed' }
+    fx.agent = { ...NM_AGENT }
+    const res = await call(resendSs4)
+    expect(res.status).toBe(200)
+    const upd = fx.updates.find((u) => u.table === 'ss4_applications')
+    expect(upd?.values.status).toBe('awaiting_signature')
+    expect(upd?.values.county_and_state).toBe('Bernalillo County, New Mexico')
+    expect(fx.notified).toBe(1)
+  })
+
+  it('a DONE SS-4 (the EIN is already in) cannot be re-opened — a plain 409, nothing written, nobody notified', async () => {
+    fx.ss4 = { ...fx.ss4, status: 'done' }
+    fx.agent = { ...NM_AGENT }
+    const res = await call(resendSs4)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toContain('"done"')
+    expect(fx.updates.filter((u) => u.table === 'ss4_applications')).toHaveLength(0)
+    expect(fx.notified).toBe(0)
+  })
+
+  it('if the SS-4 changed while staff worked (the update matches no row) the answer is NOT "success" and the client is not notified', async () => {
+    fx.agent = { ...NM_AGENT }
+    fx.updateRows = []
+    const res = await call(resendSs4)
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toContain('changed while you were working')
+    expect(fx.notified).toBe(0)
+    expect(fx.logs.find((l) => (l.details as Record<string, unknown> | undefined)?.source === 'flow-resend-ss4')).toBeUndefined()
   })
 
   it('cannot repair Line 6 (agent has no county) → refused', async () => {

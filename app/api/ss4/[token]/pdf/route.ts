@@ -56,7 +56,7 @@ export async function GET(
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `inline; filename="Form-SS4-${ss4.company_name.replace(/[^a-zA-Z0-9]/g, "-")}.pdf"`,
-      "Cache-Control": "private, max-age=300",
+      "Cache-Control": "no-store, max-age=0",
     },
   })
 }

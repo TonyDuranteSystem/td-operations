@@ -55,12 +55,9 @@ import { isStoreStaffUser } from '@/lib/crm-store/access'
 import { parseSaveChoice, validateDestination, verifyProposalStillHolds, realResolveDeps, saveToDestination, realDestinationDeps, realFileDeps, type FiledCopy, type SaveChoiceSave } from '@/lib/crm-store/save-destination'
 import { claimSend, finishClaim, abandonClaim, realClaimDeps, HISTORY_NOT_SAVED_SENTENCE } from '@/lib/fax/send-claim'
 import { isFaxStagingPath, FAX_STAGING_BUCKET, faxSizeProblem } from '@/lib/fax/staged-upload'
-import { checkSs4StateGate } from '@/lib/operations/ss4-state-gate'
+import { checkSs4Fax } from '@/lib/fax/ss4-fax-gate'
 
 const MAX_COVER_LENGTH = 2000
-
-/** Stored documents that ARE an SS-4 (or the IRS package that contains it): sending one is gated on the company's registered-agent state. */
-const SS4_DOCUMENT_TYPES = new Set(['SS-4 + Articles (IRS Package)', 'Form SS-4 (Signed)', 'Form SS-4 (Unsigned)', 'SS-4'])
 
 /** Best-effort MIME from a filename extension (uploads carry no MIME). */
 function mimeFromName(name: string): string {
@@ -165,43 +162,6 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
     }
   }
 
-  // SS-4 STATE GATE (dev job ff2b73d7). Faxing the IRS is irreversible, so an SS-4 whose registered agent — or the state printed on its
-  // Line 6 — is not in the company's own state must never go out (Tanto per: a New Mexico company faxed with "Sheridan County, Wyoming").
-  // It applies to the SS-4 panel (dedupe flag) and to any send of a stored SS-4 document. No override: fix the agent, re-send for
-  // signature. A check that cannot be completed stops the send ("nothing was sent"), it never passes.
-  {
-    let gateAccountId: string | null = null
-    if (dedupeSdId) {
-      const { data: gateSd, error: gateSdErr } = await supabaseAdmin
-        .from('service_deliveries')
-        .select('account_id')
-        .eq('id', dedupeSdId)
-        .maybeSingle()
-      if (gateSdErr) {
-        return NextResponse.json({ success: false, error: 'Could not check the SS-4 against its company. The fax was NOT sent. Please try again.' }, { status: 503 })
-      }
-      gateAccountId = (gateSd?.account_id as string | null) ?? null
-    }
-    if (!gateAccountId && documentId) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- document_type_name is not in the generated types
-      const { data: gateDoc, error: gateDocErr } = await (supabaseAdmin as any)
-        .from('documents')
-        .select('account_id, document_type_name')
-        .eq('id', documentId)
-        .maybeSingle()
-      if (gateDocErr) {
-        return NextResponse.json({ success: false, error: 'Could not check the document before faxing it. The fax was NOT sent. Please try again.' }, { status: 503 })
-      }
-      if (gateDoc && SS4_DOCUMENT_TYPES.has(String(gateDoc.document_type_name ?? ''))) gateAccountId = (gateDoc.account_id as string | null) ?? null
-    }
-    if (gateAccountId) {
-      const gate = await checkSs4StateGate(gateAccountId, { context: 'fax' })
-      if (!gate.ok) {
-        return NextResponse.json({ success: false, error: gate.message }, { status: gate.kind === 'read_error' ? 503 : 409 })
-      }
-    }
-  }
-
   // Resolve the file to send: a selected document, a file already in the storage, a big upload staged by the browser, or a base64 upload.
   let fileBase64 = ''
   let fileName = 'document.pdf'
@@ -212,10 +172,12 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
   // a forged id must never attach a documents row to some other company.
   let accountId: string | null = documentId && typeof body.account_id === 'string' && body.account_id.trim() ? body.account_id.trim() : null
 
+  let docRowForCheck: { account_id: string | null; document_type_name: string | null } | null = null
   if (documentId) {
-    const { data: doc, error: docErr } = await supabaseAdmin
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- document_type_name is not in the generated types
+    const { data: doc, error: docErr } = await (supabaseAdmin as any)
       .from('documents')
-      .select('id, file_name, drive_file_id, account_id')
+      .select('id, file_name, drive_file_id, account_id, document_type_name')
       .eq('id', documentId)
       .single()
     if (docErr || !doc) {
@@ -253,6 +215,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
       )
     }
     if (!accountId && doc.account_id) accountId = doc.account_id as string
+    docRowForCheck = { account_id: (doc.account_id as string | null) ?? null, document_type_name: (doc.document_type_name as string | null) ?? null }
   } else if (body.staged_path !== undefined && body.staged_path !== null) {
     // a big upload the browser sent direct to the private bucket: read it here, remove it at once (the bytes are in memory now)
     if (!isFaxStagingPath(body.staged_path)) {
@@ -317,6 +280,24 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
   if (sendBytes.length === 0) {
     return NextResponse.json({ success: false, error: 'The file is empty (0 bytes), so there is nothing to fax. Please choose the file again.' }, { status: 400 })
   }
+
+  // SS-4 CHECK (dev job ff2b73d7). Only a fax FOR A CLIENT'S COMPANY is checked — the SS-4 panel, or an SS-4 sent to an IRS EIN line; a fax
+  // to anyone else is never touched. It runs before anything is claimed or sent, has no override, and a check that cannot be completed
+  // stops the send ("nothing was faxed"). See lib/fax/ss4-fax-gate.ts.
+  {
+    const ownerForCheck = toSave?.validated.owner ?? null
+    const verdict = await checkSs4Fax({
+      faxno,
+      panelServiceDeliveryId: dedupeSdId,
+      fileName,
+      bytes: sendBytes,
+      documentRow: docRowForCheck,
+      storeFileId: alreadyStored && typeof body.store_file_id === 'string' ? body.store_file_id : null,
+      chosenCompanyAccountId: ownerForCheck?.kind === 'company' ? (ownerForCheck.account_id ?? null) : null,
+    })
+    if (!verdict.ok) return NextResponse.json({ success: false, error: verdict.error }, { status: verdict.status ?? 409 })
+  }
+
   const hash = createHash('sha256').update(sendBytes).digest('hex')
   const claimDeps = await realClaimDeps()
   const claim = await claimSend({

@@ -160,6 +160,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           // The kept-explicit-pick note (present when member flags were NOT
           // consulted because the party is a staff pick) — panel shows it.
           note: refresh.message ?? null,
+          // a problem staff must act on (a wrong-state registered agent: Line 6 was NOT updated) — the panel shows it as a warning
+          warning: refresh.warning ?? null,
           ss4: refresh.ss4
             ? {
                 id: refresh.ss4.id,
