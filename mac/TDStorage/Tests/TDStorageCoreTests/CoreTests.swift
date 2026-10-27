@@ -605,5 +605,8 @@ final class UpdateHintTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(WhoAmI.self, from: Data(withHint.utf8)).latestBuild, 4)
         let without = #"{"userId":"u","email":"a@b.c","role":"admin","owner":true,"deviceId":"d"}"#
         XCTAssertNil(try JSONDecoder().decode(WhoAmI.self, from: Data(without.utf8)).latestBuild)
+        XCTAssertNil(try JSONDecoder().decode(WhoAmI.self, from: Data(without.utf8)).updateHintSeconds)
+        let paced = #"{"userId":"u","email":"a@b.c","role":"admin","owner":true,"deviceId":"d","updateHintSeconds":60}"#
+        XCTAssertEqual(try JSONDecoder().decode(WhoAmI.self, from: Data(paced.utf8)).updateHintSeconds, 60)
     }
 }

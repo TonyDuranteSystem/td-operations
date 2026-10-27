@@ -16,7 +16,7 @@ public struct WhoAmI: Codable, Equatable {
     public var userId: String; public var email: String?; public var role: String?; public var owner: Bool; public var deviceId: String
     /// `latestBuild`: the newest app build the CRM offers THIS Mac (nil = none) — the app checks for the update at once when it is newer than its own.
     /// the values the CRM's settings row gives the Mac (older servers do not send them)
-    public var leaseHours: Double?; public var resyncMinutes: Double?; public var updateCheckMinutes: Double?; public var latestBuild: Int?
+    public var leaseHours: Double?; public var resyncMinutes: Double?; public var updateCheckMinutes: Double?; public var latestBuild: Int?; public var updateHintSeconds: Double?
 }
 
 public struct NavOwner: Codable, Equatable, Hashable {

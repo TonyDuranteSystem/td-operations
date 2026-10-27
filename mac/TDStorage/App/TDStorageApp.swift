@@ -68,6 +68,12 @@ final class AppModel: ObservableObject {
     var onNewerBuild: (() -> Void)?
     private var lastUpdateNudge = Date.distantPast
     private var currentBuild: Int { Int((info["CFBundleVersion"] as? String) ?? "") ?? 0 }
+    /// follow the pace the CRM asks for (30 seconds .. 1 hour); anything else is ignored
+    private func applyPace(_ seconds: Double?) {
+        guard let s = seconds, s >= 30, s <= 3600, abs(s - checkEvery) > 0.5 else { return }
+        checkEvery = s
+        if store.load() != nil { startLeaseWatch() }      // restarts the timer with the new pace
+    }
     private func noteLatest(_ latest: Int?) {
         guard let latest, latest > currentBuild, Date().timeIntervalSince(lastUpdateNudge) > 600 else { return }
         lastUpdateNudge = Date()
@@ -84,6 +90,8 @@ final class AppModel: ObservableObject {
     private lazy var lease = KeychainLeaseStore(service: info["TDKeychainService"] as? String ?? "td-storage", accessGroup: info["TDKeychainGroup"] as? String)
     private lazy var api = StorageAPI(baseURL: baseURL, store: store, lease: lease)
     private var leaseTimer: Timer?
+    /// how often the app contacts the CRM (keeps the lease alive and hears about a newer build). The CRM sets it (`updateHintSeconds`); until it has said, 5 minutes.
+    private var checkEvery: TimeInterval = 300
     private var wakeObserver: NSObjectProtocol?
     // the name Finder shows: "TD Storage" in the real app, "TD Storage (test)" / "(sandbox)" in the other builds so they can sit side by side
     private let domain = NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier(rawValue: "td-storage"), displayName: (Bundle.main.infoDictionary?["TDDomainName"] as? String) ?? "TD Storage")
@@ -104,6 +112,7 @@ final class AppModel: ObservableObject {
             let me = try await api.whoami()
             updateCheckMinutes = me.updateCheckMinutes
             noteLatest(me.latestBuild)
+            applyPace(me.updateHintSeconds)
             state = .signedIn(me.email ?? "signed in")
             enableStartAtLogin()
             do { try await register() } catch {
@@ -159,7 +168,7 @@ final class AppModel: ObservableObject {
     /// Every few minutes: has this Mac been in contact with the CRM within 24 hours? If not → sign out and clear everything that was downloaded.
     private func startLeaseWatch() {
         leaseTimer?.invalidate()
-        leaseTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+        leaseTimer = Timer.scheduledTimer(withTimeInterval: checkEvery, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.checkLease() }
         }
         // the Finder extension is not always alive (the system may stop it, the Mac may sleep): the app itself also keeps in touch,
@@ -175,7 +184,7 @@ final class AppModel: ObservableObject {
     private func checkLease() async {
         guard store.load() != nil else { return }
         if lease.isExpired() { await wipe(); state = .problem(leaseMessage); return }
-        do { noteLatest(try await api.whoami().latestBuild) }
+        do { let me = try await api.whoami(); noteLatest(me.latestBuild); applyPace(me.updateHintSeconds) }
         catch StorageAPIError.deviceRevoked { await wipe(); state = .signedOut }
         catch StorageAPIError.notSignedIn { await wipe(); state = .signedOut }
         catch { /* offline for now: the lease keeps running */ }
