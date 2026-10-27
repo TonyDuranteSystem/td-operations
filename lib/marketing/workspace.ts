@@ -9,6 +9,7 @@ export interface Module { key: string; label: string; href: string; built: boole
 
 /** Every screen of the approved mockup, in its order, with the permission that opens it. Not-yet-built screens stay on the list, greyed "soon". */
 const CATALOG: Array<{ key: string; label: string; href: string; built: boolean; when: (p: readonly string[]) => boolean }> = [
+  { key: "home", label: "Home", href: "/marketing/home", built: true, when: p => p.includes("leads.pick") },
   { key: "today", label: "Today", href: "/marketing/today", built: true, when: p => p.includes("leads.pick") },
   { key: "call-list", label: "Call list", href: "/marketing/call-list", built: true, when: p => p.includes("leads.worklist") },
   { key: "board", label: "Board", href: "/marketing/board", built: true, when: p => p.includes("leads.read") },
