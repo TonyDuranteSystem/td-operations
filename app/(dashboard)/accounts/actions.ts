@@ -117,6 +117,18 @@ export async function updateAccountField(
     if (problem) return { success: false, error: problem }
   }
 
+  // A registered agent must be in the company's own state (dev job ff2b73d7): the SS-4's Line 6 is copied from it, and a wrong-state
+  // agent put "Wyoming" on a New Mexico company's SS-4 that was faxed to the IRS. Refused here, on the server, so no screen can link
+  // one. Clearing the agent (an empty value) is always allowed.
+  if (field === 'registered_agent_id' && typeof coercedValue === 'string' && coercedValue) {
+    // staff only: this check reads with the service key and its refusal names the company and its states
+    const { data: { user: checkUser } } = await createClient().auth.getUser()
+    if (!checkUser || !isStaffUser(checkUser)) return { success: false, error: 'Not allowed.' }
+    const { registeredAgentStateProblem } = await import('@/lib/operations/ss4-state-gate')
+    const problem = await registeredAgentStateProblem(accountId, coercedValue)
+    if (problem) return { success: false, error: problem }
+  }
+
   // ra_renewal_date / annual_report_due_date go through setAccountRenewalDate
   // instead of the generic updateWithLock branch below — that generic branch
   // writes `{ [field]: coercedValue }` with a dynamic key, which a lint rule

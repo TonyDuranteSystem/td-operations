@@ -55,6 +55,7 @@ import { isStoreStaffUser } from '@/lib/crm-store/access'
 import { parseSaveChoice, validateDestination, verifyProposalStillHolds, realResolveDeps, saveToDestination, realDestinationDeps, realFileDeps, type FiledCopy, type SaveChoiceSave } from '@/lib/crm-store/save-destination'
 import { claimSend, finishClaim, abandonClaim, realClaimDeps, HISTORY_NOT_SAVED_SENTENCE } from '@/lib/fax/send-claim'
 import { isFaxStagingPath, FAX_STAGING_BUCKET, faxSizeProblem } from '@/lib/fax/staged-upload'
+import { checkSs4Fax } from '@/lib/fax/ss4-fax-gate'
 
 const MAX_COVER_LENGTH = 2000
 
@@ -171,10 +172,12 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
   // a forged id must never attach a documents row to some other company.
   let accountId: string | null = documentId && typeof body.account_id === 'string' && body.account_id.trim() ? body.account_id.trim() : null
 
+  let docRowForCheck: { account_id: string | null; document_type_name: string | null } | null = null
   if (documentId) {
-    const { data: doc, error: docErr } = await supabaseAdmin
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- document_type_name is not in the generated types
+    const { data: doc, error: docErr } = await (supabaseAdmin as any)
       .from('documents')
-      .select('id, file_name, drive_file_id, account_id')
+      .select('id, file_name, drive_file_id, account_id, document_type_name')
       .eq('id', documentId)
       .single()
     if (docErr || !doc) {
@@ -212,6 +215,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
       )
     }
     if (!accountId && doc.account_id) accountId = doc.account_id as string
+    docRowForCheck = { account_id: (doc.account_id as string | null) ?? null, document_type_name: (doc.document_type_name as string | null) ?? null }
   } else if (body.staged_path !== undefined && body.staged_path !== null) {
     // a big upload the browser sent direct to the private bucket: read it here, remove it at once (the bytes are in memory now)
     if (!isFaxStagingPath(body.staged_path)) {
@@ -276,6 +280,24 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
   if (sendBytes.length === 0) {
     return NextResponse.json({ success: false, error: 'The file is empty (0 bytes), so there is nothing to fax. Please choose the file again.' }, { status: 400 })
   }
+
+  // SS-4 CHECK (dev job ff2b73d7). Only a fax FOR A CLIENT'S COMPANY is checked — the SS-4 panel, or an SS-4 sent to an IRS EIN line; a fax
+  // to anyone else is never touched. It runs before anything is claimed or sent, has no override, and a check that cannot be completed
+  // stops the send ("nothing was faxed"). See lib/fax/ss4-fax-gate.ts.
+  {
+    const ownerForCheck = toSave?.validated.owner ?? null
+    const verdict = await checkSs4Fax({
+      faxno,
+      panelServiceDeliveryId: dedupeSdId,
+      fileName,
+      bytes: sendBytes,
+      documentRow: docRowForCheck,
+      storeFileId: alreadyStored && typeof body.store_file_id === 'string' ? body.store_file_id : null,
+      chosenCompanyAccountId: ownerForCheck?.kind === 'company' ? (ownerForCheck.account_id ?? null) : null,
+    })
+    if (!verdict.ok) return NextResponse.json({ success: false, error: verdict.error }, { status: verdict.status ?? 409 })
+  }
+
   const hash = createHash('sha256').update(sendBytes).digest('hex')
   const claimDeps = await realClaimDeps()
   const claim = await claimSend({

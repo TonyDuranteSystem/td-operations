@@ -39,6 +39,7 @@ import { randomBytes } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { formatCountyAndState, companyOfficialRow, isTdLargoAddressRow } from "@/lib/addresses"
+import { checkAgentInCompanyState } from "@/lib/formation/registered-agent-state"
 import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
 import {
   decideSs4Signer,
@@ -335,6 +336,8 @@ export interface Ss4RefreshResult {
   changed?: string[]
   /** True when the responsible party contact changed (refreshed only). */
   signerChanged?: boolean
+  /** A problem staff must act on although the refresh itself worked: the registered agent is in the wrong state, so Line 6 was NOT updated. */
+  warning?: string
   ss4?: {
     id: string
     token: string
@@ -555,6 +558,7 @@ export async function refreshSS4(args: {
 
     // ── Line 6 from the Registered Agent (never blocks — keeps existing on miss) ──
     let raCountyAndState: string | null = null
+    let raStateNote: string | undefined
     if (account.registered_agent_id) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: raAddress } = await (supabaseAdmin as any)
@@ -563,7 +567,18 @@ export async function refreshSS4(args: {
         .eq("id", account.registered_agent_id)
         .single()
       if (raAddress?.county) {
-        raCountyAndState = formatCountyAndState(raAddress.county, raAddress.state)
+        // A registered agent in the wrong state is NEVER copied onto Line 6 (dev job ff2b73d7): the stored value stays and staff are
+        // told why. The send / re-send / fax gates refuse the SS-4 until the agent is fixed.
+        const raCheck = checkAgentInCompanyState({
+          companyState: account.state_of_formation,
+          agentState: raAddress.state,
+          companyName: account.company_name,
+        })
+        if (raCheck.ok) {
+          raCountyAndState = formatCountyAndState(raAddress.county, raAddress.state)
+        } else {
+          raStateNote = `Line 6 was NOT updated from the registered agent. ${raCheck.message}`
+        }
       }
     }
 
@@ -578,13 +593,15 @@ export async function refreshSS4(args: {
     // Staff-facing note whenever an explicit pick was honoured — surfaced by
     // the members panels so a "Set as signer" click that DIDN'T move the SS-4
     // is never a silent no-op (council major, 2026-08-11).
-    const keptPickMessage = keptExplicitPick
+    const keptPickNote = keptExplicitPick
       ? `The SS-4's responsible party (${row.responsible_party_name || "the picked signer"}) was chosen explicitly and was kept — member flag changes don't affect it. Use the signer picker on the SS-4 card to change it.`
       : undefined
+    // one staff-facing note: the kept pick and/or the wrong-state registered agent that was not copied to Line 6
+    const keptPickMessage = [keptPickNote, raStateNote].filter(Boolean).join(" ") || undefined
 
     if (computation.kind === "unchanged") {
       // No write → no audit row (the kept-pick note travels in the response).
-      return { ok: true, outcome: "unchanged", message: keptPickMessage, ss4: identity(row) }
+      return { ok: true, outcome: "unchanged", message: keptPickMessage, warning: raStateNote, ss4: identity(row) }
     }
 
     // ── ROUND-5 INVARIANT: a signer CHANGE gets full picker semantics. ──
@@ -657,6 +674,7 @@ export async function refreshSS4(args: {
     return {
       ok: true,
       outcome: "refreshed",
+      warning: raStateNote,
       message: signerSwap
         ? `The responsible party changed — the previous signer's link was revoked, their prompts were cleared, and the SS-4 is back in draft. Send it to the new signer when ready.${keptPickMessage ? ` ${keptPickMessage}` : ""}`
         : keptPickMessage,

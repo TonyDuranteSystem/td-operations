@@ -21,6 +21,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
 import { formatCountyAndState } from "@/lib/addresses"
+import { checkAgentInCompanyState } from "@/lib/formation/registered-agent-state"
 import { resolveMailing } from "@/lib/operations/ss4-refresh"
 import { pickDefaultSs4SignerLink } from "@/lib/operations/ss4-signer"
 
@@ -43,6 +44,7 @@ export type CreateSS4Outcome =
   | "needs_signer_selection"
   | "missing_ra"
   | "missing_county"
+  | "ra_state_mismatch"
   | "error"
 
 export interface CreateSS4Ss4 {
@@ -285,6 +287,18 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
     .select("county, state")
     .eq("id", raId)
     .single()
+  // The agent must be in the company's own state — Line 6 is copied from it, and a wrong-state agent put "Wyoming" on a New Mexico
+  // company's SS-4 that was then faxed to the IRS (dev job ff2b73d7). Checked before the county so the real problem is named first.
+  if (raAddress) {
+    const raCheck = checkAgentInCompanyState({
+      companyState: account.state_of_formation,
+      agentState: raAddress.state,
+      companyName: account.company_name,
+    })
+    if (!raCheck.ok) {
+      return { ok: false, outcome: "ra_state_mismatch", message: `${raCheck.message} Then generate the SS-4 again.` }
+    }
+  }
   if (!raAddress?.county) {
     return { ok: false, outcome: "missing_county", message: `Registered Agent address for ${account.company_name} is missing county. Set the county in the addresses registry, then retry.` }
   }

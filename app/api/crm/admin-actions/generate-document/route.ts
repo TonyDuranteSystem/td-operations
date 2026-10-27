@@ -20,6 +20,7 @@ import { createClient } from "@/lib/supabase/server"
 import { canPerform } from "@/lib/permissions"
 import { isOwnerOnly } from "@/lib/auth"
 import { formatCountyAndState } from "@/lib/addresses"
+import { checkAgentInCompanyState } from "@/lib/formation/registered-agent-state"
 import { decideSs4Signer, ss4SignerAlertMessage, pickDefaultSs4SignerLink, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
 import { refreshSS4, resolveMailing } from "@/lib/operations/ss4-refresh"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
@@ -554,6 +555,15 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
     .select("county, state")
     .eq("id", raId)
     .single()
+  // The agent must be in the company's own state (dev job ff2b73d7) — checked before the county so the real problem is named first.
+  if (raAddress) {
+    const raCheck = checkAgentInCompanyState({
+      companyState: account.state_of_formation,
+      agentState: raAddress.state,
+      companyName: account.company_name,
+    })
+    if (!raCheck.ok) return { error: `${raCheck.message} Then generate the SS-4 again.` }
+  }
   if (!raAddress?.county) {
     return { error: `Registered Agent address for ${account.company_name} is missing county. Set the county in the addresses registry, then retry.` }
   }

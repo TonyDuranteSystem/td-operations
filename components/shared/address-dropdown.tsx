@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { withCompanySuite, type AddressKind, type AddressRow } from '@/lib/addresses'
+import { stateCode, stateLabel } from '@/lib/formation/registered-agent-state'
 
 export type { AddressRow }
 
@@ -19,6 +20,9 @@ interface AddressDropdownProps {
   /** The company's own number (accounts.suite_number). A Largo office row then shows what THIS company gets for this role —
    *  the official address for the Articles/principal role, official + its PMB for the mailing role. Other addresses are shown as stored. */
   companySuite?: string | null
+  /** Only offer addresses in this state ("New Mexico" or "NM" — compared as codes). The registered-agent picker passes the company's
+   *  state: an agent must be in the company's own state (dev job ff2b73d7). The selected row still shows in the trigger either way. */
+  onlyState?: string | null
 }
 
 function subtitleLine(row: AddressRow): string {
@@ -60,6 +64,7 @@ export function AddressDropdown({
   className,
   disabled = false,
   companySuite = null,
+  onlyState = null,
 }: AddressDropdownProps) {
   const [open, setOpen] = useState(false)
   const [rows, setRows] = useState<AddressRow[]>([])
@@ -106,7 +111,9 @@ export function AddressDropdown({
     if (open && searchRef.current) searchRef.current.focus()
   }, [open])
 
-  const filtered = search.trim() ? rows.filter(r => matchesSearch(r, search)) : rows
+  const stateOnly = onlyState ? stateCode(onlyState) : null
+  const inState = stateOnly ? rows.filter(r => stateCode(r.state) === stateOnly) : rows
+  const filtered = search.trim() ? inState.filter(r => matchesSearch(r, search)) : inState
 
   const handleSelect = (row: AddressRow) => {
     onChange(row)
@@ -191,6 +198,12 @@ export function AddressDropdown({
             </div>
           </div>
 
+          {stateOnly && (
+            <p className="px-3 py-1.5 text-xs text-zinc-500 border-b bg-zinc-50">
+              Only agents in {stateLabel(stateOnly)} are shown — a company&apos;s registered agent must be in its own state.
+            </p>
+          )}
+
           {/* Address list */}
           <div className="max-h-60 overflow-y-auto">
             {loading && (
@@ -201,7 +214,11 @@ export function AddressDropdown({
 
             {!loading && filtered.length === 0 && (
               <p className="px-3 py-3 text-sm text-muted-foreground text-center">
-                {rows.length === 0 ? 'No addresses registered for this kind' : 'No matches'}
+                {rows.length === 0
+                  ? 'No addresses registered for this kind'
+                  : stateOnly && inState.length === 0
+                    ? `No registered agent in ${stateLabel(stateOnly)} in the registry yet. Use "New" to add one.`
+                    : 'No matches'}
               </p>
             )}
 

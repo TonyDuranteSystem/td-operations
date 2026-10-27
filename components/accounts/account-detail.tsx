@@ -2637,6 +2637,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
                 value={account.registered_agent_id ?? null}
                 verified={account.ra_link_verified ?? false}
                 onChange={() => router.refresh()}
+                companyState={account.state_of_formation ?? null}
               />
             </div>
           </div>

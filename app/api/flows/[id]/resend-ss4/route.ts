@@ -21,6 +21,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { logAction } from '@/lib/mcp/action-log'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { checkSs4StateGate } from '@/lib/operations/ss4-state-gate'
+
+/** The statuses a re-open is allowed from. fax_failed is here because that is exactly when a wrong Line 6 may have caused the failure. */
+const RESENDABLE_STATUSES = ['signed', 'submitted', 'fax_failed']
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await requireStaffRoute()
@@ -39,7 +43,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
 
     const { data: ss4 } = await supabaseAdmin
       .from('ss4_applications')
-      .select('id, status, company_name, contact_id, entity_type, responsible_party_name')
+      .select('id, status, company_name, contact_id, entity_type, responsible_party_name, county_and_state')
       .eq('account_id', sd.account_id)
       .maybeSingle()
 
@@ -66,12 +70,29 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     if (ss4.status === 'awaiting_signature') {
       return NextResponse.json({ success: true, status: 'awaiting_signature', message: 'Already awaiting the client’s signature.' })
     }
+    // Only a signed, submitted or fax-failed SS-4 can be re-opened. Anything else (e.g. done — the EIN is already in) used to match
+    // zero rows below and still answer "success"; now it says so.
+    if (!RESENDABLE_STATUSES.includes(ss4.status as string)) {
+      return NextResponse.json(
+        { success: false, error: `This SS-4 is "${ss4.status}" — it cannot be re-opened for signature.` },
+        { status: 409 },
+      )
+    }
+
+    // ── STATE GATE (dev job ff2b73d7) ── the client must never be asked to sign an SS-4 whose registered agent is not in the company's
+    // own state. A signed SS-4 is locked from the in-place refresh, so when the agent is now right but the saved Line 6 still carries
+    // the old state, the gate hands back the corrected Line 6 and it is written in THIS update — the client signs the corrected form.
+    const stateGate = await checkSs4StateGate(sd.account_id, { context: 'resend', allowStaleLine6: true })
+    if (!stateGate.ok) {
+      return NextResponse.json({ success: false, error: stateGate.message }, { status: stateGate.kind === 'read_error' ? 503 : 409 })
+    }
+    const line6Fix = stateGate.line6Fix ?? null
 
     // Re-open: clear the signature and drop back to awaiting_signature. Token +
     // access_code are preserved so the client's existing signing link still
     // works. pdf_signed_drive_id is cleared (the next signature regenerates it).
     // eslint-disable-next-line no-restricted-syntax -- targeted re-open, not a bulk write
-    const { error: updErr } = await supabaseAdmin
+    const { data: reopened, error: updErr } = await supabaseAdmin
       .from('ss4_applications')
       .update({
         status: 'awaiting_signature',
@@ -79,13 +100,19 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
         signed_at: null,
         signed_ip: null,
         pdf_signed_drive_id: null,
+        ...(line6Fix ? { county_and_state: line6Fix } : {}),
         updated_at: new Date().toISOString(),
       })
       .eq('id', ss4.id)
-      .in('status', ['signed', 'submitted']) // TOCTOU guard: only re-open a signed/submitted SS-4
+      .in('status', RESENDABLE_STATUSES) // TOCTOU guard: only re-open a signed / submitted / fax-failed SS-4
+      .select('id')
 
     if (updErr) {
       return NextResponse.json({ success: false, error: `Could not re-open the SS-4: ${updErr.message}` }, { status: 500 })
+    }
+    // zero rows = it changed while we worked (e.g. the client signed again): never report a re-open that did not happen
+    if (!reopened || reopened.length === 0) {
+      return NextResponse.json({ success: false, error: 'This SS-4 changed while you were working, so it was not re-opened. Reload the page and look at its status.' }, { status: 409 })
     }
 
     logAction({
@@ -94,7 +121,12 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       record_id: ss4.id,
       account_id: sd.account_id,
       summary: `SS-4 re-opened for re-signature: ${ss4.company_name}`,
-      details: { source: 'flow-resend-ss4', from: ss4.status, to: 'awaiting_signature' },
+      details: {
+        source: 'flow-resend-ss4',
+        from: ss4.status,
+        to: 'awaiting_signature',
+        ...(line6Fix ? { line_6_corrected_to: line6Fix, line_6_was: ss4.county_and_state ?? null } : {}),
+      },
     })
 
     // Tell the signer they need to sign AGAIN (chat + immediate email +

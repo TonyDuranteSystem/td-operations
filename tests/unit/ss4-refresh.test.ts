@@ -403,6 +403,40 @@ describe("refreshSS4", () => {
     expect(notifyCalls).toHaveLength(0)
   })
 
+  // dev job ff2b73d7 — Tanto per: a New Mexico company, the Wyoming agent linked by hand, "Sheridan County, Wyoming" printed on Line 6.
+  const matchingSigner = {
+    contact_id: "c-michele",
+    responsible_party_name: "Michele Cotti",
+    responsible_party_itin: "900-59-3806",
+    responsible_party_phone: "+17273032244",
+    language: "it",
+    member_count: 2,
+  }
+
+  it("WRONG-STATE AGENT: a Wyoming agent on a New Mexico company is NEVER copied onto Line 6 — the stored value stays and staff are told why", async () => {
+    fixtures.ss4 = { ...dbSs4Row, ...matchingSigner, county_and_state: "Bernalillo County, New Mexico" }
+    fixtures.raAddress = { county: "Sheridan", state: "WY" }
+    const r = await refreshSS4({ account_id: "acc-1", source: "test" })
+    expect(r.outcome).toBe("unchanged")
+    expect(updateCalls).toHaveLength(0)
+    expect(r.message).toContain("Line 6 was NOT updated from the registered agent")
+    expect(r.message).toContain("Wyoming")
+    expect(r.message).toContain("New Mexico")
+    // also handed back as a WARNING (the SS-4 panel shows it in red, never as the calm "refreshed" line)
+    expect(r.warning).toContain("Line 6 was NOT updated")
+  })
+
+  it("RIGHT-STATE AGENT: Line 6 still follows the agent (the stale Wyoming line is corrected to the New Mexico agent)", async () => {
+    fixtures.ss4 = { ...dbSs4Row, ...matchingSigner, county_and_state: "Sheridan County, Wyoming" }
+    fixtures.raAddress = { county: "Bernalillo", state: "NM" }
+    const r = await refreshSS4({ account_id: "acc-1", source: "test" })
+    expect(r.outcome).toBe("refreshed")
+    const upd = updateCalls.find((u) => u.table === "ss4_applications")
+    expect(upd?.values.county_and_state).toBe("Bernalillo County, New Mexico")
+    expect(r.message ?? "").not.toContain("NOT updated")
+    expect(r.warning).toBeUndefined()
+  })
+
   it("locked (TOCTOU): the client signed between read and write — no notify, clear message", async () => {
     fixtures.updateResult = { data: [], error: null }
     const r = await refreshSS4({ account_id: "acc-1", source: "test" })

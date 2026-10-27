@@ -61,7 +61,7 @@ export function ShareFaxDialog({
       const tooBig = faxSizeProblem(file.size)
       if (tooBig) throw new Error(tooBig)
       // `already_stored`: the file is ALREADY in the storage — the fax tool must not make a second internal copy of it
-      const payload: Record<string, unknown> = { faxno: normalized, file_name: fileName, already_stored: true, cover_message: coverMessage.trim() || undefined, send_id: sendId.current, confirm_resend: confirmAgain || undefined }
+      const payload: Record<string, unknown> = { faxno: normalized, file_name: fileName, already_stored: true, store_file_id: fileId, cover_message: coverMessage.trim() || undefined, send_id: sendId.current, confirm_resend: confirmAgain || undefined }
       if (file.size > FAX_INLINE_MAX_BYTES) {
         // too big for the request body: straight to the private storage, the server reads it there
         const signRes = await fetch('/api/tools/fax/upload-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_name: fileName, file_size: file.size }) })

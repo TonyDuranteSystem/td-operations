@@ -182,6 +182,16 @@ Note: signed records (status='signed') cannot be updated.`,
             if (!resolvedCounty) {
               return withSwitch(`Error: Cannot advance SS-4 for ${ss4.company_name} to awaiting_signature — county_and_state (Line 6) is blank. Line 6 is sourced from the account's Registered Agent address. Add or correct the Registered Agent address on the account, then re-run ss4_update — the value will populate automatically. If the RA address is correct but unrecognized by the helper, set county_and_state explicitly: ss4_update(..., county_and_state: "<County>, <State>").`)
             }
+            // STATE GATE (dev job ff2b73d7) — never arm a signing link for an SS-4 whose registered agent (or printed Line 6) is not in
+            // the company's own state. Checks the Line 6 being saved in this same call, else the stored one.
+            const { checkSs4StateGate } = await import("@/lib/operations/ss4-state-gate")
+            const stateGate = await checkSs4StateGate(params.account_id, {
+              context: "send",
+              line6Override: (params.county_and_state as string | undefined) || undefined,
+            })
+            if (!stateGate.ok) {
+              return withSwitch(`Error: ${stateGate.message}`)
+            }
             // ROUND-5 PROMOTION GATE — never arm a signing link for an orphaned
             // responsible party (deleted/repointed member, never picked). Same
             // shared check as send-ss4 / resend-ss4.
