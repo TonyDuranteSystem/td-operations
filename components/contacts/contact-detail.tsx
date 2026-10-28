@@ -49,6 +49,9 @@ import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } f
 import { updateContactField, updateContactName, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
 import { useShareMessagePrompt, suppressesAutoChat, isSilentShow, type ShareDecision } from '@/components/storage/use-share-message-prompt'
+import { useWorkspaceStepPrompt } from '@/components/storage/use-workspace-step-prompt'
+import { typeCouldWait, type WaitingWorkspaceStep } from '@/lib/flows/storage-step-rules'
+import { contactUploadRouting } from '@/lib/crm-store/contact-upload-routing'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { ResolvePersonalDocument } from '@/components/documents/resolve-personal-document'
 import { isUnresolvedPersonalDocument } from '@/lib/documents/visibility-guard'
@@ -3084,6 +3087,7 @@ function ContactDocumentsTab({
   const router = useRouter()
   // the "tell the client?" pop-up when this eye makes a hidden document visible (shared with the other eyes)
   const { decide: decideShare, sendChat: sendShareChat, dialog: shareDialog } = useShareMessagePrompt()
+  const { ask: askWorkspaceStep, dialog: workspaceStepDialog } = useWorkspaceStepPrompt()
   const [activeDocScope, setActiveDocScope] = useState<string>('personal')
   const activeCompanyId = activeDocScope === 'personal' ? '' : activeDocScope
   const activeCompanyStore = useStoreOwnerForAccount(activeCompanyId, !!personStoreId && activeCompanyId !== '')
@@ -3196,6 +3200,36 @@ function ContactDocumentsTab({
   const handleFileUpload = async (file: File) => {
     setUploading(true)
     try {
+      // A workspace step may be waiting for this very document (dev job e3215801, Adam Mihaly's ITIN letter): ask BEFORE anything is uploaded.
+      // An ordinary type (a passport, a bank statement …) is not even sent to the check.
+      let workspaceAck: string[] = []
+      if (typeCouldWait(contactUploadRouting(uploadType, uploadCategory).storeType)) {
+        let hits: WaitingWorkspaceStep[]
+        try {
+          const wres = await fetch('/api/crm/admin-actions/workspace-check', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contact_id: contactId, document_type: uploadType, category: uploadCategory }),
+          })
+          const wdata = await wres.json().catch(() => ({}))
+          if (!wres.ok) throw new Error((wdata as { error?: string }).error || 'Could not check whether a workspace is waiting for this file — nothing was uploaded. Please try again.')
+          hits = (wdata as { hits: WaitingWorkspaceStep[] }).hits
+        } catch (err) {
+          toast.error(err instanceof Error && err.message ? err.message : 'Could not check whether a workspace is waiting for this file — nothing was uploaded. Please try again.')
+          return
+        }
+        if (hits.length > 0) {
+          const answer = await askWorkspaceStep(hits)
+          if (answer === 'workspace') {
+            window.open(hits[0].workspacePath, '_blank', 'noopener')
+            toast.message('Nothing was uploaded here — finish it in the workspace.')
+            return
+          }
+          if (answer !== 'storage') return
+          workspaceAck = hits.map((h) => h.sdId)
+        }
+      }
+
       // Step 1: Upload to Supabase Storage (bypasses Vercel 4.5MB body limit)
       const storagePath = `crm-uploads/${contactId}/${Date.now()}_${file.name}`
       const uploadRes = await fetch(`/api/storage/upload`, {
@@ -3236,12 +3270,14 @@ function ContactDocumentsTab({
           mime_type: file.type,
           document_type: uploadType,
           category: uploadCategory,
+          ...(workspaceAck.length > 0 ? { workspaceAck } : {}),
         }),
       })
       const data = await res.json()
       if (data.success) {
         toast.success(data.documentId ? `${data.detail} — saved hidden from the client` : data.detail)
         if (data.side_effects?.length) toast.info(data.side_effects.join(' | '))
+        if (data.workspaceNote === 'failed') toast.error('The file was saved, but the note that it was filed in Storage only could not be recorded on the case — please add that note by hand.')
         setShowUpload(false)
         if (data.documentId) {
           // The file is saved HIDDEN and nothing was sent. Now ask the same question as the eye: show it to the client, and tell
@@ -3350,6 +3386,7 @@ function ContactDocumentsTab({
           onChange={e => {
             const f = e.target.files?.[0]
             if (f) handleFileUpload(f)
+            e.target.value = '' // the same file can be chosen again after the pop-up was cancelled
           }}
           disabled={uploading}
           className="flex-1 text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium file:cursor-pointer hover:file:bg-blue-100 disabled:opacity-50"
@@ -3427,6 +3464,7 @@ function ContactDocumentsTab({
   if (documents.length === 0) {
     return (
       <div className="space-y-4">
+        {workspaceStepDialog}
         <div className="flex justify-end gap-2">
           {driveFolderUrl && (
             <a
@@ -3458,6 +3496,7 @@ function ContactDocumentsTab({
   return (
     <div className="space-y-6">
       {shareDialog}
+      {workspaceStepDialog}
       <div className="flex items-center justify-between">
         {/* a tab shown from the new storage carries its own file count */}
         <p className="text-sm text-muted-foreground">{personStoreId && (activeDocScope === 'personal' || companyScopeInStore) ? '' : `${scopedDocuments.length} documents`}</p>

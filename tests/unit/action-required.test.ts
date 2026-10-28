@@ -37,6 +37,8 @@ const fixtures: Fixtures = {
 const chatInserts: Array<Record<string, unknown>> = []
 const emailSends: Array<Record<string, unknown>> = []
 const notificationCalls: Array<Record<string, unknown>> = []
+/** the filters the duplicate guard put on its portal_notifications query: [column-operator, value] */
+const guardFilters: Array<[string, unknown]> = []
 
 function resolveFor(table: string, op: string) {
   if (table === "portal_notifications") {
@@ -55,9 +57,9 @@ function makeBuilder(table: string) {
   const b: Record<string, unknown> = {}
   const chain = () => b
   b.select = chain
-  b.eq = chain
+  b.eq = (col: string, val: unknown) => { if (table === "portal_notifications") guardFilters.push([`eq:${col}`, val]); return b }
   b.gt = chain
-  b.in = chain
+  b.in = (col: string, val: unknown) => { if (table === "portal_notifications") guardFilters.push([`in:${col}`, val]); return b }
   b.limit = chain
   b.order = chain
   b.insert = (payload: Record<string, unknown>) => {
@@ -105,6 +107,7 @@ beforeEach(() => {
   chatInserts.length = 0
   emailSends.length = 0
   notificationCalls.length = 0
+  guardFilters.length = 0
 })
 
 describe("notifyClientActionRequired", () => {
@@ -234,6 +237,35 @@ describe("notifyClientActionRequired", () => {
     expect(r.chat).toContain("insert exploded")
     expect(r.notification).toBe("ok")
     expect(r.email).toContain("ok")
+  })
+})
+
+describe("notifyClientActionRequired — the bell type (2026-10-28, the ITIN letter notice)", () => {
+  it("default: the bell row is a 'must act' item (action_required) — the portal never lets the client clear it; the duplicate guard is unchanged (type + link only)", async () => {
+    await notifyClientActionRequired({ contact_id: "ctc-1", title: TITLE, message: MESSAGE, link: "/portal/sign/ss4" })
+    expect(notificationCalls[0].type).toBe("action_required")
+    expect(guardFilters).toContainEqual(["eq:type", "action_required"])
+    expect(guardFilters).toContainEqual(["eq:link", "/portal/sign/ss4"])
+    expect(guardFilters.some(([c]) => c === "in:title")).toBe(false)
+  })
+
+  it("a good-news caller passes an ordinary type, so the client CAN dismiss the notice — digest email still suppressed", async () => {
+    const r = await notifyClientActionRequired({
+      contact_id: "ctc-1",
+      title: { en: "Your ITIN is ready", it: "Il tuo ITIN è pronto" },
+      message: MESSAGE,
+      link: "/portal/documents",
+      skipEmail: true,
+      bellType: "new_document",
+    })
+    expect(r.dispatched).toBe(true)
+    expect(notificationCalls[0].type).toBe("new_document")
+    expect(notificationCalls[0].suppressDigestEmail).toBe(true)
+    expect(emailSends).toHaveLength(0)
+    // the duplicate guard looks for the SAME notice (type + link + this title), so an unrelated new-document notice cannot swallow the ITIN-ready message
+    expect(guardFilters).toContainEqual(["eq:type", "new_document"])
+    expect(guardFilters).toContainEqual(["eq:link", "/portal/documents"])
+    expect(guardFilters).toContainEqual(["in:title", ["Your ITIN is ready", "Il tuo ITIN è pronto"]])
   })
 })
 

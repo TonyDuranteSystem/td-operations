@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
+import { contactUploadRouting } from '@/lib/crm-store/contact-upload-routing'
 
 const route = readFileSync('app/api/crm/admin-actions/upload-document/route.ts', 'utf8')
 const page = readFileSync('components/contacts/contact-detail.tsx', 'utf8')
@@ -21,6 +22,10 @@ describe('People "Upload Document" is hidden and silent unless the staff member 
     expect(page).toMatch(/await handleToggleVisibility\(\{\s*id: data\.documentId/)
   })
   it('gives a generic hidden upload the plain client-shareable type so "show to client" afterwards is not refused', () => {
-    expect(route).toMatch(/\? 'ein_letter_irs' : 'other_document'/)
+    // the label -> type rule lives in the shared mapping (the "workspace step is waiting" check reads it too); the route uses it
+    expect(route).toMatch(/contactUploadRouting\(/)
+    expect(contactUploadRouting('Bank Statement', 'Contacts').storeType).toBe('other_document')
+    expect(contactUploadRouting('Other', 'Contacts').storeType).toBe('other_document')
+    expect(contactUploadRouting('EIN Letter', 'Contacts').storeType).toBe('ein_letter_irs')
   })
 })
