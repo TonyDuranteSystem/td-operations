@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useT, useLang } from '@/components/marketing/lang-provider'
-import { fetchWithNetworkRetry } from '@/lib/chat/upload-with-retry'
-import { docRefusal, formatDocSize } from '@/lib/marketing/documents-rules'
+import { uploadDocument } from '@/components/marketing/documents-upload'
+import { formatDocSize } from '@/lib/marketing/documents-rules'
 
 interface Listing {
   crumbs: Array<{ id: string; name: string }>
@@ -12,7 +12,6 @@ interface Listing {
 }
 const btn = 'rounded-lg border px-3 py-1.5 text-sm font-medium disabled:opacity-50'
 const API = '/api/marketing/documents'
-const UPLOAD_ATTEMPT_MS = 15 * 60_000
 
 /** One answer of our own server: the JSON, or an Error carrying the server's own sentence (R099: never a generic "failed"). */
 async function call<T>(url: string, init: RequestInit | undefined, fallback: string): Promise<T> {
@@ -27,6 +26,9 @@ const post = <T,>(url: string, body: unknown, fallback: string, method = 'POST')
  * TD Marketing — Documents (dev job 9aec66fa): the team's documents, kept in the firm's Business storage in a folder called Marketing. Open a folder, upload (button or drag), download, rename, put a new
  * version of a document in place of the old one (the old one is kept), delete (to the storage's trash). A person who may only read sees no change buttons.
  */
+/** The types the browser can show by itself (the same list the server opens inline); everything else (Word, Excel...) can only be downloaded. */
+const canView = (mime: string | null) => ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'text/plain'].includes((mime ?? '').split(';')[0].trim().toLowerCase())
+
 export function DocumentsBrowser({ canManage }: { canManage: boolean }) {
   const t = useT()
   const lang = useLang()
@@ -59,17 +61,7 @@ export function DocumentsBrowser({ canManage }: { canManage: boolean }) {
     finally { setBusy(null) }
   }
 
-  async function sendOne(file: File, folder: string, replaceFileId: string | null): Promise<string> {
-    const bad = docRefusal(file.name, file.size)
-    if (bad) throw new Error(t(bad))
-    const link = await post<{ signedUrl: string; path: string }>(`${API}/upload-url`, { folderId: folder, fileName: file.name, size: file.size }, t('Could not start the upload. Please try again.'))
-    let put: Response
-    try { put = await fetchWithNetworkRetry(link.signedUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file }, { attemptTimeoutMs: UPLOAD_ATTEMPT_MS }) }
-    catch { throw new Error(t("Couldn't upload the file — the connection was interrupted. Please try again.")) }
-    if (!put.ok) throw new Error(put.status === 413 ? t('That file is too large.') : t('Upload failed. Please check your connection and try again.'))
-    const r = await post<{ message: string }>(`${API}/register`, { folderId: folder, path: link.path, fileName: file.name, mimeType: file.type || null, replaceFileId }, t('The upload could not be saved. Please try again.'))
-    return r.message
-  }
+  const sendOne = (file: File, folder: string, replaceFileId: string | null) => uploadDocument(file, folder, replaceFileId, t)
 
   function upload(files: File[], replaceFileId: string | null = null) {
     if (!here || files.length === 0) return
@@ -149,6 +141,7 @@ export function DocumentsBrowser({ canManage }: { canManage: boolean }) {
                     <span className="block text-xs text-slate-500">{[formatDocSize(f.size), new Date(f.updatedAt).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' }), f.versions > 1 ? t('{n} versions', { n: f.versions }) : ''].filter(Boolean).join(' · ')}</span>
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-3 text-sm">
+                    {canView(f.mimeType) && <a className="underline" href={`${API}/file/${f.id}?view=1`} target="_blank" rel="noopener noreferrer" data-testid="doc-view">{t('Open')}</a>}
                     <a className="underline" href={`${API}/file/${f.id}`} data-testid="doc-download">{t('Download')}</a>
                     {canManage && (confirming?.id === f.id
                       ? <span className="flex items-center gap-2"><span>{t('Delete this document?')}</span><button type="button" className={`${btn} bg-rose-700 text-white`} data-testid="doc-delete-yes" onClick={() => { const c = confirming; setConfirming(null); void run(t('Deleting…'), async () => { await call(`${API}/file/${c.id}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } }, t('The document could not be deleted. Please try again.')); return t('Document deleted. The Storage page of the CRM can bring it back.') }) }}>{t('Delete')}</button><button type="button" className={btn} onClick={() => setConfirming(null)}>{t('Cancel')}</button></span>
