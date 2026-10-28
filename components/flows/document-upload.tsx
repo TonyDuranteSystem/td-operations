@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Upload, Loader2, CheckCircle2, FileUp, X } from 'lucide-react'
 import { PrincipalOfficeCheck } from '@/components/calendar/principal-office-check'
@@ -8,6 +8,8 @@ import { EMPTY_PRINCIPAL_OFFICE_DRAFT, principalOfficeAnswer, type PrincipalOffi
 import { pickersFromPreflight } from '@/lib/flows/materialize-preflight-response'
 import { hasValidLlcEnding } from '@/lib/flows/legal-name'
 import { suggestLegalName, legalNameNeedsDifferTick } from '@/lib/flows/legal-name-prefill'
+import { typesForTarget } from '@/lib/crm-store/types-for-target'
+import { uploadOutcome } from '@/lib/flows/upload-outcome'
 
 /** Window event fired after a flow document upload succeeds. The sibling
  *  DocumentViewer listens for it to re-fetch live (a server router.refresh()
@@ -39,6 +41,12 @@ interface DocumentUploadProps {
   requirePrincipalOffice?: boolean
   /** The company the answer is about (required with requirePrincipalOffice). */
   accountId?: string | null
+  /** The DEFAULT Storage document type of this box (a catalog slug, from the stage layout). When set the box shows a type picker — the Storage
+   *  list for where the file lands, this one pre-selected — and the upload carries the chosen type: the STORAGE rule (a client's storage always
+   *  takes a type from the list). Absent = no picker, the upload behaves as before. */
+  documentType?: string
+  /** Where the file lands: a person's storage (a contact-scoped flow such as an ITIN) or a company's. Picks which part of the Storage list is offered. */
+  ownerKind?: 'person' | 'company'
 }
 
 /**
@@ -59,7 +67,7 @@ interface DocumentUploadProps {
  *      switch this to a multipart/FormData body or the 4.5MB limit returns.
  * Surfaces the server's real error on failure (R099) — never a generic toast.
  */
-export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvance, folder, rename, requirePrincipalOffice, accountId }: DocumentUploadProps) {
+export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvance, folder, rename, requirePrincipalOffice, accountId, documentType, ownerKind }: DocumentUploadProps) {
   const router = useRouter()
   const inputRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -68,6 +76,31 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
   const [error, setError] = useState<string | null>(null)
 
   const uploadLabel = label || 'Upload Document'
+
+  // The Storage rule for a typed box: the type is chosen from the Storage list (this box's default pre-selected) and is required.
+  const [docTypes, setDocTypes] = useState<Array<{ slug: string; name: string; personal: boolean }> | null>(null)
+  const [docType, setDocType] = useState(documentType ?? '')
+  const [typesError, setTypesError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!documentType) return
+    let cancelled = false
+    fetch('/api/crm-store/browse/types', { cache: 'no-store' })
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error((d as { error?: string }).error || 'Could not load the document types — please reload the page.')
+        return (d as { types: Array<{ slug: string; name: string; personal: boolean }> }).types
+      })
+      .then((all) => {
+        if (cancelled) return
+        const list = typesForTarget(all, { ownerKind: ownerKind ?? 'company' })
+        setDocTypes(list)
+        // the box's default stays pre-selected only when the list really offers it; otherwise the person must choose
+        setDocType((cur) => (list.some((t) => t.slug === cur) ? cur : ''))
+      })
+      .catch((e) => { if (!cancelled) setTypesError(e instanceof Error && e.message ? e.message : 'Could not load the document types — please reload the page.') })
+    return () => { cancelled = true }
+  }, [documentType, ownerKind])
+  const typeReady = !documentType || (!!docTypes && docTypes.some((t) => t.slug === docType))
 
   const [principalOffice, setPrincipalOffice] = useState<PrincipalOfficeDraft>(EMPTY_PRINCIPAL_OFFICE_DRAFT)
   const principalOfficeReady = !requirePrincipalOffice || !!principalOfficeAnswer(principalOffice)
@@ -179,6 +212,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         auto_advance: autoAdvance === false ? false : undefined,
         ...(folder ? { folder } : {}),
         ...(rename ? { rename } : {}),
+        ...(documentType && docType ? { document_type: docType } : {}),
         ...(confirmedDate ? { formation_date: confirmedDate } : {}),
         ...(confirmedEntityType ? { entity_type: confirmedEntityType } : {}),
         ...(confirmedFormationState ? { formation_state: confirmedFormationState } : {}),
@@ -190,25 +224,11 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
     if (!apiRes.ok || !data.success) {
       throw new Error(data.detail || data.error || 'Upload failed — please try again.')
     }
-    // Never show a failed company creation / refused advance as a green
-    // success: the server reports both via `advance` (structured) and folds
-    // them into `detail` with a ⚠️ marker.
-    const matError: string | undefined = data.advance?.materialization?.error
-    const advanceRefused =
-      needsFormationDate && data.advance && data.advance.success === false && data.advance.error
-    if (matError) {
-      setWarn(`${fileName} uploaded, but the company record was NOT created: ${matError}`)
-    } else if (advanceRefused) {
-      setWarn(`${fileName} uploaded, but the flow did not advance: ${data.advance.error}`)
-    }
-    // Prefer the server's summary — for ITIN approval letters it reports the
-    // OCR/finalize outcome (ITIN saved + client notified, or a warning).
-    if (typeof data.principal_office_warning === 'string' && data.principal_office_warning) {
-      setWarn(data.principal_office_warning)
-    }
-    if (!matError && !advanceRefused) {
-      setDone(typeof data.detail === 'string' && data.detail ? data.detail : `${fileName} uploaded`)
-    }
+    // Never show a failed company creation / refused advance / unfinished ITIN letter step as a green success: the server reports them
+    // structured (`advance`, `itin_finalize`) and folds them into `detail` with a ⚠️ marker. The rule lives in lib/flows/upload-outcome.ts.
+    const outcome = uploadOutcome(data, { fileName, needsFormationDate })
+    if (outcome.warn) setWarn(outcome.warn)
+    if (outcome.done) setDone(outcome.done)
     clearPick()
     stagedPathRef.current = null
     window.dispatchEvent(
@@ -218,7 +238,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
   }
 
   async function handleUpload() {
-    if (!file || uploading) return
+    if (!file || uploading || !typeReady) return
     setUploading(true)
     setError(null)
     setDone(null)
@@ -358,7 +378,8 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
   }
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4">
+    // data-guide-*: the workspace guide (lib/flows/workspace-guide.ts) finds the box by its document type and circles its parts
+    <div className="rounded-xl border border-zinc-200 bg-white p-4" data-guide-box={documentType || undefined}>
       <div className="flex items-center gap-2 mb-3">
         <FileUp className="h-4 w-4 text-zinc-400" />
         <h3 className="text-sm font-semibold text-zinc-900">{uploadLabel}</h3>
@@ -377,6 +398,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
       <div className="flex flex-wrap items-center gap-2">
         <label
           htmlFor={`flow-upload-${serviceDeliveryId}`}
+          data-guide-part="choose"
           className={`inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-md border transition-colors ${
             uploading
               ? 'border-zinc-200 text-zinc-400 cursor-not-allowed'
@@ -404,6 +426,25 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         )}
       </div>
 
+      {documentType && (
+        <div className="mt-3 flex flex-wrap items-center gap-2" data-testid="flow-upload-type">
+          <label htmlFor={`flow-upload-type-${serviceDeliveryId}`} className="text-sm text-zinc-600">Document type</label>
+          <select
+            id={`flow-upload-type-${serviceDeliveryId}`}
+            value={docType}
+            onChange={(e) => setDocType(e.target.value)}
+            disabled={uploading || !docTypes}
+            data-guide-part="type"
+            className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-800 disabled:opacity-50"
+          >
+            {!docTypes && !typesError && <option value="">Loading…</option>}
+            {docTypes && <option value="">Choose the document type…</option>}
+            {(docTypes ?? []).map((t) => <option key={t.slug} value={t.slug}>{t.name}</option>)}
+          </select>
+          {typesError && <span className="text-sm text-red-600">{typesError}</span>}
+        </div>
+      )}
+
       {requirePrincipalOffice && accountId && (
         <div className="mt-3">
           <PrincipalOfficeCheck accountId={accountId} value={principalOffice} onChange={setPrincipalOffice} disabled={uploading} />
@@ -414,9 +455,10 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
       <button
         type="button"
         onClick={handleUpload}
-        disabled={!file || uploading || !principalOfficeReady}
+        disabled={!file || uploading || !principalOfficeReady || !typeReady}
+        data-guide-part="submit"
         className={`mt-3 inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-          !file || uploading || !principalOfficeReady
+          !file || uploading || !principalOfficeReady || !typeReady
             ? 'bg-zinc-200 text-zinc-400 cursor-not-allowed'
             : 'bg-blue-600 text-white hover:bg-blue-700 cursor-pointer'
         }`}

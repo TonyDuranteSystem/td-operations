@@ -106,6 +106,10 @@ export interface ActionRequiredParams {
    * "Take action" / "Vai all'azione" — override for informational dispatches
    * (e.g. "View document" when delivering an ITIN letter). */
   ctaLabel?: LocalizedText
+  /** The bell notification's type. Default 'action_required' = a "you must do something" item: the portal bell and "Mark all read" never
+   * clear it. A caller whose notice is only GOOD NEWS (the ITIN letter is ready) passes an ordinary type ('new_document') so the client can
+   * dismiss it. The duplicate guard then also matches the title, so an unrelated notice of that type cannot swallow this dispatch. */
+  bellType?: string
 }
 
 export interface ActionRequiredResult {
@@ -224,12 +228,14 @@ export async function notifyClientActionRequired(params: ActionRequiredParams): 
 
     // ── Dedup guard ─────────────────────────────────────────────────────
     const windowStart = new Date(Date.now() - DEDUP_WINDOW_MS).toISOString()
+    const bellType = params.bellType ?? ACTION_REQUIRED_TYPE
     let dedupQuery = supabaseAdmin
       .from('portal_notifications')
       .select('id', { count: 'exact', head: true })
-      .eq('type', ACTION_REQUIRED_TYPE)
+      .eq('type', bellType)
       .eq('link', params.link)
       .gt('created_at', windowStart)
+    if (bellType !== ACTION_REQUIRED_TYPE) dedupQuery = dedupQuery.in('title', [params.title.en, params.title.it])
     dedupQuery = params.contact_id
       ? dedupQuery.eq('contact_id', params.contact_id)
       : dedupQuery.eq('account_id', params.account_id as string)
@@ -280,7 +286,7 @@ export async function notifyClientActionRequired(params: ActionRequiredParams): 
       const bell = await createPortalNotification({
         account_id: params.account_id ?? undefined,
         contact_id: params.contact_id ?? undefined,
-        type: ACTION_REQUIRED_TYPE,
+        type: params.bellType ?? ACTION_REQUIRED_TYPE,
         title: params.title[primaryLocale],
         body: params.message[primaryLocale],
         link: params.link,

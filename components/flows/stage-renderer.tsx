@@ -88,6 +88,8 @@ function renderComponent(
           autoAdvance={component.autoAdvance}
           folder={component.folder}
           rename={component.rename}
+          documentType={component.documentType}
+          ownerKind={serviceDelivery.account_id ? 'company' : 'person'}
           requirePrincipalOffice={serviceDelivery.service_type === 'State Annual Report'}
           accountId={account.id}
         />

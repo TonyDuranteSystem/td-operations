@@ -19,6 +19,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { parseItinIssueDateFromOcr } from '@/lib/ocr-helpers'
 import { writeITINFields } from '@/lib/itin/write-itin-fields'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { contactUploadRouting } from '@/lib/crm-store/contact-upload-routing'
+import type { WaitingWorkspaceStep } from '@/lib/flows/storage-step-rules'
 
 const CATEGORY_MAP: Record<string, { num: number; subfolder: string }> = {
   Contacts: { num: 2, subfolder: '2. Contacts' },
@@ -44,6 +46,42 @@ export async function POST(req: NextRequest) {
     }
 
     const catInfo = CATEGORY_MAP[category] || CATEGORY_MAP.Correspondence
+
+    // A file an open workspace step is waiting for must go through that step — or be filed in Storage on purpose (dev job e3215801, "Door A":
+    // Adam Mihaly's ITIN letter was filed in Storage, hidden, while the workspace step that reads it, tells the client and closes the case never
+    // ran). The page asks the staff member first and sends `workspaceAck` (the cases they chose to leave); anything else is refused here, BEFORE
+    // anything is downloaded or saved. A check that cannot be completed refuses too — it never lets the file through unchecked.
+    const ackBody = (body as { workspaceAck?: unknown }).workspaceAck
+    const acked = Array.isArray(ackBody) ? ackBody.filter((x): x is string => typeof x === 'string') : []
+    let waiting: WaitingWorkspaceStep[] = []
+    {
+      const discardStaged = async () => {
+        if (!String(storagePath).startsWith('crm-uploads/') || String(storagePath).includes('..')) return
+        await supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
+      }
+      try {
+        const { findWaitingWorkspaceStepsForContact } = await import('@/lib/flows/storage-step-hints')
+        const routed = contactUploadRouting(documentType as string, category)
+        waiting = await findWaitingWorkspaceStepsForContact({ contactId, documentType: routed.storeType, folderKind: routed.checkFolderKind })
+      } catch {
+        await discardStaged()
+        return NextResponse.json({ success: false, detail: 'Could not check whether a workspace is waiting for this file — nothing was uploaded. Please try again.' }, { status: 503 })
+      }
+      const unanswered = waiting.filter((h) => acked.indexOf(h.sdId) === -1)
+      if (unanswered.length > 0) {
+        await discardStaged()
+        const first = unanswered[0]
+        return NextResponse.json(
+          {
+            success: false,
+            code: 'workspace_step_waiting',
+            detail: `${first.who}'s ${first.serviceType} case is at "${first.stage}" and is waiting for ${first.asks}. ${first.how ? `In the workspace: ${first.how} ` : ''}Or choose "Save in Storage only" on the contact page — nothing was uploaded.`,
+            hits: unanswered,
+          },
+          { status: 409 },
+        )
+      }
+    }
 
     // Download from Supabase Storage
     const { data: blob, error: dlErr } = await supabaseAdmin.storage
@@ -71,7 +109,7 @@ export async function POST(req: NextRequest) {
     // Where do these files live? (Drive cutover, dev job ad09ea91.) A person's OWN documents (category Contacts) go to
     // their personal storage when it is live; a company document goes to the linked company's storage when that company
     // is in storage. Anything else is refused with one plain sentence below (nothing is written to Drive).
-    let stored: { pointer: string; documentRowId: string } | null = null
+    let stored: { pointer: string; documentRowId: string; status: string } | null = null
     {
       const { saveDocumentForContact, saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
       const { createHash } = await import('crypto')
@@ -99,12 +137,8 @@ export async function POST(req: NextRequest) {
           if ((await companyDocState(id)) !== 'drive') { switchedViaAccountId = id; break }
         }
       }
-      const dt = (documentType as string).toLowerCase()
-      // A file saved hidden with NO type is closed to sharing ("choose its type first"), so the follow-up "show to client" would be refused:
-      // a generic file gets the plain client-shareable type up front, exactly as it did when uploads were saved visible.
-      const storeType = dt.includes('passport') ? 'passport' : dt.includes('itin') ? 'itin_letter' : /\bein\b/.test(dt) ? 'ein_letter_irs' : 'other_document'
-      // an ITIN document (a letter, a form …) belongs in the person's ITIN folder; a passport follows the normal rule (Personal documents)
-      const itinFolder: 'itin' | undefined = !dt.includes('passport') && dt.includes('itin') ? 'itin' : undefined
+      // the dropdown label -> the Storage type + folder (one shared place: the "workspace step is waiting" check reads it too)
+      const { storeType, itinFolder } = contactUploadRouting(documentType as string, category)
       const callerKey = `staff-contact-upload:${contactId}:${catInfo.num}:${createHash('sha256').update(buffer).digest('hex')}`
       const row = { document_type_name: documentType as string, category: catInfo.num, category_name: category as string, status: 'classified' }
       try {
@@ -117,7 +151,7 @@ export async function POST(req: NextRequest) {
                 documentType: storeType, callerKey, portalVisible: wantVisible, row: { ...row, contact_id: contactId },
               })
             : ({ route: 'drive' } as const)
-        if (routed.route === 'store') stored = { pointer: routed.pointer, documentRowId: routed.documentRowId }
+        if (routed.route === 'store') stored = { pointer: routed.pointer, documentRowId: routed.documentRowId, status: routed.status }
       } catch (e) {
         if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 })
         throw e
@@ -196,6 +230,18 @@ export async function POST(req: NextRequest) {
         notifyClientsOfNewDocument(newDoc.id as string).catch((e) =>
           console.warn('[upload-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
       }
+    }
+
+    // filed in Storage on purpose: say so on the case's record AND on the person's own activity (an identical copy of a file already stored changed nothing, so it writes no new record).
+    // A note that cannot be written never undoes the save — it is reported back so the page can tell the staff member.
+    let workspaceNote: 'recorded' | 'failed' | undefined
+    if (waiting.length > 0 && stored.status !== 'unchanged') {
+      const { recordStorageOnlyFiling } = await import('@/lib/flows/storage-step-log')
+      const { createClient } = await import('@/lib/supabase/server')
+      const { data: { user } } = await createClient().auth.getUser()
+      workspaceNote = await recordStorageOnlyFiling({
+        waiting, actorEmail: user?.email, fileId: driveFile.id, fileName, documentType: contactUploadRouting(documentType as string, category).storeType,
+      })
     }
 
     // Log action BEFORE OCR (ensures it's recorded even if OCR times out)
@@ -366,6 +412,7 @@ export async function POST(req: NextRequest) {
       documentId: stored.documentRowId,
       ocrData,
       side_effects: sideEffects,
+      ...(workspaceNote ? { workspaceNote } : {}),
     })
   } catch (e) {
     console.error('[upload-document] Error:', e)

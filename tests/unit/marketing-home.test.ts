@@ -78,10 +78,10 @@ describe("owner Home — calls today", () => {
   })
 })
 
-describe("owner Home — the menu", () => {
-  it("is for people who can pick leads, and is the owner's first screen", () => {
-    expect(modulesFor(["leads.pick"]).map(x => x.key)[0]).toBe("home")
-    expect(modulesFor(["leads.worklist"]).map(x => x.key)).not.toContain("home")
-    expect(homeFor(["leads.pick", "leads.read"])).toBe("/marketing/home")
+describe("the team workspace has no owner Home", () => {
+  it("is not in anybody's menu, and the first screen of a seller is Today", () => {
+    expect(modulesFor(["leads.pick"]).map(x => x.key)).not.toContain("home")
+    expect(modulesFor(["leads.pick", "leads.read"]).map(x => x.key)[0]).not.toBe("home")
+    expect(homeFor(["leads.pick", "leads.read"])).toBe("/marketing/today")
   })
 })

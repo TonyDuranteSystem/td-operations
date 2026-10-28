@@ -748,6 +748,13 @@ export async function advanceServiceDelivery(
         stageLabel,
         hasClientLabel,
       })
+      // A client who has the app gets the push for this move (8a below) — the batched portal-digest email would be a second copy
+      // (Antonio 2026-10-28, stage emails skip clients who have the app). The row is still created (the bell shows it); it is just
+      // born "already emailed". A client without the app is unchanged: the digest emails them. The check is "does the person the digest
+      // would email have a device" — for a company-only case that is the company's one email address, NOT "any device of the company"
+      // (lib/portal/push-presence.ts). It never throws: any failure means "no app", and the bell + email go out as before.
+      const { stageNoticeRecipientHasApp } = await import("@/lib/portal/push-presence")
+      const hasApp = await stageNoticeRecipientHasApp({ contactId: delivery.contact_id ?? null, accountId: delivery.account_id ?? null })
       await createPortalNotification({
         account_id: delivery.account_id ?? undefined,
         contact_id: delivery.contact_id ?? undefined,
@@ -755,8 +762,9 @@ export async function advanceServiceDelivery(
         title,
         body,
         link: "/portal/services",
+        suppressDigestEmail: hasApp,
       })
-      autoTriggers.push(`Portal notification sent: "${title}"`)
+      autoTriggers.push(`Portal notification sent: "${title}"${hasApp ? " (client has the app — no digest email)" : ""}`)
     } catch {
       // Non-critical — don't fail the advance
     }
@@ -820,7 +828,7 @@ export async function advanceServiceDelivery(
           : targetStage.stage_name,
         custom_message: targetStageWithNotify.client_notification_message ?? null,
       })
-      autoTriggers.push(`Stage-change email sent: ${result.sent} delivered, ${result.failed} failed`)
+      autoTriggers.push(`Stage-change email sent: ${result.sent} delivered, ${result.failed} failed${result.skippedHasApp ? `, ${result.skippedHasApp} skipped (client has the app)` : ""}`)
     } catch (emailErr) {
       autoTriggers.push(`Stage-change email failed: ${emailErr instanceof Error ? emailErr.message : String(emailErr)}`)
     }

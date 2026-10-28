@@ -9,6 +9,8 @@ import { resolveMailingAddress } from '@/lib/addresses'
 import { deriveFlowYear } from '@/lib/flows/resolve-flows'
 import { StageStepper, type StepperStage } from '@/components/flows/stage-stepper'
 import { StageRenderer } from '@/components/flows/stage-renderer'
+import { WorkspaceGuide } from '@/components/flows/workspace-guide'
+import { guideHintFor, parseGuideParam, stageDefsFromRows } from '@/lib/flows/workspace-guide'
 import { SuitePanel } from '@/components/flows/suite-panel'
 import { GoBackButton } from '@/components/flows/go-back-button'
 import { ItinOriginCard, type ItinOrigin } from '@/components/flows/itin-origin-card'
@@ -25,7 +27,7 @@ export const dynamic = 'force-dynamic'
  * for the SD's current stage (matched by stage NAME, since stage_order on the SD
  * is frequently NULL).
  */
-export default async function FlowWorkspacePage({ params }: { params: { id: string } }) {
+export default async function FlowWorkspacePage({ params, searchParams }: { params: { id: string }; searchParams?: { guide?: string | string[] } }) {
   const { data: sd } = await supabaseAdmin
     .from('service_deliveries')
     .select('id, service_type, stage, stage_order, status, assigned_to, due_date, stage_entered_at, created_at, account_id, contact_id')
@@ -99,6 +101,8 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
   const currentStageRow = stages.find((s) => s.stage_name === sd.stage) ?? null
   const layout = parseStageLayout(currentStageRow?.stage_layout)
   const year = deriveFlowYear(sd)
+  const guideType = parseGuideParam(searchParams?.guide)
+  const guideHint = guideType ? guideHintFor(sd.service_type, guideType) : null
 
   // Previous stage (highest stage_order below the current one) drives the
   // "← Go Back" button — hidden on the first stage. Resolved by stage_order
@@ -361,6 +365,21 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
         secondInstallment={secondInstallment}
         needsDocument={currentStageRow?.requires_document_to_advance === true}
       />
+
+      {/* The step-by-step guide: only when the pop-up "Open the workspace" opened the case (?guide=<document type>) for a document the step table
+          knows. A small card + a glowing ring on the real next click; it never clicks for staff (components/flows/workspace-guide.tsx). */}
+      {guideType && guideHint && (
+        <WorkspaceGuide
+          serviceDeliveryId={serviceDelivery.id}
+          currentStage={sd.stage}
+          status={sd.status}
+          documentType={guideType}
+          stages={stageDefsFromRows(stages)}
+          asks={guideHint.asks}
+          does={guideHint.does}
+          readyStages={guideHint.readyStages}
+        />
+      )}
 
       {/* Go Back — every stage except the first */}
       {previousStageRow && (

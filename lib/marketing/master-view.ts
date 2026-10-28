@@ -36,6 +36,8 @@ export interface MasterInput {
   now: Date
   /** leads with no team at all (they belong to nobody's list, so they are counted apart); default: counted from `leads` */
   unassignedCount?: number
+  /** the newest leads that have no team (a few, for the "Needs you" buttons) */
+  unassignedLeads?: Array<{ id: string; name: string }>
 }
 
 const arrivedAt = (l: MasterLead) => new Date(l.meta_created_time ?? l.received_at).getTime()
@@ -70,7 +72,8 @@ export function ageText(ms: number, dayUnit = "d"): string {
   return `${Math.floor(h / 24)} ${dayUnit}`
 }
 
-export interface NeedsItem { key: "untouched" | "unassigned" | "late_callbacks" | "existing_client"; text: string; tone: "bad" | "warn" }
+/** `leadId` is the one lead a line is about (a late call back, an existing client); `leads` are the first few leads of a group line (untouched, no team), so Antonio can act on them where he reads them. */
+export interface NeedsItem { key: "untouched" | "unassigned" | "late_callbacks" | "existing_client"; text: string; tone: "bad" | "warn"; leadId?: string; leads?: Array<{ id: string; name: string }> }
 export interface PersonRow { email: string; role: string; good: number; notInTarget: number; callBacks: number; picked: number; lastActive: string | null }
 export interface MasterView {
   newLast24h: number
@@ -109,13 +112,13 @@ export function buildMasterView(i: MasterInput): MasterView {
   if (stray) funnel.push({ key: "_other", label: "Other", count: stray })
 
   const needs: NeedsItem[] = []
-  if (untouched.length) needs.push({ key: "untouched", tone: "bad", text: `${untouched.length} lead${untouched.length === 1 ? "" : "s"} untouched for over a day (oldest: ${ageText(oldest as number)})` })
+  if (untouched.length) needs.push({ key: "untouched", tone: "bad", leads: [...untouched].sort((a, b) => arrivedAt(a) - arrivedAt(b)).slice(0, 3).map(l => ({ id: l.id, name: nameOf(l) })), text: `${untouched.length} lead${untouched.length === 1 ? "" : "s"} untouched for over a day (oldest: ${ageText(oldest as number)})` })
   const unassigned = i.unassignedCount ?? i.leads.filter(l => !l.team_id).length
-  if (unassigned) needs.push({ key: "unassigned", tone: "warn", text: `${unassigned} lead${unassigned === 1 ? "" : "s"} that arrived with no team` })
-  for (const l of late.slice(0, 3)) needs.push({ key: "late_callbacks", tone: "bad", text: `Call back with ${nameOf(l)} is ${ageText(nowMs - new Date(l.callback_at as string).getTime())} late` })
+  if (unassigned) needs.push({ key: "unassigned", tone: "warn", leads: i.unassignedLeads?.slice(0, 3), text: `${unassigned} lead${unassigned === 1 ? "" : "s"} that arrived with no team` })
+  for (const l of late.slice(0, 3)) needs.push({ key: "late_callbacks", tone: "bad", leadId: l.id, text: `Call back with ${nameOf(l)} is ${ageText(nowMs - new Date(l.callback_at as string).getTime())} late` })
   if (late.length > 3) needs.push({ key: "late_callbacks", tone: "bad", text: `${late.length - 3} more call backs are late` })
   const flagged = i.leads.filter(l => l.existing_client && (l.existing_client.contact_ids?.length || l.existing_client.check_failed) && l.status === firstStage)
-  for (const l of flagged.slice(0, 3)) needs.push({ key: "existing_client", tone: "warn", text: `${nameOf(l)} ${l.existing_client?.check_failed ? "could not be checked against TD clients" : "looks like an existing client"}` })
+  for (const l of flagged.slice(0, 3)) needs.push({ key: "existing_client", tone: "warn", leadId: l.id, text: `${nameOf(l)} ${l.existing_client?.check_failed ? "could not be checked against TD clients" : "looks like an existing client"}` })
 
   // What each person did today. Events are matched to people by the email stored as the actor.
   const work = i.events.filter(countsAsWork)

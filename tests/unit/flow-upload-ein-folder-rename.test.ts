@@ -67,6 +67,10 @@ vi.mock("@/lib/supabase-admin", () => ({
           },
         }
       }
+      if (table === "pipeline_stages") {
+        // the stage layout lookup for the box's default document type: these stages have no typed box -> the upload stays as before
+        return { select: () => ({ eq: () => ({ eq: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }) }) }) }
+      }
       if (table === "action_log") {
         return {
           insert: (payload: Record<string, unknown>) => {

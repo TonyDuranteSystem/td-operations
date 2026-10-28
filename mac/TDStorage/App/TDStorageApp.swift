@@ -103,6 +103,11 @@ final class AppModel: ObservableObject {
         checkEvery = s
         if store.load() != nil { startLeaseWatch() }      // restarts the timer with the new pace
     }
+    /// Finder only hears about new files when somebody asks the CRM. The Finder helper used to do that itself, but macOS stops the helper when
+    /// nobody is using Finder, so an idle Mac fell hours behind. This app is always running, so it asks every time it contacts the CRM.
+    private func nudgeFinder() {
+        NSFileProviderManager(for: domain)?.signalEnumerator(for: .workingSet) { _ in }
+    }
     private func noteLatest(_ latest: Int?) {
         guard let latest, latest > currentBuild, Date().timeIntervalSince(lastUpdateNudge) > 600 else { return }
         lastUpdateNudge = Date()
@@ -142,6 +147,7 @@ final class AppModel: ObservableObject {
             updateCheckMinutes = me.updateCheckMinutes
             noteLatest(me.latestBuild)
             applyPace(me.updateHintSeconds)
+            nudgeFinder()
             state = .signedIn(me.email ?? "signed in")
             enableStartAtLogin()
             do { try await register() } catch {
@@ -213,7 +219,7 @@ final class AppModel: ObservableObject {
     private func checkLease() async {
         guard store.load() != nil else { return }
         if lease.isExpired() { await wipe(); state = .problem(leaseMessage); return }
-        do { let me = try await api.whoami(); noteLatest(me.latestBuild); applyPace(me.updateHintSeconds) }
+        do { let me = try await api.whoami(); noteLatest(me.latestBuild); applyPace(me.updateHintSeconds); nudgeFinder() }
         catch StorageAPIError.deviceRevoked { await wipe(); state = .signedOut }
         catch StorageAPIError.notSignedIn { await wipe(); state = .signedOut }
         catch { /* offline for now: the lease keeps running */ }
