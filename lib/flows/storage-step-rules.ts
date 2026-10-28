@@ -112,6 +112,56 @@ function howToUpload(defs: readonly GuideStageDef[], at: string, boxStage: strin
   return `${lead}, then upload it in ${box}.${caution}`
 }
 
+/**
+ * Mistakes in the upload boxes' settings that would SILENTLY switch a pop-up off (nothing throws; the rule just never matches). Pure: returns plain
+ * sentences, empty when everything is fine. The server logs them every time it reads the layouts (lib/flows/storage-step-hints.ts), and a test runs
+ * it over the real ITIN layouts, so a bad edit shows up instead of quietly disabling a rule:
+ *  - a `storageHint` on a box with no `documentType` (nothing to match it with);
+ *  - `typeNeedsFolder` / `otherDocumentCounts` with no `folderKind` (they are about a folder kind, so they could never match);
+ *  - `fromStages` naming a stage the pipeline does not have (a typo, a wrong capital letter) — the stage is dropped and that stage is unchecked;
+ *  - two boxes of one service taking the same `documentType` (the pop-up and the guide use the first one).
+ */
+export function stepHintProblems(rows: ReadonlyArray<{ service_type: string; stage_name: string; stage_order: number; stage_layout: unknown }>): string[] {
+  const out: string[] = []
+  const byService = new Map<string, Array<{ stage_name: string; stage_order: number; stage_layout: unknown }>>()
+  for (const r of rows) {
+    if (!r.service_type || !r.stage_name) continue
+    const list = byService.get(r.service_type) ?? []
+    list.push(r)
+    byService.set(r.service_type, list)
+  }
+  for (const [serviceType, serviceRows] of Array.from(byService.entries())) {
+    const names = serviceRows.map((r) => r.stage_name)
+    const sorted = [...serviceRows].sort((a, b) => a.stage_order - b.stage_order)
+    const seen = new Map<string, string[]>()
+    for (const row of sorted) {
+      for (const c of parseStageLayout(row.stage_layout)?.components ?? []) {
+        if (c.type !== 'document_upload') continue
+        const where = `${serviceType} / ${row.stage_name} / "${c.label || 'Upload Document'}"`
+        const sh = c.storageHint
+        if (!c.documentType) {
+          if (sh) out.push(`${where}: has a storageHint but no documentType, so the pop-up can never match it`)
+          continue
+        }
+        seen.set(c.documentType, [...(seen.get(c.documentType) ?? []), `"${c.label || 'Upload Document'}" at ${row.stage_name}`])
+        if (!sh) continue
+        if ((sh.typeNeedsFolder || sh.otherDocumentCounts) && !sh.folderKind) {
+          out.push(`${where}: typeNeedsFolder / otherDocumentCounts need a folderKind; as written this rule never matches`)
+        }
+        for (const s of sh.fromStages ?? []) {
+          if (names.indexOf(s) !== -1) continue
+          const near = names.filter((n) => n.trim().toLowerCase() === s.trim().toLowerCase())[0]
+          out.push(`${where}: fromStages names "${s}", which is not a stage of ${serviceType}${near ? ` (did you mean "${near}"?)` : ''}; that stage is left out`)
+        }
+      }
+    }
+    for (const [type, boxes] of Array.from(seen.entries())) {
+      if (boxes.length > 1) out.push(`${serviceType}: ${boxes.length} upload boxes take "${type}" (${boxes.join(', ')}); the pop-up and the guide use the first`)
+    }
+  }
+  return out
+}
+
 /** Statuses of a case that is finished: nothing is waiting any more. */
 const FINISHED_STATUSES = ['completed', 'cancelled']
 
@@ -189,14 +239,22 @@ function hintFor(
   folderKind: string | null,
 ): { hint: StorageStepHint; by: 'type' | 'folder' } | null {
   if (FINISHED_STATUSES.indexOf(c.status) !== -1) return null
-  for (let i = 0; i < hints.length; i++) {
-    const h = hints[i]
-    if (h.serviceType !== c.serviceType || h.stages.indexOf(c.stage) === -1) continue
-    if (documentType !== null && h.documentTypes.indexOf(documentType) !== -1 && (!h.typeNeedsFolder || (folderKind !== null && h.folderKind === folderKind))) {
-      return { hint: h, by: 'type' }
+  // The step whose OWN upload box is at the stage the case is at is tried first; a step that only REACHES this stage (its fromStages) comes after.
+  // Inside each group the pipeline's order decides, so the answer never depends on how the rows happen to be listed.
+  const own = hints.filter((h) => h.boxStage === c.stage)
+  const reaching = hints.filter((h) => h.boxStage !== c.stage)
+  const groups = [own, reaching]
+  for (let g = 0; g < groups.length; g++) {
+    const list = groups[g]
+    for (let i = 0; i < list.length; i++) {
+      const h = list[i]
+      if (h.serviceType !== c.serviceType || h.stages.indexOf(c.stage) === -1) continue
+      if (documentType !== null && h.documentTypes.indexOf(documentType) !== -1 && (!h.typeNeedsFolder || (folderKind !== null && h.folderKind === folderKind))) {
+        return { hint: h, by: 'type' }
+      }
+      const vague = documentType === null || (h.vagueTypes ?? []).indexOf(documentType) !== -1
+      if (vague && h.folderKind && folderKind === h.folderKind) return { hint: h, by: 'folder' }
     }
-    const vague = documentType === null || (h.vagueTypes ?? []).indexOf(documentType) !== -1
-    if (vague && h.folderKind && folderKind === h.folderKind) return { hint: h, by: 'folder' }
   }
   return null
 }

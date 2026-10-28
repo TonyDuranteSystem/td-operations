@@ -8,14 +8,18 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { buildStepHints, typeCouldWait, couldMatchAnyHint, matchStorageStepHints, type StorageStepHint, type WaitingWorkspaceStep } from './storage-step-rules'
+import { buildStepHints, stepHintProblems, typeCouldWait, couldMatchAnyHint, matchStorageStepHints, type StorageStepHint, type WaitingWorkspaceStep } from './storage-step-rules'
 
 export * from './storage-step-rules'
 
 /**
  * The rules are BUILT from the workspace's own stage layouts (see storage-step-rules.ts) — read here, kept for a short while so an upload does not
- * re-read every stage of every service. A layout edit shows up within a minute. A read that fails THROWS: the callers refuse the save ("nothing was
- * saved"), they never let a file through unchecked.
+ * re-read every stage of every service. A layout edit shows up within a minute.
+ *
+ * Every upload's server-side check needs these rules, so a read that fails must not block every upload (a passport included) on a blip: when a
+ * read fails and an EARLIER good copy exists, that copy is used (and a warning is logged); with none (a cold instance) the read THROWS and the
+ * callers refuse the save ("nothing was saved") — they never let a file through unchecked. Mistakes in the boxes' settings that would silently
+ * switch a pop-up off are logged on every successful read (`stepHintProblems`).
  */
 const HINTS_CACHE_MS = 30_000
 let hintsCache: { at: number; hints: StorageStepHint[] } | null = null
@@ -26,10 +30,27 @@ export function resetStepHintsCache(): void {
 
 export async function loadStepHints(): Promise<StorageStepHint[]> {
   if (hintsCache && Date.now() - hintsCache.at < HINTS_CACHE_MS) return hintsCache.hints
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pipeline_stages.stage_layout is not in the generated types
-  const { data, error } = await (supabaseAdmin as any).from('pipeline_stages').select('service_type, stage_name, stage_order, stage_layout')
-  if (error) throw new Error(error.message)
-  const hints = buildStepHints((data ?? []) as Array<{ service_type: string; stage_name: string; stage_order: number; stage_layout: unknown }>)
+  let rows: Array<{ service_type: string; stage_name: string; stage_order: number; stage_layout: unknown }>
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pipeline_stages.stage_layout is not in the generated types
+    const { data, error } = await (supabaseAdmin as any)
+      .from('pipeline_stages')
+      .select('service_type, stage_name, stage_order, stage_layout')
+      .order('service_type')
+      .order('stage_order')
+      .order('stage_name')
+    if (error) throw new Error(error.message)
+    rows = (data ?? []) as typeof rows
+  } catch (e) {
+    if (hintsCache) {
+      console.warn('[workspace-step-hints] could not re-read the stage layouts; using the last good copy —', e instanceof Error ? e.message : String(e))
+      return hintsCache.hints
+    }
+    throw e
+  }
+  const problems = stepHintProblems(rows)
+  if (problems.length > 0) console.warn('[workspace-step-hints] upload-box settings that switch a pop-up off —', problems.join(' | '))
+  const hints = buildStepHints(rows)
   hintsCache = { at: Date.now(), hints }
   return hints
 }

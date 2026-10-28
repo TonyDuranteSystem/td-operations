@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  buildStepHints, matchStorageStepHints, couldMatchAnyHint, typeCouldWait, typeCouldWaitIn, waitSummary, GENERIC_EFFECT,
+  buildStepHints, matchStorageStepHints, couldMatchAnyHint, typeCouldWait, typeCouldWaitIn, waitSummary, stepHintProblems, GENERIC_EFFECT,
   type StorageStepHint,
 } from '@/lib/flows/storage-step-rules'
 import { parseStageLayout, parseStorageHint } from '@/lib/flows/stage-layout'
@@ -215,5 +215,96 @@ describe('storageHint in a stage layout is read carefully (anything unusable is 
   it('a layout carries the hint on its upload box', () => {
     const l = parseStageLayout({ components: [{ type: 'document_upload', label: 'L', documentType: 't', storageHint: { asks: 'x' } }] })
     expect(l?.components[0].storageHint).toEqual({ asks: 'x' })
+  })
+})
+
+// ── the step whose OWN box is at the case's stage wins ─────────────────────────────────────────────────────────────────────────
+
+describe('a step that only REACHES the stage never beats the step whose own box is there', () => {
+  const rows: Row[] = [
+    stage('X', 'A', 1, [btn('Go', 'B'), { type: 'document_upload', label: 'Box A', documentType: 'ta', storageHint: { folderKind: 'k', otherDocumentCounts: true, fromStages: ['A', 'B'] } }]),
+    stage('X', 'B', 2, [{ type: 'document_upload', label: 'Box B', documentType: 'tb', storageHint: { folderKind: 'k', otherDocumentCounts: true } }]),
+  ]
+  const hints = buildStepHints(rows)
+  it('a vague file ("Other document" in the folder kind) at B is B\'s document, not A\'s, although A lists B in fromStages', () => {
+    const r = match(hints, 'B', 'other_document', 'k', 'X')
+    expect(r).toHaveLength(1)
+    expect(r[0].asks).toContain('Box B')
+    expect(r[0].how).toBe('Upload it in the "Box B" box.')
+  })
+  it('at A it is A\'s; a typed file is matched by its type at either stage', () => {
+    expect(match(hints, 'A', 'other_document', 'k', 'X')[0].asks).toContain('Box A')
+    expect(match(hints, 'B', 'ta', null, 'X')[0].asks).toContain('Box A')
+    expect(match(hints, 'B', 'tb', null, 'X')[0].asks).toContain('Box B')
+  })
+  it('the order of the rows in the list never changes the answer', () => {
+    const flipped = [...hints].reverse()
+    expect(match(flipped, 'B', 'other_document', 'k', 'X')[0].asks).toContain('Box B')
+  })
+})
+
+// ── the checker for settings that silently switch a pop-up off ──────────────────────────────────────────────────────────────────
+
+describe('stepHintProblems — mistakes that would quietly disable a rule are reported', () => {
+  it('the real ITIN layouts have none', () => {
+    expect(stepHintProblems(ITIN_ROWS)).toEqual([])
+    expect(stepHintProblems(NEW_SERVICE)).toEqual([])
+  })
+  it('a hint on a box with no documentType', () => {
+    const p = stepHintProblems([stage('X', 'A', 1, [{ type: 'document_upload', label: 'Up', storageHint: { asks: 'a thing' } }])])
+    expect(p).toHaveLength(1)
+    expect(p[0]).toContain('no documentType')
+  })
+  it('typeNeedsFolder / otherDocumentCounts without a folderKind (they could never match)', () => {
+    for (const hint of [{ typeNeedsFolder: true }, { otherDocumentCounts: true }]) {
+      const p = stepHintProblems([stage('X', 'A', 1, [{ type: 'document_upload', label: 'Up', documentType: 't', storageHint: hint }])])
+      expect(p[0], JSON.stringify(hint)).toContain('need a folderKind')
+    }
+    expect(stepHintProblems([stage('X', 'A', 1, [{ type: 'document_upload', label: 'Up', documentType: 't', storageHint: { typeNeedsFolder: true, folderKind: 'k' } }])])).toEqual([])
+  })
+  it('fromStages naming a stage the pipeline does not have, with a "did you mean" for a wrong capital letter', () => {
+    const rows2 = [
+      stage('X', 'IRS Processing', 1, [btn('Go', 'Done')]),
+      stage('X', 'Done', 2, [{ type: 'document_upload', label: 'Up', documentType: 't', storageHint: { fromStages: ['irs processing', 'Nowhere'] } }]),
+    ]
+    const p = stepHintProblems(rows2)
+    expect(p).toHaveLength(2)
+    expect(p[0]).toContain('"irs processing"')
+    expect(p[0]).toContain('did you mean "IRS Processing"')
+    expect(p[1]).toContain('"Nowhere"')
+    expect(p[1]).not.toContain('did you mean')
+  })
+  it('two boxes of one service taking the same document type (the pop-up and the guide use the first)', () => {
+    const p = stepHintProblems([
+      stage('X', 'A', 1, [{ type: 'document_upload', label: 'One', documentType: 't' }]),
+      stage('X', 'B', 2, [{ type: 'document_upload', label: 'Two', documentType: 't' }]),
+    ])
+    expect(p).toHaveLength(1)
+    expect(p[0]).toContain('2 upload boxes take "t"')
+    // the same type in two DIFFERENT services is fine
+    expect(stepHintProblems([
+      stage('X', 'A', 1, [{ type: 'document_upload', label: 'One', documentType: 't' }]),
+      stage('Y', 'A', 1, [{ type: 'document_upload', label: 'One', documentType: 't' }]),
+    ])).toEqual([])
+  })
+})
+
+// ── the data change and the test data are the SAME thing ──────────────────────────────────────────────────────────────────────
+
+describe('the production data change (SQL) and the test layouts say exactly the same', () => {
+  const sql = readFileSync(join(__dirname, '../../scripts/migrations/20261029-0100-itin-upload-box-storage-hints.sql'), 'utf8')
+  const blocks = Array.from(sql.matchAll(/\('([^']+)', \$h\$([\s\S]*?)\$h\$::jsonb\)/g)).map((m) => ({ stage: m[1], hint: JSON.parse(m[2]) as unknown }))
+  it('the SQL carries the three ITIN boxes, and each hint equals the storageHint of that box in the test layouts', () => {
+    expect(blocks.map((b) => b.stage)).toEqual(['Documents Received', 'Submitted to IRS', 'ITIN Approved'])
+    for (const b of blocks) {
+      const row = ITIN_ROWS.find((r) => r.stage_name === b.stage)!
+      const box = (row.stage_layout as { components: Array<{ type: string; storageHint?: unknown }> }).components.find((c) => c.type === 'document_upload')!
+      expect(box.storageHint, b.stage).toEqual(b.hint)
+    }
+  })
+  it('the UNDO removes exactly that key from those three stages', () => {
+    const undo = readFileSync(join(__dirname, '../../scripts/migrations/20261029-0100-itin-upload-box-storage-hints.UNDO.sql'), 'utf8')
+    expect(undo).toContain("c - 'storageHint'")
+    for (const st of ['Documents Received', 'Submitted to IRS', 'ITIN Approved']) expect(undo).toContain(`'${st}'`)
   })
 })

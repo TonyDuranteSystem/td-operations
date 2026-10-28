@@ -27,6 +27,7 @@ vi.mock('@/lib/supabase-admin', () => ({
       const b: any = {}
       b.select = () => b
       b.in = () => b
+      b.order = () => b
       b.eq = (col: string, val: unknown) => { fx.filters.push([`${table}.${col}`, val]); return b }
       const one = () => {
         if (table === 'store_folders') return fx.fail.folder ? { data: null, error: { message: 'boom' } } : { data: fx.folder, error: null }
@@ -317,6 +318,48 @@ describe('the rules are read from the stage layouts — a read that fails refuse
     resetStepHintsCache()
     await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })
     expect(fx.queried.filter((t) => t === 'pipeline_stages')).toHaveLength(2)
+  })
+})
+
+describe('the stage read must not block every upload on a blip (stale copy), and bad box settings are logged', () => {
+  it('a read that fails AFTER a good one reuses the last good copy (a passport upload is not refused because of a blip)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const first = await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })
+      expect(first).toHaveLength(1)
+      vi.setSystemTime(Date.now() + 31_000)          // the 30 s copy has expired: the next call re-reads
+      fx.fail.stages = true
+      expect(await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'passport' })).toEqual([])
+      const again = await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })
+      expect(again).toHaveLength(1)                   // still protected, from the last good copy
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('last good copy'))).toBe(true)
+      warn.mockRestore()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('with NO earlier copy (a cold instance) the read still THROWS — never "check nothing"', async () => {
+    fx.fail.stages = true
+    await expect(findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'passport' })).rejects.toThrow()
+  })
+
+  it('upload-box settings that would silently switch a pop-up off are logged when the layouts are read', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fx.stageRows = [
+      { service_type: 'X', stage_name: 'Go', stage_order: 1, stage_layout: { components: [{ type: 'document_upload', label: 'Up', documentType: 'x_doc', storageHint: { typeNeedsFolder: true } }] } },
+    ] as unknown as Array<Record<string, unknown>>
+    await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'x_doc' })
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('switch a pop-up off') && String(c[1]).includes('need a folderKind'))).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('the real ITIN layouts raise no warning', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 })
 

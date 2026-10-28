@@ -80,6 +80,38 @@ describe('the browser helper', () => {
     expect(await m.typeCouldWaitNow('passport')).toBe(false)    // loaded on the retry
     expect(f).toHaveBeenCalledTimes(2)
   })
+  it('keeps the list for one minute (so a workspace change is noticed quickly), then reads it again; resetWaitSummary forgets it at once', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const f = vi.fn(async () => new Response(JSON.stringify({ summary: { types: ['doc_a'], vagueTypes: [] } }), { status: 200 }))
+      globalThis.fetch = f as unknown as typeof fetch
+      const m = await fresh()
+      await m.loadWaitSummary()
+      vi.setSystemTime(Date.now() + 59_000)
+      await m.loadWaitSummary()
+      expect(f).toHaveBeenCalledTimes(1)
+      vi.setSystemTime(Date.now() + 2_000)           // 61 s after the first read
+      await m.loadWaitSummary()
+      expect(f).toHaveBeenCalledTimes(2)
+      m.resetWaitSummary()
+      await m.loadWaitSummary()
+      expect(f).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('a request that never answers is given up after 5 seconds: the answer is "unknown" (check everything), not a stuck upload', async () => {
+    vi.useFakeTimers()
+    try {
+      globalThis.fetch = (() => new Promise(() => {})) as unknown as typeof fetch
+      const m = await fresh()
+      const asked = m.typeCouldWaitNow('passport')
+      await vi.advanceTimersByTimeAsync(5_001)
+      expect(await asked).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
   it('a network failure or a nonsense answer is the same as "unknown"', async () => {
     globalThis.fetch = (async () => { throw new Error('offline') }) as unknown as typeof fetch
     let m = await fresh()
@@ -99,6 +131,18 @@ describe('wiring: nothing keeps a hardcoded list', () => {
       expect(src, f).toContain('typeCouldWaitNow(')
       expect(src, f).not.toMatch(/\btypeCouldWait\(/)
     }
+  })
+  it('both pages recover from a refusal caused by an out-of-date list: they read the list again and start the upload over ONCE (so the proper question is asked)', () => {
+    const storage = read('components/storage/new-store-browser.tsx')
+    expect(storage).toContain("(e.data as { code?: unknown } | undefined)?.code === 'workspace_step_waiting'")
+    expect(storage).toContain('resetWaitSummary()')
+    expect(storage).toContain('workspaceRechecked: true')
+    expect(storage).toContain('!o.workspaceRechecked')
+    const contact = read('components/contacts/contact-detail.tsx')
+    expect(contact).toContain("data.code === 'workspace_step_waiting' && !workspaceRechecked")
+    expect(contact).toContain('await handleFileUpload(file, true)')
+    expect(read('components/storage/store-ui-rules.ts')).toContain('data?: unknown')
+    expect(storage).toContain('res.status, data)')
   })
   it('the rules file has no list of services or document types written in it', () => {
     const src = read('lib/flows/storage-step-rules.ts')

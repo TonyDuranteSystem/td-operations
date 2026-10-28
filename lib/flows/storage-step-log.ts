@@ -22,7 +22,7 @@ export async function recordStorageOnlyFiling(input: {
     const asks = h.asks.charAt(0).toUpperCase() + h.asks.slice(1)
     const summary = h.matchedBy === 'type'
       ? `${asks} filed in Storage only — ${h.who}'s ${h.serviceType} case is still at "${h.stage}" (the workspace step was not done)`
-      : `A file typed "Other document" was filed in ${h.who}'s ${h.serviceType} folder while the case is at "${h.stage}" waiting for ${h.asks} (the workspace step was not done)`
+      : `A file typed "Other document" was filed in ${h.who}'s storage, where this step's documents are kept, while the ${h.serviceType} case is at "${h.stage}" waiting for ${h.asks} (the workspace step was not done)`
     try {
       const { error } = await supabaseAdmin.from('action_log').insert({
         actor: `dashboard:${input.actorEmail?.split('@')[0] ?? 'unknown'}`,
