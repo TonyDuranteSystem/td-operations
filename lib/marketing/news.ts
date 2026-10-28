@@ -70,7 +70,7 @@ export const ANNOUNCEMENTS: readonly Announcement[] = [
 
 /** Screens that were already in the team's hands before What's New existed (28 Oct 2026): no draft is made for them. */
 export const BASELINE_SCREENS: readonly string[] = [
-  "home", "today", "call-list", "board", "leads", "calendar", "inbox", "whatsapp", "chat", "calls", "money", "offers", "content", "templates", "my-numbers", "activity", "reports", "team", "news",
+  "today", "call-list", "board", "leads", "calendar", "inbox", "whatsapp", "chat", "calls", "money", "offers", "content", "templates", "my-numbers", "activity", "reports", "team", "news",
 ]
 
 /** The announcements Antonio has not decided yet (a decision is a news row with that feature key, posted or discarded). */

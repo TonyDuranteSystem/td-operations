@@ -116,7 +116,8 @@ async function main() {
   }
   type Pg = import("playwright").Page
   const adminCtx = await session(em("admin")), seller = await session(em("sellerA")), sellerIt = await session(em("sellerA"), "it"), setter = await session(em("setterA")), owner = await session(em("ownerA"))
-  const open = async (ctx: BrowserContext, path = "/marketing") => { const p = await ctx.newPage(); await p.goto(BASE + path, { waitUntil: "networkidle", timeout: 180000 }); return p }
+  const open = async (ctx: BrowserContext, path = "/marketing") => { const p = await ctx.newPage(); await p.goto(BASE + path, { waitUntil: "load", timeout: 180000 }); await p.waitForLoadState("networkidle", { timeout: 25000 }).catch(() => undefined); await p.waitForTimeout(2500); return p }
+  const settle = async (p: Pg) => { const url = p.url(); for (let i = 0; i < 3; i++) { try { await p.goto(url, { waitUntil: "load", timeout: 150000 }); break } catch (e) { if (i === 2) throw e; await p.waitForTimeout(3000) } } await p.waitForLoadState("networkidle", { timeout: 25000 }).catch(() => undefined); await p.waitForTimeout(2500) }
   const api = (p: Pg, method: string, path: string, payload?: object) => p.evaluate(async ([m, u, b]) => { const r = await fetch(u as string, { method: m as string, headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) } }, [method, path, payload ?? null] as [string, string, object | null])
   const text = async (p: Pg) => (await p.locator("body").innerText()).replace(/\s+/g, " ")
 
@@ -124,7 +125,7 @@ async function main() {
   const ap = await open(adminCtx, "/marketing-leads")
   const add = await api(ap, "POST", `/api/marketing-admin/teams/${teamA.id}/add-me`, {})
   ck("D0 the admin joined the team as owner", add.status === 200, add)
-  await ap.reload({ waitUntil: "networkidle", timeout: 150000 })
+  await settle(ap)
 
   // ---- ONE menu
   const menuText = await ap.getByTestId("owner-nav").innerText()
@@ -142,11 +143,11 @@ async function main() {
   await ap.getByTestId("owner-nav-documents").click()
   await ap.waitForURL("**/marketing/documents", { timeout: 120000 })
   await ap.waitForLoadState("networkidle")
-  ck("D3 Documents opens from his menu, and the page is framed by HIS menu (not Rocco's)", (await ap.getByTestId("owner-nav").count()) === 1 && (await ap.getByTestId("nav-board").count()) === 0 && (await ap.getByTestId("owner-nav-documents").getAttribute("aria-current")) === "page")
+  ck("D3 Documents opens from his menu, and the page is framed by the TEAM'S workspace menu (the same as Rocco's), with a clear 'Back to Marketing' button", (await ap.getByTestId("owner-nav").count()) === 0 && (await ap.getByTestId("nav-board").count()) === 1 && /Back to Marketing/.test(await ap.getByTestId("back-to-crm").innerText().catch(() => "")))
   await ap.screenshot({ path: `${SHOTS}/qa-od-documents.png`, fullPage: false })
   for (const [k, path] of [["board", "/marketing/board"], ["calendar", "/marketing/calendar"], ["chat", "/marketing/chat"], ["templates", "/marketing/templates"]] as const) {
     const p = await open(adminCtx, path)
-    ck(`D3b ${k} opens under HIS menu`, (await p.getByTestId("owner-nav").count()) === 1 && (await p.getByTestId("nav-board").count()) === 0, (await text(p)).slice(0, 150))
+    ck(`D3b ${k} opens in the team's workspace frame, with the Back to Marketing button`, (await p.getByTestId("owner-nav").count()) === 0 && (await p.getByTestId("nav-board").count()) === 1 && (await p.getByTestId("back-to-crm").count()) === 1, (await text(p)).slice(0, 150))
     await p.close()
   }
 
@@ -156,11 +157,16 @@ async function main() {
   ck("D4 'Needs you' lists the untouched lead with Open lead and a person dropdown", (await rawRow.count()) === 1 && (await rawRow.getByTestId("give-select").count()) === 1 && (await rawRow.getByTestId("need-open").count()) === 1)
   const options = await rawRow.getByTestId("give-select").locator("option").allInnerTexts()
   ck("D4b the dropdown holds the people who may pick leads (the seller and the team owner), not the setter", options.some(o => /Sellera|Seller/i.test(o)) && !options.some(o => /Settera/i.test(o)), options)
-  await rawRow.getByTestId("give-select").selectOption(ids.sellerA)
-  await rawRow.getByTestId("give-send").click()
+  for (let i = 0; i < 4; i++) {
+    await rawRow.getByTestId("give-select").selectOption(ids.sellerA).catch(() => undefined)
+    await rawRow.getByTestId("give-send").click().catch(() => undefined)
+    await hp.waitForTimeout(6000)
+    if ((await db.query("select claimed_by from marketing_leads where id=$1", [Lraw])).rows[0].claimed_by) break
+  }
   let claimed: { claimed_by: string | null } = { claimed_by: null }
   for (let i = 0; i < 40; i++) { claimed = (await db.query("select claimed_by from marketing_leads where id=$1", [Lraw])).rows[0]; if (claimed.claimed_by) break; await hp.waitForTimeout(1000) }
-  const ev = (await db.query("select kind, actor, data from marketing_lead_events where lead_id=$1 and kind='given'", [Lraw])).rows
+  let ev: Array<{ kind: string; actor: string; data: { to?: string } }> = []
+  for (let i = 0; i < 20; i++) { ev = (await db.query("select kind, actor, data from marketing_lead_events where lead_id=$1 and kind='given'", [Lraw])).rows; if (ev.length > 0) break; await hp.waitForTimeout(500) }
   ck("D5 assigning gives the lead to that person (atomic) and writes ONE 'given' history line (not a 'picked')", claimed.claimed_by === ids.sellerA && ev.length === 1 && ev[0].data.to === em("sellerA") && (await db.query("select 1 from marketing_lead_events where lead_id=$1 and kind='claimed'", [Lraw])).rowCount === 0, { claimed, ev })
   const again = await api(hp, "POST", `/api/marketing-admin/leads/${Lraw}/give`, { personId: ids.ownerA })
   ck("D5b giving a lead somebody already holds is refused (409), nothing changes", again.status === 409 && (await db.query("select claimed_by from marketing_leads where id=$1", [Lraw])).rows[0].claimed_by === ids.sellerA, again)
@@ -170,10 +176,14 @@ async function main() {
   ck("D5d only the admin can give a lead (a team owner gets 403)", noAdmin.status === 403, noAdmin)
 
   // ---- Home: a lead with no team goes to a team
-  await hp.reload({ waitUntil: "networkidle", timeout: 150000 })
+  await settle(hp)
   const noTeamRow = hp.getByTestId("need-lead").filter({ hasText: "Teamless Lead" })
   ck("D6 a lead with no team is listed with a team dropdown", (await noTeamRow.count()) === 1 && (await noTeamRow.getByTestId("team-box").count()) === 1)
-  await noTeamRow.getByTestId("team-send").click()
+  for (let i = 0; i < 4; i++) {
+    await noTeamRow.getByTestId("team-send").click().catch(() => undefined)
+    await hp.waitForTimeout(6000)
+    if ((await db.query("select team_id from marketing_leads where id=$1", [Lnoteam])).rows[0].team_id) break
+  }
   let tid: string | null = null
   for (let i = 0; i < 40; i++) { tid = (await db.query("select team_id from marketing_leads where id=$1", [Lnoteam])).rows[0].team_id; if (tid) break; await hp.waitForTimeout(1000) }
   ck("D6b giving it to the team works", tid === teamA.id, tid)
@@ -182,7 +192,7 @@ async function main() {
   const sp = await open(seller)
   const sent = await api(sp, "POST", `/api/marketing/chat/${Lchat}/messages`, { message: "Antonio, can I offer the two-payment plan?" })
   ck("D7 the seller writes in the lead's chat", sent.status === 200, sent)
-  await hp.reload({ waitUntil: "networkidle", timeout: 150000 })
+  await settle(hp)
   const msg = hp.getByTestId("home-messages")
   ck("D7b Home shows the message with a reply box under it", /two-payment plan|Chat Lead/.test(await msg.innerText()) && (await msg.getByTestId("reply-input").count()) >= 1, await msg.innerText())
   await msg.getByTestId("reply-input").first().fill("Yes, offer it.")
@@ -211,11 +221,30 @@ async function main() {
   // ---- Home: Documents card, upload from Home
   const fname = `QA${stamp}-from-home.txt`
   writeFileSync(`/tmp/${fname}`, "owner dashboard QA upload\n")
-  await hp.reload({ waitUntil: "networkidle", timeout: 150000 })
+  await settle(hp)
   await hp.getByTestId("home-docs-input").setInputFiles(`/tmp/${fname}`)
   await hp.getByTestId("home-docs-notice").waitFor({ timeout: 90000 })
   ck("D11 an Upload on Home puts the file in the Marketing folder and lists it as the newest", (await hp.getByTestId("home-doc").first().innerText()).includes(fname), await hp.getByTestId("home-documents").innerText())
   await hp.screenshot({ path: `${SHOTS}/qa-od-home-after.png`, fullPage: true })
+
+  // ---- Documents: a text file opens in the browser (Open), a Word file has only Download
+  const wname = `QA${stamp}-letter.docx`
+  writeFileSync(`/tmp/${wname}`, "not really a word file\n")
+  await hp.getByTestId("home-docs-input").setInputFiles(`/tmp/${wname}`)
+  await hp.waitForTimeout(4000)
+  const dp = await open(adminCtx, "/marketing/documents")
+  await dp.getByTestId("doc-download").first().waitFor({ timeout: 90000 })
+  const txtRow = dp.locator("li", { hasText: fname }).first()
+  const docxRow = dp.locator("li", { hasText: wname }).first()
+  const viewHref = await txtRow.getByTestId("doc-view").getAttribute("href")
+  const viewTarget = await txtRow.getByTestId("doc-view").getAttribute("target")
+  const dlHref = await txtRow.getByTestId("doc-download").getAttribute("href")
+  const viewRes = await dp.request.get(`${BASE}${viewHref}`)
+  const dlRes = await dp.request.get(`${BASE}${dlHref}`)
+  ck("D12 a text file has an Open link (new tab) next to Download", !!viewHref && /view=1/.test(viewHref) && viewTarget === "_blank")
+  ck("D12b Open shows the file in the browser (inline, sandboxed); Download is still a download", /^inline/.test(viewRes.headers()["content-disposition"] ?? "") && /sandbox/.test(viewRes.headers()["content-security-policy"] ?? "") && /^attachment/.test(dlRes.headers()["content-disposition"] ?? ""), { v: viewRes.headers(), d: dlRes.headers() })
+  ck("D12c a Word file has only Download (a browser cannot show it), and ?view=1 on it still downloads", (await docxRow.getByTestId("doc-view").count()) === 0 && (await docxRow.getByTestId("doc-download").count()) === 1 && /^attachment/.test((await dp.request.get(`${BASE}${await docxRow.getByTestId("doc-download").getAttribute("href")}?view=1`)).headers()["content-disposition"] ?? ""))
+  await dp.screenshot({ path: `${SHOTS}/qa-od-documents-open.png`, fullPage: false })
 
   // ---- What's New: approve the draft
   const np = await open(adminCtx, "/marketing-leads/news")
@@ -249,16 +278,17 @@ async function main() {
   const s2 = await open(seller, "/marketing/board")
   ck("N5b next screen: no line, no number", (await s2.getByTestId("news-strip").count()) === 0 && (await s2.getByTestId("nav-news-badge").count()) === 0)
 
-  // ---- the card on a seller's Home
+  // ---- no owner Home in the team workspace: the old address lands on the person's real first screen; the team owner who sells reads the news on the news page
   const oh = await open(owner, "/marketing/home")
-  ck("N5c a team owner who sells sees the news card on Home, with 'Open Documents' and 'Mark as read'", (await oh.getByTestId("home-news-member").count()) === 1 && (await oh.getByTestId("home-news-open").getAttribute("href")) === "/marketing/documents" && (await oh.getByTestId("home-news-read").count()) === 1, (await text(oh)).slice(0, 300))
-  await oh.screenshot({ path: `${SHOTS}/qa-od-seller-home.png`, fullPage: false })
-  await oh.getByTestId("home-news-read").first().click()
+  ck("N5c the old workspace Home address lands on Today for a team owner who sells (no owner Home in the team workspace)", /\/marketing\/today/.test(oh.url()) && (await oh.getByTestId("owner-home").count()) === 0 && (await oh.getByTestId("nav-home").count()) === 0, oh.url())
+  await oh.getByTestId("nav-news").click()
+  await oh.waitForURL("**/marketing/news", { timeout: 120000 })
+  await oh.getByTestId("news-item").first().waitFor({ timeout: 60000 })
   let ownerReads = 0
   for (let i = 0; i < 40; i++) { ownerReads = (await db.query("select count(*)::int n from marketing_news_reads where user_id=$1", [ids.ownerA])).rows[0].n; if (ownerReads === 1) break; await oh.waitForTimeout(1000) }
-  ck("N5d 'Mark as read' marks it read for him and the card goes", ownerReads === 1 && (await oh.getByTestId("home-news-member").count()) === 0, ownerReads)
+  ck("N5d opening What's New marks it read for the team owner too", ownerReads === 1, ownerReads)
   const adminHome = await open(adminCtx, "/marketing/home")
-  ck("N5e Antonio, who posts the news, gets no news card on the workspace Home", (await adminHome.getByTestId("home-news-member").count()) === 0)
+  ck("N5e Antonio, who posts the news, gets no news strip in the workspace, and the old Home address lands on a real screen", (await adminHome.getByTestId("news-strip").count()) === 0 && !/\/marketing\/home/.test(adminHome.url()), adminHome.url())
 
   // ---- Italian
   const it1 = await open(sellerIt, "/marketing/board")

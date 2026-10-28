@@ -2,9 +2,9 @@ export const dynamic = "force-dynamic"
 import { NextRequest, NextResponse } from "next/server"
 import { docsGate, docsError, json, isUuid } from "@/lib/marketing/documents-route"
 import { readDoc, renameDoc, trashDoc, DocsError } from "@/lib/marketing/documents-server"
-import { staffFileHeaders } from "@/lib/crm-store/serve"
+import { staffFileHeaders, canPreviewInline } from "@/lib/crm-store/serve"
 
-/** GET — download the document (always as a download, never shown inside the site). */
+/** GET — the document as a download; with ?view=1 a PDF, image or plain text opens in the browser (a new tab) instead. Any other type is still a download. */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const g = await docsGate(req, "read")
   if (g.res) return g.res
@@ -12,6 +12,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   try {
     const f = await readDoc(params.id)
     const h = staffFileHeaders(f.mimeType, f.name)
+    if (req.nextUrl.searchParams.get("view") === "1" && canPreviewInline(f.mimeType)) {
+      // shown inside the browser, locked down: a PDF needs Chromium's own viewer (no sandbox header there); images and text stay sandboxed
+      return new NextResponse(new Uint8Array(f.bytes), { headers: h["Content-Type"] === "application/pdf" ? h : { ...h, "Content-Security-Policy": "sandbox" } })
+    }
     return new NextResponse(new Uint8Array(f.bytes), { headers: { ...h, "Content-Disposition": h["Content-Disposition"].replace(/^inline/, "attachment") } })
   } catch (e) { return docsError(e, "That document could not be downloaded. Please try again.") }
 }

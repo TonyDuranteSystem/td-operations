@@ -18,7 +18,6 @@ import { ThemeSwitch } from '@/components/marketing/theme-switch'
 import { getTheme } from '@/lib/marketing/theme-server'
 import { availableBoardRoles, boardRole } from '@/lib/marketing/board'
 import { marketingChatUnread } from '@/lib/marketing/menu-unread'
-import { OwnerNav } from '@/components/marketing/owner-nav'
 import { NewsStrip } from '@/components/marketing/news-strip'
 import { draftCount, listNewsFor, type NewsItem } from '@/lib/marketing/news-server'
 import { newsText } from '@/lib/marketing/news'
@@ -50,38 +49,39 @@ export default async function MarketingAppLayout({ children }: { children: React
   const tourKey = tourKeyFor({ memberRole: ctx.viewAs && ctx.membership.bundle ? 'member' : ctx.role, permissions: ctx.permissions, bundles: bundlesSetting })
   const ownSteps = resolveTour(tourKey, ctx.permissions, lang)
   // the two reads are independent: run them together so the tour costs the page no extra wait
-  // Antonio (his own login, not "View as") gets HIS menu around these screens, so he never has to go into Rocco's dashboard to reach one; he posts the news, so he has no strip and no unread news
-  const ownerMode = fromCrm && !ctx.viewAs
+  // The team's screens look the same for everybody (the frame is the sales workspace, never the owner's own menu). Antonio posts the news, so on his own login he has no strip and no unread news;
+  // the red number on What's New is, for him, the drafts waiting for his OK
+  const ownerLogin = fromCrm && !ctx.viewAs
   const [chatUnread, seen, news, drafts] = await Promise.all([
     marketingChatUnread(ctx),
     ctx.viewAs || ownSteps.length === 0 ? Promise.resolve(true) : tourSeen(ctx.user.id, ctx.team.id, tourKey),
-    ownerMode ? Promise.resolve([] as NewsItem[]) : listNewsFor(ctx),
-    ownerMode ? draftCount() : Promise.resolve(0),
+    ownerLogin ? Promise.resolve([] as NewsItem[]) : listNewsFor(ctx),
+    ownerLogin ? draftCount() : Promise.resolve(0),
   ])
   const unreadNews = news.filter(n => n.unread)
   const autoStart = !ctx.viewAs && ownSteps.length > 0 && !seen
   const previews: Partial<Record<TourKey, ResolvedStep[]>> | null = ctx.role === 'owner' && hasPermission(ctx.permissions, 'team.manage')
     ? Object.fromEntries(PREVIEW_TOURS.map(k => [k, resolveTour(k, MARKETING_PERMISSIONS, lang)])) : null
-  const nav = modulesFor(ctx.permissions).map(m => (m.key === 'chat' || m.key === 'home' ? { ...m, badge: chatUnread } : m.key === 'news' ? { ...m, badge: unreadNews.length } : m))
+  const nav = modulesFor(ctx.permissions).map(m => (m.key === 'chat' ? { ...m, badge: chatUnread } : m.key === 'news' ? { ...m, badge: ownerLogin ? drafts : unreadNews.length } : m))
   return (
     <LangProvider lang={lang}>
     <TourProvider own={{ key: tourKey, steps: ownSteps }} previews={previews} autoStart={autoStart} recordable={!ctx.viewAs}>
     <div>
       {ctx.viewAs && (
         <div className="flex items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900" role="status">
-          <span>{t('Viewing as {who}. You are Antonio: nothing is blocked, and what you do is recorded under your own email.', { who: ctx.viewAs.label })}</span>
+          <span>{t('Viewing as {who}. You are Antonio: nothing is blocked, what you do is recorded under your own email, and anything personal (messages, chats) is yours, not theirs.', { who: ctx.viewAs.label })}</span>
           <ExitViewButton />
         </div>
       )}
     <div className="flex min-h-screen">
       <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col gap-4 border-r bg-white p-4">
         <div>
-          {fromCrm && <Link href="/marketing-leads" className="mb-2 inline-block text-xs text-slate-500 underline" data-testid="back-to-crm">&#9666; {t('Back to the CRM')}</Link>}
+          {fromCrm && <Link href="/marketing-leads" className="mb-3 block rounded-lg border border-slate-300 px-3 py-2 text-center text-sm font-medium text-slate-700 hover:bg-slate-50" data-testid="back-to-crm">&#9666; {t('Back to Marketing')}</Link>}
           <p className="text-xs uppercase tracking-wide text-slate-400">TD Marketing</p>
           <p className="truncate font-semibold">{ctx.team.name}</p>
         </div>
 
-        {ownerMode ? <OwnerNav badges={{ messages: chatUnread, news: drafts }} /> : <WorkspaceNav items={nav} />}
+        <WorkspaceNav items={nav} />
         <div className="mt-auto space-y-2 text-sm">
           <TourButton />
           <p className="truncate text-slate-500" title={ctx.user.email ?? ''}>{ctx.user.email}</p>

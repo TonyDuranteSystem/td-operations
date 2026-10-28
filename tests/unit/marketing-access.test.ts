@@ -50,14 +50,14 @@ describe("a person with no role is exactly their ticks (storage stays as it was)
 
 describe("the menu preview uses the live menu's own rules", () => {
   const seller = bundles.seller, setter = bundles.setter
-  it("setter + seller keeps BOTH Home/Today and the Call list only when 'work the call list' is ticked", () => {
+  it("setter + seller keeps BOTH Today and the Call list only when 'work the call list' is ticked", () => {
     const both = permissionsOfRoles(["setter", "seller"], bundles)
     const p = previewMenu(both)
     const on = (k: string) => p.items.find(i => i.key === k)?.on
     expect(on("today")).toBe(true)
     expect(on("call-list")).toBe(true)
     expect(on("my-numbers")).toBe(true)
-    expect(p.home).toBe("Home")
+    expect(p.home).toBe("Today")
   })
   it("a seller alone has Today and no Call list; a setter alone has the Call list and no Today", () => {
     expect(modulesFor(seller).map(m => m.key)).toContain("today")
