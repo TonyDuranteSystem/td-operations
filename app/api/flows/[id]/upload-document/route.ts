@@ -40,6 +40,7 @@ import { validateConfirmedLegalName } from '@/lib/flows/legal-name'
 import { formationReferenceName } from '@/lib/operations/formation-materialize'
 import { saveConfirmedLegalName } from '@/lib/operations/formation-name-checks'
 import { GENERIC_CLIENT_TYPE } from '@/lib/crm-store/save-for-account'
+import { resolveFlowUploadType } from '@/lib/flows/flow-upload-type'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
 // migration but the generated DB types haven't been regenerated yet.
@@ -165,6 +166,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // IS the client's deliverable.
     const isItinApprovalUpload = sd.service_type === 'ITIN' && flowStage === 'ITIN Approved'
 
+    // The file's document type follows the STORAGE rule (dev job e3215801, Antonio 2026-10-28): a box with a type picker sends the chosen
+    // catalog type, checked here against the same list Storage uses (exists, belongs to this kind of storage, never staff-only when the client
+    // will see it). A box without a picker sends nothing and behaves as before. Refused BEFORE anything is downloaded or saved.
+    const chosenType = await resolveFlowUploadType({
+      slug: body.document_type,
+      ownerKind: accountId ? 'company' : 'person',
+      visibleToClient: isItinApprovalUpload,
+      folderKind: sd.service_type === 'ITIN' ? 'itin' : null,
+    })
+    if (!chosenType.ok) {
+      if (storagePath.startsWith('flow-uploads/') && !storagePath.includes('..')) {
+        await supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})   // a refused upload leaves no staged file behind
+      }
+      return NextResponse.json({ success: false, detail: (chosenType as { ok: false; error: string }).error }, { status: 400 })   // (strict:false does not narrow the union)
+    }
+
     // 2. Download from Storage.
     const { data: blob, error: dlErr } = await supabaseAdmin.storage
       .from('onboarding-uploads')
@@ -250,9 +267,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             // The state's stamped answer (Company Change Name, "Waiting for the state") is promised to the client and listed on their
             // flow page; an UNTYPED stored file counts as closed, so without a catalogued type it was listed but answered "Document
             // not found" when opened (production QA, 2026-10-20). Only this one allow-listed upload gets the generic client type.
-            documentType: sd.service_type === 'Company Formation' && flowStage
+            documentType: (chosenType as { slug: string | null }).slug ?? (sd.service_type === 'Company Formation' && flowStage
               ? (FORMATION_UPLOAD_TYPES[flowStage] ?? null)
-              : (sd.service_type === 'Company Change Name' && isClientSafeFlowDoc(sd.service_type, flowStage, false) ? GENERIC_CLIENT_TYPE : null),
+              : (sd.service_type === 'Company Change Name' && isClientSafeFlowDoc(sd.service_type, flowStage, false) ? GENERIC_CLIENT_TYPE : null)),
             callerKey: `flow-upload:${serviceDeliveryId}:${flowStage ?? ''}:${storeNameKey(effectiveName)}`,
             portalVisible: isItinApprovalUpload,
             row: { contact_id: contactId, service_delivery_id: serviceDeliveryId, flow_stage: flowStage, status: 'classified' },
@@ -301,7 +318,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           name: effectiveName,
           bytes: buffer,
           mimeType: fileMime,
-          documentType: null,
+          documentType: (chosenType as { slug: string | null }).slug,   // null (no picker on this box) = as before; a chosen type = the Storage rule
           // every ITIN document (a letter, a scan, a form) belongs in the person's ITIN folder, not Personal documents (Antonio 2026-10-21,
           // Francesco Lussignoli / Jodi's letter); a person storage without an ITIN folder falls back to Personal documents inside the helper
           folderKind: sd.service_type === 'ITIN' ? 'itin' : undefined,

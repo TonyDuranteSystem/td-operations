@@ -27,6 +27,7 @@ import { PlainDropPanel, type PlainOutcome } from './plain-drop-panel'
 import { viewKindFor } from '@/lib/crm-store/view-html'
 import { allFolderPaths, filterPlainDrop, itemsFromFileList, type PlainItem, type PlainSkipped } from '@/lib/crm-store/plain-drop'
 import { isInternalOwnerKind, isPersonalAreaKind } from '@/lib/crm-store/owner-kinds'
+import { typesForTarget } from '@/lib/crm-store/types-for-target'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
@@ -982,12 +983,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // ───────────────────────────────────────── files dragged in from the computer
 
   /** the document types a folder takes (the same rule as the Upload panel) */
-  const typesForFolder = (f: Fold | null, all: DocType[] | null = types): DocType[] => {
-    const via = !!f && viaCompany.current.has(f.id)
-    const isPerson = ownerKind === 'person' || via
-    const contacts = f?.kind === 'contacts'
-    return (all ?? []).filter((t) => (via ? t.personal : isPerson ? true : contacts ? t.personal : ownerKind === 'private' ? true : !t.personal))
-  }
+  const typesForFolder = (f: Fold | null, all: DocType[] | null = types): DocType[] =>
+    typesForTarget(all, { ownerKind, folderKind: f?.kind, viaCompany: !!f && viaCompany.current.has(f.id) })   // THE Storage rule, shared with the workspace upload box
   /** a sensible first type for a folder: the first type whose home is this kind of folder */
   const defaultTypeFor = (f: Fold, list: DocType[]): string => {
     const k = f.kind === 'tax' ? 'tax_year' : f.kind === 'person_tax' ? 'person_tax_year' : f.kind
