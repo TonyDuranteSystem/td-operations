@@ -81,31 +81,8 @@ export async function POST(req: NextRequest) {
     // undoes the save — it is reported back (workspaceNote: "failed") so the staff member can note it by hand.
     let workspaceNote: "recorded" | "failed" | undefined
     if (waiting.length > 0 && r.write !== "unchanged") {
-      workspaceNote = "recorded"
-      const { supabaseAdmin } = await import("@/lib/supabase-admin")
-      for (const h of waiting) {
-        const asks = h.asks.charAt(0).toUpperCase() + h.asks.slice(1)
-        const summary = h.matchedBy === "type"
-          ? `${asks} filed in Storage only — ${h.who}'s ${h.serviceType} case is still at "${h.stage}" (the workspace step was not done)`
-          : `A file typed "Other document" was filed in ${h.who}'s ${h.serviceType} folder while the case is at "${h.stage}" waiting for ${h.asks} (the workspace step was not done)`
-        try {
-          const { error } = await supabaseAdmin.from("action_log").insert({
-            actor: `dashboard:${user?.email?.split("@")[0] ?? "unknown"}`,
-            action_type: "storage_filed_workspace_document",
-            table_name: "store_files",
-            record_id: r.fileId,
-            service_delivery_id: h.sdId,
-            contact_id: h.contactId,
-            account_id: h.accountId,
-            summary,
-            details: { file_name: r.name, stage: h.stage, workspace: h.workspacePath, document_type: documentType ?? null, matched_by: h.matchedBy },
-          })
-          if (error) throw new Error(error.message)
-        } catch (e) {
-          workspaceNote = "failed"
-          console.error("[crm-store] could not record the Storage-only filing:", e instanceof Error ? e.message : e)
-        }
-      }
+      const { recordStorageOnlyFiling } = await import("@/lib/flows/storage-step-log")
+      workspaceNote = await recordStorageOnlyFiling({ waiting, actorEmail: user?.email, fileId: r.fileId, fileName: r.name, documentType: documentType ?? null })
     }
     return NextResponse.json(workspaceNote ? { ...r, workspaceNote } : r)
   } catch (e) {

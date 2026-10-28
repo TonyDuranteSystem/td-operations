@@ -59,19 +59,31 @@ export async function findWaitingWorkspaceSteps(input: {
   }
   if (!couldMatchAnyHint(input.documentType, folderKind)) return []
 
-  const serviceTypes = Array.from(new Set(STORAGE_STEP_HINTS.map((h) => h.serviceType)))
-  let q = db.from('service_deliveries').select('id, service_type, stage, status, contact_id, account_id').in('service_type', serviceTypes)
-  let owner: { kind: string; contact_id: string | null; account_id: string | null } | null
+  let owner: StoreOwnerRef | null
   // the person override only means something for a "2. Contacts" folder — anywhere else the save ignores it, so the check must too
   if (input.personContactId && folderKind === 'contacts') {
     owner = { kind: 'person', contact_id: input.personContactId, account_id: null }
   } else {
     const o = await db.from('store_owners').select('kind, contact_id, account_id').eq('id', input.ownerId).maybeSingle()
     if (o.error) throw new Error(o.error.message)
-    owner = (o.data as { kind: string; contact_id: string | null; account_id: string | null } | null) ?? null
+    owner = (o.data as StoreOwnerRef | null) ?? null
   }
   if (!owner) return []
+  return waitingStepsForOwner(db, owner, input.documentType, folderKind)
+}
 
+type StoreOwnerRef = { kind: string; contact_id: string | null; account_id: string | null }
+
+/** The open cases of ONE owner (a person's, or a company's) that wait for a file of this type going into this kind of folder. */
+async function waitingStepsForOwner(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* tables are not in the generated types
+  db: any,
+  owner: StoreOwnerRef,
+  documentType: string | null,
+  folderKind: string | null,
+): Promise<WaitingWorkspaceStep[]> {
+  const serviceTypes = Array.from(new Set(STORAGE_STEP_HINTS.map((h) => h.serviceType)))
+  let q = db.from('service_deliveries').select('id, service_type, stage, status, contact_id, account_id').in('service_type', serviceTypes)
   const who = await ownerDisplayName(db, owner)
   if (who === null) return []
   if (owner.kind === 'person') q = q.eq('contact_id', owner.contact_id)
@@ -89,7 +101,21 @@ export async function findWaitingWorkspaceSteps(input: {
       contactId: r.contact_id ?? null,
       accountId: r.account_id ?? null,
     })),
-    documentType: input.documentType,
+    documentType,
     folderKind,
   })
+}
+
+/**
+ * The same question for the CONTACT page's upload ("Door A"): the person is known directly (no storage owner / folder), the Storage type and
+ * the kind of folder come from `contactUploadRouting`. An ordinary type answers [] without reading anything. Throws when a record cannot be read.
+ */
+export async function findWaitingWorkspaceStepsForContact(input: {
+  contactId: string
+  documentType: string | null
+  folderKind: string | null
+}): Promise<WaitingWorkspaceStep[]> {
+  if (!typeCouldWait(input.documentType) || !couldMatchAnyHint(input.documentType, input.folderKind)) return []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* tables are not in the generated types
+  return waitingStepsForOwner(supabaseAdmin as any, { kind: 'person', contact_id: input.contactId, account_id: null }, input.documentType, input.folderKind)
 }

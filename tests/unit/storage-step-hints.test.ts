@@ -40,7 +40,7 @@ vi.mock('@/lib/supabase-admin', () => ({
   },
 }))
 
-import { matchStorageStepHints, couldMatchAnyHint, typeCouldWait, findWaitingWorkspaceSteps, STORAGE_STEP_HINTS } from '@/lib/flows/storage-step-hints'
+import { matchStorageStepHints, couldMatchAnyHint, typeCouldWait, findWaitingWorkspaceSteps, findWaitingWorkspaceStepsForContact, STORAGE_STEP_HINTS } from '@/lib/flows/storage-step-hints'
 
 const kase = (stage: string, status = 'active', serviceType = 'ITIN') => ({ sdId: 'sd-1', serviceType, stage, status, who: 'Adam Mihaly' })
 
@@ -284,3 +284,33 @@ describe('findWaitingWorkspaceSteps — the lookup', () => {
     await expect(findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })).rejects.toThrow()
   })
 })
+
+describe('findWaitingWorkspaceStepsForContact — the contact page\'s upload ("Door A")', () => {
+  it('a person\'s ITIN letter -> their open ITIN case, found by the CONTACT directly (no storage owner, no folder lookup)', async () => {
+    const r = await findWaitingWorkspaceStepsForContact({ contactId: 'c-1', documentType: 'itin_letter', folderKind: 'itin' })
+    expect(r).toHaveLength(1)
+    expect(r[0]).toMatchObject({ sdId: 'sd-1', who: 'Adam Mihaly', stage: 'IRS Processing', contactId: 'c-1', matchedBy: 'type' })
+    expect(fx.filters).toContainEqual(['service_deliveries.contact_id', 'c-1'])
+    expect(fx.queried).not.toContain('store_owners')
+    expect(fx.queried).not.toContain('store_folders')
+  })
+
+  it('an ordinary type (a passport, a bank statement) answers "nothing waiting" WITHOUT reading anything', async () => {
+    for (const t of ['passport', 'bank_statement', 'ein_letter_irs']) {
+      expect(await findWaitingWorkspaceStepsForContact({ contactId: 'c-1', documentType: t, folderKind: null }), t).toEqual([])
+    }
+    // a generic type that only counts inside the ITIN folder ("Receipt", filed elsewhere) is also not looked up
+    expect(await findWaitingWorkspaceStepsForContact({ contactId: 'c-1', documentType: 'receipt', folderKind: null })).toEqual([])
+    expect(fx.queried).toEqual([])
+  })
+
+  it('a person with no open case, or a finished one, has nothing waiting; a record that cannot be read THROWS (the caller refuses the upload)', async () => {
+    fx.cases = []
+    expect(await findWaitingWorkspaceStepsForContact({ contactId: 'c-1', documentType: 'itin_letter', folderKind: 'itin' })).toEqual([])
+    fx.cases = [{ id: 'sd-2', service_type: 'ITIN', stage: 'ITIN Approved', status: 'completed', contact_id: 'c-1', account_id: null }]
+    expect(await findWaitingWorkspaceStepsForContact({ contactId: 'c-1', documentType: 'itin_letter', folderKind: 'itin' })).toEqual([])
+    fx.fail.cases = true
+    await expect(findWaitingWorkspaceStepsForContact({ contactId: 'c-1', documentType: 'itin_letter', folderKind: 'itin' })).rejects.toThrow()
+  })
+})
+
