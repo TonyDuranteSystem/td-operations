@@ -11,6 +11,7 @@ import { StageStepper, type StepperStage } from '@/components/flows/stage-steppe
 import { StageRenderer } from '@/components/flows/stage-renderer'
 import { WorkspaceGuide } from '@/components/flows/workspace-guide'
 import { guideHintFor, parseGuideParam, stageDefsFromRows } from '@/lib/flows/workspace-guide'
+import { buildStepHints } from '@/lib/flows/storage-step-rules'
 import { SuitePanel } from '@/components/flows/suite-panel'
 import { GoBackButton } from '@/components/flows/go-back-button'
 import { ItinOriginCard, type ItinOrigin } from '@/components/flows/itin-origin-card'
@@ -102,7 +103,10 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
   const layout = parseStageLayout(currentStageRow?.stage_layout)
   const year = deriveFlowYear(sd)
   const guideType = parseGuideParam(searchParams?.guide)
-  const guideHint = guideType ? guideHintFor(sd.service_type, guideType) : null
+  // the words of the guide come from this service's OWN upload boxes (their stage layouts), the same rules the Storage pop-up uses
+  const guideHint = guideType
+    ? guideHintFor(buildStepHints(stages.map((s) => ({ service_type: sd.service_type as string, stage_name: s.stage_name, stage_order: s.stage_order, stage_layout: s.stage_layout }))), sd.service_type, guideType)
+    : null
 
   // Previous stage (highest stage_order below the current one) drives the
   // "← Go Back" button — hidden on the first stage. Resolved by stage_order

@@ -1,0 +1,325 @@
+[
+  {
+    "service_type": "ITIN",
+    "stage_name": "Data Collection",
+    "stage_order": 1,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "waiting_notice",
+          "label": "Waiting for client to complete the ITIN wizard."
+        },
+        {
+          "type": "chat"
+        }
+      ],
+      "description": "Client is filling the ITIN wizard in the portal."
+    }
+  },
+  {
+    "service_type": "ITIN",
+    "stage_name": "Document Preparation",
+    "stage_order": 2,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "info_panel"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "document_viewer",
+          "collapsible": true
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Documents Reviewed — Send to Client",
+              "target": "Client Signing"
+            }
+          ]
+        }
+      ],
+      "description": "Documents auto-generated (W-7, 1040-NR, Schedule OI). Review them. Client already has them in portal."
+    }
+  },
+  {
+    "service_type": "ITIN",
+    "stage_name": "Client Signing",
+    "stage_order": 3,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "waiting_notice",
+          "label": "Mail to: {td_mailing_address}"
+        },
+        {
+          "type": "shipping_info"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "document_viewer",
+          "collapsible": true
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Documents Received at Office",
+              "target": "Documents Received"
+            }
+          ]
+        }
+      ],
+      "description": "Client must print, sign with wet ink, and mail to TD office. Click below when package arrives."
+    }
+  },
+  {
+    "service_type": "ITIN",
+    "stage_name": "Shipped",
+    "stage_order": 4,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "waiting_notice",
+          "label": "Shipped by the client — waiting for the package to arrive at the office."
+        },
+        {
+          "type": "shipping_info"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "document_viewer",
+          "collapsible": true
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Documents Received at Office",
+              "target": "Documents Received"
+            }
+          ]
+        }
+      ],
+      "description": "The client has shipped the signed package (courier + tracking below). Click \"Documents Received at Office\" when it arrives."
+    }
+  },
+  {
+    "service_type": "ITIN",
+    "stage_name": "Documents Received",
+    "stage_order": 5,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "document_upload",
+          "label": "Upload received package scan",
+          "storageHint": {
+            "asks": "the signed package received from the client",
+            "effects": [
+              "attach it to the case as the received package",
+              "move the case on to the CAA review"
+            ],
+            "folderKind": "itin",
+            "fromStages": [
+              "Client Signing",
+              "Shipped",
+              "Documents Received"
+            ],
+            "acceptsTypes": [
+              "form_w_7"
+            ],
+            "otherDocumentCounts": true
+          },
+          "documentType": "itin_application"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "document_viewer",
+          "collapsible": true
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Package Complete — Send to CAA Review",
+              "target": "CAA Review"
+            }
+          ]
+        }
+      ],
+      "description": "Verify: 2x signed W-7, 2x signed 1040-NR + Schedule OI, 2x color passport copies."
+    }
+  },
+  {
+    "service_type": "ITIN",
+    "stage_name": "CAA Review",
+    "stage_order": 6,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "info_panel"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "document_viewer",
+          "collapsible": true
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Ready to Submit to IRS",
+              "target": "Submitted to IRS"
+            }
+          ]
+        }
+      ],
+      "description": "Antonio: certify passport copies, prepare COA, assemble IRS package."
+    }
+  },
+  {
+    "service_type": "ITIN",
+    "stage_name": "Submitted to IRS",
+    "stage_order": 7,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "waiting_notice",
+          "label": "IRS ITIN Operation, PO Box 149342, Austin TX 78714-9342"
+        },
+        {
+          "type": "document_upload",
+          "label": "Upload mailing receipt/tracking",
+          "storageHint": {
+            "asks": "the mailing receipt for the package sent to the IRS",
+            "effects": [
+              "attach it to the case as the mailing receipt"
+            ],
+            "folderKind": "itin",
+            "fromStages": [
+              "Submitted to IRS"
+            ],
+            "typeNeedsFolder": true,
+            "otherDocumentCounts": true
+          },
+          "documentType": "receipt"
+        },
+        {
+          "type": "irs_tracking_entry"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Submitted - Wait for IRS",
+              "target": "IRS Processing"
+            }
+          ]
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "document_viewer",
+          "collapsible": true
+        }
+      ],
+      "description": "Mail the ITIN (W-7) package to the IRS. Upload the mailing/tracking receipt."
+    }
+  },
+  {
+    "service_type": "ITIN",
+    "stage_name": "IRS Processing",
+    "stage_order": 8,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "waiting_notice",
+          "label": "IRS processing takes 7-11 weeks. Month 2: check tracking. Month 3: call IRS CAA line."
+        },
+        {
+          "type": "irs_tracking_entry"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "ITIN Received",
+              "target": "ITIN Approved"
+            }
+          ]
+        },
+        {
+          "type": "chat"
+        }
+      ],
+      "description": "Waiting for IRS to process the ITIN application."
+    }
+  },
+  {
+    "service_type": "ITIN",
+    "stage_name": "ITIN Approved",
+    "stage_order": 9,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "document_upload",
+          "label": "Upload CP565 ITIN Letter",
+          "storageHint": {
+            "asks": "the IRS approval letter (CP565)",
+            "effects": [
+              {
+                "key": "read_itin",
+                "text": "read the ITIN from the letter and save it on the contact"
+              },
+              "show the letter to the client",
+              "tell the client in the portal (a message and a notification; an email only if they do not have the app)",
+              "close the case"
+            ],
+            "folderKind": "itin",
+            "fromStages": [
+              "Submitted to IRS",
+              "IRS Processing",
+              "ITIN Approved"
+            ],
+            "acceptsTypes": [
+              "itin_cp565",
+              "itin_letter_client_received"
+            ],
+            "otherDocumentCounts": true
+          },
+          "documentType": "itin_letter"
+        },
+        {
+          "type": "info_panel"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "document_viewer",
+          "collapsible": true
+        }
+      ],
+      "description": "ITIN approved! Upload the CP565 letter. ITIN number will be saved to the contact."
+    }
+  }
+]

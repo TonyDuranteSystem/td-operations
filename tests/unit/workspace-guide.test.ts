@@ -3,6 +3,9 @@
  * The stage data below is the real ITIN pipeline (stage buttons carry their target stage, the upload boxes carry their document type).
  */
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { buildStepHints } from '@/lib/flows/storage-step-rules'
 import {
   stageDefsFromRows, planGuide, uploadSubStep, ringSelector, guideCardText, guideNotReadyText, parseGuideParam, guideHintFor,
   readGuideOff, writeGuideOff, GUIDE_OFF_KEY, GUIDE_DONE_TEXT, type GuideStageDef, type GuideStep, type StorageLike,
@@ -165,15 +168,17 @@ describe('the ?guide= value and the table behind it', () => {
     expect(parseGuideParam(['receipt', 'x'])).toBe('receipt')
     for (const bad of [undefined, null, '', 'ITIN Letter', 'a-b', '"><script>', 'x'.repeat(61), 5, {}]) expect(parseGuideParam(bad)).toBeNull()
   })
-  it('the table gives the words, what the workspace does, and the stages where the document is waiting', () => {
-    const h = guideHintFor('ITIN', 'itin_letter')!
+  it('the box gives the words, what the workspace does, and the stages where the document is waiting (read from the real ITIN layouts)', () => {
+    const rows = JSON.parse(readFileSync(join(__dirname, '../fixtures/pipeline-itin-stages.json'), 'utf8'))
+    const hints = buildStepHints(rows)
+    const h = guideHintFor(hints, 'ITIN', 'itin_letter')!
     expect(h.asks).toBe('the IRS approval letter (CP565)')
     expect(h.readyStages).toEqual(['Submitted to IRS', 'IRS Processing', 'ITIN Approved'])
     expect(h.does).toContain('close the case')
-    expect(guideHintFor('ITIN', 'receipt')!.readyStages).toEqual(['Submitted to IRS'])
-    expect(guideHintFor('ITIN', 'itin_application')!.readyStages).toEqual(['Shipped', 'Documents Received'])
-    expect(guideHintFor('Tax Return', 'itin_letter')).toBeNull()
-    expect(guideHintFor('ITIN', 'passport')).toBeNull()
+    expect(guideHintFor(hints, 'ITIN', 'receipt')!.readyStages).toEqual(['Submitted to IRS'])
+    expect(guideHintFor(hints, 'ITIN', 'itin_application')!.readyStages).toEqual(['Client Signing', 'Shipped', 'Documents Received'])
+    expect(guideHintFor(hints, 'Tax Return', 'itin_letter')).toBeNull()
+    expect(guideHintFor(hints, 'ITIN', 'passport')).toBeNull()
   })
 })
 

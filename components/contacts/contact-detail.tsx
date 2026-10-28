@@ -50,7 +50,8 @@ import { updateContactField, updateContactName, addContactNote } from '@/app/(da
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
 import { useShareMessagePrompt, suppressesAutoChat, isSilentShow, type ShareDecision } from '@/components/storage/use-share-message-prompt'
 import { useWorkspaceStepPrompt } from '@/components/storage/use-workspace-step-prompt'
-import { typeCouldWait, type WaitingWorkspaceStep } from '@/lib/flows/storage-step-rules'
+import type { WaitingWorkspaceStep } from '@/lib/flows/storage-step-rules'
+import { typeCouldWaitNow } from '@/lib/flows/workspace-wait-client'
 import { contactUploadRouting } from '@/lib/crm-store/contact-upload-routing'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { ResolvePersonalDocument } from '@/components/documents/resolve-personal-document'
@@ -3201,9 +3202,9 @@ function ContactDocumentsTab({
     setUploading(true)
     try {
       // A workspace step may be waiting for this very document (dev job e3215801, Adam Mihaly's ITIN letter): ask BEFORE anything is uploaded.
-      // An ordinary type (a passport, a bank statement …) is not even sent to the check.
+      // An ordinary type (a passport, a bank statement …) is not even sent to the check; which types ANY workspace upload box takes comes from the workspaces themselves.
       let workspaceAck: string[] = []
-      if (typeCouldWait(contactUploadRouting(uploadType, uploadCategory).storeType)) {
+      if (await typeCouldWaitNow(contactUploadRouting(uploadType, uploadCategory).storeType)) {
         let hits: WaitingWorkspaceStep[]
         try {
           const wres = await fetch('/api/crm/admin-actions/workspace-check', {

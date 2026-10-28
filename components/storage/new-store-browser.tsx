@@ -49,7 +49,8 @@ import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keep
 import { HttpError, sameNameKey, errorText, isGoneError, fmtSize, canShowToClient, cantShowReason, resetFailedToWaiting, hasHiddenPart, markFingerprint } from './store-ui-rules'
 import { trapTabKey } from './focus-trap'
 import { WorkspaceStepBody } from '@/components/storage/workspace-step-body'
-import { typeCouldWait, type WaitingWorkspaceStep } from '@/lib/flows/storage-step-rules'
+import type { WaitingWorkspaceStep } from '@/lib/flows/storage-step-rules'
+import { typeCouldWaitNow } from '@/lib/flows/workspace-wait-client'
 
 interface Fold { id: string; name: string; kind: string; trashed: boolean; locked?: boolean }
 /** the right-click menu: what was clicked (the menu items are the SAME ones the row's "…" button shows) */
@@ -1927,8 +1928,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       }
       // a workspace step may be waiting for this very document (dev job e3215801, Adam Mihaly's ITIN letter): ask BEFORE anything is saved
       let workspaceAck: string[] = []
-      // an ordinary type (a passport, a tax return …) can never be a step's document: it is not even sent to the check
-      if (upType && typeCouldWait(upType)) {
+      // an ordinary type (a passport, a tax return …) can never be a step's document: it is not even sent to the check. Which types ANY workspace
+      // upload box takes comes from the workspaces themselves (their stage layouts), not from a list written here.
+      if (upType && (await typeCouldWaitNow(upType))) {
         const wcheck = await postJson<{ hits: WaitingWorkspaceStep[] }>('/api/crm-store/browse/workspace-check', {
           ownerId: landsIn.ownerId || target.ownerId,
           folderId: landsIn.folderId || target.folder.id,

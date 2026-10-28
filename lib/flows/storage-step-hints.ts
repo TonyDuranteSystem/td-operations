@@ -8,9 +8,31 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { STORAGE_STEP_HINTS, typeCouldWait, couldMatchAnyHint, matchStorageStepHints, type WaitingWorkspaceStep } from './storage-step-rules'
+import { buildStepHints, typeCouldWait, couldMatchAnyHint, matchStorageStepHints, type StorageStepHint, type WaitingWorkspaceStep } from './storage-step-rules'
 
 export * from './storage-step-rules'
+
+/**
+ * The rules are BUILT from the workspace's own stage layouts (see storage-step-rules.ts) — read here, kept for a short while so an upload does not
+ * re-read every stage of every service. A layout edit shows up within a minute. A read that fails THROWS: the callers refuse the save ("nothing was
+ * saved"), they never let a file through unchecked.
+ */
+const HINTS_CACHE_MS = 30_000
+let hintsCache: { at: number; hints: StorageStepHint[] } | null = null
+
+export function resetStepHintsCache(): void {
+  hintsCache = null
+}
+
+export async function loadStepHints(): Promise<StorageStepHint[]> {
+  if (hintsCache && Date.now() - hintsCache.at < HINTS_CACHE_MS) return hintsCache.hints
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pipeline_stages.stage_layout is not in the generated types
+  const { data, error } = await (supabaseAdmin as any).from('pipeline_stages').select('service_type, stage_name, stage_order, stage_layout')
+  if (error) throw new Error(error.message)
+  const hints = buildStepHints((data ?? []) as Array<{ service_type: string; stage_name: string; stage_order: number; stage_layout: unknown }>)
+  hintsCache = { at: Date.now(), hints }
+  return hints
+}
 
 /**
  * The name shown in the pop-up ("Adam Mihaly" / the company), or null when this owner is neither a person with a contact nor a company
@@ -46,7 +68,8 @@ export async function findWaitingWorkspaceSteps(input: {
   /** Saved through a company's "2. Contacts" folder: the file lands in THIS person's own storage, so their cases are the ones to look at. */
   personContactId?: string | null
 }): Promise<WaitingWorkspaceStep[]> {
-  if (!typeCouldWait(input.documentType)) return []
+  const hints = await loadStepHints()
+  if (!typeCouldWait(hints, input.documentType)) return []
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* tables are not in the generated types
   const db = supabaseAdmin as any
@@ -57,7 +80,7 @@ export async function findWaitingWorkspaceSteps(input: {
     if (f.error) throw new Error(f.error.message)
     folderKind = (f.data?.kind as string | null | undefined) ?? null
   }
-  if (!couldMatchAnyHint(input.documentType, folderKind)) return []
+  if (!couldMatchAnyHint(hints, input.documentType, folderKind)) return []
 
   let owner: StoreOwnerRef | null
   // the person override only means something for a "2. Contacts" folder — anywhere else the save ignores it, so the check must too
@@ -69,7 +92,7 @@ export async function findWaitingWorkspaceSteps(input: {
     owner = (o.data as StoreOwnerRef | null) ?? null
   }
   if (!owner) return []
-  return waitingStepsForOwner(db, owner, input.documentType, folderKind)
+  return waitingStepsForOwner(db, hints, owner, input.documentType, folderKind)
 }
 
 type StoreOwnerRef = { kind: string; contact_id: string | null; account_id: string | null }
@@ -78,11 +101,12 @@ type StoreOwnerRef = { kind: string; contact_id: string | null; account_id: stri
 async function waitingStepsForOwner(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* tables are not in the generated types
   db: any,
+  hints: readonly StorageStepHint[],
   owner: StoreOwnerRef,
   documentType: string | null,
   folderKind: string | null,
 ): Promise<WaitingWorkspaceStep[]> {
-  const serviceTypes = Array.from(new Set(STORAGE_STEP_HINTS.map((h) => h.serviceType)))
+  const serviceTypes = Array.from(new Set(hints.map((h) => h.serviceType)))
   let q = db.from('service_deliveries').select('id, service_type, stage, status, contact_id, account_id').in('service_type', serviceTypes)
   const who = await ownerDisplayName(db, owner)
   if (who === null) return []
@@ -92,6 +116,7 @@ async function waitingStepsForOwner(
   if (cases.error) throw new Error(cases.error.message)
 
   return matchStorageStepHints({
+    hints,
     cases: ((cases.data ?? []) as Array<{ id: string; service_type: string; stage: string; status: string; contact_id?: string | null; account_id?: string | null }>).map((r) => ({
       sdId: r.id,
       serviceType: r.service_type,
@@ -115,7 +140,8 @@ export async function findWaitingWorkspaceStepsForContact(input: {
   documentType: string | null
   folderKind: string | null
 }): Promise<WaitingWorkspaceStep[]> {
-  if (!typeCouldWait(input.documentType) || !couldMatchAnyHint(input.documentType, input.folderKind)) return []
+  const hints = await loadStepHints()
+  if (!typeCouldWait(hints, input.documentType) || !couldMatchAnyHint(hints, input.documentType, input.folderKind)) return []
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* tables are not in the generated types
-  return waitingStepsForOwner(supabaseAdmin as any, { kind: 'person', contact_id: input.contactId, account_id: null }, input.documentType, input.folderKind)
+  return waitingStepsForOwner(supabaseAdmin as any, hints, { kind: 'person', contact_id: input.contactId, account_id: null }, input.documentType, input.folderKind)
 }
