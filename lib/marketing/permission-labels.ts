@@ -18,6 +18,8 @@ export const PERMISSION_LABELS: Record<MarketingPermission, string> = {
   inbox: "Use the shared inbox",
   chat: "Use team chat",
   "content.manage": "Manage ads and content",
+  documents: "See and download the team documents",
+  "documents.manage": "Upload, edit and delete the team documents",
   "reports.read": "See reports",
   "team.activity": "See what the team did today",
   "team.notes": "See other people's notes and rejections",
