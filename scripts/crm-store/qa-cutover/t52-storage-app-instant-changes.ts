@@ -13,7 +13,7 @@ config({ path: ".env.local" })
 
 const UX_ACCOUNT = "30c2cd96-03e4-43cf-9536-81d961b18b1d"
 const STAFF = { id: "00000000-0000-4000-8000-000000000052", email: "qa-push@example.test", app_metadata: { role: "team" }, user_metadata: {}, aud: "authenticated", created_at: "" } as never
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 async function main() {
   const url = process.env.SUPABASE_DB_URL || ""
@@ -34,21 +34,18 @@ async function main() {
   if (!qa) throw new Error("no admin login found in the sandbox")
   const tag = `QA Test ap-push ${Date.now()}`
   const folder = await createFolder(root!.id, tag, null)
-  const deps = (from0: { v: string | null }) => ({
-    read: (c: ReturnType<typeof parseCursor>) => changesSince(STAFF, c, 500),
-    sleep, now: () => Date.now(), aborted: () => false, _from: from0,
-  })
+  const deps = () => ({ read: (c: ReturnType<typeof parseCursor>) => changesSince(STAFF, c, 500), sleep, now: () => Date.now(), aborted: () => false })
   const head = async () => { const h = await changesHead(); return h ? parseCursor(h) : null }
 
   // A — nothing new: with wait 0 it answers at once, empty
   let cur = await head()
   let t0 = Date.now()
-  let r = await changesWaiting(cur, 0, deps({ v: null }))
+  let r = await changesWaiting(cur, 0, deps())
   check("A wait 0 and nothing new → answers at once, empty", Date.now() - t0 < 2000 && r.changes.length === 0, `${Date.now() - t0} ms, ${r.changes.length} changes`)
 
   // B — nothing new, wait 4 s → gives up at about 4 s
   t0 = Date.now()
-  r = await changesWaiting(cur, 4000, deps({ v: null }))
+  r = await changesWaiting(cur, 4000, deps())
   const gave = Date.now() - t0
   check("B wait 4 s and nothing new → gives up at about 4 s, empty", gave >= 3500 && gave < 7000 && r.changes.length === 0, `${gave} ms`)
 
@@ -56,7 +53,7 @@ async function main() {
   cur = await head()
   t0 = Date.now()
   let savedAt = 0
-  const waiter = changesWaiting(cur, 20000, deps({ v: null }))
+  const waiter = changesWaiting(cur, 20000, deps())
   await sleep(3000)
   const saved = await saveBytesToStore({ ownerId: owner.id, folderId: folder.id, name: "QA push.txt", mimeType: "text/plain", callerKey: `qa-push:${tag}`, contentChanged: true, bytes: Buffer.from("push " + tag), documentType: null })
   savedAt = Date.now()
@@ -70,7 +67,7 @@ async function main() {
   // D — a change already exists → answers at once
   const older = cur
   t0 = Date.now()
-  r = await changesWaiting(older, 20000, deps({ v: null }))
+  r = await changesWaiting(older, 20000, deps())
   check("D a change already exists → answers at once", Date.now() - t0 < 2500 && r.changes.length > 0, `${Date.now() - t0} ms, ${r.changes.length} changes`)
 
   // cleanup: trash the QA folder (and the file in it)
