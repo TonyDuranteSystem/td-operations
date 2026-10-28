@@ -17,6 +17,12 @@ const state = vi.hoisted(() => ({
   docDeletes: [] as string[],
   prepare: vi.fn(),
   finish: vi.fn(),
+  classify: vi.fn(),
+  rename: vi.fn(),
+  closeTasks: vi.fn(),
+  inserts: [] as Array<{ table: string; row: Record<string, unknown> }>,
+  insertError: null as null | { message: string },
+  sd: null as null | Record<string, unknown>,
 }))
 
 function builder(table: string) {
@@ -26,6 +32,8 @@ function builder(table: string) {
     if (table === "ss4_applications" && ctx.op === "select" && ctx.filters.like) return { data: state.liveTokens, error: null }
     if (table === "ss4_applications_archive") return { count: state.archivedCount, data: null, error: null }
     if (table === "documents" && ctx.op === "select") return { data: state.docs, error: null }
+    if (table === "documents" && ctx.op === "delete") return { data: [{ id: ctx.filters.id }], error: null }
+    if (table === "action_log" && ctx.op === "insert") return { data: null, error: state.insertError }
     return { data: null, error: null }
   }
   for (const m of ["select", "eq", "in", "like", "order", "limit"]) {
@@ -37,8 +45,10 @@ function builder(table: string) {
   }
   b.update = (patch: Record<string, unknown>) => { ctx.op = "update"; ctx.patch = patch; return b }
   b.delete = () => { ctx.op = "delete"; return b }
+  b.insert = (row: Record<string, unknown>) => { ctx.op = "insert"; state.inserts.push({ table, row }); return b }
   b.maybeSingle = async () => {
     if (table === "ss4_applications") return { data: state.old, error: null }
+    if (table === "service_deliveries") return { data: state.sd, error: null }
     return { data: null, error: null }
   }
   b.then = (res: (v: unknown) => unknown) => {
@@ -52,7 +62,12 @@ function builder(table: string) {
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: { from: (t: string) => builder(t), rpc: (...a: unknown[]) => state.rpc(...a) },
 }))
-vi.mock("@/lib/mcp/action-log", () => ({ logAction: vi.fn() }))
+vi.mock("@/lib/operations/ss4-refresh", () => ({
+  classifySs4Party: (...a: unknown[]) => state.classify(...a),
+  resolveEntityType: (x: string | null) => x ?? "SMLLC",
+}))
+vi.mock("@/lib/crm-store/file-actions", () => ({ renameStoreFile: (...a: unknown[]) => state.rename(...a) }))
+vi.mock("@/lib/operations/task", () => ({ updateTasksBulk: (...a: unknown[]) => state.closeTasks(...a) }))
 vi.mock("@/lib/operations/ss4", () => ({
   prepareSS4: (...a: unknown[]) => state.prepare(...a),
   finishSS4Create: (...a: unknown[]) => state.finish(...a),
@@ -64,7 +79,7 @@ const ACC = "acc-1"
 const baseRow = { token: "ss4-tanto-per-llc-2026", access_code: "newcode1", status: "draft", county_and_state: "Bernalillo County, New Mexico" }
 
 beforeEach(() => {
-  state.old = { id: "old-1", token: "ss4-tanto-per-llc-2026", status: "signed", contact_id: "c-1", county_and_state: "Sheridan County, Wyoming", company_name: "Tanto per LLC" }
+  state.old = { id: "old-1", token: "ss4-tanto-per-llc-2026", status: "signed", contact_id: "c-1", entity_type: "SMLLC", county_and_state: "Sheridan County, Wyoming", company_name: "Tanto per LLC" }
   state.archivedCount = 0
   state.liveTokens = []
   state.docs = []
@@ -73,6 +88,12 @@ beforeEach(() => {
   state.rpc = vi.fn().mockResolvedValue({ data: "new-1", error: null })
   state.prepare = vi.fn().mockResolvedValue({ ok: true, outcome: "created", prepared: { row: { ...baseRow }, company_name: "Tanto per LLC" } })
   state.finish = vi.fn().mockResolvedValue({ ok: true, outcome: "created", previewUrl: "https://x/preview" })
+  state.classify = vi.fn().mockResolvedValue("member_derived")
+  state.rename = vi.fn().mockResolvedValue({ name: "x" })
+  state.closeTasks = vi.fn().mockResolvedValue({ success: true, outcome: "updated", count: 1, ids: ["t1"] })
+  state.inserts = []
+  state.insertError = null
+  state.sd = { id: "sd-1", stage_history: [] }
 })
 
 describe("resubmitToken", () => {
@@ -184,6 +205,93 @@ describe("resubmitSs4 success path", () => {
     expect(state.docUpdates.map((u) => u.id).sort()).toEqual(["d-pkg", "d-signed", "d-unsigned"])
     const signed = state.docUpdates.find((u) => u.id === "d-signed")!
     expect(signed.patch.document_type_name).toBe("Form SS-4 (Signed) (Replaced)")
-    expect(String(signed.patch.file_name)).toMatch(/Signed \(replaced \d{4}-\d{2}-\d{2}\)\.pdf$/)
+    expect(String(signed.patch.file_name)).toMatch(/Signed \(replaced \d{4}-\d{2}-\d{2} \d{4}\)\.pdf$/)
+  })
+
+  it("closes the old SS-4's open fax tasks and writes the marker the fax panel reads", async () => {
+    const r = await resubmitSs4({ account_id: ACC, reason: "wrong agent", by: "luca@x", source: "test" })
+    expect(r.ok).toBe(true)
+    expect(state.closeTasks).toHaveBeenCalledTimes(1)
+    expect(state.closeTasks.mock.calls[0][0]).toMatchObject({ account_id: ACC, title_ilike: "%Fax%SS-4%", patch: { status: "Done" } })
+    const marker = state.inserts.find((i) => i.table === "action_log")!
+    expect(marker.row.action_type).toBe("ss4_resubmitted")
+    expect(marker.row.service_delivery_id).toBe("sd-1")
+    expect((marker.row.details as Record<string, unknown>).reason).toBe("wrong agent")
+  })
+})
+
+describe("resubmitSs4 after the archive step (the old SS-4 is already archived)", () => {
+  it("a failing set-up step is reported as a warning — never as 'nothing was changed'", async () => {
+    state.finish = vi.fn().mockRejectedValue(new Error("boom"))
+    const r = await resubmitSs4({ account_id: ACC, reason: "wrong agent", by: "t", source: "test" })
+    expect(r.ok).toBe(true)
+    expect(r.outcome).toBe("resubmitted")
+    expect(r.message).not.toContain("Nothing was changed")
+    expect(r.warnings?.join(" ")).toContain("Setting up the corrected SS-4 did not finish")
+    // the later steps still ran
+    expect(state.closeTasks).toHaveBeenCalled()
+  })
+
+  it("a set-up that returns not-ok is also a warning", async () => {
+    state.finish = vi.fn().mockResolvedValue({ ok: false, outcome: "error", message: "pdf failed" })
+    const r = await resubmitSs4({ account_id: ACC, reason: "wrong agent", by: "t", source: "test" })
+    expect(r.ok).toBe(true)
+    expect(r.warnings?.join(" ")).toContain("pdf failed")
+  })
+
+  it("one document that cannot be relabelled does not stop the others", async () => {
+    state.docs = [
+      { id: "d-a", file_name: "A.pdf", document_type_name: "Form SS-4 (Unsigned)", drive_file_id: "store:1" },
+      { id: "d-b", file_name: "B.pdf", document_type_name: "Form SS-4 (Signed)", drive_file_id: "store:2" },
+    ]
+    const r = await resubmitSs4({ account_id: ACC, reason: "wrong agent", by: "t", source: "test" })
+    expect(r.ok).toBe(true)
+    expect(state.docUpdates.map((u) => u.id).sort()).toEqual(["d-a", "d-b"])
+  })
+
+  it("a live document row of a DIFFERENT token is left alone", async () => {
+    state.docs = [{ id: "d-other", file_name: "SS-4.pdf", document_type_name: "SS-4", drive_file_id: "ss4-live:some-other-token" }]
+    await resubmitSs4({ account_id: ACC, reason: "wrong agent", by: "t", source: "test" })
+    expect(state.docDeletes).toEqual([])
+  })
+
+  it("an already-replaced document is not relabelled twice", async () => {
+    state.docs = [{ id: "d-x", file_name: "x (replaced 2026-10-01).pdf", document_type_name: "Form SS-4 (Signed) (Replaced)", drive_file_id: "store:9" }]
+    await resubmitSs4({ account_id: ACC, reason: "wrong agent", by: "t", source: "test" })
+    expect(state.docUpdates).toEqual([])
+  })
+})
+
+describe("resubmitSs4 stored files", () => {
+  it("renames each old stored copy in the storage too (so the corrected SS-4 gets the clean name)", async () => {
+    state.docs = [
+      { id: "d-unsigned", file_name: "Form SS-4 - Tanto per LLC - Unsigned.pdf", document_type_name: "Form SS-4 (Unsigned)", drive_file_id: "store:aaaaaaaa-0000-4000-8000-000000000001" },
+      { id: "d-signed", file_name: "Form SS-4 - Tanto per LLC - Signed.pdf", document_type_name: "Form SS-4 (Signed)", drive_file_id: "storage:signed-ss4/x.pdf" },
+    ]
+    await resubmitSs4({ account_id: ACC, reason: "wrong agent", by: "t", source: "test" })
+    expect(state.rename).toHaveBeenCalledTimes(1) // only the store: copy; a storage: path is not a store file
+    expect(String(state.rename.mock.calls[0][1])).toMatch(/Unsigned \(replaced \d{4}-\d{2}-\d{2} \d{4}\)\.pdf$/)
+  })
+
+  it("a storage rename that fails is a warning, and the CRM row is still relabelled", async () => {
+    state.rename = vi.fn().mockRejectedValue(new Error("locked"))
+    state.docs = [{ id: "d-unsigned", file_name: "U.pdf", document_type_name: "Form SS-4 (Unsigned)", drive_file_id: "store:aaaaaaaa-0000-4000-8000-000000000001" }]
+    const r = await resubmitSs4({ account_id: ACC, reason: "wrong agent", by: "t", source: "test" })
+    expect(r.ok).toBe(true)
+    expect(r.warnings?.join(" ")).toContain("could not be renamed in the storage")
+    expect(state.docUpdates.map((u) => u.id)).toEqual(["d-unsigned"])
+  })
+})
+
+describe("resubmitSs4 signer", () => {
+  it("keeps the old signer while that person is still a member", async () => {
+    await resubmitSs4({ account_id: ACC, reason: "wrong agent", by: "t", source: "test" })
+    expect(state.prepare).toHaveBeenCalledWith({ account_id: ACC, contact_id: "c-1" }, { allowExisting: true })
+  })
+
+  it("does NOT carry over a signer who is no longer one of the members (worked out again from today's members)", async () => {
+    state.classify = vi.fn().mockResolvedValue("orphaned")
+    await resubmitSs4({ account_id: ACC, reason: "wrong agent", by: "t", source: "test" })
+    expect(state.prepare).toHaveBeenCalledWith({ account_id: ACC, contact_id: undefined }, { allowExisting: true })
   })
 })

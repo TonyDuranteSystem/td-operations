@@ -26,6 +26,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { gmailGet, gmailPost, getHeader, GmailAPIMessage, extractBody } from '@/lib/gmail'
 import type { Json } from '@/lib/database.types'
+import { faxEmailPredatesSs4 } from '@/lib/fax/ss4-fax-email-guard'
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const IRS_FAX_NUMBER = '(855)641-6935'
@@ -42,6 +43,7 @@ interface CronResults {
   failures_detected: number
   no_ss4_match: number
   skipped_already_alerted: number
+  skipped_superseded: number
   errors: string[]
 }
 
@@ -61,6 +63,7 @@ export async function GET(request: NextRequest) {
     failures_detected: 0,
     no_ss4_match: 0,
     skipped_already_alerted: 0,
+    skipped_superseded: 0,
     errors: [],
   }
 
@@ -105,7 +108,7 @@ async function processEmail(messageId: string, results: CronResults): Promise<vo
   const { data: existing } = await supabaseAdmin
     .from('action_log')
     .select('id')
-    .in('action_type', ['ss4_fax_confirmed', 'ss4_fax_failed'])
+    .in('action_type', ['ss4_fax_confirmed', 'ss4_fax_failed', 'ss4_fax_superseded'])
     .filter('details->>message_id', 'eq', messageId)
     .limit(1)
 
@@ -139,7 +142,7 @@ async function processEmail(messageId: string, results: CronResults): Promise<vo
   // Handle failed faxes — create Urgent task for retry
   if (faxStatus && faxStatus.toLowerCase() === 'failure') {
     console.warn(`[faxage-ss4] Fax FAILED for job ${jobId} company="${companyName}" — creating urgent task`)
-    await handleFaxFailure(messageId, jobId, companyName, body, results)
+    await handleFaxFailure(messageId, jobId, companyName, body, results, fullMsg.internalDate)
     return
   }
 
@@ -160,7 +163,7 @@ async function processEmail(messageId: string, results: CronResults): Promise<vo
   // Find matching SS-4 by company name (case-insensitive), status = signed or submitted
   const { data: ss4Records } = await supabaseAdmin
     .from('ss4_applications')
-    .select('id, account_id, company_name, status, token')
+    .select('id, account_id, company_name, status, token, signed_at')
     .ilike('company_name', companyName)
     .in('status', ['signed', 'submitted'])
     .order('created_at', { ascending: false })
@@ -193,6 +196,13 @@ async function processEmail(messageId: string, results: CronResults): Promise<vo
 
   const ss4 = ss4Records[0]
 
+  // An email older than this SS-4's signature belongs to an EARLIER (replaced) SS-4's fax — never confirm the corrected SS-4 with it.
+  if (faxEmailPredatesSs4(fullMsg.internalDate, ss4.signed_at)) {
+    await logSuperseded(messageId, jobId, companyName, ss4.account_id, ss4.id, 'confirmation')
+    results.skipped_superseded++
+    return
+  }
+
   // Idempotency: already submitted
   if (ss4.status === 'submitted') {
     results.skipped_already_processed++
@@ -221,7 +231,8 @@ async function handleFaxFailure(
   jobId: string | null,
   companyName: string | null,
   body: string,
-  results: CronResults
+  results: CronResults,
+  emailInternalDate?: string,
 ): Promise<void> {
   // Parse failure reason — FAXAGE uses "Reason: ..." which can span the rest of the line
   const reasonMatch = body.match(/Reason:\s+(.+)/i)
@@ -232,13 +243,23 @@ async function handleFaxFailure(
   if (companyName) {
     const { data: ss4Records } = await supabaseAdmin
       .from('ss4_applications')
-      .select('id, account_id, company_name, status')
+      .select('id, account_id, company_name, status, signed_at')
       .ilike('company_name', companyName)
       .order('created_at', { ascending: false })
       .limit(1)
 
     if (ss4Records && ss4Records.length > 0) {
       accountId = ss4Records[0].account_id
+      // A failure of an EARLIER (replaced) SS-4's fax: nobody should retry it — the corrected SS-4 has its own fax step.
+      const notYetSigned = ss4Records[0].status === 'draft' || ss4Records[0].status === 'awaiting_signature'
+      // Only for a company that HAS had an SS-4 resubmitted (an archived SS-4 exists): any other failure must always raise the retry task.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- new table, not in generated types
+      const { count: replacedCount } = await (supabaseAdmin as any).from('ss4_applications_archive').select('id', { count: 'exact', head: true }).eq('account_id', accountId)
+      if ((replacedCount ?? 0) > 0 && (notYetSigned || faxEmailPredatesSs4(emailInternalDate, ss4Records[0].signed_at))) {
+        await logSuperseded(messageId, jobId, companyName, accountId, ss4Records[0].id, 'failure')
+        results.skipped_superseded++
+        return
+      }
     }
   }
 
@@ -295,6 +316,19 @@ async function handleFaxFailure(
   })
 
   results.failures_detected++
+}
+
+// ─── Mark an old (replaced) SS-4's fax email as handled so it is not re-scanned every run ────────────────
+async function logSuperseded(messageId: string, jobId: string | null, companyName: string | null, accountId: string | null, ss4Id: string, kind: 'confirmation' | 'failure'): Promise<void> {
+  await supabaseAdmin.from('action_log').insert({
+    actor: 'system',
+    action_type: 'ss4_fax_superseded',
+    table_name: 'ss4_applications',
+    record_id: ss4Id,
+    account_id: accountId,
+    summary: `FaxAge ${kind} for "${companyName}" (Job ${jobId || 'Unknown'}) ignored: it belongs to an earlier SS-4 that was replaced by a resubmit`,
+    details: { job_id: jobId, message_id: messageId, company_name: companyName, kind },
+  })
 }
 
 // ─── Has a no-match alert already been sent for this fax? ────────────────────

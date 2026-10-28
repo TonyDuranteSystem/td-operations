@@ -58,6 +58,11 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'SS-4 % not found (already archived?)', p_old_id;
   END IF;
+  -- Re-checked HERE, under the row lock: the caller read the status a moment earlier, and "Re-send for signature" can re-open a signed
+  -- SS-4 in place in between. Only an SS-4 the client already signed (or that was faxed) may be archived.
+  IF v_old.status NOT IN ('signed', 'submitted', 'done', 'fax_failed') THEN
+    RAISE EXCEPTION 'SS-4 % is "%" now - it is not signed, so it cannot be resubmitted. Reload and check its status.', p_old_id, v_old.status;
+  END IF;
 
   INSERT INTO public.ss4_applications_archive
   SELECT r.*

@@ -21,9 +21,12 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
 import { prepareSS4, finishSS4Create, type CreateSS4Outcome } from "@/lib/operations/ss4"
+import { classifySs4Party, resolveEntityType } from "@/lib/operations/ss4-refresh"
+import { updateTasksBulk } from "@/lib/operations/task"
+import { parseStorePointer } from "@/lib/crm-store/document-pointer"
+import { SS4_RESUBMIT_MARKER } from "@/lib/fax/ss4-resubmit-marker"
 
 /** Statuses that mean "the client already signed / it was filed" — the only ones a resubmit is for. */
 export const RESUBMITTABLE_STATUSES = ["signed", "submitted", "done", "fax_failed"] as const
@@ -74,7 +77,7 @@ export async function resubmitSs4(args: { account_id: string; reason: string; by
     // ─── 1. the SS-4 being replaced ───
     const { data: old, error: oldErr } = await supabaseAdmin
       .from("ss4_applications")
-      .select("id, token, status, contact_id, county_and_state, company_name")
+      .select("id, token, status, contact_id, county_and_state, company_name, entity_type")
       .eq("account_id", account_id)
       .maybeSingle()
     if (oldErr) return { ok: false, outcome: "error", message: `Could not load the SS-4: ${oldErr.message}. Nothing was changed.` }
@@ -90,10 +93,18 @@ export async function resubmitSs4(args: { account_id: string; reason: string; by
 
     // ─── 2. every check a new SS-4 needs, BEFORE anything is touched ───
     // The same responsible party signs the corrected SS-4 (the IRS has that person on file); only the data is refreshed.
-    const prep = await prepareSS4(
-      { account_id, contact_id: old.contact_id ?? undefined },
-      { allowExisting: true },
-    )
+    // If that person is no longer one of the company's members (removed / repointed) and was never explicitly picked, they are NOT carried
+    // over: the signer is worked out again from the company's current members (a clean "pick the signer" stop when it is ambiguous).
+    let signerId: string | undefined = old.contact_id ?? undefined
+    if (signerId) {
+      const cls = await classifySs4Party({
+        account_id,
+        ss4: { id: old.id, contact_id: signerId },
+        entityType: resolveEntityType(old.entity_type),
+      })
+      if (cls === "orphaned") signerId = undefined
+    }
+    const prep = await prepareSS4({ account_id, contact_id: signerId }, { allowExisting: true })
     if (!prep.prepared) {
       return { ok: false, outcome: prep.outcome, message: `${prep.message ?? "The corrected SS-4 could not be prepared."} Nothing was archived — the current SS-4 is unchanged.` }
     }
@@ -124,44 +135,79 @@ export async function resubmitSs4(args: { account_id: string; reason: string; by
       }
     }
 
+    // From here the old SS-4 IS archived and the corrected draft EXISTS: nothing below may report "nothing was changed".
     const warnings: string[] = []
-
-    // ─── 5. retire the old SS-4's flow-document rows ───
-    const retired = await retireOldSs4Documents(account_id, old.token)
-    if (retired.error) warnings.push(retired.error)
-    if (retired.ids.length) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabaseAdmin as any).from("ss4_applications_archive").update({ retired_document_ids: retired.ids }).eq("id", old.id)
+    let previewFromFinish: string | undefined
+    let retiredIds: string[] = []
+    const step = async (name: string, fn: () => Promise<void>) => {
+      try {
+        await fn()
+      } catch (e) {
+        warnings.push(`${name} did not finish (${e instanceof Error ? e.message : String(e)}) — open the corrected SS-4 and check it; "Regenerate from account data" re-runs the set-up.`)
+      }
     }
 
-    // ─── 6. the corrected SS-4 gets the same set-up as any new one (draft: nothing is sent to the client) ───
-    const finished = await finishSS4Create(prep.prepared, {
-      id: newId as string,
-      token,
-      access_code: String(prep.prepared.row.access_code),
-      status: String(prep.prepared.row.status),
+    // ─── 5. retire the old SS-4's flow-document rows ───
+    await step("Relabelling the old SS-4's documents", async () => {
+      const retired = await retireOldSs4Documents(account_id, old.token)
+      retiredIds = retired.ids
+      warnings.push(...retired.errors)
+      if (retired.ids.length) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabaseAdmin as any).from("ss4_applications_archive").update({ retired_document_ids: retired.ids }).eq("id", old.id)
+      }
     })
 
-    // ─── 7. trail ───
-    logAction({
-      actor: by,
-      action_type: "resubmit",
-      table_name: "ss4_applications",
-      record_id: newId as string,
-      account_id,
-      summary: `SS-4 resubmitted for ${prep.prepared.company_name}: ${reason}`,
-      details: {
-        source,
-        reason,
-        archived_ss4_id: old.id,
-        archived_token: old.token,
-        archived_status: old.status,
-        old_line6: old.county_and_state,
-        new_line6: newRow.county_and_state ?? null,
-        retired_document_ids: retired.ids,
-      },
+    // ─── 6. the corrected SS-4 gets the same set-up as any new one (draft: nothing is sent to the client) ───
+    await step("Setting up the corrected SS-4", async () => {
+      const finished = await finishSS4Create(prep.prepared!, {
+        id: newId as string,
+        token,
+        access_code: String(prep.prepared!.row.access_code),
+        status: String(prep.prepared!.row.status),
+      })
+      previewFromFinish = finished.previewUrl
+      if (!finished.ok) throw new Error(finished.message || finished.outcome)
     })
-    await noteStageHistory(account_id, `SS-4 resubmitted (${reason}); the previous SS-4 was archived. A corrected draft is ready for review.`)
+
+    // ─── 7. the old fax belongs to the OLD form: close its tasks, and mark the flow so the "already faxed" lock starts over ───
+    await step("Closing the old SS-4's fax tasks", async () => {
+      const closed = await updateTasksBulk({
+        account_id,
+        title_ilike: "%Fax%SS-4%",
+        status_in: ["To Do", "In Progress", "Waiting"],
+        patch: { status: "Done" },
+        actor: "system:ss4-resubmit",
+        summary: "Auto-closed the fax task(s) of the replaced SS-4 — the corrected SS-4 gets its own fax step once it is signed",
+      })
+      if (!closed.success) throw new Error(closed.error || "tasks could not be closed")
+    })
+
+    // ─── 8. trail (+ the marker the fax panel / fax send read) ───
+    const sdId = await findFormationSdId(account_id)
+    await step("Recording the resubmit", async () => {
+      const { error } = await supabaseAdmin.from("action_log").insert({
+        actor: by,
+        action_type: SS4_RESUBMIT_MARKER,
+        table_name: "ss4_applications",
+        record_id: newId as string,
+        account_id,
+        ...(sdId ? { service_delivery_id: sdId } : {}),
+        summary: `SS-4 resubmitted for ${prep.prepared!.company_name}: ${reason}`,
+        details: {
+          source,
+          reason,
+          archived_ss4_id: old.id,
+          archived_token: old.token,
+          archived_status: old.status,
+          old_line6: old.county_and_state,
+          new_line6: (newRow.county_and_state as string | null) ?? null,
+          retired_document_ids: retiredIds,
+        },
+      })
+      if (error) throw new Error(error.message)
+    })
+    if (sdId) await noteStageHistory(sdId, `SS-4 resubmitted (${reason}); the previous SS-4 was archived. A corrected draft is ready for review.`)
 
     return {
       ok: true,
@@ -178,11 +224,11 @@ export async function resubmitSs4(args: { account_id: string; reason: string; by
         status: String(newRow.status),
         county_and_state: (newRow.county_and_state as string | null) ?? null,
       },
-      previewUrl: finished.previewUrl ?? `${APP_BASE_URL}/ss4/${token}/${String(newRow.access_code)}?preview=td`,
+      previewUrl: previewFromFinish ?? `${APP_BASE_URL}/ss4/${token}/${String(newRow.access_code)}?preview=td`,
       ...(warnings.length ? { warnings } : {}),
     }
   } catch (e) {
-    return { ok: false, outcome: "error", message: `The SS-4 could not be resubmitted: ${e instanceof Error ? e.message : String(e)}` }
+    return { ok: false, outcome: "error", message: `The SS-4 could not be resubmitted: ${e instanceof Error ? e.message : String(e)}. Reload the page and check the SS-4 before trying again.` }
   }
 }
 
@@ -191,8 +237,9 @@ export async function resubmitSs4(args: { account_id: string; reason: string; by
  * the stored copies (unsigned / signed / IRS package) stay as history but are relabelled "(Replaced)" so no lookup by type can
  * mistake them for the corrected SS-4's files. The fax confirmation and everything else is untouched.
  */
-async function retireOldSs4Documents(accountId: string, oldToken: string): Promise<{ ids: string[]; error?: string }> {
+async function retireOldSs4Documents(accountId: string, oldToken: string): Promise<{ ids: string[]; errors: string[] }> {
   const ids: string[] = []
+  const errors: string[] = []
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- document_type_name not in generated types
     const { data: docs, error } = await (supabaseAdmin as any)
@@ -200,43 +247,70 @@ async function retireOldSs4Documents(accountId: string, oldToken: string): Promi
       .select("id, file_name, document_type_name, drive_file_id")
       .eq("account_id", accountId)
       .in("document_type_name", [...SS4_DOC_TYPES])
-    if (error) return { ids, error: `The old SS-4's documents could not be relabelled: ${error.message}` }
-    const stamp = new Date().toISOString().slice(0, 10)
+    if (error) return { ids, errors: [`The old SS-4's documents could not be relabelled: ${error.message}`] }
+    // date + time (UTC) so a second resubmit on the same day never collides with the first one's renamed file
+    const now = new Date().toISOString()
+    const stamp = `${now.slice(0, 10)} ${now.slice(11, 13)}${now.slice(14, 16)}`
+    // One failing row never stops the others: each is tried, each failure is reported.
     for (const d of (docs ?? []) as Array<{ id: string; file_name: string | null; document_type_name: string; drive_file_id: string | null }>) {
       if (d.document_type_name === "SS-4" && (d.drive_file_id ?? "").startsWith("ss4-live:")) {
+        // The live shortcut row of the OLD token goes; a live row of any other token is not this SS-4's and is left alone.
+        if (d.drive_file_id !== `ss4-live:${oldToken}`) continue
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { error: delErr } = await (supabaseAdmin as any).from("documents").delete().eq("id", d.id).eq("drive_file_id", `ss4-live:${oldToken}`)
-        if (delErr) return { ids, error: `The old SS-4's live document row could not be removed: ${delErr.message}` }
-        ids.push(d.id)
+        const { data: gone, error: delErr } = await (supabaseAdmin as any).from("documents").delete().eq("id", d.id).eq("drive_file_id", `ss4-live:${oldToken}`).select("id")
+        if (delErr) errors.push(`The old SS-4's live document row could not be removed: ${delErr.message}`)
+        else if ((gone ?? []).length > 0) ids.push(d.id)
         continue
       }
+      if (d.document_type_name.endsWith(REPLACED_SUFFIX)) continue
       const name = (d.file_name ?? "SS-4.pdf").replace(/\.pdf$/i, "") + ` (replaced ${stamp}).pdf`
+      // A stored copy is renamed IN THE STORAGE too (the CRM row follows): otherwise the old, rejected file would keep the clean name and the
+      // corrected SS-4's copy would be saved as "… (2).pdf" next to it.
+      const storeId = parseStorePointer(d.drive_file_id)
+      if (storeId) {
+        try {
+          const { renameStoreFile } = await import("@/lib/crm-store/file-actions")
+          await renameStoreFile(storeId, name, null)
+        } catch (e) {
+          errors.push(`The old SS-4's stored file "${d.file_name}" could not be renamed in the storage (${e instanceof Error ? e.message : String(e)}) — rename it by hand so it is not mistaken for the corrected SS-4.`)
+        }
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: updErr } = await (supabaseAdmin as any)
         .from("documents")
         .update({ document_type_name: d.document_type_name + REPLACED_SUFFIX, file_name: name })
         .eq("id", d.id)
-      if (updErr) return { ids, error: `An old SS-4 document could not be relabelled: ${updErr.message}` }
-      ids.push(d.id)
+      if (updErr) errors.push(`An old SS-4 document could not be relabelled: ${updErr.message}`)
+      else ids.push(d.id)
     }
-    return { ids }
+    return { ids, errors }
   } catch (e) {
-    return { ids, error: `The old SS-4's documents could not be relabelled: ${e instanceof Error ? e.message : String(e)}` }
+    return { ids, errors: [`The old SS-4's documents could not be relabelled: ${e instanceof Error ? e.message : String(e)}`] }
   }
 }
 
-/** A line in the active Company Formation delivery's history. Never moves the stage. Best-effort. */
-async function noteStageHistory(accountId: string, note: string): Promise<void> {
+/** The account's active Company Formation delivery (the flow the SS-4 belongs to). Best-effort. */
+async function findFormationSdId(accountId: string): Promise<string | null> {
   try {
     const { data: sd } = await supabaseAdmin
       .from("service_deliveries")
-      .select("id, stage_history")
+      .select("id")
       .eq("account_id", accountId)
       .eq("service_type", "Company Formation")
       .eq("status", "active")
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle()
+    return sd?.id ?? null
+  } catch {
+    return null
+  }
+}
+
+/** A line in the flow's history. Never moves the stage. Best-effort. */
+async function noteStageHistory(sdId: string, note: string): Promise<void> {
+  try {
+    const { data: sd } = await supabaseAdmin.from("service_deliveries").select("id, stage_history").eq("id", sdId).maybeSingle()
     if (!sd) return
     const history = Array.isArray(sd.stage_history) ? sd.stage_history : []
     history.push({ event: "ss4_resubmitted", at: new Date().toISOString(), note })

@@ -71,9 +71,9 @@ export function Ss4CorrectionPanel({ serviceDeliveryId, accountId }: Props) {
       const da = await a.json().catch(() => ({}))
       const db = await b.json().catch(() => ({}))
       if (!a.ok || !da.success) throw new Error(da.error || 'Could not load the SS-4.')
-      if (!b.ok || !db.success) throw new Error(db.error || 'Could not load the archived SS-4s.')
       setStatus(da.ss4?.status ?? null)
-      setArchived(Array.isArray(db.archived) ? db.archived : [])
+      // The archived list is a nice-to-have: if it cannot be read (e.g. the database script has not been run yet) the panel still works.
+      setArchived(b.ok && db.success && Array.isArray(db.archived) ? db.archived : [])
       setLoadError(null)
     } catch (err) {
       setLoadError(err instanceof Error && err.message ? err.message : 'Could not load the SS-4.')

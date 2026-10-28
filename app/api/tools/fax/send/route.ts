@@ -56,6 +56,7 @@ import { parseSaveChoice, validateDestination, verifyProposalStillHolds, realRes
 import { claimSend, finishClaim, abandonClaim, realClaimDeps, HISTORY_NOT_SAVED_SENTENCE } from '@/lib/fax/send-claim'
 import { isFaxStagingPath, FAX_STAGING_BUCKET, faxSizeProblem } from '@/lib/fax/staged-upload'
 import { checkSs4Fax } from '@/lib/fax/ss4-fax-gate'
+import { latestSs4ResubmitAt } from '@/lib/fax/ss4-resubmit-marker'
 
 const MAX_COVER_LENGTH = 2000
 
@@ -134,14 +135,19 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
   // Double-send guard (opt-in). A prior 'fax_sent' for this flow → block with a
   // 409 the caller can turn into an explicit "send again?" confirm. A lookup ERROR stops the send (it never fails open).
   if (dedupeSdId && !confirmResend) {
-    const { data: prior, error: priorErr } = await supabaseAdmin
+    // only faxes sent after the latest SS-4 resubmit of this flow count (an earlier fax carried the OLD SS-4)
+    const resubmit = await latestSs4ResubmitAt(dedupeSdId)
+    let priorQuery = supabaseAdmin
       .from('action_log')
       .select('created_at, details, action_type')
       .in('action_type', ['fax_sent', 'fax_claim'])
       .eq('service_delivery_id', dedupeSdId)
+    if (resubmit.at) priorQuery = priorQuery.gt('created_at', resubmit.at)
+    const { data: prior, error: priorErrRaw } = await priorQuery
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
+    const priorErr = priorErrRaw ?? (resubmit.error ? { message: resubmit.error } : null)
     if (priorErr) {
       return NextResponse.json({ success: false, error: 'Could not check whether this flow was already faxed. The fax was NOT sent. Please try again.' }, { status: 503 })
     }
