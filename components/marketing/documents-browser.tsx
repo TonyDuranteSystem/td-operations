@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useT, useLang } from '@/components/marketing/lang-provider'
-import { fetchWithNetworkRetry } from '@/lib/chat/upload-with-retry'
-import { docRefusal, formatDocSize } from '@/lib/marketing/documents-rules'
+import { uploadDocument } from '@/components/marketing/documents-upload'
+import { formatDocSize } from '@/lib/marketing/documents-rules'
 
 interface Listing {
   crumbs: Array<{ id: string; name: string }>
@@ -12,7 +12,6 @@ interface Listing {
 }
 const btn = 'rounded-lg border px-3 py-1.5 text-sm font-medium disabled:opacity-50'
 const API = '/api/marketing/documents'
-const UPLOAD_ATTEMPT_MS = 15 * 60_000
 
 /** One answer of our own server: the JSON, or an Error carrying the server's own sentence (R099: never a generic "failed"). */
 async function call<T>(url: string, init: RequestInit | undefined, fallback: string): Promise<T> {
@@ -59,17 +58,7 @@ export function DocumentsBrowser({ canManage }: { canManage: boolean }) {
     finally { setBusy(null) }
   }
 
-  async function sendOne(file: File, folder: string, replaceFileId: string | null): Promise<string> {
-    const bad = docRefusal(file.name, file.size)
-    if (bad) throw new Error(t(bad))
-    const link = await post<{ signedUrl: string; path: string }>(`${API}/upload-url`, { folderId: folder, fileName: file.name, size: file.size }, t('Could not start the upload. Please try again.'))
-    let put: Response
-    try { put = await fetchWithNetworkRetry(link.signedUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file }, { attemptTimeoutMs: UPLOAD_ATTEMPT_MS }) }
-    catch { throw new Error(t("Couldn't upload the file — the connection was interrupted. Please try again.")) }
-    if (!put.ok) throw new Error(put.status === 413 ? t('That file is too large.') : t('Upload failed. Please check your connection and try again.'))
-    const r = await post<{ message: string }>(`${API}/register`, { folderId: folder, path: link.path, fileName: file.name, mimeType: file.type || null, replaceFileId }, t('The upload could not be saved. Please try again.'))
-    return r.message
-  }
+  const sendOne = (file: File, folder: string, replaceFileId: string | null) => uploadDocument(file, folder, replaceFileId, t)
 
   function upload(files: File[], replaceFileId: string | null = null) {
     if (!here || files.length === 0) return

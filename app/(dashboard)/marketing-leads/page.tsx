@@ -4,7 +4,12 @@ import { createClient } from "@/lib/supabase/server"
 import { isSecureAdmin } from "@/lib/auth"
 import { adminMemberContext } from "@/lib/marketing/guard"
 import { loadOwnerHome } from "@/lib/marketing/home-server"
-import { OwnerHomePanels } from "@/components/marketing/owner-home-panels"
+import { CallsPanel, MessagesPanel, WaitingPanel } from "@/components/marketing/owner-home-panels"
+import { OwnerNeeds } from "@/components/marketing/owner-needs"
+import { HomeNewsCard } from "@/components/marketing/home-news-card"
+import { HomeDocuments } from "@/components/marketing/home-documents"
+import { loadNewsAdmin } from "@/lib/marketing/news-server"
+import { listGiveTargets } from "@/lib/marketing/give-lead"
 import { makeT } from "@/lib/marketing/i18n"
 import { leadDb } from "@/lib/marketing/meta-leads/service"
 import { ageText } from "@/lib/marketing/master-view"
@@ -14,8 +19,6 @@ import { listConnections } from "@/lib/marketing/meta-leads/key-store"
 import { FillDetailsPanel } from "./fill-details-panel"
 
 export const dynamic = "force-dynamic"
-
-const TONE = { bad: "bg-red-50 text-red-700", warn: "bg-amber-50 text-amber-800" } as const
 
 /**
  * TD Marketing — Antonio's master view (dev job 9aec66fa): are leads arriving, is anyone sitting on them, what needs him today, what each person did,
@@ -33,12 +36,15 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
 
   const db = leadDb()
   const teams = await listTeams()
-  const team = teams.find(t => t.id === sp.team) ?? teams.find(t => t.status === "active") ?? teams[0] ?? null
-  const [total, noDetails, connections, master] = await Promise.all([
+  // no team picked: his own (the one he joined), else the first active one
+  const team = teams.find(t => t.id === sp.team) ?? (member.ok ? teams.find(t => t.id === member.ctx.team.id) : undefined) ?? teams.find(t => t.status === "active") ?? teams[0] ?? null
+  const [total, noDetails, connections, master, news, giveTargets] = await Promise.all([
     db.from("marketing_leads").select("id", { count: "exact", head: true }),
     db.from("marketing_leads").select("id", { count: "exact", head: true }).is("full_name", null).is("email", null).is("phone", null),
     listConnections(db, process.env.META_APP_SECRET),
     team ? loadMasterData(db, team.id) : Promise.resolve(null),
+    loadNewsAdmin(),
+    team ? listGiveTargets(team.id).catch(() => []) : Promise.resolve([]),
   ])
     const connection = [
     { label: "App secret", ok: !!process.env.META_APP_SECRET },
@@ -51,6 +57,8 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
   // his own dashboard (messages for him, what waits on Rocco, today's calls) is read only when the team on this page is the one he has joined
   const tEn = makeT("en")
   const home = member.ok && team && member.ctx.team.id === team.id ? await loadOwnerHome(member.ctx, new Date(), "Unnamed lead") : null
+  const teamQuery = team ? `?team=${team.id}` : ""
+  const firstStage = master?.stages[0]?.key ?? "new"
   const maxFunnel = master ? Math.max(1, ...master.view.funnel.map(f => f.count)) : 1
 
   return (
@@ -71,13 +79,6 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
             <p className="mt-1 text-xs text-slate-500">Leads, board, calendar, chat</p>
           </div>
         )}
-        {master && (
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-            <span><span className={`mr-1.5 inline-block h-2.5 w-2.5 rounded-full ${connected ? "bg-emerald-500" : "bg-red-500"}`} />{connected ? "Meta connected" : "Meta not fully set up"}</span>
-            <span><span className={`mr-1.5 inline-block h-2.5 w-2.5 rounded-full ${lastCheckMs !== null && lastCheckMs < 20 * 60_000 ? "bg-emerald-500" : "bg-red-500"}`} />{lastCheckMs === null ? "Lead check has not run" : `Last lead check ${ageText(lastCheckMs)} ago`}</span>
-            <span><span className={`mr-1.5 inline-block h-2.5 w-2.5 rounded-full ${master.failedCount === 0 ? "bg-emerald-500" : "bg-red-500"}`} />{master.failedCount} failed</span>
-          </div>
-        )}
       </div>
 
       {teams.length > 1 && (
@@ -90,50 +91,34 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
 
       {master && (
         <>
-          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Numbers">
+          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Numbers" data-testid="home-numbers">
             {[
-              { label: "New in the last 24 h", v: master.view.newLast24h, bad: false },
-              { label: "Nobody touched, over 24 h", v: master.view.untouchedOver24h, bad: master.view.untouchedOver24h > 0 },
-              { label: "Call backs due today", v: master.view.callBacksDueToday, bad: false },
-              { label: "Sales paid this month", v: master.view.paidCallsThisMonth, bad: false },
+              { label: "New in the last 24 h", v: master.view.newLast24h, bad: false, href: `/marketing-leads/leads${teamQuery}` },
+              { label: "Nobody touched, over 24 h", v: master.view.untouchedOver24h, bad: master.view.untouchedOver24h > 0, href: `/marketing-leads/leads?${team ? `team=${team.id}&` : ""}stage=${firstStage}` },
+              { label: "Call backs due today", v: master.view.callBacksDueToday, bad: false, href: "/marketing/calendar" },
+              { label: "Sales paid this month", v: master.view.paidCallsThisMonth, bad: false, href: "/marketing-leads/money" },
             ].map(k => (
-              <div key={k.label} className="rounded-xl border bg-white p-4">
+              <Link key={k.label} href={k.href} className="rounded-xl border bg-white p-4 hover:border-slate-400" data-testid="home-number">
                 <div className="text-xs text-slate-500">{k.label}</div>
                 <div className={`mt-1 font-mono text-2xl tabular-nums ${k.bad ? "text-red-600" : ""}`}>{k.v}</div>
-              </div>
+              </Link>
             ))}
           </section>
 
-          {home && <OwnerHomePanels model={home.model} mode="crm" t={tEn} locale="en-US" chatAny={home.chatAny} />}
+          <div className="grid gap-4 lg:grid-cols-[1.3fr_1fr]">
+            <OwnerNeeds needs={master.view.needs} people={giveTargets} teams={teams.filter(t => t.status === "active").map(t => ({ id: t.id, name: t.name }))} currentTeamId={team?.id} />
+            {home ? <MessagesPanel model={home.model} mode="crm" t={tEn} chatAny={home.chatAny} /> : (
+              <section className="rounded-xl border bg-white p-5" aria-label="Messages for you" data-testid="home-join">
+                <h2 className="text-sm font-semibold text-slate-600">Messages for you</h2>
+                <p className="mt-2 text-sm text-slate-500">Join the team to see the messages for you, the calls today and what is waiting on Rocco here.</p>
+                <Link href="/marketing-leads/teams" className="mt-3 inline-block rounded-lg border px-3 py-1.5 text-sm font-medium text-teal-800 hover:bg-slate-50">Join the team</Link>
+              </section>
+            )}
+          </div>
 
-          <div className="grid gap-4 md:grid-cols-[1.2fr_1fr]">
-            <section className="rounded-xl border bg-white p-4">
-              <h2 className="text-sm font-semibold text-slate-600">Where the leads are</h2>
-              <ul className="mt-3 space-y-2 text-sm">
-                {master.view.funnel.map(f => (
-                  <li key={f.key} className="grid grid-cols-[7rem_1fr_2rem] items-center gap-3">
-                    <span>{f.label}</span>
-                    <span className="h-3 rounded bg-slate-100"><span className="block h-3 rounded bg-teal-700" style={{ width: `${Math.round((f.count / maxFunnel) * 100)}%` }} /></span>
-                    <span className="text-right font-mono tabular-nums">{f.count}</span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-            <section className="rounded-xl border bg-white p-4">
-              <h2 className="text-sm font-semibold text-slate-600">Needs you</h2>
-              {master.view.needs.length === 0 ? (
-                <p className="mt-3 text-sm text-slate-500">Nothing needs you right now.</p>
-              ) : (
-                <ul className="mt-3 divide-y text-sm">
-                  {master.view.needs.map((n, i) => (
-                    <li key={i} className="flex items-baseline justify-between gap-3 py-2 first:pt-0 last:pb-0">
-                      <span>{n.text}</span>
-                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${TONE[n.tone]}`}>{n.key === "unassigned" ? "Assign" : n.key === "existing_client" ? "Check" : n.key === "late_callbacks" ? "Late" : "Slow"}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {home ? <div className="space-y-4"><CallsPanel model={home.model} mode="crm" t={tEn} locale="en-US" /><WaitingPanel model={home.model} mode="crm" t={tEn} /></div> : <div />}
+            <HomeNewsCard news={news} />
           </div>
 
           <section className="rounded-xl border bg-white p-4">
@@ -160,6 +145,28 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
               </table>
             </div>
           </section>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <section className="rounded-xl border bg-white p-5">
+              <h2 className="text-sm font-semibold text-slate-600">Where the leads are</h2>
+              <ul className="mt-3 space-y-2 text-sm">
+                {master.view.funnel.map(f => (
+                  <li key={f.key} className="grid grid-cols-[7rem_1fr_2rem] items-center gap-3">
+                    <span>{f.label}</span>
+                    <span className="h-3 rounded bg-slate-100"><span className="block h-3 rounded bg-teal-700" style={{ width: `${Math.round((f.count / maxFunnel) * 100)}%` }} /></span>
+                    <span className="text-right font-mono tabular-nums">{f.count}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+            <HomeDocuments />
+          </div>
+
+          <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500" data-testid="home-health">
+            <span><span className={`mr-1.5 inline-block h-2 w-2 rounded-full ${connected ? "bg-emerald-500" : "bg-red-500"}`} />{connected ? "Meta connected" : "Meta not fully set up"}</span>
+            <span><span className={`mr-1.5 inline-block h-2 w-2 rounded-full ${lastCheckMs !== null && lastCheckMs < 20 * 60_000 ? "bg-emerald-500" : "bg-red-500"}`} />{lastCheckMs === null ? "Lead check has not run" : `Last lead check ${ageText(lastCheckMs)} ago`}</span>
+            <span><span className={`mr-1.5 inline-block h-2 w-2 rounded-full ${master.failedCount === 0 ? "bg-emerald-500" : "bg-red-500"}`} />{master.failedCount} failed</span>
+          </p>
         </>
       )}
 
