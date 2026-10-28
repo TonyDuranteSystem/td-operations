@@ -153,8 +153,8 @@
       "schedule": "*/15 * * * *"
     },
     {
-      "path": "/api/cron/stripe-sync",
-      "schedule": "0 */6 * * *"
+      "path": "/api/cron/stripe-sync?days=3",
+      "schedule": "*/3 * * * *"
     },
     {
       "path": "/api/cron/portal-recurring-invoices",

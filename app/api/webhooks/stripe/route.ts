@@ -21,7 +21,7 @@ import { isNonClientPayment, readPaymentKind, PAYMENT_KIND_MARKETING, PAYMENT_KI
 import { recordPaidCallFromSession } from "@/lib/incoming-payments/link-payment"
 import { isUnlabelledPayment } from "@/lib/incoming-payments/classify"
 import { notifyUnlabelledPayment } from "@/lib/incoming-payments/notify"
-import { recordPaidSession, recordRefund, recordDispute } from "@/lib/marketing/sales-server"
+import { recordRefund, recordDispute } from "@/lib/marketing/sales-server"
 import type { Db } from "@/lib/marketing/meta-leads/ingest"
 
 type StripeClient = ReturnType<typeof StripeConstructor>
@@ -195,11 +195,11 @@ async function handleCheckoutCompleted(session: StripeSession) {
   //     create a client payment row. The webhook_events row above is the record;
   //     the marketing ledger reads it. Absent tag = normal client payment, unchanged.
   if (isNonClientPayment(session.metadata)) {
-    // A marketing payment link: write the sale's ledger BEFORE anything else, and on redelivery too (it is idempotent). If it
-    // throws, answer 500 so Stripe sends the event again; the payment must never be only in the raw event log.
+    // A marketing payment link: the sale is NOT marked paid here any more (Antonio, 2026-10-28: Finance regulates). The saved event above is the record;
+    // Finance's Stripe sync copies the payment into the Bank Feed within minutes and its matcher marks the sale paid, moves the lead's card and makes the invoice
+    // (lib/finance/marketing-sale-settle.ts).
     if (readPaymentKind(session.metadata) === PAYMENT_KIND_MARKETING) {
-      const r = await recordPaidSession(getSupabase() as unknown as Db, session)
-      console.warn(`[stripe-webhook] ${sessionId}: marketing sale ${r.recorded ? "recorded" : `not recorded (${r.reason})`}`)
+      console.warn(`[stripe-webhook] ${sessionId}: marketing payment received; Finance settles it when it matches the payment`)
     }
     // A paid call paid through a link made from the CRM lead page: the link says what it is, so record it now (paid call + credit),
     // BEFORE the redelivery check, exactly like the marketing ledger above (idempotent; a failure answers 500 so Stripe retries).

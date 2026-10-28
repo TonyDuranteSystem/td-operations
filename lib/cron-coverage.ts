@@ -92,7 +92,8 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/card-autopay-charge": "0 11 * * *",
   // /api/cron/forms-archive-sweep removed 2026-10-22 — Stop Drive S4 (dev job 264bb882, Antonio). It was in DRY-RUN (report-only, never enqueued or alerted); its one standing candidate (an ITIN submission from 2026-07-24) was already filed in the person's storage, only its archived marker was never set.
   "/api/cron/airwallex-sync": "*/15 * * * *",
-  "/api/cron/stripe-sync": "0 */6 * * *",
+  // every 3 minutes (Antonio, 2026-10-28: Finance regulates marketing sales, so it must see Stripe payments within minutes); short look-back (?days=3), ?days=90 by hand when needed
+  "/api/cron/stripe-sync": "*/3 * * * *",
   "/api/cron/itin-processing-check": "0 9 * * 1",
   // ITIN IRS-shipment tracking daily check (dev job 7c3ef909) — asks ShipStation
   // for real delivery status on packages mailed to the IRS, tells the client

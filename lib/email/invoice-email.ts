@@ -56,6 +56,8 @@ export interface InvoiceEmailInput {
    *  neutral "notes" block between the invoice table and the payment CTA. */
   message?: string | null
 
+  /** The language of a RECEIPT ("Payment received"): Italian when the person works in Italian (dev job 9aec66fa, Antonio 2026-10-28). Default English; other purposes are English. */
+  language?: "en" | "it"
 }
 
 export interface InvoiceEmailOutput {
@@ -84,7 +86,7 @@ function subjectFor(input: InvoiceEmailInput): string {
     case "credit":
       return `Credit Note ${n} from Tony Durante LLC`
     case "receipt":
-      return `Payment received for Invoice ${n}`
+      return input.language === "it" ? `Pagamento ricevuto per la fattura ${n}` : `Payment received for Invoice ${n}`
   }
 }
 
@@ -94,7 +96,8 @@ function headerColorFor(purpose: InvoiceEmailPurpose): string {
   return "#2563eb" // blue (initial + reminder)
 }
 
-function docLabelFor(purpose: InvoiceEmailPurpose): string {
+function docLabelFor(purpose: InvoiceEmailPurpose, language?: "en" | "it"): string {
+  if (purpose === "receipt" && language === "it") return "Ricevuta di pagamento"
   switch (purpose) {
     case "initial":
       return "Invoice"
@@ -110,11 +113,11 @@ function docLabelFor(purpose: InvoiceEmailPurpose): string {
 function invoiceTableRows(input: InvoiceEmailInput): string {
   const rows: string[] = []
   rows.push(`<tr style="background:#f8fafc;">
-    <td style="padding:8px 12px;font-weight:bold;color:#6b7280;font-size:13px;">Invoice Number</td>
+    <td style="padding:8px 12px;font-weight:bold;color:#6b7280;font-size:13px;">${input.purpose === "receipt" && input.language === "it" ? "Numero fattura" : "Invoice Number"}</td>
     <td style="padding:8px 12px;font-size:14px;">${input.invoiceNumber}</td>
   </tr>`)
   rows.push(`<tr>
-    <td style="padding:8px 12px;font-weight:bold;color:#6b7280;font-size:13px;">${input.purpose === "receipt" ? "Paid Date" : "Issue Date"}</td>
+    <td style="padding:8px 12px;font-weight:bold;color:#6b7280;font-size:13px;">${input.purpose === "receipt" ? (input.language === "it" ? "Data del pagamento" : "Paid Date") : "Issue Date"}</td>
     <td style="padding:8px 12px;font-size:14px;">${input.issueDate}</td>
   </tr>`)
   if (input.purpose !== "receipt" && input.purpose !== "credit" && input.dueDate) {
@@ -123,7 +126,7 @@ function invoiceTableRows(input: InvoiceEmailInput): string {
       <td style="padding:8px 12px;font-size:14px;">${input.dueDate}</td>
     </tr>`)
   }
-  const totalLabel = input.purpose === "credit" ? "Credit Amount" : input.purpose === "receipt" ? "Amount Paid" : "Total"
+  const totalLabel = input.purpose === "credit" ? "Credit Amount" : input.purpose === "receipt" ? (input.language === "it" ? "Importo pagato" : "Amount Paid") : "Total"
   const totalPrefix = input.purpose === "credit" ? "-" : ""
   const totalColor = headerColorFor(input.purpose)
   rows.push(`<tr${input.purpose === "receipt" || input.purpose === "credit" ? ' style="background:#f8fafc;"' : ""}>
@@ -179,9 +182,9 @@ function ctaPortalOpen(): string {
   </div>`
 }
 
-function ctaPortalReceipt(): string {
+function ctaPortalReceipt(language?: "en" | "it"): string {
   return `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 20px;margin:28px 0;">
-    <p style="margin:0;font-size:14px;color:#15803d;font-weight:600;">This invoice is marked as paid in your portal.</p>
+    <p style="margin:0;font-size:14px;color:#15803d;font-weight:600;">${language === "it" ? "Questa fattura risulta saldata nel tuo portale." : "This invoice is marked as paid in your portal."}</p>
   </div>`
 }
 
@@ -197,7 +200,7 @@ function ctaNoPortalOpen(payUrl: string): string {
 
 function baseShell(input: InvoiceEmailInput, inner: string): string {
   const accent = headerColorFor(input.purpose)
-  const doc = docLabelFor(input.purpose)
+  const doc = docLabelFor(input.purpose, input.language)
   return `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
       <div style="background:${accent};padding:24px;border-radius:12px 12px 0 0;">
@@ -225,7 +228,9 @@ export function buildInvoiceEmail(input: InvoiceEmailInput): InvoiceEmailOutput 
   const isCredit = input.purpose === "credit"
 
   // Greeting + first paragraph by purpose
-  const greeting = `<p>Dear ${input.clientName},</p>`
+  const itReceipt = isReceipt && input.language === "it"
+  const safeName = String(input.clientName ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+  const greeting = itReceipt ? `<p>Gentile ${safeName},</p>` : `<p>Dear ${safeName},</p>`
   let firstPara = ""
   switch (input.purpose) {
     case "initial":
@@ -238,7 +243,9 @@ export function buildInvoiceEmail(input: InvoiceEmailInput): InvoiceEmailOutput 
       firstPara = `<p>Please find attached credit note <strong>${input.invoiceNumber}</strong>.</p>`
       break
     case "receipt":
-      firstPara = `<p>We've received your payment for invoice <strong>${input.invoiceNumber}</strong>. Thank you! The paid PDF is attached.</p>`
+      firstPara = itReceipt
+        ? `<p>Abbiamo ricevuto il tuo pagamento per la fattura <strong>${input.invoiceNumber}</strong>. Grazie! In allegato trovi la fattura in PDF, saldata.</p>`
+        : `<p>We've received your payment for invoice <strong>${input.invoiceNumber}</strong>. Thank you! The paid PDF is attached.</p>`
       break
   }
 
@@ -255,12 +262,12 @@ export function buildInvoiceEmail(input: InvoiceEmailInput): InvoiceEmailOutput 
       paymentPath = (payUrl ? ctaNoPortalOpen(payUrl) : "") + bankDetailsBlock(bdWithRef)
     }
   } else if (isReceipt && isPortal) {
-    paymentPath = ctaPortalReceipt()
+    paymentPath = ctaPortalReceipt(input.language)
   }
 
   // Closing line
   const closingLine = isReceipt
-    ? `<p style="color:#6b7280;font-size:13px;margin-top:24px;">No action required. If you have questions, reply directly to this email.</p>`
+    ? `<p style="color:#6b7280;font-size:13px;margin-top:24px;">${itReceipt ? "Nessuna azione richiesta. Per qualsiasi domanda rispondi direttamente a questa email." : "No action required. If you have questions, reply directly to this email."}</p>`
     : `<p style="color:#6b7280;font-size:13px;margin-top:24px;">The PDF is attached to this email. If you have questions, reply directly.</p>`
 
   const inner = `${greeting}${firstPara}${table}${msgBlock}${paymentPath}${closingLine}`

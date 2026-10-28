@@ -30,6 +30,8 @@ import {
 import { isChargeRefundedNow } from "@/lib/stripe-sync"
 import { findPayoutIdForDeposit, looksLikeStripePayoutDeposit } from "@/lib/finance/stripe-payouts"
 import { updateFeed } from "@/lib/finance/feed-write"
+import { marketingRefFromFeed } from "@/lib/finance/marketing-sale-ref"
+import { settleMarketingSaleFromFeed } from "@/lib/finance/marketing-sale-settle"
 import {
   auditLinkMetadata,
   contestedMetadata,
@@ -139,6 +141,15 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
     if (fErr || !feed) return { matched: false, error: `Feed not found: ${fErr?.message}` }
     if (feed.status === "matched") return { matched: true, paymentId: feed.matched_payment_id }
+
+    // ⛔ A payment from one of Rocco's TD Marketing links (dev job 9aec66fa, Antonio 2026-10-28: Finance regulates, the card moves only when Finance matches).
+    // It is settled by its OWN labels (sale + lead) and never falls through to the invoice tiers below: a marketing payment must not be able to settle an
+    // unrelated invoice by amount or name coincidence.
+    if (feed.source === "stripe" && marketingRefFromFeed(feed)) {
+      const r = await settleMarketingSaleFromFeed(feedId)
+      if (r.matched === true) return { matched: true, paymentId: r.paymentId, invoiceNumber: r.invoiceNumber, confidence: "certain_retroactive", moneyApplied: false, note: r.note }
+      return { matched: false, moneyApplied: false, error: r.matched === false ? r.error : undefined, note: r.note }
+    }
 
     const feedAmount = Number(feed.amount)
     const feedCurrency = feed.currency || "USD"

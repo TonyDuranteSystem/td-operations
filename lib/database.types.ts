@@ -16151,6 +16151,117 @@ export type Database = {
           },
         ]
       }
+      ss4_applications_archive: {
+        Row: {
+          access_code: string | null
+          account_id: string | null
+          archive_reason: string | null
+          archived_at: string
+          archived_by: string | null
+          company_name: string
+          contact_id: string | null
+          county_and_state: string | null
+          created_at: string | null
+          entity_type: string
+          formation_date: string | null
+          id: string
+          language: string | null
+          mailing_city_state_zip: string | null
+          mailing_street: string | null
+          member_count: number
+          pdf_signed_drive_id: string | null
+          pdf_unsigned_drive_id: string | null
+          replaced_by_id: string | null
+          responsible_party_itin: string | null
+          responsible_party_name: string
+          responsible_party_phone: string | null
+          responsible_party_title: string
+          retired_document_ids: string[] | null
+          signature_data: Json | null
+          signed_at: string | null
+          signed_ip: string | null
+          state_of_formation: string
+          status: string
+          token: string
+          trade_name: string | null
+          updated_at: string | null
+          view_count: number | null
+          viewed_at: string | null
+        }
+        Insert: {
+          access_code?: string | null
+          account_id?: string | null
+          archive_reason?: string | null
+          archived_at?: string
+          archived_by?: string | null
+          company_name: string
+          contact_id?: string | null
+          county_and_state?: string | null
+          created_at?: string | null
+          entity_type?: string
+          formation_date?: string | null
+          id?: string
+          language?: string | null
+          mailing_city_state_zip?: string | null
+          mailing_street?: string | null
+          member_count?: number
+          pdf_signed_drive_id?: string | null
+          pdf_unsigned_drive_id?: string | null
+          replaced_by_id?: string | null
+          responsible_party_itin?: string | null
+          responsible_party_name: string
+          responsible_party_phone?: string | null
+          responsible_party_title?: string
+          retired_document_ids?: string[] | null
+          signature_data?: Json | null
+          signed_at?: string | null
+          signed_ip?: string | null
+          state_of_formation: string
+          status?: string
+          token: string
+          trade_name?: string | null
+          updated_at?: string | null
+          view_count?: number | null
+          viewed_at?: string | null
+        }
+        Update: {
+          access_code?: string | null
+          account_id?: string | null
+          archive_reason?: string | null
+          archived_at?: string
+          archived_by?: string | null
+          company_name?: string
+          contact_id?: string | null
+          county_and_state?: string | null
+          created_at?: string | null
+          entity_type?: string
+          formation_date?: string | null
+          id?: string
+          language?: string | null
+          mailing_city_state_zip?: string | null
+          mailing_street?: string | null
+          member_count?: number
+          pdf_signed_drive_id?: string | null
+          pdf_unsigned_drive_id?: string | null
+          replaced_by_id?: string | null
+          responsible_party_itin?: string | null
+          responsible_party_name?: string
+          responsible_party_phone?: string | null
+          responsible_party_title?: string
+          retired_document_ids?: string[] | null
+          signature_data?: Json | null
+          signed_at?: string | null
+          signed_ip?: string | null
+          state_of_formation?: string
+          status?: string
+          token?: string
+          trade_name?: string | null
+          updated_at?: string | null
+          view_count?: number | null
+          viewed_at?: string | null
+        }
+        Relationships: []
+      }
       staff_alert_state: {
         Row: {
           dismissed_at: string
@@ -22127,6 +22238,10 @@ export type Database = {
         Returns: string
       }
       reset_tool_counter: { Args: never; Returns: undefined }
+      resubmit_ss4: {
+        Args: { p_by: string; p_new: Json; p_old_id: string; p_reason: string }
+        Returns: string
+      }
       search_team_messages: {
         Args: { p_query: string; p_user_id: string }
         Returns: {
