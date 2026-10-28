@@ -47,6 +47,8 @@ import { DriveImportDialog } from './drive-import-dialog'
 import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keepBothName } from '@/lib/crm-store/names'
 import { HttpError, sameNameKey, errorText, isGoneError, fmtSize, canShowToClient, cantShowReason, resetFailedToWaiting, hasHiddenPart, markFingerprint } from './store-ui-rules'
 import { trapTabKey } from './focus-trap'
+import { WorkspaceStepBody } from '@/components/storage/workspace-step-body'
+import type { WaitingWorkspaceStep } from '@/lib/flows/storage-step-hints'
 
 interface Fold { id: string; name: string; kind: string; trashed: boolean; locked?: boolean }
 /** the right-click menu: what was clicked (the menu items are the SAME ones the row's "…" button shows) */
@@ -1926,6 +1928,27 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           }
         }
       }
+      // a workspace step may be waiting for this very document (dev job e3215801, Adam Mihaly's ITIN letter): ask BEFORE anything is saved
+      let workspaceAck: string[] = []
+      if (upType) {
+        const wcheck = await postJson<{ hits: WaitingWorkspaceStep[] }>('/api/crm-store/browse/workspace-check', {
+          ownerId: landsIn.ownerId || target.ownerId,
+          folderId: landsIn.folderId || target.folder.id,
+          documentType: upType,
+          ...(target.folder.kind === 'contacts' ? { personContactId: upPerson } : {}),
+        }, 'Could not check whether a workspace is waiting for this file — nothing was saved. Please try again.')
+        if (wcheck.hits.length > 0) {
+          const a = await ask('workspace_step_waiting', 'A workspace step is waiting for this document', <WorkspaceStepBody hits={wcheck.hits} />,
+            [{ key: 'workspace', label: 'Open the workspace', tone: 'primary' }, { key: 'storage', label: 'Save in Storage only' }])
+          if (a === 'workspace') {
+            window.open(wcheck.hits[0].workspacePath, '_blank', 'noopener')
+            toast.message('Nothing was saved here — finish it in the workspace.')
+            return 'cancelled'
+          }
+          if (a !== 'storage') return 'cancelled'
+          workspaceAck = wcheck.hits.map((h) => h.sdId)
+        }
+      }
       // the save
       const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
       // each try asks for a fresh link and a fresh staging path (a connection blip no longer fails the upload)
@@ -1951,6 +1974,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         displayName: displayName || undefined, visible: deferShow ? false : upVisible && !needsReview, periodYear, filingAnswer, needsReview,
         ...(target.folder.kind === 'contacts' ? { personContactId: upPerson } : {}),
         ...(target.via && ownerId ? { viaCompanyOwnerId: ownerId } : {}),
+        ...(workspaceAck.length > 0 ? { workspaceAck } : {}),
       }, 'The upload could not be saved — please try again.')
       toast.success(
         r.write === 'versioned' ? `"${r.name}" saved as a new version (the old copy is under Versions) — ${r.visible ? 'the client can see it' : 'hidden from the client'}`

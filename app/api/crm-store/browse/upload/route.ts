@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { denyUnlessStoreStaff, denyUnlessStorePilotEnv, denyUnlessAreaAccess } from "../_auth"
 import { plainStoreError } from "@/lib/crm-store/lock-errors"
+import type { WaitingWorkspaceStep } from "@/lib/flows/storage-step-hints"
 
 export async function POST(req: NextRequest) {
   const denied = await denyUnlessStoreStaff()
@@ -38,9 +39,62 @@ export async function POST(req: NextRequest) {
   const noAccess = (await denyUnlessAreaAccess({ ownerId, folderId })) ?? (viaCompanyOwnerId ? await denyUnlessAreaAccess({ ownerId: viaCompanyOwnerId }) : null)
   if (noAccess) return noAccess
   const { data: { user } } = await createClient().auth.getUser()
+
+  // A file an open workspace step is waiting for must go through that step — or be filed in Storage on purpose (dev job e3215801: Adam
+  // Mihaly's ITIN letter was filed here, hidden, while the workspace step that reads it, tells the client and closes the case never ran).
+  // The Storage page asks the staff member first and sends `workspaceAck` (the cases they chose to leave); anything else is refused here.
+  const ackBody = (body as { workspaceAck?: unknown }).workspaceAck
+  const acked = Array.isArray(ackBody) ? ackBody.filter((x): x is string => typeof x === "string") : []
+  const discardStaged = async () => {
+    const { STAFF_STORE_UPLOAD_PREFIX } = await import("@/lib/crm-store/browse")
+    if (!storagePath.startsWith(STAFF_STORE_UPLOAD_PREFIX) || storagePath.includes("..")) return
+    const { supabaseAdmin } = await import("@/lib/supabase-admin")
+    await supabaseAdmin.storage.from("onboarding-uploads").remove([storagePath]).catch(() => {})
+  }
+  let waiting: WaitingWorkspaceStep[] = []
+  try {
+    const { findWaitingWorkspaceSteps } = await import("@/lib/flows/storage-step-hints")
+    waiting = await findWaitingWorkspaceSteps({ ownerId, folderId, documentType: documentType ?? null, personContactId: personContactId ?? null })
+  } catch {
+    await discardStaged()
+    return NextResponse.json({ error: "Could not check whether a workspace is waiting for this file — nothing was saved. Please try again." }, { status: 503 })
+  }
+  const unanswered = waiting.filter((h) => acked.indexOf(h.sdId) === -1)
+  if (unanswered.length > 0) {
+    await discardStaged()
+    const first = unanswered[0]
+    return NextResponse.json(
+      {
+        code: "workspace_step_waiting",
+        error: `${first.who}'s ${first.serviceType} case is at "${first.stage}" and is waiting for ${first.asks}. Do it in the workspace, or choose "Save in Storage only" in the Storage screen — nothing was saved.`,
+        hits: unanswered,
+      },
+      { status: 409 },
+    )
+  }
+
   try {
     const { staffUploadToStore } = await import("@/lib/crm-store/browse")
     const r = await staffUploadToStore({ ownerId, folderId, storagePath, fileName, mimeType: mimeType ?? null, documentType: documentType ?? null, actorId: user?.id ?? null, personContactId: personContactId ?? null, displayName: displayName ?? null, visible, periodYear, filingAnswer, needsReview, viaCompanyOwnerId: viaCompanyOwnerId ?? null })
+    // filed in Storage on purpose: say so on the case's record, so nobody has to guess later why the step is still open
+    if (waiting.length > 0) {
+      const { supabaseAdmin } = await import("@/lib/supabase-admin")
+      for (const h of waiting) {
+        const asks = h.asks.charAt(0).toUpperCase() + h.asks.slice(1)
+        await supabaseAdmin
+          .from("action_log")
+          .insert({
+            actor: `dashboard:${user?.email?.split("@")[0] ?? "unknown"}`,
+            action_type: "storage_filed_workspace_document",
+            table_name: "store_files",
+            record_id: r.fileId,
+            service_delivery_id: h.sdId,
+            summary: `${asks} filed in Storage only — ${h.who}'s ${h.serviceType} case is still at "${h.stage}" (the workspace step was not done)`,
+            details: { file_name: r.name, stage: h.stage, workspace: h.workspacePath, document_type: documentType ?? null },
+          })
+          .then(({ error }) => { if (error) console.error("[crm-store] could not record the Storage-only filing:", error.message) })
+      }
+    }
     return NextResponse.json(r)
   } catch (e) {
     return NextResponse.json({ error: plainStoreError(e, "The upload could not be saved.") }, { status: 400 })

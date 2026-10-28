@@ -195,7 +195,7 @@ _Regenerated 2026-10-27. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-21)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-27)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-27)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-28)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-27)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-23)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-26)_
@@ -221,7 +221,7 @@ _Regenerated 2026-10-27. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-10-13)_
 - [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-10-27)_
-- [storage.md](storage.md) — CRM Storage _(verified 2026-10-27)_
+- [storage.md](storage.md) — CRM Storage _(verified 2026-10-28)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-10-27)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-19)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
