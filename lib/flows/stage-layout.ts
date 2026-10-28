@@ -35,6 +35,7 @@ export const STAGE_COMPONENT_TYPES = [
   'ss4_fax_panel',
   'activate_ra',
   'ss4_panel',
+  'ss4_correction_panel',
   'ein_entry',
   'shipping_info',
   'formation_names',

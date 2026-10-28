@@ -13,6 +13,7 @@ import { FaxIrs } from './fax-irs'
 import { Ss4FaxPanel } from './ss4-fax-panel'
 import { ActivateRa } from './activate-ra'
 import { Ss4Panel } from './ss4-panel'
+import { Ss4CorrectionPanel } from './ss4-correction-panel'
 import { EinEntry } from './ein-entry'
 import { FormationNames } from './formation-names'
 import { FlowChat } from './flow-chat'
@@ -129,6 +130,8 @@ function renderComponent(
       return <ActivateRa key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
     case 'ss4_panel':
       return <Ss4Panel key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
+    case 'ss4_correction_panel':
+      return <Ss4CorrectionPanel key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
     case 'ein_entry':
       return <EinEntry key={key} serviceDeliveryId={serviceDelivery.id} accountId={serviceDelivery.account_id} />
     case 'formation_names':
