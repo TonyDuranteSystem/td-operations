@@ -148,7 +148,7 @@ async function main() {
   // ---- 11. a row that keeps failing is parked after 4 tries with the reason (it cannot hold up the others), and never makes a second invoice
   const w = await scenario("w", { nullSessionOnSale: true, email: `${tag}-w@qa-mail.dev` })
   const outs: string[] = []
-  for (let i = 0; i < 5; i++) { const r = await settleMarketingSaleFromFeed(w.feed); outs.push(r.matched ? "matched" : r.parked ? "parked" : "error") }
+  for (let i = 0; i < 5; i++) { const r = await settleMarketingSaleFromFeed(w.feed); outs.push(r.matched ? "matched" : "parked" in r && r.parked ? "parked" : "error") }
   const sw = await state(w)
   const nw = (await db.query("select count(*)::int n from payments where stripe_payment_id=$1 and invoice_status='Paid'", [w.pi])).rows[0].n
   ck("F19 a payment that cannot be tied to its sale is tried 3 times, then PARKED with the reason on the 4th; one invoice at most; the sale and the card never moved", JSON.stringify(outs.slice(0, 4)) === JSON.stringify(["error", "error", "error", "parked"]) && sw.feed.status === "needs_review" && /after 4 tries/.test(String(sw.feed.review_metadata?.marketing_sale_problem)) && sw.sale.status === "link_created" && sw.lead.status === "link_sent" && nw <= 1, { outs, sw, nw })
