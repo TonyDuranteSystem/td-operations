@@ -77,6 +77,7 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
     case "client_check_failed": return t("Could not check whether this is a TD client")
     case "assigned": return t("Assigned to {team}", { team: typeof data.team_name === "string" ? data.team_name : t("a team") })
     case "details_filled": return t("Name, email and phone filled in from the form answers")
+    case "given": return t("Given to {name} by Antonio", { name: typeof data.to_name === "string" ? data.to_name : t("a person") })
     case "claimed": return t("Picked")
     case "released": return t("Given back")
     case "note": return t("Note: {text}", { text: typeof data.text === "string" ? data.text : "" })

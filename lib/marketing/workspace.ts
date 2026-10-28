@@ -9,7 +9,8 @@ export interface Module { key: string; label: string; href: string; built: boole
 
 /** Every screen of the approved mockup, in its order, with the permission that opens it. Not-yet-built screens stay on the list, greyed "soon". */
 const CATALOG: Array<{ key: string; label: string; href: string; built: boolean; when: (p: readonly string[]) => boolean }> = [
-  { key: "home", label: "Home", href: "/marketing/home", built: true, when: p => p.includes("leads.pick") },
+  // What's New (Antonio's posts to the team): every person who has any access reads it, whatever the role
+  { key: "news", label: "What's New", href: "/marketing/news", built: true, when: p => p.length > 0 },
   { key: "today", label: "Today", href: "/marketing/today", built: true, when: p => p.includes("leads.pick") },
   { key: "call-list", label: "Call list", href: "/marketing/call-list", built: true, when: p => p.includes("leads.worklist") },
   { key: "board", label: "Board", href: "/marketing/board", built: true, when: p => p.includes("leads.read") },
@@ -36,7 +37,8 @@ export function modulesFor(perms: readonly string[]): Module[] {
 
 /** Where /marketing sends a person: the first screen that exists for him. null = nothing to open (no permissions at all). */
 export function homeFor(perms: readonly string[]): string | null {
-  return modulesFor(perms).find(m => m.built)?.href ?? null
+  // What's New is for reading, never somebody's first screen. There is NO owner Home in the team workspace (28 Oct 2026): the owner's Home lives only in his CRM Marketing section, so the owner and Rocco share one workspace, which starts on Today
+  return modulesFor(perms).find(m => m.built && m.key !== "news")?.href ?? null
 }
 
 export interface OutcomeStages { good: string; not_in_target: string; call_back: string }

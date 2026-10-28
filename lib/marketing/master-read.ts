@@ -29,7 +29,7 @@ export interface MasterData {
 export async function loadMasterData(db: Db, teamId: string, now = new Date()): Promise<MasterData> {
   const [leadsRes, noTeamRes, ev, stages, members, cron, stuck, saleStages, bundles] = await Promise.all([
     readPaged<MasterLead>((from, to) => db.from("marketing_leads").select(LEAD_COLS).eq("team_id", teamId).order("received_at", { ascending: false }).order("id", { ascending: false }).range(from, to), 5000),
-    db.from("marketing_leads").select("id", { count: "exact", head: true }).is("team_id", null),
+    db.from("marketing_leads").select("id, full_name, email", { count: "exact" }).is("team_id", null).order("received_at", { ascending: false }).limit(3),
     loadTeamEvents(db, teamId, { since: romeStartOfMonth(now) }),
     getMarketingSetting("pipeline_stages", teamId) as Promise<StageOpt[]>,
     listMembers(teamId),
@@ -42,7 +42,7 @@ export async function loadMasterData(db: Db, teamId: string, now = new Date()): 
   const events = ev.events
   const people: MasterMember[] = members.map(m => ({ email: m.email, role: m.member_role as "owner" | "member", bundle: accessLabel(effectivePermissions({ memberRole: "member", bundle: m.bundle, bundles, extra: m.permissions }), bundles), status: m.status, lastSignInAt: m.last_sign_in_at }))
   return {
-    view: buildMasterView({ leads, events, members: people, stages, now, unassignedCount: noTeamRes.count ?? 0, paidStages: paidStagesFrom(saleStages) }),
+    view: buildMasterView({ leads, events, members: people, stages, now, unassignedCount: noTeamRes.count ?? 0, unassignedLeads: ((noTeamRes.data ?? []) as Array<{ id: string; full_name: string | null; email: string | null }>).map(l => ({ id: l.id, name: l.full_name || l.email || "Unnamed lead" })), paidStages: paidStagesFrom(saleStages) }),
     stages, leadCount: leads.length, memberCount: people.filter(p => p.status !== "removed").length,
     lastCheckAt: (cron.data?.[0] as { executed_at?: string } | undefined)?.executed_at ?? null,
     failedCount: stuck.count ?? 0,
