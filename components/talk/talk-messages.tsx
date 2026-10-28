@@ -11,11 +11,11 @@ import {
 } from '@/lib/talk/chat-model'
 
 /** One attachment inside a bubble: a voice note you can play, a photo you can open, or a file you can download. */
-function Attachment({ a, messageId, index, voiceApi }: { a: TalkAttachment; messageId: string; index: number; voiceApi?: string }) {
+function Attachment({ a, messageId, index, voiceApi, eager }: { a: TalkAttachment; messageId: string; index: number; voiceApi?: string; eager?: boolean }) {
   const { t } = useTalkI18n()
   const [broken, setBroken] = useState(false)
   if (isAudio(a) && !broken) {
-    return <VoiceNote messageId={messageId} index={index} url={a.url} transcript={a.transcript} flat={a.flat} flattenedAt={a.flattened_at} onBroken={() => setBroken(true)} apiBase={voiceApi} />
+    return <VoiceNote messageId={messageId} index={index} url={a.url} transcript={a.transcript} flat={a.flat} flattenedAt={a.flattened_at} onBroken={() => setBroken(true)} apiBase={voiceApi} eager={eager} />
   }
   if (isImage(a) && !broken) {
     return (
@@ -65,11 +65,13 @@ const LONG_PRESS_MS = 450
 const SWIPE_TRIGGER_PX = 64
 
 function Bubble({
-  m, mine, tick, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo, voiceApi,
+  m, mine, tick, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo, voiceApi, newestVoiceId,
 }: {
   m: TalkMessage; mine: boolean; tick: Tick; showSender: boolean; meId: string; byId: Map<string, TalkMessage>; highlighted: boolean
   onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
   voiceApi?: string
+  /** Id of the newest message with a voice note in this chat — only that one is loaded ahead of the tap. */
+  newestVoiceId?: string | null
 }) {
   const { t, ts } = useTalkI18n()
   const atts = (m.attachments ?? []).filter(a => a && a.url)
@@ -147,7 +149,7 @@ function Bubble({
                 <span className="block truncate text-[13px] text-zinc-600">{ts(quote.text)}</span>
               </button>
             )}
-            {atts.map((a, i) => <Attachment key={`${a.url}-${i}`} a={a} messageId={m.id} index={i} voiceApi={voiceApi} />)}
+            {atts.map((a, i) => <Attachment key={`${a.url}-${i}`} a={a} messageId={m.id} index={i} voiceApi={voiceApi} eager={m.id === newestVoiceId} />)}
             {m.message ? <Text text={m.message} /> : null}
           </div>
         )}
@@ -236,6 +238,8 @@ export function TalkMessages({
 
   const groups = groupByDay(messages)
   const byId = new Map(messages.map(m => [m.id, m]))
+  // only the newest voice note of the chat is downloaded ahead of the tap; older ones wait until they are played
+  const newestVoiceId = [...messages].reverse().find(m => (m.attachments ?? []).some(a => a && a.url && isAudio(a)))?.id ?? null
 
   return (
     <div ref={boxRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-zinc-100 px-3 py-3" data-testid="talk-messages">
@@ -252,7 +256,7 @@ export function TalkMessages({
               </div>
               {g.messages.map(m => (
                 <Bubble key={m.id} m={m} mine={m.sender_id === meId} tick={m.sender_id === meId ? tickOf(m) : 'sent'} showSender={showSender} meId={meId} byId={byId}
-                  highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} voiceApi={voiceApi} />
+                  highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} voiceApi={voiceApi} newestVoiceId={newestVoiceId} />
               ))}
             </div>
           ))}

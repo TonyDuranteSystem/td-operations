@@ -15,7 +15,7 @@ import { useTalkI18n } from '@/components/talk/talk-i18n'
 const repairAsked = new Set<string>()
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export function VoiceNote({ messageId, index, url, transcript: saved, flat, flattenedAt, tone = 'light', onBroken, apiBase = '/api/team/messages' }: {
+export function VoiceNote({ messageId, index, url, transcript: saved, flat, flattenedAt, tone = 'light', onBroken, eager = false, apiBase = '/api/team/messages' }: {
   messageId: string
   index: number
   url: string
@@ -23,6 +23,8 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
   /** Stored as an ordinary MP4 already (recorded that way, or repaired once). Otherwise the server checks it the first time it is opened. */
   flat?: boolean
   flattenedAt?: string | null
+  /** The newest voice note of the chat: load the WHOLE file as soon as it is on screen so the tap plays at once. Every other note only reads its first few KB, and only when it is near the screen. */
+  eager?: boolean
   /** 'dark' = text sits on a dark bubble. */
   tone?: 'light' | 'dark'
   onBroken?: () => void
@@ -59,7 +61,8 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
     if (!a || a.ended || (a.paused && a.currentTime === 0)) setStamp(cur => cur === latest ? cur : latest)
   }, [latest])
   useEffect(() => { if (latest !== stamp) swapIfIdle() }, [latest, stamp, swapIfIdle])
-  // start loading the file once the note is on (or near) the screen, so the tap plays at once
+  // Nothing is fetched for a note far off screen (a chat can hold hundreds). Near the screen it reads only its first few KB
+  // (length + play button); the whole file is fetched ahead of time only for the NEWEST note, otherwise on tap.
   useEffect(() => {
     const el = audioRef.current
     if (!el || typeof IntersectionObserver === 'undefined') { setNear(true); return }
@@ -90,7 +93,7 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
   return (
     <div className="flex flex-col gap-1" data-testid="voice-note">
       <audio
-        ref={audioRef} controls preload={near ? 'auto' : 'metadata'} src={src} className="h-10 w-60 max-w-full" onError={onBroken}
+        ref={audioRef} controls preload={near ? (eager ? 'auto' : 'metadata') : 'none'} src={src} className="h-10 w-60 max-w-full" onError={onBroken}
         onPlay={e => stopPlayingAudio(e.currentTarget)} onEnded={swapIfIdle} data-testid="talk-voice-note"
       />
       <button
