@@ -25,6 +25,7 @@ import { CreateFromEmailDialog } from './create-from-email-dialog'
 import { WorkerChatPanel } from './worker-chat-panel'
 import { WhatsAppWorkerPanel } from './whatsapp-worker-panel'
 import { WhatsAppBridgeBanner } from './whatsapp-bridge-banner'
+import { WhatsAppRecoverButton } from './whatsapp-recover-button'
 import { WhatsAppSendSwitch } from './whatsapp-send-switch'
 import { WhatsAppSoundPicker } from './whatsapp-sound-picker'
 import { LinkClientDialog } from './link-client-dialog'
@@ -1371,6 +1372,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
           }}
         />
         <div className="pr-4 relative flex items-center gap-2">
+          {isWhatsApp && <WhatsAppRecoverButton />}
           {isWhatsApp && (
             <button
               data-tour="wa-find-matches"

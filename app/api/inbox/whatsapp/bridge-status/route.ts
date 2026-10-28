@@ -5,6 +5,7 @@ import { isOwnerOnly } from "@/lib/auth"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { classifyBridge, describeBridgeProblem, type BridgeProblem } from "@/lib/messaging/wabridge-health"
 import { visibleLinkCode } from "@/lib/messaging/wabridge-link"
+import { recoverView, codeRequestView } from "@/lib/messaging/wabridge-commands"
 import { normalizeSendMode } from "@/lib/messaging/wabridge-outbox"
 
 export const dynamic = "force-dynamic"
@@ -72,6 +73,12 @@ export async function GET() {
         }
       : null
 
+    // "Get a new code" (owner) and "Recover missing messages" (all staff) — state only; the counts are not sensitive.
+    // the new columns are not in the generated types yet — read them as plain fields
+    const stateRow = (worst.state ?? states?.[0] ?? null) as unknown as Record<string, string | number | null | undefined> | null
+    const codeReq = codeRequestView(stateRow, now)
+    const recover = recoverView(stateRow, now)
+
     return NextResponse.json(
       {
         send,
@@ -81,6 +88,10 @@ export async function GET() {
         hint: text?.hint ?? null,
         code: view.code,
         codeAgeSeconds: view.ageSeconds,
+        // owner only: the code request is in flight / the hour limit is reached (and until when)
+        codeRequested: isOwner ? codeReq.requested : false,
+        codeLimitUntil: isOwner ? codeReq.limitUntil : null,
+        recover,
       },
       { headers: noStore },
     )

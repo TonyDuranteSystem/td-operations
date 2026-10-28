@@ -245,11 +245,43 @@ describe("POST /api/wa-bridge/[channelId] — auth and channel checks", () => {
 describe("POST /api/wa-bridge/[channelId] — heartbeat", () => {
   it("records a fresh, signed, complete heartbeat through the atomic RPC and saves no message", async () => {
     const r = await call(beat({ connected: false, logged_in: true }))
-    expect(r).toEqual({ status: 200, body: { ok: true, heartbeat: true } })
+    // nothing was asked of the Mac (the stubbed database answer is not a command object) → "nothing to do"
+    expect(r).toEqual({ status: 200, body: { ok: true, heartbeat: true, commands: { want_code: false, recover_days: null } } })
     expect(state.rpcCalls).toEqual([
       { fn: "wabridge_record_heartbeat", args: { p_channel_id: CHANNEL, p_reachable: true, p_connected: false, p_logged_in: true } },
+      { fn: "wabridge_take_commands", args: { p_channel_id: CHANNEL } },
     ])
     expect(state.groupCalls).toHaveLength(0)
+  })
+
+  it("answers the heartbeat with what the Mac should do next (pairing code asked for / recover pressed)", async () => {
+    state.rpcOverrides.wabridge_take_commands = { data: { want_code: true, recover_days: 7 }, error: null }
+    const r = await call(beat({ logged_in: false, connected: false }))
+    expect(r).toEqual({ status: 200, body: { ok: true, heartbeat: true, commands: { want_code: true, recover_days: 7 } } })
+  })
+
+  it("never lets the commands lookup fail the heartbeat (error, exception or nonsense all mean nothing to do)", async () => {
+    for (const bad of [
+      { data: null, error: { message: "db down" } },
+      { data: { want_code: "yes", recover_days: 9999 }, error: null },
+    ]) {
+      state.rpcOverrides.wabridge_take_commands = bad
+      const r = await call(beat())
+      expect(r.status).toBe(200)
+      expect(r.body).toMatchObject({ ok: true, heartbeat: true, commands: { want_code: false, recover_days: null } })
+    }
+    state.rpcOverrides = {}
+    state.rpcThrow.wabridge_take_commands = true
+    const r = await call(beat())
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ commands: { want_code: false, recover_days: null } })
+  })
+
+  it("asks for no commands when the heartbeat itself could not be stored", async () => {
+    state.rpcOverrides.wabridge_record_heartbeat = { data: null, error: { message: "db down" } }
+    const r = await call(beat())
+    expect(r.status).toBe(500)
+    expect(state.rpcCalls.map((c) => c.fn)).toEqual(["wabridge_record_heartbeat"])
   })
 
   it("rejects an UNSIGNED heartbeat (nobody can fake a healthy bridge)", async () => {
@@ -761,5 +793,32 @@ describe("POST /api/wa-bridge/[channelId] — delivery / read receipts (message.
     const r = await call(ack(), { sig: "sha256=bad" })
     expect(r.status).toBe(401)
     expect(state.rpcCalls).toEqual([])
+  })
+})
+
+describe("bridge.recover.result (Recover missing messages)", () => {
+  const result = (over: Record<string, unknown> = {}) => ({ event: "bridge.recover.result", ts: Date.now(), saved: 1, read: 26, ...over })
+  it("records what the Mac's catch-up found, through the atomic function", async () => {
+    const r = await call(result())
+    expect(r).toEqual({ status: 200, body: { ok: true, recorded: true } })
+    expect(state.rpcCalls).toEqual([{ fn: "wabridge_set_recover_result", args: { p_channel_id: CHANNEL, p_saved: 1, p_read: 26 } }])
+  })
+  it("says recorded:false when no recover job was waiting (a second report cannot overwrite the first)", async () => {
+    state.rpcOverrides.wabridge_set_recover_result = { data: false, error: null }
+    expect((await call(result())).body).toEqual({ ok: true, recorded: false })
+  })
+  it("rejects an UNSIGNED report", async () => {
+    expect((await call(result(), { sig: null })).status).toBe(401)
+    expect(state.rpcCalls).toHaveLength(0)
+  })
+  it("rejects a stale report and impossible numbers", async () => {
+    expect((await call(result({ ts: Date.now() - 10 * 60_000 }))).status).toBe(400)
+    expect((await call(result({ saved: 30, read: 26 }))).status).toBe(400)
+    expect((await call(result({ saved: -1 }))).status).toBe(400)
+    expect(state.rpcCalls).toHaveLength(0)
+  })
+  it("500s when the result cannot be stored", async () => {
+    state.rpcOverrides.wabridge_set_recover_result = { data: null, error: { message: "db down" } }
+    expect((await call(result())).status).toBe(500)
   })
 })
