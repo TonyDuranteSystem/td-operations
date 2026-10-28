@@ -185,8 +185,9 @@ async function main() {
   await wp.getByTestId("talk-msg-theirs").first().hover()
   await wp.getByTestId("talk-tool-more").first().click()
   await wp.getByTestId("talk-act-unread").click()
-  await wp.waitForTimeout(2500)
-  const posAfter = (await db.query("select last_read_at from marketing_lead_chat_reads where lead_id=$1 and user_id=$2", [Lm, ids.ownerA])).rows[0]?.last_read_at
+  // the request waits for a refresh already on its way, so on a busy machine it lands a few seconds later: wait for it
+  let posAfter: string | undefined
+  for (let i = 0; i < 40; i++) { posAfter = (await db.query("select last_read_at from marketing_lead_chat_reads where lead_id=$1 and user_id=$2", [Lm, ids.ownerA])).rows[0]?.last_read_at; if (posAfter && new Date(posAfter).getTime() < new Date(firstMsg.created_at).getTime()) break; await wp.waitForTimeout(500) }
   ck("G8 'Mark unread' moves HIS read position back to just before that message", !!posAfter && new Date(posAfter).getTime() < new Date(firstMsg.created_at).getTime() && (!posBefore || new Date(posAfter).getTime() < new Date(posBefore).getTime()), { posBefore, posAfter, at: firstMsg.created_at })
   await wp.waitForTimeout(9000)
   const posLater = (await db.query("select last_read_at from marketing_lead_chat_reads where lead_id=$1 and user_id=$2", [Lm, ids.ownerA])).rows[0]?.last_read_at

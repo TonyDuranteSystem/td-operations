@@ -66,6 +66,8 @@ export interface TalkMessage {
   reply_to_preview?: TalkReplyPreview | null
   /** Slack-thread reply inside a channel — never present in a direct message. */
   root_id?: string | null
+  /** When the message was pinned (TD Marketing chats only); null/absent = not pinned. */
+  pinned_at?: string | null
 }
 
 export function isGroupThread(t: Pick<TalkThread, 'thread_type'>): boolean {
@@ -383,7 +385,7 @@ export function mergeSnapshot(local: TalkMessage[], snapshot: TalkMessage[]): Ta
 /** A cheap fingerprint of everything on screen that can change (text, edits, deletes, reactions, files) — equal means "nothing to redraw". */
 export function messageSignature(list: TalkMessage[]): string {
   return list
-    .map(m => `${m.id}|${m.message ?? ''}|${m.edited_at ?? ''}|${m.deleted_at ?? ''}|${(m.reactions ?? []).map(r => `${r.emoji}${r.reactor_id}`).join(',')}|${(m.attachments ?? []).length}`)
+    .map(m => `${m.id}|${m.message ?? ''}|${m.edited_at ?? ''}|${m.deleted_at ?? ''}|${m.pinned_at ?? ''}|${(m.reactions ?? []).map(r => `${r.emoji}${r.reactor_id}`).join(',')}|${(m.attachments ?? []).length}`)
     .join('\n')
 }
 

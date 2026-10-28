@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Copy, CornerUpLeft, Link2, MailOpen, Pencil, Trash2 } from 'lucide-react'
+import { Copy, CornerUpLeft, Link2, MailOpen, Pencil, Pin, PinOff, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTalkI18n } from '@/components/talk/talk-i18n'
 import { REACTION_EMOJIS, canDelete, canEdit, reactionSummary, snippet, type TalkMessage } from '@/lib/talk/chat-model'
@@ -11,7 +11,7 @@ import { REACTION_EMOJIS, canDelete, canEdit, reactionSummary, snippet, type Tal
  * (the last two only on my own messages). Delete asks once more. It is a bottom sheet so it is easy to reach with a thumb.
  */
 export function TalkMessageSheet({
-  message, meId, onClose, onReact, onReply, onCopy, onCopyLink, onEdit, onDelete, onMarkUnread,
+  message, meId, onClose, onReact, onReply, onCopy, onCopyLink, onEdit, onDelete, onMarkUnread, onTogglePin,
 }: {
   message: TalkMessage
   meId: string
@@ -25,6 +25,8 @@ export function TalkMessageSheet({
   onDelete: () => void
   /** Only chats with a per-person read position pass this (TD Marketing): "Mark unread" from this message on, for me only. */
   onMarkUnread?: () => void
+  /** Only chats that can pin (TD Marketing) pass this: Pin / Unpin for everyone who can see the message. */
+  onTogglePin?: () => void
 }) {
   const { t, ts } = useTalkI18n()
   const [confirming, setConfirming] = useState(false)
@@ -76,6 +78,7 @@ export function TalkMessageSheet({
             {hasText && !message.deleted_at && <Row icon={<Copy className="h-5 w-5" />} label={t('Copy text')} onClick={onCopy} testId="talk-act-copy" />}
             {onCopyLink && !message.deleted_at && <Row icon={<Link2 className="h-5 w-5" />} label={t('Copy link')} onClick={onCopyLink} testId="talk-act-copy-link" />}
             {onMarkUnread && !message.deleted_at && <Row icon={<MailOpen className="h-5 w-5" />} label={t('Mark unread')} onClick={onMarkUnread} testId="talk-act-unread" />}
+            {onTogglePin && !message.deleted_at && <Row icon={message.pinned_at ? <PinOff className="h-5 w-5" /> : <Pin className="h-5 w-5" />} label={message.pinned_at ? t('Unpin') : t('Pin')} onClick={onTogglePin} testId="talk-act-pin" />}
             {canEdit(message, meId) && <Row icon={<Pencil className="h-5 w-5" />} label={t('Edit')} onClick={onEdit} testId="talk-act-edit" />}
             {canDelete(message, meId) && <Row icon={<Trash2 className="h-5 w-5" />} label={t('Delete')} onClick={() => setConfirming(true)} danger testId="talk-act-delete" />}
           </>

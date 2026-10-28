@@ -9,7 +9,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireMarketing, type MarketingContext } from "@/lib/marketing/guard"
 import { personName } from "@/lib/marketing/setter-note"
 import { sendMarketingPush } from "@/lib/marketing/push"
-import { chatMembers, shape, NO_STORE, UNREAD_LOOKBACK_DAYS } from "@/lib/marketing/lead-chat-server"
+import { chatMembers, pinFailure, shape, NO_STORE, UNREAD_LOOKBACK_DAYS } from "@/lib/marketing/lead-chat-server"
 import { pointerBefore } from "@/lib/talk/unread-pointer"
 import {
   BUCKET, checkEdit, checkEmoji, checkSend, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, unreadCount,
@@ -241,8 +241,10 @@ export async function groupAction(ctx: MarketingContext, t: { thread: Thread; me
 export async function loadThread(ctx: MarketingContext, t: { thread: Thread; memberIds: string[] }, markRead: boolean) {
   const d = db()
   const me = ctx.user.id
+  // the pin columns are only there once their migration has run: without them the conversation simply shows no pins
+  const newest = (cols: string) => d.from("marketing_team_messages").select(cols).eq("team_id", ctx.team.id).eq("thread_id", t.thread.id).order("created_at", { ascending: false }).limit(LOAD_LIMIT)
   const [{ data: rowsDesc }, { data: reads }, { data: deliveries }, members] = await Promise.all([
-    d.from("marketing_team_messages").select(MESSAGE_COLS).eq("team_id", ctx.team.id).eq("thread_id", t.thread.id).order("created_at", { ascending: false }).limit(LOAD_LIMIT),
+    newest(`${MESSAGE_COLS}, pinned_at`).then(r => (r.error?.code === "42703" ? newest(MESSAGE_COLS) : r)),
     d.from("marketing_team_chat_reads").select("user_id, last_read_at").eq("thread_id", t.thread.id),
     d.from("marketing_team_chat_delivery").select("user_id, delivered_at").eq("thread_id", t.thread.id),
     chatMembers(ctx.team.id),
@@ -277,6 +279,17 @@ export async function markThreadUnreadFrom(ctx: MarketingContext, threadId: stri
   const next = pointerBefore(m.created_at, (cur as { last_read_at: string } | null)?.last_read_at ?? null)
   const { error } = await db().from("marketing_team_chat_reads").upsert({ thread_id: threadId, team_id: ctx.team.id, user_id: ctx.user.id, last_read_at: next }, { onConflict: "thread_id,user_id" })
   return error ? { ok: false, error: "Could not mark it unread. Please try again.", status: 500 } : { ok: true }
+}
+
+/** Pin or unpin a message of a conversation I am in. */
+export async function setThreadMessagePinned(ctx: MarketingContext, threadId: string, messageId: unknown, pinned: boolean): Promise<{ ok: true; pinned_at: string | null } | { ok: false; error: string; status: number }> {
+  const m = typeof messageId === "string" ? await myMessage(ctx, messageId) : null
+  if (!m || m.thread_id !== threadId) return { ok: false, error: "That message was not found.", status: 404 }
+  if (m.deleted_at) return { ok: false, error: "A deleted message cannot be pinned.", status: 400 }
+  const pinned_at = pinned ? new Date().toISOString() : null
+  const { error } = await db().from("marketing_team_messages").update({ pinned_at, pinned_by: pinned ? ctx.user.id : null }).eq("id", m.id).eq("team_id", ctx.team.id)
+  if (error) return pinFailure(error)
+  return { ok: true, pinned_at }
 }
 
 /** This device now has these conversations: tell the others (grey double tick). Only conversations I am in. */

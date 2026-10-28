@@ -105,6 +105,8 @@ export interface ChatMessageRow {
   edited_at: string | null
   deleted_at: string | null
   created_at: string
+  /** Only present once the pin migration has run. */
+  pinned_at?: string | null
 }
 export interface ChatReaction { message_id: string; user_id: string; user_name: string; emoji: string }
 
@@ -120,6 +122,7 @@ export function toTalkMessage(m: ChatMessageRow, byId: ReadonlyMap<string, ChatM
     created_at: m.created_at,
     edited_at: m.edited_at,
     deleted_at: m.deleted_at,
+    pinned_at: m.pinned_at ?? null,
     reply_to_id: m.reply_to_id,
     reply_to_preview: quoted ? { id: quoted.id, message: quoted.deleted_at ? "" : quoted.message, sender_name: quoted.sender_name, deleted_at: quoted.deleted_at } : null,
     attachments: deleted ? null : (m.attachments ?? []).flatMap(a => { const url = urlFor(a.path); return url ? [{ ...a, url }] : [] }),

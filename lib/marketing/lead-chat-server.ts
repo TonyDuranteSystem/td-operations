@@ -71,11 +71,17 @@ async function setterIdsOf(teamId: string): Promise<Set<string>> {
  * `mentions` is read only for a setter, and a database without that column (migration not run) simply shows her her own and other setters' messages.
  */
 async function readMessages<T extends { sender_id: string }>(
-  ctx: MarketingContext, cols: string, run: (cols: string) => PromiseLike<{ data: unknown; error: { code?: string } | null }>,
+  ctx: MarketingContext, cols: string, run: (cols: string) => PromiseLike<{ data: unknown; error: { code?: string } | null }>, withPins = false,
 ): Promise<T[]> {
-  if (!isSetterOnly(ctx.permissions)) return (((await run(cols)).data ?? []) as T[])
-  let res = await run(`${cols}, mentions`)
-  if (res.error?.code === "42703") res = await run(cols)
+  // the pin columns are asked for only by the chat screen, and a database without them (migration not run) simply shows no pins
+  const ask = async (c: string) => {
+    if (!withPins) return run(c)
+    const r = await run(`${c}, pinned_at`)
+    return r.error?.code === "42703" ? run(c) : r
+  }
+  if (!isSetterOnly(ctx.permissions)) return (((await ask(cols)).data ?? []) as T[])
+  let res = await ask(`${cols}, mentions`)
+  if (res.error?.code === "42703") res = await ask(cols)
   const setters = await setterIdsOf(ctx.team.id)
   return ((res.data ?? []) as T[]).filter(m => visibleToSetter(m as T & { mentions?: string[] | null }, ctx.user.id, setters))
 }
@@ -120,7 +126,7 @@ export async function shape(rows: ChatMessageRow[], reactions: ChatReaction[]) {
 export async function loadChat(ctx: MarketingContext, leadId: string, markRead: boolean) {
   const d = db()
   const [rowsDesc, { data: reads }, { data: deliveries }, members] = await Promise.all([
-    readMessages<ChatMessageRow>(ctx, MESSAGE_COLS, cols => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).eq("lead_id", leadId).order("created_at", { ascending: false }).limit(LOAD_LIMIT)),
+    readMessages<ChatMessageRow>(ctx, MESSAGE_COLS, cols => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).eq("lead_id", leadId).order("created_at", { ascending: false }).limit(LOAD_LIMIT), true),
     d.from("marketing_lead_chat_reads").select("user_id, last_read_at").eq("lead_id", leadId),
     d.from("marketing_lead_chat_delivery").select("user_id, delivered_at").eq("lead_id", leadId),
     chatMembers(ctx.team.id),
@@ -164,6 +170,26 @@ export async function markLeadUnreadFrom(ctx: MarketingContext, leadId: string, 
   const next = pointerBefore(m.created_at, (cur as { last_read_at: string } | null)?.last_read_at ?? null)
   const { error } = await db().from("marketing_lead_chat_reads").upsert({ lead_id: leadId, team_id: ctx.team.id, user_id: ctx.user.id, last_read_at: next }, { onConflict: "lead_id,user_id" })
   return error ? { ok: false, error: "Could not mark it unread. Please try again.", status: 500 } : { ok: true }
+}
+
+/** Pin or unpin a message of a lead's chat. Anyone who can see the message may (a setter cannot touch a message she may not read: it does not exist for her). */
+export async function setLeadMessagePinned(ctx: MarketingContext, leadId: string, messageId: unknown, pinned: boolean): Promise<{ ok: true; pinned_at: string | null } | { ok: false; error: string; status: number }> {
+  const m = typeof messageId === "string" ? await messageInTeam(ctx, messageId) : null
+  if (!m || m.lead_id !== leadId) return { ok: false, error: "That message was not found.", status: 404 }
+  if (m.deleted_at) return { ok: false, error: "A deleted message cannot be pinned.", status: 400 }
+  const pinned_at = pinned ? new Date().toISOString() : null
+  const { error } = await db().from("marketing_lead_messages").update({ pinned_at, pinned_by: pinned ? ctx.user.id : null }).eq("id", m.id).eq("team_id", ctx.team.id)
+  if (error) return pinFailure(error)
+  return { ok: true, pinned_at }
+}
+
+/** The pin columns are not in the database yet (migration not run) is a clear answer; anything else is a plain failure. */
+export function pinFailure(error: { code?: string; message?: string }): { ok: false; error: string; status: number } {
+  // a write to a column that is not there comes back as 42703 from the database or as PGRST204 from the gateway ("Could not find the 'pinned_at' column")
+  const missing = error.code === "42703" || error.code === "PGRST204" || /pinned_(at|by)/.test(error.message ?? "")
+  return missing
+    ? { ok: false, error: "Pinning is not switched on yet. Please tell Antonio.", status: 503 }
+    : { ok: false, error: "Could not pin the message. Please try again.", status: 500 }
 }
 
 /** This device now has the chat: tell the others (grey double tick). Only leads of the guard's team. */
