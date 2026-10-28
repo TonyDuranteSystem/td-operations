@@ -1,5 +1,6 @@
 'use client'
 
+import { viewKindFor } from '@/lib/crm-store/view-html'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useT, useLang } from '@/components/marketing/lang-provider'
 import { uploadDocument } from '@/components/marketing/documents-upload'
@@ -26,8 +27,8 @@ const post = <T,>(url: string, body: unknown, fallback: string, method = 'POST')
  * TD Marketing — Documents (dev job 9aec66fa): the team's documents, kept in the firm's Business storage in a folder called Marketing. Open a folder, upload (button or drag), download, rename, put a new
  * version of a document in place of the old one (the old one is kept), delete (to the storage's trash). A person who may only read sees no change buttons.
  */
-/** The types the browser can show by itself (the same list the server opens inline); everything else (Word, Excel...) can only be downloaded. */
-const canView = (mime: string | null) => ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'text/plain'].includes((mime ?? '').split(';')[0].trim().toLowerCase())
+/** What can be opened in the page: what the browser shows by itself (PDF, pictures, plain text) plus what the CRM storage's simplified view can turn into a page (Word, Excel, text-like files). Everything else downloads. */
+const canView = (name: string, mime: string | null) => ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'text/plain'].includes((mime ?? '').split(';')[0].trim().toLowerCase()) || viewKindFor(name, mime) !== null
 
 export function DocumentsBrowser({ canManage }: { canManage: boolean }) {
   const t = useT()
@@ -141,7 +142,7 @@ export function DocumentsBrowser({ canManage }: { canManage: boolean }) {
                     <span className="block text-xs text-slate-500">{[formatDocSize(f.size), new Date(f.updatedAt).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' }), f.versions > 1 ? t('{n} versions', { n: f.versions }) : ''].filter(Boolean).join(' · ')}</span>
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-3 text-sm">
-                    {canView(f.mimeType) && <a className="underline" href={`${API}/file/${f.id}?view=1`} target="_blank" rel="noopener noreferrer" data-testid="doc-view">{t('Open')}</a>}
+                    {canView(f.name, f.mimeType) && <a className="underline" href={`${API}/file/${f.id}?view=1`} target="_blank" rel="noopener noreferrer" data-testid="doc-view">{t('Open')}</a>}
                     <a className="underline" href={`${API}/file/${f.id}`} data-testid="doc-download">{t('Download')}</a>
                     {canManage && (confirming?.id === f.id
                       ? <span className="flex items-center gap-2"><span>{t('Delete this document?')}</span><button type="button" className={`${btn} bg-rose-700 text-white`} data-testid="doc-delete-yes" onClick={() => { const c = confirming; setConfirming(null); void run(t('Deleting…'), async () => { await call(`${API}/file/${c.id}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } }, t('The document could not be deleted. Please try again.')); return t('Document deleted. The Storage page of the CRM can bring it back.') }) }}>{t('Delete')}</button><button type="button" className={btn} onClick={() => setConfirming(null)}>{t('Cancel')}</button></span>

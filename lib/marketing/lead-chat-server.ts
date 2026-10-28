@@ -15,6 +15,7 @@ import { personName } from "@/lib/marketing/setter-note"
 import type { Bundles } from "@/lib/marketing/access"
 import { sendMarketingPush } from "@/lib/marketing/push"
 import { parseMentions, threadPush } from "@/lib/marketing/team-chat"
+import { pointerBefore } from "@/lib/talk/unread-pointer"
 import {
   BUCKET, SIGNED_URL_SECONDS, URL_CACHE_SECONDS, checkEdit, isInvolved, isSetterOnly, visibleToSetter, checkEmoji, checkSend, chatUrlFor, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, pushRecipients, toTalkMessage, unreadCount,
   type ChatMessageRow, type ChatReaction, type StoredAttachment,
@@ -150,6 +151,19 @@ export async function loadChat(ctx: MarketingContext, leadId: string, markRead: 
 
 export async function markLeadRead(ctx: MarketingContext, leadId: string): Promise<void> {
   await db().from("marketing_lead_chat_reads").upsert({ lead_id: leadId, team_id: ctx.team.id, user_id: ctx.user.id, last_read_at: new Date().toISOString() }, { onConflict: "lead_id,user_id" })
+}
+
+/**
+ * "Mark unread" from one message on, for ME only (TD Marketing chats; Antonio 28 Oct 2026): my read position moves back to just before that message, so it and everything newer from others is
+ * unread again for me — nobody else's chat changes. Never moves the position forward (older unread messages stay unread). A message a setter may not see does not exist for her.
+ */
+export async function markLeadUnreadFrom(ctx: MarketingContext, leadId: string, messageId: unknown): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+  const m = typeof messageId === "string" ? await messageInTeam(ctx, messageId) : null
+  if (!m || m.lead_id !== leadId) return { ok: false, error: "That message was not found.", status: 404 }
+  const { data: cur } = await db().from("marketing_lead_chat_reads").select("last_read_at").eq("lead_id", leadId).eq("user_id", ctx.user.id).maybeSingle()
+  const next = pointerBefore(m.created_at, (cur as { last_read_at: string } | null)?.last_read_at ?? null)
+  const { error } = await db().from("marketing_lead_chat_reads").upsert({ lead_id: leadId, team_id: ctx.team.id, user_id: ctx.user.id, last_read_at: next }, { onConflict: "lead_id,user_id" })
+  return error ? { ok: false, error: "Could not mark it unread. Please try again.", status: 500 } : { ok: true }
 }
 
 /** This device now has the chat: tell the others (grey double tick). Only leads of the guard's team. */

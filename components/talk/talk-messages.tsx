@@ -1,12 +1,13 @@
 'use client'
 
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Check, CheckCheck, FileText } from 'lucide-react'
+import { Check, CheckCheck, CornerUpLeft, FileText, MoreHorizontal, Pencil, Smile } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import { useTalkI18n } from '@/components/talk/talk-i18n'
+import { TalkEmojiPopover } from '@/components/talk/talk-emoji'
 import {
-  formatSize, groupByDay, isAudio, isImage, linkify, nameColorFor, quotedPreview, reactionSummary, splitMentions, timeLabel,
+  canEdit, formatSize, groupByDay, isAudio, isImage, linkify, nameColorFor, quotedPreview, reactionSummary, splitMentions, timeLabel,
   type Tick, type TalkAttachment, type TalkMessage,
 } from '@/lib/talk/chat-model'
 
@@ -61,23 +62,29 @@ function Text({ text }: { text: string }) {
   )
 }
 
+/** What the hover toolbar needs beyond what every chat already passes (reply, react and the menu): how to start editing my own message. */
+export interface TalkMessageTools { onEdit: (m: TalkMessage) => void }
+
 const LONG_PRESS_MS = 450
 const SWIPE_TRIGGER_PX = 64
 
 function Bubble({
-  m, mine, tick, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo, voiceApi, newestVoiceId,
+  m, mine, tick, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo, voiceApi, newestVoiceId, tools,
 }: {
   m: TalkMessage; mine: boolean; tick: Tick; showSender: boolean; meId: string; byId: Map<string, TalkMessage>; highlighted: boolean
   onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
   voiceApi?: string
   /** Id of the newest message with a voice note in this chat — only that one is loaded ahead of the tap. */
   newestVoiceId?: string | null
+  /** Computer toolbar on hover (emoji, reply, edit, more); absent = TD Talk as it always was. */
+  tools?: TalkMessageTools
 }) {
   const { t, ts } = useTalkI18n()
   const atts = (m.attachments ?? []).filter(a => a && a.url)
   const deleted = !!m.deleted_at
   const quote = quotedPreview(m, byId)
   const pills = reactionSummary(m.reactions, meId)
+  const [emojiOpen, setEmojiOpen] = useState(false)
 
   // Long-press opens the menu; a swipe to the right replies (WhatsApp). Both are cancelled by any real movement the
   // other way, so scrolling the chat never triggers either.
@@ -116,12 +123,14 @@ function Bubble({
         onContextMenu={e => { e.preventDefault(); if (!deleted) onMenu(m) }}
         style={{ transform: dx ? `translateX(${dx}px)` : undefined, transition: dx ? 'none' : 'transform 150ms' }}
         className={cn(
-          'relative max-w-[82%] select-none rounded-2xl px-3 py-2 shadow-sm [-webkit-touch-callout:none] [-webkit-user-select:none]',
+          'relative max-w-[82%] rounded-2xl px-3 py-2 shadow-sm [-webkit-touch-callout:none]',
+          // with the computer toolbar the text can be selected and copied with the mouse; without it (TD Talk) nothing changes
+          tools ? 'md:select-text' : 'select-none [-webkit-user-select:none]',
           mine ? 'rounded-br-md bg-sky-100 text-zinc-900' : 'rounded-bl-md border border-zinc-200 bg-white text-zinc-900',
           highlighted && 'ring-2 ring-amber-400',
         )}
       >
-        {!deleted && (
+        {!deleted && !tools && (
           <button
             type="button"
             aria-label={t('Message options')}
@@ -130,6 +139,15 @@ function Bubble({
           >
             <span className="block h-4 w-4 text-center text-xs leading-4">⌄</span>
           </button>
+        )}
+        {!deleted && tools && (
+          <div className={cn('absolute -top-7 z-10 hidden items-center gap-0.5 rounded-full border border-zinc-200 bg-white px-1 py-0.5 shadow md:group-hover:flex md:group-focus-within:flex', emojiOpen && 'md:!flex', mine ? 'right-1' : 'left-1')} data-testid="talk-toolbar">
+            <button type="button" onClick={() => setEmojiOpen(o => !o)} aria-label={t('React')} data-testid="talk-tool-emoji" className="flex h-7 w-7 items-center justify-center rounded-full text-zinc-600 hover:bg-zinc-100"><Smile className="h-4 w-4" /></button>
+            <button type="button" onClick={() => onReply(m)} aria-label={t('Reply')} data-testid="talk-tool-reply" className="flex h-7 w-7 items-center justify-center rounded-full text-zinc-600 hover:bg-zinc-100"><CornerUpLeft className="h-4 w-4" /></button>
+            {canEdit(m, meId) && <button type="button" onClick={() => tools.onEdit(m)} aria-label={t('Edit')} data-testid="talk-tool-edit" className="flex h-7 w-7 items-center justify-center rounded-full text-zinc-600 hover:bg-zinc-100"><Pencil className="h-4 w-4" /></button>}
+            <button type="button" onClick={() => onMenu(m)} aria-label={t('Message options')} data-testid="talk-tool-more" className="flex h-7 w-7 items-center justify-center rounded-full text-zinc-600 hover:bg-zinc-100"><MoreHorizontal className="h-4 w-4" /></button>
+            {emojiOpen && <TalkEmojiPopover mine={pills.filter(p => p.mine).map(p => p.emoji)} align={mine ? 'right' : 'left'} onClose={() => setEmojiOpen(false)} onPick={e => { setEmojiOpen(false); onReact(m, e) }} />}
+          </div>
         )}
         {deleted ? (
           <p className="text-sm italic text-zinc-400">{t('This message was deleted')}</p>
@@ -189,7 +207,7 @@ function Bubble({
  * and never yanks you down while you are reading older ones.
  */
 export function TalkMessages({
-  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo, voiceApi,
+  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo, voiceApi, tools,
 }: {
   threadId: string; messages: TalkMessage[]; meId: string
   /** My message's tick: sent / delivered (their device has it) / seen (they read it; a group: everyone did). */
@@ -201,6 +219,8 @@ export function TalkMessages({
   onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
   /** Where a voice note's "Show text" goes (the lead chat passes its own); default = Team Chat. */
   voiceApi?: string
+  /** The computer toolbar on hover (TD Marketing's chats turn it on); absent = TD Talk exactly as before. */
+  tools?: TalkMessageTools
 }) {
   const { t, day } = useTalkI18n()
   const boxRef = useRef<HTMLDivElement>(null)
@@ -256,7 +276,7 @@ export function TalkMessages({
               </div>
               {g.messages.map(m => (
                 <Bubble key={m.id} m={m} mine={m.sender_id === meId} tick={m.sender_id === meId ? tickOf(m) : 'sent'} showSender={showSender} meId={meId} byId={byId}
-                  highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} voiceApi={voiceApi} newestVoiceId={newestVoiceId} />
+                  highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} voiceApi={voiceApi} newestVoiceId={newestVoiceId} tools={tools} />
               ))}
             </div>
           ))}

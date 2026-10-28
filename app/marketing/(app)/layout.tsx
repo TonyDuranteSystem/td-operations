@@ -8,6 +8,8 @@ import { getMarketingSetting } from '@/lib/marketing/settings'
 import { SignOutButton } from './sign-out-button'
 import { WorkspaceNav } from './workspace-nav'
 import { ExitViewButton } from './exit-view-button'
+import { frameFor } from '@/lib/marketing/frame'
+import { OwnerNav } from '@/components/marketing/owner-nav'
 import { LangProvider } from '@/components/marketing/lang-provider'
 import { LangSwitch } from '@/components/marketing/lang-switch'
 import { MarketingPushBanner } from '@/components/marketing/push-banner'
@@ -49,9 +51,9 @@ export default async function MarketingAppLayout({ children }: { children: React
   const tourKey = tourKeyFor({ memberRole: ctx.viewAs && ctx.membership.bundle ? 'member' : ctx.role, permissions: ctx.permissions, bundles: bundlesSetting })
   const ownSteps = resolveTour(tourKey, ctx.permissions, lang)
   // the two reads are independent: run them together so the tour costs the page no extra wait
-  // The team's screens look the same for everybody (the frame is the sales workspace, never the owner's own menu). Antonio posts the news, so on his own login he has no strip and no unread news;
-  // the red number on What's New is, for him, the drafts waiting for his OK
-  const ownerLogin = fromCrm && !ctx.viewAs
+  // Antonio on his own login gets HIS frame (his own menu on every Marketing screen), never Rocco's; "View as" and everybody else get the team's frame (lib/marketing/frame.ts holds the rule).
+  // He posts the news, so he has no strip and no unread news; the red number on What's New is, for him, the drafts waiting for his OK
+  const ownerLogin = frameFor({ admin: fromCrm, viewAs: !!ctx.viewAs }) === 'owner'
   const [chatUnread, seen, news, drafts] = await Promise.all([
     marketingChatUnread(ctx),
     ctx.viewAs || ownSteps.length === 0 ? Promise.resolve(true) : tourSeen(ctx.user.id, ctx.team.id, tourKey),
@@ -74,18 +76,19 @@ export default async function MarketingAppLayout({ children }: { children: React
         </div>
       )}
     <div className="flex min-h-screen">
-      <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col gap-4 border-r bg-white p-4">
+      <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col gap-4 overflow-y-auto border-r bg-white p-4" data-testid={ownerLogin ? 'frame-owner' : 'frame-team'}>
         <div>
-          {fromCrm && <Link href="/marketing-leads" className="mb-3 block rounded-lg border border-slate-300 px-3 py-2 text-center text-sm font-medium text-slate-700 hover:bg-slate-50" data-testid="back-to-crm">&#9666; {t('Back to Marketing')}</Link>}
+          {fromCrm && !ownerLogin && <Link href="/marketing-leads" className="mb-3 block rounded-lg border border-slate-300 px-3 py-2 text-center text-sm font-medium text-slate-700 hover:bg-slate-50" data-testid="back-to-crm">&#9666; {t('Back to Marketing')}</Link>}
+          {ownerLogin && <Link href="/" className="mb-2 inline-block text-xs text-slate-500 underline" data-testid="back-to-crm">&#9666; CRM</Link>}
           <p className="text-xs uppercase tracking-wide text-slate-400">TD Marketing</p>
-          <p className="truncate font-semibold">{ctx.team.name}</p>
+          <p className="truncate font-semibold">{ownerLogin ? 'Owner' : ctx.team.name}</p>
         </div>
 
-        <WorkspaceNav items={nav} />
+        {ownerLogin ? <OwnerNav badges={{ messages: chatUnread, news: drafts }} /> : <WorkspaceNav items={nav} />}
         <div className="mt-auto space-y-2 text-sm">
-          <TourButton />
+          {!ownerLogin && <TourButton />}
           <p className="truncate text-slate-500" title={ctx.user.email ?? ''}>{ctx.user.email}</p>
-          <p className="text-xs text-slate-400">{ctx.role === 'owner' ? t('Team owner') : tAccessLabel(t, accessLabel(ctx.permissions, bundlesSetting))}</p>
+          <p className="text-xs text-slate-400">{ownerLogin ? 'Business owner' : ctx.role === 'owner' ? t('Team owner') : tAccessLabel(t, accessLabel(ctx.permissions, bundlesSetting))}</p>
           <ThemeSwitch initial={getTheme()} />
           <LangSwitch />
           <SignOutButton />

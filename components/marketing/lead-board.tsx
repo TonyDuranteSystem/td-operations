@@ -34,10 +34,12 @@ export function LeadBoard({ cards, truncated }: { cards: BoardCard[]; truncated:
   const columns = columnsFor(role)
   const hidden = hiddenCount(role, cards)
   const cardButton = (c: BoardCard) => (
-    <button key={c.id} type="button" onClick={() => open(c)} data-testid="board-card" data-lead={c.id}
-      className={`block w-full rounded-lg border p-3 text-left text-sm shadow-sm hover:border-slate-400 ${c.unread > 0 && c.incomingFrom === 'setter' ? 'border-emerald-500 bg-emerald-50' : c.unread > 0 && c.incomingFrom === 'owner' ? 'animate-pulse border-red-500 bg-red-50' : 'bg-white'}`}
+    <button key={`${c.id}:${c.unread}`} type="button" onClick={() => open(c)} data-testid="board-card" data-lead={c.id}
+      // a new message: the card blinks for about 15 seconds (each new message blinks it again; nothing at all for people who ask their system for less motion), then stays marked until the chat is read
+      className={`block w-full rounded-lg border p-3 text-left text-sm shadow-sm hover:border-slate-400 ${c.unread > 0 ? `motion-safe:[animation:pulse_1.2s_cubic-bezier(0.4,0,0.6,1)_12] ${c.incomingFrom === 'setter' ? 'border-emerald-500 bg-emerald-50' : 'border-red-500 bg-red-50'}` : 'bg-white'}`}
       data-incoming={c.unread > 0 ? c.incomingFrom ?? 'owner' : undefined}>
-      <span className="flex items-start justify-between gap-2"><b className="min-w-0 truncate font-medium">{c.name}</b>{c.unread > 0 && <span className={`shrink-0 rounded-full px-1.5 text-[11px] font-semibold text-white ${c.incomingFrom === 'setter' ? 'bg-emerald-600' : 'bg-red-600'}`} data-testid="card-unread" aria-label={t('{n} unread messages', { n: c.unread })}>{c.unread}</span>}{c.existingClient && <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-900" title={t('Existing TD client? Check before selling.')}>TD</span>}</span>
+      {c.unread > 0 && <span className={`mb-1.5 inline-block rounded-full px-2 text-[11px] font-semibold text-white ${c.incomingFrom === 'setter' ? 'bg-emerald-600' : 'bg-red-600'}`} data-testid="card-unread" aria-label={t('{n} unread messages', { n: c.unread })}>{c.unread > 1 ? `${t('New message')} · ${c.unread}` : t('New message')}</span>}
+      <span className="block min-w-0 truncate"><b className="font-medium">{c.name}</b></span>
       {c.phone && <span className="mt-0.5 block truncate text-xs text-slate-500">{c.phone}</span>}
       {c.note && <span className="mt-1 block text-xs text-slate-700 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden">{c.note}</span>}
       {c.chips.length > 0 && <span className="mt-1.5 flex flex-wrap gap-1">{c.chips.map(ch => <span key={ch.key} className={`rounded-full border px-2 py-0.5 text-[11px] ${TONE[ch.tone]}`}>{ch.text}</span>)}</span>}

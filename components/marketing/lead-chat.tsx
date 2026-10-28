@@ -74,13 +74,15 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
   // when the file links on screen were fetched: a window left open asks for fresh ones before they run out (an hour), and a refresh that changes nothing else keeps the audio player undisturbed
   const linksAtRef = useRef(0)
   const failuresRef = useRef(0)
+  // after "Mark unread" this open window must not read the chat again by itself (it would undo it at the next refresh); a fresh open reads as usual
+  const heldUnreadRef = useRef(false)
   const [offline, setOffline] = useState(false)
   messagesRef.current = messages
   meIdRef.current = meId
 
   const load = useCallback(async (opts: { silent?: boolean } = {}) => {
     try {
-      const r = await fetch(`${API}/${leadId}${isBeingViewed() && !isFrameHidden() ? '' : '?mark_read=0'}`)
+      const r = await fetch(`${API}/${leadId}${isBeingViewed() && !isFrameHidden() && !heldUnreadRef.current ? '' : '?mark_read=0'}`)
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(tRef.current(d.error || 'Could not load this chat.')) }
       const d = await r.json()
       const incoming = (d.messages ?? []) as TalkMessage[]
@@ -208,6 +210,17 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
     } catch (e) { toast.error(e instanceof Error ? e.message : t('Could not delete the message.')) }
   }, [applyToMessage, t, VOICE_API])
 
+  const markUnread = useCallback(async (m: TalkMessage) => {
+    setSheetMsg(null)
+    try {
+      const r = await fetch(`${API}/${leadId}/unread`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_id: m.id }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(t(d.error || 'Could not mark it unread. Please try again.'))
+      heldUnreadRef.current = true
+      toast.success(t('Marked as unread.'))
+    } catch (e) { toast.error(e instanceof Error ? e.message : t('Could not mark it unread. Please try again.')) }
+  }, [API, leadId, t])
+
   const jumpTo = useCallback((id: string) => {
     if (!messagesRef.current.some(m => m.id === id)) { toast(t('That message is older than the latest 500 in this chat.')); return }
     setSearchOpen(false)
@@ -271,6 +284,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
           onReply={m => { setMode({ kind: 'reply', message: m, who: m.sender_id === meId ? 'yourself' : m.sender_name }); setSheetMsg(null) }}
           onReact={(m, emoji) => void react(m, emoji)}
           onJumpTo={jumpTo}
+          tools={{ onEdit: m => { setMode({ kind: 'edit', message: m }); setSheetMsg(null) } }}
         />
       )}
       {!searchOpen && <TalkComposer key={leadId} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping} mentionPeople={mentionPeople} />}
@@ -282,6 +296,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
           onCopy={() => void copyText(sheetMsg)}
           onEdit={() => { setMode({ kind: 'edit', message: sheetMsg }); setSheetMsg(null) }}
           onDelete={() => void remove(sheetMsg)}
+          onMarkUnread={() => void markUnread(sheetMsg)}
         />
       )}
     </div>

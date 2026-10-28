@@ -10,6 +10,7 @@ import { requireMarketing, type MarketingContext } from "@/lib/marketing/guard"
 import { personName } from "@/lib/marketing/setter-note"
 import { sendMarketingPush } from "@/lib/marketing/push"
 import { chatMembers, shape, NO_STORE, UNREAD_LOOKBACK_DAYS } from "@/lib/marketing/lead-chat-server"
+import { pointerBefore } from "@/lib/talk/unread-pointer"
 import {
   BUCKET, checkEdit, checkEmoji, checkSend, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, unreadCount,
   type ChatMessageRow, type ChatReaction, type StoredAttachment,
@@ -269,6 +270,16 @@ export async function markThreadRead(ctx: MarketingContext, threadId: string): P
 }
 
 /** This device now has these conversations: tell the others (grey double tick). Only conversations I am in. */
+/** "Mark unread" from one message on, for me only — the same as a lead chat's (see markLeadUnreadFrom). */
+export async function markThreadUnreadFrom(ctx: MarketingContext, threadId: string, messageId: unknown): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+  const m = typeof messageId === "string" ? await myMessage(ctx, messageId) : null
+  if (!m || m.thread_id !== threadId) return { ok: false, error: "That message was not found.", status: 404 }
+  const { data: cur } = await db().from("marketing_team_chat_reads").select("last_read_at").eq("thread_id", threadId).eq("user_id", ctx.user.id).maybeSingle()
+  const next = pointerBefore(m.created_at, (cur as { last_read_at: string } | null)?.last_read_at ?? null)
+  const { error } = await db().from("marketing_team_chat_reads").upsert({ thread_id: threadId, team_id: ctx.team.id, user_id: ctx.user.id, last_read_at: next }, { onConflict: "thread_id,user_id" })
+  return error ? { ok: false, error: "Could not mark it unread. Please try again.", status: 500 } : { ok: true }
+}
+
 export async function markThreadsDelivered(ctx: MarketingContext, threadIds: readonly string[]): Promise<number> {
   const ids = Array.from(new Set(threadIds.filter(isUuid))).slice(0, 50)
   if (ids.length === 0) return 0
