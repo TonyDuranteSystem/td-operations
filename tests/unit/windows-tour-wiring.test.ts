@@ -11,6 +11,8 @@ import { join } from "path"
 const root = join(__dirname, "..", "..")
 const read = (p: string) => readFileSync(join(root, p), "utf8")
 const tour = read("components/windows/windows-tour.tsx")
+// the glowing ring lives in a shared file since 2026-10-28 (the workspace guide uses the very same one)
+const ring = read("components/ui/tour-ring.tsx")
 const manager = read("components/windows/window-manager.tsx")
 const launcher = read("components/dashboard/windows-launcher.tsx")
 const navMenu = read("components/dashboard/nav-item-menu.tsx")
@@ -20,7 +22,8 @@ const inbox = read("components/inbox/inbox-shell.tsx")
 describe("the tour does not get in the person's way", () => {
   it("is a small card plus a ring — no dimming overlay library", () => {
     expect(tour).not.toMatch(/react-joyride/)
-    expect(tour).toContain("pointer-events-none fixed z-[48]") // the ring never takes a click
+    expect(ring).toContain("pointer-events-none fixed z-[48]") // the ring never takes a click
+    expect(tour).toContain("from '@/components/ui/tour-ring'")   // and the tour really uses the shared ring
     expect(tour).toContain("pointer-events-auto fixed bottom-24 z-[47]")
   })
 
@@ -41,18 +44,18 @@ describe("the tour does not get in the person's way", () => {
   })
 
   it("respects reduced motion", () => {
-    expect(tour).toContain("motion-safe:animate-pulse")
+    expect(ring).toContain("motion-safe:animate-pulse")
   })
 
   it("the ring hides once an action step is done, and the card warns when something covers the circled spot", () => {
     expect(tour).toContain("!(step.kind === 'act' && done)")
-    expect(tour).toContain("document.elementFromPoint(")
+    expect(ring).toContain("document.elementFromPoint(")
     expect(tour).toContain("A window is covering the left menu")
   })
 
   it("the ring follows its target as it moves (a dragged window) and scrolls a far-away menu item into view", () => {
-    expect(tour).toContain("requestAnimationFrame(tick)")
-    expect(tour).toContain("scrollIntoView")
+    expect(ring).toContain("requestAnimationFrame(tick)")
+    expect(ring).toContain("scrollIntoView")
   })
 })
 
@@ -116,7 +119,7 @@ describe("bug-hunt fixes on the built tour", () => {
   })
 
   it("the ring reports 'not covered' when its target changes or goes away", () => {
-    expect(tour).toContain("onCovered(false) // a new target starts uncovered")
+    expect(ring).toContain("onCovered(false) // a new target starts uncovered")
   })
 })
 
