@@ -76,6 +76,9 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
   const failuresRef = useRef(0)
   // after "Mark unread" this open window must not read the chat again by itself (it would undo it at the next refresh); a fresh open reads as usual
   const heldUnreadRef = useRef(false)
+  // the refresh that is running right now: "Mark unread" waits for it, so a refresh that was already on its way (and would read the chat) cannot land after the mark
+  const inflightRef = useRef<Promise<void> | null>(null)
+  const hiddenSince = useRef(false)
   const [offline, setOffline] = useState(false)
   messagesRef.current = messages
   meIdRef.current = meId
@@ -116,16 +119,24 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
     }
   }, [leadId, API, idField])
 
-  useEffect(() => { void load() }, [load])
+  const loadTracked = useCallback((opts: { silent?: boolean } = {}) => {
+    const p = load(opts).finally(() => { if (inflightRef.current === p) inflightRef.current = null })
+    inflightRef.current = p
+    return p
+  }, [load])
+  useEffect(() => { void loadTracked() }, [loadTracked])
 
   // a short refresh while the window is open and on screen, and a catch-up when it comes back to the front
   useEffect(() => {
-    const tick = () => { if (document.visibilityState === 'visible') void load({ silent: true }) }
+    const tick = () => { if (document.visibilityState === 'visible') void loadTracked({ silent: true }) }
     const timer = setInterval(tick, POLL_MS)
+    // coming back to a window that was hidden is opening the chat again: a held "Mark unread" lets go (the next refresh reads it)
+    const back = () => { if (document.visibilityState === 'visible' && hiddenSince.current) { hiddenSince.current = false; heldUnreadRef.current = false } else if (document.visibilityState === 'hidden') hiddenSince.current = true }
+    document.addEventListener('visibilitychange', back)
     document.addEventListener('visibilitychange', tick)
     window.addEventListener('focus', tick)
-    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick); window.removeEventListener('focus', tick) }
-  }, [load])
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', back); document.removeEventListener('visibilitychange', tick); window.removeEventListener('focus', tick) }
+  }, [loadTracked])
 
   // "typing…": a lightweight broadcast on a per-lead channel (nothing is stored), exactly TD Talk's mechanism
   useEffect(() => {
@@ -163,6 +174,8 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not send. Please try again.') }
       const d = await r.json().catch(() => null)
       if (d?.message) setMessages(prev => prev.some(x => x.id === d.message.id) ? prev : [...prev, d.message as TalkMessage])
+      // answering is dealing with the chat: the server reads it, so the hold lets go too
+      heldUnreadRef.current = false
       return true
     } catch (e) {
       const why = t(e instanceof Error && e.message ? e.message : 'Could not send. Please try again.')
@@ -212,13 +225,14 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
 
   const markUnread = useCallback(async (m: TalkMessage) => {
     setSheetMsg(null)
+    heldUnreadRef.current = true
+    await inflightRef.current?.catch(() => undefined)
     try {
       const r = await fetch(`${API}/${leadId}/unread`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_id: m.id }) })
       const d = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(t(d.error || 'Could not mark it unread. Please try again.'))
-      heldUnreadRef.current = true
       toast.success(t('Marked as unread.'))
-    } catch (e) { toast.error(e instanceof Error ? e.message : t('Could not mark it unread. Please try again.')) }
+    } catch (e) { heldUnreadRef.current = false; toast.error(e instanceof Error ? e.message : t('Could not mark it unread. Please try again.')) }
   }, [API, leadId, t])
 
   const jumpTo = useCallback((id: string) => {

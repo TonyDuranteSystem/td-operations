@@ -133,6 +133,21 @@ export function unreadCount(messages: ReadonlyArray<{ sender_id: string; created
 }
 
 /**
+ * What a SETTER is told about how far the others have read: each read position is cut back to the newest message she can see that is not newer than it. Her ticks come out exactly the same
+ * (a message she can see is "read" when the position reaches it, and the cut position reaches it too), but the position can no longer be the exact time of a message she may not see —
+ * "Mark unread" puts a position one millisecond before a message, which would otherwise point at it.
+ */
+export function clampReadsToVisible<T extends { last_read_at: string }>(reads: readonly T[], visibleMessageTimes: readonly string[]): T[] {
+  const times = visibleMessageTimes.map(t => new Date(t).getTime()).filter(Number.isFinite).sort((a, b) => a - b)
+  return reads.map(r => {
+    const at = new Date(r.last_read_at).getTime()
+    let best: number | null = null
+    for (const t of times) { if (t <= at) best = t; else break }
+    return { ...r, last_read_at: best === null ? new Date(0).toISOString() : new Date(best).toISOString() }
+  })
+}
+
+/**
  * Who is INVOLVED in a lead's chat: a person who may use the chat AND works the leads (marks or picks them) — the setter and the seller, not the ad person who only watches.
  * They are the ones the ticks wait for and the ones who are notified: a tick that waited for somebody who never opens these chats would never turn blue.
  */

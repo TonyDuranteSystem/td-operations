@@ -262,7 +262,7 @@ export function TalkMessages({
   const newestVoiceId = [...messages].reverse().find(m => (m.attachments ?? []).some(a => a && a.url && isAudio(a)))?.id ?? null
 
   return (
-    <div ref={boxRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-zinc-100 px-3 py-3" data-testid="talk-messages">
+    <div ref={boxRef} className={cn('flex-1 min-h-0 overflow-y-auto overscroll-contain bg-zinc-100 px-3 pb-3', tools ? 'pt-9' : 'pt-3')} data-testid="talk-messages">
       {loading && messages.length === 0 ? (
         <p className="py-10 text-center text-sm text-zinc-400">{t('Loading…')}</p>
       ) : groups.length === 0 ? (

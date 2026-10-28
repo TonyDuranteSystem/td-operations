@@ -161,6 +161,8 @@ async function main() {
   await wp.getByTestId("talk-tool-emoji").first().click()
   await wp.getByTestId("talk-emoji-more").click()
   ck("G6b '+' opens the full emoji picker", (await wp.getByTestId("talk-emoji-picker").count()) === 1)
+  await wp.getByTestId("talk-tool-emoji").first().click()
+  ck("G6c clicking the emoji button again closes the popover (it does not reopen it)", (await wp.getByTestId("talk-emoji-popover").count()) === 0)
   await wp.keyboard.press("Escape")
   // write a message of his own, then edit it from the toolbar
   const box = wp.locator("textarea, [contenteditable=true]").last()
@@ -196,6 +198,11 @@ async function main() {
   ck("G8d the card shows 'New message' again on his board", /New message/.test(cm2?.tag ?? ""), cm2)
   const badMark = await api(await open(setter, "/marketing/call-list"), "POST", `/api/marketing/chat/${Lm}/unread`, { message_id: firstMsg.id })
   ck("G9 a setter cannot mark unread a message she may not see (404)", badMark.status === 404 || badMark.status === 403, badMark)
+  const setterPage = await open(setter, "/marketing/call-list")
+  const sChat = await api(setterPage, "GET", `/api/marketing/chat/${Lm}`)
+  const hiddenAt = new Date(firstMsg.created_at).getTime()
+  const leaked = ((sChat.body?.member_reads ?? []) as Array<{ last_read_at: string }>).some(r => Math.abs(new Date(r.last_read_at).getTime() - (hiddenAt - 1)) < 2)
+  ck("G11 the setter is never handed a read position that points at a message she cannot see", sChat.status === 200 || sChat.status === 403 || sChat.status === 404 ? !leaked : false, { status: sChat.status, leaked })
 
   // ---- 5. Documents: a real Word file opens in the page
   const docPath = process.env.QA_DOCX ?? ""

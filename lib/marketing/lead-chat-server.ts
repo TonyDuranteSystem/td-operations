@@ -17,7 +17,7 @@ import { sendMarketingPush } from "@/lib/marketing/push"
 import { parseMentions, threadPush } from "@/lib/marketing/team-chat"
 import { pointerBefore } from "@/lib/talk/unread-pointer"
 import {
-  BUCKET, SIGNED_URL_SECONDS, URL_CACHE_SECONDS, checkEdit, isInvolved, isSetterOnly, visibleToSetter, checkEmoji, checkSend, chatUrlFor, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, pushRecipients, toTalkMessage, unreadCount,
+  BUCKET, clampReadsToVisible, SIGNED_URL_SECONDS, URL_CACHE_SECONDS, checkEdit, isInvolved, isSetterOnly, visibleToSetter, checkEmoji, checkSend, chatUrlFor, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, pushRecipients, toTalkMessage, unreadCount,
   type ChatMessageRow, type ChatReaction, type StoredAttachment,
 } from "@/lib/marketing/lead-chat"
 
@@ -144,7 +144,7 @@ export async function loadChat(ctx: MarketingContext, leadId: string, markRead: 
     members: members.filter(m => m.status === "active" && isInvolved(m.permissions)).map(m => ({ id: m.id, name: m.name })),
     // the ticks: how far every OTHER person who can chat has read / received it
     member_ids: memberIds,
-    member_reads: ((reads ?? []) as Array<{ user_id: string; last_read_at: string }>).filter(r => r.user_id !== me),
+    member_reads: (isSetterOnly(ctx.permissions) ? clampReadsToVisible : (r: Array<{ user_id: string; last_read_at: string }>) => r)(((reads ?? []) as Array<{ user_id: string; last_read_at: string }>).filter(r => r.user_id !== me), rows.map(r => r.created_at)),
     member_delivered: ((deliveries ?? []) as Array<{ user_id: string; delivered_at: string }>).filter(r => r.user_id !== me),
   }
 }

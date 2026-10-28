@@ -61,7 +61,7 @@ export default async function MarketingAppLayout({ children }: { children: React
     ownerLogin ? draftCount() : Promise.resolve(0),
   ])
   const unreadNews = news.filter(n => n.unread)
-  const autoStart = !ctx.viewAs && ownSteps.length > 0 && !seen
+  const autoStart = !ctx.viewAs && !ownerLogin && ownSteps.length > 0 && !seen
   const previews: Partial<Record<TourKey, ResolvedStep[]>> | null = ctx.role === 'owner' && hasPermission(ctx.permissions, 'team.manage')
     ? Object.fromEntries(PREVIEW_TOURS.map(k => [k, resolveTour(k, MARKETING_PERMISSIONS, lang)])) : null
   const nav = modulesFor(ctx.permissions).map(m => (m.key === 'chat' ? { ...m, badge: chatUnread } : m.key === 'news' ? { ...m, badge: ownerLogin ? drafts : unreadNews.length } : m))

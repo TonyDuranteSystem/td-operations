@@ -18,7 +18,8 @@ export function TalkEmojiPopover({ mine, onPick, onClose, align }: { mine: reado
   const box = useRef<HTMLDivElement>(null)
   const [more, setMore] = useState(false)
   useEffect(() => {
-    const away = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) onClose() }
+    // a click on the toolbar's own emoji button is the button's job (it closes the popover itself); everything else outside closes it
+    const away = (e: MouseEvent) => { if ((e.target as Element | null)?.closest?.('[data-testid="talk-tool-emoji"]')) return; if (box.current && !box.current.contains(e.target as Node)) onClose() }
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('mousedown', away)
     document.addEventListener('keydown', esc)

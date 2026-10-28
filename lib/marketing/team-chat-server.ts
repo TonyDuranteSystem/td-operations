@@ -269,7 +269,6 @@ export async function markThreadRead(ctx: MarketingContext, threadId: string): P
   await db().from("marketing_team_chat_reads").upsert({ thread_id: threadId, team_id: ctx.team.id, user_id: ctx.user.id, last_read_at: new Date().toISOString() }, { onConflict: "thread_id,user_id" })
 }
 
-/** This device now has these conversations: tell the others (grey double tick). Only conversations I am in. */
 /** "Mark unread" from one message on, for me only — the same as a lead chat's (see markLeadUnreadFrom). */
 export async function markThreadUnreadFrom(ctx: MarketingContext, threadId: string, messageId: unknown): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
   const m = typeof messageId === "string" ? await myMessage(ctx, messageId) : null
@@ -280,6 +279,7 @@ export async function markThreadUnreadFrom(ctx: MarketingContext, threadId: stri
   return error ? { ok: false, error: "Could not mark it unread. Please try again.", status: 500 } : { ok: true }
 }
 
+/** This device now has these conversations: tell the others (grey double tick). Only conversations I am in. */
 export async function markThreadsDelivered(ctx: MarketingContext, threadIds: readonly string[]): Promise<number> {
   const ids = Array.from(new Set(threadIds.filter(isUuid))).slice(0, 50)
   if (ids.length === 0) return 0

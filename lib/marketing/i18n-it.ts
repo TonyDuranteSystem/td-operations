@@ -901,7 +901,6 @@ export const IT: Record<string, string> = {
   "Booking link sent": "Link prenotazione inviato",
   "Interested lead": "Lead interessato",
   "Out of target": "Fuori target",
-  "Incoming messages": "Messaggi in arrivo",
   "This lead is marked Not in target. Change that first if you want to mark it Contacted.": "Questo lead è segnato Fuori target. Cambialo prima se vuoi segnarlo Contattato.",
   "The stage for \"Contacted\" is not set up. Ask Antonio.": "La fase «Contattato» non è impostata. Chiedi ad Antonio.",
   "The stage for \"Upsell\" is not set up. Ask Antonio.": "La fase «Upsell» non è impostata. Chiedi ad Antonio.",
