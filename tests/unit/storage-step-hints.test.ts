@@ -45,11 +45,17 @@ import { matchStorageStepHints, couldMatchAnyHint, typeCouldWait, findWaitingWor
 const kase = (stage: string, status = 'active', serviceType = 'ITIN') => ({ sdId: 'sd-1', serviceType, stage, status, who: 'Adam Mihaly' })
 
 describe('matchStorageStepHints — what a Storage save would skip', () => {
+  it('"Open the workspace" opens the case WITH the guide on, about the document each row\'s workspace box takes (package / receipt / letter)', () => {
+    const pkg = matchStorageStepHints({ cases: [kase('Shipped')], documentType: 'itin_application', folderKind: 'itin' })
+    expect(pkg[0].workspacePath).toBe('/flows/sd-1?guide=itin_application')
+    const rec = matchStorageStepHints({ cases: [kase('Submitted to IRS')], documentType: 'receipt', folderKind: 'itin' })
+    expect(rec[0].workspacePath).toBe('/flows/sd-1?guide=receipt')
+  })
   it('ADAM: the letter filed as "ITIN Letter Client Received" while the case is at IRS Processing is caught (the stage move had not happened yet)', () => {
     const r = matchStorageStepHints({ cases: [kase('IRS Processing')], documentType: 'itin_letter_client_received', folderKind: 'itin' })
     expect(r).toHaveLength(1)
     expect(r[0].asks).toBe('the IRS approval letter (CP565)')
-    expect(r[0].workspacePath).toBe('/flows/sd-1')
+    expect(r[0].workspacePath).toBe('/flows/sd-1?guide=itin_letter')   // the guide is about the document the step takes (the row's first type), not the type it was filed as
     expect(r[0].who).toBe('Adam Mihaly')
     expect(r[0].workspaceDoes).toContain('read the ITIN from the letter and save it on the contact')
     expect(r[0].workspaceDoes).toContain('close the case')
@@ -214,7 +220,7 @@ describe('findWaitingWorkspaceSteps — the lookup', () => {
   it('ADAM: a person\'s storage, ITIN folder, the letter type -> the open ITIN case, named', async () => {
     const r = await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter_client_received' })
     expect(r).toHaveLength(1)
-    expect(r[0]).toMatchObject({ sdId: 'sd-1', who: 'Adam Mihaly', stage: 'IRS Processing', serviceType: 'ITIN', workspacePath: '/flows/sd-1' })
+    expect(r[0]).toMatchObject({ sdId: 'sd-1', who: 'Adam Mihaly', stage: 'IRS Processing', serviceType: 'ITIN', workspacePath: '/flows/sd-1?guide=itin_letter' })
     expect(fx.filters).toContainEqual(['service_deliveries.contact_id', 'c-1'])
   })
 
