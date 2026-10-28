@@ -81,6 +81,10 @@ export interface StageComponent {
    *  extension is preserved. If any token is missing the original filename is
    *  kept. Absent = keep the uploaded filename. */
   rename?: string
+  /** document_upload: the DEFAULT Storage document type of this box (a catalog slug, e.g. "itin_letter"). When set, the box shows a type picker
+   *  (the Storage list for where the file lands, this one pre-selected) and the upload must carry a type — the Storage rule. Absent = no picker,
+   *  the upload behaves as before. One line in the layout moves a box over to the model. */
+  documentType?: string
   /** document_viewer: render with a collapse/expand toggle, starting collapsed.
    *  Absent/false = always-open list (original behavior, unchanged). */
   collapsible?: boolean
@@ -117,7 +121,7 @@ export function parseStageLayout(value: unknown): StageLayout | null {
     const comp = c as { type?: unknown; label?: unknown; url?: unknown; actions?: unknown }
     if (typeof comp.type !== 'string') continue
     if (!(STAGE_COMPONENT_TYPES as readonly string[]).includes(comp.type)) continue
-    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown; collapsible?: unknown }
+    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown; collapsible?: unknown; documentType?: unknown }
     components.push({
       type: comp.type as StageComponentType,
       label: typeof comp.label === 'string' ? resolveTokens(comp.label) : undefined,
@@ -128,6 +132,7 @@ export function parseStageLayout(value: unknown): StageLayout | null {
       autoAdvance: typeof rawComp.autoAdvance === 'boolean' ? rawComp.autoAdvance : undefined,
       folder: typeof rawComp.folder === 'string' ? rawComp.folder : undefined,
       rename: typeof rawComp.rename === 'string' ? rawComp.rename : undefined,
+      documentType: typeof rawComp.documentType === 'string' && rawComp.documentType ? rawComp.documentType : undefined,
       collapsible: typeof rawComp.collapsible === 'boolean' ? rawComp.collapsible : undefined,
     })
   }

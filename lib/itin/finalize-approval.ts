@@ -19,9 +19,10 @@
  *      terminal "ITIN Approved" stage never flips status by name). This is
  *      what clears the CRM "in progress" banner and turns the pipeline green.
  *   5. ONLY when this call won the completion (guards double-upload races):
- *      notify the client via the standard 3-channel dispatcher
- *      (notifyClientActionRequired: flow-threaded chat + bell/push + immediate
- *      bilingual email, deep link /portal/documents).
+ *      notify the client by Antonio's rule (2026-10-28): the flow-threaded portal
+ *      chat message + bell/push (notifyClientActionRequired with its own email
+ *      skipped), and an email ONLY as the "unread message" nudge for a client
+ *      without push notifications (notifyClientOfAdminMessage).
  *
  * OCR/extraction failures NEVER fail the upload — the letter is already
  * filed. They surface as warnings so staff can fix the scan or enter the
@@ -136,10 +137,19 @@ export async function finalizeItinApproval(opts: {
     }
     result.finalized = true
 
-    // 5. Notify the client (best-effort — never fails the finalize).
+    // 5. Notify the client (best-effort — never fails the finalize), by Antonio's rule (2026-10-28): the client gets the MESSAGE in the portal chat
+    //    plus the bell/push; an email only as the "you have an unread message" nudge, and only when the client has no push notifications
+    //    (notifyClientOfAdminMessage skips the email for anyone who has push). NOT the immediate-email rail used for "you must act" moments —
+    //    so the dispatcher's own email is skipped and the push-aware nudge below is the only email.
     const { notifyClientActionRequired } = await import("@/lib/portal/action-required")
+    const { notifyClientOfAdminMessage } = await import("@/lib/portal/notifications")
+    const { localeFromLanguage } = await import("@/lib/locale")
     const { buildFlowTopic, deriveFlowYear } = await import("@/lib/flows/resolve-flows")
     const topic = buildFlowTopic(sd.service_type, deriveFlowYear(sd)) || null
+    const message = {
+      en: "Great news — the IRS has approved your ITIN application! Your official ITIN letter (CP565) is now available in your portal under Documents.",
+      it: "Ottima notizia — l'IRS ha approvato la tua richiesta ITIN! La lettera ufficiale (CP565) è ora disponibile nel tuo portale nella sezione Documenti.",
+    }
     const notify = await notifyClientActionRequired({
       contact_id: opts.contactId,
       account_id: sd.account_id ?? null,
@@ -149,14 +159,23 @@ export async function finalizeItinApproval(opts: {
         en: "Your ITIN is ready",
         it: "Il tuo ITIN è pronto",
       },
-      message: {
-        en: "Great news — the IRS has approved your ITIN application! Your official ITIN letter (CP565) is now available in your portal under Documents.",
-        it: "Ottima notizia — l'IRS ha approvato la tua richiesta ITIN! La lettera ufficiale (CP565) è ora disponibile nel tuo portale nella sezione Documenti.",
-      },
+      message,
       link: "/portal/documents",
       ctaLabel: { en: "View document", it: "Vedi documento" },
+      skipEmail: true,
+      // good news, not a to-do: an ordinary notice type, so the client can dismiss it (the default 'action_required' one is never cleared)
+      bellType: "new_document",
     })
-    result.notify = { chat: notify.chat, notification: notify.notification, email: notify.email }
+    let nudge = "push-aware unread-message email: not attempted"
+    try {
+      const { data: contactRow } = await supabaseAdmin.from("contacts").select("language").eq("id", opts.contactId).maybeSingle()
+      const locale = localeFromLanguage((contactRow as { language?: string | null } | null)?.language)
+      await notifyClientOfAdminMessage({ contact_id: opts.contactId, account_id: sd.account_id ?? null, topic, messagePreview: message[locale] })
+      nudge = "unread-message email handled (sent only if the client has no push notifications)"
+    } catch (nudgeErr) {
+      nudge = `unread-message email failed: ${nudgeErr instanceof Error ? nudgeErr.message : String(nudgeErr)}`
+    }
+    result.notify = { chat: notify.chat, notification: notify.notification, email: nudge }
 
     return result
   } catch (err) {
