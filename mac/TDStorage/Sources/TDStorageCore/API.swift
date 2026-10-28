@@ -136,8 +136,10 @@ public final class StorageAPI: @unchecked Sendable {
     }
     /// Take the head BEFORE walking the whole tree; changes made during the walk then arrive from it.
     public func head() async throws -> String? { (try await get("api/storage-app/changes", query: [URLQueryItem(name: "head", value: "1")]) as HeadResponse).cursor }
-    public func changes(since cursor: String?, limit: Int = 500) async throws -> ChangesPage {
+    /// `wait` > 0: the CRM keeps the question open up to that many seconds and answers the moment something changes (the always-running app uses it).
+    public func changes(since cursor: String?, limit: Int = 500, wait: Int = 0) async throws -> ChangesPage {
         var q = [URLQueryItem(name: "limit", value: String(limit))]
+        if wait > 0 { q.append(URLQueryItem(name: "wait", value: String(wait))) }
         if let cursor { q.append(URLQueryItem(name: "since", value: cursor)) }
         return try await get("api/storage-app/changes", query: q)
     }

@@ -103,3 +103,30 @@ export async function changesSince(user: User, after: Cursor | null, limit = 500
   const cursor = last ? formatCursor({ txid: last.txid, seq: Number(last.seq) }) : after ? formatCursor(after) : null
   return { changes, cursor, resync: false, hasMore: rows.length >= Math.max(1, Math.min(limit, 2000)) }
 }
+
+export interface WaitDeps {
+  read: (after: Cursor | null) => Promise<ChangesPage>
+  sleep: (ms: number) => Promise<void>
+  now: () => number
+  aborted: () => boolean
+}
+export const WAIT_TICK_MS = 1500
+
+/**
+ * "Tell me when something changes" (2026-10-28, Antonio: like Drive / Dropbox). Answers AT ONCE when there is anything to say (a change this login may
+ * see, or a `resync`); otherwise keeps asking the log every WAIT_TICK_MS until something shows up, the wait is over, or the Mac hung up.
+ * `waitMs` 0 = the plain answer. Rows this login may not see still move the cursor on (so they are not read again on every tick).
+ */
+export async function changesWaiting(after: Cursor | null, waitMs: number, deps: WaitDeps): Promise<ChangesPage> {
+  const deadline = deps.now() + Math.max(0, waitMs)
+  let from = after
+  let page = await deps.read(from)
+  while (waitMs > 0 && !page.resync && page.changes.length === 0 && !deps.aborted()) {
+    const left = deadline - deps.now()
+    if (left <= 0) break
+    if (page.cursor) from = parseCursor(page.cursor) ?? from
+    await deps.sleep(Math.min(WAIT_TICK_MS, left))
+    page = await deps.read(from)
+  }
+  return page
+}

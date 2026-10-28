@@ -28,6 +28,7 @@ export interface StorageAppSettings {
   resyncMinutes: number
   updateCheckMinutes: number
   updateHintSeconds: number
+  pushWaitSeconds: number
   requireSecondFactor: boolean
   sensitiveTypes: string[]
 }
@@ -39,6 +40,9 @@ export const DEFAULT_SENSITIVE_TYPES: readonly string[] = [
 /** The biggest NEW file a Mac may save, whatever the setting says (2026-10-27, Antonio: Zoom recordings of ~1 GB). Anything over the writer's inline cap (150 MB)
  *  is registered by a background job while the Mac waits (see saveFromSlot); updating a file that is already saved stays at the inline cap. */
 export const ABSOLUTE_MAX_SAVE_MB = 2048
+
+/** The longest a change question may stay open (seconds). Kept well under the function time limit. */
+export const PUSH_WAIT_MAX_SECONDS = 20
 
 export function defaultSettings(env: Record<string, string | undefined> = process.env): StorageAppSettings {
   const mb = (v: string | undefined, d: number) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d }
@@ -54,6 +58,7 @@ export function defaultSettings(env: Record<string, string | undefined> = proces
     resyncMinutes: 10,
     updateCheckMinutes: 60,
     updateHintSeconds: 60,
+    pushWaitSeconds: PUSH_WAIT_MAX_SECONDS,
     requireSecondFactor: true,
     sensitiveTypes: [...DEFAULT_SENSITIVE_TYPES],
   }
@@ -83,6 +88,7 @@ export function parseSettings(raw: unknown, env: Record<string, string | undefin
     leaseHours: num(r.leaseHours, 1, 720, d.leaseHours),
     maxMacsPerLogin: Math.round(num(r.maxMacsPerLogin, 1, 20, d.maxMacsPerLogin)),
     resyncMinutes: num(r.resyncMinutes, 1, 1440, d.resyncMinutes),
+    pushWaitSeconds: num(r.pushWaitSeconds, 0, PUSH_WAIT_MAX_SECONDS, d.pushWaitSeconds),   // how long a Mac's "tell me when something changes" question may stay open (0 = off: the Mac falls back to asking once a minute)
     updateHintSeconds: num(r.updateHintSeconds, 30, 3600, d.updateHintSeconds),   // how often a Mac asks the CRM "who am I / is a newer build offered?" (the app follows it; 30 s .. 1 h)
     updateCheckMinutes: num(r.updateCheckMinutes, 60, 1440, d.updateCheckMinutes),   // how often a Mac looks for a new app version (never below an hour)
     requireSecondFactor: typeof r.requireSecondFactor === "boolean" ? r.requireSecondFactor : d.requireSecondFactor,
