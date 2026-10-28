@@ -142,7 +142,9 @@ export async function uploadTeamAttachment(file: File, threadId: string): Promis
   try {
     putRes = await fetchWithNetworkRetry(signedUrl, {
       method: 'PUT',
-      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      // Each file has its own never-reused address, so the browser may keep its copy for a year instead of asking storage
+      // again every time a chat is opened (storage's default is "ask again every time").
+      headers: { 'Content-Type': file.type || 'application/octet-stream', 'cache-control': 'max-age=31536000' },
       body: file,
     })
   } catch (err) {
