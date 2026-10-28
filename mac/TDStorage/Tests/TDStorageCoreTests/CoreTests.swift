@@ -658,3 +658,29 @@ final class KeepAliveTests: XCTestCase {
         XCTAssertEqual(KeepAlive.fourCC("why?"), 0x7768793F)
     }
 }
+
+final class ChangeBatchTests: XCTestCase {
+    private func ch(_ kind: ChangeKind, _ id: String, _ op: ChangeOp = .upsert, name: String = "n") -> AppChange {
+        AppChange(kind: kind, id: id, op: op, ownerId: "o1", parentId: "p1", oldOwnerId: nil, oldParentId: nil, name: name)
+    }
+    func testTwoRowsForOneFileBecomeOneLookup() {
+        XCTAssertEqual(ChangeBatch.collapse([ch(.file, "f1"), ch(.file, "f1")]).count, 1)
+    }
+    func testTheLastWordOnAnItemWins() {
+        let r = ChangeBatch.collapse([ch(.file, "f1", .upsert), ch(.file, "f1", .delete)])
+        XCTAssertEqual(r.map(\.op), [.delete])
+        let back = ChangeBatch.collapse([ch(.file, "f1", .delete), ch(.file, "f1", .upsert, name: "again")])
+        XCTAssertEqual(back.map(\.op), [.upsert]); XCTAssertEqual(back.first?.name, "again")
+    }
+    func testAFileAndAFolderWithTheSameIdAreDifferentItems() {
+        XCTAssertEqual(ChangeBatch.collapse([ch(.file, "x"), ch(.folder, "x")]).count, 2)
+    }
+    func testOrderOfLastAppearanceIsKept() {
+        let r = ChangeBatch.collapse([ch(.file, "a"), ch(.file, "b"), ch(.file, "a"), ch(.file, "c")])
+        XCTAssertEqual(r.map(\.id), ["b", "a", "c"])
+    }
+    func testEmptyStaysEmptyAndPagesAreSmall() {
+        XCTAssertTrue(ChangeBatch.collapse([]).isEmpty)
+        XCTAssertLessThanOrEqual(ChangeBatch.pageSize, 200); XCTAssertGreaterThan(ChangeBatch.parallelLookups, 1)
+    }
+}

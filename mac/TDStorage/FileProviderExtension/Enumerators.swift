@@ -49,7 +49,7 @@ final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
         Task {
             do {
                 let raw = String(data: anchor.rawValue, encoding: .utf8) ?? "start"
-                let page = try await api.changes(since: raw == "start" || raw == "v1" ? nil : raw)
+                let page = try await api.changes(since: raw == "start" || raw == "v1" ? nil : raw, limit: ChangeBatch.pageSize)
                 let clock = UserDefaults.standard, key = "td-storage-last-full-refresh"
                 let last = (clock.object(forKey: key) as? Date)
                 Trace.log("workingSet.changes", ["resync": page.resync, "minutes": page.resyncMinutes ?? -1, "lastAgoSec": last.map { Int(Date().timeIntervalSince($0)) } ?? -1])
@@ -72,18 +72,23 @@ final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
                 if last == nil { clock.set(Date(), forKey: key) }
                 var updated: [NSFileProviderItem] = refreshed
                 var deleted: [NSFileProviderItemIdentifier] = []
-                for c in page.changes {
-                    let id: ItemID?
-                    switch c.kind {
-                    case .file: id = c.ownerId.map { .file(owner: $0, file: c.id) }
-                    case .folder: id = c.ownerId.map { .folder(owner: $0, folder: c.id) }
-                    case .owner: id = .owner(c.id)
+                // one lookup per ITEM (a saved file leaves two feed rows), several at the same time: a day's backlog used to take ~10 minutes
+                let batch = ChangeBatch.collapse(page.changes)
+                var results = [Outcome](repeating: .skip, count: batch.count)
+                await withTaskGroup(of: (Int, Outcome).self) { group in
+                    var next = min(ChangeBatch.parallelLookups, batch.count)
+                    for i in 0..<next { group.addTask { (i, await self.resolve(batch[i])) } }
+                    for await (i, outcome) in group {
+                        results[i] = outcome
+                        if next < batch.count { let j = next; next += 1; group.addTask { (j, await self.resolve(batch[j])) } }
                     }
-                    guard let id else { continue }
-                    if c.op == .delete { deleted.append(FPItem.identifier(for: id)); continue }
-                    // a storage's top folder is not a Finder item: never create one, and clear one an earlier build made
-                    if case .folder(_, let fid) = id, await catalog.isTopFolder(folder: fid) { deleted.append(FPItem.identifier(for: id)); continue }
-                    if let item = try? await catalog.item(for: id) { updated.append(item) }
+                }
+                for o in results {
+                    switch o {
+                    case .update(let item): updated.append(item)
+                    case .delete(let id): deleted.append(id)
+                    case .skip: break
+                    }
                 }
                 if !updated.isEmpty { observer.didUpdate(updated) }
                 if !deleted.isEmpty { observer.didDeleteItems(withIdentifiers: deleted) }
@@ -91,5 +96,22 @@ final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
                 observer.finishEnumeratingChanges(upTo: NSFileProviderSyncAnchor(Data(next.utf8)), moreComing: page.hasMore)
             } catch { observer.finishEnumeratingWithError(fileProviderError(error)) }
         }
+    }
+    private enum Outcome { case update(NSFileProviderItem), delete(NSFileProviderItemIdentifier), skip }
+
+    /// What one feed row means for Finder: an updated item, an item to drop, or nothing (the item is gone again, or cannot be read right now).
+    private func resolve(_ c: AppChange) async -> Outcome {
+        let id: ItemID?
+        switch c.kind {
+        case .file: id = c.ownerId.map { .file(owner: $0, file: c.id) }
+        case .folder: id = c.ownerId.map { .folder(owner: $0, folder: c.id) }
+        case .owner: id = .owner(c.id)
+        }
+        guard let id else { return .skip }
+        if c.op == .delete { return .delete(FPItem.identifier(for: id)) }
+        // a storage's top folder is not a Finder item: never create one, and clear one an earlier build made
+        if case .folder(_, let fid) = id, await catalog.isTopFolder(folder: fid) { return .delete(FPItem.identifier(for: id)) }
+        if let item = try? await catalog.item(for: id) { return .update(item) }
+        return .skip
     }
 }
