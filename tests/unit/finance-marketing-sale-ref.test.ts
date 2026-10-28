@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { checkSaleAgainstFeed, marketingRefFromFeed, receiptLanguage, type MarketingFeedRef, type SaleFacts } from "@/lib/finance/marketing-sale-ref"
+import { checkSaleAgainstFeed, isTestLeadEmail, marketingRefFromFeed, receiptLanguage, type MarketingFeedRef, type SaleFacts } from "@/lib/finance/marketing-sale-ref"
 import { buildInvoiceEmail } from "@/lib/email/invoice-email"
 import vercel from "../../vercel.json"
 
@@ -50,16 +50,25 @@ describe("the sale agrees with the money, or a person decides", () => {
 })
 
 describe("the language of the invoice email", () => {
-  it("follows the person's record when it says a language", () => {
+  it("is Italian when the person's record says Italian, or the lead came from an Italian ad", () => {
     expect(receiptLanguage("Italian", {})).toBe("it")
     expect(receiptLanguage("it", { campaign_name: "x" })).toBe("it")
-    expect(receiptLanguage("English", { campaign_name: "LLC ITA | Lead Form" })).toBe("en")
-  })
-  it("for a person with no language: Italian only when the ad itself is Italian", () => {
-    expect(receiptLanguage(null, { campaign_name: "14.10.2026 | LLC ITA | Lead Form | CBO 35$" })).toBe("it")
+    expect(receiptLanguage("English", { campaign_name: "14.10.2026 | LLC ITA | Lead Form | CBO 35$" })).toBe("it")
     expect(receiptLanguage(null, { adset_name: "Lingua IT | Europa+AE+CA | 25-65" })).toBe("it")
+  })
+  it("is English otherwise — never a guess from the name", () => {
+    expect(receiptLanguage("English", { campaign_name: "LLC US | Lead Form" })).toBe("en")
     expect(receiptLanguage(null, { campaign_name: "LLC US | Lead Form" })).toBe("en")
     expect(receiptLanguage(undefined, {})).toBe("en")
+  })
+})
+
+describe("a test lead never gets a real invoice or email", () => {
+  it("recognises addresses that cannot be a real person's", () => {
+    for (const e of ["test-payment@example.test", "x@example.com", "a@b.test", "TEST+1@gmail.com", "qa@foo.invalid"]) expect(isTestLeadEmail(e)).toBe(true)
+  })
+  it("lets real addresses through", () => {
+    for (const e of ["catacchio@b2bconsultingbg.com", "monicagermani2025@gmail.com", "contest@gmail.com", null, undefined, ""]) expect(isTestLeadEmail(e)).toBe(false)
   })
 })
 
@@ -76,6 +85,11 @@ describe("the paid receipt email in Italian", () => {
     expect(en.subject).toBe("Payment received for Invoice INV-002800")
     expect(en.html).toContain("Dear Nicola Catacchio")
     expect(en.html).toContain("Amount Paid")
+  })
+  it("a name with HTML in it cannot inject markup into the email", () => {
+    const html = buildInvoiceEmail({ ...base, clientName: '<img src=x onerror=alert(1)> "Bob"', language: "it" }).html
+    expect(html).not.toContain("<img")
+    expect(html).toContain("&lt;img")
   })
   it("never changes the other emails: an invoice or reminder asked in Italian stays English", () => {
     expect(buildInvoiceEmail({ ...base, purpose: "initial", language: "it", payToken: "t" }).subject).toBe("Invoice INV-002800 from Tony Durante LLC")

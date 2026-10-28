@@ -182,9 +182,9 @@ function ctaPortalOpen(): string {
   </div>`
 }
 
-function ctaPortalReceipt(): string {
+function ctaPortalReceipt(language?: "en" | "it"): string {
   return `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 20px;margin:28px 0;">
-    <p style="margin:0;font-size:14px;color:#15803d;font-weight:600;">This invoice is marked as paid in your portal.</p>
+    <p style="margin:0;font-size:14px;color:#15803d;font-weight:600;">${language === "it" ? "Questa fattura risulta saldata nel tuo portale." : "This invoice is marked as paid in your portal."}</p>
   </div>`
 }
 
@@ -229,7 +229,8 @@ export function buildInvoiceEmail(input: InvoiceEmailInput): InvoiceEmailOutput 
 
   // Greeting + first paragraph by purpose
   const itReceipt = isReceipt && input.language === "it"
-  const greeting = itReceipt ? `<p>Gentile ${input.clientName},</p>` : `<p>Dear ${input.clientName},</p>`
+  const safeName = String(input.clientName ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+  const greeting = itReceipt ? `<p>Gentile ${safeName},</p>` : `<p>Dear ${safeName},</p>`
   let firstPara = ""
   switch (input.purpose) {
     case "initial":
@@ -261,7 +262,7 @@ export function buildInvoiceEmail(input: InvoiceEmailInput): InvoiceEmailOutput 
       paymentPath = (payUrl ? ctaNoPortalOpen(payUrl) : "") + bankDetailsBlock(bdWithRef)
     }
   } else if (isReceipt && isPortal) {
-    paymentPath = ctaPortalReceipt()
+    paymentPath = ctaPortalReceipt(input.language)
   }
 
   // Closing line

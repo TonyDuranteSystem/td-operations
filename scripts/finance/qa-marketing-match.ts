@@ -16,7 +16,7 @@ async function main() {
   if (!(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").includes("127.0.0.1")) throw new Error("local private stack only")
   const db = new Client({ connectionString: process.env.SUPABASE_DB_URL, ssl: false })
   await db.connect()
-  const { settleMarketingSaleFromFeed, settleHandRecordedSales } = await import("@/lib/finance/marketing-sale-settle")
+  const { settleMarketingSaleFromFeed, settleHandRecordedSales, retryMarketingReceipts } = await import("@/lib/finance/marketing-sale-settle")
   const { matchAndReconcile } = await import("@/lib/bank-feed-matcher")
 
   const team = (await db.query("insert into marketing_teams (name) values ($1) returning id", [`QA fm ${tag}`])).rows[0].id
@@ -24,15 +24,15 @@ async function main() {
   const stages = (await db.query("select value from marketing_settings where team_id=$1 and key='sale_kind_stages'", [team])).rows[0]?.value
   const paidStage = stages?.strategic_call ?? "paid_call"
 
-  async function scenario(k: string, opts: { amountCents?: number; feedAmount?: number; email?: string; campaign?: string; refunded?: boolean } = {}) {
-    const email = opts.email ?? `${tag}-${k}@example.test`
+  async function scenario(k: string, opts: { amountCents?: number; feedAmount?: number; email?: string; campaign?: string; refunded?: boolean; nullSessionOnSale?: boolean; daysOld?: number } = {}) {
+    const email = opts.email ?? `${tag}-${k}@qa-mail.dev`
     const lead = (await db.query("insert into marketing_leads (team_id, leadgen_id, full_name, email, phone, status, campaign_name, received_at, answers) values ($1,$2,$3,$4,'+393339990000','link_sent',$5, now(), '[]'::jsonb) returning id", [team, `${tag}-${k}`, `QA ${k} Lead`, email, opts.campaign ?? "14.10.2026 | LLC ITA | Lead Form"])).rows[0].id
     const session = `cs_live_${tag}${k}`
     const pi = `pi_${tag}${k}`
     const saleId = randomUUID()
-    await db.query("insert into marketing_sales (id, team_id, lead_id, kind, amount_cents, currency, status, created_by, stripe_session_id) values ($1,$2,$3,'strategic_call',$4,'EUR','link_created','qa',$5)", [saleId, team, lead, opts.amountCents ?? 39700, session])
+    await db.query("insert into marketing_sales (id, team_id, lead_id, kind, amount_cents, currency, status, created_by, stripe_session_id) values ($1,$2,$3,'strategic_call',$4,'EUR','link_created','qa',$5)", [saleId, team, lead, opts.amountCents ?? 39700, opts.nullSessionOnSale ? null : session])
     const charge = { id: `ch_${tag}${k}`, metadata: {}, status: "succeeded", payment_intent: { id: pi, metadata: { source: "td-marketing", payment_kind: "marketing_sale", marketing_lead_id: lead, marketing_sale_id: saleId, marketing_team_id: team }, payment_details: { order_reference: session } } }
-    const feed = (await db.query("insert into td_bank_feeds (source, external_id, transaction_date, amount, currency, sender_name, status, raw_data) values ('stripe',$1,now(),$2,'EUR',$3,'unmatched',$4) returning id", [charge.id, opts.feedAmount ?? 397, `QA ${k}`, JSON.stringify(charge)])).rows[0].id
+    const feed = (await db.query("insert into td_bank_feeds (source, external_id, transaction_date, amount, currency, sender_name, status, raw_data) values ('stripe',$1, now() - ($5 || ' days')::interval,$2,'EUR',$3,'unmatched',$4) returning id", [charge.id, opts.feedAmount ?? 397, `QA ${k}`, JSON.stringify(charge), String(opts.daysOld ?? 0)])).rows[0].id
     return { lead, saleId, feed, email, session, pi }
   }
   const state = async (s: { lead: string; saleId: string; feed: string }) => ({
@@ -94,7 +94,7 @@ async function main() {
   ck("F12 a lead from a non-Italian ad gets the English receipt", me.length === 1 && /Payment received/.test(me[0].subject), me)
 
   // ---- 7. a sale recorded BY HAND afterwards (hand-made link, no labels, an older "ignored" tag, a confirmation row already there)
-  const h = await scenario("h", { email: `${tag}-h@example.test` })
+  const h = await scenario("h", { email: `${tag}-h@qa-mail.dev` })
   await db.query("update td_bank_feeds set raw_data=jsonb_set(raw_data,'{payment_intent,metadata}','{}'::jsonb), status='ignored', review_metadata='{\"marketing_sale\":{\"tagged_by\":\"qa\"}}'::jsonb where id=$1", [h.feed])
   await db.query("update marketing_sales set status='paid', paid_at=now(), stripe_payment_intent=$2, note='Recorded afterwards by qa: hand-made link.' where id=$1", [h.saleId, h.pi])
   await db.query("update marketing_leads set status=$2 where id=$1", [h.lead, paidStage])
@@ -107,6 +107,51 @@ async function main() {
   const mh2 = (await db.query("select count(*)::int n from sandbox_captured_emails where recipient=$1", [h.email])).rows[0].n
   const nih = (await db.query("select count(*)::int n from payments where stripe_payment_id=$1 and invoice_status='Paid'", [h.pi])).rows[0].n
   ck("F13b run again: nothing new (one invoice, one email)", mh2 === 1 && nih === 1, { sweep2, mh2, nih })
+
+  // ---- 8. an OLD payment (10 days) is never settled by the automatic step; the matcher does not fall through to the invoice tiers either
+  const o = await scenario("o", { daysOld: 10 })
+  const ro = await matchAndReconcile(o.feed)
+  const so = await state(o)
+  const no = (await db.query("select count(*)::int n from payments where stripe_payment_id=$1", [o.pi])).rows[0].n
+  ck("F14 a payment older than 4 days is left in Finance for a person: not matched, still unmatched, the sale and the card stay", ro.matched === false && so.feed.status === "unmatched" && so.sale.status === "link_created" && so.lead.status === "link_sent", { ro, so })
+  ck("F14b …and no invoice was made for it", no === 0, no)
+
+  // ---- 9. a TEST lead never gets a real invoice, credit or email
+  const tl = await scenario("t", { email: `qa-${tag}@example.test` })
+  const rt = await matchAndReconcile(tl.feed)
+  const stl = await state(tl)
+  ck("F15 a test lead (example.test address): parked, no invoice, no credit, no email, the sale stays unpaid", rt.matched === false && stl.feed.status === "needs_review" && /test address/.test(String(stl.feed.review_metadata?.marketing_sale_problem)) && stl.sale.status === "link_created" && ((await db.query("select count(*)::int n from sandbox_captured_emails where recipient=$1", [`qa-${tag}@example.test`])).rows[0].n) === 0, { rt, stl })
+
+  // ---- 10. a failed or interrupted invoice email is tried again, then marked sent; a sent one is never touched
+  const resolution = async (session: string) => (await db.query("select note, resolved_at from incoming_payment_resolutions where stripe_session_id=$1", [session])).rows[0]
+  const ra = await resolution(a.session)
+  ck("F16 the claim row of the normal case says the email was SENT", /\[email:sent\]/.test(ra.note), ra)
+  const f = await scenario("f", { email: `${tag}-f@qa-mail.dev` })
+  await settleMarketingSaleFromFeed(f.feed, { sendEmail: false })
+  await db.query("insert into incoming_payment_resolutions (stripe_session_id, resolution, contact_id, invoice_payment_id, note, resolved_by, resolved_at) select $1,'paid_call', contact_id, id, $2, 'finance:marketing-match', now() from payments where stripe_payment_id=$3 and invoice_status='Paid'", [f.session, `Marketing sale ${f.saleId}: matched in Finance. [email:failed:1]`, f.pi])
+  const retry1 = await retryMarketingReceipts()
+  const mf = (await db.query("select subject from sandbox_captured_emails where recipient=$1", [f.email])).rows
+  ck("F17 a failed email is tried again: sent once, marked sent", retry1.sent >= 1 && mf.length === 1 && /\[email:sent\]/.test((await resolution(f.session)).note), { retry1, mf })
+  const retry2 = await retryMarketingReceipts()
+  ck("F17b a sent one is never touched again", (await db.query("select count(*)::int n from sandbox_captured_emails where recipient=$1", [f.email])).rows[0].n === 1, retry2)
+  const g = await scenario("g", { email: `${tag}-g@qa-mail.dev` })
+  await settleMarketingSaleFromFeed(g.feed, { sendEmail: false })
+  await db.query("insert into incoming_payment_resolutions (stripe_session_id, resolution, contact_id, invoice_payment_id, note, resolved_by, resolved_at) select $1,'paid_call', contact_id, id, $2, 'finance:marketing-match', now() - interval '20 minutes' from payments where stripe_payment_id=$3 and invoice_status='Paid'", [g.session, `Marketing sale ${g.saleId}: matched in Finance. [email:pending]`, g.pi])
+  const fresh = await scenario("g2", { email: `${tag}-g2@qa-mail.dev` })
+  await settleMarketingSaleFromFeed(fresh.feed, { sendEmail: false })
+  await db.query("insert into incoming_payment_resolutions (stripe_session_id, resolution, contact_id, invoice_payment_id, note, resolved_by, resolved_at) select $1,'paid_call', contact_id, id, $2, 'finance:marketing-match', now() - interval '2 minutes' from payments where stripe_payment_id=$3 and invoice_status='Paid'", [fresh.session, `Marketing sale ${fresh.saleId}: matched in Finance. [email:pending]`, fresh.pi])
+  await retryMarketingReceipts()
+  const mg = (await db.query("select count(*)::int n from sandbox_captured_emails where recipient=$1", [g.email])).rows[0].n
+  const mg2 = (await db.query("select count(*)::int n from sandbox_captured_emails where recipient=$1", [fresh.email])).rows[0].n
+  ck("F18 a claim left 'pending' for 20 minutes (cut off) is sent; one claimed 2 minutes ago (still in flight) is NOT touched", mg === 1 && mg2 === 0, { mg, mg2 })
+
+  // ---- 11. a row that keeps failing is parked after 4 tries with the reason (it cannot hold up the others), and never makes a second invoice
+  const w = await scenario("w", { nullSessionOnSale: true, email: `${tag}-w@qa-mail.dev` })
+  const outs: string[] = []
+  for (let i = 0; i < 5; i++) { const r = await settleMarketingSaleFromFeed(w.feed); outs.push(r.matched ? "matched" : r.parked ? "parked" : "error") }
+  const sw = await state(w)
+  const nw = (await db.query("select count(*)::int n from payments where stripe_payment_id=$1 and invoice_status='Paid'", [w.pi])).rows[0].n
+  ck("F19 a payment that cannot be tied to its sale is tried 3 times, then PARKED with the reason on the 4th; one invoice at most; the sale and the card never moved", JSON.stringify(outs.slice(0, 4)) === JSON.stringify(["error", "error", "error", "parked"]) && sw.feed.status === "needs_review" && /after 4 tries/.test(String(sw.feed.review_metadata?.marketing_sale_problem)) && sw.sale.status === "link_created" && sw.lead.status === "link_sent" && nw <= 1, { outs, sw, nw })
 
   console.log(`\n${pass} passed, ${fail} failed`)
   // clean this run's rows (local test database only, exact tag)

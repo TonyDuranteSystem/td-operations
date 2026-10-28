@@ -426,7 +426,7 @@ export async function sendTDInvoice(
  * recipients get the same email minus the portal link — both get the
  * paid PDF attached.
  */
-export async function sendPaidReceipt(paymentId: string, opts?: { language?: "en" | "it" }): Promise<void> {
+export async function sendPaidReceipt(paymentId: string, opts?: { language?: "en" | "it" }): Promise<"sent" | "no_invoice" | "no_recipient"> {
   const { data: payment, error: pErr } = await supabaseAdmin
     .from("payments")
     .select("*")
@@ -436,7 +436,7 @@ export async function sendPaidReceipt(paymentId: string, opts?: { language?: "en
 
   // Only send receipts for payments with an invoice (Draft-and-Paid ad-hoc
   // bookkeeping entries without invoice_number shouldn't email anyone).
-  if (!payment.invoice_number || !payment.invoice_status) return
+  if (!payment.invoice_number || !payment.invoice_status) return "no_invoice"
 
   const { data: items } = await supabaseAdmin
     .from("payment_items")
@@ -465,7 +465,7 @@ export async function sendPaidReceipt(paymentId: string, opts?: { language?: "en
     // Silent — callers are fire-and-forget, and a missing email is not a
     // payment-blocking condition.
     console.warn(`[sendPaidReceipt] no recipient email for payment ${paymentId} — skipping`)
-    return
+    return "no_recipient"
   }
 
   const recipientEmail = recipient.email
@@ -557,4 +557,5 @@ export async function sendPaidReceipt(paymentId: string, opts?: { language?: "en
   const raw = Buffer.from(parts.join("\r\n")).toString("base64url")
 
   await gmailPost("/messages/send", { raw })
+  return "sent"
 }

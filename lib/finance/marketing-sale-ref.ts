@@ -70,12 +70,16 @@ export function checkSaleAgainstFeed(sale: SaleFacts, ref: MarketingFeedRef): { 
 }
 
 /**
- * The language of the invoice email: what the person's record says; for a brand-new person, Italian when the lead came from an Italian ad (the campaign or the
- * ad set says so in its own name), else English. Never a guess from the name.
+ * The language of the invoice email: Italian when the person's record says Italian OR the lead came from an Italian ad (the campaign or the ad set says so in its own
+ * name), else English. (A record that only holds the database's default language says nothing, so the ad speaks for it; never a guess from the name.)
  */
 export function receiptLanguage(contactLanguage: string | null | undefined, lead: { campaign_name?: string | null; adset_name?: string | null }): "it" | "en" {
-  const l = (contactLanguage ?? "").trim().toLowerCase()
-  if (l.startsWith("it")) return "it"
-  if (l.startsWith("en")) return "en"
+  if ((contactLanguage ?? "").trim().toLowerCase().startsWith("it")) return "it"
   return /\bITA\b|Lingua\s*IT/i.test(`${lead.campaign_name ?? ""} ${lead.adset_name ?? ""}`) ? "it" : "en"
+}
+
+/** A lead that is a test (an address that cannot be a real person's): it must never mint a real invoice, a real credit or an email. */
+export function isTestLeadEmail(email: string | null | undefined): boolean {
+  const e = (email ?? "").trim().toLowerCase()
+  return /@example\.(com|org|net|test)$/.test(e) || /\.(test|invalid|localhost)$/.test(e) || /^test[-_+.]/.test(e)
 }
