@@ -426,7 +426,7 @@ export async function sendTDInvoice(
  * recipients get the same email minus the portal link — both get the
  * paid PDF attached.
  */
-export async function sendPaidReceipt(paymentId: string): Promise<void> {
+export async function sendPaidReceipt(paymentId: string, opts?: { language?: "en" | "it" }): Promise<void> {
   const { data: payment, error: pErr } = await supabaseAdmin
     .from("payments")
     .select("*")
@@ -529,6 +529,7 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
     currencySymbol: csym,
     currency,
     message: sanitizedMessage,
+    language: opts?.language,
   })
 
   const boundary = `boundary_${Date.now()}`
