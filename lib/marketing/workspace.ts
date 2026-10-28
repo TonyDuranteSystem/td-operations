@@ -22,6 +22,7 @@ const CATALOG: Array<{ key: string; label: string; href: string; built: boolean;
   { key: "money", label: "Money", href: "/marketing/money", built: true, when: p => p.includes("money.read") },
   { key: "offers", label: "Offers", href: "/marketing/offers", built: false, when: p => p.includes("offers.create") },
   { key: "content", label: "Content", href: "/marketing/content", built: false, when: p => p.includes("content.manage") },
+  { key: "documents", label: "Documents", href: "/marketing/documents", built: true, when: p => p.includes("documents") || p.includes("documents.manage") },
   { key: "templates", label: "Templates", href: "/marketing/templates", built: true, when: p => p.includes("leads.mark") },
   { key: "my-numbers", label: "My numbers", href: "/marketing/my-numbers", built: true, when: p => p.includes("leads.worklist") },
   { key: "activity", label: "Team activity", href: "/marketing/activity", built: true, when: p => p.includes("team.activity") },

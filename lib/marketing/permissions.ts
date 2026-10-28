@@ -13,7 +13,7 @@ export const MARKETING_PERMISSIONS = [
   "offers.create",
   "calls.host", "calls.recordings",
   "whatsapp", "inbox", "chat",
-  "content.manage", "reports.read", "team.activity", "team.notes",
+  "content.manage", "documents", "documents.manage", "reports.read", "team.activity", "team.notes",
   "team.manage",
 ] as const
 export type MarketingPermission = (typeof MARKETING_PERMISSIONS)[number]

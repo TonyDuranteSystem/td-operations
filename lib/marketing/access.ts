@@ -110,6 +110,9 @@ export const ACCESS_GROUPS: ReadonlyArray<{ group: string; items: ReadonlyArray<
     { label: PERMISSION_LABELS.whatsapp, keys: ["whatsapp"] }, { label: PERMISSION_LABELS.inbox, keys: ["inbox"] }, { label: PERMISSION_LABELS.chat, keys: ["chat"] },
     { label: PERMISSION_LABELS["calls.host"], keys: ["calls.host"] }, { label: PERMISSION_LABELS["calls.recordings"], keys: ["calls.recordings"] },
   ] },
+  { group: "Documents", items: [
+    { label: PERMISSION_LABELS.documents, keys: ["documents"] }, { label: PERMISSION_LABELS["documents.manage"], keys: ["documents.manage"] },
+  ] },
 ]
 
 /** Every permission appears in exactly one popup tick, except team.manage (its own warned row) and content.manage (not built yet). */
