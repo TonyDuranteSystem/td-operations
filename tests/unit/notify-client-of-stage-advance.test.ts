@@ -14,7 +14,10 @@ interface ContactRow {
 }
 
 let contactFixture: ContactRow | null = null
-let accountContactsFixture: Array<{ contacts: ContactRow | null }> = []
+let accountContactsFixture: Array<{ contact_id?: string; contacts: ContactRow | null }> = []
+/** contact ids / account ids that have a push subscription (the client "has the app") */
+let pushContacts: string[] = []
+let pushAccounts: string[] = []
 
 const gmailPostMock = vi.fn()
 
@@ -32,6 +35,13 @@ vi.mock("@/lib/supabase-admin", () => ({
         return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn(() => Promise.resolve({ data: accountContactsFixture, error: null })),
+        }
+      }
+      if (table === "push_subscriptions") {
+        // select('id', { count, head }).eq(column, value) -> { count }
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn((col: string, val: string) => Promise.resolve({ count: (col === "contact_id" ? pushContacts : pushAccounts).includes(val) ? 1 : 0, error: null })),
         }
       }
       if (table === "portal_notifications") {
@@ -57,6 +67,8 @@ import { notifyClientOfStageAdvance } from "@/lib/portal/notifications"
 beforeEach(() => {
   contactFixture = null
   accountContactsFixture = []
+  pushContacts = []
+  pushAccounts = []
   gmailPostMock.mockReset()
   gmailPostMock.mockResolvedValue({ id: "msg-1" })
 })
@@ -76,7 +88,7 @@ describe("notifyClientOfStageAdvance", () => {
       stage_name: "TR Filed",
     })
 
-    expect(result).toEqual({ sent: 1, failed: 0 })
+    expect(result).toEqual({ sent: 1, failed: 0, skippedHasApp: 0 })
     expect(gmailPostMock).toHaveBeenCalledTimes(1)
     const raw = decodeRaw(gmailPostMock.mock.calls[0][1])
     expect(raw).toContain("To: alice@example.com")
@@ -103,7 +115,7 @@ describe("notifyClientOfStageAdvance", () => {
       stage_name: "Closing",
     })
 
-    expect(result).toEqual({ sent: 1, failed: 0 })
+    expect(result).toEqual({ sent: 1, failed: 0, skippedHasApp: 0 })
     const raw = decodeRaw(gmailPostMock.mock.calls[0][1])
     const subjectMatch = raw.match(/Subject: =\?utf-8\?B\?([^?]+)\?=/)
     const decodedSubject = Buffer.from(subjectMatch![1], "base64").toString("utf8")
@@ -138,7 +150,7 @@ describe("notifyClientOfStageAdvance", () => {
       stage_name: "Y",
     })
 
-    expect(result).toEqual({ sent: 0, failed: 0 })
+    expect(result).toEqual({ sent: 0, failed: 0, skippedHasApp: 0 })
     expect(gmailPostMock).not.toHaveBeenCalled()
   })
 
@@ -148,7 +160,7 @@ describe("notifyClientOfStageAdvance", () => {
       stage_name: "Y",
     })
 
-    expect(result).toEqual({ sent: 0, failed: 0 })
+    expect(result).toEqual({ sent: 0, failed: 0, skippedHasApp: 0 })
     expect(gmailPostMock).not.toHaveBeenCalled()
   })
 
@@ -166,7 +178,7 @@ describe("notifyClientOfStageAdvance", () => {
       stage_name: "TR Completed",
     })
 
-    expect(result).toEqual({ sent: 2, failed: 0 })
+    expect(result).toEqual({ sent: 2, failed: 0, skippedHasApp: 0 })
     expect(gmailPostMock).toHaveBeenCalledTimes(2)
     const recipients = gmailPostMock.mock.calls.map(c => decodeRaw(c[1]).match(/^To: (.+)$/m)?.[1])
     expect(recipients).toContain("owner@example.com")
@@ -186,7 +198,7 @@ describe("notifyClientOfStageAdvance", () => {
       stage_name: "Y",
     })
 
-    expect(result).toEqual({ sent: 1, failed: 0 })
+    expect(result).toEqual({ sent: 1, failed: 0, skippedHasApp: 0 })
     const raw = decodeRaw(gmailPostMock.mock.calls[0][1])
     expect(raw).toContain("To: specific@example.com")
   })
@@ -201,7 +213,7 @@ describe("notifyClientOfStageAdvance", () => {
       stage_name: "Y",
     })
 
-    expect(result).toEqual({ sent: 0, failed: 1 })
+    expect(result).toEqual({ sent: 0, failed: 1, skippedHasApp: 0 })
   })
 
   it("HTML-escapes the service name and stage name in the rendered body", async () => {
@@ -218,5 +230,58 @@ describe("notifyClientOfStageAdvance", () => {
     const decodedHtml = Buffer.from(htmlMatch![1], "base64").toString("utf8")
     expect(decodedHtml).toContain("Acme &amp; &lt;Co&gt;")
     expect(decodedHtml).not.toContain("<Co>")
+  })
+
+  it("C (2026-10-28): a client who has the app gets NO stage email (the push already reached them)", async () => {
+    contactFixture = { email: "alice@example.com", full_name: "Alice Smith", language: "en" }
+    pushContacts = ["contact-1"]
+
+    const result = await notifyClientOfStageAdvance({ contact_id: "contact-1", service_name: "ITIN", stage_name: "ITIN Approved" })
+
+    expect(result).toEqual({ sent: 0, failed: 0, skippedHasApp: 1 })
+    expect(gmailPostMock).not.toHaveBeenCalled()
+  })
+
+  it("a client without the app is unchanged: the email still goes out", async () => {
+    contactFixture = { email: "alice@example.com", full_name: "Alice Smith", language: "en" }
+
+    const result = await notifyClientOfStageAdvance({ contact_id: "contact-1", service_name: "ITIN", stage_name: "ITIN Approved" })
+
+    expect(result).toEqual({ sent: 1, failed: 0, skippedHasApp: 0 })
+    expect(gmailPostMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("a company with several members: only the member WITH the app is skipped; the others still get the email", async () => {
+    accountContactsFixture = [
+      { contact_id: "m-1", contacts: { email: "one@example.com", full_name: "One", language: "en" } },
+      { contact_id: "m-2", contacts: { email: "two@example.com", full_name: "Two", language: "en" } },
+    ]
+    pushContacts = ["m-1"]
+
+    const result = await notifyClientOfStageAdvance({ account_id: "acct-1", service_name: "Tax Return 2025", stage_name: "TR Filed" })
+
+    expect(result).toEqual({ sent: 1, failed: 0, skippedHasApp: 1 })
+    expect(decodeRaw(gmailPostMock.mock.calls[0][1])).toContain("To: two@example.com")
+  })
+
+  it("an email to ONE named person is not silenced by a company-level subscription (it cannot be tied to them)", async () => {
+    contactFixture = { email: "alice@example.com", full_name: "Alice Smith", language: "en" }
+    pushAccounts = ["acct-1"]
+
+    const result = await notifyClientOfStageAdvance({ contact_id: "contact-1", account_id: "acct-1", service_name: "ITIN", stage_name: "ITIN Approved" })
+
+    expect(result).toEqual({ sent: 1, failed: 0, skippedHasApp: 0 })
+  })
+
+  it("a company-level subscription on a multi-member company silences nobody (it cannot be tied to one person)", async () => {
+    accountContactsFixture = [
+      { contact_id: "m-1", contacts: { email: "one@example.com", full_name: "One", language: "en" } },
+      { contact_id: "m-2", contacts: { email: "two@example.com", full_name: "Two", language: "en" } },
+    ]
+    pushAccounts = ["acct-1"]
+
+    const result = await notifyClientOfStageAdvance({ account_id: "acct-1", service_name: "Tax Return 2025", stage_name: "TR Filed" })
+
+    expect(result).toEqual({ sent: 2, failed: 0, skippedHasApp: 0 })
   })
 })

@@ -56,7 +56,7 @@ describe('ITIN approval letter — how the client is told', () => {
     const r = await run()
     expect(r.finalized).toBe(true)
     expect(r.itin_number).toBe('912-70-1234')
-    expect(fx.action).toMatchObject({ contact_id: 'c-1', service_delivery_id: 'sd-1', link: '/portal/documents', skipEmail: true })
+    expect(fx.action).toMatchObject({ contact_id: 'c-1', service_delivery_id: 'sd-1', link: '/portal/documents', skipEmail: true, bellType: 'new_document' })   // good news: the bell notice is an ordinary type the client can dismiss
     expect(fx.nudges).toHaveLength(1)
     expect(fx.nudges[0]).toMatchObject({ contact_id: 'c-1', account_id: null, topic: 'ITIN 2026' })
     expect(String(fx.nudges[0].messagePreview)).toContain('the IRS has approved your ITIN application')

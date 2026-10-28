@@ -237,6 +237,28 @@ describe("notifyClientActionRequired", () => {
   })
 })
 
+describe("notifyClientActionRequired — the bell type (2026-10-28, the ITIN letter notice)", () => {
+  it("default: the bell row is a 'must act' item (action_required) — the portal never lets the client clear it", async () => {
+    await notifyClientActionRequired({ contact_id: "ctc-1", title: TITLE, message: MESSAGE, link: "/portal/sign/ss4" })
+    expect(notificationCalls[0].type).toBe("action_required")
+  })
+
+  it("a good-news caller passes an ordinary type, so the client CAN dismiss the notice — digest email still suppressed", async () => {
+    const r = await notifyClientActionRequired({
+      contact_id: "ctc-1",
+      title: { en: "Your ITIN is ready", it: "Il tuo ITIN è pronto" },
+      message: MESSAGE,
+      link: "/portal/documents",
+      skipEmail: true,
+      bellType: "new_document",
+    })
+    expect(r.dispatched).toBe(true)
+    expect(notificationCalls[0].type).toBe("new_document")
+    expect(notificationCalls[0].suppressDigestEmail).toBe(true)
+    expect(emailSends).toHaveLength(0)
+  })
+})
+
 describe("notifySs4ReadyToSign", () => {
   it("skips when the SS-4 is not awaiting_signature (draft)", async () => {
     fixtures.ss4 = { id: "ss4-1", account_id: "acc-1", contact_id: "ctc-1", company_name: "Acme LLC", status: "draft" }

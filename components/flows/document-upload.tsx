@@ -9,6 +9,7 @@ import { pickersFromPreflight } from '@/lib/flows/materialize-preflight-response
 import { hasValidLlcEnding } from '@/lib/flows/legal-name'
 import { suggestLegalName, legalNameNeedsDifferTick } from '@/lib/flows/legal-name-prefill'
 import { typesForTarget } from '@/lib/crm-store/types-for-target'
+import { uploadOutcome } from '@/lib/flows/upload-outcome'
 
 /** Window event fired after a flow document upload succeeds. The sibling
  *  DocumentViewer listens for it to re-fetch live (a server router.refresh()
@@ -223,25 +224,11 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
     if (!apiRes.ok || !data.success) {
       throw new Error(data.detail || data.error || 'Upload failed — please try again.')
     }
-    // Never show a failed company creation / refused advance as a green
-    // success: the server reports both via `advance` (structured) and folds
-    // them into `detail` with a ⚠️ marker.
-    const matError: string | undefined = data.advance?.materialization?.error
-    const advanceRefused =
-      needsFormationDate && data.advance && data.advance.success === false && data.advance.error
-    if (matError) {
-      setWarn(`${fileName} uploaded, but the company record was NOT created: ${matError}`)
-    } else if (advanceRefused) {
-      setWarn(`${fileName} uploaded, but the flow did not advance: ${data.advance.error}`)
-    }
-    // Prefer the server's summary — for ITIN approval letters it reports the
-    // OCR/finalize outcome (ITIN saved + client notified, or a warning).
-    if (typeof data.principal_office_warning === 'string' && data.principal_office_warning) {
-      setWarn(data.principal_office_warning)
-    }
-    if (!matError && !advanceRefused) {
-      setDone(typeof data.detail === 'string' && data.detail ? data.detail : `${fileName} uploaded`)
-    }
+    // Never show a failed company creation / refused advance / unfinished ITIN letter step as a green success: the server reports them
+    // structured (`advance`, `itin_finalize`) and folds them into `detail` with a ⚠️ marker. The rule lives in lib/flows/upload-outcome.ts.
+    const outcome = uploadOutcome(data, { fileName, needsFormationDate })
+    if (outcome.warn) setWarn(outcome.warn)
+    if (outcome.done) setDone(outcome.done)
     clearPick()
     stagedPathRef.current = null
     window.dispatchEvent(

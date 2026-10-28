@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server'
 const fx = vi.hoisted(() => ({
   staff: true,
   resolved: { ok: true, slug: 'itin_letter' } as { ok: true; slug: string | null } | { ok: false; error: string },
+  boxDefault: 'itin_letter' as string | null,
   resolveCalls: [] as Array<Record<string, unknown>>,
   removed: [] as string[],
   downloads: [] as string[],
@@ -18,6 +19,7 @@ vi.mock('@/lib/auth/require-staff-route', () => ({
 }))
 vi.mock('@/lib/flows/flow-upload-type', () => ({
   resolveFlowUploadType: async (input: Record<string, unknown>) => { fx.resolveCalls.push(input); return fx.resolved },
+  boxDefaultType: async () => fx.boxDefault,
 }))
 vi.mock('@/lib/supabase-admin', () => ({
   supabaseAdmin: {
@@ -44,7 +46,7 @@ const req = (body: Record<string, unknown>) => new NextRequest('http://localhost
 const call = (body: Record<string, unknown>) => upload(req(body), { params: { id: 'sd-1' } })
 const BODY = { storage_path: 'flow-uploads/sd-1/1_letter.pdf', file_name: 'letter.pdf', mime_type: 'application/pdf', flow_stage: 'ITIN Approved' }
 
-beforeEach(() => { fx.staff = true; fx.resolved = { ok: true, slug: 'itin_letter' }; fx.resolveCalls = []; fx.removed = []; fx.downloads = [] })
+beforeEach(() => { fx.staff = true; fx.boxDefault = 'itin_letter'; fx.resolved = { ok: true, slug: 'itin_letter' }; fx.resolveCalls = []; fx.removed = []; fx.downloads = [] })
 
 describe('POST /api/flows/[id]/upload-document — the document type follows the Storage rule', () => {
   it('a refused type -> 400 with the plain sentence, NOTHING downloaded, the staged file removed', async () => {
@@ -58,7 +60,7 @@ describe('POST /api/flows/[id]/upload-document — the document type follows the
 
   it('the check knows where the file lands and whether the client will see it (the ITIN letter at ITIN Approved: a person\'s storage, ITIN folder, visible)', async () => {
     await call({ ...BODY, document_type: 'itin_letter' })
-    expect(fx.resolveCalls[0]).toEqual({ slug: 'itin_letter', ownerKind: 'person', visibleToClient: true, folderKind: 'itin' })
+    expect(fx.resolveCalls[0]).toEqual({ slug: 'itin_letter', fallbackSlug: null, ownerKind: 'person', visibleToClient: true, folderKind: 'itin' })
   })
 
   it('an accepted type goes on (it reaches the download); no type sent (a box without a picker) goes on exactly as before', async () => {
@@ -68,6 +70,25 @@ describe('POST /api/flows/[id]/upload-document — the document type follows the
     fx.resolved = { ok: true, slug: null }
     await call(BODY)
     expect(fx.resolveCalls[1].slug).toBeUndefined()
+    expect(fx.downloads).toEqual([BODY.storage_path])
+  })
+
+  it('no type sent: the box\'s own default goes to the check (a stale tab or a direct call can never save the letter as "Other document")', async () => {
+    await call(BODY)
+    expect(fx.resolveCalls[0].fallbackSlug).toBe('itin_letter')
+    expect(fx.resolveCalls[0].slug).toBeUndefined()
+  })
+
+  it('a type WAS sent: the box default is not even looked at', async () => {
+    await call({ ...BODY, document_type: 'receipt' })
+    expect(fx.resolveCalls[0].fallbackSlug).toBeNull()
+  })
+
+  it('a stage with no typed box: nothing to fall back on, the upload goes on as before', async () => {
+    fx.boxDefault = null
+    fx.resolved = { ok: true, slug: null }
+    await call(BODY)
+    expect(fx.resolveCalls[0].fallbackSlug).toBeNull()
     expect(fx.downloads).toEqual([BODY.storage_path])
   })
 

@@ -28,6 +28,20 @@ beforeEach(() => { fx.row = { slug: 'itin_letter', metadata: { personal: true } 
 const base = { ownerKind: 'person' as const, visibleToClient: true, folderKind: 'itin' }
 
 describe('resolveFlowUploadType', () => {
+  it('no type sent but the box has a default -> the default is checked like any chosen type (a stale tab can never save "Other document")', async () => {
+    expect(await resolveFlowUploadType({ ...base, slug: undefined, fallbackSlug: 'itin_letter' })).toEqual({ ok: true, slug: 'itin_letter' })
+    expect(fx.filters).toContainEqual(['slug', 'itin_letter'])
+  })
+  it('the box default is NOT usable (not in the catalog / not for this storage) -> refused with a "reload the page" sentence', async () => {
+    fx.row = null
+    const r = await resolveFlowUploadType({ ...base, slug: '', fallbackSlug: 'itin_application' })
+    expect(r).toEqual({ ok: false, error: 'This upload needs a document type — please reload the page and choose one from the list.' })
+  })
+  it('a type WAS sent: the box default is ignored (the sent type is the one checked)', async () => {
+    expect(await resolveFlowUploadType({ ...base, slug: 'itin_letter', fallbackSlug: 'receipt' })).toEqual({ ok: true, slug: 'itin_letter' })
+    expect(fx.filters).toContainEqual(['slug', 'itin_letter'])
+    expect(fx.filters).not.toContainEqual(['slug', 'receipt'])
+  })
   it('no type sent (a box without a picker) -> null, nothing is read: the upload behaves exactly as before', async () => {
     for (const slug of [undefined, null, '']) expect(await resolveFlowUploadType({ ...base, slug })).toEqual({ ok: true, slug: null })
     expect(fx.filters).toEqual([])

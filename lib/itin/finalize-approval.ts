@@ -163,6 +163,8 @@ export async function finalizeItinApproval(opts: {
       link: "/portal/documents",
       ctaLabel: { en: "View document", it: "Vedi documento" },
       skipEmail: true,
+      // good news, not a to-do: an ordinary notice type, so the client can dismiss it (the default 'action_required' one is never cleared)
+      bellType: "new_document",
     })
     let nudge = "push-aware unread-message email: not attempted"
     try {

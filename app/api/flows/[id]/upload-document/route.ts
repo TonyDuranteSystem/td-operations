@@ -40,7 +40,7 @@ import { validateConfirmedLegalName } from '@/lib/flows/legal-name'
 import { formationReferenceName } from '@/lib/operations/formation-materialize'
 import { saveConfirmedLegalName } from '@/lib/operations/formation-name-checks'
 import { GENERIC_CLIENT_TYPE } from '@/lib/crm-store/save-for-account'
-import { resolveFlowUploadType } from '@/lib/flows/flow-upload-type'
+import { resolveFlowUploadType, boxDefaultType } from '@/lib/flows/flow-upload-type'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
 // migration but the generated DB types haven't been regenerated yet.
@@ -169,8 +169,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // The file's document type follows the STORAGE rule (dev job e3215801, Antonio 2026-10-28): a box with a type picker sends the chosen
     // catalog type, checked here against the same list Storage uses (exists, belongs to this kind of storage, never staff-only when the client
     // will see it). A box without a picker sends nothing and behaves as before. Refused BEFORE anything is downloaded or saved.
+    const sentNoType = body.document_type === undefined || body.document_type === null || body.document_type === ''
     const chosenType = await resolveFlowUploadType({
       slug: body.document_type,
+      fallbackSlug: sentNoType ? await boxDefaultType(sd.service_type as string | null, flowStage) : null,
       ownerKind: accountId ? 'company' : 'person',
       visibleToClient: isItinApprovalUpload,
       folderKind: sd.service_type === 'ITIN' ? 'itin' : null,
@@ -549,7 +551,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (principalOfficeWarning) detail += ` — ⚠️ ${principalOfficeWarning}`
     if (itinFinalize) {
       if (itinFinalize.finalized) {
-        detail += ` — ITIN ${itinFinalize.itin_number} saved to the contact (issued ${itinFinalize.itin_issue_date}), client notified, flow completed.`
+        // "client notified" only when the portal message really went out (the chat step can be skipped or fail on its own)
+        const told = !itinFinalize.notify || itinFinalize.notify.chat === 'ok'
+        detail += ` — ITIN ${itinFinalize.itin_number} saved to the contact (issued ${itinFinalize.itin_issue_date}), flow completed${told ? ', client notified.' : '.'}`
+        // a warning (not only text), so the page shows it amber like every other "saved, but…" outcome
+        if (!told) itinFinalize.warnings.push(`The portal message to the client was NOT posted (${itinFinalize.notify?.chat}) — tell them in the portal chat.`)
       }
       if (itinFinalize.warnings.length) {
         detail += ` — ⚠️ ${itinFinalize.warnings.join(' ')}`

@@ -748,6 +748,12 @@ export async function advanceServiceDelivery(
         stageLabel,
         hasClientLabel,
       })
+      // A client who has the app gets the push for this move (8a below) — the batched portal-digest email would be a second copy
+      // (Antonio 2026-10-28, stage emails skip clients who have the app). The row is still created (the bell shows it); it is just
+      // born "already emailed". A client without the app is unchanged: the digest emails them.
+      const { recipientHasPush } = await import("@/lib/portal/push-presence")
+      // Same scope the digest itself uses: a notice addressed to a PERSON looks only at that person's own app; only a company-only notice looks at the company's.
+      const hasApp = await recipientHasPush({ contactId: delivery.contact_id ?? null, accountId: delivery.contact_id ? null : (delivery.account_id ?? null), singleRecipient: true })
       await createPortalNotification({
         account_id: delivery.account_id ?? undefined,
         contact_id: delivery.contact_id ?? undefined,
@@ -755,8 +761,9 @@ export async function advanceServiceDelivery(
         title,
         body,
         link: "/portal/services",
+        suppressDigestEmail: hasApp,
       })
-      autoTriggers.push(`Portal notification sent: "${title}"`)
+      autoTriggers.push(`Portal notification sent: "${title}"${hasApp ? " (client has the app — no digest email)" : ""}`)
     } catch {
       // Non-critical — don't fail the advance
     }
@@ -820,7 +827,7 @@ export async function advanceServiceDelivery(
           : targetStage.stage_name,
         custom_message: targetStageWithNotify.client_notification_message ?? null,
       })
-      autoTriggers.push(`Stage-change email sent: ${result.sent} delivered, ${result.failed} failed`)
+      autoTriggers.push(`Stage-change email sent: ${result.sent} delivered, ${result.failed} failed${result.skippedHasApp ? `, ${result.skippedHasApp} skipped (client has the app)` : ""}`)
     } catch (emailErr) {
       autoTriggers.push(`Stage-change email failed: ${emailErr instanceof Error ? emailErr.message : String(emailErr)}`)
     }

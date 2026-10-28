@@ -4,6 +4,7 @@ import { PORTAL_BASE_URL } from '@/lib/config'
 import { buildPortalChatLink } from '@/lib/portal/chat-link'
 import { escapeHtml } from '@/lib/html-escape'
 import { localeFromLanguage, isItalian } from '@/lib/locale'
+import { recipientHasPush } from '@/lib/portal/push-presence'
 
 // Email digest is handled by /api/cron/portal-digest (every 5 min)
 // All notification types are eligible for digest emails.
@@ -341,26 +342,8 @@ export async function notifyClientOfAdminMessage({
     // Skip email if this client already has active push subscriptions (PWA with
     // notifications) — they'll get the push instead. Check contact-level first,
     // then account-level (some subscriptions are keyed by account, not contact).
-    let hasPush = false
-    if (recipient.contactId) {
-      const { count } = await supabaseAdmin
-        .from('push_subscriptions')
-        .select('id', { count: 'exact', head: true })
-        .eq('contact_id', recipient.contactId)
-      if (count && count > 0) hasPush = true
-    }
-    // Account-level subscriptions can't be attributed to a person (legacy rows
-    // predate contact stamping), so trust them only when this notification has
-    // a SINGLE recipient. On a multi-member account or with teammates, skipping
-    // everyone because ONE member subscribed would cut the others off from both
-    // push AND email (council bug-hunter finding, 2026-07-28).
-    if (!hasPush && account_id && recipients.length === 1) {
-      const { count } = await supabaseAdmin
-        .from('push_subscriptions')
-        .select('id', { count: 'exact', head: true })
-        .eq('account_id', account_id)
-      if (count && count > 0) hasPush = true
-    }
+    // (Account-level subscriptions are trusted only for a SINGLE recipient — see recipientHasPush.)
+    const hasPush = await recipientHasPush({ contactId: recipient.contactId, accountId: account_id, singleRecipient: recipients.length === 1 })
     if (hasPush) continue // has push — skip the redundant email
 
     // contacts.language is messy free text ("Italian", "Italiano", "it", …) —
@@ -479,10 +462,10 @@ export async function notifyClientOfStageAdvance(params: {
   stage_name: string
   /** Optional per-stage custom body (pipeline_stages.client_notification_message). */
   custom_message?: string | null
-}): Promise<{ sent: number; failed: number }> {
+}): Promise<{ sent: number; failed: number; skippedHasApp: number }> {
   const { account_id, contact_id, service_name, stage_name, custom_message } = params
 
-  type Recipient = { email: string; firstName: string | null; language: string }
+  type Recipient = { contactId: string | null; email: string; firstName: string | null; language: string }
   let recipients: Recipient[] = []
 
   if (contact_id) {
@@ -493,6 +476,7 @@ export async function notifyClientOfStageAdvance(params: {
       .single()
     if (contact?.email) {
       recipients = [{
+        contactId: contact_id,
         email: contact.email,
         firstName: contact.full_name?.split(' ')[0] ?? null,
         language: contact.language ?? 'en',
@@ -501,13 +485,14 @@ export async function notifyClientOfStageAdvance(params: {
   } else if (account_id) {
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
-      .select('contacts(email, full_name, language)')
+      .select('contact_id, contacts(email, full_name, language)')
       .eq('account_id', account_id)
     recipients = (links ?? [])
       .map(l => {
         const c = l.contacts as { email: string; full_name: string; language: string } | null
         if (!c?.email) return null
         return {
+          contactId: (l.contact_id as string | null) ?? null,
           email: c.email,
           firstName: c.full_name?.split(' ')[0] ?? null,
           language: c.language ?? 'en',
@@ -516,7 +501,7 @@ export async function notifyClientOfStageAdvance(params: {
       .filter((r): r is Recipient => r !== null)
   }
 
-  if (recipients.length === 0) return { sent: 0, failed: 0 }
+  if (recipients.length === 0) return { sent: 0, failed: 0, skippedHasApp: 0 }
 
   const { gmailPost } = await import('@/lib/gmail')
   const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -524,8 +509,15 @@ export async function notifyClientOfStageAdvance(params: {
 
   let sent = 0
   let failed = 0
+  let skippedHasApp = 0
 
   for (const recipient of recipients) {
+    // A client with the app already got the push for this stage change (service-delivery step 8a) — no second copy by email.
+    // (An email addressed to one named person looks only at that person's own app — a company-level record cannot be tied to them.)
+    if (await recipientHasPush({ contactId: recipient.contactId, accountId: contact_id ? null : (account_id ?? null), singleRecipient: recipients.length === 1 })) {
+      skippedHasApp++
+      continue
+    }
     const copy = buildStageAdvanceCopy({
       locale: localeFromLanguage(recipient.language),
       serviceName: service_name,
@@ -582,7 +574,7 @@ export async function notifyClientOfStageAdvance(params: {
     }
   }
 
-  return { sent, failed }
+  return { sent, failed, skippedHasApp }
 }
 
 /**
