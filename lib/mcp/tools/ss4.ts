@@ -4,6 +4,7 @@
  * Tools:
  *   ss4_create — Create a pre-filled SS-4 application from CRM account data
  *   ss4_get    — Get SS-4 details by token or account_id
+ *   ss4_resubmit — Archive a signed/faxed SS-4 (with a reason) and create a corrected draft
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
@@ -12,6 +13,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
 import { createSS4 } from "@/lib/operations/ss4"
+import { resubmitSs4 } from "@/lib/operations/ss4-resubmit"
 
 export function registerSs4Tools(server: McpServer) {
 
@@ -321,6 +323,19 @@ Note: signed records (status='signed') cannot be updated.`,
         const { data: ss4, error } = await query.maybeSingle()
 
         if (error || !ss4) {
+          if (params.token && !error) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- new table, not in generated types
+            const { data: arch } = await (supabaseAdmin as any)
+              .from("ss4_applications_archive")
+              .select("id, company_name, status, archived_at, archive_reason, replaced_by_id")
+              .eq("token", params.token)
+              .order("archived_at", { ascending: false })
+              .limit(1)
+              .maybeSingle()
+            if (arch) {
+              return { content: [{ type: "text" as const, text: `SS-4 ${params.token} was ARCHIVED (replaced) on ${arch.archived_at}: ${arch.archive_reason}. Its replacement is ${arch.replaced_by_id}. Query by account_id to see the current SS-4.` }] }
+            }
+          }
           return { content: [{ type: "text" as const, text: `SS-4 not found: ${error?.message || "no data"}` }] }
         }
 
@@ -349,6 +364,48 @@ Note: signed records (status='signed') cannot be updated.`,
               ``,
               `Admin Preview: ${previewUrl}`,
             ].filter(Boolean).join("\n"),
+          }],
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] }
+      }
+    }
+  )
+
+  // ───────────────────────────────────────────────────────────
+  // ss4_resubmit
+  // ───────────────────────────────────────────────────────────
+  server.tool(
+    "ss4_resubmit",
+    `Correct an SS-4 that was ALREADY signed / faxed and turned out wrong (for example the IRS rejected it because Line 6 showed the wrong state). Archives the old SS-4 (kept whole: signature, timestamps, signed PDF — never deleted) with the reason, and creates a corrected DRAFT from the account's current data.
+
+Every check a new SS-4 needs runs FIRST (registered agent in the company's own state, county for Line 6, signer, mailing address). If any fails, NOTHING is archived and the reason is returned — fix it and run again.
+
+Does NOT send anything to the client and does NOT move the service-delivery stage. After this, show Antonio the admin preview link and check Line 6; the client is only asked to sign when staff use "Send to Client for Signature" (or ss4_update status='awaiting_signature'). Once signed, Luca gets the normal "fax it to the IRS" task and email.
+
+Only for signed / submitted / done / fax_failed SS-4s. For a draft or awaiting-signature SS-4 use the workspace "Regenerate from account data" instead.
+SAFETY: this changes a real client's filing — only run it on Antonio's explicit instruction, for the account he named.`,
+    {
+      account_id: z.string().uuid().describe("CRM account UUID"),
+      reason: z.string().min(3).describe("Why the SS-4 is being replaced, e.g. 'IRS rejected: wrong registered agent county'. Stored with the archive and the action log."),
+    },
+    async (params) => {
+      try {
+        const r = await resubmitSs4({ account_id: params.account_id, reason: params.reason, by: "mcp", source: "mcp-ss4-resubmit" })
+        if (!r.ok) {
+          return { content: [{ type: "text" as const, text: `Error (${r.outcome}): ${r.message}` }] }
+        }
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              r.message,
+              ``,
+              `Archived SS-4: ${r.old?.token} (was ${r.old?.status})`,
+              `New SS-4: ${r.ss4?.token} (${r.ss4?.status})`,
+              `Admin Preview: ${r.previewUrl}`,
+              ...(r.warnings?.length ? [``, `Warnings:`, ...r.warnings.map((w) => `- ${w}`)] : []),
+            ].join("\n"),
           }],
         }
       } catch (err) {

@@ -22,6 +22,7 @@ import { isStorePointer } from '@/lib/crm-store/document-pointer'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { latestSs4ResubmitAt } from '@/lib/fax/ss4-resubmit-marker'
 import { isDashboardUser } from '@/lib/auth'
 import { IRS_EIN_FAX_DOMESTIC } from '@/lib/fax/faxage'
 
@@ -82,12 +83,18 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       }
     : null
 
-  // Most recent fax already sent for this flow.
-  const { data: prior, error: priorErr } = await supabaseAdmin
+  // Most recent fax already sent for this flow — only faxes sent AFTER the latest SS-4 resubmit count: an earlier fax carried the OLD SS-4.
+  const resubmit = await latestSs4ResubmitAt(serviceDeliveryId)
+  if (resubmit.error) {
+    return NextResponse.json({ success: false, error: 'Could not check whether this flow was already faxed. Please reload; nothing was sent.' }, { status: 503 })
+  }
+  let priorQuery = supabaseAdmin
     .from('action_log')
     .select('created_at, details, action_type')
     .in('action_type', ['fax_sent', 'fax_claim'])   // an unconfirmed send counts too: the panel must not offer a second fax
     .eq('service_delivery_id', serviceDeliveryId)
+  if (resubmit.at) priorQuery = priorQuery.gt('created_at', resubmit.at)
+  const { data: prior, error: priorErr } = await priorQuery
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()

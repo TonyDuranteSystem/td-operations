@@ -83,7 +83,7 @@ This is the single map of the whole system: every feature, where it lives, the r
 <!-- GENERATED:mcp-tools -->
 _Regenerated 2026-10-28. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
 
-**51 active tool groups**, **222 distinct tool names defined** in `lib/mcp/tools/` (a definition count, NOT a registration count — an unregistered file would inflate it; the group list below is the authoritative active set).
+**51 active tool groups**, **223 distinct tool names defined** in `lib/mcp/tools/` (a definition count, NOT a registration count — an unregistered file would inflate it; the group list below is the authoritative active set).
 
 `AgentApproval` · `AgentMessage` · `AgentThread` · `BankStatement` · `BankingForm` · `Calendar` · `Calendly` · `Catalog` · `Checkpoint` · `Circleback` · `Classify` · `Closure` · `CodebaseRead` · `Crm` · `Deadline` · `DevTask` · `Doc` · `Docai` · `DocumentGeneration` · `Drive` · `Formation` · `Gmail` · `HarborCompliance` · `HermesRead` · `ITINForm` · `Job` · `Knowledge` · `Lead` · `Lease` · `Lock` · `MemberInfo` · `Messaging` · `MyFilesAccess` · `MyFilesDrop` · `Oa` · `Offer` · `Onboarding` · `Operations` · `Portal` · `Referral` · `Signature` · `Sql` · `Ss4` · `Storage` · `Sysdoc` · `Tax` · `TaxQuote` · `TeamChat` · `Testing` · `WelcomePackage` · `Whop`
 <!-- /GENERATED:mcp-tools -->
@@ -194,7 +194,7 @@ _Regenerated 2026-10-28. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-10-23)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-21)_
-- [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-27)_
+- [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-28)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-28)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-28)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-23)_
@@ -202,7 +202,7 @@ _Regenerated 2026-10-28. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-24)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-27)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-10-28)_
-- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-25)_
+- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-28)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-26)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-23)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-27)_
