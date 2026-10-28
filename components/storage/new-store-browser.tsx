@@ -48,6 +48,8 @@ import { DriveImportDialog } from './drive-import-dialog'
 import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keepBothName } from '@/lib/crm-store/names'
 import { HttpError, sameNameKey, errorText, isGoneError, fmtSize, canShowToClient, cantShowReason, resetFailedToWaiting, hasHiddenPart, markFingerprint } from './store-ui-rules'
 import { trapTabKey } from './focus-trap'
+import { WorkspaceStepBody } from '@/components/storage/workspace-step-body'
+import { typeCouldWait, type WaitingWorkspaceStep } from '@/lib/flows/storage-step-rules'
 
 interface Fold { id: string; name: string; kind: string; trashed: boolean; locked?: boolean }
 /** the right-click menu: what was clicked (the menu items are the SAME ones the row's "…" button shows) */
@@ -1923,6 +1925,28 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           }
         }
       }
+      // a workspace step may be waiting for this very document (dev job e3215801, Adam Mihaly's ITIN letter): ask BEFORE anything is saved
+      let workspaceAck: string[] = []
+      // an ordinary type (a passport, a tax return …) can never be a step's document: it is not even sent to the check
+      if (upType && typeCouldWait(upType)) {
+        const wcheck = await postJson<{ hits: WaitingWorkspaceStep[] }>('/api/crm-store/browse/workspace-check', {
+          ownerId: landsIn.ownerId || target.ownerId,
+          folderId: landsIn.folderId || target.folder.id,
+          documentType: upType,
+          ...(target.folder.kind === 'contacts' ? { personContactId: upPerson } : {}),
+        }, 'Could not check whether a workspace is waiting for this file — nothing was saved. Please try again.')
+        if (wcheck.hits.length > 0) {
+          const a = await ask('workspace_step_waiting', 'A workspace step is waiting for this document', <WorkspaceStepBody hits={wcheck.hits} />,
+            [{ key: 'workspace', label: 'Open the workspace', tone: 'primary' }, { key: 'storage', label: 'Save in Storage only' }])
+          if (a === 'workspace') {
+            window.open(wcheck.hits[0].workspacePath, '_blank', 'noopener')
+            toast.message('Nothing was saved here — finish it in the workspace.')
+            return 'cancelled'
+          }
+          if (a !== 'storage') return 'cancelled'
+          workspaceAck = wcheck.hits.map((h) => h.sdId)
+        }
+      }
       // the save
       const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
       // each try asks for a fresh link and a fresh staging path (a connection blip no longer fails the upload)
@@ -1943,11 +1967,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       // the client (Show only / Send message / Cancel) — so an upload can never alert a client without that choice
       const deferShow = upVisible && !needsReview && !o.batch
       const wasVisible = !!same?.clientVisible
-      const r = await postJson<{ fileId?: string; write: string; name: string; visible: boolean; identity?: string | null }>('/api/crm-store/browse/upload', {
+      const r = await postJson<{ fileId?: string; write: string; name: string; visible: boolean; identity?: string | null; workspaceNote?: 'recorded' | 'failed' }>('/api/crm-store/browse/upload', {
         ownerId: target.ownerId, folderId: target.folder.id, storagePath, fileName: file.name, mimeType: file.type, documentType: upType,
         displayName: displayName || undefined, visible: deferShow ? false : upVisible && !needsReview, periodYear, filingAnswer, needsReview,
         ...(target.folder.kind === 'contacts' ? { personContactId: upPerson } : {}),
         ...(target.via && ownerId ? { viaCompanyOwnerId: ownerId } : {}),
+        ...(workspaceAck.length > 0 ? { workspaceAck } : {}),
       }, 'The upload could not be saved — please try again.')
       toast.success(
         r.write === 'versioned' ? `"${r.name}" saved as a new version (the old copy is under Versions) — ${r.visible ? 'the client can see it' : 'hidden from the client'}`
@@ -1955,6 +1980,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             : `"${r.name}" uploaded${needsReview ? ' — marked "Needs review", hidden from the client' : r.visible ? ' and shared with the client' : ' (hidden from the client)'}`,
       )
       if (r.identity) toast.message(r.identity)
+      if (r.workspaceNote === 'failed') toast.error('The file was saved, but the note that it was filed in Storage only could not be recorded on the case — please add that note by hand.')
       if (deferShow && r.fileId && r.write !== 'unchanged') {
         if (r.write === 'versioned' && wasVisible) {
           // the file was already shown to the client: keep it shown, tell the client nothing new
