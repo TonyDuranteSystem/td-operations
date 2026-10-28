@@ -10,7 +10,8 @@
 --      Documents Received  -> itin_application   (the signed package scan)
 --      Submitted to IRS    -> receipt            (the mailing receipt / tracking)
 --      ITIN Approved       -> itin_letter        (the IRS approval letter, CP565)
---    A slug missing from the catalog only means no default is pre-selected (the person chooses) — it never breaks the upload.
+--    A slug missing from the catalog only means no default is pre-selected (the person chooses). A request that sends NO type at all (a browser tab
+--    opened before the picker existed) is then refused with a "reload the page" sentence, because the server applies the box default (it never saves "Other document").
 --
 -- UNDO: scripts/migrations/20261028-1400-itin-stage-emails-off-and-upload-box-types.UNDO.sql
 

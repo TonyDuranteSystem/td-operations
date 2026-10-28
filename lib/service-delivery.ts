@@ -750,10 +750,11 @@ export async function advanceServiceDelivery(
       })
       // A client who has the app gets the push for this move (8a below) — the batched portal-digest email would be a second copy
       // (Antonio 2026-10-28, stage emails skip clients who have the app). The row is still created (the bell shows it); it is just
-      // born "already emailed". A client without the app is unchanged: the digest emails them.
-      const { recipientHasPush } = await import("@/lib/portal/push-presence")
-      // Same scope the digest itself uses: a notice addressed to a PERSON looks only at that person's own app; only a company-only notice looks at the company's.
-      const hasApp = await recipientHasPush({ contactId: delivery.contact_id ?? null, accountId: delivery.contact_id ? null : (delivery.account_id ?? null), singleRecipient: true })
+      // born "already emailed". A client without the app is unchanged: the digest emails them. The check is "does the person the digest
+      // would email have a device" — for a company-only case that is the company's one email address, NOT "any device of the company"
+      // (lib/portal/push-presence.ts). It never throws: any failure means "no app", and the bell + email go out as before.
+      const { stageNoticeRecipientHasApp } = await import("@/lib/portal/push-presence")
+      const hasApp = await stageNoticeRecipientHasApp({ contactId: delivery.contact_id ?? null, accountId: delivery.account_id ?? null })
       await createPortalNotification({
         account_id: delivery.account_id ?? undefined,
         contact_id: delivery.contact_id ?? undefined,

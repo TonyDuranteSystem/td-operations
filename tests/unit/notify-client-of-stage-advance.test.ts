@@ -15,9 +15,8 @@ interface ContactRow {
 
 let contactFixture: ContactRow | null = null
 let accountContactsFixture: Array<{ contact_id?: string; contacts: ContactRow | null }> = []
-/** contact ids / account ids that have a push subscription (the client "has the app") */
-let pushContacts: string[] = []
-let pushAccounts: string[] = []
+/** push subscriptions ("devices"): who they are stamped with — a person, a company, or both (teammate devices have no person) */
+let subs: Array<{ contact_id?: string; account_id?: string }> = []
 
 const gmailPostMock = vi.fn()
 
@@ -38,11 +37,16 @@ vi.mock("@/lib/supabase-admin", () => ({
         }
       }
       if (table === "push_subscriptions") {
-        // select('id', { count, head }).eq(column, value) -> { count }
-        return {
-          select: vi.fn().mockReturnThis(),
-          eq: vi.fn((col: string, val: string) => Promise.resolve({ count: (col === "contact_id" ? pushContacts : pushAccounts).includes(val) ? 1 : 0, error: null })),
+        // select('id', { count, head }).eq(a).eq(b)... -> { count } of the devices matching every filter
+        const filters: Record<string, string> = {}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const b: any = {
+          select: () => b,
+          eq: (col: string, val: string) => { filters[col] = val; return b },
+          then: (resolve: (v: unknown) => unknown) =>
+            resolve({ count: subs.filter((d) => Object.entries(filters).every(([k, v]) => (d as Record<string, string | undefined>)[k] === v)).length, error: null }),
         }
+        return b
       }
       if (table === "portal_notifications") {
         return {
@@ -67,8 +71,7 @@ import { notifyClientOfStageAdvance } from "@/lib/portal/notifications"
 beforeEach(() => {
   contactFixture = null
   accountContactsFixture = []
-  pushContacts = []
-  pushAccounts = []
+  subs = []
   gmailPostMock.mockReset()
   gmailPostMock.mockResolvedValue({ id: "msg-1" })
 })
@@ -234,7 +237,7 @@ describe("notifyClientOfStageAdvance", () => {
 
   it("C (2026-10-28): a client who has the app gets NO stage email (the push already reached them)", async () => {
     contactFixture = { email: "alice@example.com", full_name: "Alice Smith", language: "en" }
-    pushContacts = ["contact-1"]
+    subs = [{ contact_id: "contact-1" }]
 
     const result = await notifyClientOfStageAdvance({ contact_id: "contact-1", service_name: "ITIN", stage_name: "ITIN Approved" })
 
@@ -251,12 +254,21 @@ describe("notifyClientOfStageAdvance", () => {
     expect(gmailPostMock).toHaveBeenCalledTimes(1)
   })
 
-  it("a company with several members: only the member WITH the app is skipped; the others still get the email", async () => {
+  it("an email to ONE named person is not silenced by a company-level device (teammate / other member) — only that person's own devices count", async () => {
+    contactFixture = { email: "alice@example.com", full_name: "Alice Smith", language: "en" }
+    subs = [{ account_id: "acct-1" }, { contact_id: "someone-else", account_id: "acct-1" }]
+
+    const result = await notifyClientOfStageAdvance({ contact_id: "contact-1", account_id: "acct-1", service_name: "ITIN", stage_name: "ITIN Approved" })
+
+    expect(result).toEqual({ sent: 1, failed: 0, skippedHasApp: 0 })
+  })
+
+  it("a company with several members: only the member whose device is stamped with THIS company is skipped; the others still get the email", async () => {
     accountContactsFixture = [
       { contact_id: "m-1", contacts: { email: "one@example.com", full_name: "One", language: "en" } },
       { contact_id: "m-2", contacts: { email: "two@example.com", full_name: "Two", language: "en" } },
     ]
-    pushContacts = ["m-1"]
+    subs = [{ contact_id: "m-1", account_id: "acct-1" }]
 
     const result = await notifyClientOfStageAdvance({ account_id: "acct-1", service_name: "Tax Return 2025", stage_name: "TR Filed" })
 
@@ -264,21 +276,21 @@ describe("notifyClientOfStageAdvance", () => {
     expect(decodeRaw(gmailPostMock.mock.calls[0][1])).toContain("To: two@example.com")
   })
 
-  it("an email to ONE named person is not silenced by a company-level subscription (it cannot be tied to them)", async () => {
-    contactFixture = { email: "alice@example.com", full_name: "Alice Smith", language: "en" }
-    pushAccounts = ["acct-1"]
+  it("a member whose device is stamped with ANOTHER company is not reached by this company's push -> still emailed", async () => {
+    accountContactsFixture = [{ contact_id: "m-1", contacts: { email: "one@example.com", full_name: "One", language: "en" } }]
+    subs = [{ contact_id: "m-1", account_id: "acct-OTHER" }]
 
-    const result = await notifyClientOfStageAdvance({ contact_id: "contact-1", account_id: "acct-1", service_name: "ITIN", stage_name: "ITIN Approved" })
+    const result = await notifyClientOfStageAdvance({ account_id: "acct-1", service_name: "Tax Return 2025", stage_name: "TR Filed" })
 
     expect(result).toEqual({ sent: 1, failed: 0, skippedHasApp: 0 })
   })
 
-  it("a company-level subscription on a multi-member company silences nobody (it cannot be tied to one person)", async () => {
+  it("a company-level device with no person on it (a teammate's) silences nobody", async () => {
     accountContactsFixture = [
       { contact_id: "m-1", contacts: { email: "one@example.com", full_name: "One", language: "en" } },
       { contact_id: "m-2", contacts: { email: "two@example.com", full_name: "Two", language: "en" } },
     ]
-    pushAccounts = ["acct-1"]
+    subs = [{ account_id: "acct-1" }]
 
     const result = await notifyClientOfStageAdvance({ account_id: "acct-1", service_name: "Tax Return 2025", stage_name: "TR Filed" })
 

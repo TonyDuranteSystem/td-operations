@@ -3,7 +3,7 @@
  * (dev job e3215801 — the ITIN letter saved but the case not closed / the client not told must never look like a success).
  */
 import { describe, it, expect } from 'vitest'
-import { uploadOutcome } from '@/lib/flows/upload-outcome'
+import { uploadOutcome, clientWasTold } from '@/lib/flows/upload-outcome'
 
 const opts = { fileName: 'letter.pdf', needsFormationDate: false }
 
@@ -47,3 +47,32 @@ describe('uploadOutcome', () => {
     expect(r).toEqual({ warn: 'Address answer needs a look.', done: 'ok' })
   })
 })
+
+describe('uploadOutcome — the good news stays visible', () => {
+  it('the ITIN was saved and the case closed but the client message failed -> amber says so (staff must not re-upload)', () => {
+    const r = uploadOutcome({ itin_finalize: { finalized: true, warnings: ['The portal message to the client was NOT posted (failed: boom) — tell them in the portal chat.'] } }, opts)
+    expect(r.done).toBeNull()
+    expect(r.warn).toBe('letter.pdf uploaded, the ITIN was saved and the case closed, but: The portal message to the client was NOT posted (failed: boom) — tell them in the portal chat.')
+  })
+  it('finalize did NOT finish -> no claim that anything was saved or closed', () => {
+    const r = uploadOutcome({ itin_finalize: { finalized: false, warnings: ['OCR failed.'] } }, opts)
+    expect(r.warn).toBe('letter.pdf uploaded, but: OCR failed.')
+    expect(r.warn).not.toContain('case closed')
+  })
+})
+
+describe('clientWasTold — did the portal message to the client really go out?', () => {
+  it("'ok' -> yes", () => expect(clientWasTold({ chat: 'ok' })).toBe(true))
+  it('an identical message was sent moments ago (duplicate guard) -> yes, the client has it', () => {
+    expect(clientWasTold({ chat: 'skipped: duplicate within dedup window' })).toBe(true)
+  })
+  it('failed / any other skip / no result at all -> NOT confirmed', () => {
+    expect(clientWasTold({ chat: 'failed: boom' })).toBe(false)
+    expect(clientWasTold({ chat: 'skipped: no recipient (contact_id or account_id required)' })).toBe(false)
+    expect(clientWasTold({ chat: 'skipped: not attempted' })).toBe(false)
+    expect(clientWasTold({})).toBe(false)
+    expect(clientWasTold(null)).toBe(false)
+    expect(clientWasTold(undefined)).toBe(false)
+  })
+})
+

@@ -4,7 +4,7 @@ import { PORTAL_BASE_URL } from '@/lib/config'
 import { buildPortalChatLink } from '@/lib/portal/chat-link'
 import { escapeHtml } from '@/lib/html-escape'
 import { localeFromLanguage, isItalian } from '@/lib/locale'
-import { recipientHasPush } from '@/lib/portal/push-presence'
+import { recipientHasPush, personHasPush, personHasCompanyPush } from '@/lib/portal/push-presence'
 
 // Email digest is handled by /api/cron/portal-digest (every 5 min)
 // All notification types are eligible for digest emails.
@@ -512,9 +512,18 @@ export async function notifyClientOfStageAdvance(params: {
   let skippedHasApp = 0
 
   for (const recipient of recipients) {
-    // A client with the app already got the push for this stage change (service-delivery step 8a) — no second copy by email.
-    // (An email addressed to one named person looks only at that person's own app — a company-level record cannot be tied to them.)
-    if (await recipientHasPush({ contactId: recipient.contactId, accountId: contact_id ? null : (account_id ?? null), singleRecipient: recipients.length === 1 })) {
+    // A client with the app already got the push for this stage change (service-delivery step 8a) — no second copy by email. An email to ONE
+    // named person (the case has a contact) looks at that person's own devices; an email fanned out to a company's members looks at each member's
+    // device stamped with THAT company (the company push reaches only those) — never at "some device of the company" (lib/portal/push-presence.ts).
+    let hasApp = false
+    try {
+      hasApp = contact_id
+        ? await personHasPush(recipient.contactId)
+        : await personHasCompanyPush(recipient.contactId, account_id ?? null)
+    } catch {
+      hasApp = false   // a failed lookup must never silence a client: the email goes out
+    }
+    if (hasApp) {
       skippedHasApp++
       continue
     }

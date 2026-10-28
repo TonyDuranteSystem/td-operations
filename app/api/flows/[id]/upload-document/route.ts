@@ -41,6 +41,7 @@ import { formationReferenceName } from '@/lib/operations/formation-materialize'
 import { saveConfirmedLegalName } from '@/lib/operations/formation-name-checks'
 import { GENERIC_CLIENT_TYPE } from '@/lib/crm-store/save-for-account'
 import { resolveFlowUploadType, boxDefaultType } from '@/lib/flows/flow-upload-type'
+import { clientWasTold } from '@/lib/flows/upload-outcome'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
 // migration but the generated DB types haven't been regenerated yet.
@@ -552,10 +553,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (itinFinalize) {
       if (itinFinalize.finalized) {
         // "client notified" only when the portal message really went out (the chat step can be skipped or fail on its own)
-        const told = !itinFinalize.notify || itinFinalize.notify.chat === 'ok'
+        const told = clientWasTold(itinFinalize.notify)
         detail += ` — ITIN ${itinFinalize.itin_number} saved to the contact (issued ${itinFinalize.itin_issue_date}), flow completed${told ? ', client notified.' : '.'}`
         // a warning (not only text), so the page shows it amber like every other "saved, but…" outcome
-        if (!told) itinFinalize.warnings.push(`The portal message to the client was NOT posted (${itinFinalize.notify?.chat}) — tell them in the portal chat.`)
+        if (!told) {
+          itinFinalize.warnings.push(itinFinalize.notify
+            ? `The portal message to the client was NOT posted (${itinFinalize.notify.chat}) — tell them in the portal chat.`
+            : 'Could not confirm the client was messaged — check the portal chat and tell them if the message is not there.')
+        }
       }
       if (itinFinalize.warnings.length) {
         detail += ` — ⚠️ ${itinFinalize.warnings.join(' ')}`
