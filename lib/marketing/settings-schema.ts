@@ -102,13 +102,13 @@ export const MARKETING_SETTING_DEFS = {
     fallback: {
       // calls and filters leads: no payment links, no Money, no export, no team management
       // no inbox: the setter has no email address of her own (27 Oct 2026, Rocco and Antonio)
-      setter: ["leads.read", "leads.call", "leads.mark", "leads.worklist", "team.notes", "whatsapp", "chat"],
+      setter: ["leads.read", "leads.call", "leads.mark", "leads.worklist", "team.notes", "whatsapp", "chat", "documents"],
       // ads, video, posts: chat, content, reports; reads leads
-      content: ["chat", "inbox", "content.manage", "reports.read", "leads.read"],
+      content: ["chat", "inbox", "content.manage", "reports.read", "leads.read", "documents", "documents.manage"],
       // contacts the leads the setters pass: works them, sends the free-call link, no money screens
-      seller: ["leads.read", "leads.pick", "leads.call", "leads.mark", "team.notes", "whatsapp", "chat", "inbox", "calls.host"],
+      seller: ["leads.read", "leads.pick", "leads.call", "leads.mark", "team.notes", "whatsapp", "chat", "inbox", "calls.host", "documents", "documents.manage"],
       // sees everything, changes nothing: for analysing the ads and the team
-      analyst: ["leads.read", "team.activity", "team.notes", "reports.read"],
+      analyst: ["leads.read", "team.activity", "team.notes", "reports.read", "documents"],
     } as Record<string, string[]>,
   },
   /** Which kinds of sale carry commission terms. A catalog value, so a new kind is a settings change. */
