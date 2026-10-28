@@ -138,6 +138,28 @@ export function matchStorageStepHints(input: {
 }
 
 /**
+ * The name shown in the pop-up ("Adam Mihaly" / the company), or null when this owner is neither a person with a contact nor a company
+ * with an account (nothing can be waiting for it). Kept apart from the case lookup below on purpose.
+ */
+async function ownerDisplayName(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* tables are not in the generated types
+  db: any,
+  owner: { kind: string; contact_id: string | null; account_id: string | null },
+): Promise<string | null> {
+  if (owner.kind === 'person' && owner.contact_id) {
+    const c = await db.from('contacts').select('full_name').eq('id', owner.contact_id).maybeSingle()
+    if (c.error) throw new Error(c.error.message)
+    return (c.data?.full_name as string | undefined) ?? 'This person'
+  }
+  if (owner.kind === 'company' && owner.account_id) {
+    const a = await db.from('accounts').select('company_name').eq('id', owner.account_id).maybeSingle()
+    if (a.error) throw new Error(a.error.message)
+    return (a.data?.company_name as string | undefined) ?? 'This company'
+  }
+  return null
+}
+
+/**
  * The open cases of the owner of this storage (a person's ITIN case, a company's cases) that are waiting for a file of this type going
  * into this folder. Throws when a record cannot be read — the caller refuses the save ("nothing was saved"), it never lets it through.
  */
@@ -162,7 +184,6 @@ export async function findWaitingWorkspaceSteps(input: {
 
   const serviceTypes = Array.from(new Set(STORAGE_STEP_HINTS.map((h) => h.serviceType)))
   let q = db.from('service_deliveries').select('id, service_type, stage, status').in('service_type', serviceTypes)
-  let who = ''
   let owner: { kind: string; contact_id: string | null; account_id: string | null } | null
   if (input.personContactId) {
     owner = { kind: 'person', contact_id: input.personContactId, account_id: null }
@@ -173,19 +194,10 @@ export async function findWaitingWorkspaceSteps(input: {
   }
   if (!owner) return []
 
-  if (owner.kind === 'person' && owner.contact_id) {
-    q = q.eq('contact_id', owner.contact_id)
-    const c = await db.from('contacts').select('full_name').eq('id', owner.contact_id).maybeSingle()
-    if (c.error) throw new Error(c.error.message)
-    who = (c.data?.full_name as string | undefined) ?? 'This person'
-  } else if (owner.kind === 'company' && owner.account_id) {
-    q = q.eq('account_id', owner.account_id)
-    const a = await db.from('accounts').select('company_name').eq('id', owner.account_id).maybeSingle()
-    if (a.error) throw new Error(a.error.message)
-    who = (a.data?.company_name as string | undefined) ?? 'This company'
-  } else {
-    return []
-  }
+  const who = await ownerDisplayName(db, owner)
+  if (who === null) return []
+  if (owner.kind === 'person') q = q.eq('contact_id', owner.contact_id)
+  else q = q.eq('account_id', owner.account_id)
   const cases = await q
   if (cases.error) throw new Error(cases.error.message)
 
