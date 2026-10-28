@@ -84,7 +84,29 @@ const STATE_MAP: Record<string, string> = {
   "DELAWARE": "DE", "DE": "DE",
 }
 
-export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Result> {
+/** Everything createSS4 decided BEFORE writing: the row to insert plus what the after-insert steps need. */
+export interface PreparedSS4 {
+  row: Record<string, unknown>
+  account_id: string
+  company_name: string
+  contactId: string
+  contactName: string
+  entityType: string
+  state: string
+  memberCount: number
+  /** True when the caller named the responsible party (writes the pick record). */
+  explicitContact: boolean
+}
+
+/**
+ * Steps 1–9 of the create: runs EVERY prerequisite (state, signer, member count, registered agent in the company's own state + county,
+ * mailing address) and returns the row to insert — it writes NOTHING. A failure returns the same structured result createSS4 always did.
+ * `allowExisting` skips only the "an SS-4 already exists" stop; the resubmit flow uses it so all the checks run BEFORE the old SS-4 is touched.
+ */
+export async function prepareSS4(
+  params: CreateSS4Params,
+  opts: { allowExisting?: boolean } = {},
+): Promise<CreateSS4Result & { prepared?: PreparedSS4 }> {
   // ─── 1. FETCH ACCOUNT ───
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: account, error: accErr } = await (supabaseAdmin as any)
@@ -107,7 +129,7 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
     .eq("account_id", params.account_id)
     .maybeSingle()
 
-  if (existing) {
+  if (existing && !opts.allowExisting) {
     return {
       ok: false,
       outcome: "already_exists",
@@ -323,41 +345,74 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
     .replace(/(^-|-$)/g, "")
   const token = `ss4-${slug}-${new Date().getFullYear()}`
 
-  // ─── 9. INSERT ───
+  // ─── 9. THE ROW TO INSERT ───
   const title = entityType === "SMLLC" ? "Owner" : entityType === "MMLLC" ? "Member" : "President"
+
+  const row: Record<string, unknown> = {
+    token,
+    account_id: params.account_id,
+    contact_id: contactId,
+    company_name: account.company_name,
+    entity_type: entityType,
+    state_of_formation: state,
+    formation_date: account.formation_date || null,
+    member_count: memberCount,
+    responsible_party_name: contact.full_name,
+    responsible_party_itin: contact.itin_number || null,
+    responsible_party_phone: contact.phone || null,
+    responsible_party_title: title,
+    language: "en",
+    county_and_state: resolvedCountyAndState,
+    mailing_street: mailingStreet,
+    mailing_city_state_zip: mailingCityStateZip,
+    // Generate the access code explicitly (8 hex chars, matching the existing
+    // format) rather than relying on a DB column default — the default is
+    // absent in sandbox (schema drift), which left access_code NULL and broke
+    // the portal sign URL (/ss4/{token}/{access_code} → "Invalid access code").
+    access_code: randomBytes(4).toString("hex"),
+    status: params.ready_to_sign ? "awaiting_signature" : "draft",
+  }
+
+  return {
+    ok: true,
+    outcome: "created",
+    prepared: {
+      row, account_id: params.account_id, company_name: account.company_name, contactId, contactName: contact.full_name,
+      entityType, state, memberCount, explicitContact: !!params.contact_id,
+    },
+  }
+}
+
+export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Result> {
+  const prep = await prepareSS4(params)
+  if (!prep.prepared) return prep
 
   const { data: ss4, error: insertErr } = await supabaseAdmin
     .from("ss4_applications")
-    .insert({
-      token,
-      account_id: params.account_id,
-      contact_id: contactId,
-      company_name: account.company_name,
-      entity_type: entityType,
-      state_of_formation: state,
-      formation_date: account.formation_date || null,
-      member_count: memberCount,
-      responsible_party_name: contact.full_name,
-      responsible_party_itin: contact.itin_number || null,
-      responsible_party_phone: contact.phone || null,
-      responsible_party_title: title,
-      language: "en",
-      county_and_state: resolvedCountyAndState,
-      mailing_street: mailingStreet,
-      mailing_city_state_zip: mailingCityStateZip,
-      // Generate the access code explicitly (8 hex chars, matching the existing
-      // format) rather than relying on a DB column default — the default is
-      // absent in sandbox (schema drift), which left access_code NULL and broke
-      // the portal sign URL (/ss4/{token}/{access_code} → "Invalid access code").
-      access_code: randomBytes(4).toString("hex"),
-      status: params.ready_to_sign ? "awaiting_signature" : "draft",
-    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .insert(prep.prepared.row as any)
     .select("id, token, access_code, status")
     .single()
 
   if (insertErr || !ss4) {
     return { ok: false, outcome: "error", message: `Error creating SS-4: ${insertErr?.message || "insert failed"}` }
   }
+
+  return finishSS4Create(prep.prepared, ss4)
+}
+
+/**
+ * Steps 10–12: everything that follows the insert (log, member-count sync, the flow document row, the stored unsigned copy, the
+ * signer notification when created signable). Shared by createSS4 and the resubmit flow so a corrected SS-4 gets exactly the same set-up.
+ */
+export async function finishSS4Create(
+  prepared: PreparedSS4,
+  ss4: { id: string; token: string; access_code: string; status: string },
+): Promise<CreateSS4Result> {
+  const { account_id, company_name, contactId, entityType, state, memberCount } = prepared
+  const params = { account_id, contact_id: prepared.explicitContact ? contactId : undefined }
+  const account = { company_name }
+  const contact = { full_name: prepared.contactName }
 
   // ─── 10. LOG ───
   // When the caller EXPLICITLY named the responsible party (ss4_create with
