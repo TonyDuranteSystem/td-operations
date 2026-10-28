@@ -378,7 +378,8 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
   }
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4">
+    // data-guide-*: the workspace guide (lib/flows/workspace-guide.ts) finds the box by its document type and circles its parts
+    <div className="rounded-xl border border-zinc-200 bg-white p-4" data-guide-box={documentType || undefined}>
       <div className="flex items-center gap-2 mb-3">
         <FileUp className="h-4 w-4 text-zinc-400" />
         <h3 className="text-sm font-semibold text-zinc-900">{uploadLabel}</h3>
@@ -397,6 +398,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
       <div className="flex flex-wrap items-center gap-2">
         <label
           htmlFor={`flow-upload-${serviceDeliveryId}`}
+          data-guide-part="choose"
           className={`inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-md border transition-colors ${
             uploading
               ? 'border-zinc-200 text-zinc-400 cursor-not-allowed'
@@ -432,6 +434,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
             value={docType}
             onChange={(e) => setDocType(e.target.value)}
             disabled={uploading || !docTypes}
+            data-guide-part="type"
             className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-800 disabled:opacity-50"
           >
             {!docTypes && !typesError && <option value="">Loading…</option>}
@@ -453,6 +456,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         type="button"
         onClick={handleUpload}
         disabled={!file || uploading || !principalOfficeReady || !typeReady}
+        data-guide-part="submit"
         className={`mt-3 inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
           !file || uploading || !principalOfficeReady || !typeReady
             ? 'bg-zinc-200 text-zinc-400 cursor-not-allowed'

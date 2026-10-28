@@ -178,6 +178,7 @@ export function ActionButtons({ serviceDeliveryId, actions }: ActionButtonsProps
               type="button"
               onClick={() => runAction(action)}
               disabled={disabled}
+              data-guide-action={action.targetStage}
               className={`${base} ${styles}`}
             >
               {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}

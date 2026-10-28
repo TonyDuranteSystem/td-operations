@@ -81,7 +81,8 @@ export const STORAGE_STEP_HINTS: readonly StorageStepHint[] = [
     workspaceDoes: [
       'read the ITIN from the letter and save it on the contact',
       'show the letter to the client',
-      'tell the client (message, notification and email)',
+      // verified against lib/itin/finalize-approval.ts (2026-10-28, #870): the portal message + bell/push; an email only as the "unread message" nudge for a client without the app
+      'tell the client in the portal (a message and a notification; an email only if they do not have the app)',
       'close the case',
     ],
     // a Storage save typed "ITIN Letter" reads the letter itself (lib/crm-store/browse.ts, readIdentityIntoContact) — the other letter types do not
@@ -182,7 +183,9 @@ export function matchStorageStepHints(input: {
       how: m.hint.howByStage[c.stage] ?? '',
       storageDoes: also.map((a) => a.storage),
       workspaceDoes: m.hint.workspaceDoes.filter((w) => !also.some((a) => a.does === w)),
-      workspacePath: `/flows/${c.sdId}`,
+      // "Open the workspace" opens the case with the step-by-step guide on (lib/flows/workspace-guide.ts): the guide is about the document this
+      // row's workspace box takes — the row's first type (itin_application / receipt / itin_letter are the types the ITIN boxes carry).
+      workspacePath: `/flows/${c.sdId}?guide=${m.hint.documentTypes[0]}`,
       contactId: c.contactId ?? null,
       accountId: c.accountId ?? null,
     })
