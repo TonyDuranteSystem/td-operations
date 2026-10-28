@@ -684,3 +684,19 @@ final class ChangeBatchTests: XCTestCase {
         XCTAssertLessThanOrEqual(ChangeBatch.pageSize, 200); XCTAssertGreaterThan(ChangeBatch.parallelLookups, 1)
     }
 }
+
+final class PushPlanTests: XCTestCase {
+    func testSomethingChangedAsksAgainAtOnce() {
+        XCTAssertEqual(PushPlan.pause(afterAnswerIn: 1, gotChanges: true, failures: 0), 0)
+    }
+    func testAnEmptyAnswerAfterTheFullWaitAsksAgainAtOnce() {
+        XCTAssertEqual(PushPlan.pause(afterAnswerIn: 20, gotChanges: false, failures: 0), 0)
+    }
+    func testAnEmptyAnswerThatCameBackAlmostAtOnceNeverLoopsTight() {
+        XCTAssertEqual(PushPlan.pause(afterAnswerIn: 0.2, gotChanges: false, failures: 0), 10)
+    }
+    func testTroubleBacksOffAndStopsAtAMinute() {
+        XCTAssertEqual((1...7).map { PushPlan.pause(afterAnswerIn: 0, gotChanges: false, failures: $0) }, [5, 10, 20, 40, 60, 60, 60])
+    }
+    func testTheWaitIsWithinWhatTheCRMAllows() { XCTAssertEqual(PushPlan.waitSeconds, 20) }
+}

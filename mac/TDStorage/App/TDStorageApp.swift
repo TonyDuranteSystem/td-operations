@@ -108,6 +108,35 @@ final class AppModel: ObservableObject {
     private func nudgeFinder() {
         NSFileProviderManager(for: domain)?.signalEnumerator(for: .workingSet) { _ in }
     }
+    /// The "tell me when something changes" question (like Drive / Dropbox): one question stays open to the CRM; the moment a change is made
+    /// anywhere, the answer comes back and Finder is nudged, so a new file shows up in about a second. Falls back to the once-a-minute check
+    /// (`checkLease`) when this cannot run, so it can only make things faster.
+    private func startListening() {
+        listenTask?.cancel()
+        listenTask = Task { [weak self] in
+            var cursor: String?
+            var failures = 0
+            while !Task.isCancelled {
+                guard let self else { return }
+                let began = Date()
+                var pause: TimeInterval
+                do {
+                    if cursor == nil { cursor = try await self.api.head() }
+                    let page = try await self.api.changes(since: cursor, limit: ChangeBatch.pageSize, wait: PushPlan.waitSeconds)
+                    failures = 0
+                    if page.resync { cursor = nil } else if let c = page.cursor { cursor = c }
+                    let got = page.resync || !page.changes.isEmpty
+                    if got { self.nudgeFinder() }
+                    pause = PushPlan.pause(afterAnswerIn: Date().timeIntervalSince(began), gotChanges: got, failures: 0)
+                } catch is CancellationError { return }
+                catch {                                              // offline, signed out, revoked: rest and try again (the once-a-minute check signs the Mac out and stops this)
+                    failures += 1
+                    pause = PushPlan.pause(afterAnswerIn: 0, gotChanges: false, failures: failures)
+                }
+                if pause > 0 { try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000)) }
+            }
+        }
+    }
     private func noteLatest(_ latest: Int?) {
         guard let latest, latest > currentBuild, Date().timeIntervalSince(lastUpdateNudge) > 600 else { return }
         lastUpdateNudge = Date()
@@ -124,6 +153,7 @@ final class AppModel: ObservableObject {
     private lazy var lease = KeychainLeaseStore(service: info["TDKeychainService"] as? String ?? "td-storage", accessGroup: info["TDKeychainGroup"] as? String)
     private lazy var api = StorageAPI(baseURL: baseURL, store: store, lease: lease)
     private var leaseTimer: Timer?
+    private var listenTask: Task<Void, Never>?
     /// how often the app contacts the CRM (keeps the lease alive and hears about a newer build). The CRM sets it (`updateHintSeconds`); until it has said, 5 minutes.
     private var checkEvery: TimeInterval = 300
     private var wakeObserver: NSObjectProtocol?
@@ -148,6 +178,7 @@ final class AppModel: ObservableObject {
             noteLatest(me.latestBuild)
             applyPace(me.updateHintSeconds)
             nudgeFinder()
+            startListening()
             state = .signedIn(me.email ?? "signed in")
             enableStartAtLogin()
             do { try await register() } catch {
@@ -176,6 +207,7 @@ final class AppModel: ObservableObject {
             enableStartAtLogin()
             try await register()
             startLeaseWatch()
+            startListening()
             state = .signedIn(me.email ?? "signed in")
         } catch LoopbackSignIn.SignInError.timedOut { state = .problem("The sign-in took too long. Try again.") }
         catch StorageAPIError.forbidden(let why) { state = .problem(why) }
@@ -248,6 +280,7 @@ final class AppModel: ObservableObject {
 
     private func wipe() async {
         leaseTimer?.invalidate()
+        listenTask?.cancel()
         store.clear()
         lease.clear()
         try? await NSFileProviderManager.remove(domain)     // removes the TD Storage location and everything cached for it

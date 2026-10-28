@@ -16,3 +16,19 @@ public enum ChangeBatch {
         return changes.enumerated().compactMap { lastIndex["\($0.element.kind.rawValue):\($0.element.id)"] == $0.offset ? $0.element : nil }
     }
 }
+
+/// PURE: pacing of the app's "tell me when something changes" question (2026-10-28).
+public enum PushPlan {
+    /// How long the CRM may keep one question open (it caps this itself, and can switch it off with 0).
+    public static let waitSeconds = 20
+
+    /// How long to rest before asking again.
+    ///  - trouble (offline, server error): 5, 10, 20, 40, then 60 seconds;
+    ///  - something changed: ask again at once;
+    ///  - an EMPTY answer that came back almost at once means the CRM has the waiting switched off: ask only every 10 seconds, never in a tight loop.
+    public static func pause(afterAnswerIn elapsed: TimeInterval, gotChanges: Bool, failures: Int) -> TimeInterval {
+        if failures > 0 { return min(60, 5 * pow(2, Double(min(failures - 1, 4)))) }
+        if gotChanges { return 0 }
+        return elapsed < 3 ? 10 : 0
+    }
+}
