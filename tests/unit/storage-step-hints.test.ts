@@ -40,7 +40,7 @@ vi.mock('@/lib/supabase-admin', () => ({
   },
 }))
 
-import { matchStorageStepHints, couldMatchAnyHint, findWaitingWorkspaceSteps, STORAGE_STEP_HINTS } from '@/lib/flows/storage-step-hints'
+import { matchStorageStepHints, couldMatchAnyHint, typeCouldWait, findWaitingWorkspaceSteps, STORAGE_STEP_HINTS } from '@/lib/flows/storage-step-hints'
 
 const kase = (stage: string, status = 'active', serviceType = 'ITIN') => ({ sdId: 'sd-1', serviceType, stage, status, who: 'Adam Mihaly' })
 
@@ -119,17 +119,63 @@ describe('matchStorageStepHints — what a Storage save would skip', () => {
     expect(r.map((x) => x.sdId)).toEqual(['b'])
   })
 
-  it('every row names what the workspace does (nothing is claimed that is not listed)', () => {
+  it('every row names what the workspace does (nothing is claimed that is not listed) and EVERY stage it covers says what to press there', () => {
     for (const h of STORAGE_STEP_HINTS) {
       expect(h.stages.length).toBeGreaterThan(0)
       expect(h.documentTypes.length).toBeGreaterThan(0)
       expect(h.asks.length).toBeGreaterThan(5)
       expect(h.workspaceDoes.length).toBeGreaterThan(0)
+      for (const stage of h.stages) expect((h.howByStage[stage] ?? '').length, `${h.asks} @ ${stage}`).toBeGreaterThan(10)
     }
+  })
+
+  it('the pop-up says the exact next click for the stage the case is at (Adam: "IRS Processing" has NO upload box — press "ITIN Received" first)', () => {
+    const letterAt = (stage: string) => matchStorageStepHints({ cases: [kase(stage)], documentType: 'itin_letter', folderKind: 'itin' })[0].how
+    expect(letterAt('IRS Processing')).toContain('Press "ITIN Received"')
+    expect(letterAt('IRS Processing')).toContain('Upload CP565 ITIN Letter')
+    expect(letterAt('ITIN Approved')).toContain('Upload CP565 ITIN Letter')
+    // at Submitted to IRS the only box is for the mailing receipt — the letter must NOT go there
+    expect(letterAt('Submitted to IRS')).toContain('Submitted - Wait for IRS')
+    expect(letterAt('Submitted to IRS')).toContain('ITIN Received')
+    expect(letterAt('Submitted to IRS')).toContain('mailing-receipt box')
+    const scanAt = (stage: string) => matchStorageStepHints({ cases: [kase(stage)], documentType: 'itin_application', folderKind: 'itin' })[0].how
+    expect(scanAt('Shipped')).toContain('Documents Received at Office')
+    expect(scanAt('Documents Received')).toContain('Upload received package scan')
+  })
+
+  it('what Storage itself does is told truthfully: a file typed "ITIN Letter" is read by Storage; the other letter types are not', () => {
+    const t = (type: string) => matchStorageStepHints({ cases: [kase('IRS Processing')], documentType: type, folderKind: 'itin' })[0]
+    const letter = t('itin_letter')
+    expect(letter.storageDoes.join(' ')).toContain('read the ITIN number off the letter')
+    expect(letter.workspaceDoes).not.toContain('read the ITIN from the letter and save it on the contact')
+    expect(letter.workspaceDoes).toContain('show the letter to the client')
+    expect(letter.workspaceDoes).toContain('close the case')
+    for (const other of ['itin_cp565', 'itin_letter_client_received', 'other_document']) {
+      expect(t(other).storageDoes, other).toEqual([])
+      expect(t(other).workspaceDoes, other).toContain('read the ITIN from the letter and save it on the contact')
+    }
+  })
+
+  it('a hit says HOW it matched: the type is the step\'s document, or only "Other document" in the ITIN folder (it MAY be that document)', () => {
+    expect(matchStorageStepHints({ cases: [kase('IRS Processing')], documentType: 'itin_letter', folderKind: 'itin' })[0].matchedBy).toBe('type')
+    expect(matchStorageStepHints({ cases: [kase('IRS Processing')], documentType: 'other_document', folderKind: 'itin' })[0].matchedBy).toBe('folder')
+  })
+
+  it('"Receipt" is a generic type: it only counts inside the ITIN folder (an office receipt in another folder is just a receipt)', () => {
+    expect(matchStorageStepHints({ cases: [kase('Submitted to IRS')], documentType: 'receipt', folderKind: 'itin' })).toHaveLength(1)
+    expect(matchStorageStepHints({ cases: [kase('Submitted to IRS')], documentType: 'receipt', folderKind: 'personal' })).toHaveLength(0)
+    expect(matchStorageStepHints({ cases: [kase('Submitted to IRS')], documentType: 'receipt', folderKind: null })).toHaveLength(0)
+  })
+
+  it('the case\'s own person / company ids travel with the hit (the Storage-only note is shown on THEIR activity)', () => {
+    const r = matchStorageStepHints({ cases: [{ ...kase('IRS Processing'), contactId: 'c-1', accountId: null }], documentType: 'itin_letter', folderKind: 'itin' })
+    expect(r[0].contactId).toBe('c-1')
+    expect(r[0].accountId).toBeNull()
+    expect(matchStorageStepHints({ cases: [kase('IRS Processing')], documentType: 'itin_letter', folderKind: 'itin' })[0].contactId).toBeNull()
   })
 })
 
-describe('couldMatchAnyHint — an ordinary upload never touches the database', () => {
+describe('couldMatchAnyHint / typeCouldWait — an ordinary upload is not even sent to the check', () => {
   it('false for ordinary documents, true for the workspace types and the ITIN folder', () => {
     expect(couldMatchAnyHint('passport', 'personal')).toBe(false)
     expect(couldMatchAnyHint('other_document', 'personal')).toBe(false)
@@ -138,6 +184,18 @@ describe('couldMatchAnyHint — an ordinary upload never touches the database', 
     expect(couldMatchAnyHint('other_document', 'itin')).toBe(true)
     expect(couldMatchAnyHint(null, 'itin')).toBe(true)
     expect(couldMatchAnyHint('passport', 'itin')).toBe(false)
+    expect(couldMatchAnyHint('receipt', 'personal')).toBe(false)
+    expect(couldMatchAnyHint('receipt', 'itin')).toBe(true)
+  })
+
+  it('typeCouldWait: ordinary types false (no database, no extra call); workspace types, "Other document", "Receipt" and no type true', () => {
+    for (const t of ['passport', 'id_document', 'tax_return', 'articles_of_organization', 'bank_statement', 'form_1040_nr', 'ein_letter_irs']) {
+      expect(typeCouldWait(t), t).toBe(false)
+    }
+    for (const t of ['itin_letter', 'itin_cp565', 'itin_letter_client_received', 'itin_application', 'form_w_7', 'receipt', 'other_document']) {
+      expect(typeCouldWait(t), t).toBe(true)
+    }
+    expect(typeCouldWait(null)).toBe(true)
   })
 })
 
@@ -146,7 +204,7 @@ beforeEach(() => {
   fx.owner = { kind: 'person', contact_id: 'c-1', account_id: null }
   fx.contact = { full_name: 'Adam Mihaly' }
   fx.account = { company_name: 'Acme LLC' }
-  fx.cases = [{ id: 'sd-1', service_type: 'ITIN', stage: 'IRS Processing', status: 'active' }]
+  fx.cases = [{ id: 'sd-1', service_type: 'ITIN', stage: 'IRS Processing', status: 'active', contact_id: 'c-1', account_id: null }]
   fx.fail = { folder: false, owner: false, contact: false, cases: false }
   fx.queried = []
   fx.filters = []
@@ -160,11 +218,34 @@ describe('findWaitingWorkspaceSteps — the lookup', () => {
     expect(fx.filters).toContainEqual(['service_deliveries.contact_id', 'c-1'])
   })
 
-  it('an ordinary upload (a passport into Personal documents) reads only the folder and stops: no owner, no case lookups', async () => {
+  it('an ordinary upload (a passport, a tax return) answers "nothing waiting" WITHOUT reading anything — not even the folder', async () => {
     fx.folder = { kind: 'personal' }
-    const r = await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'passport' })
+    for (const t of ['passport', 'tax_return', 'bank_statement']) {
+      expect(await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: t })).toEqual([])
+    }
+    expect(fx.queried).toEqual([])
+  })
+
+  it('a generic type that is only sometimes a step\'s document ("Receipt" into Personal documents) reads the folder and stops: no owner, no case lookups', async () => {
+    fx.folder = { kind: 'personal' }
+    const r = await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'receipt' })
     expect(r).toEqual([])
     expect(fx.queried).toEqual(['store_folders'])
+  })
+
+  it('the hit carries the case\'s own contact id (and account id) from the case row', async () => {
+    const r = await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })
+    expect(r[0]).toMatchObject({ contactId: 'c-1', accountId: null, matchedBy: 'type' })
+    expect(r[0].how).toContain('ITIN Received')
+  })
+
+  it('a person override only counts for a "2. Contacts" folder — anywhere else the save ignores it, so the check uses the storage\'s own owner', async () => {
+    fx.folder = { kind: 'itin' }
+    const r = await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter', personContactId: 'c-OTHER' })
+    expect(r).toHaveLength(1)
+    expect(fx.queried).toContain('store_owners')
+    expect(fx.filters).toContainEqual(['service_deliveries.contact_id', 'c-1'])
+    expect(fx.filters).not.toContainEqual(['service_deliveries.contact_id', 'c-OTHER'])
   })
 
   it('a company storage looks at the company\'s own cases', async () => {

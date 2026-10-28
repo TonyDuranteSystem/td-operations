@@ -13,6 +13,9 @@ const fx = vi.hoisted(() => ({
   saved: [] as Array<Record<string, unknown>>,
   saveThrows: false,
   logs: [] as Array<Record<string, unknown>>,
+  logError: false,
+  logThrows: false,
+  write: 'created' as 'created' | 'unchanged' | 'versioned',
   removed: [] as string[],
 }))
 
@@ -34,13 +37,20 @@ vi.mock('@/lib/crm-store/browse', () => ({
   staffUploadToStore: async (p: Record<string, unknown>) => {
     if (fx.saveThrows) throw new Error('no space')
     fx.saved.push(p)
-    return { fileId: 'file-1', write: 'created', name: String(p.fileName), visible: false }
+    return { fileId: 'file-1', write: fx.write, name: String(p.fileName), visible: false }
   },
 }))
 vi.mock('@/lib/crm-store/lock-errors', () => ({ plainStoreError: (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback) }))
 vi.mock('@/lib/supabase-admin', () => ({
   supabaseAdmin: {
-    from: (table: string) => ({ insert: (row: Record<string, unknown>) => { if (table === 'action_log') fx.logs.push(row); return Promise.resolve({ error: null }) }, select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { kind: 'person' } }) }) }) }),
+    from: (table: string) => ({
+      insert: (row: Record<string, unknown>) => {
+        if (fx.logThrows) throw new Error('insert exploded')
+        if (table === 'action_log' && !fx.logError) fx.logs.push(row)
+        return Promise.resolve({ error: fx.logError ? { message: 'db down' } : null })
+      },
+      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { kind: 'person' } }) }) }),
+    }),
     storage: { from: () => ({ remove: async (paths: string[]) => { fx.removed.push(...paths); return { data: null, error: null } } }) },
   },
 }))
@@ -48,7 +58,11 @@ vi.mock('@/lib/supabase-admin', () => ({
 import { POST as check } from '@/app/api/crm-store/browse/workspace-check/route'
 import { POST as upload } from '@/app/api/crm-store/browse/upload/route'
 
-const HIT = { sdId: 'sd-1', serviceType: 'ITIN', stage: 'IRS Processing', who: 'Adam Mihaly', asks: 'the IRS approval letter (CP565)', workspaceDoes: ['close the case'], workspacePath: '/flows/sd-1' }
+const HIT = {
+  sdId: 'sd-1', serviceType: 'ITIN', stage: 'IRS Processing', who: 'Adam Mihaly', asks: 'the IRS approval letter (CP565)', matchedBy: 'type',
+  how: 'Press "ITIN Received" first, then upload the letter in the "Upload CP565 ITIN Letter" box.', storageDoes: [], workspaceDoes: ['close the case'],
+  workspacePath: '/flows/sd-1', contactId: 'c-1', accountId: null,
+}
 const req = (path: string, body: Record<string, unknown>) => new NextRequest(`http://localhost${path}`, { method: 'POST', body: JSON.stringify(body) })
 const UP = { ownerId: 'o-1', folderId: 'f-1', storagePath: 'crm-uploads/store-staging/o-1/1_abc_letter.pdf', fileName: 'letter.pdf', mimeType: 'application/pdf', documentType: 'itin_letter' }
 
@@ -60,6 +74,9 @@ beforeEach(() => {
   fx.saved = []
   fx.saveThrows = false
   fx.logs = []
+  fx.logError = false
+  fx.logThrows = false
+  fx.write = 'created'
   fx.removed = []
 })
 
@@ -105,6 +122,7 @@ describe('POST /api/crm-store/browse/upload — the backstop', () => {
     expect(body.code).toBe('workspace_step_waiting')
     expect(body.error).toContain("Adam Mihaly's ITIN case is at \"IRS Processing\"")
     expect(body.error).toContain('nothing was saved')
+    expect(body.error).toContain('In the workspace: Press "ITIN Received" first')   // the exact next click, not just "do it in the workspace"
     expect(body.hits).toHaveLength(1)
     expect(fx.saved).toHaveLength(0)
     expect(fx.removed).toEqual([UP.storagePath])
@@ -119,6 +137,49 @@ describe('POST /api/crm-store/browse/upload — the backstop', () => {
     expect(fx.logs[0]).toMatchObject({ action_type: 'storage_filed_workspace_document', service_delivery_id: 'sd-1', record_id: 'file-1', actor: 'dashboard:luca' })
     expect(String(fx.logs[0].summary)).toContain('filed in Storage only')
     expect(String(fx.logs[0].summary)).toContain('the workspace step was not done')
+    expect((await res.json()).workspaceNote).toBe('recorded')
+  })
+
+  it('the record is tied to the PERSON (and company) too, so it shows on their own activity — not only on the case', async () => {
+    fx.hits = [{ ...HIT, contactId: 'c-1', accountId: 'a-1' }]
+    await upload(req('/x', { ...UP, workspaceAck: ['sd-1'] }))
+    expect(fx.logs[0]).toMatchObject({ service_delivery_id: 'sd-1', contact_id: 'c-1', account_id: 'a-1' })
+  })
+
+  it('a file only typed "Other document" in the ITIN folder is logged honestly — it never claims the file IS the IRS letter', async () => {
+    fx.hits = [{ ...HIT, matchedBy: 'folder' }]
+    await upload(req('/x', { ...UP, documentType: 'other_document', workspaceAck: ['sd-1'] }))
+    const s = String(fx.logs[0].summary)
+    expect(s).toContain('A file typed "Other document"')
+    expect(s).toContain('waiting for the IRS approval letter (CP565)')
+    expect(s).not.toContain('filed in Storage only —')
+  })
+
+  it('an identical re-save (nothing changed) is not logged a second time', async () => {
+    fx.hits = [HIT]
+    fx.write = 'unchanged'
+    const res = await upload(req('/x', { ...UP, workspaceAck: ['sd-1'] }))
+    expect(res.status).toBe(200)
+    expect(fx.logs).toHaveLength(0)
+    expect((await res.json()).workspaceNote).toBeUndefined()
+  })
+
+  it('a note that cannot be written NEVER undoes the save: still 200, and the answer says the note failed (staff are told)', async () => {
+    fx.hits = [HIT]
+    fx.logError = true
+    const res = await upload(req('/x', { ...UP, workspaceAck: ['sd-1'] }))
+    expect(res.status).toBe(200)
+    expect(fx.saved).toHaveLength(1)
+    expect((await res.json()).workspaceNote).toBe('failed')
+  })
+
+  it('…and the same when the note insert THROWS: not a 400 "could not be saved" for a file that was saved', async () => {
+    fx.hits = [HIT]
+    fx.logThrows = true
+    const res = await upload(req('/x', { ...UP, workspaceAck: ['sd-1'] }))
+    expect(res.status).toBe(200)
+    expect(fx.saved).toHaveLength(1)
+    expect((await res.json()).workspaceNote).toBe('failed')
   })
 
   it('an answer for ANOTHER case does not cover this one', async () => {

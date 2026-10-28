@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         code: "workspace_step_waiting",
-        error: `${first.who}'s ${first.serviceType} case is at "${first.stage}" and is waiting for ${first.asks}. Do it in the workspace, or choose "Save in Storage only" in the Storage screen — nothing was saved.`,
+        error: `${first.who}'s ${first.serviceType} case is at "${first.stage}" and is waiting for ${first.asks}. ${first.how ? `In the workspace: ${first.how} ` : ''}Or choose "Save in Storage only" in the Storage screen — nothing was saved.`,
         hits: unanswered,
       },
       { status: 409 },
@@ -76,26 +76,38 @@ export async function POST(req: NextRequest) {
   try {
     const { staffUploadToStore } = await import("@/lib/crm-store/browse")
     const r = await staffUploadToStore({ ownerId, folderId, storagePath, fileName, mimeType: mimeType ?? null, documentType: documentType ?? null, actorId: user?.id ?? null, personContactId: personContactId ?? null, displayName: displayName ?? null, visible, periodYear, filingAnswer, needsReview, viaCompanyOwnerId: viaCompanyOwnerId ?? null })
-    // filed in Storage on purpose: say so on the case's record, so nobody has to guess later why the step is still open
-    if (waiting.length > 0) {
+    // filed in Storage on purpose: say so on the case's record AND on the person's / company's own activity, so nobody has to guess later
+    // why the step is still open. An identical re-save changed nothing, so it is not logged again. A note that cannot be written never
+    // undoes the save — it is reported back (workspaceNote: "failed") so the staff member can note it by hand.
+    let workspaceNote: "recorded" | "failed" | undefined
+    if (waiting.length > 0 && r.write !== "unchanged") {
+      workspaceNote = "recorded"
       const { supabaseAdmin } = await import("@/lib/supabase-admin")
       for (const h of waiting) {
         const asks = h.asks.charAt(0).toUpperCase() + h.asks.slice(1)
-        await supabaseAdmin
-          .from("action_log")
-          .insert({
+        const summary = h.matchedBy === "type"
+          ? `${asks} filed in Storage only — ${h.who}'s ${h.serviceType} case is still at "${h.stage}" (the workspace step was not done)`
+          : `A file typed "Other document" was filed in ${h.who}'s ${h.serviceType} folder while the case is at "${h.stage}" waiting for ${h.asks} (the workspace step was not done)`
+        try {
+          const { error } = await supabaseAdmin.from("action_log").insert({
             actor: `dashboard:${user?.email?.split("@")[0] ?? "unknown"}`,
             action_type: "storage_filed_workspace_document",
             table_name: "store_files",
             record_id: r.fileId,
             service_delivery_id: h.sdId,
-            summary: `${asks} filed in Storage only — ${h.who}'s ${h.serviceType} case is still at "${h.stage}" (the workspace step was not done)`,
-            details: { file_name: r.name, stage: h.stage, workspace: h.workspacePath, document_type: documentType ?? null },
+            contact_id: h.contactId,
+            account_id: h.accountId,
+            summary,
+            details: { file_name: r.name, stage: h.stage, workspace: h.workspacePath, document_type: documentType ?? null, matched_by: h.matchedBy },
           })
-          .then(({ error }) => { if (error) console.error("[crm-store] could not record the Storage-only filing:", error.message) })
+          if (error) throw new Error(error.message)
+        } catch (e) {
+          workspaceNote = "failed"
+          console.error("[crm-store] could not record the Storage-only filing:", e instanceof Error ? e.message : e)
+        }
       }
     }
-    return NextResponse.json(r)
+    return NextResponse.json(workspaceNote ? { ...r, workspaceNote } : r)
   } catch (e) {
     return NextResponse.json({ error: plainStoreError(e, "The upload could not be saved.") }, { status: 400 })
   }
