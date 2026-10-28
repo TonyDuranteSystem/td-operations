@@ -16,6 +16,7 @@ import { parseReceiptEvent } from "@/lib/messaging/wabridge-receipts"
 import { parseReactionsBatch, mergeReactionResults } from "@/lib/messaging/wabridge-reactions"
 import { parseReactClaim, parseReactResult } from "@/lib/messaging/wabridge-react"
 import { parseLinkCode } from "@/lib/messaging/wabridge-link"
+import { normalizeCommands, parseRecoverResult, NO_COMMANDS } from "@/lib/messaging/wabridge-commands"
 import { parseSendClaim, parseSendResult } from "@/lib/messaging/wabridge-outbox"
 import {
   inboundMediaPath,
@@ -58,6 +59,8 @@ const MAX_NAME_ITEMS = 500
  *  - {event:"bridge.media.claim", ts}                                 the Mac asks for its NEXT voice note to fetch (answer carries a signed upload URL)
  *  - {event:"bridge.media.result", ts, message_id, outcome, size_bytes?, duration_seconds?, transcript?, language?, model?, error?}
  *  - {event:"bridge.linkcode", ts, code}                            a pairing code the Mac fetched while the device is unlinked (shown to the owner only)
+ *  - {event:"bridge.recover.result", ts, saved, read}               what the Mac's catch-up found when "Recover missing messages" was pressed
+ *  The heartbeat REPLY carries `commands` = what the Mac should do next ({want_code, recover_days}) — the CRM cannot call the Mac, so the Mac asks.
  *
  * Response contract with GOWA (it retries a non-2xx up to 5 times over ~30s, then DROPS the event):
  *  - 404 unknown/malformed/non-bridge channel, 401 bad signature → not worth retrying
@@ -119,7 +122,32 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
       p_logged_in: hb.logged_in,
     })
     if (hbError) return NextResponse.json({ error: hbError.message }, { status: 500 })
-    return NextResponse.json({ ok: true, heartbeat: true })
+    // What the Mac should do next (a pairing code was asked for / "Recover missing messages" was pressed). Best effort: a failure here
+    // must never fail the heartbeat itself, and an unexpected answer means "nothing to do".
+    let commands = NO_COMMANDS
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: cmd, error: cmdError } = await (supabaseAdmin as any).rpc("wabridge_take_commands", { p_channel_id: channel.id })
+      if (!cmdError) commands = normalizeCommands(cmd)
+    } catch {
+      /* heartbeat still succeeds */
+    }
+    return NextResponse.json({ ok: true, heartbeat: true, commands })
+  }
+
+  // ─── What the Mac's catch-up found after "Recover missing messages" ───
+  if (kind === "bridge.recover.result") {
+    const rr = parseRecoverResult(body, now)
+    if (!rr) return NextResponse.json({ error: "bad recover result" }, { status: 400 })
+    if (rr.ok === false) return NextResponse.json({ error: rr.reason }, { status: 400 })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: recorded, error: rrError } = await (supabaseAdmin as any).rpc("wabridge_set_recover_result", {
+      p_channel_id: channel.id,
+      p_saved: rr.saved,
+      p_read: rr.read,
+    })
+    if (rrError) return NextResponse.json({ error: "could not record the result" }, { status: 500 })
+    return NextResponse.json({ ok: true, recorded: recorded === true })
   }
 
   // ─── A pairing code from the Mac while the device is unlinked (Reconnect from the CRM) ───

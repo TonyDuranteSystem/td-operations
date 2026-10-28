@@ -10,6 +10,10 @@ interface BridgeStatus {
   hint?: string | null
   code?: string | null
   codeAgeSeconds?: number | null
+  /** owner only: "Get a new code" was pressed and the Mac has not answered yet */
+  codeRequested?: boolean
+  /** owner only: 5 codes were already made this hour — when the hour is over (ISO) */
+  codeLimitUntil?: string | null
 }
 
 const POLL_MS = 30_000
@@ -23,7 +27,8 @@ const POLL_UNLINKED_MS = 10_000
 export function WhatsAppBridgeBanner() {
   const [status, setStatus] = useState<BridgeStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [refreshing, setRefreshing] = useState(false)
+  const [asking, setAsking] = useState(false) // between the click and the first status that shows the request
+  const [askError, setAskError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -38,6 +43,25 @@ export function WhatsAppBridgeBanner() {
       setError(err instanceof Error && err.message ? err.message : 'Could not read the WhatsApp link status.')
     }
   }, [])
+
+  const askForCode = async () => {
+    setAskError(null)
+    setAsking(true)
+    try {
+      const res = await fetch('/api/inbox/whatsapp/bridge-request', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'code' }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not send the request. Please try again.')
+      if (d.result === 'limit') setAskError('5 codes were already made in the last hour — please wait a little and try again.')
+      else if (d.result === 'linked') setAskError('WhatsApp is connected again — no code needed.')
+      await load()
+    } catch (err) {
+      setAskError(err instanceof Error && err.message ? err.message : 'Could not send the request. Please try again.')
+    } finally {
+      setAsking(false)
+    }
+  }
 
   const unlinked = status?.health === 'unlinked'
   useEffect(() => {
@@ -64,25 +88,31 @@ export function WhatsAppBridgeBanner() {
                 <p className="font-mono text-3xl font-bold tracking-widest select-all">{status.code}</p>
                 <p className="text-xs text-red-800">
                   On the phone: WhatsApp → Settings → Linked devices → Link a device → <b>Link with phone number instead</b> → type this code.
-                  It expires in about 2 minutes; a new one appears here automatically.
+                  It expires in about 2 minutes — if it runs out, press the button below for a new one.
                 </p>
               </>
+            ) : status.codeRequested ? (
+              <p className="text-sm" role="status">Asking the Mac Mini for a pairing code — it should appear here within about a minute…</p>
             ) : (
-              <p className="text-sm">Waiting for the Mac Mini to fetch a pairing code (up to about 2 minutes)…</p>
+              <p className="text-sm">
+                No pairing code is made until you ask for one. Get the phone ready first (WhatsApp → Settings → Linked devices → Link a device →
+                <b> Link with phone number instead</b>), then press the button — the code lasts about 2 minutes.
+              </p>
             )}
             <button
               type="button"
-              disabled={refreshing}
-              onClick={async () => {
-                setRefreshing(true)
-                await load()
-                setRefreshing(false)
-              }}
+              disabled={asking || !!status.codeRequested}
+              onClick={askForCode}
+              data-testid="wa-get-code"
               className="inline-flex items-center gap-1.5 rounded border border-red-300 bg-white px-2.5 py-1 text-xs font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-              Check for a new code
+              <RefreshCw className={`h-3.5 w-3.5 ${asking || status.codeRequested ? 'animate-spin' : ''}`} />
+              {status.code ? 'Get a new code' : 'Get a pairing code'}
             </button>
+            {askError && <p className="text-xs text-red-700" role="alert">{askError}</p>}
+            {!askError && status.codeLimitUntil && !status.codeRequested && (
+              <p className="text-xs text-red-700">5 codes were already made this hour; you can ask again after {new Date(status.codeLimitUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.</p>
+            )}
           </div>
         ) : unlinked ? (
           <p className="text-sm">Only the owner can see the pairing code. Please tell Antonio.</p>
