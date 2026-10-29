@@ -49,9 +49,9 @@ const SETTER_COLUMNS: readonly BoardColumn[] = [
   { key: "out", label: "Out of target", stages: ["not_in_target"] },
 ]
 // Rocco's board (the call of 27 Oct 2026): Interested lead, Contacted, Link sent, Not in target, Not ready now, Paid, Booking link sent, Upsell, Waiting, Archived. A lead the setter passed on but
-// nobody has booked yet still shows under "Interested lead" so it never disappears. A lead with a new chat message sits in "Incoming messages" (first column, only while there is something unread).
+// nobody has booked yet still shows under "Interested lead" so it never disappears. A new chat message does NOT move a card (Antonio, 28 Oct 2026, reversing the "Incoming messages" column of 27 Oct:
+// "when a message is received the card does not have to change stage"): the card stays in its stage, blinks for a few seconds and carries a "New message" tag until the chat is read.
 const SELLER_COLUMNS: readonly BoardColumn[] = [
-  { key: "incoming", label: "Incoming messages", stages: [] },
   { key: "booked", label: "Interested lead", stages: ["booked", "showed", "qualified"] },
   { key: "contacted", label: "Contacted", stages: ["seller_contacted"] },
   { key: "closed", label: "Link sent", stages: ["closed"] },
@@ -72,14 +72,13 @@ export function columnOf(role: BoardRole, stage: string): string | null {
 }
 
 /** The column a CARD sits in. For the seller an in-target lead appears only once the setter has passed it on; until then it is the setter's. Likewise a turned-down lead only if it reached him.
- *  A lead of the seller's board that has an unread chat message sits in "Incoming messages" until it is read. */
-export function columnOfCard(role: BoardRole, card: Pick<BoardCard, "stage" | "handedOver"> & { apptAt?: string | null; unread?: number }): string | null {
+ *  An unread chat message never changes the column (it is shown on the card itself). */
+export function columnOfCard(role: BoardRole, card: Pick<BoardCard, "stage" | "handedOver"> & { apptAt?: string | null }): string | null {
   const key = columnOf(role, card.stage)
   if (role !== "seller") return key
   if (card.stage === "qualified" && !card.handedOver) return null
   // a lead the setter turned down before it ever reached Rocco (not passed on, no call booked) is not on his board
   if (card.stage === "not_in_target" && !card.handedOver && !card.apptAt) return null
-  if (key !== null && (card.unread ?? 0) > 0) return "incoming"
   return key
 }
 

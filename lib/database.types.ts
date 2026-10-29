@@ -20224,6 +20224,8 @@ export type Database = {
           link_attempts: number
           link_code: string | null
           link_code_at: string | null
+          link_code_wanted_at: string | null
+          link_window_at: string | null
           logged_in: boolean | null
           names_synced_at: string | null
           reachable: boolean | null
@@ -20237,6 +20239,11 @@ export type Database = {
           reactions_per_chat_hour: number
           reactions_seen_at: string | null
           reactions_sender_seen_at: string | null
+          recover_done_at: string | null
+          recover_read: number | null
+          recover_requested_at: string | null
+          recover_saved: number | null
+          recover_started_at: string | null
           send_allowlist: string[]
           send_daily_cap: number
           send_distinct_per_day: number
@@ -20258,6 +20265,8 @@ export type Database = {
           link_attempts?: number
           link_code?: string | null
           link_code_at?: string | null
+          link_code_wanted_at?: string | null
+          link_window_at?: string | null
           logged_in?: boolean | null
           names_synced_at?: string | null
           reachable?: boolean | null
@@ -20271,6 +20280,11 @@ export type Database = {
           reactions_per_chat_hour?: number
           reactions_seen_at?: string | null
           reactions_sender_seen_at?: string | null
+          recover_done_at?: string | null
+          recover_read?: number | null
+          recover_requested_at?: string | null
+          recover_saved?: number | null
+          recover_started_at?: string | null
           send_allowlist?: string[]
           send_daily_cap?: number
           send_distinct_per_day?: number
@@ -20292,6 +20306,8 @@ export type Database = {
           link_attempts?: number
           link_code?: string | null
           link_code_at?: string | null
+          link_code_wanted_at?: string | null
+          link_window_at?: string | null
           logged_in?: boolean | null
           names_synced_at?: string | null
           reachable?: boolean | null
@@ -20305,6 +20321,11 @@ export type Database = {
           reactions_per_chat_hour?: number
           reactions_seen_at?: string | null
           reactions_sender_seen_at?: string | null
+          recover_done_at?: string | null
+          recover_read?: number | null
+          recover_requested_at?: string | null
+          recover_saved?: number | null
+          recover_started_at?: string | null
           send_allowlist?: string[]
           send_daily_cap?: number
           send_distinct_per_day?: number
@@ -23076,6 +23097,14 @@ export type Database = {
         }
         Returns: undefined
       }
+      wabridge_request_link_code: {
+        Args: { p_channel_id: string }
+        Returns: Json
+      }
+      wabridge_request_recover: {
+        Args: { p_channel_id: string }
+        Returns: Json
+      }
       wabridge_resolve_outbox: {
         Args: { p_action: string; p_outbox_id: string; p_user: string }
         Returns: Json
@@ -23096,6 +23125,10 @@ export type Database = {
         Args: { p_allow_all?: boolean; p_channel_id: string; p_mode: string }
         Returns: Json
       }
+      wabridge_set_recover_result: {
+        Args: { p_channel_id: string; p_read: number; p_saved: number }
+        Returns: boolean
+      }
       wabridge_set_send_allowlist: {
         Args: { p_channel_id: string; p_digits: string[] }
         Returns: Json
@@ -23104,6 +23137,7 @@ export type Database = {
         Args: { p_allow_all?: boolean; p_channel_id: string; p_mode: string }
         Returns: Json
       }
+      wabridge_take_commands: { Args: { p_channel_id: string }; Returns: Json }
       wabridge_toggle_reaction: {
         Args: {
           p_emoji: string

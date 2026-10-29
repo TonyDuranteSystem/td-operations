@@ -105,6 +105,8 @@ export interface ChatMessageRow {
   edited_at: string | null
   deleted_at: string | null
   created_at: string
+  /** Only present once the pin migration has run. */
+  pinned_at?: string | null
 }
 export interface ChatReaction { message_id: string; user_id: string; user_name: string; emoji: string }
 
@@ -120,6 +122,7 @@ export function toTalkMessage(m: ChatMessageRow, byId: ReadonlyMap<string, ChatM
     created_at: m.created_at,
     edited_at: m.edited_at,
     deleted_at: m.deleted_at,
+    pinned_at: m.pinned_at ?? null,
     reply_to_id: m.reply_to_id,
     reply_to_preview: quoted ? { id: quoted.id, message: quoted.deleted_at ? "" : quoted.message, sender_name: quoted.sender_name, deleted_at: quoted.deleted_at } : null,
     attachments: deleted ? null : (m.attachments ?? []).flatMap(a => { const url = urlFor(a.path); return url ? [{ ...a, url }] : [] }),
@@ -130,6 +133,21 @@ export function toTalkMessage(m: ChatMessageRow, byId: ReadonlyMap<string, ChatM
 /** Unread = messages from other people, not deleted, newer than my read marker (no marker = everything from others). */
 export function unreadCount(messages: ReadonlyArray<{ sender_id: string; created_at: string; deleted_at: string | null }>, userId: string, lastReadAt: string | null): number {
   return messages.filter(m => m.sender_id !== userId && !m.deleted_at && (!lastReadAt || m.created_at > lastReadAt)).length
+}
+
+/**
+ * What a SETTER is told about how far the others have read: each read position is cut back to the newest message she can see that is not newer than it. Her ticks come out exactly the same
+ * (a message she can see is "read" when the position reaches it, and the cut position reaches it too), but the position can no longer be the exact time of a message she may not see —
+ * "Mark unread" puts a position one millisecond before a message, which would otherwise point at it.
+ */
+export function clampReadsToVisible<T extends { last_read_at: string }>(reads: readonly T[], visibleMessageTimes: readonly string[]): T[] {
+  const times = visibleMessageTimes.map(t => new Date(t).getTime()).filter(Number.isFinite).sort((a, b) => a - b)
+  return reads.map(r => {
+    const at = new Date(r.last_read_at).getTime()
+    let best: number | null = null
+    for (const t of times) { if (t <= at) best = t; else break }
+    return { ...r, last_read_at: best === null ? new Date(0).toISOString() : new Date(best).toISOString() }
+  })
 }
 
 /**

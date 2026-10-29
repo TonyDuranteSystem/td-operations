@@ -120,17 +120,17 @@ describe("Upsell, Waiting, Archive", () => {
   })
 })
 
-describe("the board: Incoming messages and the setter's columns", () => {
+describe("the board: a new message never moves a card, and the setter's columns", () => {
   const card = (stage: string, o: Partial<BoardCard> = {}): Pick<BoardCard, "stage" | "handedOver"> & { unread?: number } => ({ stage, handedOver: true, ...o })
-  it("a lead of Rocco's board with an unread message sits in Incoming messages; nothing unread, its own column", () => {
-    expect(columnOfCard("seller", card("booked", { unread: 2 }))).toBe("incoming")
-    expect(columnOfCard("seller", card("closed", { unread: 1 }))).toBe("incoming")
-    expect(columnOfCard("seller", card("closed", { unread: 0 }))).toBe("closed")
+  it("an unread message never changes the column of a card (Antonio, 28 Oct 2026: the card keeps its stage and blinks)", () => {
+    expect(columnOfCard("seller", card("booked"))).toBe("booked")
+    expect(columnOfCard("seller", card("closed"))).toBe("closed")
+    expect(columnsFor("seller").map(c => c.key)).not.toContain("incoming")
     expect(columnOfCard("seller", card("paid_call"))).toBe("paid")
   })
   it("a lead that is not on his board stays off it, unread or not", () => {
-    expect(columnOfCard("seller", card("qualified", { handedOver: false, unread: 3 }))).toBeNull()
-    expect(columnOfCard("seller", card("new", { unread: 3 }))).toBeNull()
+    expect(columnOfCard("seller", card("qualified", { handedOver: false }))).toBeNull()
+    expect(columnOfCard("seller", card("new"))).toBeNull()
   })
   it("the setter's board has no Incoming column and no Paid; her last column is Interested lead", () => {
     expect(columnsFor("setter").map(c => c.key)).not.toContain("incoming")

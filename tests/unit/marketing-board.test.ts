@@ -12,9 +12,9 @@ describe("the lead board: who sees which columns", () => {
     expect(boardRole(["leads.read", "leads.worklist"])).toBe("setter")
     expect(boardRole([])).toBe("setter")
   })
-  it("the setter has five columns (no Paid) and Rocco ten plus Incoming messages (the call of 27 Oct 2026)", () => {
+  it("the setter has five columns (no Paid) and Rocco ten, with no Incoming-messages column (removed by Antonio on 28 Oct 2026)", () => {
     expect(columnsFor("setter").map(c => c.key)).toEqual(["to_contact", "tried", "in_target", "booked", "out"])
-    expect(columnsFor("seller").map(c => c.key)).toEqual(["incoming", "booked", "contacted", "closed", "out", "not_ready", "paid", "booking_link", "upsell", "waiting", "archived"])
+    expect(columnsFor("seller").map(c => c.key)).toEqual(["booked", "contacted", "closed", "out", "not_ready", "paid", "booking_link", "upsell", "waiting", "archived"])
   })
   it("every column stage is a real pipeline stage (a renamed stage must not silently empty a column)", () => {
     const real = new Set(MARKETING_SETTING_DEFS.pipeline_stages.fallback.map(s => s.key))

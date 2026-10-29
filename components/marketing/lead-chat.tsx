@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Loader2, Search, X } from 'lucide-react'
+import { ChevronDown, Loader2, Pin, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { isBeingViewed } from '@/lib/talk/window-front'
@@ -12,6 +12,7 @@ import {
   type TalkMessage, type TalkReaction, type TypingKind,
 } from '@/lib/talk/chat-model'
 import { TalkMessages, TalkMentionNames } from '@/components/talk/talk-messages'
+import { allPins, applyPinOverrides, nextPinned, PIN_OVERRIDE_MS, type PinOverride } from '@/lib/talk/pins'
 import { TalkComposer, type TalkComposerMode, type TalkSendInput } from '@/components/talk/talk-composer'
 import { TalkMessageSheet } from '@/components/talk/talk-sheet'
 import { STATIC_SNIPPETS, TalkI18nProvider, type TalkI18n } from '@/components/talk/talk-i18n'
@@ -61,6 +62,10 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [sheetMsg, setSheetMsg] = useState<TalkMessage | null>(null)
+  const [pinShownId, setPinShownId] = useState<string | null>(null)
+  // pins older than the loaded window (the bar still shows them), and the pins/unpins I just did (a refresh already on its way must not flip them back)
+  const [olderPins, setOlderPins] = useState<TalkMessage[]>([])
+  const pinOverrides = useRef(new Map<string, PinOverride>())
   const [mode, setMode] = useState<TalkComposerMode>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQ, setSearchQ] = useState('')
@@ -74,16 +79,22 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
   // when the file links on screen were fetched: a window left open asks for fresh ones before they run out (an hour), and a refresh that changes nothing else keeps the audio player undisturbed
   const linksAtRef = useRef(0)
   const failuresRef = useRef(0)
+  // after "Mark unread" this open window must not read the chat again by itself (it would undo it at the next refresh); a fresh open reads as usual
+  const heldUnreadRef = useRef(false)
+  // the refresh that is running right now: "Mark unread" waits for it, so a refresh that was already on its way (and would read the chat) cannot land after the mark
+  const inflightRef = useRef<Promise<void> | null>(null)
+  const hiddenSince = useRef(false)
   const [offline, setOffline] = useState(false)
   messagesRef.current = messages
   meIdRef.current = meId
 
   const load = useCallback(async (opts: { silent?: boolean } = {}) => {
     try {
-      const r = await fetch(`${API}/${leadId}${isBeingViewed() && !isFrameHidden() ? '' : '?mark_read=0'}`)
+      const r = await fetch(`${API}/${leadId}${isBeingViewed() && !isFrameHidden() && !heldUnreadRef.current ? '' : '?mark_read=0'}`)
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(tRef.current(d.error || 'Could not load this chat.')) }
       const d = await r.json()
-      const incoming = (d.messages ?? []) as TalkMessage[]
+      const incoming = applyPinOverrides((d.messages ?? []) as TalkMessage[], pinOverrides.current, Date.now())
+      setOlderPins(applyPinOverrides((d.older_pins ?? []) as TalkMessage[], pinOverrides.current, Date.now()))
       setMeId(d.me ?? null); meIdRef.current = d.me ?? null
       setOthers(d.member_ids ?? [])
       setNames(Object.fromEntries(((d.members ?? []) as Array<{ id: string; name: string }>).map(m => [m.id, m.name])))
@@ -114,16 +125,24 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
     }
   }, [leadId, API, idField])
 
-  useEffect(() => { void load() }, [load])
+  const loadTracked = useCallback((opts: { silent?: boolean } = {}) => {
+    const p = load(opts).finally(() => { if (inflightRef.current === p) inflightRef.current = null })
+    inflightRef.current = p
+    return p
+  }, [load])
+  useEffect(() => { void loadTracked() }, [loadTracked])
 
   // a short refresh while the window is open and on screen, and a catch-up when it comes back to the front
   useEffect(() => {
-    const tick = () => { if (document.visibilityState === 'visible') void load({ silent: true }) }
+    const tick = () => { if (document.visibilityState === 'visible') void loadTracked({ silent: true }) }
     const timer = setInterval(tick, POLL_MS)
+    // coming back to a window that was hidden is opening the chat again: a held "Mark unread" lets go (the next refresh reads it)
+    const back = () => { if (document.visibilityState === 'visible' && hiddenSince.current) { hiddenSince.current = false; heldUnreadRef.current = false } else if (document.visibilityState === 'hidden') hiddenSince.current = true }
+    document.addEventListener('visibilitychange', back)
     document.addEventListener('visibilitychange', tick)
     window.addEventListener('focus', tick)
-    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick); window.removeEventListener('focus', tick) }
-  }, [load])
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', back); document.removeEventListener('visibilitychange', tick); window.removeEventListener('focus', tick) }
+  }, [loadTracked])
 
   // "typing…": a lightweight broadcast on a per-lead channel (nothing is stored), exactly TD Talk's mechanism
   useEffect(() => {
@@ -161,6 +180,8 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not send. Please try again.') }
       const d = await r.json().catch(() => null)
       if (d?.message) setMessages(prev => prev.some(x => x.id === d.message.id) ? prev : [...prev, d.message as TalkMessage])
+      // answering is dealing with the chat: the server reads it, so the hold lets go too
+      heldUnreadRef.current = false
       return true
     } catch (e) {
       const why = t(e instanceof Error && e.message ? e.message : 'Could not send. Please try again.')
@@ -169,7 +190,10 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
     }
   }, [leadId, t, API])
 
-  const applyToMessage = useCallback((id: string, patch: Partial<TalkMessage>) => setMessages(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m))), [])
+  const applyToMessage = useCallback((id: string, patch: Partial<TalkMessage>) => {
+    setMessages(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)))
+    setOlderPins(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)))
+  }, [])
 
   const react = useCallback(async (m: TalkMessage, emoji: string) => {
     setSheetMsg(null)
@@ -208,6 +232,31 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
     } catch (e) { toast.error(e instanceof Error ? e.message : t('Could not delete the message.')) }
   }, [applyToMessage, t, VOICE_API])
 
+  const markUnread = useCallback(async (m: TalkMessage) => {
+    setSheetMsg(null)
+    heldUnreadRef.current = true
+    await inflightRef.current?.catch(() => undefined)
+    try {
+      const r = await fetch(`${API}/${leadId}/unread`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_id: m.id }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(t(d.error || 'Could not mark it unread. Please try again.'))
+      toast.success(t('Marked as unread.'))
+    } catch (e) { heldUnreadRef.current = false; toast.error(e instanceof Error ? e.message : t('Could not mark it unread. Please try again.')) }
+  }, [API, leadId, t])
+
+  const togglePin = useCallback(async (m: TalkMessage) => {
+    setSheetMsg(null)
+    const pin = !m.pinned_at
+    try {
+      const r = await fetch(`${API}/${leadId}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_id: m.id, pinned: pin }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(t(d.error || 'Could not pin the message. Please try again.'))
+      pinOverrides.current.set(m.id, { at: d.pinned_at ?? null, until: Date.now() + PIN_OVERRIDE_MS })
+      applyToMessage(m.id, { pinned_at: d.pinned_at ?? null })
+      toast.success(t(pin ? 'Pinned.' : 'Unpinned.'))
+    } catch (e) { toast.error(e instanceof Error ? e.message : t('Could not pin the message. Please try again.')) }
+  }, [API, applyToMessage, leadId, t])
+
   const jumpTo = useCallback((id: string) => {
     if (!messagesRef.current.some(m => m.id === id)) { toast(t('That message is older than the latest 500 in this chat.')); return }
     setSearchOpen(false)
@@ -234,6 +283,8 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
   const typingText = peerTyping ? t(peerTyping.kind === 'recording' ? '{who} is recording a voice message…' : '{who} is typing…', { who: typingWho ?? '' }) : ''
   const tickOf = (m: TalkMessage) => tickStateAll(m, others, reads, delivered)
   const hits = matchMessages(messages, searchQ)
+  const pins = allPins(messages, olderPins)
+  const pinShown = pins.find(p => p.id === pinShownId) ?? pins[0] ?? null
   return (
     <TalkI18nProvider value={i18n}>
     <TalkMentionNames.Provider value={mentionNames}>
@@ -247,6 +298,17 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
         </button>
       </div>
       {offline && <div role="status" className="shrink-0 bg-amber-50 px-3 py-1 text-xs text-amber-900" data-testid="chat-offline">{t('Connection problem. New messages may be late; trying again.')}</div>}
+      {pinShown && !searchOpen && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-amber-200 bg-amber-50 px-3 py-1.5" data-testid="pinned-bar">
+          <Pin className="h-3.5 w-3.5 shrink-0 text-amber-800" />
+          <button type="button" onClick={() => jumpTo(pinShown.id)} className="min-w-0 flex-1 text-left" data-testid="pinned-open">
+            <span className="block text-[11px] font-semibold text-amber-800">{pins.length > 1 ? t('Pinned message {n} of {total}', { n: String(pins.indexOf(pinShown) + 1), total: String(pins.length) }) : t('Pinned message')} · {pinShown.sender_id === meId ? t('You') : pinShown.sender_name}</span>
+            <span className="block truncate text-[13px] text-zinc-800">{i18n.ts(snippet(pinShown, 100))}</span>
+          </button>
+          <button type="button" onClick={() => void togglePin(pinShown)} aria-label={t('Unpin')} data-testid="pinned-unpin" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-amber-800 hover:bg-amber-100"><X className="h-4 w-4" /></button>
+          {pins.length > 1 && <button type="button" onClick={() => setPinShownId(nextPinned(pins, pinShown.id)?.id ?? null)} aria-label={t('Next pinned message')} data-testid="pinned-next" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-amber-800 hover:bg-amber-100"><ChevronDown className="h-4 w-4" /></button>}
+        </div>
+      )}
       {searchOpen && (
         <div className="flex min-h-0 flex-1 flex-col bg-white" data-testid="talk-search">
           <div className="shrink-0 border-b border-zinc-200 px-3 py-2">
@@ -271,6 +333,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
           onReply={m => { setMode({ kind: 'reply', message: m, who: m.sender_id === meId ? 'yourself' : m.sender_name }); setSheetMsg(null) }}
           onReact={(m, emoji) => void react(m, emoji)}
           onJumpTo={jumpTo}
+          tools={{ onEdit: m => { setMode({ kind: 'edit', message: m }); setSheetMsg(null) } }}
         />
       )}
       {!searchOpen && <TalkComposer key={leadId} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping} mentionPeople={mentionPeople} />}
@@ -282,6 +345,8 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
           onCopy={() => void copyText(sheetMsg)}
           onEdit={() => { setMode({ kind: 'edit', message: sheetMsg }); setSheetMsg(null) }}
           onDelete={() => void remove(sheetMsg)}
+          onMarkUnread={() => void markUnread(sheetMsg)}
+          onTogglePin={() => void togglePin(messages.find(x => x.id === sheetMsg.id) ?? sheetMsg)}
         />
       )}
     </div>
