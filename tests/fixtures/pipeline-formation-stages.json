@@ -1,0 +1,276 @@
+[
+  {
+    "service_type": "Company Formation",
+    "stage_name": "Payment Confirmed",
+    "stage_order": 1,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "info_panel"
+        },
+        {
+          "type": "waiting_notice",
+          "label": "Waiting for client to complete the formation wizard."
+        },
+        {
+          "type": "chat"
+        }
+      ],
+      "description": "Payment received. Waiting for client to submit formation details."
+    }
+  },
+  {
+    "service_type": "Company Formation",
+    "stage_name": "Wizard Submitted",
+    "stage_order": 2,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "formation_names"
+        },
+        {
+          "type": "suite_panel"
+        },
+        {
+          "type": "info_panel"
+        },
+        {
+          "type": "data_viewer",
+          "label": "Client Details"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "members_panel"
+        }
+      ],
+      "description": "Name command center. Review the candidate LLC names, check each on the Secretary of State, send the available one to the client for approval, and file the accepted name — all from here. The advance unlocks once a name is filed."
+    }
+  },
+  {
+    "service_type": "Company Formation",
+    "stage_name": "Filed with State",
+    "stage_order": 3,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "formation_names"
+        },
+        {
+          "type": "info_panel"
+        },
+        {
+          "url": "https://enterprise.sos.nm.gov/",
+          "type": "external_link",
+          "label": "Secretary of State site"
+        },
+        {
+          "type": "document_upload",
+          "label": "Upload Articles of Organization",
+          "required": true,
+          "storageHint": {
+            "asks": "the Articles of Organization from the state",
+            "effects": [
+              "ask for the company's legal name, state, LLC type and formation date",
+              "save the file on the case",
+              "move the case on to Articles Received and create the company"
+            ]
+          },
+          "documentType": "articles_of_organization"
+        },
+        {
+          "type": "document_viewer"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Articles Received — Company Created",
+              "target": "Articles Received"
+            }
+          ]
+        }
+      ],
+      "description": "Name filed on the Secretary of State site. Waiting for the state to confirm (~1 week). When the Articles of Organization arrive, upload them and advance."
+    }
+  },
+  {
+    "service_type": "Company Formation",
+    "stage_name": "Articles Received",
+    "stage_order": 4,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "document_viewer"
+        },
+        {
+          "type": "info_panel"
+        },
+        {
+          "type": "activate_ra"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Prepare SS-4",
+              "target": "SS-4 Prepared"
+            }
+          ]
+        },
+        {
+          "type": "members_panel"
+        }
+      ],
+      "description": "Company created! The Articles of Organization are in. Activate the Registered Agent, then prepare the SS-4."
+    }
+  },
+  {
+    "service_type": "Company Formation",
+    "stage_name": "SS-4 Prepared",
+    "stage_order": 5,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "ss4_panel"
+        },
+        {
+          "type": "document_viewer"
+        },
+        {
+          "type": "info_panel"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Client Signed SS-4",
+              "target": "SS-4 Signed"
+            }
+          ]
+        },
+        {
+          "type": "members_panel"
+        }
+      ],
+      "description": "SS-4 form generated. Review, send to client for signature."
+    }
+  },
+  {
+    "service_type": "Company Formation",
+    "stage_name": "SS-4 Signed",
+    "stage_order": 6,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "document_viewer"
+        },
+        {
+          "type": "ss4_fax_panel"
+        },
+        {
+          "type": "document_upload",
+          "label": "Upload fax confirmation/tracking",
+          "storageHint": {
+            "asks": "the fax confirmation for the SS-4 sent to the IRS",
+            "effects": [
+              "save the file on the case",
+              "move the case on to SS-4 Sent to IRS"
+            ]
+          },
+          "documentType": "fax_confirmation"
+        },
+        {
+          "type": "chat"
+        }
+      ],
+      "description": "Client signed the SS-4. Fax to IRS and upload confirmation."
+    }
+  },
+  {
+    "service_type": "Company Formation",
+    "stage_name": "SS-4 Sent to IRS",
+    "stage_order": 7,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "waiting_notice",
+          "label": "The SS-4 has been faxed to the IRS. We are waiting for the EIN letter (CP 575). This typically takes 4-6 weeks."
+        },
+        {
+          "type": "ss4_correction_panel"
+        },
+        {
+          "type": "document_viewer"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "EIN Received",
+              "target": "EIN Received"
+            }
+          ]
+        }
+      ],
+      "description": "SS-4 faxed to IRS. Waiting for EIN letter (CP 575)."
+    }
+  },
+  {
+    "service_type": "Company Formation",
+    "stage_name": "EIN Received",
+    "stage_order": 8,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "ein_entry"
+        },
+        {
+          "type": "document_upload",
+          "label": "Upload EIN Letter (CP 575)",
+          "folder": "1. Company",
+          "rename": "EIN Official – {company_name}",
+          "storageHint": {
+            "asks": "the IRS EIN letter (CP 575)",
+            "effects": [
+              "rename it \"EIN Official – company name\" and file it in the \"1. Company\" folder",
+              "save the file on the case"
+            ],
+            "fromStages": [
+              "SS-4 Sent to IRS",
+              "EIN Received"
+            ]
+          },
+          "documentType": "ein_letter_irs"
+        },
+        {
+          "type": "document_viewer"
+        },
+        {
+          "type": "info_panel"
+        },
+        {
+          "type": "chat"
+        }
+      ],
+      "description": "EIN received! Enter the EIN number and upload the CP 575 letter. Formation is complete."
+    }
+  }
+]
