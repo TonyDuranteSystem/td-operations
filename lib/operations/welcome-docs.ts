@@ -22,7 +22,9 @@ export interface WelcomeDocPick {
   fileName: string | null
 }
 
-const EIN_TYPES = new Set(["EIN Letter (IRS)", "EIN Confirmation Letter", "EIN Letter"])
+// "EIN IRS FAX - LTR 147C", "EIN CP575B" and "EIN CP575G" are the specific types a workspace upload can now keep (2026-10-29): the file is the
+// company's EIN letter all the same, so the welcome package must find it.
+const EIN_TYPES = new Set(["EIN Letter (IRS)", "EIN Confirmation Letter", "EIN Letter", "EIN IRS FAX - LTR 147C", "EIN CP575B", "EIN CP575G"])
 const ARTICLES_TYPES = new Set(["Articles of Organization", "Articles of Incorporation"])
 // Some companies hold the IRS EIN confirmation only as a fax record (production: "IRS Fax" rows named "EIN confirmation fax …", "147C").
 // Used only when no typed EIN letter exists.
