@@ -28,8 +28,8 @@ const POLL_MS = 4_000
  * can do is here, and what TD Talk gains later arrives here with it. New messages come in by a short refresh while the window is open; "typing…" is live.
  * READ RULE (TD Talk's): messages are marked read only while somebody is looking at the window.
  */
-export function LeadChat({ leadId }: { leadId: string }) {
-  return <ConversationChat id={leadId} api="/api/marketing/chat" idField="lead_id" channel="tdm-lead-typing" />
+export function LeadChat({ leadId, lane }: { leadId: string; /** which of the lead's two chats ("owners" = Antonio and Rocco, "setter" = Rocco and the setter) */ lane?: string }) {
+  return <ConversationChat id={leadId} api="/api/marketing/chat" idField="lead_id" channel="tdm-lead-typing" lane={lane} />
 }
 
 /** The chat of a team conversation (a direct message or a group): the same screen, fed by /api/marketing/team-chat. */
@@ -41,8 +41,10 @@ export function TeamChat({ threadId }: { threadId: string }) {
  * One conversation, whatever it is about: a lead, a direct message, a group. `api` is the chat's own address (it answers the same shape everywhere), `idField` names the id in the
  * "delivered" call, `channel` the live "typing…" channel. Everything below is the lead chat's own code, only not tied to a lead any more.
  */
-function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix }: { id: string; api: string; idField: 'lead_id' | 'thread_id'; channel: string }) {
+function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix, lane }: { id: string; api: string; idField: 'lead_id' | 'thread_id'; channel: string; lane?: string }) {
   const VOICE_API = `${API}/messages`
+  // a lead has two chats: every request names the one on screen (a team conversation has no lane)
+  const laneQs = lane ? `?lane=${encodeURIComponent(lane)}` : ''
   const t = useT()
   const lang = useLang()
   const tRef = useRef(t)
@@ -90,7 +92,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
 
   const load = useCallback(async (opts: { silent?: boolean } = {}) => {
     try {
-      const r = await fetch(`${API}/${leadId}${isBeingViewed() && !isFrameHidden() && !heldUnreadRef.current ? '' : '?mark_read=0'}`)
+      const r = await fetch(`${API}/${leadId}${isBeingViewed() && !isFrameHidden() && !heldUnreadRef.current ? laneQs : `${laneQs ? `${laneQs}&` : '?'}mark_read=0`}`)
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(tRef.current(d.error || 'Could not load this chat.')) }
       const d = await r.json()
       const incoming = applyPinOverrides((d.messages ?? []) as TalkMessage[], pinOverrides.current, Date.now())
@@ -114,7 +116,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
       const newest = incoming.filter(m => m.sender_id !== d.me).map(m => m.created_at).sort().pop() ?? null
       if (newest && deliveredFor.current !== newest) {
         deliveredFor.current = newest
-        void fetch(`${API}/delivered`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [{ [idField]: leadId }] }), keepalive: true }).catch(() => { deliveredFor.current = null })
+        void fetch(`${API}/delivered`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [{ [idField]: leadId, ...(lane ? { lane } : {}) }] }), keepalive: true }).catch(() => { deliveredFor.current = null })
       }
     } catch (e) {
       // a refresh that fails in the background used to be invisible: after three in a row the chat says so
@@ -123,7 +125,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
     } finally {
       setLoading(false)
     }
-  }, [leadId, API, idField])
+  }, [leadId, API, idField, lane, laneQs])
 
   const loadTracked = useCallback((opts: { silent?: boolean } = {}) => {
     const p = load(opts).finally(() => { if (inflightRef.current === p) inflightRef.current = null })
@@ -176,7 +178,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
     try {
       const attachments = []
       for (const f of files) attachments.push(await uploadLeadAttachment(f, leadId, API))
-      const r = await fetch(`${API}/${leadId}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text, reply_to_id: replyToId ?? null, attachments: attachments.length ? attachments : null }) })
+      const r = await fetch(`${API}/${leadId}/messages${laneQs}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text, reply_to_id: replyToId ?? null, attachments: attachments.length ? attachments : null }) })
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not send. Please try again.') }
       const d = await r.json().catch(() => null)
       if (d?.message) setMessages(prev => prev.some(x => x.id === d.message.id) ? prev : [...prev, d.message as TalkMessage])
@@ -188,7 +190,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
       toast.error(voiceOnly ? `${why} ${t('Please record the voice message again.')}` : why)
       return false
     }
-  }, [leadId, t, API])
+  }, [leadId, t, API, laneQs])
 
   const applyToMessage = useCallback((id: string, patch: Partial<TalkMessage>) => {
     setMessages(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)))
@@ -237,25 +239,25 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
     heldUnreadRef.current = true
     await inflightRef.current?.catch(() => undefined)
     try {
-      const r = await fetch(`${API}/${leadId}/unread`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_id: m.id }) })
+      const r = await fetch(`${API}/${leadId}/unread${laneQs}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_id: m.id }) })
       const d = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(t(d.error || 'Could not mark it unread. Please try again.'))
       toast.success(t('Marked as unread.'))
     } catch (e) { heldUnreadRef.current = false; toast.error(e instanceof Error ? e.message : t('Could not mark it unread. Please try again.')) }
-  }, [API, leadId, t])
+  }, [API, leadId, t, laneQs])
 
   const togglePin = useCallback(async (m: TalkMessage) => {
     setSheetMsg(null)
     const pin = !m.pinned_at
     try {
-      const r = await fetch(`${API}/${leadId}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_id: m.id, pinned: pin }) })
+      const r = await fetch(`${API}/${leadId}/pin${laneQs}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_id: m.id, pinned: pin }) })
       const d = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(t(d.error || 'Could not pin the message. Please try again.'))
       pinOverrides.current.set(m.id, { at: d.pinned_at ?? null, until: Date.now() + PIN_OVERRIDE_MS })
       applyToMessage(m.id, { pinned_at: d.pinned_at ?? null })
       toast.success(t(pin ? 'Pinned.' : 'Unpinned.'))
     } catch (e) { toast.error(e instanceof Error ? e.message : t('Could not pin the message. Please try again.')) }
-  }, [API, applyToMessage, leadId, t])
+  }, [API, applyToMessage, leadId, t, laneQs])
 
   const jumpTo = useCallback((id: string) => {
     if (!messagesRef.current.some(m => m.id === id)) { toast(t('That message is older than the latest 500 in this chat.')); return }

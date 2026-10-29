@@ -68,7 +68,7 @@ async function main() {
       [teamA.id, `qvc-${n}-${stamp}`, name, `${n}@example.test`])).rows[0].id as string
   const Lquiet = await mkLead("quiet", "Quiet Chat Lead")
   const Lnamed = await mkLead("named", "Named Chat Lead")
-  const say = (lead: string, text: string, mentions: string[] = [], by = "ownerA") => db.query("insert into marketing_lead_messages (team_id, lead_id, sender_id, sender_name, message, mentions) values ($1,$2,$3,$4,$5,$6)", [teamA.id, lead, ids[by], by === "setterA" ? "Setter" : "Rocco", text, mentions])
+  const say = (lead: string, text: string, mentions: string[] = [], by = "ownerA") => db.query("insert into marketing_lead_messages (team_id, lead_id, sender_id, sender_name, message, mentions, lane) values ($1,$2,$3,$4,$5,$6,$7)", [teamA.id, lead, ids[by], by === "setterA" ? "Setter" : "Rocco", text, mentions, by === "setterA" ? "setter" : "owners"])
 
   const jwtSecret = (() => {
     const c = execSync("docker ps --format '{{.Names}}'").toString().split("\n").find(n => n.startsWith("supabase_auth_tdlocal-claude-circlback"))

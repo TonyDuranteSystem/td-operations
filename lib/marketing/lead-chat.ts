@@ -166,6 +166,51 @@ export function isSetterOnly(permissions: readonly string[]): boolean {
   return permissions.includes("leads.worklist") && !permissions.includes("leads.pick") && !permissions.includes("calls.host") && !permissions.includes("payment_links.create")
 }
 
+/**
+ * The two chats inside a lead (29 Oct 2026, Antonio: "Discuss with Antonio" and "Discuss with the setter" for Rocco, "Discuss with Rocco" for the setter). A message belongs to ONE lane:
+ * "owners" = Antonio and Rocco, "setter" = Rocco and the setter(s). The setter is never handed the owners lane, so her privacy is where the data is read, not a filter by @-name.
+ * Antonio on his own login reads the owners lane only; he reads the setter lane only by "viewing as" a setter (his answer of 29 Oct 2026).
+ */
+export type Lane = "owners" | "setter"
+export const LANES: readonly Lane[] = ["owners", "setter"]
+export const isLane = (v: unknown): v is Lane => v === "owners" || v === "setter"
+
+/** The lanes this person may read and write. `admin` = a CRM admin (Antonio); `viewAs` = he is previewing a role. */
+export function lanesFor(i: { permissions: readonly string[]; admin: boolean; viewAs: boolean }): Lane[] {
+  if (isSetterOnly(i.permissions)) return ["setter"]
+  if (i.admin && !i.viewAs) return ["owners"]
+  return ["owners", "setter"]
+}
+
+/** Whether a team member takes part in a lane: the owners lane is everybody who is not a setter (Antonio, Rocco); the setter lane is the setters and the people who work with them (Rocco), never Antonio. */
+export function inLane(m: { permissions: readonly string[]; isAdmin: boolean }, lane: Lane): boolean {
+  const setter = isSetterOnly(m.permissions)
+  return lane === "setter" ? setter || !m.isAdmin : !setter
+}
+
+/** The lane a request names, or the one a person has when she has only one; null when she may not use the lane asked for (or asked for none and has two). */
+export function resolveLane(asked: unknown, allowed: readonly Lane[]): Lane | null {
+  if (asked === undefined || asked === null || asked === "") return allowed.length === 1 ? allowed[0] : allowed.includes("owners") ? "owners" : null
+  return isLane(asked) && allowed.includes(asked) ? asked : null
+}
+
+/** Who is told about a new message in a lane: every active, involved member of THAT lane except the sender (nobody needs an @ to be told about a chat that is only theirs). */
+export function laneRecipients(members: ReadonlyArray<{ user_id: string; status?: string; permissions: readonly string[]; isAdmin: boolean }>, senderId: string, lane: Lane): string[] {
+  return Array.from(new Set(members
+    .filter(m => m.user_id !== senderId && m.status !== "removed" && m.status !== "paused" && isInvolved(m.permissions) && inLane(m, lane))
+    .map(m => m.user_id)))
+}
+
+/** The buttons a person gets on a lead: one per lane she may use, each named after the OTHER side (Rocco: "Discuss with Antonio", "Discuss with Cristina"; the setter: "Discuss with Rocco"; Antonio: "Chat with Rocco"). */
+export function laneLabels(lanes: readonly Lane[], names: { admin: string; seller: string; setters: string }, viewer: { isSetter: boolean; isAdmin: boolean }): Array<{ lane: Lane; label: string }> {
+  return lanes.map(lane => ({
+    lane,
+    label: lane === "setter"
+      ? (viewer.isSetter ? `Discuss with ${names.seller}` : `Discuss with ${names.setters}`)
+      : (viewer.isAdmin ? `Chat with ${names.seller}` : `Discuss with ${names.admin}`),
+  }))
+}
+
 /** Whether a setter may see this message: she wrote it, another setter wrote it, or it names her with @. */
 export function visibleToSetter(m: { sender_id: string; mentions?: readonly string[] | null }, viewerId: string, setterIds: ReadonlySet<string>): boolean {
   return setterIds.has(m.sender_id) || (m.mentions ?? []).includes(viewerId)
@@ -192,4 +237,4 @@ export function previewLine(m: { message: string; attachments: ReadonlyArray<{ m
 }
 
 /** Where a tapped notification goes: the board with this lead's chat open. */
-export const chatUrlFor = (leadId: string): string => `/marketing/board?chat=${leadId}`
+export const chatUrlFor = (leadId: string, lane?: Lane): string => `/marketing/board?chat=${leadId}${lane ? `&lane=${lane}` : ""}`

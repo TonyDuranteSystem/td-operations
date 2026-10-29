@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { BOARD_VIEWS, boardCards, boardRole, cardsInColumn, columnOf, columnsFor, hiddenCount, parseBoardView, type BoardCard } from "@/lib/marketing/board"
-import { MAX_WINDOWS, EMPTY_WINDOWS, closeWindow, clampPosition, focusWindow, frontWindowId, minimizeWindow, moveWindow, openWindow, windowSrc, WINDOW_W } from "@/lib/marketing/lead-windows"
+import { MAX_WINDOWS, EMPTY_WINDOWS, closeWindow, clampPosition, focusWindow, frontWindowId, minimizeWindow, moveWindow, openWindow, windowSrc, WINDOW_W, laneOfTab, isChatTab } from "@/lib/marketing/lead-windows"
 import { MARKETING_SETTING_DEFS } from "@/lib/marketing/settings-schema"
 
 const card = (id: string, stage: string, over: Partial<BoardCard> = {}): BoardCard => ({ id, name: id, stage, stageLabel: stage, phone: null, filledIn: "", apptAt: null, arrivedMs: 0, chips: [], pickedText: "", note: null, ad: null, existingClient: false, handedOver: true, unread: 0, ...over })
@@ -109,5 +109,24 @@ describe("the floating lead windows", () => {
     expect(windowSrc(lead(1).id)).toBe(`/marketing/window/${lead(1).id}`)
     expect(windowSrc("../../etc")).toBeNull()
     expect(windowSrc("1; drop table")).toBeNull()
+  })
+})
+
+describe("the tab of a lead window names one of the lead's two chats", () => {
+  const ID = "11111111-1111-4111-8111-111111111111"
+  it("a window address carries the chat tab with its lane, and nothing else", () => {
+    expect(windowSrc(ID, "chat:setter")).toBe(`/marketing/window/${ID}?tab=chat%3Asetter`)
+    expect(windowSrc(ID, "chat")).toBe(`/marketing/window/${ID}?tab=chat`)
+    expect(windowSrc(ID, "lead")).toBe(`/marketing/window/${ID}`)
+  })
+  it("the lane and the chat-ness of a tab", () => {
+    expect(laneOfTab("chat:owners")).toBe("owners")
+    expect(laneOfTab("chat:setter")).toBe("setter")
+    expect(laneOfTab("chat")).toBeNull()
+    expect(laneOfTab("chat:nonsense")).toBeNull()
+    expect(isChatTab("chat")).toBe(true)
+    expect(isChatTab("chat:setter")).toBe(true)
+    expect(isChatTab("lead")).toBe(false)
+    expect(isChatTab(undefined)).toBe(false)
   })
 })
