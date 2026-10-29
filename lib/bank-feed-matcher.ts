@@ -40,6 +40,7 @@ import {
 } from "@/lib/finance/feed-vocabulary"
 import {
   selectBestCandidate,
+  resolveTieByPaidDate,
   type ScoredCandidate,
 } from "@/lib/finance/candidate-selection"
 
@@ -220,7 +221,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
     // `is_test` is excluded so a QA fixture invoice can never absorb real client money.
     const { data: allInvoices, error: invQueryErr } = await supabaseAdmin
       .from("payments")
-      .select("id, account_id, contact_id, invoice_number, invoice_status, status, is_test, total, amount, amount_due, amount_currency, stripe_payment_id, description, accounts:account_id(company_name), contacts:contact_id(full_name)")
+      .select("id, account_id, contact_id, invoice_number, invoice_status, status, is_test, total, amount, amount_due, amount_currency, paid_date, stripe_payment_id, description, accounts:account_id(company_name), contacts:contact_id(full_name)")
 
     if (invQueryErr) {
       return { matched: false, error: `Invoice query failed: ${invQueryErr.message}` }
@@ -792,7 +793,18 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
 
         const retroSelection = selectBestCandidate(retroCandidates)
 
-        if (retroSelection.contested) {
+        // A tie among already-Paid invoices can be settled by the DATE: the one invoice marked
+        // Paid around the transaction's own date is the one this money belongs to. Only a single
+        // clear winner counts — anything else stays contested (see resolveTieByPaidDate).
+        const dateWinner = retroSelection.contested
+          ? resolveTieByPaidDate(
+              retroSelection.tied,
+              new Map(paidFiltered.map((inv) => [inv.id, inv.paid_date as string | null])),
+              feed.transaction_date,
+            )
+          : null
+
+        if (retroSelection.contested && !dateWinner) {
           // Two already-paid invoices are equally plausible homes for this transaction. An
           // audit link moves no money, but it is NOT harmless: it marks the feed `matched`,
           // removes it from the review queue, and permanently consumes that invoice's slot in
@@ -816,7 +828,7 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
           }
         }
 
-        const bestRetro = retroSelection.best
+        const bestRetro = dateWinner ?? retroSelection.best
 
         if (bestRetro) {
           // Link feed to the Paid invoice for audit trail — do NOT change invoice status
@@ -826,10 +838,17 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
             matched_at: new Date().toISOString(),
             matched_by: "auto",
             status: "matched",
-            review_metadata: auditLinkMetadata(
-              "fuzzy",
-              "Invoice was already paid — linked for the audit trail; no money applied.",
-            ),
+            // `contested: null` clears an earlier tie snapshot (review_metadata merges), so a
+            // row that was parked and is now settled by its date stops showing the red box.
+            review_metadata: {
+              ...auditLinkMetadata(
+                "fuzzy",
+                dateWinner
+                  ? "Several paid invoices fit; this was the only one paid around the transaction date — linked for the audit trail; no money applied."
+                  : "Invoice was already paid — linked for the audit trail; no money applied.",
+              ),
+              contested: null,
+            },
           }, "matcher:retroactive-audit-link")
 
           return {

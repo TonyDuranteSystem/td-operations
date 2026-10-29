@@ -1,6 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isMatchableInvoice } from '@/lib/finance/invoice-matchability'
+import {
+  contestedPaymentIds,
+  toContestedInvoiceDetail,
+  type ContestedInvoiceDetail,
+  type ContestedInvoiceRow,
+} from '@/lib/finance/contested-invoice-detail'
 import { isDashboardUser, isAdmin, isOwnerOnly } from '@/lib/auth'
 import {
   buildOwnerLedgerEvidenceContext,
@@ -317,6 +323,31 @@ export default async function FinancePage({
     ? allBankFeeds
     : allBankFeeds.filter(f => !isPrivateToOwner(f))
   ).map(f => ({ ...f, source_bank_name: bankNameByFeedId.get((f as { id: string }).id) ?? null }))
+
+  // Details of every invoice named in a "more than one invoice fits" box, read live so the box
+  // can show what each invoice is (description, amount, paid date) without leaving the screen.
+  const contestedIds = contestedPaymentIds(bankFeeds as { review_metadata?: unknown }[])
+  const contestedDetailById = new Map<string, ContestedInvoiceDetail>()
+  if (contestedIds.length > 0) {
+    const { data: contestedRows, error: contestedErr } = await supabaseAdmin
+      .from('payments')
+      .select('id, description, installment, total, amount, amount_currency, invoice_status, status, paid_date')
+      .in('id', contestedIds)
+    if (contestedErr) console.error('[finance] contested invoice details failed:', contestedErr.message)
+    for (const row of contestedRows ?? []) {
+      contestedDetailById.set(row.id, toContestedInvoiceDetail(row as ContestedInvoiceRow))
+    }
+  }
+  const bankFeedsWithDetails = bankFeeds.map(f => {
+    const ids = contestedPaymentIds([f as { review_metadata?: unknown }])
+    if (ids.length === 0) return f
+    return {
+      ...f,
+      contested_details: Object.fromEntries(
+        ids.flatMap(id => (contestedDetailById.has(id) ? [[id, contestedDetailById.get(id)]] : [])),
+      ),
+    }
+  })
   // The count must match what the viewer can actually see, or the header claims rows they
   // will never find.
   const bankFeedTotalCount = userIsOwner
@@ -482,7 +513,7 @@ export default async function FinancePage({
         stats={{ totalOutstanding, totalOverdue, overdueCount, clientCount: clientList.filter(c => c.invoice_count > 0).length, cashThisMonth, avgDaysToPay }}
         agingBuckets={agingBuckets}
         recentAuditLog={recentAuditLog}
-        bankFeeds={bankFeeds}
+        bankFeeds={bankFeedsWithDetails}
         bankOpenInvoices={bankOpenInvoices}
         bankFeedTotalCount={bankFeedTotalCount}
         allInvoicesFlat={allInvoicesFlat}

@@ -13,6 +13,8 @@ import { describe, it, expect } from "vitest"
 import {
   selectBestCandidate,
   compareCandidates,
+  resolveTieByPaidDate,
+  PAID_DATE_WINDOW_DAYS,
   type ScoredCandidate,
 } from "@/lib/finance/candidate-selection"
 
@@ -138,5 +140,72 @@ describe("compareCandidates — deterministic ordering", () => {
     const b = c({ id: "bbb", score: 95 })
     expect(compareCandidates(a, b)).toBeLessThan(0)
     expect(compareCandidates(b, a)).toBeGreaterThan(0)
+  })
+})
+
+// THE 2026-10-29 CASE. A $15 Zelle from BERIL LLC dated 2026-10-27 tied six paid $15 Beril
+// invoices on name + amount. Only INV-002705 was marked Paid on 2026-10-27; the rest were paid in
+// April and June. Delete the window check and the "outside the window" cases fail; delete the
+// exactly-one rule and the "two inside the window" case fails.
+describe("resolveTieByPaidDate — the Beril $15 case", () => {
+  const beril = (id: string, invoiceNumber: string) =>
+    c({ id, invoiceNumber, score: 80, confidence: "medium", accountId: "acct-beril" })
+  const tied = [
+    beril("a", "INV-001376"),
+    beril("b", "INV-001377"),
+    beril("c", "INV-001379"),
+    beril("d", "INV-001392"),
+    beril("e", "INV-002082"),
+    beril("f", "INV-002705"),
+  ]
+  const paid = new Map<string, string | null>([
+    ["a", "2026-04-22"],
+    ["b", "2026-04-22"],
+    ["c", "2026-04-22"],
+    ["d", "2026-04-22"],
+    ["e", "2026-06-09"],
+    ["f", "2026-10-27"],
+  ])
+
+  it("picks the one invoice paid on the transaction date", () => {
+    expect(resolveTieByPaidDate(tied, paid, "2026-10-27")?.invoiceNumber).toBe("INV-002705")
+  })
+
+  it("still picks it when the invoice was marked paid a few days either side", () => {
+    const early = new Map(paid).set("f", "2026-10-24")
+    const late = new Map(paid).set("f", "2026-10-30")
+    expect(resolveTieByPaidDate(tied, early, "2026-10-27")?.invoiceNumber).toBe("INV-002705")
+    expect(resolveTieByPaidDate(tied, late, "2026-10-27")?.invoiceNumber).toBe("INV-002705")
+  })
+
+  it("does not pick when the nearest invoice is outside the window", () => {
+    const far = new Map(paid).set("f", "2026-10-20")
+    expect(resolveTieByPaidDate(tied, far, "2026-10-27")).toBeNull()
+    expect(PAID_DATE_WINDOW_DAYS).toBe(3)
+  })
+
+  it("refuses when two invoices were paid inside the window", () => {
+    const two = new Map(paid).set("e", "2026-10-26")
+    expect(resolveTieByPaidDate(tied, two, "2026-10-27")).toBeNull()
+  })
+
+  it("refuses when the transaction date is missing or unreadable", () => {
+    expect(resolveTieByPaidDate(tied, paid, null)).toBeNull()
+    expect(resolveTieByPaidDate(tied, paid, "not a date")).toBeNull()
+  })
+
+  it("ignores invoices with no paid date", () => {
+    const noDates = new Map<string, string | null>([["f", null]])
+    expect(resolveTieByPaidDate(tied, noDates, "2026-10-27")).toBeNull()
+  })
+
+  it("accepts a timestamp-shaped date and compares by calendar day", () => {
+    const stamped = new Map(paid).set("f", "2026-10-27T23:59:00+00:00")
+    expect(resolveTieByPaidDate(tied, stamped, "2026-10-27")?.invoiceNumber).toBe("INV-002705")
+  })
+
+  it("works across a month boundary", () => {
+    const m = new Map<string, string | null>([["f", "2026-11-01"]])
+    expect(resolveTieByPaidDate(tied, m, "2026-10-30")?.invoiceNumber).toBe("INV-002705")
   })
 })
