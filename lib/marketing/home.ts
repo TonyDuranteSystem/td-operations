@@ -59,7 +59,8 @@ export function homeModel(i: {
     paidToday: new Set(todays("payment_received").map(e => (typeof e.data?.sale_id === "string" ? e.data.sale_id : `${e.lead_id}:${e.created_at}`))).size,
   }
 
-  const fromLeads: HomeMessage[] = i.conversations.filter(c => c.unread > 0).map(c => ({ key: `lead:${c.leadId}`, kind: "lead", id: c.leadId, title: c.name, by: c.lastBy, text: c.last, at: c.lastAt, mentioned: false }))
+  // a chat about a lead is his only when somebody NAMED him in it (Antonio, 29 Oct 2026); the others stay in Messages
+  const fromLeads: HomeMessage[] = i.conversations.filter(c => c.unread > 0 && c.mentioned === true).map(c => ({ key: `lead:${c.leadId}`, kind: "lead", id: c.leadId, title: c.name, by: c.lastBy, text: c.last, at: c.lastAt, mentioned: true }))
   const fromThreads: HomeMessage[] = i.threads.filter(t => t.unread > 0).map(t => ({ key: `thread:${t.id}`, kind: "thread", id: t.id, title: t.title, by: t.lastBy, text: t.last, at: t.lastAt, mentioned: t.mentioned }))
   const all = [...fromLeads, ...fromThreads].sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""))
 

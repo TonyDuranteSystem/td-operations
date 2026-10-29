@@ -26,7 +26,7 @@ export async function loadOwnerHome(ctx: MarketingContext, now: Date, unnamed: s
     getMarketingSetting("pipeline_stages", teamId) as Promise<StageOpt[]>,
     loadTeamEvents(db, teamId, { since: romeStartOfMonth(now), kinds: ["payment_link_created", "payment_received"] }),
     loadCalendarData(db, teamId),
-    leadChat ? listConversations(ctx) : Promise.resolve([]),
+    leadChat ? listConversations(ctx, { withMentions: true }) : Promise.resolve([]),
     chatAny ? listThreads(ctx).then(s => s.threads) : Promise.resolve([]),
   ])
   const model = homeModel({

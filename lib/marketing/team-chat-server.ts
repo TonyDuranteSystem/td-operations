@@ -64,12 +64,17 @@ async function peopleOf(teamMembers: Awaited<ReturnType<typeof chatMembers>>, id
   return out
 }
 
+/** Antonio previewing a role other than the owner ("View as Setter"): he is a member of conversations, the role he previews is not. */
+const previewingARole = (ctx: MarketingContext): boolean => !!ctx.viewAs && ctx.membership.bundle !== null
+
 /** A conversation of MY team that I am a member of, with its members; null for anything else (another team's, a stranger's, not a uuid). */
 export async function myThread(ctx: MarketingContext, threadId: string): Promise<{ thread: Thread; memberIds: string[] } | null> {
   if (!isUuid(threadId)) return null
   const d = db()
   const { data: t } = await d.from("marketing_chat_threads").select("id, kind, title, created_by").eq("id", threadId).eq("team_id", ctx.team.id).maybeSingle()
   if (!t) return null
+  // "View as" another role: Antonio's own conversations are not that person's (29 Oct 2026), so the preview opens none
+  if (previewingARole(ctx)) return null
   const { data: ms } = await d.from("marketing_chat_thread_members").select("user_id").eq("thread_id", threadId)
   const memberIds = ((ms ?? []) as Array<{ user_id: string }>).map(m => m.user_id)
   return memberIds.includes(ctx.user.id) ? { thread: t as Thread, memberIds } : null
@@ -94,7 +99,7 @@ export async function listThreads(ctx: MarketingContext): Promise<{ threads: Thr
   const people = members.filter(m => m.status === "active" && m.id !== me).map(m => ({ id: m.id, name: m.name }))
   const { data: mine } = await d.from("marketing_chat_thread_members").select("thread_id").eq("user_id", me).limit(1000)
   const ids = ((mine ?? []) as Array<{ thread_id: string }>).map(x => x.thread_id)
-  if (ids.length === 0) return { threads: [], people, me }
+  if (ids.length === 0 || previewingARole(ctx)) return { threads: [], people: previewingARole(ctx) ? [] : people, me }
   const threads: Array<{ id: string; kind: "dm" | "group"; title: string | null }> = []
   const memberRows: Array<{ thread_id: string; user_id: string }> = []
   const reads = new Map<string, string>()

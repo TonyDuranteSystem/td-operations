@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { LeadLink } from '@/components/marketing/lead-link'
+import { CrmLeadChatLink } from '@/components/marketing/crm-lead-chat-link'
 import type { HomeModel, WaitingGroup } from '@/lib/marketing/home'
 import { personName } from '@/lib/marketing/setter-note'
 import { romeTime } from '@/lib/marketing/calendar'
@@ -9,16 +10,18 @@ import { RemindBox, ReplyBox } from '@/components/marketing/owner-home-actions'
 
 /**
  * The owner's Home panels (TD Marketing, dev job 9aec66fa): the messages waiting for him, what is waiting on Rocco, and today's calls. Shown in the workspace's Home (every lead opens in a window on
- * top of the screen) and on the CRM's Marketing page (a plain link into the workspace, which opens the lead or the chat there). The CRM page is in English; the workspace follows the person's language.
+ * top of the screen) and on the CRM's Marketing page (a chat opens in a window right on that page; a lead is a plain link into the workspace). The CRM page is in English; the workspace follows the person's language.
  */
 type PanelProps = { model: HomeModel; mode: 'workspace' | 'crm'; t: TFn; locale: string; chatAny: boolean }
 const card = 'rounded-xl border bg-white p-5'
 
-/** inside the workspace a lead opens in a window; from the CRM it is a link into the workspace that opens the lead (or its chat) there, under Antonio's own menu */
+/** inside the workspace a lead opens in a window; from the CRM a chat opens in a window on that page (he stays on his dashboard) and a lead is a link into the workspace, under Antonio's own menu */
 function leadLink(mode: 'workspace' | 'crm', id: string, name: string, className: string, children: React.ReactNode, o: { chat?: boolean; testId?: string } = {}) {
   return mode === 'workspace'
     ? <LeadLink leadId={id} name={name} tab={o.chat ? 'chat' : undefined} className={className} testId={o.testId}>{children}</LeadLink>
-    : <Link href={`/marketing/board?${o.chat ? 'chat' : 'open'}=${id}`} className={className} data-testid={o.testId}>{children}</Link>
+    : o.chat
+      ? <CrmLeadChatLink leadId={id} name={name} className={className} testId={o.testId}>{children}</CrmLeadChatLink>
+      : <Link href={`/marketing/board?open=${id}`} className={className} data-testid={o.testId}>{children}</Link>
 }
 
 /** The messages waiting for him. In the CRM each one has a reply box (answer without leaving the page). */

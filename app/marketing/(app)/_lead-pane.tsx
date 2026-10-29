@@ -3,7 +3,9 @@ import { PaymentLinkPanel, type PaymentLinkProps } from '@/components/marketing/
 import { clientFlagText, eventText, formatWhen, prettyAnswer, prettyQuestion, stageLabel, telHref, type StageOption } from '@/lib/marketing/lead-view'
 import type { LeadEventRow, LeadRow } from '@/lib/marketing/leads-read'
 import { hasPermission, type MarketingPermission } from '@/lib/marketing/permissions'
-import { answersWithoutPhone, canSeeNotes, canSeePhone, redactLead, redactTimeline } from '@/lib/marketing/lead-privacy'
+import { answersWithoutPhone, canSeeNotes, canSeePhone, redactLead, redactTimeline, setterTimeline } from '@/lib/marketing/lead-privacy'
+import { isSetterOnly } from '@/lib/marketing/lead-chat'
+import { setterActorsOf } from '@/lib/marketing/setter-view'
 import { buildSetterNote, personName } from '@/lib/marketing/setter-note'
 import { SetterNoteBlock } from '@/components/marketing/setter-note-block'
 import { ContactPanel } from '@/components/marketing/contact-panel'
@@ -15,7 +17,7 @@ import { getLang } from '@/lib/marketing/lang'
 import { localeFor, makeT } from '@/lib/marketing/i18n'
 import { getMarketingSetting } from '@/lib/marketing/settings'
 import type { SellerResultStages } from '@/lib/marketing/settings-schema'
-import { hasPaidOrLater, sellerOf } from '@/lib/marketing/lead-actions'
+import { hasPaidOrLater, onSellerSide, sellerOf } from '@/lib/marketing/lead-actions'
 import { BookingLinkPanel } from '@/components/marketing/booking-link-panel'
 
 interface Props {
@@ -50,7 +52,10 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
   const lead0 = redactLead(leadIn, seesNotes)
   // no phone number (and no phone-looking form answer) in the page for someone who may not see phone numbers
   const lead = canSeePhone(permissions) ? lead0 : { ...lead0, phone: null, answers: answersWithoutPhone(lead0.answers, permissions) }
-  const events = redactTimeline(eventsIn, seesNotes)
+  // a setter reads what setters did and the plain facts; never the seller's and Antonio's notes, the booking link, the payment link, the payment or the stage moves of Rocco's side (setterTimeline)
+  const setterOnly = isSetterOnly(permissions)
+  const setterActors = setterOnly && lead.team_id ? await setterActorsOf(lead.team_id) : new Set<string>()
+  const events = setterOnly ? setterTimeline(redactTimeline(eventsIn, seesNotes), setterActors, viewingAs === true) : redactTimeline(eventsIn, seesNotes)
   const setterNote = seesNotes ? buildSetterNote(events, reasons) : null
   const claim = lead.claimed_by === null ? 'free' : lead.claimed_by === myId ? 'me' : 'other'
   const flag = clientFlagText(lead.existing_client, t)
@@ -68,6 +73,8 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
   const sellerSettings = lead.team_id ? { sellerStages: (await getMarketingSetting('seller_result_stages', lead.team_id)) as SellerResultStages, paidStages: Array.from(new Set(Object.values((await getMarketingSetting('sale_kind_stages', lead.team_id)) as Record<string, string>))) } : { sellerStages: undefined, paidStages: undefined }
   const sellerKeys = sellerOf(sellerSettings)
   const afterPay = hasPaidOrLater(lead.status, sellerSettings)
+  // to a setter a lead on Rocco's side of the road is simply with the seller: she is never told it was sent a link or paid
+  const withSeller = setterOnly && onSellerSide(lead.status, sellerSettings)
   const lastBookingLink = [...events].reverse().map(e => (e.kind === 'booking_link' && typeof e.data?.url === 'string' ? e.data.url : null)).find(u => u !== null) ?? null
   const where = [lead.campaign_name, lead.adset_name, lead.ad_name].filter(Boolean)
   return (
@@ -75,7 +82,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
       <div className="rounded-xl border bg-white p-5">
         <div className="flex items-start justify-between gap-3">
           <h2 className="text-xl font-semibold">{lead.full_name || lead.email || lead.phone || t('Unnamed lead')}</h2>
-          <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs">{t(stageLabel(stages, lead.status))}</span>
+          <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs">{withSeller ? t('With the seller') : t(stageLabel(stages, lead.status))}</span>
         </div>
         <div className="mt-3 grid gap-x-8 gap-y-1 text-sm sm:grid-cols-2">
           {lead.phone && <p><span className="text-slate-500">{t('Phone: ')}</span>{tel ? <a className="font-medium underline" href={tel}>{lead.phone}</a> : lead.phone}</p>}

@@ -5,6 +5,7 @@ import { ArrowUp, Check, CornerUpLeft, Mic, Paperclip, Pencil, Trash2, X, Loader
 import { toast } from 'sonner'
 import { useTalkI18n } from '@/components/talk/talk-i18n'
 import { useAudioNoteRecorder } from '@/lib/hooks/use-audio-note-recorder'
+import { meterFill, SILENT_WARN_AFTER_SECONDS } from '@/lib/media/sound-level'
 import { prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } from '@/lib/team/attachment'
 import { clock, snippet, type TalkMessage, type TypingKind } from '@/lib/talk/chat-model'
 
@@ -30,7 +31,7 @@ export type TalkComposerMode =
  * message went out, so a failed send keeps what was typed.
  */
 export function TalkComposer({
-  onSend, onEdit, mode, onCancelMode, onTyping, disabled, mentionPeople,
+  onSend, onEdit, mode, onCancelMode, onTyping, disabled, mentionPeople, soundCheck,
 }: {
   onSend: (input: TalkSendInput) => Promise<boolean>
   onEdit: (id: string, text: string) => Promise<boolean>
@@ -41,6 +42,8 @@ export function TalkComposer({
   disabled?: boolean
   /** The people who can be named with @ (the marketing chats pass the people of the conversation; the default is nobody: TD Talk and Team Chat show no picker). */
   mentionPeople?: ReadonlyArray<{ id: string; name: string }>
+  /** TD Marketing sets this: a live sound bar while recording, a warning when the microphone hears nothing, and a silent recording is not sent. Off for TD Talk. */
+  soundCheck?: boolean
 }) {
   const { t, ts } = useTalkI18n()
   const [text, setText] = useState('')
@@ -112,8 +115,9 @@ export function TalkComposer({
     }
   }, [onSend])
 
-  const { isRecording, startRecording, stopRecording, cancelRecording, isSupported } = useAudioNoteRecorder({
+  const { isRecording, startRecording, stopRecording, cancelRecording, isSupported, level, heardSound } = useAudioNoteRecorder({
     preferMp4: true,
+    watchSound: !!soundCheck,
     onRecorded: file => {
       const replyToId = modeRef.current?.kind === 'reply' ? modeRef.current.message.id : null
       // a voice note answering a message ends the reply, exactly like a typed answer (else the NEXT text would quote it too)
@@ -187,6 +191,12 @@ export function TalkComposer({
           <span className="h-3 w-3 animate-pulse rounded-full bg-[#BE1E2D]" />
           <span className="font-mono text-base tabular-nums text-zinc-800">{clock(seconds)}</span>
           <span className="text-sm text-zinc-400">{t('Recording…')}</span>
+          {soundCheck && (
+            <span className="ml-1 flex min-w-0 flex-1 flex-col gap-0.5" data-testid="talk-sound">
+              <span className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200"><span className="block h-full rounded-full bg-emerald-600 transition-[width] duration-100" style={{ width: `${Math.round(meterFill(level) * 100)}%` }} data-testid="talk-sound-bar" /></span>
+              {!heardSound && seconds >= SILENT_WARN_AFTER_SECONDS && <span className="text-xs font-medium text-red-700" role="alert" data-testid="talk-no-sound">{t('No sound yet. Check that your microphone is on and not muted.')}</span>}
+            </span>
+          )}
         </div>
         <button type="button" onClick={stopRecording} aria-label={t('Send the voice note')} data-testid="talk-voice-send" className="flex h-11 w-11 items-center justify-center rounded-full bg-[#BE1E2D] text-white active:opacity-80">
           <ArrowUp className="h-5 w-5" />
