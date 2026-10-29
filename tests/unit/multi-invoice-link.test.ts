@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
-interface FeedRow { id: string; amount: number; currency: string | null; status: string }
+interface FeedRow { id: string; amount: number; currency: string | null; status: string; source?: string; external_id?: string | null }
 interface PayRow {
   id: string
   invoice_number: string | null
@@ -60,6 +60,7 @@ vi.mock("@/lib/operations/payment", () => ({}))
 vi.mock("@/lib/system-errors", () => ({ reportSystemError: async () => {} }))
 
 import { linkFeedTransactionToInvoices } from "@/lib/finance/owner-transaction-link"
+import { isChargeRefundedNow } from "@/lib/stripe-sync"
 import {
   readLinkedPaymentIds,
   summarizeMultiLink,
@@ -187,6 +188,36 @@ describe("linkFeedTransactionToInvoices — refusals (nothing is written)", () =
     const ids = Array.from({ length: 21 }, (_, i) => `x${i}`)
     expect((await run(ids)).ok).toBe(false)
     nothingWritten()
+  })
+
+  it("refuses a Stripe payment that was refunded or disputed — it is not our money any more", async () => {
+    feedRow = { id: "feed1", amount: 125, currency: "USD", status: "unmatched", source: "stripe", external_id: "ch_1" }
+    vi.mocked(isChargeRefundedNow).mockResolvedValueOnce("refunded")
+    const r = await run(["p50", "p75"])
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/refunded or disputed/)
+    nothingWritten()
+  })
+
+  it("refuses when Stripe cannot be asked right now, rather than linking unchecked", async () => {
+    feedRow = { id: "feed1", amount: 125, currency: "USD", status: "unmatched", source: "stripe", external_id: "ch_1" }
+    vi.mocked(isChargeRefundedNow).mockResolvedValueOnce("defer")
+    const r = await run(["p50", "p75"])
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/try again/)
+    nothingWritten()
+  })
+
+  it("links a Stripe payment Stripe confirms is still good, and does not ask Stripe about a bank payment", async () => {
+    feedRow = { id: "feed1", amount: 125, currency: "USD", status: "unmatched", source: "stripe", external_id: "ch_1" }
+    vi.mocked(isChargeRefundedNow).mockResolvedValueOnce("ok")
+    expect((await run(["p50", "p75"])).ok).toBe(true)
+
+    vi.mocked(isChargeRefundedNow).mockClear()
+    feedWrites.length = 0
+    feedRow = { id: "feed1", amount: 125, currency: "USD", status: "unmatched", source: "relay", external_id: null }
+    expect((await run(["p50", "p75"])).ok).toBe(true)
+    expect(isChargeRefundedNow).not.toHaveBeenCalled()
   })
 })
 

@@ -68,6 +68,7 @@ import { applyMoneyToInvoice } from "@/lib/finance/apply-payment"
 import { isTerminalInvoice, terminalReason, isPaidInvoice } from "@/lib/finance/invoice-matchability"
 import { clientPaymentClaimMetadata, auditLinkMetadata } from "@/lib/finance/feed-vocabulary"
 import { updateFeed } from "@/lib/finance/feed-write"
+import { stripeRefundGate } from "@/lib/finance/refund-gate"
 import {
   CLEAR_MULTI_LINK_METADATA,
   MAX_LINKED_INVOICES,
@@ -526,7 +527,7 @@ export async function linkFeedTransactionToInvoices(
 
   const { data: feed, error: feedErr } = await supabaseAdmin
     .from("td_bank_feeds")
-    .select("id, amount, currency, status")
+    .select("id, amount, currency, status, source, external_id")
     .eq("id", feedId)
     .maybeSingle()
   if (feedErr) return { ok: false, error: `Could not read the transaction: ${feedErr.message}` }
@@ -534,6 +535,10 @@ export async function linkFeedTransactionToInvoices(
   if (feed.status === "matched") {
     return { ok: false, error: "This transaction has already settled an invoice." }
   }
+
+  // A refunded or disputed card payment must not be tied to invoices, even for the record.
+  const gate = await stripeRefundGate(feed)
+  if (gate.error) return { ok: false, error: gate.error }
 
   const { data: rows, error: payErr } = await supabaseAdmin
     .from("payments")
