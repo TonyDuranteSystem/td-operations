@@ -6,6 +6,7 @@ import { usePlaidLink } from 'react-plaid-link'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { readContestedCandidates, readContestedTotal, type ContestedCandidate } from '@/lib/finance/feed-vocabulary'
+import { contestedInvoiceFacts, type ContestedInvoiceDetail } from '@/lib/finance/contested-invoice-detail'
 import { evaluateNameEvidence } from '@/lib/finance/feed-signals'
 import { toast } from 'sonner'
 import {
@@ -63,6 +64,9 @@ export interface BankFeedRecord {
    *  name), which otherwise loses which bank it actually was. Null for a feed
    *  that never came from My Finances, or a genuinely bank-unknown manual entry. */
   source_bank_name?: string | null
+  /** Live details (description, amount, paid date) of each invoice in a "more than one invoice fits"
+   *  box, keyed by invoice id, so the person can choose without leaving the screen. */
+  contested_details?: Record<string, ContestedInvoiceDetail>
   payments?: {
     invoice_number: string | null
     description: string | null
@@ -1153,22 +1157,32 @@ function UnmatchedRow({
               </p>
             </div>
             <ul className="space-y-1">
-              {contested.map((c) => (
-                <li
-                  key={c.payment_id}
-                  className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2 text-xs bg-white border border-orange-200 rounded px-2 py-1.5"
-                >
-                  <span className="font-mono font-medium">{c.invoice_number ?? 'no number'}</span>
-                  <span className="font-medium text-zinc-800">{c.client_name ?? 'unknown client'}</span>
-                  <span className="text-[11px] text-muted-foreground sm:ml-auto">
-                    equally scored ({c.confidence})
-                  </span>
-                </li>
-              ))}
+              {contested.map((c) => {
+                const detail = feed.contested_details?.[c.payment_id]
+                const facts = detail ? contestedInvoiceFacts(detail) : null
+                return (
+                  <li
+                    key={c.payment_id}
+                    className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2 text-xs bg-white border border-orange-200 rounded px-2 py-1.5"
+                  >
+                    <span className="font-mono font-medium">{c.invoice_number ?? 'no number'}</span>
+                    <span className="font-medium text-zinc-800">{c.client_name ?? 'unknown client'}</span>
+                    {facts && (
+                      <span className="text-zinc-700">
+                        {[facts.what, facts.amount, facts.state].filter(Boolean).join(' · ')}
+                      </span>
+                    )}
+                    <span className="text-[11px] text-muted-foreground sm:ml-auto">
+                      equally scored ({c.confidence})
+                    </span>
+                  </li>
+                )
+              })}
             </ul>
             <p className="text-[11px] text-orange-900">
-              Use the link icon (↗) above to pick the right invoice. If the payment carries an
-              invoice number, that is the only thing that can settle this for certain.
+              To pick the right invoice, click the green note icon above (&quot;Link with a note&quot;) — it
+              finds paid and open invoices. If the payment carries an invoice number, that is the
+              only thing that can settle this for certain.
             </p>
           </div>
         </div>

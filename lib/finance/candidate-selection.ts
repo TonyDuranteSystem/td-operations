@@ -89,6 +89,47 @@ export function compareCandidates(a: ScoredCandidate, b: ScoredCandidate): numbe
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
 }
 
+/**
+ * THE DATE CLUE FOR TIES AMONG ALREADY-PAID INVOICES (Antonio, 2026-10-29).
+ *
+ * Real case: a $15 Zelle from "BERIL LLC" dated Oct 27 fitted six paid $15 Beril invoices
+ * equally on name + amount, so it was parked. Only one of the six (INV-002705) was marked Paid
+ * on Oct 27 — the others in April and June. The bank date was on the transaction all along; the
+ * matcher simply never read it.
+ *
+ * Used ONLY when the tied invoices are already Paid (the audit-link pass — no money moves).
+ * It picks a winner only when EXACTLY ONE tied invoice was marked Paid within
+ * `PAID_DATE_WINDOW_DAYS` of the transaction date. Two or more inside the window, or none, means
+ * the date cannot separate them and the tie stays a tie — a wrong audit link would use up that
+ * invoice's one slot and block the transaction that really belongs there.
+ */
+export const PAID_DATE_WINDOW_DAYS = 3
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function dayNumber(value: string | null | undefined): number | null {
+  if (!value) return null
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value)
+  if (!m) return null
+  const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  return Number.isFinite(t) ? Math.round(t / DAY_MS) : null
+}
+
+export function resolveTieByPaidDate(
+  tied: ScoredCandidate[],
+  paidDateById: ReadonlyMap<string, string | null | undefined>,
+  transactionDate: string | null | undefined,
+  windowDays: number = PAID_DATE_WINDOW_DAYS,
+): ScoredCandidate | null {
+  const feedDay = dayNumber(transactionDate)
+  if (feedDay === null) return null
+  const near = tied.filter((c) => {
+    const paidDay = dayNumber(paidDateById.get(c.id))
+    return paidDay !== null && Math.abs(paidDay - feedDay) <= windowDays
+  })
+  return near.length === 1 ? near[0] : null
+}
+
 export function selectBestCandidate(candidates: ScoredCandidate[]): CandidateSelection {
   if (candidates.length === 0) return { best: null, contested: false, tied: [] }
 
