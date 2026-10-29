@@ -15,7 +15,7 @@
  * stage where this document is expected only gets a warning (no guided walk); a guide for CLIENTS in the portal wizards comes later.
  */
 import { parseStageLayout } from '@/lib/flows/stage-layout'
-import { STORAGE_STEP_HINTS } from '@/lib/flows/storage-step-rules'
+import type { StorageStepHint } from '@/lib/flows/storage-step-rules'
 
 // ── what the page hands the guide ──────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -92,23 +92,37 @@ export function planGuide(input: {
   }
   if (!here) return { kind: 'not_ready', currentStage: input.currentStage, boxStage: nearest.name, boxLabel: boxOf(nearest).label }
 
-  // shortest chain of forward buttons (breadth-first; a loop in the pipeline cannot hang it)
-  const byName = new Map(input.stages.map((s) => [s.name, s] as const))
-  const targets = new Set(withBox.map((s) => s.name))
-  const queue: Array<{ stage: GuideStageDef; path: GuideStep[] }> = [{ stage: here, path: [] }]
-  const seen = new Set<string>([here.name])
+  const found = pressPath(input.stages, here.name, new Set(withBox.map((s) => s.name)))
+  if (found) return { kind: 'steps', steps: [...found.press, uploadStep(found.reached)] }
+  return { kind: 'not_ready', currentStage: input.currentStage, boxStage: nearest.name, boxLabel: boxOf(nearest).label }
+}
+
+export type PressStep = Extract<GuideStep, { kind: 'press' }>
+
+/**
+ * The shortest chain of forward buttons from the stage `fromName` to the nearest stage in `targets` (breadth-first; a loop in the pipeline cannot
+ * hang it). `press` is empty when `fromName` already is a target. null = no chain of guided buttons reaches a target. Shared by the guide and by
+ * the "workspace step is waiting" pop-up (which tells staff the exact buttons), so the two always say the same thing.
+ */
+export function pressPath(stages: readonly GuideStageDef[], fromName: string, targets: ReadonlySet<string>): { press: PressStep[]; reached: GuideStageDef } | null {
+  const byName = new Map(stages.map((s) => [s.name, s] as const))
+  const start = byName.get(fromName)
+  if (!start) return null
+  if (targets.has(start.name)) return { press: [], reached: start }
+  const queue: Array<{ stage: GuideStageDef; path: PressStep[] }> = [{ stage: start, path: [] }]
+  const seen = new Set<string>([start.name])
   while (queue.length > 0) {
     const cur = queue.shift()!
     for (const a of cur.stage.actions) {
       const next = byName.get(a.target)
       if (!next || seen.has(next.name)) continue
       seen.add(next.name)
-      const path: GuideStep[] = [...cur.path, { kind: 'press', stage: cur.stage.name, label: a.label, target: a.target }]
-      if (targets.has(next.name)) return { kind: 'steps', steps: [...path, uploadStep(next)] }
+      const path: PressStep[] = [...cur.path, { kind: 'press', stage: cur.stage.name, label: a.label, target: a.target }]
+      if (targets.has(next.name)) return { press: path, reached: next }
       queue.push({ stage: next, path })
     }
   }
-  return { kind: 'not_ready', currentStage: input.currentStage, boxStage: nearest.name, boxLabel: boxOf(nearest).label }
+  return null
 }
 
 // ── which part of the upload box to circle ─────────────────────────────────────────────────────────────────────────────────────
@@ -192,11 +206,11 @@ export function parseGuideParam(raw: unknown): string | null {
   return typeof v === 'string' && GUIDE_PARAM.test(v) ? v : null
 }
 
-/** What the table says about the step this document belongs to (the words, what the workspace does, and the stages where it is waiting). */
-export function guideHintFor(serviceType: string, documentType: string): { asks: string; does: string[]; readyStages: string[] } | null {
-  for (const h of STORAGE_STEP_HINTS) {
+/** What the workspace's own upload boxes say about the step this document belongs to (the words, what the workspace does, and the stages where it is waiting). */
+export function guideHintFor(hints: readonly StorageStepHint[], serviceType: string, documentType: string): { asks: string; does: string[]; readyStages: string[] } | null {
+  for (const h of hints) {
     if (h.serviceType === serviceType && h.documentTypes.indexOf(documentType) !== -1) {
-      return { asks: h.asks, does: [...h.workspaceDoes], readyStages: [...h.stages] }
+      return { asks: h.asks, does: h.workspaceDoes.map((e) => e.text), readyStages: [...h.stages] }
     }
   }
   return null

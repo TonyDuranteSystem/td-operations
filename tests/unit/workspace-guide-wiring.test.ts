@@ -25,7 +25,7 @@ describe('workspace guide wiring', () => {
   it('the workspace page starts the guide only from ?guide= and only for a document the step table knows', () => {
     const src = read('app/(dashboard)/flows/[id]/page.tsx')
     expect(src).toContain('parseGuideParam(searchParams?.guide)')
-    expect(src).toContain('guideHintFor(sd.service_type, guideType)')
+    expect(src).toContain('guideHintFor(buildStepHints(')
     expect(src).toMatch(/\{guideType && guideHint && \(\s*<WorkspaceGuide/)
   })
   it('the pop-up\'s "Open the workspace" link carries the guide request', () => {

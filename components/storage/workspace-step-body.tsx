@@ -28,7 +28,7 @@ export function WorkspaceStepBody({ hits }: { hits: WaitingWorkspaceStep[] }) {
           ) : (
             <p>
               <strong>{h.who}</strong>&apos;s {h.serviceType} case is at <strong>&ldquo;{h.stage}&rdquo;</strong> and is waiting for {h.asks}. This file is typed
-              &ldquo;Other document&rdquo; in their {h.serviceType} folder — if it <strong>is</strong> that document, do it in the workspace; if it is
+              &ldquo;Other document&rdquo;, so it may or may not be that document — if it <strong>is</strong>, do it in the workspace; if it is
               something else, save it in Storage.
             </p>
           )}

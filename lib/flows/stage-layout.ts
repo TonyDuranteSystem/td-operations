@@ -86,9 +86,71 @@ export interface StageComponent {
    *  (the Storage list for where the file lands, this one pre-selected) and the upload must carry a type — the Storage rule. Absent = no picker,
    *  the upload behaves as before. One line in the layout moves a box over to the model. */
   documentType?: string
+  /** document_upload: what the "workspace step is waiting" pop-up and the guide know about this box (see StageBoxStorageHint). */
+  storageHint?: StageBoxStorageHint
   /** document_viewer: render with a collapse/expand toggle, starting collapsed.
    *  Absent/false = always-open list (original behavior, unchanged). */
   collapsible?: boolean
+}
+
+/** One thing the workspace does when this box takes its file. `key` names an action Storage itself ALSO does for some types (STORAGE_OWN_ACTIONS). */
+export interface StageBoxEffect {
+  text: string
+  key?: string
+}
+
+/**
+ * document_upload: how the "a workspace step is waiting for this document" pop-up (and the step-by-step guide) learn about this box — dev job
+ * e3215801, "make it flexible, not hardcoded" (Antonio 2026-10-28). Everything is optional and lives WITH the stage, so adding a service is data only
+ * (lib/flows/storage-step-rules.ts builds the rules from these layouts). Needs the box's `documentType`: a box with no type can never be matched.
+ */
+export interface StageBoxStorageHint {
+  /** Plain words: the document the box asks for ("the IRS approval letter (CP565)"). Absent: the box's own label. */
+  asks?: string
+  /** Other Storage document types that count as this box's document (besides `documentType`). */
+  acceptsTypes?: string[]
+  /** The KIND of folder this document lives in (e.g. "itin"). Needed for `typeNeedsFolder` / `otherDocumentCounts`. */
+  folderKind?: string
+  /** `documentType` is a GENERIC type (e.g. "receipt"): it only counts inside a folder of `folderKind`. */
+  typeNeedsFolder?: boolean
+  /** A file typed "Other document" (or untyped) in a folder of `folderKind` MAY be this document, so it counts too. */
+  otherDocumentCounts?: boolean
+  /** The stages of an OPEN case at which a matching file means "this box is waiting". Absent: only the box's own stage. */
+  fromStages?: string[]
+  /** What uploading in the workspace does (verified sentences only). Absent: the pop-up says only the always-true line. */
+  effects?: StageBoxEffect[]
+}
+
+function strList(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined
+  const out = v.filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+  return out.length > 0 ? out : undefined
+}
+
+/** Narrow a raw `storageHint` into the typed shape; anything unusable is dropped (never throws). */
+export function parseStorageHint(value: unknown): StageBoxStorageHint | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const raw = value as Record<string, unknown>
+  const effects: StageBoxEffect[] = []
+  if (Array.isArray(raw.effects)) {
+    for (const e of raw.effects) {
+      if (typeof e === 'string' && e.trim()) effects.push({ text: e })
+      else if (e && typeof e === 'object' && typeof (e as { text?: unknown }).text === 'string' && (e as { text: string }).text.trim()) {
+        const key = (e as { key?: unknown }).key
+        effects.push({ text: (e as { text: string }).text, ...(typeof key === 'string' && key ? { key } : {}) })
+      }
+    }
+  }
+  const out: StageBoxStorageHint = {
+    ...(typeof raw.asks === 'string' && raw.asks.trim() ? { asks: raw.asks } : {}),
+    ...(strList(raw.acceptsTypes) ? { acceptsTypes: strList(raw.acceptsTypes) } : {}),
+    ...(typeof raw.folderKind === 'string' && raw.folderKind ? { folderKind: raw.folderKind } : {}),
+    ...(typeof raw.typeNeedsFolder === 'boolean' ? { typeNeedsFolder: raw.typeNeedsFolder } : {}),
+    ...(typeof raw.otherDocumentCounts === 'boolean' ? { otherDocumentCounts: raw.otherDocumentCounts } : {}),
+    ...(strList(raw.fromStages) ? { fromStages: strList(raw.fromStages) } : {}),
+    ...(effects.length > 0 ? { effects } : {}),
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /** Narrow one raw action entry into a StageAction, or null if unusable. */
@@ -122,7 +184,7 @@ export function parseStageLayout(value: unknown): StageLayout | null {
     const comp = c as { type?: unknown; label?: unknown; url?: unknown; actions?: unknown }
     if (typeof comp.type !== 'string') continue
     if (!(STAGE_COMPONENT_TYPES as readonly string[]).includes(comp.type)) continue
-    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown; collapsible?: unknown; documentType?: unknown }
+    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown; collapsible?: unknown; documentType?: unknown; storageHint?: unknown }
     components.push({
       type: comp.type as StageComponentType,
       label: typeof comp.label === 'string' ? resolveTokens(comp.label) : undefined,
@@ -134,6 +196,7 @@ export function parseStageLayout(value: unknown): StageLayout | null {
       folder: typeof rawComp.folder === 'string' ? rawComp.folder : undefined,
       rename: typeof rawComp.rename === 'string' ? rawComp.rename : undefined,
       documentType: typeof rawComp.documentType === 'string' && rawComp.documentType ? rawComp.documentType : undefined,
+      storageHint: parseStorageHint(rawComp.storageHint),
       collapsible: typeof rawComp.collapsible === 'boolean' ? rawComp.collapsible : undefined,
     })
   }

@@ -9,10 +9,13 @@ import { isHeicByNameOrType, jpegNameFor } from '@/lib/image-heic'
 /** A server answer that was not OK — keeps the status so the screen can tell "gone" from "could not reach". */
 export class HttpError extends Error {
   status: number
-  constructor(message: string, status: number) {
+  /** The server's whole JSON answer when it sent one (a refusal can carry a `code` and the `hits` it refused for). */
+  data?: unknown
+  constructor(message: string, status: number, data?: unknown) {
     super(message)
     this.name = 'HttpError'
     this.status = status
+    this.data = data
   }
 }
 

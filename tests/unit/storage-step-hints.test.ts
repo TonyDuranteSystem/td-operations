@@ -4,6 +4,8 @@
  * step that reads the letter, tells the client and closes the case never ran.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const fx = vi.hoisted(() => ({
   folder: { kind: 'itin' } as Record<string, unknown> | null,
@@ -11,7 +13,8 @@ const fx = vi.hoisted(() => ({
   contact: { full_name: 'Adam Mihaly' } as Record<string, unknown> | null,
   account: { company_name: 'Acme LLC' } as Record<string, unknown> | null,
   cases: [] as Array<Record<string, unknown>>,
-  fail: { folder: false, owner: false, contact: false, cases: false },
+  stageRows: [] as Array<Record<string, unknown>>,
+  fail: { folder: false, owner: false, contact: false, cases: false, stages: false },
   queried: [] as string[],
   filters: [] as Array<[string, unknown]>,
 }))
@@ -24,12 +27,14 @@ vi.mock('@/lib/supabase-admin', () => ({
       const b: any = {}
       b.select = () => b
       b.in = () => b
+      b.order = () => b
       b.eq = (col: string, val: unknown) => { fx.filters.push([`${table}.${col}`, val]); return b }
       const one = () => {
         if (table === 'store_folders') return fx.fail.folder ? { data: null, error: { message: 'boom' } } : { data: fx.folder, error: null }
         if (table === 'store_owners') return fx.fail.owner ? { data: null, error: { message: 'boom' } } : { data: fx.owner, error: null }
         if (table === 'contacts') return fx.fail.contact ? { data: null, error: { message: 'boom' } } : { data: fx.contact, error: null }
         if (table === 'accounts') return { data: fx.account, error: null }
+        if (table === 'pipeline_stages') return fx.fail.stages ? { data: null, error: { message: 'boom' } } : { data: fx.stageRows, error: null }
         if (table === 'service_deliveries') return fx.fail.cases ? { data: null, error: { message: 'boom' } } : { data: fx.cases, error: null }
         return { data: null, error: null }
       }
@@ -40,7 +45,14 @@ vi.mock('@/lib/supabase-admin', () => ({
   },
 }))
 
-import { matchStorageStepHints, couldMatchAnyHint, typeCouldWait, findWaitingWorkspaceSteps, findWaitingWorkspaceStepsForContact, STORAGE_STEP_HINTS } from '@/lib/flows/storage-step-hints'
+import { matchStorageStepHints as matchWith, couldMatchAnyHint as couldMatchWith, typeCouldWait as couldWaitWith, findWaitingWorkspaceSteps, findWaitingWorkspaceStepsForContact, buildStepHints, resetStepHintsCache } from '@/lib/flows/storage-step-hints'
+
+// The production ITIN stage rows (their upload boxes carry the storageHint the pop-up is built from) — the rules are BUILT from these, nothing is hardcoded.
+const ITIN_ROWS = JSON.parse(readFileSync(join(__dirname, '../fixtures/pipeline-itin-stages.json'), 'utf8')) as Array<{ service_type: string; stage_name: string; stage_order: number; stage_layout: unknown }>
+const HINTS = buildStepHints(ITIN_ROWS)
+const matchStorageStepHints = (i: Omit<Parameters<typeof matchWith>[0], 'hints'>) => matchWith({ ...i, hints: HINTS })
+const couldMatchAnyHint = (t: string | null, f: string | null) => couldMatchWith(HINTS, t, f)
+const typeCouldWait = (t: string | null) => couldWaitWith(HINTS, t)
 
 const kase = (stage: string, status = 'active', serviceType = 'ITIN') => ({ sdId: 'sd-1', serviceType, stage, status, who: 'Adam Mihaly' })
 
@@ -126,7 +138,7 @@ describe('matchStorageStepHints — what a Storage save would skip', () => {
   })
 
   it('every row names what the workspace does (nothing is claimed that is not listed) and EVERY stage it covers says what to press there', () => {
-    for (const h of STORAGE_STEP_HINTS) {
+    for (const h of HINTS) {
       expect(h.stages.length).toBeGreaterThan(0)
       expect(h.documentTypes.length).toBeGreaterThan(0)
       expect(h.asks.length).toBeGreaterThan(5)
@@ -143,7 +155,7 @@ describe('matchStorageStepHints — what a Storage save would skip', () => {
     // at Submitted to IRS the only box is for the mailing receipt — the letter must NOT go there
     expect(letterAt('Submitted to IRS')).toContain('Submitted - Wait for IRS')
     expect(letterAt('Submitted to IRS')).toContain('ITIN Received')
-    expect(letterAt('Submitted to IRS')).toContain('mailing-receipt box')
+    expect(letterAt('Submitted to IRS')).toContain('Do not use the "Upload mailing receipt/tracking" box')
     const scanAt = (stage: string) => matchStorageStepHints({ cases: [kase(stage)], documentType: 'itin_application', folderKind: 'itin' })[0].how
     expect(scanAt('Shipped')).toContain('Documents Received at Office')
     expect(scanAt('Documents Received')).toContain('Upload received package scan')
@@ -206,12 +218,14 @@ describe('couldMatchAnyHint / typeCouldWait — an ordinary upload is not even s
 })
 
 beforeEach(() => {
+  resetStepHintsCache()
+  fx.stageRows = ITIN_ROWS as unknown as Array<Record<string, unknown>>
   fx.folder = { kind: 'itin' }
   fx.owner = { kind: 'person', contact_id: 'c-1', account_id: null }
   fx.contact = { full_name: 'Adam Mihaly' }
   fx.account = { company_name: 'Acme LLC' }
   fx.cases = [{ id: 'sd-1', service_type: 'ITIN', stage: 'IRS Processing', status: 'active', contact_id: 'c-1', account_id: null }]
-  fx.fail = { folder: false, owner: false, contact: false, cases: false }
+  fx.fail = { folder: false, owner: false, contact: false, cases: false, stages: false }
   fx.queried = []
   fx.filters = []
 })
@@ -229,14 +243,14 @@ describe('findWaitingWorkspaceSteps — the lookup', () => {
     for (const t of ['passport', 'tax_return', 'bank_statement']) {
       expect(await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: t })).toEqual([])
     }
-    expect(fx.queried).toEqual([])
+    expect(fx.queried).toEqual(['pipeline_stages'])
   })
 
   it('a generic type that is only sometimes a step\'s document ("Receipt" into Personal documents) reads the folder and stops: no owner, no case lookups', async () => {
     fx.folder = { kind: 'personal' }
     const r = await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'receipt' })
     expect(r).toEqual([])
-    expect(fx.queried).toEqual(['store_folders'])
+    expect(fx.queried).toEqual(['pipeline_stages', 'store_folders'])
   })
 
   it('the hit carries the case\'s own contact id (and account id) from the case row', async () => {
@@ -282,12 +296,70 @@ describe('findWaitingWorkspaceSteps — the lookup', () => {
   it('a record that cannot be read THROWS — the caller refuses the save, it never passes', async () => {
     fx.fail.folder = true
     await expect(findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })).rejects.toThrow()
-    fx.fail = { folder: false, owner: true, contact: false, cases: false }
+    fx.fail = { folder: false, owner: true, contact: false, cases: false, stages: false }
     await expect(findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })).rejects.toThrow()
-    fx.fail = { folder: false, owner: false, contact: true, cases: false }
+    fx.fail = { folder: false, owner: false, contact: true, cases: false, stages: false }
     await expect(findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })).rejects.toThrow()
-    fx.fail = { folder: false, owner: false, contact: false, cases: true }
+    fx.fail = { folder: false, owner: false, contact: false, cases: true, stages: false }
     await expect(findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })).rejects.toThrow()
+  })
+})
+
+describe('the rules are read from the stage layouts — a read that fails refuses the save', () => {
+  it('stage rows that cannot be read THROW (both doors) instead of letting the file through unchecked', async () => {
+    fx.fail.stages = true
+    await expect(findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })).rejects.toThrow()
+    await expect(findWaitingWorkspaceStepsForContact({ contactId: 'c-1', documentType: 'itin_letter', folderKind: 'itin' })).rejects.toThrow()
+  })
+  it('a layout edit shows up after the short cache (a new box type is noticed); the rows are read once for a burst of uploads', async () => {
+    await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })
+    await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })
+    expect(fx.queried.filter((t) => t === 'pipeline_stages')).toHaveLength(1)
+    resetStepHintsCache()
+    await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })
+    expect(fx.queried.filter((t) => t === 'pipeline_stages')).toHaveLength(2)
+  })
+})
+
+describe('the stage read must not block every upload on a blip (stale copy), and bad box settings are logged', () => {
+  it('a read that fails AFTER a good one reuses the last good copy (a passport upload is not refused because of a blip)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const first = await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })
+      expect(first).toHaveLength(1)
+      vi.setSystemTime(Date.now() + 31_000)          // the 30 s copy has expired: the next call re-reads
+      fx.fail.stages = true
+      expect(await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'passport' })).toEqual([])
+      const again = await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })
+      expect(again).toHaveLength(1)                   // still protected, from the last good copy
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('last good copy'))).toBe(true)
+      warn.mockRestore()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('with NO earlier copy (a cold instance) the read still THROWS — never "check nothing"', async () => {
+    fx.fail.stages = true
+    await expect(findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'passport' })).rejects.toThrow()
+  })
+
+  it('upload-box settings that would silently switch a pop-up off are logged when the layouts are read', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fx.stageRows = [
+      { service_type: 'X', stage_name: 'Go', stage_order: 1, stage_layout: { components: [{ type: 'document_upload', label: 'Up', documentType: 'x_doc', storageHint: { typeNeedsFolder: true } }] } },
+    ] as unknown as Array<Record<string, unknown>>
+    await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'x_doc' })
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('switch a pop-up off') && String(c[1]).includes('need a folderKind'))).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('the real ITIN layouts raise no warning', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await findWaitingWorkspaceSteps({ ownerId: 'o-1', folderId: 'f-1', documentType: 'itin_letter' })
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 })
 
@@ -307,7 +379,7 @@ describe('findWaitingWorkspaceStepsForContact — the contact page\'s upload ("D
     }
     // a generic type that only counts inside the ITIN folder ("Receipt", filed elsewhere) is also not looked up
     expect(await findWaitingWorkspaceStepsForContact({ contactId: 'c-1', documentType: 'receipt', folderKind: null })).toEqual([])
-    expect(fx.queried).toEqual([])
+    expect(fx.queried).toEqual(['pipeline_stages'])
   })
 
   it('a person with no open case, or a finished one, has nothing waiting; a record that cannot be read THROWS (the caller refuses the upload)', async () => {

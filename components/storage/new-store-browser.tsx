@@ -49,7 +49,8 @@ import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keep
 import { HttpError, sameNameKey, errorText, isGoneError, fmtSize, canShowToClient, cantShowReason, resetFailedToWaiting, hasHiddenPart, markFingerprint } from './store-ui-rules'
 import { trapTabKey } from './focus-trap'
 import { WorkspaceStepBody } from '@/components/storage/workspace-step-body'
-import { typeCouldWait, type WaitingWorkspaceStep } from '@/lib/flows/storage-step-rules'
+import type { WaitingWorkspaceStep } from '@/lib/flows/storage-step-rules'
+import { resetWaitSummary, typeCouldWaitNow } from '@/lib/flows/workspace-wait-client'
 
 interface Fold { id: string; name: string; kind: string; trashed: boolean; locked?: boolean }
 /** the right-click menu: what was clicked (the menu items are the SAME ones the row's "…" button shows) */
@@ -129,7 +130,7 @@ async function getJson<T>(url: string): Promise<T> {
 async function postJson<T>(url: string, body: unknown, fallback: string): Promise<T> {
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new HttpError((data as { error?: string }).error || fallback, res.status)
+  if (!res.ok) throw new HttpError((data as { error?: string }).error || fallback, res.status, data)
   return data as T
 }
 
@@ -1762,7 +1763,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
    * ONE upload through every question — used by the Upload panel and by files dragged in from the computer
    * (`batch`: several in a row — no panel close / refresh per file). Returns what happened to this file.
    */
-  const doUploadWith = async (file: File, o: { folder: Fold | null; typeSlug: string; personId: string; displayName: string; visible: boolean; batch?: boolean; retryOfFailed?: boolean; taxMemo?: Map<string, { folder: Fold; year: number | null }> }): Promise<UploadOutcome> => {
+  const doUploadWith = async (file: File, o: { folder: Fold | null; typeSlug: string; personId: string; displayName: string; visible: boolean; batch?: boolean; retryOfFailed?: boolean; workspaceRechecked?: boolean; taxMemo?: Map<string, { folder: Fold; year: number | null }> }): Promise<UploadOutcome> => {
     const upFolderObj = o.folder, upType = o.typeSlug, upPerson = o.personId, upName = o.displayName, upVisible = o.visible
     const upIsContacts = upFolderObj?.kind === 'contacts'
     if (!ownerId || !upFolderObj) { toast.error('Choose the folder first.'); return 'failed' }
@@ -1927,8 +1928,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       }
       // a workspace step may be waiting for this very document (dev job e3215801, Adam Mihaly's ITIN letter): ask BEFORE anything is saved
       let workspaceAck: string[] = []
-      // an ordinary type (a passport, a tax return …) can never be a step's document: it is not even sent to the check
-      if (upType && typeCouldWait(upType)) {
+      // an ordinary type (a passport, a tax return …) can never be a step's document: it is not even sent to the check. Which types ANY workspace
+      // upload box takes comes from the workspaces themselves (their stage layouts), not from a list written here.
+      if (upType && (await typeCouldWaitNow(upType))) {
         const wcheck = await postJson<{ hits: WaitingWorkspaceStep[] }>('/api/crm-store/browse/workspace-check', {
           ownerId: landsIn.ownerId || target.ownerId,
           folderId: landsIn.folderId || target.folder.id,
@@ -1999,6 +2001,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       if (!o.batch) { setUploadOpen(false); await refreshAll([target.folder.id]) }
       return 'saved'
     } catch (e) {
+      // The list of workspace documents this page loaded is up to a minute old: a workspace changed since, so the page skipped the check but the
+      // server's own check refused ("a workspace step is waiting"). Nothing was saved. Read the list again and run the whole upload once more —
+      // this time the page asks the proper question (Open the workspace / Save in Storage only) instead of showing an error it cannot act on.
+      if (e instanceof HttpError && e.status === 409 && (e.data as { code?: unknown } | undefined)?.code === 'workspace_step_waiting' && !o.workspaceRechecked) {
+        resetWaitSummary()
+        return await doUploadWith(file, { ...o, workspaceRechecked: true })
+      }
       toast.error(errMsg(e, 'The upload failed — please try again.'))
       return 'failed'
     } finally {

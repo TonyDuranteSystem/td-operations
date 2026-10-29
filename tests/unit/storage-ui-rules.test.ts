@@ -107,3 +107,13 @@ describe('AI marks follow the file (a mark never describes an older copy)', () =
     expect(idsNeedingMark(['a'], {}, new Map([['a', '']]))).toEqual([])
   })
 })
+
+describe('HttpError keeps the server\'s whole answer (a refusal can carry a code and the hits it refused for)', () => {
+  it('status, message and data', () => {
+    const e = new HttpError('nope', 409, { code: 'workspace_step_waiting', hits: [] })
+    expect(e.status).toBe(409)
+    expect(e.message).toBe('nope')
+    expect((e.data as { code?: string }).code).toBe('workspace_step_waiting')
+    expect(new HttpError('x', 500).data).toBeUndefined()
+  })
+})
