@@ -60,7 +60,7 @@ export interface Announcement { key: string; menuKey: string; audience: NewsAudi
  */
 export const ANNOUNCEMENTS: readonly Announcement[] = [
   {
-    key: "documents", menuKey: "documents", audience: "everyone",
+    key: "documents", menuKey: "documents", audience: "sellers",
     title: "Documents is live",
     body: "The Documents tab is now in your menu. It holds the company overview and the description of Tony Durante LLC's services, in English and Italian. You can download them and, if your access allows it, upload new files or new versions.",
     titleIt: "Documenti è online",

@@ -130,7 +130,7 @@ describe("the marketing worker file", () => {
 })
 
 describe("the two chats of a lead (lanes)", () => {
-  const SETTER = ["leads.read", "leads.call", "leads.mark", "leads.worklist", "team.notes", "whatsapp", "chat", "documents"]
+  const SETTER = ["leads.read", "leads.call", "leads.mark", "leads.worklist", "team.notes", "whatsapp", "chat"]
   const SELLER = ["leads.read", "leads.pick", "leads.call", "leads.mark", "team.notes", "whatsapp", "chat", "inbox", "calls.host", "documents", "documents.manage"]
   it("a setter has only the setter lane, Antonio on his own login only the owners lane, Rocco both; Antonio viewing as a setter sees the setter lane, viewing as the owner both", () => {
     expect(lanesFor({ permissions: SETTER, admin: false, viewAs: false })).toEqual(["setter"])

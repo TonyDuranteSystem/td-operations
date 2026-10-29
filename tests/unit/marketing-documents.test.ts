@@ -50,9 +50,10 @@ describe("Documents — who may do what", () => {
     expect(canManageDocuments(["documents"])).toBe(false)
     expect(canReadDocuments(["chat"])).toBe(false)
   })
-  it("the built-in roles: everybody reads, the seller and the ad person also change, the setter and analyst do not", () => {
+  it("the built-in roles: the seller, the ad person and the analyst read (the seller and the ad person also change); the setter has no Documents at all (29 Oct 2026, Antonio never decided it)", () => {
     const b = MARKETING_SETTING_DEFS.permission_bundles.fallback as Record<string, string[]>
-    for (const role of ["setter", "seller", "content", "analyst"]) expect(canReadDocuments(b[role])).toBe(true)
+    for (const role of ["seller", "content", "analyst"]) expect(canReadDocuments(b[role])).toBe(true)
+    expect(canReadDocuments(b.setter)).toBe(false)
     expect(canManageDocuments(b.seller)).toBe(true)
     expect(canManageDocuments(b.content)).toBe(true)
     expect(canManageDocuments(b.setter)).toBe(false)

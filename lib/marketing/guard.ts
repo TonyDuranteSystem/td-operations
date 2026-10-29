@@ -95,7 +95,9 @@ async function memberContext(userId: string, email: string | null, role: unknown
 
 /** The context of an admin login that has been added to a team as a member (no "View as" involved) — for the CRM menu's red number. Not ok when he is not a member. */
 export async function adminMemberContext(user: { id: string; email?: string | null }): Promise<GuardResult> {
-  return memberContext(user.id, user.email ?? null, "marketing")
+  const r = await memberContext(user.id, user.email ?? null, "marketing")
+  // He is the admin here exactly as in resolveMarketingContext (his own membership): without the flag the chat treated him as a team owner and handed him the setter's chat on his Home page and in his menu number (29 Oct 2026).
+  return r.ok ? { ok: true, ctx: { ...r.ctx, admin: true } } : r
 }
 
 /** For API routes: the context, or the ready-to-return refusal. */
