@@ -248,6 +248,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       fileName: effectiveName,
       bytes: buffer,
       mimeType: fileMime,
+      documentType: (chosenType as { slug: string | null }).slug,   // the type picked at upload wins over the stage's default (Luca, Redstone Atlas EIN, 2026-10-29)
     })
 
     // 3-cutover. Every flow upload for a company is saved in its storage, internal unless it is the ITIN approval letter.

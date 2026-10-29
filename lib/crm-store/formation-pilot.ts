@@ -327,6 +327,11 @@ export const FORMATION_UPLOAD_TYPES: Record<string, string> = {
   "EIN Received": "ein_letter_irs",
 }
 
+/** The store type of a formation workspace upload: the type the person PICKED wins; no pick = the stage's default; neither = undefined (unmapped). */
+export function formationUploadType(chosen: string | null | undefined, flowStage: string | null): string | undefined {
+  return chosen || (flowStage ? FORMATION_UPLOAD_TYPES[flowStage] : undefined)
+}
+
 /** The root folder name of a company being formed: the buyer's name (the company has none yet). */
 export async function formationRootName(contactId: string | null): Promise<string> {
   let who = "New client"
@@ -358,13 +363,15 @@ export async function pilotSaveFormationUpload(p: {
   fileName: string
   bytes: Buffer
   mimeType: string | null
+  /** The document type the person PICKED at upload (already checked against Storage's list). Wins over the stage's default; null = the box has no picker. */
+  documentType?: string | null
 }): Promise<PilotUpload> {
   if (!formationStoreAllowed() || p.sd.service_type !== "Company Formation") return { status: "not_pilot" }
   // Rule 1: an upload never CREATES the formation's storage — only the wizard step (and, once the
   // workspace plan's S1 lands, payment) does. A formation that started on Drive stays on Drive.
   const owner = await storeOwnerForCase(p.sd.id)
   if (!owner) return { status: "not_pilot" }
-  const documentType = p.flowStage ? FORMATION_UPLOAD_TYPES[p.flowStage] : undefined
+  const documentType = formationUploadType(p.documentType, p.flowStage)
   if (!documentType) {
     await raisePilotAlarm("store_unmapped_upload", { ownerId: owner.id, caseId: p.sd.id, stage: p.flowStage, fileName: p.fileName })
     return { status: "failed" }
