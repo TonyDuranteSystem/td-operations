@@ -9,7 +9,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireMarketing, type MarketingContext } from "@/lib/marketing/guard"
 import { personName } from "@/lib/marketing/setter-note"
 import { sendMarketingPush } from "@/lib/marketing/push"
-import { chatMembers, pinFailure, shape, NO_STORE, UNREAD_LOOKBACK_DAYS } from "@/lib/marketing/lead-chat-server"
+import { chatMembers, OLDER_PINS_LIMIT, shape, shapeOlderPins, writePin, NO_STORE, UNREAD_LOOKBACK_DAYS } from "@/lib/marketing/lead-chat-server"
 import { pointerBefore } from "@/lib/talk/unread-pointer"
 import {
   BUCKET, checkEdit, checkEmoji, checkSend, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, unreadCount,
@@ -251,6 +251,10 @@ export async function loadThread(ctx: MarketingContext, t: { thread: Thread; mem
   ])
   const rows = ((rowsDesc ?? []) as ChatMessageRow[]).slice().reverse()
   const ids = rows.map(r => r.id)
+  // a pin must not drop out of the bar because 500 newer messages arrived: when the window is full, the older pins are fetched on their own (no pin column yet = none)
+  const olderRes = rows.length >= LOAD_LIMIT
+    ? await d.from("marketing_team_messages").select(`${MESSAGE_COLS}, pinned_at`).eq("team_id", ctx.team.id).eq("thread_id", t.thread.id).not("pinned_at", "is", null).is("deleted_at", null).order("pinned_at", { ascending: false }).limit(OLDER_PINS_LIMIT)
+    : { data: [] }
   const { data: reacts } = ids.length ? await d.from("marketing_team_message_reactions").select("message_id, user_id, user_name, emoji").in("message_id", ids) : { data: [] }
   if (markRead) await markThreadRead(ctx, t.thread.id)
   // the people of THIS conversation who can be reached (a paused person is not waited for: his ticks would never turn blue); a person who is not on the team list (Antonio under View as) counts too
@@ -260,6 +264,7 @@ export async function loadThread(ctx: MarketingContext, t: { thread: Thread; mem
     me,
     thread: { id: t.thread.id, kind: t.thread.kind, title: threadTitle({ kind: t.thread.kind, title: t.thread.title, memberIds: t.memberIds }, me, id => inChat.find(m => m.id === id)?.name) },
     messages: await shape(rows, (reacts ?? []) as ChatReaction[]),
+    older_pins: await shapeOlderPins((olderRes.data ?? []) as unknown as ChatMessageRow[], new Set(ids)),
     members: inChat.map(m => ({ id: m.id, name: m.name })),
     member_ids: waiting.map(m => m.id),
     member_reads: ((reads ?? []) as Array<{ user_id: string; last_read_at: string }>).filter(r => r.user_id !== me),
@@ -285,11 +290,7 @@ export async function markThreadUnreadFrom(ctx: MarketingContext, threadId: stri
 export async function setThreadMessagePinned(ctx: MarketingContext, threadId: string, messageId: unknown, pinned: boolean): Promise<{ ok: true; pinned_at: string | null } | { ok: false; error: string; status: number }> {
   const m = typeof messageId === "string" ? await myMessage(ctx, messageId) : null
   if (!m || m.thread_id !== threadId) return { ok: false, error: "That message was not found.", status: 404 }
-  if (m.deleted_at) return { ok: false, error: "A deleted message cannot be pinned.", status: 400 }
-  const pinned_at = pinned ? new Date().toISOString() : null
-  const { error } = await db().from("marketing_team_messages").update({ pinned_at, pinned_by: pinned ? ctx.user.id : null }).eq("id", m.id).eq("team_id", ctx.team.id)
-  if (error) return pinFailure(error)
-  return { ok: true, pinned_at }
+  return writePin("marketing_team_messages", m, ctx, pinned)
 }
 
 /** This device now has these conversations: tell the others (grey double tick). Only conversations I am in. */

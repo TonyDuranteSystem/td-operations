@@ -110,7 +110,9 @@ async function main() {
   type Pg = import("playwright").Page
   const adminCtx = await session(em("admin")), setter = await session(em("setterA")), owner = await session(em("ownerA"))
   const open = async (ctx: BrowserContext, path = "/marketing") => { const p = await ctx.newPage(); await p.goto(BASE + path, { waitUntil: "load", timeout: 180000 }); await p.waitForLoadState("networkidle", { timeout: 25000 }).catch(() => undefined); await p.waitForTimeout(2500); return p }
-  const api = (p: Pg, method: string, path: string, payload?: object) => p.evaluate(async ([m, u, b]) => { const r = await fetch(u as string, { method: m as string, headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) } }, [method, path, payload ?? null] as [string, string, object | null])
+  const apiOnce = (p: Pg, method: string, path: string, payload?: object) => p.evaluate(async ([m, u, b]) => { const r = await fetch(u as string, { method: m as string, headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) } }, [method, path, payload ?? null] as [string, string, object | null])
+  // a page that is still settling can swap its document under the call: wait and try again
+  const api = async (p: Pg, method: string, path: string, payload?: object) => { for (let i = 0; ; i++) { try { return await apiOnce(p, method, path, payload) } catch (e) { if (i >= 4 || !/context was destroyed|navigation/i.test(String(e))) throw e; await p.waitForLoadState("load").catch(() => undefined); await p.waitForTimeout(1500) } } }
 
   const adminP = await open(adminCtx, "/marketing-leads")
   const add = await api(adminP, "POST", `/api/marketing-admin/teams/${teamA.id}/add-me`, {})
@@ -219,6 +221,39 @@ async function main() {
     await db.query("alter table marketing_lead_messages add column if not exists pinned_at timestamptz, add column if not exists pinned_by uuid")
     await db.query("alter table marketing_team_messages add column if not exists pinned_at timestamptz, add column if not exists pinned_by uuid")
   }
+
+
+  // ---- 6. the review fixes: an already pinned message keeps its first pin, a deleted message's pin can be cleared, a pin older than the window stays in the bar
+  await api(setterP, "POST", `/api/marketing/chat/${Lp}/pin`, { message_id: m3, pinned: true })
+  const first = (await db.query("select pinned_at, pinned_by from marketing_lead_messages where id=$1", [m3])).rows[0]
+  const re = await api(ownerP, "POST", `/api/marketing/chat/${Lp}/pin`, { message_id: m3, pinned: true })
+  const after = (await db.query("select pinned_at, pinned_by from marketing_lead_messages where id=$1", [m3])).rows[0]
+  ck("P14 pinning an already pinned message keeps the first pin (same time, same person) and says so", re.status === 200 && new Date(after.pinned_at).getTime() === new Date(first.pinned_at).getTime() && after.pinned_by === first.pinned_by && new Date(re.body.pinned_at).getTime() === new Date(first.pinned_at).getTime(), { first, after, re })
+  await db.query("update marketing_lead_messages set pinned_at = now(), pinned_by = $2 where id = $1", [m1, ids.ownerA])
+  const unDeleted = await api(ownerP, "POST", `/api/marketing/chat/${Lp}/pin`, { message_id: m1, pinned: false })
+  ck("P15 the pin of a deleted message can be cleared (200, not an error)", unDeleted.status === 200 && !(await pinnedAt(m1)), unDeleted)
+  const Lq = await mkLead("old", "Old Pin Lead", { status: "seller_contacted", claimed: ids.ownerA, hoursAgo: 5 })
+  await db.query("insert into marketing_lead_messages (team_id, lead_id, sender_id, sender_name, message, created_at) values ($1,$2,$3,'Qa Pn Admin','The very first note to keep', now() - interval '3 days')", [teamA.id, Lq, ids.admin])
+  await db.query("insert into marketing_lead_messages (team_id, lead_id, sender_id, sender_name, message, created_at) select $1,$2,$3,'Qa Pn Admin','filler '||g, now() - interval '2 days' + (g || ' seconds')::interval from generate_series(1,505) g", [teamA.id, Lq, ids.admin])
+  const oldId = (await db.query("select id from marketing_lead_messages where lead_id=$1 and message='The very first note to keep'", [Lq])).rows[0].id as string
+  await db.query("update marketing_lead_messages set pinned_at = now(), pinned_by = $2 where id = $1", [oldId, ids.admin])
+  const big = await api(ownerP, "GET", `/api/marketing/chat/${Lq}`)
+  const inWindow = ((big.body?.messages ?? []) as Array<{ id: string }>).some(m => m.id === oldId)
+  const olderIds = ((big.body?.older_pins ?? []) as Array<{ id: string }>).map(m => m.id)
+  ck("P16 a pin older than the newest 500 messages is not in the window but IS handed over as an older pin", big.status === 200 && !inWindow && olderIds.includes(oldId), { status: big.status, inWindow, olderIds })
+  const small = await api(ownerP, "GET", `/api/marketing/chat/${Lp}`)
+  ck("P16b a chat with fewer than 500 messages carries no older pins (no extra work)", (small.body?.older_pins ?? []).length === 0, small.body?.older_pins)
+  const wq = await open(owner, `/marketing/window/${Lq}?role=seller`)
+  await wq.getByText("Chat", { exact: true }).first().click().catch(() => undefined)
+  await wq.getByTestId("pinned-bar").waitFor({ timeout: 90000 })
+  ck("P17 the bar still shows the old pin, with its words", /The very first note to keep/.test(await wq.getByTestId("pinned-bar").innerText()))
+  await wq.getByTestId("pinned-unpin").click()
+  let oldAt = "x" as unknown
+  for (let i = 0; i < 40; i++) { oldAt = await pinnedAt(oldId); if (!oldAt) break; await wq.waitForTimeout(500) }
+  await wq.waitForTimeout(1000)
+  ck("P17b the X in the bar unpins it (saved, and the bar goes away)", !oldAt && (await wq.getByTestId("pinned-bar").count()) === 0, { oldAt, toast: (await wq.locator("[data-sonner-toast]").allInnerTexts()).join(" | ") })
+  await wq.waitForTimeout(7000)
+  ck("P17c a refresh a few seconds later does not bring it back", (await wq.getByTestId("pinned-bar").count()) === 0)
 
   console.log(fail ? `FAILED ${fail}` : "ALL PASSED")
   process.exit(fail ? 1 : 0)

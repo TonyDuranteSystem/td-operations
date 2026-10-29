@@ -133,6 +133,10 @@ export async function loadChat(ctx: MarketingContext, leadId: string, markRead: 
   ])
   const rows = rowsDesc.slice().reverse()
   const ids = rows.map(r => r.id)
+  // a pin must not drop out of the bar because 500 newer messages arrived: when the window is full, the older pins are fetched on their own
+  const olderRaw = rowsDesc.length >= LOAD_LIMIT
+    ? await readMessages<ChatMessageRow>(ctx, MESSAGE_COLS, cols => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).eq("lead_id", leadId).not("pinned_at", "is", null).is("deleted_at", null).order("pinned_at", { ascending: false }).limit(OLDER_PINS_LIMIT), true)
+    : []
   const { data: reacts } = ids.length ? await d.from("marketing_lead_message_reactions").select("message_id, user_id, user_name, emoji").in("message_id", ids) : { data: [] }
   if (markRead) await markLeadRead(ctx, leadId)
   const me = ctx.user.id
@@ -147,6 +151,7 @@ export async function loadChat(ctx: MarketingContext, leadId: string, markRead: 
   return {
     me,
     messages,
+    older_pins: await shapeOlderPins(olderRaw, new Set(ids)),
     members: members.filter(m => m.status === "active" && isInvolved(m.permissions)).map(m => ({ id: m.id, name: m.name })),
     // the ticks: how far every OTHER person who can chat has read / received it
     member_ids: memberIds,
@@ -176,12 +181,34 @@ export async function markLeadUnreadFrom(ctx: MarketingContext, leadId: string, 
 export async function setLeadMessagePinned(ctx: MarketingContext, leadId: string, messageId: unknown, pinned: boolean): Promise<{ ok: true; pinned_at: string | null } | { ok: false; error: string; status: number }> {
   const m = typeof messageId === "string" ? await messageInTeam(ctx, messageId) : null
   if (!m || m.lead_id !== leadId) return { ok: false, error: "That message was not found.", status: 404 }
-  if (m.deleted_at) return { ok: false, error: "A deleted message cannot be pinned.", status: 400 }
-  const pinned_at = pinned ? new Date().toISOString() : null
-  const { error } = await db().from("marketing_lead_messages").update({ pinned_at, pinned_by: pinned ? ctx.user.id : null }).eq("id", m.id).eq("team_id", ctx.team.id)
-  if (error) return pinFailure(error)
-  return { ok: true, pinned_at }
+  return writePin("marketing_lead_messages", m, ctx, pinned)
 }
+
+/**
+ * The one writer of a pin (lead chats and team conversations). Pinning a message that is already pinned keeps the first pin (somebody with an out-of-date screen cannot move it or change who pinned it);
+ * a deleted message cannot be pinned, but its pin can always be cleared.
+ */
+export async function writePin(table: "marketing_lead_messages" | "marketing_team_messages", m: { id: string; deleted_at: string | null }, ctx: MarketingContext, pinned: boolean): Promise<{ ok: true; pinned_at: string | null } | { ok: false; error: string; status: number }> {
+  const d = db()
+  if (!pinned) {
+    const { error } = await d.from(table).update({ pinned_at: null, pinned_by: null }).eq("id", m.id).eq("team_id", ctx.team.id)
+    return error ? pinFailure(error) : { ok: true, pinned_at: null }
+  }
+  if (m.deleted_at) return { ok: false, error: "A deleted message cannot be pinned.", status: 400 }
+  const now = new Date().toISOString()
+  const { data: set, error } = await d.from(table).update({ pinned_at: now, pinned_by: ctx.user.id }).eq("id", m.id).eq("team_id", ctx.team.id).is("pinned_at", null).select("pinned_at")
+  if (error) return pinFailure(error)
+  if ((set ?? []).length > 0) return { ok: true, pinned_at: now }
+  const { data: cur } = await d.from(table).select("pinned_at").eq("id", m.id).maybeSingle()
+  return { ok: true, pinned_at: (cur as { pinned_at: string | null } | null)?.pinned_at ?? now }
+}
+
+/** The pins older than the newest LOAD_LIMIT messages (only looked for when the window is full), shaped for the screen; they feed the pinned bar and nothing else. */
+export async function shapeOlderPins(older: ChatMessageRow[], windowIds: ReadonlySet<string>) {
+  const rows = older.filter(r => !windowIds.has(r.id)).map(r => ({ ...r, reply_to_id: null }))
+  return shape(rows, [])
+}
+export const OLDER_PINS_LIMIT = 20
 
 /** The pin columns are not in the database yet (migration not run) is a clear answer; anything else is a plain failure. */
 export function pinFailure(error: { code?: string; message?: string }): { ok: false; error: string; status: number } {

@@ -12,7 +12,7 @@ import {
   type TalkMessage, type TalkReaction, type TypingKind,
 } from '@/lib/talk/chat-model'
 import { TalkMessages, TalkMentionNames } from '@/components/talk/talk-messages'
-import { nextPinned, pinnedMessages } from '@/lib/talk/pins'
+import { allPins, applyPinOverrides, nextPinned, PIN_OVERRIDE_MS, type PinOverride } from '@/lib/talk/pins'
 import { TalkComposer, type TalkComposerMode, type TalkSendInput } from '@/components/talk/talk-composer'
 import { TalkMessageSheet } from '@/components/talk/talk-sheet'
 import { STATIC_SNIPPETS, TalkI18nProvider, type TalkI18n } from '@/components/talk/talk-i18n'
@@ -63,6 +63,9 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
   const [loadError, setLoadError] = useState<string | null>(null)
   const [sheetMsg, setSheetMsg] = useState<TalkMessage | null>(null)
   const [pinShownId, setPinShownId] = useState<string | null>(null)
+  // pins older than the loaded window (the bar still shows them), and the pins/unpins I just did (a refresh already on its way must not flip them back)
+  const [olderPins, setOlderPins] = useState<TalkMessage[]>([])
+  const pinOverrides = useRef(new Map<string, PinOverride>())
   const [mode, setMode] = useState<TalkComposerMode>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQ, setSearchQ] = useState('')
@@ -90,7 +93,8 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
       const r = await fetch(`${API}/${leadId}${isBeingViewed() && !isFrameHidden() && !heldUnreadRef.current ? '' : '?mark_read=0'}`)
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(tRef.current(d.error || 'Could not load this chat.')) }
       const d = await r.json()
-      const incoming = (d.messages ?? []) as TalkMessage[]
+      const incoming = applyPinOverrides((d.messages ?? []) as TalkMessage[], pinOverrides.current, Date.now())
+      setOlderPins(applyPinOverrides((d.older_pins ?? []) as TalkMessage[], pinOverrides.current, Date.now()))
       setMeId(d.me ?? null); meIdRef.current = d.me ?? null
       setOthers(d.member_ids ?? [])
       setNames(Object.fromEntries(((d.members ?? []) as Array<{ id: string; name: string }>).map(m => [m.id, m.name])))
@@ -186,7 +190,10 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
     }
   }, [leadId, t, API])
 
-  const applyToMessage = useCallback((id: string, patch: Partial<TalkMessage>) => setMessages(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m))), [])
+  const applyToMessage = useCallback((id: string, patch: Partial<TalkMessage>) => {
+    setMessages(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)))
+    setOlderPins(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)))
+  }, [])
 
   const react = useCallback(async (m: TalkMessage, emoji: string) => {
     setSheetMsg(null)
@@ -244,6 +251,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
       const r = await fetch(`${API}/${leadId}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_id: m.id, pinned: pin }) })
       const d = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(t(d.error || 'Could not pin the message. Please try again.'))
+      pinOverrides.current.set(m.id, { at: d.pinned_at ?? null, until: Date.now() + PIN_OVERRIDE_MS })
       applyToMessage(m.id, { pinned_at: d.pinned_at ?? null })
       toast.success(t(pin ? 'Pinned.' : 'Unpinned.'))
     } catch (e) { toast.error(e instanceof Error ? e.message : t('Could not pin the message. Please try again.')) }
@@ -275,7 +283,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
   const typingText = peerTyping ? t(peerTyping.kind === 'recording' ? '{who} is recording a voice message…' : '{who} is typing…', { who: typingWho ?? '' }) : ''
   const tickOf = (m: TalkMessage) => tickStateAll(m, others, reads, delivered)
   const hits = matchMessages(messages, searchQ)
-  const pins = pinnedMessages(messages)
+  const pins = allPins(messages, olderPins)
   const pinShown = pins.find(p => p.id === pinShownId) ?? pins[0] ?? null
   return (
     <TalkI18nProvider value={i18n}>
@@ -297,6 +305,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
             <span className="block text-[11px] font-semibold text-amber-800">{pins.length > 1 ? t('Pinned message {n} of {total}', { n: String(pins.indexOf(pinShown) + 1), total: String(pins.length) }) : t('Pinned message')} · {pinShown.sender_id === meId ? t('You') : pinShown.sender_name}</span>
             <span className="block truncate text-[13px] text-zinc-800">{i18n.ts(snippet(pinShown, 100))}</span>
           </button>
+          <button type="button" onClick={() => void togglePin(pinShown)} aria-label={t('Unpin')} data-testid="pinned-unpin" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-amber-800 hover:bg-amber-100"><X className="h-4 w-4" /></button>
           {pins.length > 1 && <button type="button" onClick={() => setPinShownId(nextPinned(pins, pinShown.id)?.id ?? null)} aria-label={t('Next pinned message')} data-testid="pinned-next" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-amber-800 hover:bg-amber-100"><ChevronDown className="h-4 w-4" /></button>}
         </div>
       )}

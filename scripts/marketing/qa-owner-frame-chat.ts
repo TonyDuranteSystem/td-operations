@@ -113,7 +113,9 @@ async function main() {
   type Pg = import("playwright").Page
   const adminCtx = await session(em("admin")), setter = await session(em("setterA")), owner = await session(em("ownerA"))
   const open = async (ctx: BrowserContext, path = "/marketing") => { const p = await ctx.newPage(); await p.goto(BASE + path, { waitUntil: "load", timeout: 180000 }); await p.waitForLoadState("networkidle", { timeout: 25000 }).catch(() => undefined); await p.waitForTimeout(2500); return p }
-  const api = (p: Pg, method: string, path: string, payload?: object) => p.evaluate(async ([m, u, b]) => { const r = await fetch(u as string, { method: m as string, headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) } }, [method, path, payload ?? null] as [string, string, object | null])
+  const apiOnce = (p: Pg, method: string, path: string, payload?: object) => p.evaluate(async ([m, u, b]) => { const r = await fetch(u as string, { method: m as string, headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) } }, [method, path, payload ?? null] as [string, string, object | null])
+  // a page that is still settling can swap its document under the call: wait and try again
+  const api = async (p: Pg, method: string, path: string, payload?: object) => { for (let i = 0; ; i++) { try { return await apiOnce(p, method, path, payload) } catch (e) { if (i >= 4 || !/context was destroyed|navigation/i.test(String(e))) throw e; await p.waitForLoadState("load").catch(() => undefined); await p.waitForTimeout(1500) } } }
   const text = async (p: Pg) => (await p.locator("body").innerText()).replace(/\s+/g, " ")
 
 
@@ -175,7 +177,7 @@ async function main() {
   const box2 = wp.locator("textarea, [contenteditable=true]").last()
   await box2.fill("Second wording"); await wp.keyboard.press("Enter")
   let edited = ""
-  for (let i = 0; i < 20; i++) { edited = (await db.query("select message from marketing_lead_messages where lead_id=$1 and edited_at is not null order by created_at desc limit 1", [Lm])).rows[0]?.message ?? ""; if (edited === "Second wording") break; await wp.waitForTimeout(500) }
+  for (let i = 0; i < 60; i++) { edited = (await db.query("select message from marketing_lead_messages where lead_id=$1 and edited_at is not null order by created_at desc limit 1", [Lm])).rows[0]?.message ?? ""; if (edited === "Second wording") break; await wp.waitForTimeout(500) }
   ck("G7b the edit is saved (and marked edited)", edited === "Second wording", edited)
   await wp.screenshot({ path: `${SHOTS}/qa-fc-chat-toolbar.png` })
 

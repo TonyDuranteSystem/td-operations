@@ -15,3 +15,18 @@ export function nextPinned<T extends { id: string }>(pins: readonly T[], current
   const at = pins.findIndex(p => p.id === currentId)
   return pins[(at + 1) % pins.length]
 }
+
+/** A pin or unpin I just did, remembered for a little while so a refresh that was already on its way (and still carries the old state) cannot flip it back. */
+export type PinOverride = { at: string | null; until: number }
+export const PIN_OVERRIDE_MS = 15_000
+
+export function applyPinOverrides<T extends { id: string; pinned_at?: string | null }>(list: readonly T[], overrides: ReadonlyMap<string, PinOverride>, now: number): T[] {
+  if (overrides.size === 0) return list.slice()
+  return list.map(m => { const o = overrides.get(m.id); return o && o.until > now ? { ...m, pinned_at: o.at } : m })
+}
+
+/** The pins the bar shows: those among the loaded messages, plus the ones older than the loaded window (a pin must not drop out because 500 newer messages arrived). */
+export function allPins<T extends Pick<TalkMessage, 'id' | 'pinned_at' | 'deleted_at'>>(loaded: readonly T[], older: readonly T[]): T[] {
+  const have = new Set(loaded.map(m => m.id))
+  return pinnedMessages([...loaded, ...older.filter(o => !have.has(o.id))])
+}
