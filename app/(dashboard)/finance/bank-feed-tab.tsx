@@ -8,6 +8,13 @@ import { format, parseISO } from 'date-fns'
 import { readContestedCandidates, readContestedTotal, type ContestedCandidate } from '@/lib/finance/feed-vocabulary'
 import { contestedInvoiceFacts, formatCalendarDate, type ContestedInvoiceDetail } from '@/lib/finance/contested-invoice-detail'
 import { recordOnlyLinkNote } from '@/lib/finance/match-selection'
+import {
+  summarizeInvoice,
+  summaryInputFromPayerInvoice,
+  summaryInputFromOpenInvoice,
+  summaryInputFromMatchedPayment,
+  type InvoiceSummaryInput,
+} from '@/lib/finance/invoice-summary'
 import type { PayerInvoice, PayerInvoicesResult, PayerCompanyInfo } from '@/lib/finance/payer-invoices'
 import { summarizeMultiLink, MAX_LINKED_INVOICES, otherMultiLinkedInvoices } from '@/lib/finance/multi-invoice-link'
 import { evaluateNameEvidence } from '@/lib/finance/feed-signals'
@@ -580,6 +587,31 @@ function ClaimForOwnerButton({ feedId }: { feedId: string }) {
   )
 }
 
+/**
+ * An invoice number that shows a short summary on hover — client, what it is for, amount, status —
+ * so a person can tell whose invoice it is without opening it.
+ */
+function InvoiceNumberTip({ summary, hint, children }: { summary: InvoiceSummaryInput; hint?: string; children: React.ReactNode }) {
+  const s = summarizeInvoice(summary)
+  return (
+    <FastTooltip
+      label={undefined}
+      align="left"
+      card={
+        <div className="space-y-0.5">
+          <p className="font-mono text-[11px] font-semibold">{s.title}</p>
+          {s.lines.map(l => (
+            <p key={l.label}><span className="text-zinc-400">{l.label}: </span>{l.value}</p>
+          ))}
+          {hint && <p className="pt-0.5 text-zinc-400">{hint}</p>}
+        </div>
+      }
+    >
+      {children}
+    </FastTooltip>
+  )
+}
+
 /** One invoice in a "who paid" list: tick it to add it to the selection. */
 function PayerInvoiceRow({ inv, checked, onToggle, disabled, showParty }: {
   inv: PayerInvoice
@@ -597,7 +629,7 @@ function PayerInvoiceRow({ inv, checked, onToggle, disabled, showParty }: {
       className={cn('w-full flex items-center gap-3 px-3 py-1.5 text-xs hover:bg-blue-50 disabled:opacity-50', checked && 'bg-blue-100')}
     >
       {checked ? <CheckCircle2 className="h-3 w-3 text-blue-600 shrink-0" /> : <span className="h-3 w-3 rounded-sm border border-zinc-300 shrink-0" />}
-      <span className="font-mono text-blue-600 shrink-0">{inv.invoice_number ?? '—'}</span>
+      <InvoiceNumberTip summary={summaryInputFromPayerInvoice(inv)}><span className="font-mono text-blue-600 shrink-0">{inv.invoice_number ?? '—'}</span></InvoiceNumberTip>
       {showParty && <span className="text-muted-foreground truncate max-w-[140px] shrink-0">{inv.party}</span>}
       <span className="truncate flex-1 text-left">{inv.description ?? inv.installment ?? ''}</span>
       {inv.claimed_by_other && (
@@ -1451,7 +1483,16 @@ function UnmatchedRow({
                     className="w-full flex items-center gap-2 px-3 py-2 text-xs rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-left disabled:opacity-60"
                   >
                     <Check className="h-3 w-3 text-emerald-600 shrink-0" />
-                    <span className="font-mono text-blue-700">{members.map(m => m.invoice_number ?? '—').join(' + ')}</span>
+                    <span className="font-mono text-blue-700 flex items-center gap-1">
+                      {members.map((m, i) => (
+                        <span key={m.id} className="flex items-center gap-1">
+                          {i > 0 && <span>+</span>}
+                          <InvoiceNumberTip summary={summaryInputFromPayerInvoice(m)}>
+                            <span>{m.invoice_number ?? 'no number'}</span>
+                          </InvoiceNumberTip>
+                        </span>
+                      ))}
+                    </span>
                     <span className="flex-1 text-emerald-800">
                       {members.length === 1 ? 'is exactly' : 'add up to exactly'} {formatCurrency(combo.total, feed.currency)}
                       {combo.dates_match ? ' — paid around the date of this payment' : ''}
@@ -1551,7 +1592,7 @@ function UnmatchedRow({
                                 className={cn("w-full flex items-center gap-3 px-3 py-1.5 text-xs hover:bg-blue-50 disabled:opacity-50", selected.has(inv.id) && "bg-blue-100")}
                               >
                                 {selected.has(inv.id) ? <CheckCircle2 className="h-3 w-3 text-blue-600 shrink-0" /> : <span className="h-3 w-3 rounded-sm border border-zinc-300 shrink-0" />}
-                                <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
+                                <InvoiceNumberTip summary={summaryInputFromOpenInvoice(inv, invoicePartyName(inv))}><span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span></InvoiceNumberTip>
                                 <span className="truncate flex-1 text-left">{inv.description ?? ''}</span>
                                 <span className="font-medium">{formatCurrency(invAmount, inv.amount_currency)}</span>
                               </button>
@@ -1618,7 +1659,7 @@ function UnmatchedRow({
                     className={cn("w-full flex items-center gap-3 px-3 py-2 text-xs rounded-lg border hover:bg-blue-50 hover:border-blue-200 transition-colors disabled:opacity-50", selected.has(inv.id) && "bg-blue-100 border-blue-300")}
                   >
                     {selected.has(inv.id) ? <CheckCircle2 className="h-3 w-3 text-blue-600 shrink-0" /> : <span className="h-3 w-3 rounded-sm border border-zinc-300 shrink-0" />}
-                    <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
+                    <InvoiceNumberTip summary={summaryInputFromOpenInvoice(inv, invoicePartyName(inv))}><span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span></InvoiceNumberTip>
                     <span className="truncate flex-1">{invoicePartyName(inv)}</span>
                     {inv.invoice_status === 'Partial' && (
                       <span className="text-[10px] bg-orange-100 text-orange-700 px-1 py-0.5 rounded">Partial</span>
@@ -1663,7 +1704,7 @@ function UnmatchedRow({
                       className={cn("w-full flex items-center gap-3 px-3 py-2 text-xs rounded-lg border hover:bg-blue-50 hover:border-blue-200 transition-colors disabled:opacity-50", selected.has(inv.id) && "bg-blue-100 border-blue-300")}
                     >
                       {selected.has(inv.id) ? <CheckCircle2 className="h-3 w-3 text-blue-600 shrink-0" /> : <span className="h-3 w-3 rounded-sm border border-zinc-300 shrink-0" />}
-                      <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
+                      <InvoiceNumberTip summary={summaryInputFromOpenInvoice(inv, invoicePartyName(inv))}><span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span></InvoiceNumberTip>
                       <span className="truncate flex-1">{invoicePartyName(inv)}</span>
                       <span className="font-medium">{formatCurrency(Number(inv.total ?? inv.amount), inv.amount_currency)}</span>
                     </button>
@@ -2094,7 +2135,7 @@ function UnmatchedRow({
                               onClick={() => setNoteLinkInvoiceId(inv.id)}
                               className="w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border hover:bg-blue-50 hover:border-blue-200 transition-colors"
                             >
-                              <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
+                              <InvoiceNumberTip summary={summaryInputFromOpenInvoice(inv, invoicePartyName(inv))}><span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span></InvoiceNumberTip>
                               <span className="truncate flex-1 text-left">{invoicePartyName(inv)}</span>
                               {inv.invoice_status === 'Partial' && (
                                 <span className="text-[10px] bg-orange-100 text-orange-700 px-1 py-0.5 rounded">Partial</span>
@@ -2123,7 +2164,7 @@ function UnmatchedRow({
                                 onClick={() => { setNoteLinkInvoiceId(inv.id); setNoteLinkPicked(inv); setNoteLinkExtras([]); setNoteLinkExtraQuery('') }}
                                 className="w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border hover:bg-amber-50 hover:border-amber-200 transition-colors"
                               >
-                                <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
+                                <InvoiceNumberTip summary={summaryInputFromOpenInvoice(inv, invoicePartyName(inv))}><span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span></InvoiceNumberTip>
                                 <span className="truncate flex-1 text-left">{invoicePartyName(inv)}</span>
                                 <span className="font-medium">{formatCurrency(inv.total ?? inv.amount, inv.amount_currency)}</span>
                                 <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Paid</span>
@@ -2207,7 +2248,7 @@ function UnmatchedRow({
                                 onClick={() => { setNoteLinkExtras(list => [...list, inv]); setNoteLinkExtraQuery('') }}
                                 className="w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border hover:bg-amber-50 hover:border-amber-200 transition-colors"
                               >
-                                <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
+                                <InvoiceNumberTip summary={summaryInputFromOpenInvoice(inv, invoicePartyName(inv))}><span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span></InvoiceNumberTip>
                                 <span className="truncate flex-1 text-left">{invoicePartyName(inv)}</span>
                                 <span className="font-medium">{formatCurrency(inv.total ?? inv.amount, inv.amount_currency)}</span>
                                 <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Paid</span>
@@ -2328,7 +2369,7 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
       <span className="text-xs text-muted-foreground truncate">{feed.sender_name || '—'}</span>
       <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
       {payment?.invoice_number && feed.matched_payment_id ? (
-        <FastTooltip label="Open invoice PDF">
+        <InvoiceNumberTip summary={summaryInputFromMatchedPayment(payment, feed.currency)} hint="Click to open the invoice PDF">
           <a
             href={`/api/invoices/${feed.matched_payment_id}/pdf`}
             target="_blank"
@@ -2338,9 +2379,13 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
           >
             {payment.invoice_number}
           </a>
-        </FastTooltip>
+        </InvoiceNumberTip>
+      ) : payment ? (
+        <InvoiceNumberTip summary={summaryInputFromMatchedPayment(payment, feed.currency)}>
+          <span className="font-mono text-xs text-blue-600 shrink-0">{payment.invoice_number ?? '—'}</span>
+        </InvoiceNumberTip>
       ) : (
-        <span className="font-mono text-xs text-blue-600 shrink-0">{payment?.invoice_number ?? '—'}</span>
+        <span className="font-mono text-xs text-blue-600 shrink-0">—</span>
       )}
       {/* One payment linked to several already-paid invoices: the row points at the first, so
           the others are named here — otherwise the row looks like it covers one invoice only. */}
