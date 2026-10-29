@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { readContestedCandidates, readContestedTotal, type ContestedCandidate } from '@/lib/finance/feed-vocabulary'
 import { contestedInvoiceFacts, type ContestedInvoiceDetail } from '@/lib/finance/contested-invoice-detail'
+import { summarizeMultiLink, MAX_LINKED_INVOICES, otherMultiLinkedInvoices } from '@/lib/finance/multi-invoice-link'
 import { evaluateNameEvidence } from '@/lib/finance/feed-signals'
 import { toast } from 'sonner'
 import {
@@ -910,6 +911,13 @@ function UnmatchedRow({
   const [noteLinkPaidResults, setNoteLinkPaidResults] = useState<OpenInvoice[]>([])
   const [noteLinkPaidLoading, setNoteLinkPaidLoading] = useState(false)
   const [noteLinkPaidError, setNoteLinkPaidError] = useState<string | null>(null)
+  // The first already-paid invoice picked, kept as a snapshot (the paid search results are replaced
+  // by every new search, so looking it up there again would lose it), and the OTHER already-paid
+  // invoices this same payment also settled — one payment can pay several invoices
+  // (lib/finance/multi-invoice-link.ts). Audit-only: no money moves.
+  const [noteLinkPicked, setNoteLinkPicked] = useState<OpenInvoice | null>(null)
+  const [noteLinkExtras, setNoteLinkExtras] = useState<OpenInvoice[]>([])
+  const [noteLinkExtraQuery, setNoteLinkExtraQuery] = useState('')
 
   const closeNoteLink = () => {
     if (noteLinkSubmitting) return
@@ -920,6 +928,9 @@ function UnmatchedRow({
     setNoteLinkWriteOff(false)
     setNoteLinkPaidResults([])
     setNoteLinkPaidError(null)
+    setNoteLinkPicked(null)
+    setNoteLinkExtras([])
+    setNoteLinkExtraQuery('')
   }
 
   // Reports open/closed to the parent so it can disable "Sync All Banks Now"
@@ -933,6 +944,8 @@ function UnmatchedRow({
   }, [noteLinkOpen, feed.id, onNoteLinkOpenChange])
 
   const noteLinkQueryLower = noteLinkQuery.trim().toLowerCase()
+  // While no invoice is picked the main box searches; once one is picked the "also paid" box does.
+  const noteLinkSearchTerm = (noteLinkInvoiceId ? noteLinkExtraQuery : noteLinkQuery).trim().toLowerCase()
   // Unlike `suggestions` below (amount-tolerance gated), this searches ALL open
   // invoices — the whole point of this popup is linking a payment that does
   // NOT match an invoice's amount (that's what "write off the difference" is for).
@@ -950,7 +963,7 @@ function UnmatchedRow({
   // while the box is empty. Cancels its own stale response via the `cancelled`
   // flag, same pattern as any other debounced-search effect in this codebase.
   useEffect(() => {
-    if (!noteLinkOpen || noteLinkQueryLower.length < 2) {
+    if (!noteLinkOpen || noteLinkSearchTerm.length < 2) {
       setNoteLinkPaidResults([])
       setNoteLinkPaidError(null)
       return
@@ -958,7 +971,7 @@ function UnmatchedRow({
     let cancelled = false
     setNoteLinkPaidLoading(true)
     const timer = setTimeout(() => {
-      fetch(`/api/finance/search-paid-invoices?q=${encodeURIComponent(noteLinkQueryLower)}`)
+      fetch(`/api/finance/search-paid-invoices?q=${encodeURIComponent(noteLinkSearchTerm)}`)
         .then(async res => {
           const d = await res.json().catch(() => ({}))
           if (!res.ok) throw new Error(d.error || `Search failed (${res.status})`)
@@ -973,9 +986,10 @@ function UnmatchedRow({
         .finally(() => { if (!cancelled) setNoteLinkPaidLoading(false) })
     }, 300)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [noteLinkOpen, noteLinkQueryLower])
+  }, [noteLinkOpen, noteLinkSearchTerm])
 
   const noteLinkSelected = openInvoices.find(inv => inv.id === noteLinkInvoiceId)
+    ?? (noteLinkPicked?.id === noteLinkInvoiceId ? noteLinkPicked : null)
     ?? noteLinkPaidResults.find(inv => inv.id === noteLinkInvoiceId)
     ?? null
   // Selected but not in the open list → it came from the paid search. Governs
@@ -985,6 +999,12 @@ function UnmatchedRow({
   const noteLinkSelectedDue = noteLinkSelected
     ? Number(noteLinkSelected.amount_due ?? noteLinkSelected.total ?? noteLinkSelected.amount ?? 0)
     : 0
+  // Several already-paid invoices for this one payment: how they add up against it.
+  const noteLinkAllPaid = noteLinkSelected != null && noteLinkSelectedIsPaidPick ? [noteLinkSelected, ...noteLinkExtras] : []
+  const noteLinkSummary = summarizeMultiLink(
+    amount,
+    noteLinkAllPaid.map(inv => Number(inv.total ?? inv.amount ?? 0)),
+  )
 
   const submitNoteLink = async () => {
     if (!noteLinkInvoiceId) { toast.error('Pick which invoice this pays first'); return }
@@ -996,7 +1016,9 @@ function UnmatchedRow({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           feed_id: feed.id,
-          payment_id: noteLinkInvoiceId,
+          ...(noteLinkExtras.length > 0
+            ? { payment_ids: [noteLinkInvoiceId, ...noteLinkExtras.map(inv => inv.id)] }
+            : { payment_id: noteLinkInvoiceId }),
           note: noteLinkNote.trim(),
           write_off_remaining: noteLinkWriteOff,
         }),
@@ -1008,7 +1030,14 @@ function UnmatchedRow({
       // stale between opening this popup and submitting it (the invoice's real status
       // may have changed elsewhere in the meantime), and the server always re-reads
       // the invoice fresh at the moment it decides which branch actually ran.
-      toast.success(
+      if (d.multi === true) {
+        const numbers = Array.isArray(d.invoiceNumbers) ? d.invoiceNumbers.join(', ') : 'the invoices'
+        const diff = Number(d.difference ?? 0)
+        toast.success(
+          `Linked ${numbers} to this payment for the record — they were already paid, no money applied.` +
+            (Math.abs(diff) >= 0.005 ? ` The invoices add up to ${formatCurrency(Number(d.linkedTotal ?? 0), feed.currency)}, ${formatCurrency(Math.abs(diff), feed.currency)} ${diff > 0 ? 'less' : 'more'} than the payment.` : ''),
+        )
+      } else toast.success(
         d.auditLink === true
           ? `Linked to ${d.invoiceNumber ?? 'the invoice'} for the record — it was already paid, no money applied.`
           : d.newStatus === 'Paid'
@@ -1681,14 +1710,17 @@ function UnmatchedRow({
                   <span className={cn('font-mono', noteLinkSelectedIsPaidPick ? 'text-amber-700' : 'text-blue-700')}>{noteLinkSelected.invoice_number ?? '—'}</span>
                   <span className="truncate flex-1">{invoicePartyName(noteLinkSelected)}</span>
                   {noteLinkSelectedIsPaidPick ? (
-                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Paid</span>
+                    <>
+                      <span className="font-medium">{formatCurrency(noteLinkSelected.total ?? noteLinkSelected.amount, noteLinkSelected.amount_currency)}</span>
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Paid</span>
+                    </>
                   ) : (
                     <span className="font-medium">{formatCurrency(noteLinkSelectedDue, noteLinkSelected.amount_currency)} due</span>
                   )}
                   <FastTooltip label="Change invoice">
                     <button
                       type="button"
-                      onClick={() => { setNoteLinkInvoiceId(null); setNoteLinkWriteOff(false) }}
+                      onClick={() => { setNoteLinkInvoiceId(null); setNoteLinkWriteOff(false); setNoteLinkPicked(null); setNoteLinkExtras([]); setNoteLinkExtraQuery('') }}
                       disabled={noteLinkSubmitting}
                       className={cn('p-0.5 rounded', noteLinkSelectedIsPaidPick ? 'hover:bg-amber-100 text-amber-500' : 'hover:bg-blue-100 text-blue-500')}
                       aria-label="Change invoice"
@@ -1750,11 +1782,12 @@ function UnmatchedRow({
                               <button
                                 key={inv.id}
                                 type="button"
-                                onClick={() => setNoteLinkInvoiceId(inv.id)}
+                                onClick={() => { setNoteLinkInvoiceId(inv.id); setNoteLinkPicked(inv); setNoteLinkExtras([]); setNoteLinkExtraQuery('') }}
                                 className="w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border hover:bg-amber-50 hover:border-amber-200 transition-colors"
                               >
                                 <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
                                 <span className="truncate flex-1 text-left">{invoicePartyName(inv)}</span>
+                                <span className="font-medium">{formatCurrency(inv.total ?? inv.amount, inv.amount_currency)}</span>
                                 <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Paid</span>
                               </button>
                             ))}
@@ -1767,6 +1800,86 @@ function UnmatchedRow({
                     <p className="text-[11px] text-muted-foreground">Showing {noteLinkCandidates.length} of {openInvoices.length} — type to narrow.</p>
                   )}
                 </>
+              )}
+
+              {/* One payment can pay SEVERAL invoices. Once an already-paid invoice is picked, more can be
+                  added here, with a running total against the payment. Audit-only: no money moves. */}
+              {noteLinkSelected && noteLinkSelectedIsPaidPick && (
+                <div className="mt-2 space-y-1.5">
+                  {noteLinkExtras.map(inv => (
+                    <div key={inv.id} className="flex items-center gap-2 border border-amber-300 bg-amber-50 rounded-md px-3 py-1.5 text-xs">
+                      <span className="font-mono text-amber-700">{inv.invoice_number ?? '—'}</span>
+                      <span className="truncate flex-1">{invoicePartyName(inv)}</span>
+                      <span className="font-medium">{formatCurrency(inv.total ?? inv.amount, inv.amount_currency)}</span>
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Paid</span>
+                      <FastTooltip label="Remove this invoice">
+                        <button
+                          type="button"
+                          onClick={() => setNoteLinkExtras(list => list.filter(x => x.id !== inv.id))}
+                          disabled={noteLinkSubmitting}
+                          className="p-0.5 rounded hover:bg-amber-100 text-amber-500"
+                          aria-label="Remove this invoice"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </FastTooltip>
+                    </div>
+                  ))}
+
+                  <p className={cn(
+                    'text-xs rounded-md px-3 py-1.5 border',
+                    noteLinkSummary.matches ? 'text-green-800 bg-green-50 border-green-200' : 'text-amber-900 bg-amber-50 border-amber-200',
+                  )}>
+                    {noteLinkSummary.matches
+                      ? `Payment ${formatCurrency(amount, feed.currency)} = ${noteLinkAllPaid.length === 1 ? 'this invoice' : `${noteLinkAllPaid.length} invoices`} ${formatCurrency(noteLinkSummary.linkedTotal, feed.currency)}. Everything this payment covers is accounted for.`
+                      : noteLinkSummary.difference > 0
+                        ? `Payment ${formatCurrency(amount, feed.currency)} · ${noteLinkAllPaid.length === 1 ? 'this invoice' : `${noteLinkAllPaid.length} invoices`} ${formatCurrency(noteLinkSummary.linkedTotal, feed.currency)} · ${formatCurrency(noteLinkSummary.difference, feed.currency)} of the payment is not accounted for yet. If it also paid another invoice, add it below — or link as it is.`
+                        : `The ${noteLinkAllPaid.length} invoices add up to ${formatCurrency(noteLinkSummary.linkedTotal, feed.currency)}, which is ${formatCurrency(Math.abs(noteLinkSummary.difference), feed.currency)} more than the payment ${formatCurrency(amount, feed.currency)}.`}
+                  </p>
+
+                  {noteLinkAllPaid.length < MAX_LINKED_INVOICES && (
+                    <div className="space-y-1">
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                        <input
+                          type="text"
+                          placeholder="Did it also pay another invoice? Add it — number or client name…"
+                          value={noteLinkExtraQuery}
+                          onChange={e => setNoteLinkExtraQuery(e.target.value)}
+                          disabled={noteLinkSubmitting}
+                          className="w-full pl-8 pr-3 py-1.5 text-xs border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        />
+                      </div>
+                      {noteLinkSearchTerm.length >= 2 && (
+                        <div className="space-y-1 max-h-40 overflow-y-auto">
+                          {noteLinkPaidLoading && noteLinkPaidResults.length === 0 && (
+                            <p className="text-xs text-muted-foreground px-1 py-1 flex items-center gap-1.5">
+                              <Loader2 className="h-3 w-3 animate-spin" /> Searching…
+                            </p>
+                          )}
+                          {noteLinkPaidError && !noteLinkPaidLoading && (
+                            <p className="text-xs text-red-600 px-1 py-1">{noteLinkPaidError}</p>
+                          )}
+                          {noteLinkPaidResults
+                            .filter(inv => !noteLinkAllPaid.some(x => x.id === inv.id))
+                            .map(inv => (
+                              <button
+                                key={inv.id}
+                                type="button"
+                                onClick={() => { setNoteLinkExtras(list => [...list, inv]); setNoteLinkExtraQuery('') }}
+                                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border hover:bg-amber-50 hover:border-amber-200 transition-colors"
+                              >
+                                <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
+                                <span className="truncate flex-1 text-left">{invoicePartyName(inv)}</span>
+                                <span className="font-medium">{formatCurrency(inv.total ?? inv.amount, inv.amount_currency)}</span>
+                                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Paid</span>
+                              </button>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
@@ -1785,7 +1898,7 @@ function UnmatchedRow({
             {noteLinkSelectedIsPaidPick ? (
               <div className="flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
                 <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-                <span>This invoice is already paid. Linking connects this transaction to it for the record — no money moves, no balance changes.</span>
+                <span>{noteLinkExtras.length > 0 ? 'These invoices are already paid. Linking connects this transaction to all of them for the record' : 'This invoice is already paid. Linking connects this transaction to it for the record'} — no money moves, no balance changes.</span>
               </div>
             ) : (
               <label className="flex items-start gap-2 cursor-pointer">
@@ -1818,7 +1931,7 @@ function UnmatchedRow({
                 className="px-3 py-1.5 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
               >
                 {noteLinkSubmitting && <Loader2 className="h-3 w-3 animate-spin" />}
-                Link transaction
+                {noteLinkExtras.length > 0 ? `Link to ${noteLinkExtras.length + 1} invoices` : 'Link transaction'}
               </button>
             </div>
           </div>
@@ -1860,6 +1973,7 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
   // The parent component computes eligibility from the full bank-feed array
   // and passes the flag in via canDeleteDuplicate.
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const otherLinkedInvoices = otherMultiLinkedInvoices(feed.review_metadata, feed.matched_payment_id)
   const handleDeleteConfirm = async () => {
     const result = await deleteDuplicateBankFeed(feed.id)
     if (!result.success) return { success: false, error: result.error || 'Failed to delete duplicate' }
@@ -1889,6 +2003,15 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
         </FastTooltip>
       ) : (
         <span className="font-mono text-xs text-blue-600 shrink-0">{payment?.invoice_number ?? '—'}</span>
+      )}
+      {/* One payment linked to several already-paid invoices: the row points at the first, so
+          the others are named here — otherwise the row looks like it covers one invoice only. */}
+      {otherLinkedInvoices.length > 0 && (
+        <FastTooltip label={`This payment also covers ${otherLinkedInvoices.map(o => `${o.invoice_number ?? 'an invoice'}${o.total != null ? ` (${formatCurrency(o.total, feed.currency)})` : ''}`).join(', ')}`}>
+          <span className="font-mono text-xs text-blue-600 shrink-0">
+            {otherLinkedInvoices.map(o => `+ ${o.invoice_number ?? 'invoice'}`).join(' ')}
+          </span>
+        </FastTooltip>
       )}
       <span className="text-xs truncate">{getCompanyName(payment?.accounts)}</span>
       <span className={cn(

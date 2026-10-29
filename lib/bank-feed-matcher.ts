@@ -30,6 +30,7 @@ import {
 import { isChargeRefundedNow } from "@/lib/stripe-sync"
 import { findPayoutIdForDeposit, looksLikeStripePayoutDeposit } from "@/lib/finance/stripe-payouts"
 import { updateFeed } from "@/lib/finance/feed-write"
+import { readLinkedPaymentIds } from "@/lib/finance/multi-invoice-link"
 import { marketingRefFromFeed } from "@/lib/finance/marketing-sale-ref"
 import { settleMarketingSaleFromFeed } from "@/lib/finance/marketing-sale-settle"
 import {
@@ -721,6 +722,22 @@ export async function matchAndReconcile(feedId: string): Promise<MatchResult> {
         }
 
         const retroMatchedIds = new Set((alreadyMatched ?? []).map(f => f.matched_payment_id))
+
+        // A transaction linked to SEVERAL already-Paid invoices (lib/finance/multi-invoice-link.ts)
+        // points at only the first one; the others live in its review_metadata. They are every bit
+        // as claimed, so a second transaction must not be auto-linked to one of them.
+        const { data: multiLinked, error: multiErr } = await supabaseAdmin
+          .from("td_bank_feeds")
+          .select("review_metadata")
+          .eq("status", "matched")
+          .eq("review_metadata->>multi_audit_link", "true")
+        if (multiErr) {
+          console.error(`[bank-feed-matcher] Could not read multi-linked invoices; skipping the retroactive pass: ${multiErr.message}`)
+          return { matched: false, error: "Could not verify which invoices are already claimed — retroactive matching skipped." }
+        }
+        for (const f of multiLinked ?? []) {
+          for (const id of readLinkedPaymentIds(f.review_metadata)) retroMatchedIds.add(id)
+        }
 
         // ⛔ THIS PASS NEEDS THE SAME TWO GUARDS AS THE OPEN-INVOICE PASS ABOVE (2026-07-29).
         // It was missed by the first draft of this fix, which was worse than leaving it alone:

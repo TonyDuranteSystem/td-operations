@@ -1764,6 +1764,7 @@ export async function unlinkPayment(
     const { updateFeed } = await import('@/lib/finance/feed-write')
     const { appendRejectedPair } = await import('@/lib/finance/feed-vocabulary')
     const { partitionFeedsForUnlink } = await import('@/lib/billing/invoice-reactivate')
+    const { CLEAR_MULTI_LINK_METADATA } = await import('@/lib/finance/multi-invoice-link')
     const now = new Date().toISOString()
     const today = now.slice(0, 10)
 
@@ -1802,13 +1803,27 @@ export async function unlinkPayment(
 
     // 2. Feed pointers. A CONFIRMED `matched` row returns to the queue; anything else
     //    (ignored / outgoing / duplicate) only loses its stale pointer and KEEPS its status.
-    const { data: linkedFeeds, error: feedReadErr } = await supabaseAdmin
+    const { data: pointedFeeds, error: feedReadErr } = await supabaseAdmin
       .from('td_bank_feeds')
       .select('id, status')
       .eq('matched_payment_id', paymentId)
     if (feedReadErr) throw new Error(`Failed to read bank feeds: ${feedReadErr.message}`)
 
-    const { resetIds, clearIds } = partitionFeedsForUnlink(linkedFeeds ?? [])
+    // A transaction linked to SEVERAL already-paid invoices points at only the first; the rest are
+    // named in its review_metadata. Undoing ANY of them releases the whole transaction — the link
+    // is one unit — so those feeds are found here too.
+    const { data: multiFeeds, error: multiReadErr } = await supabaseAdmin
+      .from('td_bank_feeds')
+      .select('id, status')
+      .eq('review_metadata->>multi_audit_link', 'true')
+      .contains('review_metadata', { linked_payment_ids: [paymentId] })
+    if (multiReadErr) throw new Error(`Failed to read bank feeds: ${multiReadErr.message}`)
+    const linkedFeeds = [...(pointedFeeds ?? [])]
+    for (const f of multiFeeds ?? []) {
+      if (!linkedFeeds.some((x) => x.id === f.id)) linkedFeeds.push(f)
+    }
+
+    const { resetIds, clearIds } = partitionFeedsForUnlink(linkedFeeds)
 
     for (const feedId of resetIds) {
       // Record the human's "no" on the transaction so the automatic matcher never re-proposes
@@ -1825,11 +1840,15 @@ export async function unlinkPayment(
         matched_at: null,
         matched_by: null,
         status: 'unmatched',
-        review_metadata: appendRejectedPair(existing?.review_metadata, {
-          payment_id: paymentId,
-          at: now,
-          by: actor,
-        }),
+        // CLEAR_MULTI_LINK_METADATA: the row stops claiming every invoice of a multi-link.
+        review_metadata: {
+          ...appendRejectedPair(existing?.review_metadata, {
+            payment_id: paymentId,
+            at: now,
+            by: actor,
+          }),
+          ...CLEAR_MULTI_LINK_METADATA,
+        },
       }, 'unlink-payment:reset')
       if (!res.ok) throw new Error(`Failed to unlink bank transaction: ${res.error}`)
     }

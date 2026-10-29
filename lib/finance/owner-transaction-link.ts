@@ -68,6 +68,12 @@ import { applyMoneyToInvoice } from "@/lib/finance/apply-payment"
 import { isTerminalInvoice, terminalReason, isPaidInvoice } from "@/lib/finance/invoice-matchability"
 import { clientPaymentClaimMetadata, auditLinkMetadata } from "@/lib/finance/feed-vocabulary"
 import { updateFeed } from "@/lib/finance/feed-write"
+import {
+  CLEAR_MULTI_LINK_METADATA,
+  MAX_LINKED_INVOICES,
+  multiLinkMetadata,
+  summarizeMultiLink,
+} from "@/lib/finance/multi-invoice-link"
 import { closePaymentWithWriteOff } from "@/lib/operations/payment"
 import { reportSystemError } from "@/lib/system-errors"
 
@@ -248,7 +254,9 @@ export async function linkFeedTransactionToInvoice(
         matched_at: new Date().toISOString(),
         matched_by: actor,
         status: "matched",
-        review_metadata: auditLinkMetadata("manual", auditNote),
+        // The CLEAR keys wipe a stale multi-invoice link left on this row by an earlier link
+        // that was later undone (review_metadata merges), so it cannot keep claiming invoices.
+        review_metadata: { ...auditLinkMetadata("manual", auditNote), ...CLEAR_MULTI_LINK_METADATA },
       }, "link-feed-transaction-to-invoice:audit-link")
       if (!auditClaim.ok) {
         return {
@@ -470,5 +478,145 @@ export async function linkFeedTransactionToInvoice(
     newStatus: applied.newStatus,
     newAmountPaid: applied.newAmountPaid,
     newAmountDue: applied.newAmountDue,
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// STEP 2b — Finance: link ONE transaction to SEVERAL already-Paid invoices.
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Real case (Antonio, 2026-10-29): a $125 Stripe payment paid a $50 and a $75 invoice, both
+// already marked Paid. `linkFeedTransactionToInvoice` takes ONE invoice and, for a Paid one,
+// records the link and ignores amounts — so the second invoice could never be tied to the
+// payment. The open-invoice "waterfall" (`manualMatchMulti`) skips Paid invoices on purpose.
+//
+// AUDIT-ONLY: no money moves, no invoice changes status. v1 accepts only invoices that are ALL
+// already Paid; an open one is refused with a plain pointer to "Match to invoice", because
+// splitting one payment between a settled and an open invoice needs a decision about how much
+// of it belongs to each. The transaction keeps pointing at the first invoice (every existing
+// single-pointer reader stays valid) and the full set + the amounts go in `review_metadata`
+// (see lib/finance/multi-invoice-link.ts).
+
+export interface LinkFeedToInvoicesParams {
+  feedId: string
+  paymentIds: string[]
+  note: string
+  actor: string
+}
+
+export interface LinkFeedToInvoicesResult {
+  ok: boolean
+  error?: string
+  invoiceNumbers?: string[]
+  transactionAmount?: number
+  linkedTotal?: number
+  /** transaction - sum of the invoices; 0 when they add up exactly. Shown, never blocking. */
+  difference?: number
+}
+
+export async function linkFeedTransactionToInvoices(
+  params: LinkFeedToInvoicesParams,
+): Promise<LinkFeedToInvoicesResult> {
+  const { feedId, note, actor } = params
+  const ids = Array.from(new Set((params.paymentIds ?? []).filter(Boolean)))
+  if (ids.length < 2) return { ok: false, error: "Pick at least two invoices to link one payment to several." }
+  if (ids.length > MAX_LINKED_INVOICES) {
+    return { ok: false, error: `A payment can be linked to at most ${MAX_LINKED_INVOICES} invoices at once.` }
+  }
+
+  const { data: feed, error: feedErr } = await supabaseAdmin
+    .from("td_bank_feeds")
+    .select("id, amount, currency, status")
+    .eq("id", feedId)
+    .maybeSingle()
+  if (feedErr) return { ok: false, error: `Could not read the transaction: ${feedErr.message}` }
+  if (!feed) return { ok: false, error: "Transaction not found." }
+  if (feed.status === "matched") {
+    return { ok: false, error: "This transaction has already settled an invoice." }
+  }
+
+  const { data: rows, error: payErr } = await supabaseAdmin
+    .from("payments")
+    .select("id, invoice_number, invoice_status, status, total, amount, amount_currency, notes")
+    .in("id", ids)
+  if (payErr) return { ok: false, error: `Could not read the invoices: ${payErr.message}` }
+  const byId = new Map((rows ?? []).map((r) => [r.id, r]))
+  if (byId.size !== ids.length) return { ok: false, error: "One of the invoices could not be found." }
+
+  const feedCurrency = String(feed.currency ?? "USD")
+  const invoices = ids.map((id) => byId.get(id)!)
+  for (const inv of invoices) {
+    const label = inv.invoice_number ?? "An invoice"
+    if (!isPaidInvoice(inv)) {
+      return {
+        ok: false,
+        error: isTerminalInvoice(inv)
+          ? `${label}: ${terminalReason(inv) ?? "this invoice is already closed."}`
+          : `${label} is still open. This links one payment to invoices that are already paid; to spread a payment over open invoices use "Match to invoice".`,
+      }
+    }
+    if (String(inv.amount_currency ?? "USD") !== feedCurrency) {
+      return { ok: false, error: `${label} is in ${inv.amount_currency ?? "USD"}, but this payment is in ${feedCurrency}.` }
+    }
+  }
+
+  const facts = invoices.map((inv) => ({
+    id: inv.id,
+    invoice_number: inv.invoice_number ?? null,
+    total: inv.total != null ? Number(inv.total) : inv.amount != null ? Number(inv.amount) : null,
+  }))
+  const summary = summarizeMultiLink(Number(feed.amount), facts.map((f) => f.total))
+  const numbers = invoices.map((i) => i.invoice_number ?? i.id)
+
+  const auditNote = `Invoices were already paid — one payment linked to ${numbers.join(", ")} for the audit trail; no money applied. ${note}`
+  const claim = await updateFeed(feedId, {
+    matched_payment_id: invoices[0].id,
+    match_confidence: "manual",
+    matched_at: new Date().toISOString(),
+    matched_by: actor,
+    status: "matched",
+    review_metadata: multiLinkMetadata({ note: auditNote, transactionAmount: Number(feed.amount), invoices: facts }),
+  }, "link-feed-transactions-to-invoices:multi-audit-link")
+  if (!claim.ok) return { ok: false, error: claim.error ?? "Could not link this transaction." }
+
+  // My Finances mirror: same as the single-invoice path — points at the first invoice.
+  const { error: mirrorErr } = await supabaseAdmin
+    .from("td_books_transactions")
+    .update({ linked_payment_id: invoices[0].id, linked_at: new Date().toISOString(), linked_note: note, linked_by: actor })
+    .eq("moved_to_feed_id", feedId)
+  if (mirrorErr) {
+    console.error(`[owner-transaction-link] My Finances mirror write failed for feed ${feedId}: ${mirrorErr.message}`)
+    await reportSystemError({
+      source: "server",
+      route: "lib/finance/owner-transaction-link#linkFeedTransactionToInvoices",
+      message: `Linked one payment to ${numbers.join(", ")} via feed ${feedId} (no money applied), but mirroring the outcome onto the My Finances row failed.`,
+      context: { feedId, error: mirrorErr.message },
+    }).catch(() => {})
+  }
+
+  // The note on EVERY invoice, dated and appended (never overwriting), like the single path.
+  const { updateInvoice } = await import("@/app/(dashboard)/finance/actions")
+  const today = new Date().toISOString().slice(0, 10)
+  for (const inv of invoices) {
+    const dated = `${today}: ${note}`
+    const combined = inv.notes ? `${inv.notes}\n${dated}` : dated
+    const res = await updateInvoice(inv.id, { notes: combined })
+    if (!res.success) {
+      console.error(`[owner-transaction-link] multi-link note write failed for ${inv.id}: ${res.error}`)
+      await reportSystemError({
+        source: "server",
+        route: "lib/finance/owner-transaction-link#linkFeedTransactionToInvoices",
+        message: `Linked one payment to ${numbers.join(", ")} via feed ${feedId}, but the explanatory note failed to save onto ${inv.invoice_number ?? inv.id}.`,
+        context: { feedId, paymentId: inv.id, error: res.error },
+      }).catch(() => {})
+    }
+  }
+
+  return {
+    ok: true,
+    invoiceNumbers: numbers,
+    transactionAmount: Number(feed.amount),
+    linkedTotal: summary.linkedTotal,
+    difference: summary.difference,
   }
 }
