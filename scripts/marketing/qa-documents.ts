@@ -143,14 +143,13 @@ async function main() {
   await page.waitForFunction(n => !document.querySelector(`[data-name="${n}"]`), ITN, { timeout: 60000 })
   const trashed = (await db.query("select state from store_files where name=$2 and owner_id=$1 order by created_at desc limit 1", [biz.owner_id, ITN])).rows[0]
   ck("D17 delete goes to the storage's trash (not gone)", trashed?.state === "trashed", trashed)
-  // the setter: reads, cannot change
+  // the setter: no Documents at all by default (29 Oct 2026: Antonio never decided she should read them) - no menu item, no list, no change
   const set = await session(SETTER)
   const sp = await set.newPage()
-  await sp.goto(`${BASE}/marketing/documents`, { waitUntil: "networkidle", timeout: 180000 })
-  await sp.waitForSelector("[data-testid=documents]", { timeout: 120000 })
-  await sp.waitForSelector("[data-testid=doc-file]", { timeout: 60000 })
-  ck("D18 the setter sees the documents", (await sp.$$("[data-testid=doc-file]")).length >= 1)
-  ck("D19 the setter has no Upload, Rename, Delete or New folder", (await sp.$$("[data-testid=doc-upload],[data-testid=doc-rename],[data-testid=doc-delete],[data-testid=doc-new-folder]")).length === 0)
+  await sp.goto(`${BASE}/marketing/news`, { waitUntil: "networkidle", timeout: 180000 })
+  ck("D18 the setter's menu has no Documents", (await sp.getByTestId("nav-documents").count()) === 0)
+  const sr = await sp.evaluate(async () => (await fetch("/api/marketing/documents")).status)
+  ck("D19 the setter is refused the Documents list by address", sr === 403, sr)
   const sw = await sp.evaluate(async () => (await fetch("/api/marketing/documents/folder", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parentId: "00000000-0000-4000-8000-000000000000", name: "x" }) })).status)
   ck("D20 the setter's change is refused by the server", sw === 403, sw)
   await page.screenshot({ path: `${SHOTS}/documents-owner.png` })

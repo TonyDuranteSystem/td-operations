@@ -257,7 +257,7 @@ async function main() {
   await np.getByTestId("draft-approve").click()
   await np.getByTestId("news-post-row").first().waitFor({ timeout: 60000 })
   const row = (await db.query("select title, audience, feature_key, status, team_id, link_key from marketing_news")).rows
-  ck("N3 approving posts it to every team (no team), for everyone, linked to Documents, remembered by its key", row.length === 1 && row[0].feature_key === "documents" && row[0].status === "posted" && row[0].team_id === null && row[0].audience === "everyone" && row[0].link_key === "documents", row)
+  ck("N3 approving posts it to every team (no team), for the sellers (the people who have the Documents tab), linked to Documents, remembered by its key", row.length === 1 && row[0].feature_key === "documents" && row[0].status === "posted" && row[0].team_id === null && row[0].audience === "sellers" && row[0].link_key === "documents", row)
   ck("N3b the draft is gone and the red number on What's New too", (await np.getByTestId("news-draft").count()) === 0 && (await np.getByTestId("owner-nav-news-badge").count()) === 0)
   const dup = await api(np, "POST", "/api/marketing-admin/news", { title: "Documents is live", body: "again", linkKey: "documents", featureKey: "documents" })
   ck("N3c the same draft cannot be posted twice (409)", dup.status === 409, dup)

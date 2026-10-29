@@ -102,7 +102,8 @@ export const MARKETING_SETTING_DEFS = {
     fallback: {
       // calls and filters leads: no payment links, no Money, no export, no team management
       // no inbox: the setter has no email address of her own (27 Oct 2026, Rocco and Antonio)
-      setter: ["leads.read", "leads.call", "leads.mark", "leads.worklist", "team.notes", "whatsapp", "chat", "documents"],
+      // no Documents: Antonio never decided the setter should read the company presentation and the services description (29 Oct 2026); he can add it in Settings
+      setter: ["leads.read", "leads.call", "leads.mark", "leads.worklist", "team.notes", "whatsapp", "chat"],
       // ads, video, posts: chat, content, reports; reads leads
       content: ["chat", "inbox", "content.manage", "reports.read", "leads.read", "documents", "documents.manage"],
       // contacts the leads the setters pass: works them, sends the free-call link, no money screens
