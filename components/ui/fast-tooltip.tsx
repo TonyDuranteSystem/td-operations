@@ -33,9 +33,12 @@ import { tooltipPosition, type TooltipPosition } from '@/lib/ui/tooltip-position
  * cover the label of its own buttons. It is pointer-events:none, so sitting on
  * top of everything can never block a click. */
 const TOOLTIP_Z_INDEX = 10001
+/** Room reserved below the anchor for a summary card (about five lines). */
+const CARD_HEIGHT_PX = 150
 
 export function FastTooltip({
   label,
+  card,
   children,
   align = 'right',
   className,
@@ -45,6 +48,12 @@ export function FastTooltip({
    * passed straight through shows nothing when the condition is false,
    * matching the original native-title behavior instead of an empty bubble. */
   label: string | undefined
+  /**
+   * A small multi-line CARD shown instead of the one-line label — for a summary of the thing under
+   * the mouse (e.g. an invoice: client, what it is for, amount, status). Wraps and has a width
+   * limit, unlike the label. Leave `label` undefined when passing it.
+   */
+  card?: React.ReactNode
   children: React.ReactNode
   align?: 'left' | 'right' | 'center'
   /**
@@ -63,7 +72,7 @@ export function FastTooltip({
 
   const open = () => {
     const r = wrapperRef.current?.getBoundingClientRect()
-    if (r) setPos(tooltipPosition(r, align, window.innerHeight))
+    if (r) setPos(tooltipPosition(r, align, window.innerHeight, card ? CARD_HEIGHT_PX : undefined))
     setShow(true)
   }
 
@@ -97,14 +106,17 @@ export function FastTooltip({
       onClick={() => setShow(false)}
     >
       {children}
-      {show && label && pos && typeof document !== 'undefined' &&
+      {show && (label || card) && pos && typeof document !== 'undefined' &&
         createPortal(
           <span
             role="tooltip"
             style={{ position: 'fixed', top: pos.top, left: pos.left, transform: `translate(${pos.translateX}, ${pos.translateY})`, zIndex: TOOLTIP_Z_INDEX }}
-            className="pointer-events-none whitespace-nowrap rounded-md bg-zinc-900 px-2 py-1 text-xs text-white"
+            className={cn(
+              'pointer-events-none rounded-md bg-zinc-900 text-xs text-white',
+              card ? 'block w-max max-w-[22rem] whitespace-normal px-3 py-2 shadow-lg' : 'whitespace-nowrap px-2 py-1',
+            )}
           >
-            {label}
+            {card ?? label}
           </span>,
           document.body
         )}

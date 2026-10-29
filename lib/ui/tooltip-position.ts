@@ -36,9 +36,11 @@ export function tooltipPosition(
   rect: TooltipRect,
   align: TooltipAlign,
   viewportHeight?: number,
+  /** Height to reserve below the anchor; a taller card (several lines) needs more than one line. */
+  labelHeightPx: number = LABEL_HEIGHT_PX,
 ): TooltipPosition {
   const noRoomBelow =
-    viewportHeight !== undefined && rect.bottom + GAP_PX + LABEL_HEIGHT_PX > viewportHeight
+    viewportHeight !== undefined && rect.bottom + GAP_PX + labelHeightPx > viewportHeight
   const top = noRoomBelow ? rect.top - GAP_PX : rect.bottom + GAP_PX
   const translateY = noRoomBelow ? '-100%' : '0'
   if (align === 'left') return { top, left: rect.left, translateX: '0', translateY }
