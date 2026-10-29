@@ -9689,6 +9689,8 @@ export type Database = {
           mentions: string[]
           message: string
           original_message: string | null
+          pinned_at: string | null
+          pinned_by: string | null
           reply_to_id: string | null
           sender_id: string
           sender_name: string
@@ -9705,6 +9707,8 @@ export type Database = {
           mentions?: string[]
           message?: string
           original_message?: string | null
+          pinned_at?: string | null
+          pinned_by?: string | null
           reply_to_id?: string | null
           sender_id: string
           sender_name: string
@@ -9721,6 +9725,8 @@ export type Database = {
           mentions?: string[]
           message?: string
           original_message?: string | null
+          pinned_at?: string | null
+          pinned_by?: string | null
           reply_to_id?: string | null
           sender_id?: string
           sender_name?: string
@@ -9960,6 +9966,94 @@ export type Database = {
           user_name?: string | null
         }
         Relationships: []
+      }
+      marketing_news: {
+        Row: {
+          audience: string
+          body: string
+          body_it: string | null
+          created_at: string
+          created_by: string
+          edited_at: string | null
+          feature_key: string | null
+          id: string
+          link_key: string | null
+          posted_at: string | null
+          status: string
+          team_id: string | null
+          title: string
+          title_it: string | null
+          withdrawn_at: string | null
+        }
+        Insert: {
+          audience?: string
+          body: string
+          body_it?: string | null
+          created_at?: string
+          created_by: string
+          edited_at?: string | null
+          feature_key?: string | null
+          id?: string
+          link_key?: string | null
+          posted_at?: string | null
+          status?: string
+          team_id?: string | null
+          title: string
+          title_it?: string | null
+          withdrawn_at?: string | null
+        }
+        Update: {
+          audience?: string
+          body?: string
+          body_it?: string | null
+          created_at?: string
+          created_by?: string
+          edited_at?: string | null
+          feature_key?: string | null
+          id?: string
+          link_key?: string | null
+          posted_at?: string | null
+          status?: string
+          team_id?: string | null
+          title?: string
+          title_it?: string | null
+          withdrawn_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_news_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_news_reads: {
+        Row: {
+          news_id: string
+          read_at: string
+          user_id: string
+        }
+        Insert: {
+          news_id: string
+          read_at?: string
+          user_id: string
+        }
+        Update: {
+          news_id?: string
+          read_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_news_reads_news_id_fkey"
+            columns: ["news_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_news"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       marketing_push_subscriptions: {
         Row: {
@@ -10352,6 +10446,8 @@ export type Database = {
           mentions: string[]
           message: string
           original_message: string | null
+          pinned_at: string | null
+          pinned_by: string | null
           reply_to_id: string | null
           sender_id: string
           sender_name: string
@@ -10368,6 +10464,8 @@ export type Database = {
           mentions?: string[]
           message?: string
           original_message?: string | null
+          pinned_at?: string | null
+          pinned_by?: string | null
           reply_to_id?: string | null
           sender_id: string
           sender_name: string
@@ -10384,6 +10482,8 @@ export type Database = {
           mentions?: string[]
           message?: string
           original_message?: string | null
+          pinned_at?: string | null
+          pinned_by?: string | null
           reply_to_id?: string | null
           sender_id?: string
           sender_name?: string
