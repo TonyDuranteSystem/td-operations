@@ -96,9 +96,9 @@ export function ChatWorkspace({ initial, leadConversations, showLeads, startThre
               <h2 className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{t('Chats about leads')}</h2>
               <ul data-testid="lead-conversations">
                 {leadConversations.length === 0 ? <li className="px-3 py-1 text-xs text-slate-400">{t('No conversations yet. Open a lead and write in its Chat tab.')}</li> : leadConversations.map(c => (
-                  <li key={c.leadId}>
-                    <button type="button" onClick={() => open({ id: c.leadId, name: c.name }, 'chat')} data-testid="conversation" data-lead={c.leadId} className="flex w-full items-start justify-between gap-2 border-l-4 border-transparent px-3 py-2 text-left hover:bg-slate-50">
-                      <span className="min-w-0"><b className="block truncate text-sm font-medium">{c.name}</b><span className="block truncate text-xs text-slate-500">{c.lastBy ? `${c.lastBy}: ` : ''}{t(c.last)}</span></span>
+                  <li key={`${c.leadId}|${c.lane}`}>
+                    <button type="button" onClick={() => open({ id: c.leadId, name: c.name }, c.lane === 'setter' ? 'chat:setter' : 'chat:owners')} data-testid="conversation" data-lead={c.leadId} data-lane={c.lane} className="flex w-full items-start justify-between gap-2 border-l-4 border-transparent px-3 py-2 text-left hover:bg-slate-50">
+                      <span className="min-w-0"><b className="block truncate text-sm font-medium">{c.name}</b>{c.label && <span className="block truncate text-[11px] font-medium text-slate-600" data-testid="conversation-lane">{t(c.label)}</span>}<span className="block truncate text-xs text-slate-500">{c.lastBy ? `${c.lastBy}: ` : ''}{t(c.last)}</span></span>
                       <span className="flex shrink-0 flex-col items-end gap-1"><span className="text-[11px] text-slate-400">{formatWhen(c.lastAt, 'Europe/Rome', localeFor(lang))}</span>{c.unread > 0 && <span className="rounded-full bg-red-600 px-1.5 text-[11px] font-semibold text-white" data-testid="conversation-unread">{c.unread}</span>}</span>
                     </button>
                   </li>

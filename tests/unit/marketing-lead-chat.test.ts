@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { MAX_ATTACHMENTS, MESSAGE_MAX_CHARS, chatUrlFor, checkEdit, checkEmoji, checkSend, cleanFileName, folderFor, isOwnObjectPath, mayDelete, mayEdit, newObjectPath, previewLine, isInvolved, pushRecipients, toTalkMessage, unreadCount, type ChatMessageRow } from "@/lib/marketing/lead-chat"
+import { lanesFor, inLane, resolveLane, laneRecipients, laneLabels, MAX_ATTACHMENTS, MESSAGE_MAX_CHARS, chatUrlFor, checkEdit, checkEmoji, checkSend, cleanFileName, folderFor, isOwnObjectPath, mayDelete, mayEdit, newObjectPath, previewLine, isInvolved, pushRecipients, toTalkMessage, unreadCount, type ChatMessageRow } from "@/lib/marketing/lead-chat"
 import { isMarketingAllowedPath } from "@/lib/auth/role-door"
 
 const TEAM = "11111111-1111-4111-8111-111111111111"
@@ -103,6 +103,10 @@ describe("unread numbers and who is told", () => {
     expect(url).toBe(`/marketing/board?chat=${LEAD}`)
     expect(isMarketingAllowedPath(url)).toBe(true)
   })
+  it("a notification for one of a lead's two chats names it, so that chat opens", () => {
+    expect(chatUrlFor(LEAD, "setter")).toBe(`/marketing/board?chat=${LEAD}&lane=setter`)
+    expect(isMarketingAllowedPath(chatUrlFor(LEAD, "owners"))).toBe(true)
+  })
 })
 
 describe("the marketing worker file", () => {
@@ -122,5 +126,47 @@ describe("the marketing worker file", () => {
   })
   it("it caches nothing", () => {
     expect(sw).not.toMatch(/caches\.|cache\.put|cache\.add/i)
+  })
+})
+
+describe("the two chats of a lead (lanes)", () => {
+  const SETTER = ["leads.read", "leads.call", "leads.mark", "leads.worklist", "team.notes", "whatsapp", "chat", "documents"]
+  const SELLER = ["leads.read", "leads.pick", "leads.call", "leads.mark", "team.notes", "whatsapp", "chat", "inbox", "calls.host", "documents", "documents.manage"]
+  it("a setter has only the setter lane, Antonio on his own login only the owners lane, Rocco both; Antonio viewing as a setter sees the setter lane, viewing as the owner both", () => {
+    expect(lanesFor({ permissions: SETTER, admin: false, viewAs: false })).toEqual(["setter"])
+    expect(lanesFor({ permissions: SELLER, admin: true, viewAs: false })).toEqual(["owners"])
+    expect(lanesFor({ permissions: SELLER, admin: false, viewAs: false })).toEqual(["owners", "setter"])
+    expect(lanesFor({ permissions: SETTER, admin: true, viewAs: true })).toEqual(["setter"])
+    expect(lanesFor({ permissions: SELLER, admin: true, viewAs: true })).toEqual(["owners", "setter"])
+  })
+  it("who is in which lane", () => {
+    const setter = { permissions: SETTER, isAdmin: false }, rocco = { permissions: SELLER, isAdmin: false }, antonio = { permissions: SELLER, isAdmin: true }
+    expect([setter, rocco, antonio].map(m => inLane(m, "owners"))).toEqual([false, true, true])
+    expect([setter, rocco, antonio].map(m => inLane(m, "setter"))).toEqual([true, true, false])
+  })
+  it("a request names its lane; a person with one lane needs not name it; a lane she may not use is refused", () => {
+    expect(resolveLane("setter", ["setter"])).toBe("setter")
+    expect(resolveLane(undefined, ["setter"])).toBe("setter")
+    expect(resolveLane("owners", ["setter"])).toBeNull()
+    expect(resolveLane("nonsense", ["owners", "setter"])).toBeNull()
+    expect(resolveLane(undefined, ["owners", "setter"])).toBe("owners")
+    expect(resolveLane("setter", ["owners", "setter"])).toBe("setter")
+  })
+  it("a message in a lane tells only that lane's people, the sender and paused people excepted; nobody needs an @", () => {
+    const m = [
+      { user_id: "cristina", status: "active", permissions: SETTER, isAdmin: false },
+      { user_id: "rocco", status: "active", permissions: SELLER, isAdmin: false },
+      { user_id: "antonio", status: "active", permissions: SELLER, isAdmin: true },
+      { user_id: "anna", status: "paused", permissions: SETTER, isAdmin: false },
+    ]
+    expect(laneRecipients(m, "rocco", "setter")).toEqual(["cristina"])
+    expect(laneRecipients(m, "rocco", "owners")).toEqual(["antonio"])
+    expect(laneRecipients(m, "cristina", "setter")).toEqual(["rocco"])
+  })
+  it("the buttons are named after the other side", () => {
+    const names = { admin: "Antonio", seller: "Rocco", setters: "Cristina" }
+    expect(laneLabels(["owners", "setter"], names, { isSetter: false, isAdmin: false })).toEqual([{ lane: "owners", label: "Discuss with Antonio" }, { lane: "setter", label: "Discuss with Cristina" }])
+    expect(laneLabels(["setter"], names, { isSetter: true, isAdmin: false })).toEqual([{ lane: "setter", label: "Discuss with Rocco" }])
+    expect(laneLabels(["owners"], names, { isSetter: false, isAdmin: true })).toEqual([{ lane: "owners", label: "Chat with Rocco" }])
   })
 })

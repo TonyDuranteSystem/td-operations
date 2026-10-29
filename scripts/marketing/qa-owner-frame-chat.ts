@@ -146,7 +146,7 @@ async function main() {
 
   // ---- 3. the chat: a visible toolbar on hover (emoji, reply, edit, more), text can be selected
   const wp = await open(owner, `/marketing/window/${Lm}?role=seller`)
-  await wp.getByRole("tab", { name: /Chat/ }).first().click().catch(async () => { await wp.getByText("Chat", { exact: true }).first().click() })
+  await wp.locator('[data-testid^="tab-chat"]').first().click().catch(async () => { await wp.getByText("Chat", { exact: true }).first().click() })
   await wp.getByTestId("lead-chat").waitFor({ timeout: 60000 })
   await wp.waitForTimeout(2500)
   const theirs = wp.getByTestId("talk-msg-theirs").first()
@@ -183,18 +183,18 @@ async function main() {
 
   // ---- 4. Mark unread: for him only, from that message on, and the open window does not undo it
   const firstMsg = (await db.query("select id, created_at from marketing_lead_messages where lead_id=$1 and sender_id=$2 order by created_at limit 1", [Lm, ids.admin])).rows[0]
-  const posBefore = (await db.query("select last_read_at from marketing_lead_chat_reads where lead_id=$1 and user_id=$2", [Lm, ids.ownerA])).rows[0]?.last_read_at
+  const posBefore = (await db.query("select last_read_at from marketing_lead_lane_reads where lane='owners' and lead_id=$1 and user_id=$2", [Lm, ids.ownerA])).rows[0]?.last_read_at
   await wp.getByTestId("talk-msg-theirs").first().hover()
   await wp.getByTestId("talk-tool-more").first().click()
   await wp.getByTestId("talk-act-unread").click()
   // the request waits for a refresh already on its way, so on a busy machine it lands a few seconds later: wait for it
   let posAfter: string | undefined
-  for (let i = 0; i < 40; i++) { posAfter = (await db.query("select last_read_at from marketing_lead_chat_reads where lead_id=$1 and user_id=$2", [Lm, ids.ownerA])).rows[0]?.last_read_at; if (posAfter && new Date(posAfter).getTime() < new Date(firstMsg.created_at).getTime()) break; await wp.waitForTimeout(500) }
+  for (let i = 0; i < 40; i++) { posAfter = (await db.query("select last_read_at from marketing_lead_lane_reads where lane='owners' and lead_id=$1 and user_id=$2", [Lm, ids.ownerA])).rows[0]?.last_read_at; if (posAfter && new Date(posAfter).getTime() < new Date(firstMsg.created_at).getTime()) break; await wp.waitForTimeout(500) }
   ck("G8 'Mark unread' moves HIS read position back to just before that message", !!posAfter && new Date(posAfter).getTime() < new Date(firstMsg.created_at).getTime() && (!posBefore || new Date(posAfter).getTime() < new Date(posBefore).getTime()), { posBefore, posAfter, at: firstMsg.created_at })
   await wp.waitForTimeout(9000)
-  const posLater = (await db.query("select last_read_at from marketing_lead_chat_reads where lead_id=$1 and user_id=$2", [Lm, ids.ownerA])).rows[0]?.last_read_at
+  const posLater = (await db.query("select last_read_at from marketing_lead_lane_reads where lane='owners' and lead_id=$1 and user_id=$2", [Lm, ids.ownerA])).rows[0]?.last_read_at
   ck("G8b the open window does not read the chat again by itself (the position stays back after the next refreshes)", posLater && new Date(posLater).getTime() === new Date(posAfter).getTime(), { posAfter, posLater })
-  const otherPos = (await db.query("select last_read_at from marketing_lead_chat_reads where lead_id=$1 and user_id=$2", [Lm, ids.admin])).rows[0]?.last_read_at
+  const otherPos = (await db.query("select last_read_at from marketing_lead_lane_reads where lane='owners' and lead_id=$1 and user_id=$2", [Lm, ids.admin])).rows[0]?.last_read_at
   ck("G8c nobody else's chat changed (Antonio's own position is untouched)", !otherPos || new Date(otherPos).getTime() >= new Date(firstMsg.created_at).getTime(), otherPos)
   const bp2 = await open(owner, "/marketing/board")
   const cm2 = (await bp2.$$eval('[data-testid="board-card"]', els => els.map(e => ({ id: e.getAttribute("data-lead"), tag: (e.querySelector('[data-testid="card-unread"]')?.textContent ?? "").trim() })))).find(c => c.id === Lm)

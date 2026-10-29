@@ -17,8 +17,8 @@ import { sendMarketingPush } from "@/lib/marketing/push"
 import { parseMentions, threadPush } from "@/lib/marketing/team-chat"
 import { pointerBefore } from "@/lib/talk/unread-pointer"
 import {
-  BUCKET, clampReadsToVisible, SIGNED_URL_SECONDS, URL_CACHE_SECONDS, checkEdit, isInvolved, isSetterOnly, visibleToSetter, checkEmoji, checkSend, chatUrlFor, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, pushRecipients, toTalkMessage, unreadCount,
-  type ChatMessageRow, type ChatReaction, type StoredAttachment,
+  BUCKET, SIGNED_URL_SECONDS, URL_CACHE_SECONDS, checkEdit, inLane, isInvolved, isSetterOnly, checkEmoji, checkSend, chatUrlFor, isUuid, laneLabels, lanesFor, laneRecipients, mayDelete, mayEdit, newObjectPath, previewLine, resolveLane, toTalkMessage, unreadCount,
+  type ChatMessageRow, type ChatReaction, type Lane, type StoredAttachment,
 } from "@/lib/marketing/lead-chat"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- newer tables than the generated types
@@ -29,15 +29,18 @@ const MESSAGE_COLS = "id, sender_id, sender_name, message, attachments, reply_to
 /** the newest messages one open chat holds (like TD Talk: the latest 500) */
 const LOAD_LIMIT = 500
 
-/** For every chat route: the chat permission AND the right to read leads, and a lead that belongs to the guard's team. */
-export async function openChat(leadId: string): Promise<{ ctx: MarketingContext; lead: LeadRow; res?: undefined } | { res: NextResponse; ctx?: undefined; lead?: undefined }> {
+/** For every chat route: the chat permission AND the right to read leads, a lead that belongs to the guard's team, and the lane (which of the lead's two chats) when the route is about one. */
+export async function openChat(leadId: string, laneAsked?: unknown): Promise<{ ctx: MarketingContext; lead: LeadRow; lane: Lane; res?: undefined } | { res: NextResponse; ctx?: undefined; lead?: undefined; lane?: undefined }> {
   const g = await requireMarketing("chat")
   if (g.res) return { res: g.res }
   if (!hasPermission(g.ctx.permissions, "leads.read")) return { res: json({ error: "You are not allowed to do this.", code: "NO_PERMISSION" }, 403) }
   if (!isUuid(leadId)) return { res: json({ error: "Lead not found." }, 404) }
   const lead = await getTeamLead(leadDb(), g.ctx.team.id, leadId)
   if (!lead) return { res: json({ error: "Lead not found." }, 404) }
-  return { ctx: g.ctx, lead }
+  // which of the lead's two chats: the one asked for, only if it is one of this person's
+  const lane = resolveLane(laneAsked, laneAccess(g.ctx))
+  if (!lane) return { res: json({ error: "This chat is not yours.", code: "NO_LANE" }, 403) }
+  return { ctx: g.ctx, lead, lane }
 }
 
 /** For the chat routes that are not about one lead: the same two permissions as `openChat` (the chat AND the right to read leads), so a list of conversations never shows more than the leads would. */
@@ -48,7 +51,7 @@ export async function requireChatAccess(): Promise<{ ctx: MarketingContext; res?
   return { ctx: g.ctx }
 }
 
-type ChatMember = { id: string; name: string; permissions: string[]; status: string }
+type ChatMember = { id: string; name: string; permissions: string[]; status: string; isAdmin: boolean }
 const MEMBER_CACHE_MS = 60_000
 const memberCache = new Map<string, { at: number; list: ChatMember[] }>()
 
@@ -61,36 +64,35 @@ export async function chatMembers(teamId: string): Promise<ChatMember[]> {
   return list
 }
 
-/**
- * Whose eyes the setter filter looks through. A real setter: her own. Antonio "viewing as" a setter is NOT her: his messages and the ones that name HIM are not hers, so the preview must not
- * count them (29 Oct 2026, Antonio: "View as Setter shows me every chat"). In the preview a setter sees only what setters wrote, which is what a real setter sees except the @-names of her.
- */
-const NOBODY = "00000000-0000-0000-0000-000000000000"
-const filterViewer = (ctx: MarketingContext): string => (ctx.viewAs ? NOBODY : ctx.user.id)
+/** The lanes (the two chats of a lead) this person may use: a setter the setter lane, Antonio on his own login the owners lane, Rocco both; Antonio "viewing as" a role gets that role's lanes. */
+export const laneAccess = (ctx: MarketingContext): Lane[] => lanesFor({ permissions: ctx.permissions, admin: ctx.admin === true, viewAs: ctx.viewAs !== undefined })
 
-/** The ids of the team's setters (setter only: no picking, no hosting, no payment links). In a lead's chat a setter sees only their messages and the ones that name her. */
-async function setterIdsOf(teamId: string): Promise<Set<string>> {
-  return new Set((await chatMembers(teamId)).filter(m => isSetterOnly(m.permissions)).map(m => m.id))
+const firstName = (name: string): string => name.trim().split(/\s+/)[0] || name
+
+/** The buttons this person gets on a lead, each named after the other side ("Discuss with Antonio", "Discuss with Cristina", "Discuss with Rocco"). Names come from the people's profiles. */
+export async function laneButtons(ctx: MarketingContext): Promise<Array<{ lane: Lane; label: string }>> {
+  const members = (await chatMembers(ctx.team.id)).filter(m => m.status !== "removed")
+  const setters = members.filter(m => isSetterOnly(m.permissions)).map(m => firstName(m.name))
+  const seller = members.find(m => !isSetterOnly(m.permissions) && !m.isAdmin && isInvolved(m.permissions))
+  const admin = members.find(m => m.isAdmin)
+  const lanes = laneAccess(ctx)
+  return laneLabels(lanes, { admin: admin ? firstName(admin.name) : "Antonio", seller: seller ? firstName(seller.name) : "Rocco", setters: setters.length ? setters.join(" & ") : "the setter" }, { isSetter: isSetterOnly(ctx.permissions), isAdmin: ctx.admin === true && ctx.viewAs === undefined })
 }
 
 /**
- * Messages of a lead's team, for a viewer. A setter (setter only) gets only what she wrote, what other setters wrote and what names her with @; everybody else gets everything.
- * `mentions` is read only for a setter, and a database without that column (migration not run) simply shows her her own and other setters' messages.
+ * Messages of a lead's team, for a viewer, from the lanes the viewer may read (`run` adds the lane filter to the query it builds). A setter is never handed the owners lane, whatever the screen asks:
+ * the privacy is here, at the read. `pinned_at` is asked for only by the chat screen, and a database without the pin columns (migration not run) simply shows no pins.
  */
 async function readMessages<T extends { sender_id: string }>(
-  ctx: MarketingContext, cols: string, run: (cols: string) => PromiseLike<{ data: unknown; error: { code?: string } | null }>, withPins = false,
+  ctx: MarketingContext, cols: string, run: (cols: string, lanes: Lane[]) => PromiseLike<{ data: unknown; error: { code?: string } | null }>, withPins = false,
 ): Promise<T[]> {
-  // the pin columns are asked for only by the chat screen, and a database without them (migration not run) simply shows no pins
+  const lanes = laneAccess(ctx)
   const ask = async (c: string) => {
-    if (!withPins) return run(c)
-    const r = await run(`${c}, pinned_at`)
-    return r.error?.code === "42703" ? run(c) : r
+    if (!withPins) return run(c, lanes)
+    const r = await run(`${c}, pinned_at`, lanes)
+    return r.error?.code === "42703" ? run(c, lanes) : r
   }
-  if (!isSetterOnly(ctx.permissions)) return (((await ask(cols)).data ?? []) as T[])
-  let res = await ask(`${cols}, mentions`)
-  if (res.error?.code === "42703") res = await ask(cols)
-  const setters = await setterIdsOf(ctx.team.id)
-  return ((res.data ?? []) as T[]).filter(m => visibleToSetter(m as T & { mentions?: string[] | null }, filterViewer(ctx), setters))
+  return ((await ask(cols)).data ?? []) as T[]
 }
 
 async function loadChatMembers(teamId: string): Promise<ChatMember[]> {
@@ -98,7 +100,7 @@ async function loadChatMembers(teamId: string): Promise<ChatMember[]> {
   const rows = await listMembers(teamId)
   return rows
     .filter(m => m.status !== "removed")
-    .map(m => ({ id: m.user_id as string, name: personName(m.email), status: String(m.status), permissions: effectivePermissions({ memberRole: m.member_role as "owner" | "member", bundle: m.bundle, bundles, extra: m.permissions }) as string[] }))
+    .map(m => ({ id: m.user_id as string, name: m.full_name || personName(m.email), isAdmin: m.is_admin === true, status: String(m.status), permissions: effectivePermissions({ memberRole: m.member_role as "owner" | "member", bundle: m.bundle, bundles, extra: m.permissions }) as string[] }))
     .filter(m => m.permissions.includes("chat"))
 }
 
@@ -129,46 +131,44 @@ export async function shape(rows: ChatMessageRow[], reactions: ChatReaction[]) {
   return rows.map(r => toTalkMessage(r, byId, reactions, p => urls.get(p) ?? null))
 }
 
-/** One lead's chat: the newest messages (oldest first), who has read and received how far, who can chat. `markRead` follows TD Talk's rule: only while the person is looking. */
-export async function loadChat(ctx: MarketingContext, leadId: string, markRead: boolean) {
+/** One lane of a lead's chat: the newest messages (oldest first), who has read and received how far, who can chat. `markRead` follows TD Talk's rule: only while the person is looking. */
+export async function loadChat(ctx: MarketingContext, leadId: string, markRead: boolean, lane: Lane) {
   const d = db()
   const [rowsDesc, { data: reads }, { data: deliveries }, members] = await Promise.all([
-    readMessages<ChatMessageRow>(ctx, MESSAGE_COLS, cols => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).eq("lead_id", leadId).order("created_at", { ascending: false }).limit(LOAD_LIMIT), true),
-    d.from("marketing_lead_chat_reads").select("user_id, last_read_at").eq("lead_id", leadId),
-    d.from("marketing_lead_chat_delivery").select("user_id, delivered_at").eq("lead_id", leadId),
+    readMessages<ChatMessageRow>(ctx, MESSAGE_COLS, (cols, lanes) => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).eq("lead_id", leadId).eq("lane", lane).in("lane", lanes).order("created_at", { ascending: false }).limit(LOAD_LIMIT), true),
+    d.from("marketing_lead_lane_reads").select("user_id, last_read_at").eq("lead_id", leadId).eq("lane", lane),
+    d.from("marketing_lead_lane_delivery").select("user_id, delivered_at").eq("lead_id", leadId).eq("lane", lane),
     chatMembers(ctx.team.id),
   ])
   const rows = rowsDesc.slice().reverse()
   const ids = rows.map(r => r.id)
   // a pin must not drop out of the bar because 500 newer messages arrived: when the window is full, the older pins are fetched on their own
   const olderRaw = rowsDesc.length >= LOAD_LIMIT
-    ? await readMessages<ChatMessageRow>(ctx, MESSAGE_COLS, cols => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).eq("lead_id", leadId).not("pinned_at", "is", null).is("deleted_at", null).order("pinned_at", { ascending: false }).limit(OLDER_PINS_LIMIT), true)
+    ? await readMessages<ChatMessageRow>(ctx, MESSAGE_COLS, (cols, lanes) => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).eq("lead_id", leadId).eq("lane", lane).in("lane", lanes).not("pinned_at", "is", null).is("deleted_at", null).order("pinned_at", { ascending: false }).limit(OLDER_PINS_LIMIT), true)
     : []
   const { data: reacts } = ids.length ? await d.from("marketing_lead_message_reactions").select("message_id, user_id, user_name, emoji").in("message_id", ids) : { data: [] }
-  if (markRead) await markLeadRead(ctx, leadId)
+  if (markRead) await markLeadRead(ctx, leadId, lane)
   const me = ctx.user.id
-  // the ticks wait for the people who work the leads (the setter, the seller), not for the ad person who only watches
+  // the people of THIS lane (Rocco and the setter in hers; Antonio and Rocco in the owners one); the ticks wait for the ones who work the leads, not for the ad person who only watches
   // (a paused person is not waited for: his ticks would never turn blue)
-  // (nor is a setter: she does not see Antonio's and Rocco's messages, so her read marker would never pass them)
-  const memberIds = members.filter(m => m.status === "active" && isInvolved(m.permissions) && !isSetterOnly(m.permissions)).map(m => m.id).filter(id => id !== me)
-  const shown = await shape(rows, (reacts ?? []) as ChatReaction[])
-  // a setter is never handed the id of a message she may not see (a quote-reply to one)
-  const shownIds = new Set(rows.map(r => r.id))
-  const messages = isSetterOnly(ctx.permissions) ? shown.map(m => (m.reply_to_id && !shownIds.has(m.reply_to_id) ? { ...m, reply_to_id: null } : m)) : shown
+  const inThisLane = members.filter(m => m.status === "active" && isInvolved(m.permissions) && inLane(m, lane))
+  const memberIds = inThisLane.map(m => m.id).filter(id => id !== me)
+  const messages = await shape(rows, (reacts ?? []) as ChatReaction[])
   return {
     me,
+    lane,
     messages,
     older_pins: await shapeOlderPins(olderRaw, new Set(ids)),
-    members: members.filter(m => m.status === "active" && isInvolved(m.permissions)).map(m => ({ id: m.id, name: m.name })),
-    // the ticks: how far every OTHER person who can chat has read / received it
+    members: inThisLane.map(m => ({ id: m.id, name: m.name })),
+    // the ticks: how far every OTHER person of this lane has read / received it
     member_ids: memberIds,
-    member_reads: (isSetterOnly(ctx.permissions) ? clampReadsToVisible : (r: Array<{ user_id: string; last_read_at: string }>) => r)(((reads ?? []) as Array<{ user_id: string; last_read_at: string }>).filter(r => r.user_id !== me), rows.map(r => r.created_at)),
+    member_reads: ((reads ?? []) as Array<{ user_id: string; last_read_at: string }>).filter(r => r.user_id !== me),
     member_delivered: ((deliveries ?? []) as Array<{ user_id: string; delivered_at: string }>).filter(r => r.user_id !== me),
   }
 }
 
-export async function markLeadRead(ctx: MarketingContext, leadId: string): Promise<void> {
-  await db().from("marketing_lead_chat_reads").upsert({ lead_id: leadId, team_id: ctx.team.id, user_id: ctx.user.id, last_read_at: new Date().toISOString() }, { onConflict: "lead_id,user_id" })
+export async function markLeadRead(ctx: MarketingContext, leadId: string, lane: Lane): Promise<void> {
+  await db().from("marketing_lead_lane_reads").upsert({ lead_id: leadId, lane, team_id: ctx.team.id, user_id: ctx.user.id, last_read_at: new Date().toISOString() }, { onConflict: "lead_id,lane,user_id" })
 }
 
 /**
@@ -178,9 +178,10 @@ export async function markLeadRead(ctx: MarketingContext, leadId: string): Promi
 export async function markLeadUnreadFrom(ctx: MarketingContext, leadId: string, messageId: unknown): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
   const m = typeof messageId === "string" ? await messageInTeam(ctx, messageId) : null
   if (!m || m.lead_id !== leadId) return { ok: false, error: "That message was not found.", status: 404 }
-  const { data: cur } = await db().from("marketing_lead_chat_reads").select("last_read_at").eq("lead_id", leadId).eq("user_id", ctx.user.id).maybeSingle()
+  // the lane of the message is the lane whose position moves
+  const { data: cur } = await db().from("marketing_lead_lane_reads").select("last_read_at").eq("lead_id", leadId).eq("lane", m.lane).eq("user_id", ctx.user.id).maybeSingle()
   const next = pointerBefore(m.created_at, (cur as { last_read_at: string } | null)?.last_read_at ?? null)
-  const { error } = await db().from("marketing_lead_chat_reads").upsert({ lead_id: leadId, team_id: ctx.team.id, user_id: ctx.user.id, last_read_at: next }, { onConflict: "lead_id,user_id" })
+  const { error } = await db().from("marketing_lead_lane_reads").upsert({ lead_id: leadId, lane: m.lane, team_id: ctx.team.id, user_id: ctx.user.id, last_read_at: next }, { onConflict: "lead_id,lane,user_id" })
   return error ? { ok: false, error: "Could not mark it unread. Please try again.", status: 500 } : { ok: true }
 }
 
@@ -226,45 +227,49 @@ export function pinFailure(error: { code?: string; message?: string }): { ok: fa
     : { ok: false, error: "Could not pin the message. Please try again.", status: 500 }
 }
 
-/** This device now has the chat: tell the others (grey double tick). Only leads of the guard's team. */
-export async function markDelivered(ctx: MarketingContext, leadIds: readonly string[]): Promise<number> {
-  const ids = Array.from(new Set(leadIds.filter(isUuid))).slice(0, 50)
-  if (ids.length === 0) return 0
+/** This device now has the chat: tell the others (grey double tick). Only leads of the guard's team, only lanes that are the person's own. */
+export async function markDelivered(ctx: MarketingContext, items: ReadonlyArray<{ lead_id: string; lane?: unknown }>): Promise<number> {
+  const allowed = laneAccess(ctx)
+  const wanted = items.filter(i => isUuid(i.lead_id)).map(i => ({ lead_id: i.lead_id, lane: resolveLane(i.lane, allowed) })).filter((i): i is { lead_id: string; lane: Lane } => i.lane !== null).slice(0, 50)
+  if (wanted.length === 0) return 0
+  const ids = Array.from(new Set(wanted.map(w => w.lead_id)))
   const { data: own } = await db().from("marketing_leads").select("id").eq("team_id", ctx.team.id).in("id", ids)
+  const mine = new Set(((own ?? []) as Array<{ id: string }>).map(l => l.id))
   const now = new Date().toISOString()
-  const rows = ((own ?? []) as Array<{ id: string }>).map(l => ({ lead_id: l.id, team_id: ctx.team.id, user_id: ctx.user.id, delivered_at: now }))
-  if (rows.length) await db().from("marketing_lead_chat_delivery").upsert(rows, { onConflict: "lead_id,user_id" })
+  const rows = wanted.filter(w => mine.has(w.lead_id)).map(w => ({ lead_id: w.lead_id, lane: w.lane, team_id: ctx.team.id, user_id: ctx.user.id, delivered_at: now }))
+  if (rows.length) await db().from("marketing_lead_lane_delivery").upsert(rows, { onConflict: "lead_id,lane,user_id" })
   return rows.length
 }
 
-export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body: { message?: unknown; attachments?: unknown; reply_to_id?: unknown }): Promise<{ ok: true; message: unknown } | { ok: false; error: string; status: number }> {
+export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body: { message?: unknown; attachments?: unknown; reply_to_id?: unknown }, lane: Lane): Promise<{ ok: true; message: unknown } | { ok: false; error: string; status: number }> {
   const c = checkSend({ message: body.message, attachments: body.attachments, teamId: ctx.team.id, leadId: lead.id })
   if (c.ok === false) return { ok: false, error: c.error, status: 400 }
   const d = db()
   let replyTo: string | null = null
   if (body.reply_to_id != null) {
     if (!isUuid(body.reply_to_id)) return { ok: false, error: "The message you are answering was not found.", status: 400 }
-    const { data: q } = await d.from("marketing_lead_messages").select("id").eq("id", body.reply_to_id).eq("lead_id", lead.id).maybeSingle()
+    const { data: q } = await d.from("marketing_lead_messages").select("id").eq("id", body.reply_to_id).eq("lead_id", lead.id).eq("lane", lane).maybeSingle()
     if (!q) return { ok: false, error: "The message you are answering was not found.", status: 400 }
     replyTo = body.reply_to_id
   }
-  const senderName = personName(ctx.user.email ?? "")
-  // the people named with @ (among those who work this lead's chat); a lookup that fails only means nobody is named: the message is still sent
+  // the people named with @ (among those of THIS lane); a lookup that fails only means nobody is named: the message is still sent
   let members: Awaited<ReturnType<typeof chatMembers>> = []
   try { members = await chatMembers(ctx.team.id) } catch { /* the message matters more than the mention */ }
-  const mentions = parseMentions(c.message, members.filter(m => isInvolved(m.permissions)).map(m => ({ id: m.id, name: m.name })), ctx.user.id)
-  const base = { team_id: ctx.team.id, lead_id: lead.id, sender_id: ctx.user.id, sender_name: senderName, message: c.message, attachments: c.attachments.length ? c.attachments : null, reply_to_id: replyTo }
+  // the sender is shown by the name on her profile ("Cristina"), else by her email's name
+  const senderName = members.find(m => m.id === ctx.user.id)?.name ?? personName(ctx.user.email ?? "")
+  const mentions = parseMentions(c.message, members.filter(m => isInvolved(m.permissions) && inLane(m, lane)).map(m => ({ id: m.id, name: m.name })), ctx.user.id)
+  const base = { team_id: ctx.team.id, lead_id: lead.id, lane, sender_id: ctx.user.id, sender_name: senderName, message: c.message, attachments: c.attachments.length ? c.attachments : null, reply_to_id: replyTo }
   // `mentions` is only written when somebody IS named, so a team that has not run the team-chat migration yet can still send ordinary messages
   let { data: row, error } = await d.from("marketing_lead_messages").insert(mentions.length ? { ...base, mentions } : base).select(MESSAGE_COLS).single()
   // the mentions column is not there yet (migration not run): send the message without it rather than not at all (the person is still notified below)
   if (error && mentions.length && (error as { code?: string }).code === "42703") ({ data: row, error } = await d.from("marketing_lead_messages").insert(base).select(MESSAGE_COLS).single())
   if (error || !row) return { ok: false, error: "Could not send. Please try again.", status: 500 }
   // what you send you have read, and this device has it
-  await Promise.all([markLeadRead(ctx, lead.id), markDelivered(ctx, [lead.id])])
+  await Promise.all([markLeadRead(ctx, lead.id, lane), markDelivered(ctx, [{ lead_id: lead.id, lane }])])
   const [message] = await shape([row as ChatMessageRow], [])
   // tell the others (never the sender); a failed notification never fails the message
   try {
-    const to = pushRecipients(members.map(m => ({ user_id: m.id, status: m.status, permissions: m.permissions })), ctx.user.id, mentions)
+    const to = laneRecipients(members.map(m => ({ user_id: m.id, status: m.status, permissions: m.permissions, isAdmin: m.isAdmin })), ctx.user.id, lane)
     // a lead with no name is shown by its email, never its phone number (a notification can sit on a lock screen)
     const leadName = lead.full_name || lead.email || "Lead"
     const preview = previewLine({ message: c.message, attachments: c.attachments, deleted_at: null })
@@ -273,7 +278,7 @@ export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body
     // WAIT for the notifications (a function may be stopped as soon as it has answered), but never longer than a few seconds: a slow phone service must not hold up the sender.
     // A person named with @ gets a note that says so.
     const send = (ids: string[], mentioned: boolean) => (ids.length === 0 ? Promise.resolve() : Promise.race([
-      sendMarketingPush(ctx.team.id, ids, { ...threadPush({ senderName, threadTitle: leadName, kind: "lead", mentioned, preview }), url: chatUrlFor(lead.id), tag: mentioned ? `chat-${lead.id}-at` : `chat-${lead.id}` }),
+      sendMarketingPush(ctx.team.id, ids, { ...threadPush({ senderName, threadTitle: leadName, kind: "lead", mentioned, preview }), url: chatUrlFor(lead.id, lane), tag: mentioned ? `chat-${lead.id}-${lane}-at` : `chat-${lead.id}-${lane}` }),
       new Promise(resolve => setTimeout(resolve, 4000)),
     ]))
     await Promise.all([send(named, true), send(rest, false)])
@@ -281,15 +286,12 @@ export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body
   return { ok: true, message }
 }
 
-async function messageInTeam(ctx: MarketingContext, id: string): Promise<(ChatMessageRow & { lead_id: string }) | null> {
+async function messageInTeam(ctx: MarketingContext, id: string): Promise<(ChatMessageRow & { lead_id: string; lane: Lane }) | null> {
   if (!isUuid(id)) return null
-  const restricted = isSetterOnly(ctx.permissions)
-  const run = (cols: string) => db().from("marketing_lead_messages").select(cols).eq("id", id).eq("team_id", ctx.team.id).maybeSingle()
-  let res = await run(restricted ? `${MESSAGE_COLS}, lead_id, mentions` : `${MESSAGE_COLS}, lead_id`)
-  if (restricted && res.error?.code === "42703") res = await run(`${MESSAGE_COLS}, lead_id`)
-  const m = (res.data as unknown as (ChatMessageRow & { lead_id: string; mentions?: string[] | null }) | null) ?? null
-  // a message a setter may not see does not exist for her: no edit, delete, reaction or transcript
-  if (m && restricted && !visibleToSetter(m, filterViewer(ctx), await setterIdsOf(ctx.team.id))) return null
+  const res = await db().from("marketing_lead_messages").select(`${MESSAGE_COLS}, lead_id, lane`).eq("id", id).eq("team_id", ctx.team.id).maybeSingle()
+  const m = (res.data as unknown as (ChatMessageRow & { lead_id: string; lane: Lane }) | null) ?? null
+  // a message in a chat that is not hers does not exist for her: no edit, delete, reaction, pin or transcript
+  if (m && !laneAccess(ctx).includes(m.lane)) return null
   return m
 }
 
@@ -308,21 +310,21 @@ export async function editChatMessage(ctx: MarketingContext, id: string, text: u
 }
 
 /** After an edit that has an @ in it: the people named now are told (a name added in the edit). Best effort and only when there is an @: the edit is saved, and a team without the migration is never disturbed. */
-async function remention(ctx: MarketingContext, m: ChatMessageRow & { lead_id: string }, text: string): Promise<void> {
+async function remention(ctx: MarketingContext, m: ChatMessageRow & { lead_id: string; lane: Lane }, text: string): Promise<void> {
   try {
     const members = await chatMembers(ctx.team.id)
-    const now = parseMentions(text, members.filter(x => isInvolved(x.permissions)).map(x => ({ id: x.id, name: x.name })), ctx.user.id)
+    const now = parseMentions(text, members.filter(x => isInvolved(x.permissions) && inLane(x, m.lane)).map(x => ({ id: x.id, name: x.name })), ctx.user.id)
     const { data: before, error: readErr } = await db().from("marketing_lead_messages").select("mentions, lead_id").eq("id", m.id).maybeSingle()
     if (readErr) return
     const was = ((before?.mentions ?? []) as string[])
     if (now.length === 0 && was.length === 0) return
     const { error } = await db().from("marketing_lead_messages").update({ mentions: now }).eq("id", m.id)
     if (error) return
-    const to = pushRecipients(members.map(x => ({ user_id: x.id, status: x.status, permissions: x.permissions })), ctx.user.id, now).filter(id => now.includes(id) && !was.includes(id))
+    const to = laneRecipients(members.map(x => ({ user_id: x.id, status: x.status, permissions: x.permissions, isAdmin: x.isAdmin })), ctx.user.id, m.lane).filter(id => now.includes(id) && !was.includes(id))
     if (to.length === 0) return
     const { data: lead } = await db().from("marketing_leads").select("full_name, email").eq("id", m.lead_id).eq("team_id", ctx.team.id).maybeSingle()
     await Promise.race([
-      sendMarketingPush(ctx.team.id, to, { ...threadPush({ senderName: personName(ctx.user.email ?? ""), threadTitle: lead?.full_name || lead?.email || "Lead", kind: "lead", mentioned: true, preview: previewLine({ message: text, attachments: m.attachments, deleted_at: null }) }), url: chatUrlFor(m.lead_id), tag: `chat-${m.lead_id}-at` }),
+      sendMarketingPush(ctx.team.id, to, { ...threadPush({ senderName: personName(ctx.user.email ?? ""), threadTitle: lead?.full_name || lead?.email || "Lead", kind: "lead", mentioned: true, preview: previewLine({ message: text, attachments: m.attachments, deleted_at: null }) }), url: chatUrlFor(m.lead_id, m.lane), tag: `chat-${m.lead_id}-${m.lane}-at` }),
       new Promise(resolve => setTimeout(resolve, 4000)),
     ])
   } catch { /* the edit is already saved */ }
@@ -386,86 +388,87 @@ export async function downloadFile(path: string): Promise<Blob | null> {
   return error || !data ? null : (data as Blob)
 }
 
-/** How many unread messages I have in each lead of my team (leads with none are left out). */
-export async function unreadByLead(ctx: MarketingContext): Promise<Map<string, number>> {
-  return new Map(Array.from((await unreadDetailByLead(ctx)).entries()).map(([lead, u]) => [lead, u.n]))
-}
-
-/** My unread numbers per lead, and who wrote the newest unread message: a setter ("setter") or anybody else, Antonio included ("owner"). A setter sees only the messages she may see. */
-export async function unreadDetailByLead(ctx: MarketingContext): Promise<Map<string, { n: number; from: "setter" | "owner" }>> {
-  const setters = await setterIdsOf(ctx.team.id).catch(() => new Set<string>())
-  return unreadFor(ctx, setters)
-}
-
 /** Only messages from the last 90 days are counted as unread (the number is recomputed on every screen, so it must not grow with the whole history). */
 export const UNREAD_LOOKBACK_DAYS = 90
 const CHAT_ROW_CAP = 5000
 
-async function unreadFor(ctx: MarketingContext, setters: ReadonlySet<string>): Promise<Map<string, { n: number; from: "setter" | "owner" }>> {
+/** My unread numbers per chat (a lead and a lane, as "<lead>|<lane>"): how many, who wrote the newest unread one (a setter or anybody else, Antonio included) and when. Only the lanes I may read are counted. */
+export async function unreadByLane(ctx: MarketingContext): Promise<Map<string, { n: number; from: "setter" | "owner"; at: string }>> {
   const d = db()
   const teamId = ctx.team.id
   const userId = ctx.user.id
   const since = new Date(Date.now() - UNREAD_LOOKBACK_DAYS * 86_400_000).toISOString()
-  const [{ data: reads, error: e1 }, msgs] = await Promise.all([
-    d.from("marketing_lead_chat_reads").select("lead_id, last_read_at").eq("user_id", userId).eq("team_id", teamId),
-    readMessages<{ lead_id: string; sender_id: string; created_at: string; deleted_at: string | null }>(ctx, "lead_id, sender_id, created_at, deleted_at", cols => d.from("marketing_lead_messages").select(cols).eq("team_id", teamId).neq("sender_id", userId).is("deleted_at", null).gte("created_at", since).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP)),
+  const [{ data: reads, error: e1 }, msgs, members] = await Promise.all([
+    d.from("marketing_lead_lane_reads").select("lead_id, lane, last_read_at").eq("user_id", userId).eq("team_id", teamId),
+    readMessages<{ lead_id: string; lane: string; sender_id: string; created_at: string; deleted_at: string | null }>(ctx, "lead_id, lane, sender_id, created_at, deleted_at", (cols, lanes) => d.from("marketing_lead_messages").select(cols).eq("team_id", teamId).in("lane", lanes).neq("sender_id", userId).is("deleted_at", null).gte("created_at", since).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP)),
+    chatMembers(teamId).catch(() => [] as ChatMember[]),
   ])
   // a failed read is a zero on the screen; at least leave a trace in the server log
   if (e1) console.error("[marketing] unread count failed:", e1.message)
-  const readAt = new Map(((reads ?? []) as Array<{ lead_id: string; last_read_at: string }>).map(r => [r.lead_id, r.last_read_at]))
+  const setters = new Set(members.filter(m => isSetterOnly(m.permissions)).map(m => m.id))
+  const readAt = new Map(((reads ?? []) as Array<{ lead_id: string; lane: string; last_read_at: string }>).map(r => [`${r.lead_id}|${r.lane}`, r.last_read_at]))
   const by = new Map<string, Array<{ sender_id: string; created_at: string; deleted_at: string | null }>>()
-  for (const m of msgs) by.set(m.lead_id, [...(by.get(m.lead_id) ?? []), m])
-  const out = new Map<string, { n: number; from: "setter" | "owner" }>()
-  for (const [lead, list] of Array.from(by)) {
-    const n = unreadCount(list, userId, readAt.get(lead) ?? null)
+  for (const m of msgs) { const key = `${m.lead_id}|${m.lane}`; by.set(key, [...(by.get(key) ?? []), m]) }
+  const out = new Map<string, { n: number; from: "setter" | "owner"; at: string }>()
+  for (const [key, list] of Array.from(by)) {
+    const last = readAt.get(key) ?? null
+    const n = unreadCount(list, userId, last)
     if (n === 0) continue
     // the list is newest first: the first unread one says who wrote the newest
-    const last = readAt.get(lead) ?? null
     const newest = list.find(m => !m.deleted_at && (!last || m.created_at > last))
-    out.set(lead, { n, from: newest && setters.has(newest.sender_id) ? "setter" : "owner" })
+    out.set(key, { n, from: newest && setters.has(newest.sender_id) ? "setter" : "owner", at: newest?.created_at ?? "" })
   }
   return out
 }
 
-export interface Conversation { leadId: string; name: string; last: string; lastAt: string; lastBy: string; unread: number; /** set only when asked for (the owner's Home): somebody named ME with @ in what I have not read */ mentioned?: boolean }
+/** My unread numbers per lead, both chats added, and who wrote the newest unread message. */
+export async function unreadDetailByLead(ctx: MarketingContext): Promise<Map<string, { n: number; from: "setter" | "owner" }>> {
+  const out = new Map<string, { n: number; from: "setter" | "owner"; at: string }>()
+  for (const [key, u] of Array.from(await unreadByLane(ctx))) {
+    const lead = key.split("|")[0]
+    const cur = out.get(lead)
+    out.set(lead, { n: (cur?.n ?? 0) + u.n, from: cur && cur.at > u.at ? cur.from : u.from, at: cur && cur.at > u.at ? cur.at : u.at })
+  }
+  return new Map(Array.from(out).map(([lead, u]) => [lead, { n: u.n, from: u.from }]))
+}
+
+/** How many unread messages I have in each lead of my team, both chats added (leads with none are left out). */
+export async function unreadByLead(ctx: MarketingContext): Promise<Map<string, number>> {
+  return new Map(Array.from((await unreadDetailByLead(ctx)).entries()).map(([lead, u]) => [lead, u.n]))
+}
+
+/** My unread numbers in the chats of ONE lead, by lane (for the buttons on the lead: "Discuss with Antonio (2)"). */
+export async function unreadLanesOfLead(ctx: MarketingContext, leadId: string): Promise<Record<Lane, number>> {
+  const out: Record<Lane, number> = { owners: 0, setter: 0 }
+  for (const [key, u] of Array.from(await unreadByLane(ctx))) {
+    const [lead, lane] = key.split("|")
+    if (lead === leadId && (lane === "owners" || lane === "setter")) out[lane] = u.n
+  }
+  return out
+}
+
+export interface Conversation { leadId: string; lane: Lane; /** the button's words for this chat ("Discuss with Cristina") */ label: string; name: string; last: string; lastAt: string; lastBy: string; unread: number; /** set only when asked for (the owner's Home): what is unread in MY chat is for me, so it is true for all of them */ mentioned?: boolean }
 
 /**
- * The leads in which somebody named ME with @ in a message I have not read yet (TD Marketing, dev job 9aec66fa — Antonio, 29 Oct 2026: "my dashboard shows messages that are not for me").
- * Same 90-day window as the unread number. A database without the mentions column (migration not run) answers nobody, never an error.
+ * Every chat of my team's leads that I may read (a lead can have two: Antonio and Rocco, Rocco and the setter): the newest line, who wrote it, and my unread number. Unread first, then newest.
+ * `withMentions` (the owner's Home) marks them all as for me: a chat that is only mine needs no @ to be about me.
  */
-export async function leadsNamingMe(ctx: MarketingContext): Promise<Set<string>> {
-  const d = db()
-  const since = new Date(Date.now() - UNREAD_LOOKBACK_DAYS * 86_400_000).toISOString()
-  const [reads, named] = await Promise.all([
-    d.from("marketing_lead_chat_reads").select("lead_id, last_read_at").eq("user_id", ctx.user.id).eq("team_id", ctx.team.id),
-    d.from("marketing_lead_messages").select("lead_id, created_at").eq("team_id", ctx.team.id).neq("sender_id", ctx.user.id).is("deleted_at", null).contains("mentions", [ctx.user.id]).gte("created_at", since).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP),
-  ])
-  if (named.error) { if ((named.error as { code?: string }).code !== "42703") console.error("[marketing] mentions of me failed:", named.error.message); return new Set() }
-  const readAt = new Map(((reads.data ?? []) as Array<{ lead_id: string; last_read_at: string }>).map(r => [r.lead_id, r.last_read_at]))
-  const out = new Set<string>()
-  for (const m of (named.data ?? []) as Array<{ lead_id: string; created_at: string }>) {
-    const last = readAt.get(m.lead_id)
-    if (!last || m.created_at > last) out.add(m.lead_id)
-  }
-  return out
-}
-
-/** Every lead of my team that has a chat: the newest line, who wrote it, and my unread number. Newest first. `withMentions` also says in which of them somebody named me. */
 export async function listConversations(ctx: MarketingContext, o: { withMentions?: boolean } = {}): Promise<Conversation[]> {
   const d = db()
-  const msgs = await readMessages<ChatMessageRow & { lead_id: string }>(ctx, `${MESSAGE_COLS}, lead_id`, cols => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP))
-  const newest = new Map<string, ChatMessageRow & { lead_id: string }>()
-  for (const m of msgs) if (!newest.has(m.lead_id)) newest.set(m.lead_id, m)
+  const msgs = await readMessages<ChatMessageRow & { lead_id: string; lane: Lane }>(ctx, `${MESSAGE_COLS}, lead_id, lane`, (cols, lanes) => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).in("lane", lanes).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP))
+  const newest = new Map<string, ChatMessageRow & { lead_id: string; lane: Lane }>()
+  for (const m of msgs) { const key = `${m.lead_id}|${m.lane}`; if (!newest.has(key)) newest.set(key, m) }
   if (newest.size === 0) return []
   // the lead names, a hundred at a time (hundreds of ids in one request make the address too long and the whole lookup fails)
-  const ids = Array.from(newest.keys())
+  const ids = Array.from(new Set(Array.from(newest.values()).map(m => m.lead_id)))
   const chunks: string[][] = []
   for (let i = 0; i < ids.length; i += 100) chunks.push(ids.slice(i, i + 100))
-  const [unread, mine, ...found] = await Promise.all([unreadByLead(ctx), o.withMentions ? leadsNamingMe(ctx) : Promise.resolve(new Set<string>()), ...chunks.map(c => d.from("marketing_leads").select("id, full_name, email").eq("team_id", ctx.team.id).in("id", c))])
+  const [unread, buttons, ...found] = await Promise.all([unreadByLane(ctx), laneButtons(ctx), ...chunks.map(c => d.from("marketing_leads").select("id, full_name, email").eq("team_id", ctx.team.id).in("id", c))])
   const failed = found.find(f => f.error)
   if (failed?.error) console.error("[marketing] chat list names failed:", failed.error.message)
   const leads = found.flatMap(f => (f.data ?? []) as Array<{ id: string; full_name: string | null; email: string | null }>)
   const nameOf = new Map(leads.map(l => [l.id, l.full_name || l.email || "Lead"]))
-  return Array.from(newest.values()).map(m => ({ leadId: m.lead_id, name: nameOf.get(m.lead_id) ?? "Lead", last: previewLine({ message: m.message, attachments: m.attachments, deleted_at: m.deleted_at }), lastAt: m.created_at, lastBy: m.sender_id === ctx.user.id ? "" : m.sender_name, unread: unread.get(m.lead_id) ?? 0, ...(o.withMentions ? { mentioned: mine.has(m.lead_id) } : {}) }))
+  const labelOf = new Map(buttons.map(b => [b.lane, b.label]))
+  return Array.from(newest.values()).map(m => ({ leadId: m.lead_id, lane: m.lane, label: labelOf.get(m.lane) ?? "", name: nameOf.get(m.lead_id) ?? "Lead", last: previewLine({ message: m.message, attachments: m.attachments, deleted_at: m.deleted_at }), lastAt: m.created_at, lastBy: m.sender_id === ctx.user.id ? "" : m.sender_name, unread: unread.get(`${m.lead_id}|${m.lane}`)?.n ?? 0, ...(o.withMentions ? { mentioned: true } : {}) }))
     .sort((a, b) => (b.unread > 0 ? 1 : 0) - (a.unread > 0 ? 1 : 0) || b.lastAt.localeCompare(a.lastAt))
 }

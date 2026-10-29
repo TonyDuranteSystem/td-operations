@@ -155,8 +155,9 @@ async function main() {
     ck("R21 Waiting moves it to Waiting", (await stageOf(LB)) === "waiting", await stageOf(LB))
     await p.click('[data-testid="result-archive"]'); await p.getByRole("button", { name: "Save" }).click(); await p.waitForTimeout(1500)
     ck("R22 Archive closes it", (await stageOf(LB)) === "archived", await stageOf(LB))
-    await p.waitForTimeout(500)
-    const b4 = await buttons()
+    // the page reloads after the save: wait (on a busy machine, up to 30 s) until it shows the archived lead's buttons
+    let b4 = await buttons()
+    for (let i = 0; i < 60 && !(b4 ?? []).includes("Contacted"); i++) { await p.waitForTimeout(500); b4 = await buttons() }
     ck("R23 an archived lead offers Contacted and Not ready now again (not a dead end) but no Archive, Upsell, Waiting and no booking box", ["Contacted", "Not ready now"].every(b => (b4 ?? []).includes(b)) && (b4 ?? []).filter(b => ["Upsell", "Waiting", "Archive"].includes(b)).length === 0 && (await p.locator('[data-testid="booking-link-panel"]').count()) === 0, b4)
 
     // a payment link never pulls a lead that is past paying back to Link sent (planner level, through the server)
@@ -190,7 +191,7 @@ async function main() {
     const ownerCtx = await session(OWNER)
     const o = await ownerCtx.newPage()
     await o.goto(`${BASE}/marketing/board`, { waitUntil: "networkidle", timeout: 180000 })
-    const say = async (pg: import("playwright").Page, lead: string, message: string) => pg.evaluate(async a => (await fetch(`/api/marketing/chat/${a.lead}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: a.message }) })).status, { lead, message })
+    const say = async (pg: import("playwright").Page, lead: string, message: string, lane = "") => pg.evaluate(async a => (await fetch(`/api/marketing/chat/${a.lead}/messages${a.lane ? `?lane=${a.lane}` : ""}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: a.message }) })).status, { lead, message, lane })
     // Antonio (owner) writes to Rocco on lead LD; the setter writes to Rocco on lead LE
     await db.query("update marketing_leads set status='seller_contacted' where id = any($1)", [[LD, LE]])
     ck("C1 Antonio's message is sent", (await say(o, LD, "Rocco, call this one today")) === 200)
@@ -209,7 +210,7 @@ async function main() {
     await p.screenshot({ path: `${SHOTS}/rocco-new-message-tag.png` })
     // @Antonio: Rocco's picker offers Antonio
     await p.goto(`${BASE}/marketing/window/${LD}?role=seller`, { waitUntil: "networkidle", timeout: 180000 })
-    await p.getByRole("tab", { name: /Chat/ }).first().click().catch(async () => { await p.getByText("Chat", { exact: true }).first().click() })
+    await p.locator('[data-testid^="tab-chat"]').first().click().catch(async () => { await p.getByText("Chat", { exact: true }).first().click() })
     await p.waitForTimeout(1500)
     const box = p.locator("textarea, [contenteditable=true]").last()
     await box.click(); await p.keyboard.type("@")
@@ -238,16 +239,16 @@ async function main() {
     const list = await s.evaluate(async () => (await (await fetch("/api/marketing/chat/conversations")).json()).conversations.map((c: { leadId: string }) => c.leadId))
     ck("S7 her chat list shows her lead and not the one only Antonio wrote on", list.includes(LE) && !list.includes(LD), list)
     // Rocco answers her without @ -> hidden; with @ -> visible
-    ck("S8 Rocco answers the setter without naming her", (await say(p, LE, "ok, I call him")) === 200)
+    ck("S8 Rocco writes in the owners chat of her lead (Antonio and Rocco)", (await say(p, LE, "ok, I call him", "owners")) === 200)
     const hid = await s.evaluate(async id => (await (await fetch(`/api/marketing/chat/${id}`)).json()).messages.map((m: { message: string }) => m.message), LE)
-    ck("S9 an answer that does not name her stays hidden from her", !hid.some((m: string) => /I call him/.test(m)), hid)
-    ck("S10 Rocco answers naming her", (await say(p, LE, "@Qa Td Settera thanks, I call him")) === 200)
+    ck("S9 what is written in the owners chat stays hidden from her", !hid.some((m: string) => /I call him/.test(m)), hid)
+    ck("S10 Rocco answers her in the setter chat (\"Discuss with\" her)", (await say(p, LE, "thanks, I call him", "setter")) === 200)
     const unread = await s.evaluate(async () => (await (await fetch("/api/marketing/chat/unread")).json()))
-    ck("S12 her unread numbers count only what she may see: the one message that names her on her lead, nothing of the hidden ones", unread?.by_lead?.[LE] === 1 && !(LD in (unread?.by_lead ?? {})) && unread?.total === 1, unread)
+    ck("S12 her unread numbers count only her own chat: the one message Rocco wrote her on her lead, nothing of the hidden ones", unread?.by_lead?.[LE] === 1 && !(LD in (unread?.by_lead ?? {})) && unread?.total === 1, unread)
     const vis = await s.evaluate(async id => (await (await fetch(`/api/marketing/chat/${id}`)).json()).messages.map((m: { message: string }) => m.message), LE)
-    ck("S11 an answer that names her is visible to her", vis.some((m: string) => /thanks, I call him/.test(m)) && !vis.some((m: string) => /^ok, I call him/.test(m)), vis)
-    const members = await p.evaluate(async id => (await (await fetch(`/api/marketing/chat/${id}`)).json()).members.map((m: { name: string }) => m.name), LD)
-    ck("S13 Rocco's list of people to @ has Antonio and the setter", members.includes("Qa Td Ownera") && members.includes("Qa Td Settera"), members)
+    ck("S11 an answer in her chat is visible to her", vis.some((m: string) => /thanks, I call him/.test(m)) && !vis.some((m: string) => /^ok, I call him/.test(m)), vis)
+    const members = await p.evaluate(async id => (await (await fetch(`/api/marketing/chat/${id}?lane=setter&mark_read=0`)).json()).members.map((m: { name: string }) => m.name), LD)
+    ck("S13 the people of the setter chat are Rocco and the setter", members.includes("Qa Td Ownera") && members.includes("Qa Td Settera"), members)
     await s.goto(`${BASE}/marketing/chat`, { waitUntil: "networkidle", timeout: 180000 })
     const chatText = await s.locator("body").innerText()
     ck("S14 the setter's Chat page shows her lead and not Antonio's", /Chats about leads|lead/i.test(chatText) && !/call this one today/.test(chatText), chatText.slice(0, 300))

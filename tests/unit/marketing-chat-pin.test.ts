@@ -78,7 +78,7 @@ describe("wiring", () => {
     expect(lead).toMatch(/messageInTeam\(ctx, messageId\)[\s\S]{0,200}writePin\("marketing_lead_messages"/)
     expect(team).toMatch(/myMessage\(ctx, messageId\)[\s\S]{0,200}writePin\("marketing_team_messages"/)
     expect(lead).toContain(".is(\"pinned_at\", null)") // an already pinned message keeps its first pin
-    expect(read("app/api/marketing/chat/[leadId]/pin/route.ts")).toContain("openChat(leadId)")
+    expect(read("app/api/marketing/chat/[leadId]/pin/route.ts")).toContain("openChat(leadId,")
     expect(read("app/api/marketing/team-chat/[threadId]/pin/route.ts")).toContain("openThread(threadId)")
   })
   it("both chats hand the screen their older pins (and only when the window is full)", () => {

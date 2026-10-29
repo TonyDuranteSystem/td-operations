@@ -74,14 +74,16 @@ export function LeadWindowsHost({ defaultRole, roles, chatOn, pollOn, children }
     const id = params.get('open') ?? params.get('lead') ?? params.get('chat')
     // the address is clean again: the next tap on a notification for the same lead must open it again
     if (!id) { handled.current.clear(); return }
-    const tab: WindowTab | undefined = params.get('chat') && chatOn ? 'chat' : undefined
+    // a notification for one of the lead's two chats names it (…&lane=setter), so that chat opens, not the other
+    const lane = params.get('lane')
+    const tab: WindowTab | undefined = params.get('chat') && chatOn ? (lane === 'setter' || lane === 'owners' ? `chat:${lane}` : 'chat') : undefined
     if (!isLeadId(id) || handled.current.has(id + (tab ?? ''))) return
     handled.current.add(id + (tab ?? ''))
     vpRef.current = { w: window.innerWidth, h: window.innerHeight }
     open({ id, name: '' }, tab)
     try {
       const u = new URL(window.location.href)
-      for (const k of ['open', 'lead', 'chat']) u.searchParams.delete(k)
+      for (const k of ['open', 'lead', 'chat', 'lane']) u.searchParams.delete(k)
       window.history.replaceState(null, '', u.pathname + (u.search || ''))
     } catch { /* the address is only cosmetic */ }
   }, [params, chatOn, open])

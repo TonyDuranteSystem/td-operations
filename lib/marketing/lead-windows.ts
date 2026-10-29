@@ -11,7 +11,11 @@ export const DOCK_H = 44
 /** the message a lead window sends to the board when something on the lead was saved */
 export const FRAME_CHANGED = "tdm-lead-changed"
 
-export type WindowTab = "lead" | "chat"
+/** "chat" opens the lead's chat tab (the first of the person's chats); "chat:owners" / "chat:setter" open that one of the lead's two chats (Antonio and Rocco / Rocco and the setter). */
+export type WindowTab = "lead" | "chat" | "chat:owners" | "chat:setter"
+/** The lane a window tab names, or null for "lead" and plain "chat". */
+export const laneOfTab = (tab: string | undefined | null): "owners" | "setter" | null => (tab === "chat:owners" ? "owners" : tab === "chat:setter" ? "setter" : null)
+export const isChatTab = (tab: string | undefined | null): boolean => tab === "chat" || laneOfTab(tab) !== null
 /** `tab` = the tab the person last asked for; `srcTab` = the tab the window's page was opened on (never changes, so the page inside is never reloaded and nothing typed is lost). */
 export interface LeadWindow { id: string; name: string; minimized: boolean; x: number; y: number; z: number; tab: WindowTab; srcTab: WindowTab }
 export interface Viewport { w: number; h: number }
@@ -65,7 +69,7 @@ export const isLeadId = (id: string): boolean => UUID.test(id)
 export function windowSrc(id: string, tab: WindowTab = "lead", role?: string): string | null {
   if (!UUID.test(id)) return null
   const q = new URLSearchParams()
-  if (tab === "chat") q.set("tab", "chat")
+  if (isChatTab(tab)) q.set("tab", tab)
   if (role === "setter" || role === "seller") q.set("role", role)
   const s = q.toString()
   return `/marketing/window/${id.toLowerCase()}${s ? `?${s}` : ""}`

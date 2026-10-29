@@ -124,7 +124,8 @@ async function main() {
   const pinnedAt = async (id: string) => (await db.query("select pinned_at from marketing_lead_messages where id=$1", [id])).rows[0]?.pinned_at ?? null
   await say(adminP, Lp, "Rocco, call him today"); await say(adminP, Lp, "Second note for Rocco"); await say(adminP, Lp, "Ale, can you check his number?")
   const m1 = await idOf("Rocco, call him today"), m2 = await idOf("Second note for Rocco"), m3 = await idOf("Ale, can you check his number?")
-  await db.query("update marketing_lead_messages set mentions = array[$1]::uuid[] where id=$2", [ids.setterA, m3])
+  // the message to the setter belongs to the SETTER chat (Rocco and the setter); the other two stay in the owners chat
+  await db.query("update marketing_lead_messages set mentions = array[$1]::uuid[], lane = 'setter' where id=$2", [ids.setterA, m3])
   const ownerP = await open(owner, "/marketing/board")
   const setterP = await open(setter, "/marketing/call-list")
 
@@ -136,20 +137,22 @@ async function main() {
   const p2b = await api(setterP, "POST", `/api/marketing/chat/${Lp}/pin`, { message_id: m1, pinned: false })
   ck("P2b ... nor unpin it (404, the pin is still there)", p2b.status === 404 && !!(await pinnedAt(m1)), p2b)
   const p3 = await api(setterP, "POST", `/api/marketing/chat/${Lp}/pin`, { message_id: m3, pinned: true })
-  ck("P3 the setter CAN pin a message that names her", p3.status === 200 && !!(await pinnedAt(m3)), p3)
+  ck("P3 the setter CAN pin a message in her own chat", p3.status === 200 && !!(await pinnedAt(m3)), p3)
   const sChat = await api(setterP, "GET", `/api/marketing/chat/${Lp}`)
   const sMsgs = (sChat.body?.messages ?? []) as Array<{ id: string; pinned_at?: string | null }>
   ck("P4 the setter's chat holds only what she may read: the pin of the message that names her, never the other pin or its text", sChat.status === 200 && sMsgs.some(m => m.id === m3 && !!m.pinned_at) && !sMsgs.some(m => m.id === m1) && !JSON.stringify(sChat.body).includes("Rocco, call him today"), { status: sChat.status, ids: sMsgs.map(m => m.id) })
-  const oChat = await api(ownerP, "GET", `/api/marketing/chat/${Lp}`)
-  const pinnedIds = ((oChat.body?.messages ?? []) as Array<{ id: string; pinned_at?: string | null }>).filter(m => m.pinned_at).map(m => m.id).sort()
-  ck("P5 Rocco's chat carries both pins", JSON.stringify(pinnedIds) === JSON.stringify([m1, m3].sort()), pinnedIds)
+  const pinsOf = async (lane: string) => (((await api(ownerP, "GET", `/api/marketing/chat/${Lp}?lane=${lane}`)).body?.messages ?? []) as Array<{ id: string; pinned_at?: string | null }>).filter(m => m.pinned_at).map(m => m.id).sort()
+  const pinnedIds = [...(await pinsOf("owners")), ...(await pinsOf("setter"))].sort()
+  ck("P5 Rocco's two chats carry the two pins, one each", JSON.stringify(pinnedIds) === JSON.stringify([m1, m3].sort()) && (await pinsOf("owners")).length === 1, pinnedIds)
   const p6 = await api(ownerP, "POST", `/api/marketing/chat/${Lp}/pin`, { message_id: "00000000-0000-4000-8000-000000000000", pinned: true })
   ck("P6 a message that does not exist is a 404", p6.status === 404, p6)
+  // from here the window checks use ONE chat with all three messages (the pinned bar steps through two pins): the setter-chat message goes back to the owners chat
+  await db.query("update marketing_lead_messages set lane = 'owners' where id=$1", [m3])
 
   const barHas = async (p: Pg, re: RegExp) => { try { await p.waitForFunction(([sel, src]) => new RegExp(src as string).test((document.querySelector(sel as string) as HTMLElement | null)?.innerText.replace(/\\s+/g, " ") ?? ""), ["[data-testid=pinned-bar]", re.source], { timeout: 20000 }); return true } catch { return false } }
   // ---- 2. in the chat window: the bar, stepping through, jumping, pin and unpin from the message menu
   const wp = await open(owner, `/marketing/window/${Lp}?role=seller`)
-  await wp.getByText("Chat", { exact: true }).first().click().catch(() => undefined)
+  await wp.locator('[data-testid^="tab-chat"]').first().click().catch(() => undefined)
   await wp.getByTestId("lead-chat").waitFor({ timeout: 60000 })
   await wp.getByTestId("pinned-bar").waitFor({ timeout: 60000 })
   const bar1 = (await wp.getByTestId("pinned-bar").innerText()).replace(/\s+/g, " ")
@@ -177,11 +180,11 @@ async function main() {
   ck("P9b unpinning clears it and the bar counts two again", !s3 && (await barHas(wp, /of 2/)), s3)
   // a refresh shows the same bar for everybody who can see the messages
   await wp.reload({ waitUntil: "load", timeout: 150000 })
-  await wp.getByText("Chat", { exact: true }).first().click().catch(() => undefined)
+  await wp.locator('[data-testid^="tab-chat"]').first().click().catch(() => undefined)
   await wp.getByTestId("pinned-bar").waitFor({ timeout: 60000 })
   ck("P10 after a refresh the pins are still there", await barHas(wp, /of 2/))
   const aw = await open(adminCtx, `/marketing/window/${Lp}?role=seller`)
-  await aw.getByText("Chat", { exact: true }).first().click().catch(() => undefined)
+  await aw.locator('[data-testid^="tab-chat"]').first().click().catch(() => undefined)
   await aw.getByTestId("pinned-bar").waitFor({ timeout: 60000 })
   ck("P10b Antonio (the other person in the chat) sees the same pins", await barHas(aw, /of 2/))
 
@@ -191,7 +194,7 @@ async function main() {
   const again = await api(ownerP, "POST", `/api/marketing/chat/${Lp}/pin`, { message_id: m1, pinned: true })
   ck("P11b pinning a deleted message is refused (400)", again.status === 400, again)
   await wp.reload({ waitUntil: "load", timeout: 150000 })
-  await wp.getByText("Chat", { exact: true }).first().click().catch(() => undefined)
+  await wp.locator('[data-testid^="tab-chat"]').first().click().catch(() => undefined)
   await wp.getByTestId("pinned-bar").waitFor({ timeout: 60000 })
   const barD = (await wp.getByTestId("pinned-bar").innerText()).replace(/\s+/g, " ")
   ck("P11c the bar shows the one message left, with no 'of'", !/ of /.test(barD) && /Ale, can you check/.test(barD) && (await wp.getByTestId("pinned-next").count()) === 0, barD)
@@ -224,7 +227,7 @@ async function main() {
 
 
   // ---- 6. the review fixes: an already pinned message keeps its first pin, a deleted message's pin can be cleared, a pin older than the window stays in the bar
-  await api(setterP, "POST", `/api/marketing/chat/${Lp}/pin`, { message_id: m3, pinned: true })
+  await api(adminP, "POST", `/api/marketing/chat/${Lp}/pin`, { message_id: m3, pinned: true })
   const first = (await db.query("select pinned_at, pinned_by from marketing_lead_messages where id=$1", [m3])).rows[0]
   const re = await api(ownerP, "POST", `/api/marketing/chat/${Lp}/pin`, { message_id: m3, pinned: true })
   const after = (await db.query("select pinned_at, pinned_by from marketing_lead_messages where id=$1", [m3])).rows[0]
@@ -244,7 +247,7 @@ async function main() {
   const small = await api(ownerP, "GET", `/api/marketing/chat/${Lp}`)
   ck("P16b a chat with fewer than 500 messages carries no older pins (no extra work)", (small.body?.older_pins ?? []).length === 0, small.body?.older_pins)
   const wq = await open(owner, `/marketing/window/${Lq}?role=seller`)
-  await wq.getByText("Chat", { exact: true }).first().click().catch(() => undefined)
+  await wq.locator('[data-testid^="tab-chat"]').first().click().catch(() => undefined)
   await wq.getByTestId("pinned-bar").waitFor({ timeout: 90000 })
   ck("P17 the bar still shows the old pin, with its words", /The very first note to keep/.test(await wq.getByTestId("pinned-bar").innerText()))
   await wq.getByTestId("pinned-unpin").click()

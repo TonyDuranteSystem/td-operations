@@ -120,15 +120,14 @@ async function main() {
   const add = await api(ap, "POST", `/api/marketing-admin/teams/${teamA.id}/add-me`, {})
   ck("M0 the admin joined the team as owner", add.status === 200, add)
 
-  // M1: Rocco writes in two leads' chats; only one of them names the admin
+  // M1: Rocco writes in two leads' chats (the owners chat: Antonio and Rocco); everything unread in it is for Antonio, named with @ or not
   await say(Lquiet, "Antonio no, this one is just between me and the lead")
   await say(Lnamed, "Ci vediamo lunedi, mi serve il tuo parere", [ids.admin])
   await settle(ap)
   const panel = ap.getByTestId("home-messages")
   const panelText = await panel.innerText()
-  ck("M1 the CRM page lists the chat that NAMES him, with the @ badge", /Named Chat Lead/.test(panelText) && (await panel.getByTestId("home-message").filter({ hasText: "Named Chat Lead" }).innerText()).includes("@"), panelText)
-  ck("M1b the chat that does not name him is NOT on his list", !/Quiet Chat Lead/.test(panelText), panelText)
-  ck("M1c the total says 1", /Messages for you \(1\)/.test(panelText), panelText)
+  ck("M1 the CRM page lists both chats with Rocco that hold something new", /Named Chat Lead/.test(panelText) && /Quiet Chat Lead/.test(panelText), panelText)
+  ck("M1c the total says 2", /Messages for you \(2\)/.test(panelText), panelText)
   await ap.screenshot({ path: `${SHOTS}/qa-om-crm-list.png`, fullPage: false })
 
   // M2: a click opens the chat right on the CRM page
@@ -144,13 +143,13 @@ async function main() {
   await ap.getByTestId("crm-chat-close").click()
   await ap.waitForTimeout(5000)
   const after = await ap.getByTestId("home-messages").innerText()
-  ck("M3 closing the window leaves him on the same page, and the message he read is gone from his list", ap.url() === urlBefore && !/Named Chat Lead/.test(after), after)
+  ck("M3 closing the window leaves him on the same page, and the chat he read is gone from his list while the other stays", ap.url() === urlBefore && !/Named Chat Lead/.test(after) && /Quiet Chat Lead/.test(after), after)
 
   // M4: his dashboard is the CRM page (the workspace /marketing/home now just redirects), so there is no second list to check
   // the full Messages screen still lists every chat, named or not
   const cp = await open(adminCtx, "/marketing/chat")
   const chatText = await cp.locator("body").innerText()
-  ck("M5 the Messages screen still lists every lead chat, including the one that does not name him", /Quiet Chat Lead/.test(chatText) && /Named Chat Lead/.test(chatText), chatText.slice(0, 300))
+  ck("M5 the Messages screen still lists every lead chat", /Quiet Chat Lead/.test(chatText) && /Named Chat Lead/.test(chatText), chatText.slice(0, 300))
 
   // M6: voice — a recording WITH sound (the fake microphone beeps)
   const voiceUrl = `/marketing/window/${Lvoice}?tab=chat`
@@ -159,8 +158,9 @@ async function main() {
   const bp = await open(beepCtx, voiceUrl)
   await bp.click('[data-testid="talk-mic"]')
   await bp.waitForSelector('[data-testid="talk-recording"]', { timeout: 20000 })
-  await bp.waitForTimeout(4500)
-  const bar = await bp.getByTestId("talk-sound-bar").evaluate(el => parseFloat((el as HTMLElement).style.width) || 0).catch(() => -1)
+  // the fake microphone beeps once a second with silence in between: take the loudest the bar reached over a few seconds, not one instant
+  let bar = 0
+  for (let i = 0; i < 40; i++) { bar = Math.max(bar, await bp.getByTestId("talk-sound-bar").evaluate(el => parseFloat((el as HTMLElement).style.width) || 0).catch(() => 0)); await bp.waitForTimeout(150) }
   ck("M6 with sound: the sound bar moves and no warning shows", bar > 0 && (await bp.getByTestId("talk-no-sound").count()) === 0, { bar })
   await bp.screenshot({ path: `${SHOTS}/qa-om-voice-sound.png` })
   await bp.click('[data-testid="talk-voice-send"]')
