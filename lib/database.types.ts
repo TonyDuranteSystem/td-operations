@@ -9645,6 +9645,84 @@ export type Database = {
           },
         ]
       }
+      marketing_lead_lane_delivery: {
+        Row: {
+          delivered_at: string
+          lane: string
+          lead_id: string
+          team_id: string
+          user_id: string
+        }
+        Insert: {
+          delivered_at?: string
+          lane: string
+          lead_id: string
+          team_id: string
+          user_id: string
+        }
+        Update: {
+          delivered_at?: string
+          lane?: string
+          lead_id?: string
+          team_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_lead_lane_delivery_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "marketing_lead_lane_delivery_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_lead_lane_reads: {
+        Row: {
+          lane: string
+          last_read_at: string
+          lead_id: string
+          team_id: string
+          user_id: string
+        }
+        Insert: {
+          lane: string
+          last_read_at?: string
+          lead_id: string
+          team_id: string
+          user_id: string
+        }
+        Update: {
+          lane?: string
+          last_read_at?: string
+          lead_id?: string
+          team_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_lead_lane_reads_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "marketing_lead_lane_reads_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       marketing_lead_message_reactions: {
         Row: {
           created_at: string
@@ -9685,6 +9763,7 @@ export type Database = {
           deleted_by: string | null
           edited_at: string | null
           id: string
+          lane: string
           lead_id: string
           mentions: string[]
           message: string
@@ -9703,6 +9782,7 @@ export type Database = {
           deleted_by?: string | null
           edited_at?: string | null
           id?: string
+          lane?: string
           lead_id: string
           mentions?: string[]
           message?: string
@@ -9721,6 +9801,7 @@ export type Database = {
           deleted_by?: string | null
           edited_at?: string | null
           id?: string
+          lane?: string
           lead_id?: string
           mentions?: string[]
           message?: string
