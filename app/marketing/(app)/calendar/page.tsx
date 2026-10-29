@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { resolveMarketingContext } from '@/lib/marketing/guard'
 import { hasPermission } from '@/lib/marketing/permissions'
+import { isSetterOnly } from '@/lib/marketing/lead-chat'
 import { leadDb } from '@/lib/marketing/meta-leads/service'
 import { listMembers } from '@/lib/marketing/members'
 import { loadCalendarData } from '@/lib/marketing/calendar-read'
@@ -38,7 +39,9 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
   const who = seesAll && sp.who && members.some(m => m.user_id === sp.who) ? sp.who : seesAll || previewAll ? 'all' : g.ctx.user.id
   const now = new Date()
   const data = await loadCalendarData(db, teamId)
-  const { items, lateMore } = calendarItems({ leads: data.leads, events: data.events, members: members.map(m => ({ user_id: m.user_id, email: m.email, status: m.status })), ownerId: who, now, appointments: data.appointments, lang })
+  const { items: allItems, lateMore } = calendarItems({ leads: data.leads, events: data.events, members: members.map(m => ({ user_id: m.user_id, email: m.email, status: m.status })), ownerId: who, now, appointments: data.appointments, lang })
+  // a setter is never told a call she booked ended in a payment: it is simply a call that is done
+  const items = isSetterOnly(perms) ? allItems.map(i => (i.stage === 'paid' ? { ...i, stage: 'done' as const } : i)) : allItems
   const href = (w: string) => (w ? `/marketing/calendar?who=${encodeURIComponent(w)}` : '/marketing/calendar')
   const chip = (on: boolean) => `rounded-full border px-3 py-1 text-xs ${on ? 'border-slate-900 bg-slate-900 text-white' : 'bg-white text-slate-600'}`
   return (

@@ -61,6 +61,13 @@ export async function chatMembers(teamId: string): Promise<ChatMember[]> {
   return list
 }
 
+/**
+ * Whose eyes the setter filter looks through. A real setter: her own. Antonio "viewing as" a setter is NOT her: his messages and the ones that name HIM are not hers, so the preview must not
+ * count them (29 Oct 2026, Antonio: "View as Setter shows me every chat"). In the preview a setter sees only what setters wrote, which is what a real setter sees except the @-names of her.
+ */
+const NOBODY = "00000000-0000-0000-0000-000000000000"
+const filterViewer = (ctx: MarketingContext): string => (ctx.viewAs ? NOBODY : ctx.user.id)
+
 /** The ids of the team's setters (setter only: no picking, no hosting, no payment links). In a lead's chat a setter sees only their messages and the ones that name her. */
 async function setterIdsOf(teamId: string): Promise<Set<string>> {
   return new Set((await chatMembers(teamId)).filter(m => isSetterOnly(m.permissions)).map(m => m.id))
@@ -83,7 +90,7 @@ async function readMessages<T extends { sender_id: string }>(
   let res = await ask(`${cols}, mentions`)
   if (res.error?.code === "42703") res = await ask(cols)
   const setters = await setterIdsOf(ctx.team.id)
-  return ((res.data ?? []) as T[]).filter(m => visibleToSetter(m as T & { mentions?: string[] | null }, ctx.user.id, setters))
+  return ((res.data ?? []) as T[]).filter(m => visibleToSetter(m as T & { mentions?: string[] | null }, filterViewer(ctx), setters))
 }
 
 async function loadChatMembers(teamId: string): Promise<ChatMember[]> {
@@ -282,7 +289,7 @@ async function messageInTeam(ctx: MarketingContext, id: string): Promise<(ChatMe
   if (restricted && res.error?.code === "42703") res = await run(`${MESSAGE_COLS}, lead_id`)
   const m = (res.data as unknown as (ChatMessageRow & { lead_id: string; mentions?: string[] | null }) | null) ?? null
   // a message a setter may not see does not exist for her: no edit, delete, reaction or transcript
-  if (m && restricted && !visibleToSetter(m, ctx.user.id, await setterIdsOf(ctx.team.id))) return null
+  if (m && restricted && !visibleToSetter(m, filterViewer(ctx), await setterIdsOf(ctx.team.id))) return null
   return m
 }
 
@@ -420,10 +427,31 @@ async function unreadFor(ctx: MarketingContext, setters: ReadonlySet<string>): P
   return out
 }
 
-export interface Conversation { leadId: string; name: string; last: string; lastAt: string; lastBy: string; unread: number }
+export interface Conversation { leadId: string; name: string; last: string; lastAt: string; lastBy: string; unread: number; /** set only when asked for (the owner's Home): somebody named ME with @ in what I have not read */ mentioned?: boolean }
 
-/** Every lead of my team that has a chat: the newest line, who wrote it, and my unread number. Newest first. */
-export async function listConversations(ctx: MarketingContext): Promise<Conversation[]> {
+/**
+ * The leads in which somebody named ME with @ in a message I have not read yet (TD Marketing, dev job 9aec66fa — Antonio, 29 Oct 2026: "my dashboard shows messages that are not for me").
+ * Same 90-day window as the unread number. A database without the mentions column (migration not run) answers nobody, never an error.
+ */
+export async function leadsNamingMe(ctx: MarketingContext): Promise<Set<string>> {
+  const d = db()
+  const since = new Date(Date.now() - UNREAD_LOOKBACK_DAYS * 86_400_000).toISOString()
+  const [reads, named] = await Promise.all([
+    d.from("marketing_lead_chat_reads").select("lead_id, last_read_at").eq("user_id", ctx.user.id).eq("team_id", ctx.team.id),
+    d.from("marketing_lead_messages").select("lead_id, created_at").eq("team_id", ctx.team.id).neq("sender_id", ctx.user.id).is("deleted_at", null).contains("mentions", [ctx.user.id]).gte("created_at", since).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP),
+  ])
+  if (named.error) { if ((named.error as { code?: string }).code !== "42703") console.error("[marketing] mentions of me failed:", named.error.message); return new Set() }
+  const readAt = new Map(((reads.data ?? []) as Array<{ lead_id: string; last_read_at: string }>).map(r => [r.lead_id, r.last_read_at]))
+  const out = new Set<string>()
+  for (const m of (named.data ?? []) as Array<{ lead_id: string; created_at: string }>) {
+    const last = readAt.get(m.lead_id)
+    if (!last || m.created_at > last) out.add(m.lead_id)
+  }
+  return out
+}
+
+/** Every lead of my team that has a chat: the newest line, who wrote it, and my unread number. Newest first. `withMentions` also says in which of them somebody named me. */
+export async function listConversations(ctx: MarketingContext, o: { withMentions?: boolean } = {}): Promise<Conversation[]> {
   const d = db()
   const msgs = await readMessages<ChatMessageRow & { lead_id: string }>(ctx, `${MESSAGE_COLS}, lead_id`, cols => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).order("created_at", { ascending: false }).limit(CHAT_ROW_CAP))
   const newest = new Map<string, ChatMessageRow & { lead_id: string }>()
@@ -433,11 +461,11 @@ export async function listConversations(ctx: MarketingContext): Promise<Conversa
   const ids = Array.from(newest.keys())
   const chunks: string[][] = []
   for (let i = 0; i < ids.length; i += 100) chunks.push(ids.slice(i, i + 100))
-  const [unread, ...found] = await Promise.all([unreadByLead(ctx), ...chunks.map(c => d.from("marketing_leads").select("id, full_name, email").eq("team_id", ctx.team.id).in("id", c))])
+  const [unread, mine, ...found] = await Promise.all([unreadByLead(ctx), o.withMentions ? leadsNamingMe(ctx) : Promise.resolve(new Set<string>()), ...chunks.map(c => d.from("marketing_leads").select("id, full_name, email").eq("team_id", ctx.team.id).in("id", c))])
   const failed = found.find(f => f.error)
   if (failed?.error) console.error("[marketing] chat list names failed:", failed.error.message)
   const leads = found.flatMap(f => (f.data ?? []) as Array<{ id: string; full_name: string | null; email: string | null }>)
   const nameOf = new Map(leads.map(l => [l.id, l.full_name || l.email || "Lead"]))
-  return Array.from(newest.values()).map(m => ({ leadId: m.lead_id, name: nameOf.get(m.lead_id) ?? "Lead", last: previewLine({ message: m.message, attachments: m.attachments, deleted_at: m.deleted_at }), lastAt: m.created_at, lastBy: m.sender_id === ctx.user.id ? "" : m.sender_name, unread: unread.get(m.lead_id) ?? 0 }))
+  return Array.from(newest.values()).map(m => ({ leadId: m.lead_id, name: nameOf.get(m.lead_id) ?? "Lead", last: previewLine({ message: m.message, attachments: m.attachments, deleted_at: m.deleted_at }), lastAt: m.created_at, lastBy: m.sender_id === ctx.user.id ? "" : m.sender_name, unread: unread.get(m.lead_id) ?? 0, ...(o.withMentions ? { mentioned: mine.has(m.lead_id) } : {}) }))
     .sort((a, b) => (b.unread > 0 ? 1 : 0) - (a.unread > 0 ? 1 : 0) || b.lastAt.localeCompare(a.lastAt))
 }

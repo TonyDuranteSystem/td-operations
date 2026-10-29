@@ -9,12 +9,15 @@ import { pickLatestMarks, pickLatestNotes, type LatestMark, type LatestNote } fr
 
 type Row = { lead_id: string; kind: string; actor: string; data: Record<string, unknown>; created_at: string }
 
-export async function loadLatestNotes(db: Db, leadIds: readonly string[]): Promise<Map<string, LatestNote>> {
-  return (await loadLeadActivity(db, leadIds)).notes
+export async function loadLatestNotes(db: Db, leadIds: readonly string[], onlyBy?: ReadonlySet<string>): Promise<Map<string, LatestNote>> {
+  return (await loadLeadActivity(db, leadIds, onlyBy)).notes
 }
 
-/** For each lead id: its newest written note and who last marked it (one read of the lead's history for both). */
-export async function loadLeadActivity(db: Db, leadIds: readonly string[]): Promise<{ notes: Map<string, LatestNote>; marks: Map<string, LatestMark>; contact: Map<string, ContactState> }> {
+/**
+ * For each lead id: its newest written note and who last marked it (one read of the lead's history for both). `onlyBy` (a setter is reading: the lower-case emails of the team's setters)
+ * keeps the notes and marks to what setters wrote, so the seller's and Antonio's notes never show under a setter's card (29 Oct 2026); the contact facts are not narrowed.
+ */
+export async function loadLeadActivity(db: Db, leadIds: readonly string[], onlyBy?: ReadonlySet<string>): Promise<{ notes: Map<string, LatestNote>; marks: Map<string, LatestMark>; contact: Map<string, ContactState> }> {
   const ids = Array.from(new Set(leadIds))
   const rows: Row[] = []
   for (let i = 0; i < ids.length; i += 100) {
@@ -22,5 +25,6 @@ export async function loadLeadActivity(db: Db, leadIds: readonly string[]): Prom
     const { rows: got } = await readPaged<Row>((from, to) => db.from("marketing_lead_events").select("lead_id, kind, actor, data, created_at").in("lead_id", chunk).in("kind", ["note", "status_changed", "whatsapp", "attempt", "appointment", "handover"]).order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, to), 5000)
     rows.push(...got)
   }
-  return { notes: pickLatestNotes(rows), marks: pickLatestMarks(rows), contact: contactStates(rows) }
+  const written = onlyBy ? rows.filter(r => onlyBy.has((r.actor ?? "").trim().toLowerCase())) : rows
+  return { notes: pickLatestNotes(written), marks: pickLatestMarks(written), contact: contactStates(rows) }
 }

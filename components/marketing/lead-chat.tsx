@@ -336,7 +336,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
           tools={{ onEdit: m => { setMode({ kind: 'edit', message: m }); setSheetMsg(null) } }}
         />
       )}
-      {!searchOpen && <TalkComposer key={leadId} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping} mentionPeople={mentionPeople} />}
+      {!searchOpen && <TalkComposer key={leadId} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping} mentionPeople={mentionPeople} soundCheck />}
       {sheetMsg && meId && (
         <TalkMessageSheet
           message={messages.find(x => x.id === sheetMsg.id) ?? sheetMsg} meId={meId} onClose={() => setSheetMsg(null)}

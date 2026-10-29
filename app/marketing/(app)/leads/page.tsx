@@ -14,6 +14,8 @@ import { personName } from '@/lib/marketing/setter-note'
 import { contactChips, EMPTY_CONTACT } from '@/lib/marketing/contact-state'
 import { canSeeNotes, withoutPhone } from '@/lib/marketing/lead-privacy'
 import { loadLeadActivity } from '@/lib/marketing/note-read'
+import { isSetterOnly } from '@/lib/marketing/lead-chat'
+import { setterActorsOf, sellerSideTest } from '@/lib/marketing/setter-view'
 import { FilterMenu } from '@/components/marketing/filter-menu'
 import { LeadLink } from '@/components/marketing/lead-link'
 
@@ -43,8 +45,12 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
   const peopleOptions = members.filter(m => m.status !== 'removed' && m.email).map(m => ({ email: m.email as string }))
   const byEmail = sp.by && hasPermission(g.ctx.permissions, 'team.activity') && members.some(x => x.email === sp.by) ? sp.by : ''
   const stages = (await getMarketingSetting('pipeline_stages', teamId)) as StageOption[]
+  // a setter: notes under a row are only what setters wrote, and a lead on Rocco's side of the road is just "with the seller" (no Paid / Link sent in the badge or the stage strip)
+  const setterOnly = isSetterOnly(g.ctx.permissions)
+  const onlyBy = setterOnly ? await setterActorsOf(teamId) : undefined
+  const onSellerSideTest = setterOnly ? await sellerSideTest(teamId) : () => false
   const show = parseLeadShow(sp.show)
-  const stage = stages.some(s => s.key === sp.stage) ? (sp.stage as string) : ''
+  const stage = stages.some(s => s.key === sp.stage) && !onSellerSideTest(sp.stage as string) ? (sp.stage as string) : ''
   const by = byEmail
   const userId = g.ctx.user.id
   // the ads offered follow the other filters (stage, who picked); an ad that does not exist is ignored
@@ -78,7 +84,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
   const applied = [stageName && t('Stage: {name}', { name: t(stageName) }), show !== 'all' && showName && t(showName), ad && t('Ad: {name}', { name: ad === NO_AD ? t('No ad name') : ad }), by && t('Worked on by {name}', { name: personName(by) })].filter(Boolean) as string[]
   // the setter's name, the mark and the one-line note are for people who may read the team's notes
   const seesNotes = canSeeNotes(g.ctx.permissions)
-  const activity = leads.length > 0 ? await loadLeadActivity(db, leads.map(l => l.id)) : null
+  const activity = leads.length > 0 ? await loadLeadActivity(db, leads.map(l => l.id), onlyBy) : null
   const nowMs = Date.now()
   const href = (n: Partial<SP>) => {
     const q = new URLSearchParams()
@@ -103,7 +109,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
       <nav aria-label={t('Filter leads')} className="space-y-2">
         <div className="flex flex-wrap items-center gap-2" data-testid="stage-strip" role="group" aria-label={t('Stages')}>
           <Link href={href({ stage: '' })} className={chip(stage === '')} aria-current={stage === '' ? 'true' : undefined}>{t('Any stage')} <b className="ml-1 font-semibold">{totalInStrip}</b></Link>
-          {stages.map(st => <Link key={st.key} href={href({ stage: st.key })} className={chip(stage === st.key, (counts.get(st.key) ?? 0) === 0)} data-stage={st.key} aria-current={stage === st.key ? 'true' : undefined}>{t(st.label)} <b className="ml-1 font-semibold">{counts.get(st.key) ?? 0}</b></Link>)}
+          {stages.filter(st => !onSellerSideTest(st.key)).map(st => <Link key={st.key} href={href({ stage: st.key })} className={chip(stage === st.key, (counts.get(st.key) ?? 0) === 0)} data-stage={st.key} aria-current={stage === st.key ? 'true' : undefined}>{t(st.label)} <b className="ml-1 font-semibold">{counts.get(st.key) ?? 0}</b></Link>)}
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex flex-wrap gap-2" role="group" aria-label={t('Whose')}>{LEAD_SHOW_OPTIONS.map(o => <Link key={o.key} href={href({ show: o.key === 'all' ? '' : o.key })} className={chip(show === o.key)} aria-current={show === o.key ? 'true' : undefined}>{o.key === 'all' ? t('All leads') : t(o.label)}</Link>)}</div>
@@ -137,7 +143,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
                     <LeadLink leadId={l.id} name={l.full_name || l.email || l.phone || t('Unnamed lead')} className="block px-4 py-3 hover:bg-slate-50" testId="lead-row">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0"><p className="truncate font-medium">{l.full_name || l.email || l.phone || t('Unnamed lead')}</p><p className="truncate text-xs text-slate-500">{[l.phone, l.email].filter(Boolean).join(' · ') || t('No contact details')}</p></div>
-                        <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs">{t(stageLabel(stages, l.status))}</span>
+                        <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs">{onSellerSideTest(l.status) ? t('With the seller') : t(stageLabel(stages, l.status))}</span>
                       </div>
                       <p className="mt-1 text-xs text-slate-500">
                         {fw(l.meta_created_time ?? l.received_at)}

@@ -3,6 +3,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fragmentedMp4ToFlat } from '@/lib/media/fmp4-to-flat'
 import { stopPlayingAudio } from '@/lib/media/stop-playing-audio'
+import { isSound, rmsOf } from '@/lib/media/sound-level'
+
+/** Starts listening to a microphone stream; `stop()` releases it. Returns null when the browser cannot measure (the recording then goes out as before). */
+function listen(stream: MediaStream, onLevel: (level: number) => void): { stop: () => void } | null {
+  try {
+    const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!Ctx) return null
+    const ctx = new Ctx()
+    const source = ctx.createMediaStreamSource(stream)
+    const analyser = ctx.createAnalyser()
+    analyser.fftSize = 1024
+    source.connect(analyser)
+    const buf = new Float32Array(analyser.fftSize)
+    void ctx.resume().catch(() => {})
+    const timer = setInterval(() => { analyser.getFloatTimeDomainData(buf); onLevel(rmsOf(buf)) }, 100)
+    return { stop: () => { clearInterval(timer); try { source.disconnect() } catch { /* already gone */ } void ctx.close().catch(() => {}) } }
+  } catch { return null }
+}
 
 interface UseAudioNoteRecorderOptions {
   /** Called with the finished recording, ready to attach and send like any other file. */
@@ -14,6 +32,11 @@ interface UseAudioNoteRecorderOptions {
    * person's iPhone. iPhone Safari and Chrome 126+ record MP4. Off by default — the WhatsApp composer is unchanged.
    */
   preferMp4?: boolean
+  /**
+   * Listen to the microphone while recording (TD Marketing sets this): `level` is the live loudness, `heardSound` turns true at the first sound, and a recording in which the
+   * microphone never heard anything is NOT handed to `onRecorded` (the person is told instead). If the level cannot be measured the recording is sent as before.
+   */
+  watchSound?: boolean
 }
 
 /** Speech needs far less than the ~190 kbps an iPhone records by default: 48 kbps mono is clear for voice and a 3-minute note drops from ~4.7 MB to ~1 MB (faster upload, less to download). TD Talk only. */
@@ -28,6 +51,9 @@ interface UseAudioNoteRecorderReturn {
    *  composer was abandoned mid-recording", where finalizing it would attach it to the wrong place. */
   cancelRecording: () => void
   isSupported: boolean
+  /** Only with `watchSound`: the live loudness (0..1) and whether any sound has been heard yet in this recording. */
+  level: number
+  heardSound: boolean
 }
 
 /**
@@ -40,9 +66,14 @@ interface UseAudioNoteRecorderReturn {
  * there — no transcription call, no text callback.
  */
 export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}): UseAudioNoteRecorderReturn {
-  const { onRecorded, onError, preferMp4 } = options
+  const { onRecorded, onError, preferMp4, watchSound } = options
 
   const [isRecording, setIsRecording] = useState(false)
+  const [level, setLevel] = useState(0)
+  const [heardSound, setHeardSound] = useState(false)
+  const watchSoundRef = useRef(!!watchSound)
+  const listenerRef = useRef<{ stop: () => void } | null>(null)
+  const peakRef = useRef(0)
   const [isSupported, setIsSupported] = useState(false)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -58,6 +89,7 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
   useEffect(() => { onRecordedRef.current = onRecorded }, [onRecorded])
   useEffect(() => { onErrorRef.current = onError }, [onError])
   useEffect(() => { preferMp4Ref.current = !!preferMp4 }, [preferMp4])
+  useEffect(() => { watchSoundRef.current = !!watchSound }, [watchSound])
 
   useEffect(() => {
     setIsSupported(
@@ -98,9 +130,22 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
       const recorder = new MediaRecorder(stream, mp4Wanted ? { mimeType, audioBitsPerSecond: VOICE_BITS_PER_SECOND } : { mimeType })
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
 
+      // listening (TD Marketing): the loudest moment of the recording decides whether the microphone heard anything at all
+      peakRef.current = 0
+      setLevel(0)
+      setHeardSound(false)
+      const meter = watchSoundRef.current
+        ? listen(stream, l => { if (l > peakRef.current) peakRef.current = l; setLevel(l); if (isSound(l)) setHeardSound(true) })
+        : null
+      listenerRef.current = meter
+
       recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop())
         streamRef.current = null
+        meter?.stop()
+        listenerRef.current = null
+        setLevel(0)
+        const silent = meter !== null && !isSound(peakRef.current)
         const audioBlob = new Blob(chunksRef.current, { type: mimeType })
         chunksRef.current = []
         setIsRecording(false)
@@ -111,6 +156,10 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
         }
         if (audioBlob.size < 1000) {
           onErrorRef.current?.('Recording too short — hold the mic button a bit longer.')
+          return
+        }
+        if (silent) {
+          onErrorRef.current?.('No sound was captured, so nothing was sent. Check that the right microphone is selected and not muted, then record again.')
           return
         }
         // buildOutboundPath (lib/messaging/wabridge-attachment.ts) picks the real extension from the
@@ -166,8 +215,9 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
       const recorder = mediaRecorderRef.current
       if (recorder && recorder.state !== 'inactive') recorder.stop()
       streamRef.current?.getTracks().forEach((t) => t.stop())
+      listenerRef.current?.stop()
     }
   }, [])
 
-  return { isRecording, startRecording, stopRecording, cancelRecording, isSupported }
+  return { isRecording, startRecording, stopRecording, cancelRecording, isSupported, level, heardSound }
 }

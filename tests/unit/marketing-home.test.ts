@@ -28,7 +28,7 @@ describe("owner Home — the four numbers", () => {
 })
 
 describe("owner Home — messages", () => {
-  const conv = (leadId: string, unread: number, lastAt: string, lastBy = "Rocco") => ({ leadId, name: `Lead ${leadId}`, last: "hi", lastAt, lastBy, unread })
+  const conv = (leadId: string, unread: number, lastAt: string, lastBy = "Rocco", mentioned = true) => ({ leadId, name: `Lead ${leadId}`, last: "hi", lastAt, lastBy, unread, mentioned })
   const thread = (id: string, unread: number, lastAt: string | null, mentioned = false) => ({ id, kind: "dm" as const, title: "Rocco", lastAt, last: "invoice", lastBy: "Rocco", unread, mentioned, memberIds: [] })
   it("lists only what is unread, newest first, lead chats and direct messages together", () => {
     const m = homeModel({ ...base, leads: [], conversations: [conv("a", 1, hoursAgo(5)), conv("b", 0, hoursAgo(1))], threads: [thread("t1", 2, hoursAgo(2))] })
@@ -40,6 +40,12 @@ describe("owner Home — messages", () => {
     const m = homeModel({ ...base, leads: [], conversations: many })
     expect(m.messages).toHaveLength(MESSAGES_SHOWN)
     expect(m.messagesTotal).toBe(MESSAGES_SHOWN + 3)
+  })
+  it("a chat about a lead is his only when somebody named him in it (Antonio: my list showed what Rocco writes to leads)", () => {
+    const m = homeModel({ ...base, leads: [], conversations: [conv("named", 2, hoursAgo(3)), conv("not-named", 5, hoursAgo(1), "Rocco", false), { leadId: "unknown", name: "Lead unknown", last: "hi", lastAt: hoursAgo(1), lastBy: "Ale", unread: 1 }] })
+    expect(m.messages.map(x => x.key)).toEqual(["lead:named"])
+    expect(m.messages[0].mentioned).toBe(true)
+    expect(m.messagesTotal).toBe(1)
   })
   it("keeps a mention flag on a thread", () => {
     expect(homeModel({ ...base, leads: [], threads: [thread("t", 1, hoursAgo(1), true)] }).messages[0].mentioned).toBe(true)

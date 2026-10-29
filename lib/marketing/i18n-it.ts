@@ -675,6 +675,8 @@ export const IT: Record<string, string> = {
   "Up to {n} files per message.": "Al massimo {n} file per messaggio.",
   "Throw away the recording": "Scarta la registrazione",
   "Recording…": "Registrazione…",
+  "No sound yet. Check that your microphone is on and not muted.": "Nessun suono. Controlla che il microfono sia acceso e non silenziato.",
+  "No sound was captured, so nothing was sent. Check that the right microphone is selected and not muted, then record again.": "Non è stato registrato nessun suono, quindi non è stato inviato nulla. Controlla che sia selezionato il microfono giusto e che non sia silenziato, poi registra di nuovo.",
   "Send the voice note": "Invia il messaggio vocale",
   "Replying to {who}": "Risposta a {who}",
   "yourself": "te stesso",
@@ -991,4 +993,5 @@ export const IT: Record<string, string> = {
   "Given to {name} by Antonio": "Assegnato a {name} da Antonio",
   "a person": "una persona",
   "Mark as read": "Segna come letto",
+  "With the seller": "Dal venditore",
 }

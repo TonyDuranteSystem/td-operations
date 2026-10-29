@@ -9,6 +9,8 @@ import { leadDb } from '@/lib/marketing/meta-leads/service'
 import { clientFlagText, formatWhen, stageLabel, type StageOption } from '@/lib/marketing/lead-view'
 import { canSeeNotes, withoutPhone } from '@/lib/marketing/lead-privacy'
 import { loadLeadActivity } from '@/lib/marketing/note-read'
+import { isSetterOnly } from '@/lib/marketing/lead-chat'
+import { setterActorsOf } from '@/lib/marketing/setter-view'
 import { contactChips, EMPTY_CONTACT } from '@/lib/marketing/contact-state'
 import type { BoardCard } from '@/lib/marketing/board'
 import type { SellerResultStages } from '@/lib/marketing/settings-schema'
@@ -48,7 +50,9 @@ export default async function MarketingBoard() {
   // the chat: my unread numbers on the cards (only for people who may chat)
   const chatOn = hasPermission(g.ctx.permissions, 'chat')
   const unread = chatOn ? await unreadDetailByLead(g.ctx) : new Map<string, { n: number; from: 'setter' | 'owner' }>()
-  const activity = leads.length > 0 ? await loadLeadActivity(db, leads.map(l => l.id)) : null
+  // a setter reads only what setters wrote under a card (never the seller's or Antonio's notes)
+  const onlyBy = isSetterOnly(g.ctx.permissions) ? await setterActorsOf(g.ctx.team.id) : undefined
+  const activity = leads.length > 0 ? await loadLeadActivity(db, leads.map(l => l.id), onlyBy) : null
   const fw = (iso: string | null | undefined) => formatWhen(iso, 'Europe/Rome', localeFor(lang))
   const cards: BoardCard[] = leads.map(l => {
     const contact = activity?.contact.get(l.id) ?? EMPTY_CONTACT

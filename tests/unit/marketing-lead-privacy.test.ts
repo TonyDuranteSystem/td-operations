@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { canSeeNotes, redactLead, redactTimeline } from "@/lib/marketing/lead-privacy"
+import { canSeeNotes, redactLead, redactTimeline, setterTimeline } from "@/lib/marketing/lead-privacy"
 import type { LeadEventRow } from "@/lib/marketing/leads-read"
 
 const ev = (id: number, kind: string, data: Record<string, unknown>): LeadEventRow => ({ id, kind, actor: "a@x", data, created_at: `2026-10-2${id}T10:00:00Z` })
@@ -65,5 +65,45 @@ describe("reaching-out rows for someone who may not read the notes", () => {
     for (const e of out) expect(JSON.stringify(e.data)).not.toMatch(/call tomorrow|voicemail|VAT/)
     expect(out[2].data.at).toBe("2026-10-26T09:00:00.000Z")
     expect(redactTimeline(rows, true)).toHaveLength(4)
+  })
+})
+
+describe("what a setter reads in a lead's history (Rocco, 29 Oct 2026: no link, no payment link, no paid)", () => {
+  const by = (id: number, actor: string, kind: string, data: Record<string, unknown> = {}): LeadEventRow => ({ id, kind, actor, data, created_at: `2026-10-2${id}T10:00:00Z` })
+  const setters = new Set(["cristina@x.test"])
+  const rows = [
+    by(1, "system", "received"),
+    by(2, "cristina@x.test", "note", { text: "ha detto che richiama" }),
+    by(3, "rocco@x.test", "note", { text: "tra noi: sconto possibile" }),
+    by(4, "cristina@x.test", "status_changed", { outcome: "good", to: "qualified", note: "interessato" }),
+    by(5, "rocco@x.test", "status_changed", { outcome: "closed", to: "closed" }),
+    by(6, "rocco@x.test", "booking_link", { url: "https://x.test/book", note: "inviato" }),
+    by(7, "system", "payment_link_created", { sale_id: "s" }),
+    by(8, "system", "payment_received"),
+    by(9, "system", "sale_paid_out"),
+    by(10, "system", "stage_not_moved"),
+    by(11, "rocco@x.test", "attempt", { via: "call", note: "segreteria, riprovare" }),
+    by(12, "cristina@x.test", "attempt", { via: "whatsapp", note: "nessuna risposta" }),
+    by(13, "antonio@x.test", "status_changed", { outcome: "good", via_view_as: true }),
+    by(14, "system", "something_new_nobody_listed"),
+  ]
+  it("keeps the plain facts and what setters wrote; drops the seller's notes and stage moves and all link and money lines", () => {
+    const out = setterTimeline(rows, setters, false)
+    expect(out.map(e => e.id)).toEqual([1, 2, 4, 11, 12])
+    expect(out.map(e => e.kind)).not.toContain("booking_link")
+    expect(JSON.stringify(out)).not.toMatch(/sconto|book|payment|paid/i)
+  })
+  it("takes the note out of a contact try somebody else made, and keeps a setter's own", () => {
+    const out = setterTimeline(rows, setters, false)
+    expect(out.find(e => e.id === 11)?.data).toEqual({ via: "call" })
+    expect(out.find(e => e.id === 12)?.data.note).toBe("nessuna risposta")
+  })
+  it("never hands a real setter Antonio's clicks while viewing as; his preview of her screen does see them", () => {
+    expect(setterTimeline(rows, setters, false).some(e => e.id === 13)).toBe(false)
+    expect(setterTimeline(rows, setters, true).some(e => e.id === 13)).toBe(true)
+  })
+  it("an unknown kind never reaches a setter, and nobody in the setter list means no notes or moves at all", () => {
+    expect(setterTimeline(rows, setters, false).some(e => e.id === 14)).toBe(false)
+    expect(setterTimeline(rows, new Set(), false).map(e => e.kind)).toEqual(["received", "attempt", "attempt"])
   })
 })

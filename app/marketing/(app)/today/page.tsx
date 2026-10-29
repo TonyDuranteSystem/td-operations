@@ -10,6 +10,8 @@ import { leadDb } from '@/lib/marketing/meta-leads/service'
 import { ageText, romeStartOfMonth, type StageOpt } from '@/lib/marketing/master-view'
 import { loadTeamEvents } from '@/lib/marketing/events-read'
 import { loadLatestNotes } from '@/lib/marketing/note-read'
+import { isSetterOnly } from '@/lib/marketing/lead-chat'
+import { setterActorsOf } from '@/lib/marketing/setter-view'
 import { clientFlagText, formatWhen, stageLabel } from '@/lib/marketing/lead-view'
 import { canSeeNotes, withoutPhone } from '@/lib/marketing/lead-privacy'
 import { personName, type LatestNote } from '@/lib/marketing/setter-note'
@@ -53,7 +55,7 @@ export default async function MarketingToday() {
   const seesNotes = canSeeNotes(g.ctx.permissions)
   const seesTeamNotes = hasPermission(g.ctx.permissions, 'team.notes')
   // the setter's newest written note, shown on each Good lead's row so Rocco knows why before he opens it
-  const notes = seesNotes ? await loadLatestNotes(db, m.goodWaiting.map(l => l.id)) : new Map<string, LatestNote>()
+  const notes = seesNotes ? await loadLatestNotes(db, m.goodWaiting.map(l => l.id), isSetterOnly(g.ctx.permissions) ? await setterActorsOf(teamId) : undefined) : new Map<string, LatestNote>()
   const card = 'rounded-xl border bg-white p-5'
   const reasonLabel = (k: string | null) => (k ? reasons.find(r => r.key === k)?.label ?? k : null)
   const late = m.callBacks.filter(c => c.late).length

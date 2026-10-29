@@ -49,3 +49,31 @@ export function redactTimeline(events: readonly LeadEventRow[], seesNotes: boole
 export function redactLead<T extends Pick<LeadRow, "qualification">>(lead: T, seesNotes: boolean): T {
   return seesNotes ? lead : { ...lead, qualification: null }
 }
+
+/**
+ * What a SETTER (setter only: she works the first calls, picks no leads, hosts no calls, makes no payment links) may read in a lead's history (29 Oct 2026, Rocco through Antonio:
+ * "the setter should not see the link, the payment link, or the paid one"). Her bundle may read notes, so `redactTimeline` lets everything through; this goes on top of it:
+ * plain facts about the lead stay (arrived, picked, given, the contact tries, the booked call, the hand-over); a note or a stage move stays only when a setter made it; a note
+ * written inside a contact try by somebody else is taken out; and the booking link, the payment link, the payment, the refund, the pay-out, the split and every kind this list
+ * does not know never reach her. Antonio's own clicks while "viewing as" are the team's words to nobody, so a real setter never gets them; his preview of her screen does.
+ * `setterActors` are the lower-case emails of the team's setters.
+ */
+const SETTER_FACT_KINDS = new Set(["received", "claimed", "released", "assigned", "given", "details_filled", "possible_existing_client", "client_check_failed", "whatsapp", "attempt", "appointment", "callback_moved", "handover"])
+const ONLY_IF_A_SETTER_MADE_IT = new Set(["note", "status_changed"])
+
+export function setterTimeline(events: readonly LeadEventRow[], setterActors: ReadonlySet<string>, previewing: boolean): LeadEventRow[] {
+  const viaViewAs = (e: LeadEventRow) => e.data?.via_view_as === true
+  const bySetter = (e: LeadEventRow) => setterActors.has((e.actor ?? "").trim().toLowerCase())
+  return events
+    .filter(e => {
+      if (viaViewAs(e)) return previewing && (SETTER_FACT_KINDS.has(e.kind) || ONLY_IF_A_SETTER_MADE_IT.has(e.kind))
+      if (ONLY_IF_A_SETTER_MADE_IT.has(e.kind)) return bySetter(e)
+      return SETTER_FACT_KINDS.has(e.kind)
+    })
+    .map(e => {
+      if (bySetter(e) || viaViewAs(e) || !NOTE_BEARING.has(e.kind)) return e
+      const { note: _note, qualification: _qualification, ...rest } = e.data ?? {}
+      void _note; void _qualification
+      return { ...e, data: rest }
+    })
+}
