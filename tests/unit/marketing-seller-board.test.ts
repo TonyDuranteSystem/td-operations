@@ -86,8 +86,10 @@ describe("the seller's tour explains every column", () => {
   it("names every column and result of Rocco's path in English and in Italian (27 Oct 2026)", () => {
     const en = resolveTour("seller", perms, "en").find(s => s.screen === "board")
     const it_ = resolveTour("seller", perms, "it").find(s => s.screen === "board")
-    for (const w of ["Interested lead", "Contacted", "Link sent", "Not in target", "Not ready now", "Paid", "Booking link sent", "Upsell", "Waiting", "Archive", "Incoming messages"]) expect(en?.body, w).toContain(w)
-    for (const w of ["Lead interessato", "Contattato", "Link inviato", "Fuori target", "Non pronto ora", "Pagato", "Link prenotazione inviato", "Upsell", "In attesa", "Archivia", "Messaggi in arrivo"]) expect(it_?.body, w).toContain(w)
+    for (const w of ["Interested lead", "Contacted", "Link sent", "Not in target", "Not ready now", "Paid", "Booking link sent", "Upsell", "Waiting", "Archive", "New message"]) expect(en?.body, w).toContain(w)
+    expect(en?.body).not.toContain("Incoming messages")
+    for (const w of ["Lead interessato", "Contattato", "Link inviato", "Fuori target", "Non pronto ora", "Pagato", "Link prenotazione inviato", "Upsell", "In attesa", "Archivia", "Nuovo messaggio"]) expect(it_?.body, w).toContain(w)
+    expect(it_?.body).not.toContain("Messaggi in arrivo")
   })
 })
 

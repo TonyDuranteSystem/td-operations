@@ -15,8 +15,9 @@ import { personName } from "@/lib/marketing/setter-note"
 import type { Bundles } from "@/lib/marketing/access"
 import { sendMarketingPush } from "@/lib/marketing/push"
 import { parseMentions, threadPush } from "@/lib/marketing/team-chat"
+import { pointerBefore } from "@/lib/talk/unread-pointer"
 import {
-  BUCKET, SIGNED_URL_SECONDS, URL_CACHE_SECONDS, checkEdit, isInvolved, isSetterOnly, visibleToSetter, checkEmoji, checkSend, chatUrlFor, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, pushRecipients, toTalkMessage, unreadCount,
+  BUCKET, clampReadsToVisible, SIGNED_URL_SECONDS, URL_CACHE_SECONDS, checkEdit, isInvolved, isSetterOnly, visibleToSetter, checkEmoji, checkSend, chatUrlFor, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, pushRecipients, toTalkMessage, unreadCount,
   type ChatMessageRow, type ChatReaction, type StoredAttachment,
 } from "@/lib/marketing/lead-chat"
 
@@ -70,11 +71,17 @@ async function setterIdsOf(teamId: string): Promise<Set<string>> {
  * `mentions` is read only for a setter, and a database without that column (migration not run) simply shows her her own and other setters' messages.
  */
 async function readMessages<T extends { sender_id: string }>(
-  ctx: MarketingContext, cols: string, run: (cols: string) => PromiseLike<{ data: unknown; error: { code?: string } | null }>,
+  ctx: MarketingContext, cols: string, run: (cols: string) => PromiseLike<{ data: unknown; error: { code?: string } | null }>, withPins = false,
 ): Promise<T[]> {
-  if (!isSetterOnly(ctx.permissions)) return (((await run(cols)).data ?? []) as T[])
-  let res = await run(`${cols}, mentions`)
-  if (res.error?.code === "42703") res = await run(cols)
+  // the pin columns are asked for only by the chat screen, and a database without them (migration not run) simply shows no pins
+  const ask = async (c: string) => {
+    if (!withPins) return run(c)
+    const r = await run(`${c}, pinned_at`)
+    return r.error?.code === "42703" ? run(c) : r
+  }
+  if (!isSetterOnly(ctx.permissions)) return (((await ask(cols)).data ?? []) as T[])
+  let res = await ask(`${cols}, mentions`)
+  if (res.error?.code === "42703") res = await ask(cols)
   const setters = await setterIdsOf(ctx.team.id)
   return ((res.data ?? []) as T[]).filter(m => visibleToSetter(m as T & { mentions?: string[] | null }, ctx.user.id, setters))
 }
@@ -119,13 +126,17 @@ export async function shape(rows: ChatMessageRow[], reactions: ChatReaction[]) {
 export async function loadChat(ctx: MarketingContext, leadId: string, markRead: boolean) {
   const d = db()
   const [rowsDesc, { data: reads }, { data: deliveries }, members] = await Promise.all([
-    readMessages<ChatMessageRow>(ctx, MESSAGE_COLS, cols => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).eq("lead_id", leadId).order("created_at", { ascending: false }).limit(LOAD_LIMIT)),
+    readMessages<ChatMessageRow>(ctx, MESSAGE_COLS, cols => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).eq("lead_id", leadId).order("created_at", { ascending: false }).limit(LOAD_LIMIT), true),
     d.from("marketing_lead_chat_reads").select("user_id, last_read_at").eq("lead_id", leadId),
     d.from("marketing_lead_chat_delivery").select("user_id, delivered_at").eq("lead_id", leadId),
     chatMembers(ctx.team.id),
   ])
   const rows = rowsDesc.slice().reverse()
   const ids = rows.map(r => r.id)
+  // a pin must not drop out of the bar because 500 newer messages arrived: when the window is full, the older pins are fetched on their own
+  const olderRaw = rowsDesc.length >= LOAD_LIMIT
+    ? await readMessages<ChatMessageRow>(ctx, MESSAGE_COLS, cols => d.from("marketing_lead_messages").select(cols).eq("team_id", ctx.team.id).eq("lead_id", leadId).not("pinned_at", "is", null).is("deleted_at", null).order("pinned_at", { ascending: false }).limit(OLDER_PINS_LIMIT), true)
+    : []
   const { data: reacts } = ids.length ? await d.from("marketing_lead_message_reactions").select("message_id, user_id, user_name, emoji").in("message_id", ids) : { data: [] }
   if (markRead) await markLeadRead(ctx, leadId)
   const me = ctx.user.id
@@ -140,16 +151,72 @@ export async function loadChat(ctx: MarketingContext, leadId: string, markRead: 
   return {
     me,
     messages,
+    older_pins: await shapeOlderPins(olderRaw, new Set(ids)),
     members: members.filter(m => m.status === "active" && isInvolved(m.permissions)).map(m => ({ id: m.id, name: m.name })),
     // the ticks: how far every OTHER person who can chat has read / received it
     member_ids: memberIds,
-    member_reads: ((reads ?? []) as Array<{ user_id: string; last_read_at: string }>).filter(r => r.user_id !== me),
+    member_reads: (isSetterOnly(ctx.permissions) ? clampReadsToVisible : (r: Array<{ user_id: string; last_read_at: string }>) => r)(((reads ?? []) as Array<{ user_id: string; last_read_at: string }>).filter(r => r.user_id !== me), rows.map(r => r.created_at)),
     member_delivered: ((deliveries ?? []) as Array<{ user_id: string; delivered_at: string }>).filter(r => r.user_id !== me),
   }
 }
 
 export async function markLeadRead(ctx: MarketingContext, leadId: string): Promise<void> {
   await db().from("marketing_lead_chat_reads").upsert({ lead_id: leadId, team_id: ctx.team.id, user_id: ctx.user.id, last_read_at: new Date().toISOString() }, { onConflict: "lead_id,user_id" })
+}
+
+/**
+ * "Mark unread" from one message on, for ME only (TD Marketing chats; Antonio 28 Oct 2026): my read position moves back to just before that message, so it and everything newer from others is
+ * unread again for me — nobody else's chat changes. Never moves the position forward (older unread messages stay unread). A message a setter may not see does not exist for her.
+ */
+export async function markLeadUnreadFrom(ctx: MarketingContext, leadId: string, messageId: unknown): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+  const m = typeof messageId === "string" ? await messageInTeam(ctx, messageId) : null
+  if (!m || m.lead_id !== leadId) return { ok: false, error: "That message was not found.", status: 404 }
+  const { data: cur } = await db().from("marketing_lead_chat_reads").select("last_read_at").eq("lead_id", leadId).eq("user_id", ctx.user.id).maybeSingle()
+  const next = pointerBefore(m.created_at, (cur as { last_read_at: string } | null)?.last_read_at ?? null)
+  const { error } = await db().from("marketing_lead_chat_reads").upsert({ lead_id: leadId, team_id: ctx.team.id, user_id: ctx.user.id, last_read_at: next }, { onConflict: "lead_id,user_id" })
+  return error ? { ok: false, error: "Could not mark it unread. Please try again.", status: 500 } : { ok: true }
+}
+
+/** Pin or unpin a message of a lead's chat. Anyone who can see the message may (a setter cannot touch a message she may not read: it does not exist for her). */
+export async function setLeadMessagePinned(ctx: MarketingContext, leadId: string, messageId: unknown, pinned: boolean): Promise<{ ok: true; pinned_at: string | null } | { ok: false; error: string; status: number }> {
+  const m = typeof messageId === "string" ? await messageInTeam(ctx, messageId) : null
+  if (!m || m.lead_id !== leadId) return { ok: false, error: "That message was not found.", status: 404 }
+  return writePin("marketing_lead_messages", m, ctx, pinned)
+}
+
+/**
+ * The one writer of a pin (lead chats and team conversations). Pinning a message that is already pinned keeps the first pin (somebody with an out-of-date screen cannot move it or change who pinned it);
+ * a deleted message cannot be pinned, but its pin can always be cleared.
+ */
+export async function writePin(table: "marketing_lead_messages" | "marketing_team_messages", m: { id: string; deleted_at: string | null }, ctx: MarketingContext, pinned: boolean): Promise<{ ok: true; pinned_at: string | null } | { ok: false; error: string; status: number }> {
+  const d = db()
+  if (!pinned) {
+    const { error } = await d.from(table).update({ pinned_at: null, pinned_by: null }).eq("id", m.id).eq("team_id", ctx.team.id)
+    return error ? pinFailure(error) : { ok: true, pinned_at: null }
+  }
+  if (m.deleted_at) return { ok: false, error: "A deleted message cannot be pinned.", status: 400 }
+  const now = new Date().toISOString()
+  const { data: set, error } = await d.from(table).update({ pinned_at: now, pinned_by: ctx.user.id }).eq("id", m.id).eq("team_id", ctx.team.id).is("pinned_at", null).select("pinned_at")
+  if (error) return pinFailure(error)
+  if ((set ?? []).length > 0) return { ok: true, pinned_at: now }
+  const { data: cur } = await d.from(table).select("pinned_at").eq("id", m.id).maybeSingle()
+  return { ok: true, pinned_at: (cur as { pinned_at: string | null } | null)?.pinned_at ?? now }
+}
+
+/** The pins older than the newest LOAD_LIMIT messages (only looked for when the window is full), shaped for the screen; they feed the pinned bar and nothing else. */
+export async function shapeOlderPins(older: ChatMessageRow[], windowIds: ReadonlySet<string>) {
+  const rows = older.filter(r => !windowIds.has(r.id)).map(r => ({ ...r, reply_to_id: null }))
+  return shape(rows, [])
+}
+export const OLDER_PINS_LIMIT = 20
+
+/** The pin columns are not in the database yet (migration not run) is a clear answer; anything else is a plain failure. */
+export function pinFailure(error: { code?: string; message?: string }): { ok: false; error: string; status: number } {
+  // a write to a column that is not there comes back as 42703 from the database or as PGRST204 from the gateway ("Could not find the 'pinned_at' column")
+  const missing = error.code === "42703" || error.code === "PGRST204" || /pinned_(at|by)/.test(error.message ?? "")
+  return missing
+    ? { ok: false, error: "Pinning is not switched on yet. Please tell Antonio.", status: 503 }
+    : { ok: false, error: "Could not pin the message. Please try again.", status: 500 }
 }
 
 /** This device now has the chat: tell the others (grey double tick). Only leads of the guard's team. */
