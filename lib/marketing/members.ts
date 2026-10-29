@@ -148,7 +148,10 @@ export async function listMembers(teamId: string) {
   const out = []
   for (const r of rows) {
     const u = await db().auth.admin.getUserById(r.user_id)
-    out.push({ ...r, email: u?.data?.user?.email ?? null, last_sign_in_at: u?.data?.user?.last_sign_in_at ?? null })
+    const meta = (u?.data?.user?.user_metadata ?? {}) as { full_name?: unknown; name?: unknown }
+    const named = typeof meta.full_name === "string" && meta.full_name.trim() ? meta.full_name.trim() : typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : null
+    // `full_name` = the name on the person's profile (the chat buttons use it); `is_admin` = a CRM admin (Antonio), who is not part of the setter's chat
+    out.push({ ...r, email: u?.data?.user?.email ?? null, last_sign_in_at: u?.data?.user?.last_sign_in_at ?? null, full_name: named, is_admin: u?.data?.user?.app_metadata?.role === "admin" })
   }
   return out
 }

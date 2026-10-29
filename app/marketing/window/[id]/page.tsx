@@ -12,7 +12,7 @@ import type { StageOption } from '@/lib/marketing/lead-view'
 import { FrameChangeNotifier } from '@/components/marketing/frame-change-notifier'
 import { ThemeSync } from '@/components/marketing/theme-sync'
 import { LeadWindowTabs } from '@/components/marketing/lead-window-tabs'
-import { unreadByLead } from '@/lib/marketing/lead-chat-server'
+import { laneButtons, unreadLanesOfLead } from '@/lib/marketing/lead-chat-server'
 import { resolveBoardRole } from '@/lib/marketing/board'
 import { LeadPane } from '../../(app)/_lead-pane'
 
@@ -46,12 +46,14 @@ export default async function MarketingLeadWindow({ params, searchParams }: { pa
   const events = await leadTimeline(db, lead.id)
   const paymentLink = hasPermission(g.ctx.permissions, 'payment_links.create') ? { leadId: lead.id, ...(await loadPaymentLinkView(db, { teamId, userId: g.ctx.user.id }, lead.id)) } : undefined
   const chatOn = hasPermission(g.ctx.permissions, 'chat')
-  const unread = chatOn ? (await unreadByLead(g.ctx)).get(lead.id) ?? 0 : 0
+  // the chats this person has on the lead (one or two) and her unread number in each
+  const [buttons, unreadLanes] = chatOn ? await Promise.all([laneButtons(g.ctx), unreadLanesOfLead(g.ctx, lead.id)]) : [[], { owners: 0, setter: 0 }]
+  const lanes = buttons.map(b => ({ lane: b.lane, label: b.label, unread: unreadLanes[b.lane] }))
   return (
     <LangProvider lang={lang}>
       <ThemeSync />
       <FrameChangeNotifier />
-      <LeadWindowTabs leadId={lead.id} chatOn={chatOn} initialTab={sp.tab === 'chat' ? 'chat' : 'lead'} initialUnread={unread}>
+      <LeadWindowTabs leadId={lead.id} chatOn={chatOn} initialTab={sp.tab ?? 'lead'} lanes={lanes}>
         <LeadPane role={resolveBoardRole(g.ctx.permissions, sp.role)} lead={lead} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} viewingAs={!!g.ctx.viewAs} paymentLink={paymentLink} />
       </LeadWindowTabs>
     </LangProvider>
