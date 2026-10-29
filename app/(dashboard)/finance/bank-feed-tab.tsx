@@ -6,7 +6,9 @@ import { usePlaidLink } from 'react-plaid-link'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { readContestedCandidates, readContestedTotal, type ContestedCandidate } from '@/lib/finance/feed-vocabulary'
-import { contestedInvoiceFacts, type ContestedInvoiceDetail } from '@/lib/finance/contested-invoice-detail'
+import { contestedInvoiceFacts, formatCalendarDate, type ContestedInvoiceDetail } from '@/lib/finance/contested-invoice-detail'
+import { recordOnlyLinkNote } from '@/lib/finance/match-selection'
+import type { PayerInvoice, PayerInvoicesResult, PayerCompanyInfo } from '@/lib/finance/payer-invoices'
 import { summarizeMultiLink, MAX_LINKED_INVOICES, otherMultiLinkedInvoices } from '@/lib/finance/multi-invoice-link'
 import { evaluateNameEvidence } from '@/lib/finance/feed-signals'
 import { toast } from 'sonner'
@@ -578,6 +580,43 @@ function ClaimForOwnerButton({ feedId }: { feedId: string }) {
   )
 }
 
+/** One invoice in a "who paid" list: tick it to add it to the selection. */
+function PayerInvoiceRow({ inv, checked, onToggle, disabled, showParty }: {
+  inv: PayerInvoice
+  checked: boolean
+  onToggle: () => void
+  disabled: boolean
+  showParty: boolean
+}) {
+  const shown = inv.paid ? inv.total : (inv.balance ?? inv.total)
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={disabled}
+      className={cn('w-full flex items-center gap-3 px-3 py-1.5 text-xs hover:bg-blue-50 disabled:opacity-50', checked && 'bg-blue-100')}
+    >
+      {checked ? <CheckCircle2 className="h-3 w-3 text-blue-600 shrink-0" /> : <span className="h-3 w-3 rounded-sm border border-zinc-300 shrink-0" />}
+      <span className="font-mono text-blue-600 shrink-0">{inv.invoice_number ?? '—'}</span>
+      {showParty && <span className="text-muted-foreground truncate max-w-[140px] shrink-0">{inv.party}</span>}
+      <span className="truncate flex-1 text-left">{inv.description ?? inv.installment ?? ''}</span>
+      {inv.claimed_by_other && (
+        <span className="text-[10px] px-1 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 shrink-0" title="Another bank payment is already linked to this invoice">
+          linked to another payment
+        </span>
+      )}
+      {inv.paid ? (
+        <span className="text-[10px] px-1 py-0.5 rounded bg-green-100 text-green-700 shrink-0">
+          {inv.paid_date ? `paid ${formatCalendarDate(inv.paid_date)}` : 'paid'}
+        </span>
+      ) : (
+        <span className="text-[10px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">{inv.status_label ?? 'unpaid'}</span>
+      )}
+      <span className="font-medium tabular-nums shrink-0">{formatCurrency(shown, inv.currency)}</span>
+    </button>
+  )
+}
+
 function UnmatchedRow({
   feed, openInvoices, isMatching, onStartMatch, onCancelMatch, candidateInfo, isAdmin = false,
   onNoteLinkOpenChange,
@@ -704,24 +743,60 @@ function UnmatchedRow({
     inv.invoice_status === 'Partial'
       ? Number(inv.amount_due ?? inv.total ?? 0)
       : Number(inv.total ?? inv.amount ?? 0)
-  const [selected, setSelected] = useState<Map<string, { id: string; invoice_number: string | null; appliedAmount: number; currency: string | null; party: string }>>(new Map())
+  type SelectedEntry = {
+    id: string
+    invoice_number: string | null
+    appliedAmount: number
+    currency: string | null
+    party: string
+    /** Already paid: linking records the payment against it, no money moves. */
+    paid: boolean
+    paidDate: string | null
+  }
+  const [selected, setSelected] = useState<Map<string, SelectedEntry>>(new Map())
   const toggleSelect = (inv: OpenInvoice) => {
     setSelected(prev => {
       const next = new Map(prev)
       if (next.has(inv.id)) next.delete(inv.id)
-      else next.set(inv.id, { id: inv.id, invoice_number: inv.invoice_number, appliedAmount: invoiceApplied(inv), currency: inv.amount_currency, party: invoicePartyName(inv) })
+      else next.set(inv.id, { id: inv.id, invoice_number: inv.invoice_number, appliedAmount: invoiceApplied(inv), currency: inv.amount_currency, party: invoicePartyName(inv), paid: false, paidDate: null })
+      return next
+    })
+  }
+  // An invoice from the "who paid" list. An already-paid one counts for its own total (it is only
+  // linked for the record). An unpaid one the page also holds is selected exactly as the plain
+  // lists select it, so every list agrees on what is owed.
+  const toggleSelectPayerInvoice = (pi: PayerInvoice) => {
+    const known = !pi.paid ? openInvoices.find(o => o.id === pi.id) : undefined
+    if (known) { toggleSelect(known); return }
+    setSelected(prev => {
+      const next = new Map(prev)
+      if (next.has(pi.id)) next.delete(pi.id)
+      else next.set(pi.id, {
+        id: pi.id,
+        invoice_number: pi.invoice_number,
+        appliedAmount: Number((pi.paid ? pi.total : (pi.balance ?? pi.total)) ?? 0),
+        currency: pi.currency,
+        party: pi.party,
+        paid: pi.paid,
+        paidDate: pi.paid_date,
+      })
       return next
     })
   }
   const removeSelect = (id: string) => setSelected(prev => { const next = new Map(prev); next.delete(id); return next })
   const selectedArr = Array.from(selected.values())
-  const selectedTotal = selectedArr.reduce((sum, x) => sum + x.appliedAmount, 0)
+  const paidSelected = selectedArr.filter(s => s.paid)
+  const openSelected = selectedArr.filter(s => !s.paid)
+  // One payment is either applied to unpaid invoices or linked to paid ones — not both at once.
+  const mixedSelection = paidSelected.length > 0 && openSelected.length > 0
+  const recordOnlyMode = paidSelected.length > 0 && openSelected.length === 0
+  const selectedTotal = openSelected.reduce((sum, x) => sum + x.appliedAmount, 0)
   // Waterfall preview (matches the backend): the wire is applied in selection
   // order, each invoice gets min(remaining wire, its balance). Map preserves
   // insertion = selection order, so this mirrors what manualMatchMulti will do.
   const EPS = 0.005
   let _remaining = amount
-  const selectedPreview = selectedArr.map(s => {
+  const selectedPreview = openSelected.map(s => {
     const willApply = Math.max(Math.min(_remaining, s.appliedAmount), 0)
     _remaining -= willApply
     const willStatus: 'Paid' | 'Partial' | 'Unpaid' =
@@ -730,19 +805,100 @@ function UnmatchedRow({
   })
   const shortfall = Math.max(selectedTotal - amount, 0) // wire < owed → stays as debt
   const leftover = Math.max(amount - selectedTotal, 0) // wire > owed → unallocated surplus
+  // Already-paid invoices linked for the record: how they add up against the payment.
+  const paidSummary = summarizeMultiLink(amount, paidSelected.map(s => s.appliedAmount))
+  const [recordNote, setRecordNote] = useState('')
+  const recordNotePlaceholder = recordOnlyLinkNote(feed)
   const handleMatchSelected = () => {
     const ids = selectedArr.map(s => s.id)
-    if (ids.length === 0) return
+    if (ids.length === 0 || mixedSelection) return
     startTransition(async () => {
       try {
-        const result = await matchBankFeedToInvoices(feed.id, ids)
+        const result = await matchBankFeedToInvoices(feed.id, ids, recordNote)
         if (!result.success) throw new Error(result.error)
-        toast.success(`Transaction matched to ${ids.length} invoice${ids.length > 1 ? 's' : ''}`)
+        const applied = result.data?.count ?? ids.length
+        if (result.data?.recordOnly) {
+          toast.success(`Payment linked to ${ids.length} already-paid invoice${ids.length > 1 ? 's' : ''} — no money moved`)
+        } else if (applied < ids.length) {
+          // The payment ran out, or an invoice was already closed: say what really happened.
+          toast.warning(`Payment applied to ${applied} of the ${ids.length} invoices you ticked. The rest were not reached — the payment ran out or they were already paid.`)
+        } else {
+          toast.success(`Transaction matched to ${ids.length} invoice${ids.length > 1 ? 's' : ''}`)
+        }
         onCancelMatch()
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Match failed')
+        toast.error(err instanceof Error && err.message ? err.message : 'Match failed')
       }
     })
+  }
+
+  // ── "Who paid" — the invoices of the company this payment most likely belongs to ──
+  // Read when the popup opens: the company the billing email belongs to in the CRM, and the
+  // companies earlier payments from the same sender were linked to, with every invoice (paid and
+  // unpaid), and any set of them that adds up to this payment exactly. Suggestions only.
+  const [payerData, setPayerData] = useState<PayerInvoicesResult | null>(null)
+  const [payerLoading, setPayerLoading] = useState(false)
+  const [payerError, setPayerError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!isMatching) return
+    let cancelled = false
+    setPayerLoading(true)
+    setPayerError(null)
+    fetch(`/api/finance/payer-invoices?feed_id=${encodeURIComponent(feed.id)}`)
+      .then(async res => {
+        const d = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(d.error || `Could not look up who paid (${res.status})`)
+        if (!cancelled) setPayerData(d)
+      })
+      .catch(err => {
+        if (!cancelled) {
+          setPayerData(null)
+          setPayerError(err instanceof Error && err.message ? err.message : 'Could not look up who paid.')
+        }
+      })
+      .finally(() => { if (!cancelled) setPayerLoading(false) })
+    return () => { cancelled = true }
+  }, [isMatching, feed.id])
+
+  // Paid invoices of a company the person searched for, loaded on demand (the page only holds
+  // the unpaid ones).
+  const [paidByResult, setPaidByResult] = useState<Record<string, { state: 'loading' | 'ready' | 'error'; invoices: PayerInvoice[]; error?: string }>>({})
+  const loadPaidFor = async (r: FeedMatchResult) => {
+    if (r.type === 'lead') return
+    const key = `${r.type}-${r.id}`
+    setPaidByResult(prev => ({ ...prev, [key]: { state: 'loading', invoices: [] } }))
+    try {
+      const param = r.type === 'account' ? `account_id=${r.id}` : `contact_id=${r.id}`
+      const res = await fetch(`/api/finance/payer-invoices?feed_id=${encodeURIComponent(feed.id)}&${param}`)
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not load the paid invoices.')
+      setPaidByResult(prev => ({ ...prev, [key]: { state: 'ready', invoices: ((d.invoices ?? []) as PayerInvoice[]).filter(i => i.paid) } }))
+    } catch (err) {
+      setPaidByResult(prev => ({ ...prev, [key]: { state: 'error', invoices: [], error: err instanceof Error && err.message ? err.message : 'Could not load the paid invoices.' } }))
+    }
+  }
+
+  // A closed popup forgets what it loaded, so the next opening reads fresh invoices.
+  useEffect(() => {
+    if (isMatching) return
+    setPaidByResult({})
+    setRecordNote('')
+  }, [isMatching])
+
+  const selectCombo = (ids: string[]) => {
+    const byId = new Map((payerData?.invoices ?? []).map(i => [i.id, i]))
+    for (const id of ids) {
+      const pi = byId.get(id)
+      if (pi && !selected.has(id)) toggleSelectPayerInvoice(pi)
+    }
+  }
+  const payerReason = (c: PayerCompanyInfo): string => {
+    const parts: string[] = []
+    if (c.source === 'email') parts.push('the email on this payment belongs to a contact of this company in the CRM')
+    if (c.times_linked > 0) {
+      parts.push(`${c.times_linked} earlier payment${c.times_linked === 1 ? '' : 's'} from this sender ${c.times_linked === 1 ? 'was' : 'were'} linked here${c.last_linked ? ` (last ${formatCalendarDate(c.last_linked)})` : ''}`)
+    }
+    return parts.join(' · ')
   }
 
   const openCreateModal = async (r: FeedMatchResult) => {
@@ -1259,6 +1415,71 @@ function UnmatchedRow({
 
       {isMatching && (
         <div className="px-4 pb-3 pt-1 space-y-3">
+          {/* ── From who paid ────────────────────────────────────────
+              The company the billing email belongs to in the CRM, and the companies earlier payments
+              from this sender were linked to — every invoice (paid and unpaid) and any set that adds
+              up to this payment exactly. Suggestions only: nothing here links by itself. */}
+          {(payerLoading || payerError || (payerData?.companies?.length ?? 0) > 0) && (
+            <div className="rounded-md border border-blue-200 bg-blue-50/40 p-2.5 space-y-2">
+              <p className="text-xs font-semibold text-blue-900">From who paid</p>
+              {payerLoading && (
+                <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Looking up who paid…
+                </p>
+              )}
+              {payerError && <p className="text-xs text-amber-700">{payerError}</p>}
+              {(payerData?.companies ?? []).map(c => (
+                <p key={`${c.kind}-${c.id}`} className="text-[11px] text-muted-foreground">
+                  <span className="font-medium text-zinc-800">{c.name}</span>
+                  {payerReason(c) ? ` — ${payerReason(c)}` : ''}
+                </p>
+              ))}
+              {(payerData?.companies?.length ?? 0) > 1 && (
+                <p className="text-[11px] text-amber-700">More than one company fits — check each invoice is the right company&apos;s before linking.</p>
+              )}
+              {(payerData?.combos ?? []).map(combo => {
+                const byId = new Map((payerData?.invoices ?? []).map(i => [i.id, i]))
+                const members = combo.ids.map(id => byId.get(id)).filter((i): i is PayerInvoice => !!i)
+                if (members.length !== combo.ids.length) return null
+                const allSelected = members.every(m => selected.has(m.id))
+                return (
+                  <button
+                    key={combo.ids.join('|')}
+                    type="button"
+                    onClick={() => selectCombo(combo.ids)}
+                    disabled={isPending || allSelected}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-left disabled:opacity-60"
+                  >
+                    <Check className="h-3 w-3 text-emerald-600 shrink-0" />
+                    <span className="font-mono text-blue-700">{members.map(m => m.invoice_number ?? '—').join(' + ')}</span>
+                    <span className="flex-1 text-emerald-800">
+                      {members.length === 1 ? 'is exactly' : 'add up to exactly'} {formatCurrency(combo.total, feed.currency)}
+                      {combo.dates_match ? ' — paid around the date of this payment' : ''}
+                    </span>
+                    <span className="font-medium text-emerald-700 shrink-0">{allSelected ? 'Selected' : 'Select these'}</span>
+                  </button>
+                )
+              })}
+              {(payerData?.invoices?.length ?? 0) > 0 && (
+                <div className="border rounded-md bg-white divide-y max-h-56 overflow-y-auto">
+                  {(payerData?.invoices ?? []).map(inv => (
+                    <PayerInvoiceRow
+                      key={inv.id}
+                      inv={inv}
+                      checked={selected.has(inv.id)}
+                      onToggle={() => toggleSelectPayerInvoice(inv)}
+                      disabled={isPending}
+                      showParty={(payerData?.companies?.length ?? 0) > 1}
+                    />
+                  ))}
+                </div>
+              )}
+              {payerData?.truncated && (
+                <p className="text-[11px] text-muted-foreground">Showing the most recent invoices — search below to find older ones.</p>
+              )}
+            </div>
+          )}
+
           {/* ── Search by client/contact ─────────────────────────── */}
           <div>
             <p className="text-xs text-muted-foreground mb-1.5">Search by company or person:</p>
@@ -1338,6 +1559,39 @@ function UnmatchedRow({
                           })}
                         </div>
                       )}
+                      {r.type !== 'lead' && (() => {
+                        const paidState = paidByResult[`${r.type}-${r.id}`]
+                        return (
+                          <div className="border-t px-3 py-1.5">
+                            {!paidState ? (
+                              <button type="button" onClick={() => loadPaidFor(r)} className="text-[11px] text-blue-600 hover:underline">
+                                Show already-paid invoices
+                              </button>
+                            ) : paidState.state === 'loading' ? (
+                              <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                                <Loader2 className="h-3 w-3 animate-spin" /> Loading paid invoices…
+                              </p>
+                            ) : paidState.state === 'error' ? (
+                              <p className="text-[11px] text-red-600">{paidState.error}</p>
+                            ) : paidState.invoices.length === 0 ? (
+                              <p className="text-[11px] text-muted-foreground">No already-paid invoices.</p>
+                            ) : (
+                              <div className="divide-y -mx-3">
+                                {paidState.invoices.map(inv => (
+                                  <PayerInvoiceRow
+                                    key={inv.id}
+                                    inv={inv}
+                                    checked={selected.has(inv.id)}
+                                    onToggle={() => toggleSelectPayerInvoice(inv)}
+                                    disabled={isPending}
+                                    showParty={false}
+                                  />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
                     </div>
                   )
                 })}
@@ -1419,10 +1673,92 @@ function UnmatchedRow({
           )}
           </div>
 
-          {/* Selection tray — one feed → several invoices (persists across searches) */}
+          {/* Selection tray — one payment → several invoices (persists across searches).
+              Unpaid invoices: the payment is applied to them. Already-paid invoices: the payment is
+              only linked to them for the record. One payment does one or the other, not both. */}
           {selected.size > 0 && (
             <div className="sticky bottom-0 -mx-4 border-t bg-white px-4 pt-2">
               <div className="rounded-md border border-blue-300 bg-blue-50 p-2 space-y-1.5">
+                {mixedSelection ? (
+                  <>
+                    <p className="text-xs font-semibold text-blue-900">Selected ({selected.size})</p>
+                    <div className="space-y-1 max-h-32 overflow-y-auto">
+                      {selectedArr.map(s => (
+                        <div key={s.id} className="flex items-center gap-2 text-xs">
+                          <span className="font-mono text-blue-600">{s.invoice_number ?? '—'}</span>
+                          <span className="truncate flex-1">{s.party}</span>
+                          <span className={cn('rounded px-1 text-[10px] font-medium', s.paid ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700')}>
+                            {s.paid ? 'already paid' : 'unpaid'}
+                          </span>
+                      <FastTooltip label="Remove">
+                        <button type="button" onClick={() => removeSelect(s.id)} className="p-0.5 rounded hover:bg-blue-100 text-blue-500" aria-label="Remove">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </FastTooltip>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-amber-700">
+                      ⚠ You ticked invoices that are already paid together with invoices that are still owed. One payment can&apos;t do both at once.
+                      Keep only the already-paid ones to link this payment to them for the record (no money moves), or only the unpaid ones to apply the payment to them.
+                    </p>
+                  </>
+                ) : recordOnlyMode ? (
+                  <>
+                    <p className="text-xs font-semibold text-blue-900">
+                      Link this payment to {paidSelected.length === 1 ? 'this already-paid invoice' : `${paidSelected.length} already-paid invoices`} — for the record, no money moves
+                    </p>
+                    <div className="space-y-1 max-h-32 overflow-y-auto">
+                      {paidSelected.map(s => (
+                        <div key={s.id} className="flex items-center gap-2 text-xs">
+                          <span className="font-mono text-blue-600">{s.invoice_number ?? '—'}</span>
+                          <span className="truncate flex-1">{s.party}</span>
+                          <span className="text-[10px] text-green-700">{s.paidDate ? `paid ${formatCalendarDate(s.paidDate)}` : 'paid'}</span>
+                          <span className="font-medium tabular-nums">{formatCurrency(s.appliedAmount, s.currency)}</span>
+                      <FastTooltip label="Remove">
+                        <button type="button" onClick={() => removeSelect(s.id)} className="p-0.5 rounded hover:bg-blue-100 text-blue-500" aria-label="Remove">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </FastTooltip>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex items-center justify-between border-t border-blue-200 pt-1 text-xs">
+                      <span className="text-blue-900">Invoices total / payment</span>
+                      <span className={cn('font-semibold tabular-nums', paidSummary.matches ? 'text-emerald-700' : 'text-amber-700')}>
+                        {formatCurrency(paidSummary.linkedTotal, feed.currency)} / {formatCurrency(amount, feed.currency)}
+                      </span>
+                    </div>
+                    {!paidSummary.matches && paidSelected.length > 1 && (
+                      <p className="text-[11px] text-amber-700">
+                        ⚠ These invoices add up to {formatCurrency(Math.abs(paidSummary.difference), feed.currency)} {paidSummary.difference > 0 ? 'less' : 'more'} than the payment. You can still link them — the invoices are not changed, they only get a note.
+                      </p>
+                    )}
+                    {paidSelected.length > MAX_LINKED_INVOICES && (
+                      <p className="text-[11px] text-red-600">A payment can be linked to at most {MAX_LINKED_INVOICES} invoices at once.</p>
+                    )}
+                    {paidSelected.length > 1 && (
+                      <input
+                        type="text"
+                        value={recordNote}
+                        onChange={e => setRecordNote(e.target.value)}
+                        placeholder={recordNotePlaceholder}
+                        aria-label="Note added to each invoice (optional)"
+                        className="w-full px-2 py-1 text-xs border rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleMatchSelected}
+                      disabled={isPending || paidSelected.length > MAX_LINKED_INVOICES}
+                      className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                      {paidSelected.length === 1 ? 'Link to this paid invoice' : `Link to ${paidSelected.length} paid invoices`}
+                    </button>
+                  </>
+                ) : (
+                  <>
                 <p className="text-xs font-semibold text-blue-900">Selected to match ({selected.size}) — applied in this order:</p>
                 <div className="space-y-1 max-h-32 overflow-y-auto">
                   {selectedPreview.map(s => (
@@ -1474,6 +1810,8 @@ function UnmatchedRow({
                   {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                   Match {selected.size} invoice{selected.size > 1 ? 's' : ''}
                 </button>
+                  </>
+                )}
               </div>
             </div>
           )}

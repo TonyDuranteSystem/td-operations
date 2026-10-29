@@ -1551,16 +1551,80 @@ export async function matchBankFeedToInvoice(
 // Match ONE incoming transaction to MULTIPLE invoices (e.g. a single wire that
 // pays invoices for several companies the same person owns). Each selected
 // invoice is settled for its own balance; the feed records the full set.
+//
+// The invoices may also be ALREADY PAID (the popup lists them since 2026-10-29): then the
+// payment is only linked to them for the record — no money moves. What the ticks mean is
+// decided HERE from the invoices' current status, never from the browser's labels, and a
+// selection mixing paid and unpaid invoices is refused (see lib/finance/match-selection.ts).
 export async function matchBankFeedToInvoices(
   feedId: string,
-  paymentIds: string[]
-): Promise<ActionResult> {
+  paymentIds: string[],
+  note?: string,
+): Promise<ActionResult<{ recordOnly: boolean; count: number; selected: number }>> {
   return safeAction(async () => {
-    const { manualMatchMulti } = await import('@/lib/bank-feed-matcher')
-    const result = await manualMatchMulti(feedId, paymentIds)
-    if (!result.matched) throw new Error(result.error ?? 'Match failed')
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    const { planMatchSelection, recordOnlyLinkNote, claimedInvoicesError } = await import('@/lib/finance/match-selection')
+    const { stripeRefundGate } = await import('@/lib/finance/refund-gate')
+
+    const [{ data: rows, error: rowsErr }, { data: feed, error: feedErr }] = await Promise.all([
+      supabaseAdmin.from('payments').select('id, invoice_number, invoice_status, status, amount_currency').in('id', paymentIds),
+      supabaseAdmin.from('td_bank_feeds').select('amount, currency, sender_name, transaction_date, source, external_id').eq('id', feedId).maybeSingle(),
+    ])
+    if (rowsErr) throw new Error(`Could not read the invoices: ${rowsErr.message}`)
+    if (feedErr) throw new Error(`Could not read the transaction: ${feedErr.message}`)
+    if (!feed) throw new Error('Transaction not found.')
+
+    const plan = planMatchSelection(paymentIds, rows ?? [])
+    if (plan.kind === 'refused') throw new Error(plan.error)
+
+    if (plan.kind === 'open') {
+      // A refunded or disputed card payment is not our money. A single invoice asks Stripe inside
+      // manualMatch; spreading one payment over several invoices must ask too.
+      if (plan.openIds.length > 1) {
+        const gate = await stripeRefundGate(feed)
+        if (gate.error) throw new Error(gate.error)
+      }
+      const { manualMatchMulti } = await import('@/lib/bank-feed-matcher')
+      const result = await manualMatchMulti(feedId, plan.openIds)
+      if (!result.matched) throw new Error(result.error ?? 'Match failed')
+      revalidatePath('/finance')
+      revalidatePath('/reconciliation')
+      // Report what was actually applied, not what was ticked: the payment can run out before
+      // every ticked invoice is reached, and a closed invoice is skipped.
+      return { recordOnly: false, count: result.appliedPaymentIds?.length ?? plan.openIds.length, selected: plan.openIds.length }
+    }
+
+    // Every invoice is already paid: record the link, move no money. First, none may already be
+    // accounted for by another bank transaction (see lib/finance/claimed-invoices.ts).
+    const { readClaimedInvoiceIds } = await import('@/lib/finance/claimed-invoices')
+    const claimed = await readClaimedInvoiceIds(plan.paidIds, feedId)
+    if (claimed === null) throw new Error('Could not check whether these invoices are already linked to another payment — try again in a moment.')
+    const taken = claimedInvoicesError((rows ?? []).filter((r) => plan.paidIds.includes(r.id)), claimed)
+    if (taken) throw new Error(taken)
+
+    if (plan.paidIds.length === 1) {
+      const only = (rows ?? []).find((r) => r.id === plan.paidIds[0])
+      if (only && String(only.amount_currency ?? 'USD') !== String(feed.currency ?? 'USD')) {
+        throw new Error(`${only.invoice_number ?? 'The invoice'} is in ${only.amount_currency ?? 'USD'}, but this payment is in ${feed.currency ?? 'USD'}.`)
+      }
+      const { manualMatch } = await import('@/lib/bank-feed-matcher')
+      const result = await manualMatch(feedId, plan.paidIds[0])
+      if (!result.matched) throw new Error(result.error ?? 'Match failed')
+    } else {
+      const { linkFeedTransactionToInvoices } = await import('@/lib/finance/owner-transaction-link')
+      const { createClient } = await import('@/lib/supabase/server')
+      const { data: { user } } = await createClient().auth.getUser()
+      const result = await linkFeedTransactionToInvoices({
+        feedId,
+        paymentIds: plan.paidIds,
+        note: note?.trim() || recordOnlyLinkNote(feed),
+        actor: `dashboard:${user?.email?.split('@')[0] ?? 'staff'}`,
+      })
+      if (!result.ok) throw new Error(result.error ?? 'Could not link this transaction.')
+    }
     revalidatePath('/finance')
     revalidatePath('/reconciliation')
+    return { recordOnly: true, count: plan.paidIds.length, selected: plan.paidIds.length }
   }, {
     action_type: 'update',
     table_name: 'td_bank_feeds',
@@ -1841,6 +1905,8 @@ export async function unlinkPayment(
         matched_by: null,
         status: 'unmatched',
         // CLEAR_MULTI_LINK_METADATA: the row stops claiming every invoice of a multi-link.
+        // The audit-link keys go too: left behind, a later match that DOES move money would still
+        // read "audit link · no money applied" — the same five keys `manualMatch` clears.
         review_metadata: {
           ...appendRejectedPair(existing?.review_metadata, {
             payment_id: paymentId,
@@ -1848,6 +1914,10 @@ export async function unlinkPayment(
             by: actor,
           }),
           ...CLEAR_MULTI_LINK_METADATA,
+          audit_link: null,
+          link_kind: null,
+          money_applied: null,
+          note: null,
         },
       }, 'unlink-payment:reset')
       if (!res.ok) throw new Error(`Failed to unlink bank transaction: ${res.error}`)
