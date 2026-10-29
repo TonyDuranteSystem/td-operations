@@ -60,7 +60,7 @@ export function WorkspaceStepBody({ hits }: { hits: WaitingWorkspaceStep[] }) {
       ))}
       {guideOff ? (
         <p className="text-xs text-zinc-500" data-testid="workspace-guide-off-note">
-          &ldquo;Open the workspace&rdquo; opens the case in a new tab and saves nothing here. The step-by-step guide is <strong>off</strong> on this computer.{' '}
+          &ldquo;Open the workspace&rdquo; opens the case and saves nothing here. The step-by-step guide is <strong>off</strong> on this computer.{' '}
           <button
             type="button"
             className="underline hover:text-zinc-700"
@@ -76,7 +76,7 @@ export function WorkspaceStepBody({ hits }: { hits: WaitingWorkspaceStep[] }) {
         </p>
       ) : (
         <p className="text-xs text-zinc-500" data-testid="workspace-guide-on-note">
-          &ldquo;Open the workspace&rdquo; opens the case in a new tab, saves nothing here, and <strong>shows you the way</strong> step by step: a small card and a green
+          &ldquo;Open the workspace&rdquo; opens the case, saves nothing here, and <strong>shows you the way</strong> step by step: a small card and a green
           frame on the next click.
         </p>
       )}
