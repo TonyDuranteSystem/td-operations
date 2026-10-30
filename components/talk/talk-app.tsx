@@ -8,15 +8,17 @@ import { createClient } from '@/lib/supabase/client'
 import { isBeingViewed } from '@/lib/talk/window-front'
 import { reportDelivered } from '@/lib/talk/report-delivered'
 import { TALK_BASE } from '@/lib/talk/paths'
+import { isImplementationChat } from '@/lib/talk/voice-alert'
 import { cn } from '@/lib/utils'
 import { uploadTeamAttachment } from '@/lib/team/attachment'
 import {
-  chatName, chatThreads, directMessages, groupMemberNames, initials, isGroupThread, matchMessages, membersWithoutChat, mergeSnapshot, messageSignature, otherUserId, parseTypingSignal, tickState, tickStateAll, shouldAnnounceTyping, snippet, startThreadId, timeLabel, dayLabel, typingLabel, TYPING_EXPIRES_MS,
+  chatName, chatThreads, directMessages, groupMemberNames, initials, isGroupThread, matchMessages, membersWithoutChat, mergeSnapshot, messageSignature, otherUserId, parseTypingSignal, readStatus, tickState, tickStateAll, shouldAnnounceTyping, snippet, startThreadId, timeLabel, dayLabel, typingLabel, TYPING_EXPIRES_MS,
   type TalkAttachment, type TalkMember, type TalkMessage, type TalkReaction, type TalkThread, type TypingKind,
 } from '@/lib/talk/chat-model'
 import { TalkMessages } from '@/components/talk/talk-messages'
 import { TalkComposer, type TalkComposerMode, type TalkSendInput } from '@/components/talk/talk-composer'
 import { TalkMessageSheet } from '@/components/talk/talk-sheet'
+import { TalkVoiceSwitch, TalkVoiceWakeBar } from '@/components/talk/talk-voice'
 import { TalkGroupInfo, TalkNewGroup } from '@/components/talk/talk-group-sheets'
 
 const LAST_OPENED_KEY = 'td-talk-last-chat'
@@ -511,9 +513,13 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
       <div className="flex h-full flex-col bg-white" data-testid="talk-people">
         <div className="flex shrink-0 items-center justify-between border-b border-zinc-200 px-4 py-3">
           <h1 className="text-lg font-semibold text-zinc-900">TD Talk</h1>
-          <button type="button" onClick={() => setNewGroupOpen(true)} data-testid="talk-new-group" className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-800 active:bg-zinc-100">
-            <Users className="h-4 w-4" /> New group
-          </button>
+          <TalkVoiceWakeBar />
+          <div className="flex items-center gap-2">
+            <TalkVoiceSwitch />
+            <button type="button" onClick={() => setNewGroupOpen(true)} data-testid="talk-new-group" className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-800 active:bg-zinc-100">
+              <Users className="h-4 w-4" /> New group
+            </button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto">
           {chats.map(t => {
@@ -563,6 +569,15 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const other = group ? selected.id : (otherUserId(selected.dm_key, meId) ?? selected.id)
   const memberIdsNow = group ? (groupMemberIds.length > 0 ? groupMemberIds : (selected.members ?? [])) : []
   const typingWho = group && peerTyping ? members.find(m => m.id === peerTyping.userId)?.name ?? 'Someone' : null
+  // The "New implementation" chat shows under every message who has read it and who has not.
+  const readByOf = group && isImplementationChat(selected.title)
+    ? (m: TalkMessage) => {
+        const nameOf = (id: string) => members.find(x => x.id === id)?.name ?? 'Someone'
+        // the open chat is being read by me right now: my own pointer on screen can lag a poll behind a message that just arrived
+        const s = readStatus(m, memberIdsNow, isBeingViewed() ? { ...memberReads, [meId]: new Date().toISOString() } : memberReads)
+        return { read: s.read.map(nameOf), waiting: s.waiting.map(nameOf) }
+      }
+    : undefined
   const tickOf = (m: TalkMessage) => group
     ? tickStateAll(m, memberIdsNow.filter(id => id !== meId), memberReads, memberDelivered)
     : tickState(m, peerReadAt, peerDeliveredAt)
@@ -614,7 +629,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
       )}
       {meId && !searchOpen && (
         <TalkMessages
-          threadId={selected.id} messages={messages} meId={meId} tickOf={tickOf} showSender={group} loading={loadingMsgs}
+          threadId={selected.id} messages={messages} meId={meId} tickOf={tickOf} showSender={group} loading={loadingMsgs} readByOf={readByOf}
           highlightId={highlightId}
           onMenu={setSheetMsg}
           onReply={m => { setMode({ kind: 'reply', message: m, who: m.sender_id === meId ? 'yourself' : m.sender_name }); setSheetMsg(null) }}

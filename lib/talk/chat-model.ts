@@ -68,6 +68,8 @@ export interface TalkMessage {
   root_id?: string | null
   /** When the message was pinned (TD Marketing chats only); null/absent = not pinned. */
   pinned_at?: string | null
+  /** A message Claude posted for a person (dictated): the person it was written for. The server sends it with every message row. */
+  on_behalf_of_user_id?: string | null
 }
 
 export function isGroupThread(t: Pick<TalkThread, 'thread_type'>): boolean {
@@ -469,4 +471,24 @@ export function splitMentions(text: string, names: readonly string[]): MentionPa
   }
   if (last < text.length) parts.push({ text: text.slice(last) })
   return parts.length ? parts : [{ text }]
+}
+
+/**
+ * Who has read a message, for the "New implementation" chat: everyone in the group except the person who wrote it (a dictated Claude message has a
+ * sender who is not a member: the person it was written for, `on_behalf_of_user_id`, is left out instead). A member has read it when their read pointer is at or after the message.
+ */
+export function readStatus(
+  m: { created_at: string; sender_id: string; on_behalf_of_user_id?: string | null },
+  memberIds: readonly string[],
+  reads: Readonly<Record<string, string | null | undefined>>,
+): { read: string[]; waiting: string[] } {
+  const read: string[] = []
+  const waiting: string[] = []
+  for (const id of memberIds) {
+    // the writer is not a reader — and for a message Claude posted FOR a person, that person is the writer
+    if (id === m.sender_id || id === m.on_behalf_of_user_id) continue
+    if (seenState(m, reads[id]) === 'seen') read.push(id)
+    else waiting.push(id)
+  }
+  return { read, waiting }
 }

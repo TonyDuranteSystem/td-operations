@@ -7,6 +7,8 @@ import { toast } from 'sonner'
 import { MessageSquare, CreditCard, PenTool, FileText } from 'lucide-react'
 import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
 import { isTalkSurfacePath, isTeamChatPath, teamChatBase } from '@/lib/talk/paths'
+import { speakTalkMessage } from '@/components/talk/talk-voice'
+import { TALK_FEATURE_PHRASE, isImplementationChat } from '@/lib/talk/voice-alert'
 
 /**
  * Global realtime notification listener for the CRM dashboard.
@@ -285,7 +287,11 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
         ? `${base}?thread=${threadId}${rootId ? `&root=${rootId}` : ''}`
         : base
 
-      playSound()
+      // A direct or group message is announced by voice ("New Luca message in TD Talk") instead of the beep; everything else keeps the beep.
+      // The voice hands back to the beep when Sound is off, the browser cannot speak, or the page has not been touched yet.
+      const groupTitle = threadId ? myGroupTitlesRef.current.get(threadId) : undefined
+      const featurePhrase = isImplementationChat(groupTitle) ? TALK_FEATURE_PHRASE : undefined
+      if (!(isMyDm && speakTalkMessage(senderName, row?.sender_id, playSound, featurePhrase))) playSound()
 
       toast(
         mentionsMe ? `@mention · ${senderName}`
