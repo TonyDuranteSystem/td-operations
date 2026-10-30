@@ -272,6 +272,46 @@ describe('withdraw', () => {
   })
 })
 
+describe('reinstate', () => {
+  it('sends a client-rejected name back to the client with a fresh card and clears the old note', async () => {
+    sdFixture = baseSd([nc('AC Digital LLC', 'rejected_by_client', { note: 'no thanks', decision_request_id: 'dr-old' })])
+    const result = await handleNameAction({ sdId: SD_ID, action: 'reinstate', nameIndex: 0, actor: 'Luca' })
+    expect(result.ok).toBe(true)
+    expect(createDecisionRequestMock).toHaveBeenCalledTimes(1)
+    const last = writes[writes.length - 1].checks[0]
+    expect(last.status).toBe('sent_to_client')
+    expect(last.note).toBeNull()
+    expect(last.decision_request_id).toBe('decision-req-1')
+    // reserve first, then the card
+    expect(order.indexOf('write')).toBeLessThan(order.indexOf('create'))
+  })
+
+  it('puts the rejection back if the client card cannot be created', async () => {
+    createDecisionRequestMock.mockResolvedValue({ ok: false, error: 'boom' })
+    sdFixture = baseSd([nc('AC Digital LLC', 'rejected_by_client', { note: 'no thanks' })])
+    const result = await handleNameAction({ sdId: SD_ID, action: 'reinstate', nameIndex: 0, actor: 'Luca' })
+    expect(result.ok).toBe(false)
+    const last = writes[writes.length - 1].checks[0]
+    expect(last.status).toBe('rejected_by_client')
+    expect(last.note).toBe('no thanks')
+  })
+
+  it.each(['rejected_by_sos', 'filed', 'not_available', 'accepted'] as const)('is refused on a %s name', async (status) => {
+    sdFixture = baseSd([nc('A LLC', status)])
+    const result = await handleNameAction({ sdId: SD_ID, action: 'reinstate', nameIndex: 0, actor: 'Luca' })
+    expect(result.ok).toBe(false)
+    expect(writes).toHaveLength(0)
+    expect(createDecisionRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('is refused on a finished case', async () => {
+    sdFixture = baseSd([nc('A LLC', 'rejected_by_client')], 'Company Created', { status: 'completed' })
+    const result = await handleNameAction({ sdId: SD_ID, action: 'reinstate', nameIndex: 0, actor: 'Luca' })
+    expect(result.ok).toBe(false)
+    expect(createDecisionRequestMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('a finished case is not messaged or reopened from here', () => {
   it('send_to_client is refused on a completed case', async () => {
     sdFixture = baseSd([nc('A LLC', 'available')], 'Company Created', { status: 'completed' })
