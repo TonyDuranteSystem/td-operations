@@ -117,6 +117,13 @@ describe('nameActionProblem (which status each staff action may start from)', ()
     expect(nameActionProblem('withdraw', 'accepted')).not.toBeNull()
   })
 
+  it('reinstate only applies to a name the CLIENT rejected — never one the state refused or that was filed', () => {
+    expect(nameActionProblem('reinstate', 'rejected_by_client')).toBeNull()
+    for (const st of ['pending', 'available', 'not_available', 'sent_to_client', 'accepted', 'filed', 'rejected_by_sos'] as const) {
+      expect(nameActionProblem('reinstate', st)).not.toBeNull()
+    }
+  })
+
   it('an action it does not guard (add_name, request_new_names, unknown) is left to the caller', () => {
     expect(nameActionProblem('add_name' as unknown as GuardedNameAction, 'filed')).toBeNull()
     expect(nameActionProblem('bogus' as unknown as GuardedNameAction, 'pending')).toBeNull()
