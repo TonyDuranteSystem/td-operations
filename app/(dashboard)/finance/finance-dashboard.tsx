@@ -178,6 +178,7 @@ export function FinanceDashboard({
             openInvoices={bankOpenInvoices}
             totalCount={bankFeedTotalCount}
             isAdmin={isAdmin}
+            isOwner={isOwner}
           />
         )}
         {tab === 'overview' && (

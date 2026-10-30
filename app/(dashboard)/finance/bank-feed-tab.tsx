@@ -29,6 +29,8 @@ import { matchBankFeedToInvoices, ignoreBankFeed, deleteDuplicateBankFeed, resto
 import { invoicePartyName } from '@/lib/finance/invoice-party'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { VALID_SERVICE_TYPES } from '@/lib/operations/service-types'
+import { PaymentInvestigationPanel, readStoredInvestigation } from './payment-investigation'
+import { prefillPersonName, validateNewPerson } from '@/lib/finance/new-person'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { InvoiceNoteDot } from '@/components/shared/invoice-note-dot'
 
@@ -125,6 +127,8 @@ interface Props {
   openInvoices: OpenInvoice[]
   totalCount: number
   isAdmin?: boolean
+  /** The owner: the only one who can run "What is this payment?" (it reads the owner's mailbox). */
+  isOwner?: boolean
 }
 
 // ── Constants ──
@@ -533,6 +537,9 @@ type FeedMatchResult =
   // A person who hasn't become a client yet (e.g. paid for a strategy call
   // but never signed/paid for a real service) — paid-call target only.
   | { type: 'lead'; id: string; name: string; email?: string | null }
+  // Someone who paid and is NOT in the CRM at all (not a client, not a lead): the server creates a plain
+  // person when the invoice is created. `id` is a placeholder — there is no record yet.
+  | { type: 'new_person'; id: string; name: string; email?: string | null }
 
 // Existing-service shape returned from /api/feed/target-services
 interface TargetServiceDelivery {
@@ -656,7 +663,7 @@ function PayerInvoiceRow({ inv, checked, onToggle, disabled, showParty }: {
 }
 
 function UnmatchedRow({
-  feed, openInvoices, isMatching, onStartMatch, onCancelMatch, candidateInfo, isAdmin = false,
+  feed, openInvoices, isMatching, onStartMatch, onCancelMatch, candidateInfo, isAdmin = false, isOwner = false,
   onNoteLinkOpenChange,
 }: {
   feed: BankFeedRecord
@@ -666,6 +673,7 @@ function UnmatchedRow({
   onCancelMatch: () => void
   candidateInfo?: CandidateInfo | null
   isAdmin?: boolean
+  isOwner?: boolean
   onNoteLinkOpenChange?: (feedId: string, open: boolean) => void
 }) {
   const router = useRouter()
@@ -754,6 +762,22 @@ function UnmatchedRow({
   // anyone (client paid under a different address). Person targets only.
   const [createPaidCall, setCreatePaidCall] = useState(false)
   const [paidCallRevenueOnly, setPaidCallRevenueOnly] = useState(false)
+  // The payer is not in the CRM: the "create a new person" card (name from the payment, email optional).
+  const [newPersonOpen, setNewPersonOpen] = useState(false)
+  const [newPersonName, setNewPersonName] = useState('')
+  const [newPersonEmail, setNewPersonEmail] = useState('')
+  // "Write the AI's story on the invoice note" — only meaningful once the payment has an investigation.
+  const [saveStory, setSaveStory] = useState(true)
+  const storedInvestigation = readStoredInvestigation(feed.review_metadata)
+  const openNewPerson = (name?: string) => {
+    setNewPersonName((name && name.trim()) || prefillPersonName(feed.sender_name))
+    setNewPersonOpen(true)
+  }
+  const continueWithNewPerson = () => {
+    const checked = validateNewPerson({ full_name: newPersonName, email: newPersonEmail })
+    if (checked.ok === false) { toast.error(checked.error); return }
+    void openCreateModal({ type: 'new_person', id: 'new', name: checked.value.full_name, email: checked.value.email })
+  }
 
   // Debounced search — fires when user types 2+ chars
   useEffect(() => {
@@ -852,7 +876,7 @@ function UnmatchedRow({
     if (ids.length === 0 || mixedSelection) return
     startTransition(async () => {
       try {
-        const result = await matchBankFeedToInvoices(feed.id, ids, recordNote)
+        const result = await matchBankFeedToInvoices(feed.id, ids, recordNote, saveStory)
         if (!result.success) throw new Error(result.error)
         const applied = result.data?.count ?? ids.length
         if (result.data?.recordOnly) {
@@ -863,6 +887,7 @@ function UnmatchedRow({
         } else {
           toast.success(`Transaction matched to ${ids.length} invoice${ids.length > 1 ? 's' : ''}`)
         }
+        if (result.data?.story) toast.info(result.data.story)
         onCancelMatch()
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : 'Match failed')
@@ -951,6 +976,8 @@ function UnmatchedRow({
       setCreatePaidCall(true)
       return
     }
+    // A person who does not exist yet has no services to attach to: only "record a service" applies.
+    if (r.type === 'new_person') return
     // Fetch existing active SDs on this target so the user can attach the
     // payment to one of them instead of creating a duplicate "Delivered" SD.
     setLoadingTargetServices(true)
@@ -1037,9 +1064,12 @@ function UnmatchedRow({
         body.account_id = createForResult.id
       } else if (createForResult.type === 'lead') {
         body.lead_id = createForResult.id
+      } else if (createForResult.type === 'new_person') {
+        body.new_contact = { full_name: createForResult.name, email: createForResult.email ?? '' }
       } else {
         body.contact_id = createForResult.id
       }
+      if (storedInvestigation) body.save_story = saveStory
       if (isPaidCall) {
         body.paid_call = true
         body.paid_call_revenue_only = paidCallRevenueOnly
@@ -1064,7 +1094,9 @@ function UnmatchedRow({
       )
       else if (isAttach) toast.success(`Invoice ${d.invoice_number ?? ''} created and attached`)
       else toast.success(`Invoice ${d.invoice_number ?? ''} created and feed matched`)
+      if (typeof d.story === 'string' && d.story) toast.info(d.story)
       closeCreateModal()
+      setNewPersonOpen(false)
       onCancelMatch()
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'Create failed')
@@ -1215,6 +1247,7 @@ function UnmatchedRow({
             : { payment_id: noteLinkInvoiceId }),
           note: noteLinkNote.trim(),
           write_off_remaining: noteLinkWriteOff,
+          ...(storedInvestigation ? { save_story: saveStory } : {}),
         }),
       })
       const d = await res.json().catch(() => ({}))
@@ -1238,6 +1271,7 @@ function UnmatchedRow({
             ? `Linked to ${d.invoiceNumber ?? 'the invoice'} — closed as paid.`
             : `Linked to ${d.invoiceNumber ?? 'the invoice'}.`,
       )
+      if (typeof d.story === 'string' && d.story) toast.info(d.story)
       closeNoteLink()
       router.refresh()
     } catch (err) {
@@ -1459,6 +1493,23 @@ function UnmatchedRow({
 
       {isMatching && (
         <div className="px-4 pb-3 pt-1 space-y-3">
+          {/* ── What is this payment? — an AI reads the CRM and both mailboxes (owner runs it) ── */}
+          <PaymentInvestigationPanel
+            feedId={feed.id}
+            stored={storedInvestigation}
+            isOwner={isOwner}
+            knownInvoices={openInvoices}
+            saveStory={saveStory}
+            onSaveStoryChange={setSaveStory}
+            onCreateNewPerson={openNewPerson}
+            onSelectInvoices={(ids) => {
+              for (const id of ids) {
+                const inv = openInvoices.find(o => o.id === id)
+                if (inv && !selected.has(inv.id)) toggleSelect(inv)
+              }
+            }}
+          />
+
           {/* ── From who paid ────────────────────────────────────────
               The company the billing email belongs to in the CRM, and the companies earlier payments
               from this sender were linked to — every invoice (paid and unpaid) and any set that adds
@@ -1652,8 +1703,66 @@ function UnmatchedRow({
             )}
           </div>
 
+          {/* ── Payer not in the CRM: create a plain person + invoice ──────────────────────────
+              Antonio, 2026-10-30: "I want a system that I can invoice for someone that is not a client,
+              that is not a lead." The search above can only find who already exists. */}
+          {!newPersonOpen ? (
+            <div className={cn(
+              'rounded-md px-3 py-2 text-xs flex items-center gap-2',
+              searchQuery.trim().length >= 2 && searchResults.length === 0 && !searchLoading ? 'border border-emerald-300 bg-emerald-50' : 'border border-dashed border-zinc-300',
+            )}>
+              <span className="text-zinc-700 flex-1">
+                {searchQuery.trim().length >= 2 && searchResults.length === 0 && !searchLoading
+                  ? 'Nobody found. Is the payer someone who is not in the CRM?'
+                  : 'The payer is not in the CRM (not a client, not a lead)?'}
+              </span>
+              <button
+                type="button"
+                onClick={() => openNewPerson()}
+                className="text-[11px] px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 shrink-0"
+              >
+                Create a new person + invoice
+              </button>
+            </div>
+          ) : (
+            <div className="rounded-md border border-emerald-300 bg-emerald-50/50 p-3 space-y-2" data-testid="new-person-card">
+              <p className="text-xs font-semibold text-emerald-900">New person for this payment</p>
+              <p className="text-[11px] text-zinc-600">
+                Created as a plain contact: not a client, not a lead, no portal access, nothing emailed. If they are already in the CRM you will be told who.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-zinc-500 uppercase tracking-wide">Name</label>
+                  <input
+                    value={newPersonName}
+                    onChange={e => setNewPersonName(e.target.value)}
+                    placeholder="First and last name"
+                    className="w-full px-2.5 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-zinc-500 uppercase tracking-wide">Email (optional)</label>
+                  <input
+                    value={newPersonEmail}
+                    onChange={e => setNewPersonEmail(e.target.value)}
+                    placeholder="name@example.com"
+                    className="w-full px-2.5 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setNewPersonOpen(false)} className="px-3 py-1.5 text-xs rounded-md border border-zinc-200 text-zinc-700 hover:bg-zinc-50">
+                  Cancel
+                </button>
+                <button type="button" onClick={continueWithNewPerson} className="px-3 py-1.5 text-xs rounded-md bg-emerald-600 text-white hover:bg-emerald-700">
+                  Continue
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="border-t pt-2">
-            <p className="text-xs text-muted-foreground mb-2">Or pick from suggestions by amount:</p>
+            <p className="text-xs text-muted-foreground mb-2">Invoices with a similar amount. Amount only: nothing here says they belong to this payer, so check before picking:</p>
           {suggestions.length === 0 ? (
             <p className="text-xs text-amber-600">No invoices with similar amount in {feed.currency}</p>
           ) : (
@@ -1891,6 +2000,11 @@ function UnmatchedRow({
                   {createForResult.type === 'account' ? '🏢' : '👤'} {createForResult.name}
                 </span>
               </p>
+              {createForResult.type === 'new_person' && (
+                <p className="text-[11px] text-zinc-500 mt-1">
+                  New person, not in the CRM yet. They are created as a plain contact (not a client, not a lead) when you press Create invoice. Nothing is emailed to them.
+                </p>
+              )}
             </div>
 
             <div className="bg-zinc-50 rounded p-3 text-xs space-y-1">
@@ -1915,7 +2029,7 @@ function UnmatchedRow({
             {/* Branch A — attach to existing active SD. Never for a lead: they
                 have no services yet by definition, and the only valid action
                 for a lead target is the paid-call checkbox below. */}
-            {createForResult?.type !== 'lead' && (loadingTargetServices ? (
+            {createForResult?.type !== 'lead' && createForResult?.type !== 'new_person' && (loadingTargetServices ? (
               <div className="text-xs text-zinc-500 flex items-center gap-1.5">
                 <Loader2 className="h-3 w-3 animate-spin" /> Looking up existing services…
               </div>
@@ -2652,7 +2766,7 @@ function FeedPager({ page, pageSize, total, totalPages, onPage }: {
   )
 }
 
-export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = false }: Props) {
+export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = false, isOwner = false }: Props) {
   // Where the person is in the list (filter tab, page, search, source) lives in the page address too, so a
   // browser refresh puts them back where they were instead of on "All", page 1.
   const searchParams = useSearchParams()
@@ -2973,6 +3087,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
                 onCancelMatch={() => setMatchingFeed(null)}
                 candidateInfo={candidateInfo}
                 isAdmin={isAdmin}
+                isOwner={isOwner}
                 onNoteLinkOpenChange={handleNoteLinkOpenChange}
               />
             ) : feed.status === 'activation_crashed' ? (

@@ -1530,16 +1530,29 @@ export async function updateInvoice(
 
 // ── Bank Feed actions ──
 
+/**
+ * After a payment is linked to invoices: write its AI investigation (if it has one worth writing) on those
+ * invoices' internal notes. Best effort by design — the link has already succeeded and must never be undone
+ * or reported as failed because a note could not be written; the sentence returned is shown to the person.
+ */
+async function investigationStoryNote(feedId: string, paymentIds: string[], saveStory: boolean): Promise<string | null> {
+  if (!saveStory) return null
+  const { writeFeedStoryToInvoices, describeStoryResult } = await import('@/lib/operations/feed-story-note')
+  return describeStoryResult(await writeFeedStoryToInvoices(feedId, paymentIds))
+}
+
 export async function matchBankFeedToInvoice(
   feedId: string,
-  paymentId: string
-): Promise<ActionResult> {
+  paymentId: string,
+  saveStory: boolean = true,
+): Promise<ActionResult<{ story: string | null }>> {
   return safeAction(async () => {
     const { manualMatch } = await import('@/lib/bank-feed-matcher')
     const result = await manualMatch(feedId, paymentId)
     if (!result.matched) throw new Error(result.error ?? 'Match failed')
     revalidatePath('/finance')
     revalidatePath('/reconciliation')
+    return { story: await investigationStoryNote(feedId, [paymentId], saveStory) }
   }, {
     action_type: 'update',
     table_name: 'td_bank_feeds',
@@ -1560,7 +1573,8 @@ export async function matchBankFeedToInvoices(
   feedId: string,
   paymentIds: string[],
   note?: string,
-): Promise<ActionResult<{ recordOnly: boolean; count: number; selected: number }>> {
+  saveStory: boolean = true,
+): Promise<ActionResult<{ recordOnly: boolean; count: number; selected: number; story: string | null }>> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     const { planMatchSelection, recordOnlyLinkNote, claimedInvoicesError } = await import('@/lib/finance/match-selection')
@@ -1591,7 +1605,12 @@ export async function matchBankFeedToInvoices(
       revalidatePath('/reconciliation')
       // Report what was actually applied, not what was ticked: the payment can run out before
       // every ticked invoice is reached, and a closed invoice is skipped.
-      return { recordOnly: false, count: result.appliedPaymentIds?.length ?? plan.openIds.length, selected: plan.openIds.length }
+      return {
+        recordOnly: false,
+        count: result.appliedPaymentIds?.length ?? plan.openIds.length,
+        selected: plan.openIds.length,
+        story: await investigationStoryNote(feedId, result.appliedPaymentIds?.length ? result.appliedPaymentIds : plan.openIds, saveStory),
+      }
     }
 
     // Every invoice is already paid: record the link, move no money. First, none may already be
@@ -1624,7 +1643,7 @@ export async function matchBankFeedToInvoices(
     }
     revalidatePath('/finance')
     revalidatePath('/reconciliation')
-    return { recordOnly: true, count: plan.paidIds.length, selected: plan.paidIds.length }
+    return { recordOnly: true, count: plan.paidIds.length, selected: plan.paidIds.length, story: await investigationStoryNote(feedId, plan.paidIds, saveStory) }
   }, {
     action_type: 'update',
     table_name: 'td_bank_feeds',

@@ -6,6 +6,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { linkFeedTransactionToInvoice, linkFeedTransactionToInvoices } from '@/lib/finance/owner-transaction-link'
+import { writeFeedStoryToInvoices, describeStoryResult } from '@/lib/operations/feed-story-note'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,7 +15,7 @@ export async function POST(req: Request) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  let body: { feed_id?: string; payment_id?: string; payment_ids?: string[]; note?: string; write_off_remaining?: boolean }
+  let body: { feed_id?: string; payment_id?: string; payment_ids?: string[]; note?: string; write_off_remaining?: boolean; save_story?: boolean }
   try {
     body = await req.json()
   } catch {
@@ -41,9 +42,11 @@ export async function POST(req: Request) {
     if (!multi.ok) {
       return NextResponse.json({ error: multi.error ?? 'Could not link this transaction.' }, { status: 400 })
     }
+    const story = body.save_story === false ? null : describeStoryResult(await writeFeedStoryToInvoices(feedId, paymentIds))
     return NextResponse.json({
       ok: true,
       multi: true,
+      ...(story ? { story } : {}),
       invoiceNumbers: multi.invoiceNumbers,
       transactionAmount: multi.transactionAmount,
       linkedTotal: multi.linkedTotal,
@@ -70,8 +73,10 @@ export async function POST(req: Request) {
   if (!result.ok) {
     return NextResponse.json({ error: result.error ?? 'Could not link this transaction.' }, { status: 400 })
   }
+  const story = body.save_story === false ? null : describeStoryResult(await writeFeedStoryToInvoices(feedId, [paymentId]))
   return NextResponse.json({
     ok: true,
+    ...(story ? { story } : {}),
     invoiceNumber: result.invoiceNumber,
     newStatus: result.newStatus,
     newAmountPaid: result.newAmountPaid,
