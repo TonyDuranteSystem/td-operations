@@ -1,0 +1,264 @@
+[
+  {
+    "service_type": "Company Change Name",
+    "stage_name": "Collect three company names",
+    "stage_order": 1,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "waiting_notice",
+          "label": "Waiting for the client to send his names"
+        },
+        {
+          "type": "formation_names"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Names received: check them",
+              "target": "Check names and client confirms"
+            }
+          ]
+        }
+      ],
+      "description": "The client was asked for his names in the portal. They appear here when he answers and the job moves to the next step by itself."
+    }
+  },
+  {
+    "service_type": "Company Change Name",
+    "stage_name": "Check names and client confirms",
+    "stage_order": 2,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "formation_names"
+        },
+        {
+          "type": "esign_panel",
+          "label": "Prepare the form for signature"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Form sent: waiting for the client to sign",
+              "target": "Client signs the name-change form"
+            }
+          ]
+        }
+      ],
+      "description": "Check each name with the state (Available / Not available), send one available name to the client, then prepare the form with the confirmed name and send it for signature."
+    }
+  },
+  {
+    "service_type": "Company Change Name",
+    "stage_name": "Client signs the name-change form",
+    "stage_order": 3,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "waiting_notice",
+          "label": "Waiting for the client to sign the form"
+        },
+        {
+          "type": "esign_panel",
+          "label": "Prepare another form for signature"
+        },
+        {
+          "type": "formation_names"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Signed: file with the state",
+              "target": "File the form with the state"
+            }
+          ]
+        }
+      ],
+      "description": "The form is with the client. When he has signed, the job moves to the next step by itself."
+    }
+  },
+  {
+    "service_type": "Company Change Name",
+    "stage_name": "File the form with the state",
+    "stage_order": 4,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "formation_names"
+        },
+        {
+          "type": "document_upload",
+          "label": "Upload the filed form (proof of filing)",
+          "folder": "1. Company",
+          "rename": "Name change filing – {company_name}",
+          "autoAdvance": false
+        },
+        {
+          "type": "document_viewer"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Filed: waiting for the state",
+              "target": "Waiting for the state"
+            }
+          ]
+        }
+      ],
+      "description": "File the signed form with the state, mark the name as filed, upload the proof of filing, then move on."
+    }
+  },
+  {
+    "service_type": "Company Change Name",
+    "stage_name": "Waiting for the state",
+    "stage_order": 5,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "waiting_notice",
+          "label": "Waiting for the state"
+        },
+        {
+          "type": "formation_names"
+        },
+        {
+          "type": "document_upload",
+          "label": "Upload the state's stamped document",
+          "folder": "1. Company",
+          "rename": "State approved name change – {company_name}",
+          "autoAdvance": false,
+          "storageHint": {
+            "asks": "the state's stamped document approving the new name",
+            "effects": [
+              "attach it to the case (\"Apply new name\" needs it)",
+              "show it to the client",
+              "rename it \"State approved name change – company name\" and file it in the \"1. Company\" folder"
+            ],
+            "folderKind": "company",
+            "typeNeedsFolder": true
+          },
+          "documentType": "other_document"
+        },
+        {
+          "type": "document_viewer"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "State accepted: update our records",
+              "target": "Update our records"
+            }
+          ]
+        }
+      ],
+      "description": "Waiting for the state's answer. Upload the stamped document when it arrives. If the state refuses the name, mark it refused in the names list and send the job back for a new name."
+    }
+  },
+  {
+    "service_type": "Company Change Name",
+    "stage_name": "Update our records",
+    "stage_order": 6,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "apply_name_panel"
+        },
+        {
+          "type": "info_panel"
+        },
+        {
+          "type": "document_viewer"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Records updated: ask the client for the Operating Agreement",
+              "target": "Client updates the Operating Agreement"
+            }
+          ]
+        }
+      ],
+      "description": "The state approved the new name. Apply it: the company is renamed and its old folders move to \"Previous names\" in one step. Then ask the client for the new Operating Agreement."
+    }
+  },
+  {
+    "service_type": "Company Change Name",
+    "stage_name": "Client updates the Operating Agreement",
+    "stage_order": 7,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "waiting_notice",
+          "label": "Waiting for the client to generate the new Operating Agreement"
+        },
+        {
+          "type": "document_viewer"
+        },
+        {
+          "type": "chat"
+        },
+        {
+          "type": "action_buttons",
+          "actions": [
+            {
+              "key": "advance_next",
+              "label": "Operating Agreement received: close the job",
+              "target": "Completed"
+            }
+          ]
+        }
+      ],
+      "description": "The client generates the new version of the Operating Agreement in the portal. When it is in, close the job."
+    }
+  },
+  {
+    "service_type": "Company Change Name",
+    "stage_name": "Completed",
+    "stage_order": 8,
+    "stage_layout": {
+      "components": [
+        {
+          "type": "info_panel"
+        },
+        {
+          "type": "document_viewer"
+        },
+        {
+          "type": "chat"
+        }
+      ],
+      "description": "The name change is complete."
+    }
+  }
+]
