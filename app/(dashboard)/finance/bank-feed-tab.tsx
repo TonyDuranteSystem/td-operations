@@ -17,6 +17,17 @@ import {
   type InvoiceSummaryInput,
 } from '@/lib/finance/invoice-summary'
 import type { PayerInvoice, PayerInvoicesResult, PayerCompanyInfo } from '@/lib/finance/payer-invoices'
+import {
+  SAME_AMOUNT_CAUTION,
+  SAME_AMOUNT_DAYS,
+  SAME_AMOUNT_WIDER_DAYS,
+  dayOffsetText,
+  dropAlreadyShown,
+  sameAmountEmptyText,
+  sameAmountHeadline,
+  sameAmountTiedText,
+  type SameAmountPaidResult,
+} from '@/lib/finance/same-amount-labels'
 import { summarizeMultiLink, MAX_LINKED_INVOICES, otherMultiLinkedInvoices } from '@/lib/finance/multi-invoice-link'
 import { evaluateNameEvidence } from '@/lib/finance/feed-signals'
 import { toast } from 'sonner'
@@ -627,12 +638,14 @@ function InvoiceNumberTip({ summary, hint, children }: { summary: InvoiceSummary
 }
 
 /** One invoice in a "who paid" list: tick it to add it to the selection. */
-function PayerInvoiceRow({ inv, checked, onToggle, disabled, showParty }: {
+function PayerInvoiceRow({ inv, checked, onToggle, disabled, showParty, note }: {
   inv: PayerInvoice
   checked: boolean
   onToggle: () => void
   disabled: boolean
   showParty: boolean
+  /** A short muted word before the paid badge, e.g. "same day" or "2 days before". */
+  note?: string
 }) {
   const shown = inv.paid ? inv.total : (inv.balance ?? inv.total)
   return (
@@ -651,6 +664,7 @@ function PayerInvoiceRow({ inv, checked, onToggle, disabled, showParty }: {
           linked to another payment
         </span>
       )}
+      {note && <span className="text-[10px] text-muted-foreground shrink-0">{note}</span>}
       {inv.paid ? (
         <span className="text-[10px] px-1 py-0.5 rounded bg-green-100 text-green-700 shrink-0">
           {inv.paid_date ? `paid ${formatCalendarDate(inv.paid_date)}` : 'paid'}
@@ -927,6 +941,39 @@ function UnmatchedRow({
     return () => { cancelled = true }
   }, [isMatching, feed.id])
 
+  // ── Already-paid invoices of exactly this amount — whoever they belong to ──
+  // Read when the popup opens, within 3 days of the payment; "Look wider" asks for 30. Plain invoice data, no AI:
+  // it works when nobody knows who paid. Suggestions only — ticking a row joins the same "link for the record"
+  // selection as the other lists.
+  const [sameAmount, setSameAmount] = useState<{ state: 'loading' | 'ready' | 'error'; days: number; data: SameAmountPaidResult | null }>(
+    { state: 'loading', days: SAME_AMOUNT_DAYS, data: null },
+  )
+  const sameAmountRun = useRef(0)
+  const loadSameAmount = (days: number) => {
+    const run = ++sameAmountRun.current
+    setSameAmount(prev => ({ state: 'loading', days, data: days === prev.days ? prev.data : null }))
+    fetch(`/api/finance/same-amount-paid?feed_id=${encodeURIComponent(feed.id)}&days=${days}`)
+      .then(async res => {
+        const d = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(d.error || `Could not look for paid invoices of this amount (${res.status})`)
+        if (run === sameAmountRun.current) setSameAmount({ state: 'ready', days, data: d as SameAmountPaidResult })
+      })
+      .catch(() => { if (run === sameAmountRun.current) setSameAmount({ state: 'error', days, data: null }) })
+  }
+  useEffect(() => {
+    if (!isMatching) {
+      sameAmountRun.current++
+      // A closed popup forgets what it loaded. Returning the same object when nothing changed keeps every row of a
+      // long list from re-rendering just because it mounted.
+      setSameAmount(prev => (prev.state === 'loading' && prev.days === SAME_AMOUNT_DAYS && prev.data === null ? prev : { state: 'loading', days: SAME_AMOUNT_DAYS, data: null }))
+      return
+    }
+    // Every new load (another payment, the wider look) or a closed popup bumps the counter, so a late answer for an
+    // earlier one is ignored.
+    loadSameAmount(SAME_AMOUNT_DAYS)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMatching, feed.id])
+
   // Paid invoices of a company the person searched for, loaded on demand (the page only holds
   // the unpaid ones).
   const [paidByResult, setPaidByResult] = useState<Record<string, { state: 'loading' | 'ready' | 'error'; invoices: PayerInvoice[]; error?: string }>>({})
@@ -961,7 +1008,7 @@ function UnmatchedRow({
       if (inv && !selected.has(inv.id)) toggleSelect(inv)
     }
     if (missing.length === 0) return
-    const pool = new Map<string, PayerInvoice>((payerData?.invoices ?? []).map(i => [i.id, i]))
+    const pool = new Map<string, PayerInvoice>([...(sameAmount.data?.invoices ?? []), ...(payerData?.invoices ?? [])].map(i => [i.id, i]))
     const params = [
       aiWho?.account_id ? `account_id=${aiWho.account_id}` : null,
       aiWho?.contact_id ? `contact_id=${aiWho.contact_id}` : null,
@@ -1635,6 +1682,69 @@ function UnmatchedRow({
               )}
             </div>
           )}
+
+          {/* ── Already-paid invoices of exactly this amount ───────────
+              Whoever they belong to: this works when nobody knows who paid. Paid within 3 days of the payment (a
+              link widens it to 30), no OTHER bank payment tied to them. Only the amount and the date match, so the
+              box says it is not proof — nothing here links by itself, and ticking a row joins the same "link for the
+              record" selection as the lists above. Hidden when everything it found is already listed above. */}
+          {(() => {
+            const data = sameAmount.data
+            if (sameAmount.state === 'error') {
+              return <p className="text-[11px] text-muted-foreground">Could not look for already-paid invoices of this amount just now.</p>
+            }
+            if (sameAmount.state === 'loading' && !data) {
+              return sameAmount.days > SAME_AMOUNT_DAYS ? (
+                <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Looking wider…
+                </p>
+              ) : null
+            }
+            if (!data || !data.ok || data.searched === false) return null
+            const days = data.days ?? sameAmount.days
+            const amountText = formatCurrency(amount, feed.currency)
+            const shown = dropAlreadyShown(data.invoices ?? [], new Set((payerData?.invoices ?? []).map(i => i.id)), candidateInfo?.invoice_number)
+            const hiddenElsewhere = (data.invoices?.length ?? 0) - shown.length
+            if (hiddenElsewhere > 0 && shown.length === 0) return null
+            const found = Math.max((data.found ?? 0) - hiddenElsewhere, 0)
+            const tied = sameAmountTiedText(data.already_tied ?? 0)
+            const lookWider = days < SAME_AMOUNT_WIDER_DAYS ? (
+              <button type="button" onClick={() => loadSameAmount(SAME_AMOUNT_WIDER_DAYS)} className="text-[11px] text-blue-700 hover:underline">
+                Look wider ({SAME_AMOUNT_WIDER_DAYS} days)
+              </button>
+            ) : null
+            if (shown.length === 0) {
+              return (
+                <p className="text-[11px] text-muted-foreground" data-testid="same-amount-empty">
+                  {sameAmountEmptyText(days, amountText)} {tied && <>{tied} </>}{lookWider}
+                </p>
+              )
+            }
+            return (
+              <div className="rounded-md border border-emerald-200 bg-emerald-50/30 p-2.5 space-y-2" data-testid="same-amount-paid-box">
+                <p className="text-xs font-semibold text-emerald-900">{sameAmountHeadline(found, days, amountText)}</p>
+                <div className="border rounded-md bg-white divide-y max-h-56 overflow-y-auto">
+                  {shown.map(inv => (
+                    <PayerInvoiceRow
+                      key={inv.id}
+                      inv={inv}
+                      checked={selected.has(inv.id)}
+                      onToggle={() => toggleSelectPayerInvoice(inv)}
+                      disabled={isPending}
+                      showParty
+                      note={dayOffsetText(inv.days_from_payment)}
+                    />
+                  ))}
+                </div>
+                {found > shown.length && (
+                  <p className="text-[11px] text-muted-foreground">and {found - shown.length} more not shown — search by company or person below to narrow it down.</p>
+                )}
+                {tied && <p className="text-[11px] text-muted-foreground">{tied}</p>}
+                <p className="text-[11px] text-muted-foreground">{SAME_AMOUNT_CAUTION}</p>
+                {lookWider}
+              </div>
+            )
+          })()}
 
           {/* ── Search by client/contact ─────────────────────────── */}
           <div>
