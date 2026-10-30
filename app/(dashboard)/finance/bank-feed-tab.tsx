@@ -1,13 +1,14 @@
 'use client'
 
-import { useState, useCallback, useEffect, useTransition, useMemo } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useState, useCallback, useEffect, useTransition, useMemo, useRef } from 'react'
+import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 import { usePlaidLink } from 'react-plaid-link'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { readContestedCandidates, readContestedTotal, type ContestedCandidate } from '@/lib/finance/feed-vocabulary'
 import { contestedInvoiceFacts, formatCalendarDate, type ContestedInvoiceDetail } from '@/lib/finance/contested-invoice-detail'
 import { recordOnlyLinkNote } from '@/lib/finance/match-selection'
+import { parseFeedView, writeFeedView } from '@/lib/finance/bank-feed-view-state'
 import {
   summarizeInvoice,
   summaryInputFromPayerInvoice,
@@ -549,6 +550,8 @@ interface CandidateInfo {
   amount: number
   amount_currency: string | null
   confidence: string | null
+  /** What the hover card on the proposed invoice's number shows (client, what it is for, amount, status). */
+  summary?: InvoiceSummaryInput
 }
 
 /**
@@ -1416,7 +1419,13 @@ function UnmatchedRow({
               <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
               <p>
                 <span className="font-semibold">Auto-matched candidate:</span>{' '}
-                <span className="font-mono">{candidateInfo.invoice_number ?? '—'}</span>
+                {candidateInfo.summary ? (
+                  <InvoiceNumberTip summary={candidateInfo.summary}>
+                    <span className="font-mono">{candidateInfo.invoice_number ?? '—'}</span>
+                  </InvoiceNumberTip>
+                ) : (
+                  <span className="font-mono">{candidateInfo.invoice_number ?? '—'}</span>
+                )}
                 {' '}for <span className="font-medium">{candidateInfo.company_name}</span>
                 {' '}({formatCurrency(candidateInfo.amount, candidateInfo.amount_currency)}
                 {candidateInfo.confidence ? `, confidence: ${candidateInfo.confidence}` : ''})
@@ -2644,11 +2653,16 @@ function FeedPager({ page, pageSize, total, totalPages, onPage }: {
 }
 
 export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = false }: Props) {
-  const [filter, setFilter] = useState<FilterTab>('all')
-  const [sourceFilter, setSourceFilter] = useState<string[] | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
+  // Where the person is in the list (filter tab, page, search, source) lives in the page address too, so a
+  // browser refresh puts them back where they were instead of on "All", page 1.
+  const searchParams = useSearchParams()
+  const pathname = usePathname()
+  const initialView = useMemo(() => parseFeedView(searchParams), []) // eslint-disable-line react-hooks/exhaustive-deps -- read once, on first render
+  const [filter, setFilter] = useState<FilterTab>(initialView.filter)
+  const [sourceFilter, setSourceFilter] = useState<string[] | null>(initialView.sources)
+  const [searchQuery, setSearchQuery] = useState(initialView.search)
   const [matchingFeed, setMatchingFeed] = useState<string | null>(null)
-  const [page, setPage] = useState(0)
+  const [page, setPage] = useState(initialView.page)
   const [highlightFeedId, setHighlightFeedId] = useState<string | null>(null)
   const pageSize = 50
 
@@ -2693,15 +2707,19 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
 
   // Deep-link from audit panel: ?feed=<uuid> opens this tab scrolled to the feed.
   // Sets source filter from feed.source + search by amount + scrolls + 3s highlight.
-  const searchParams = useSearchParams()
   const deepLinkFeedId = searchParams.get('feed')
+  // Handled ONCE per link: this effect also depends on `bankFeeds`, which changes on every data refresh
+  // (after Confirm / Reject / Match), and used to reset the filter, search and page each time.
+  const handledDeepLink = useRef<string | null>(null)
   useEffect(() => {
     if (!deepLinkFeedId) return
+    if (handledDeepLink.current === deepLinkFeedId) return
     const feed = bankFeeds.find(f => f.id === deepLinkFeedId)
     if (!feed) {
       toast.info('Feed not in current list — try Sync Now')
       return
     }
+    handledDeepLink.current = deepLinkFeedId
     setFilter('all')
     setSourceFilter([feed.source])
     setSearchQuery(String(Number(feed.amount)))
@@ -2759,6 +2777,21 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
   // Paginate
   const paginated = filtered.slice(page * pageSize, (page + 1) * pageSize)
   const totalPages = Math.ceil(filtered.length / pageSize)
+
+  // A saved page number can be past the end once rows have moved (matched, ignored, …): step back to the
+  // last page rather than showing an empty list.
+  useEffect(() => {
+    if (page > 0 && page >= totalPages) setPage(Math.max(0, totalPages - 1))
+  }, [page, totalPages])
+
+  // Keep the address in step with the list. `replaceState`, not `router.replace`: the Finance page is a
+  // server page that loads up to 1,000 feed rows, and re-running it on every keystroke would be heavy.
+  useEffect(() => {
+    const current = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : ''
+    const next = writeFeedView(current, { filter, page, search: searchQuery, sources: sourceFilter })
+    if (next === current) return
+    window.history.replaceState(window.history.state, '', next ? `${pathname}?${next}` : pathname)
+  }, [filter, page, searchQuery, sourceFilter, pathname])
 
   // Counts by status
   const counts = useMemo(() => ({
@@ -2902,6 +2935,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
                   amount: invAmount,
                   amount_currency: inv.amount_currency,
                   confidence: feed.match_confidence,
+                  summary: summaryInputFromOpenInvoice(inv, invoicePartyName(inv)),
                 }
               } else if (feed.payments) {
                 // Fallback: payment may not be in the open-invoice set anymore.
@@ -2911,6 +2945,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
                   amount: Number(feed.amount),
                   amount_currency: feed.currency,
                   confidence: feed.match_confidence,
+                  summary: summaryInputFromMatchedPayment(feed.payments, feed.currency),
                 }
               }
             }
