@@ -15,6 +15,8 @@
  */
 import { isUsablePayerName, normalizePayerName, parsePayerEmail } from "@/lib/finance/payer-suggestions"
 import { escapeUntrusted, flattenUntrusted } from "@/lib/inbox/whatsapp-worker-context"
+// Type-only: feed-chat-sweep.ts imports `cleanText` from this file, so a value import here would be a cycle.
+import type { ChatStoreSummary, ChatSweep } from "@/lib/finance/feed-chat-sweep"
 
 export const INVESTIGATION_VERDICTS = ["identified", "likely", "unclear"] as const
 export type InvestigationVerdict = (typeof INVESTIGATION_VERDICTS)[number]
@@ -63,6 +65,39 @@ export interface StoredInvestigation extends Omit<ParsedInvestigation, "parsed">
   /** The mailboxes that WERE searched, and the ones that could not be — so a gap is never silent. */
   mailboxes_searched: string[]
   mailboxes_failed: string[]
+  /**
+   * The chats and notes the CODE searched (counts only, never the text), one line per place. Absent on a
+   * result kept before this existed — the screen says so instead of implying they were searched.
+   */
+  chats_searched?: ChatStoreSummary[]
+}
+
+/** Someone who is already in the CRM, as a target the "create an invoice" flow understands. */
+export interface ExistingTarget {
+  type: "account" | "contact" | "lead"
+  id: string
+  name: string
+}
+
+/**
+ * The CRM record the investigation identified, if any: a company first (the company is the client), then a
+ * person, then a lead. Ids reach a stored result only after the server confirmed they exist, so a target
+ * here is a real record. Null when the payer is not in the CRM — only then is "create a NEW person" offered.
+ */
+export function existingTargetFromWho(who: Partial<InvestigationWho> | null | undefined): ExistingTarget | null {
+  if (!who) return null
+  const name = cleanWhoName(who.name) ?? "this client"
+  if (who.account_id) return { type: "account", id: who.account_id, name }
+  if (who.contact_id) return { type: "contact", id: who.contact_id, name }
+  if (who.lead_id) return { type: "lead", id: who.lead_id, name }
+  return null
+}
+
+/** The invoice number the server confirmed for a suggested invoice (the source it cited), for a button label. */
+export function suggestedInvoiceLabel(sources: readonly InvestigationSource[], invoiceId: string): string | null {
+  const id = invoiceId.toLowerCase()
+  const hit = sources.find((s) => s.kind === "payment" && s.verified && (s.id ?? "").toLowerCase() === id)
+  return hit ? hit.label : null
 }
 
 export const MAX_STORY_CHARS = 4000
@@ -155,6 +190,13 @@ export interface SweptEmail {
   date: string
 }
 
+/** What the chats sweep itself returned for one message or note — the server's own words, not the model's. */
+export interface SweptChat {
+  storeLabel: string
+  who: string
+  date: string
+}
+
 /** A database record the server looked up: what kind it is and the name it really has. */
 export interface KnownRecord {
   kind: "crm" | "payment"
@@ -171,7 +213,7 @@ export interface KnownRecord {
  */
 export function markVerifiedSources(
   sources: readonly InvestigationSource[],
-  proof: { emails: ReadonlyMap<string, SweptEmail>; records: ReadonlyMap<string, KnownRecord> },
+  proof: { emails: ReadonlyMap<string, SweptEmail>; records: ReadonlyMap<string, KnownRecord>; chats?: ReadonlyMap<string, SweptChat> },
 ): InvestigationSource[] {
   return sources.map((s) => {
     const id = s.id ?? ""
@@ -186,6 +228,13 @@ export function markVerifiedSources(
         date: mail.date || s.date,
         mailbox: mail.mailbox,
       }
+    }
+    // A chat message or note the chats sweep itself read: shown with the server's own words (which place, who,
+    // when) — never the text, which may be long and private. An id the sweep never saw falls through to the
+    // record check below (a chat "thread" is often cited by its company's id) and otherwise stays "cited by the AI".
+    if (s.kind === "chat") {
+      const chat = proof.chats?.get(id.toLowerCase())
+      if (chat) return { ...s, verified: true, label: cleanText(`${chat.storeLabel} — ${chat.who}`, 200), date: chat.date || s.date }
     }
     const rec = proof.records.get(id.toLowerCase())
     if (!rec) return { ...s, verified: false }
@@ -399,6 +448,7 @@ export const INVESTIGATOR_SYSTEM_PROMPT = `You are a careful investigator for th
 
 HOW TO WORK
 - Use any read tool you have: the CRM (contacts, accounts, leads, payments, services, tasks), client chats, call records, documents, the knowledge base, the Bank Feed itself (read_bank_feeds: what else this payer sent and which invoice each earlier payment was linked to) and BOTH mailboxes. Antonio has explicitly authorised you to search BOTH mailboxes: support@tonydurante.us (the default) and antonio.durante@tonydurante.us (use as_user). A first sweep of both mailboxes is already in the message below — read the threads that matter and search further; do not stop at the sweep.
+- A first sweep of the chats and notes (portal chats, the conversation log, WhatsApp/Telegram, team chat channels, staff notes) is in the message below too. It is only a first look: once you know who the payer is, ALWAYS read that client's own portal chat around the payment date (portal_chat_read or search_portal_messages) and their conversation log (search_conversations) before you conclude, and say in your story what you read there — including "nothing about this payment". A client often explains a payment in the chat and never in an email.
 - Look at the whole picture, not at one signal. An amount that matches an invoice proves nothing by itself; neither does a similar name. Ask who the payer is, what they bought or were promised, who else was involved, what the earlier payments of the same invoice looked like, and whether the story fits.
 - Prefer evidence that contradicts your first idea. If the obvious invoice belongs to a different person with a different story, say so.
 - Never invent anything. Every claim in your story must come from something you actually read; cite it. Use ids (invoice, contact, account, lead) ONLY if they appeared in a tool result. If you cannot tell, the verdict is "unclear".
@@ -441,11 +491,37 @@ export interface InvoiceContextRow {
 /** Text written by a stranger (an email, a bank line, an earlier note) → one safe line for the prompt. */
 const safe = (text: string | null | undefined): string => escapeUntrusted(flattenUntrusted(String(text ?? "")))
 
+/** The chats-and-notes sweep as lines of the prompt. Everything in it was written by a stranger: escaped. */
+export function chatSweepPromptLines(chatSweep: ChatSweep): string[] {
+  const lines: string[] = [""]
+  const searchedAny = chatSweep.stores.some((s) => s.searched || s.hits.length > 0)
+  if (chatSweep.terms.length === 0 && chatSweep.clients.length === 0 && !searchedAny) {
+    lines.push("CHATS AND NOTES SWEEP: NONE WAS RUN — nothing in this payment (no usable name, email or invoice number) could be searched for.")
+    lines.push("- Read the client's chats yourself once you know who they are, and say in your story that the automatic search had nothing to go on.")
+    return lines
+  }
+  lines.push(`CHATS AND NOTES SWEEP (already run for you — searched for: ${chatSweep.terms.map((t) => `[${safe(t)}]`).join(" ") || "(no words)"})`)
+  if (chatSweep.clients.length) {
+    lines.push(`- Matched in the CRM by name: ${chatSweep.clients.map((c) => `${safe(c.name)} (${c.kind === "account" ? "company" : "person"})`).join("; ")} — their chats and notes around the payment date are included`)
+  }
+  if (chatSweep.clientLookupError) lines.push(`- Could not ask the CRM who this payer is (${safe(chatSweep.clientLookupError)}): only the word searches ran.`)
+  if (chatSweep.window) lines.push(`- Around the payment date: ${chatSweep.window.from} to ${chatSweep.window.to}; word searches look a little wider.`)
+  for (const store of chatSweep.stores) {
+    if (!store.searched) lines.push(`- ${store.label}: NOT FULLY SEARCHED (${safe(store.error) || "unknown reason"})${store.hits.length ? ` — ${store.hits.length} found so far` : ""}`)
+    else lines.push(`- ${store.label}: ${store.hits.length ? `${store.hits.length} found` : "nothing found"}`)
+    for (const h of store.hits) {
+      lines.push(`  - [${safe(store.label)}] ${safe(h.date)} | ${safe(h.who)} | "${safe(h.text)}" | found by ${h.how === "client" ? "the client's name" : "the words"} | id=${safe(h.id)}`)
+    }
+  }
+  return lines
+}
+
 export function buildInvestigatorUserMessage(
   facts: InvestigationFacts,
   sweep: MailboxSweep,
   invoices: readonly InvoiceContextRow[] = [],
   invoicesUnavailable = false,
+  chatSweep: ChatSweep | null = null,
 ): string {
   const lines: string[] = []
   lines.push("<untrusted_data>")
@@ -472,6 +548,8 @@ export function buildInvestigatorUserMessage(
   for (const h of sweep.hits) {
     lines.push(`- [${safe(h.mailbox)}] ${safe(h.date)} | from ${safe(h.from)} | "${safe(h.subject)}" | ${safe(h.snippet)} | message_id=${safe(h.id)} thread_id=${safe(h.thread_id)}`)
   }
+
+  if (chatSweep) lines.push(...chatSweepPromptLines(chatSweep))
 
   if (invoicesUnavailable && invoices.length === 0) {
     lines.push("")

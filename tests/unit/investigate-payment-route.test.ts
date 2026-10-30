@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { NextRequest } from "next/server"
+import type { ChatSweep } from "@/lib/finance/feed-chat-sweep"
 
 const FEED_ID = "228b5a19-9a35-4221-84bc-1226d4a605c0"
 const CONTACT_ID = "11ba2e7c-36fe-48bd-986e-13b0d6f24a24"
@@ -24,6 +25,9 @@ let saveResults: boolean[]
 const updateFeed = vi.fn()
 const callWorker = vi.fn()
 const executeTool = vi.fn()
+const runChatSweep = vi.fn()
+let chatSweepResult: ChatSweep
+let chatSweepThrows: Error | null
 const fromCalls: string[] = []
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -34,6 +38,11 @@ vi.mock("@/lib/portal/rate-limit", () => ({ checkRateLimit: () => ({ allowed: tr
 vi.mock("@/lib/ai-agent/gmail-mailbox", () => ({ allowedMailboxes: () => ["support@tonydurante.us", "antonio.durante@tonydurante.us"] }))
 vi.mock("@/lib/ai-agent/tools", () => ({ executeTool: (...a: unknown[]) => executeTool(...a) }))
 vi.mock("@/lib/ai-agent/worker-tools", () => ({ callWorker: (...a: unknown[]) => callWorker(...a) }))
+// The chats-and-notes search is tested on its own (feed-chat-sweep.test.ts); here only what the route does with it.
+vi.mock("@/lib/finance/feed-chat-sweep", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/finance/feed-chat-sweep")>()),
+  runChatSweep: (...a: unknown[]) => runChatSweep(...a),
+}))
 vi.mock("@/lib/finance/feed-write", () => ({ updateFeed: (...a: unknown[]) => updateFeed(...a) }))
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
@@ -112,6 +121,22 @@ beforeEach(() => {
   updateFeed.mockImplementation(async () => ({ ok: saveResults.length > 1 ? saveResults.shift() : saveResults[0] }))
   callWorker.mockReset()
   callWorker.mockImplementation(async () => { if (workerThrows) throw workerThrows; return workerResult })
+  chatSweepThrows = null
+  chatSweepResult = {
+    terms: ["Simone Fattor"],
+    clients: [],
+    clientLookupError: null,
+    window: { from: "2026-04-29", to: "2026-06-28" },
+    stores: [
+      { store: "portal_chat", label: "portal chats", searched: true, error: null, hits: [{ store: "portal_chat", id: "pm1", date: "2026-05-30", who: "Simone Fattor", text: "I sent the apostille payment yesterday", how: "text" }] },
+      { store: "conversation_log", label: "conversation log", searched: true, error: null, hits: [] },
+      { store: "whatsapp_telegram", label: "WhatsApp/Telegram", searched: false, error: "relation is down", hits: [] },
+      { store: "team_chat", label: "team chat (channels, not direct messages)", searched: true, error: null, hits: [] },
+      { store: "staff_notes", label: "staff notes", searched: true, error: null, hits: [] },
+    ],
+  }
+  runChatSweep.mockReset()
+  runChatSweep.mockImplementation(async () => { if (chatSweepThrows) throw chatSweepThrows; return chatSweepResult })
   executeTool.mockReset()
   // The deposit notice sits in the support mailbox only; the owner's mailbox has nothing for this name.
   executeTool.mockImplementation(async (_name: string, params: { as_user?: string }) =>
@@ -309,5 +334,54 @@ describe("saving", () => {
     expect(body.saved).toBe(false)
     expect(body.investigation).toBeTruthy()
     expect(writes()[writes().length - 1].review_metadata).toEqual({ investigation_started_at: null })
+  })
+})
+
+
+describe("the chats and notes", () => {
+  it("are searched for the owner who ran it, with the payment's own facts, and never for anyone else", async () => {
+    await POST(req({ feed_id: FEED_ID }))
+    expect(runChatSweep).toHaveBeenCalledTimes(1)
+    const input = runChatSweep.mock.calls[0][0] as { userId: string; facts: { sender_name: string; transaction_date: string } }
+    expect(input.userId).toBe("owner-1")
+    expect(input.facts).toMatchObject({ sender_name: "Simone Fattor", transaction_date: "2026-05-29" })
+
+    runChatSweep.mockClear()
+    owner = false
+    await POST(req({ feed_id: FEED_ID }))
+    expect(runChatSweep).not.toHaveBeenCalled()
+  })
+
+  it("reach the AI as untrusted data in its first message", async () => {
+    await POST(req({ feed_id: FEED_ID }))
+    const message = callWorker.mock.calls[0][0] as string
+    expect(message).toContain("CHATS AND NOTES SWEEP")
+    expect(message).toContain("I sent the apostille payment yesterday")
+    expect(message).toContain("WhatsApp/Telegram: NOT FULLY SEARCHED (relation is down)")
+  })
+
+  it("are kept on the payment as counts and reasons, never as the text of the messages", async () => {
+    const body = await (await POST(req({ feed_id: FEED_ID }))).json()
+    const searched = body.investigation.chats_searched as Array<{ store: string; searched: boolean; count: number; error: string | null }>
+    expect(searched.map((c) => c.store)).toEqual(["portal_chat", "conversation_log", "whatsapp_telegram", "team_chat", "staff_notes"])
+    expect(searched[0]).toMatchObject({ searched: true, count: 1 })
+    expect(searched[2]).toMatchObject({ searched: false, error: "relation is down" })
+    expect(JSON.stringify(searched)).not.toContain("apostille payment yesterday")
+  })
+
+  it("a chat source the sweep itself read is 'verified' and shown in the server's words", async () => {
+    workerResult = { ...workerResult, reply: goodReply({ sources: [{ kind: "chat", label: "He promised to pay INV-1234 in full", date: "never", mailbox: null, id: "pm1" }] }) }
+    const body = await (await POST(req({ feed_id: FEED_ID }))).json()
+    expect(body.investigation.sources[0]).toMatchObject({ verified: true, label: "portal chats — Simone Fattor", date: "2026-05-30" })
+    expect(JSON.stringify(body.investigation.sources)).not.toContain("promised to pay")
+  })
+
+  it("a search that CRASHES does not take the investigation down: the places show as not searched", async () => {
+    chatSweepThrows = new Error("pool exhausted")
+    const res = await POST(req({ feed_id: FEED_ID }))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(callWorker).toHaveBeenCalledTimes(1)
+    expect(body.investigation.chats_searched.every((c: { searched: boolean; error: string }) => c.searched === false && /pool exhausted/.test(c.error))).toBe(true)
   })
 })
