@@ -7,7 +7,9 @@ import type { BoardRole } from '@/lib/marketing/board'
 import { formatWhen } from '@/lib/marketing/lead-view'
 import { useLang, useT } from '@/components/marketing/lang-provider'
 import { localeFor } from '@/lib/marketing/i18n'
-import { romeLocalToIso } from '@/lib/marketing/rome-time'
+import { localToIso, zoneName } from '@/lib/marketing/zones'
+import { TimesLine } from '@/components/marketing/times-line'
+import type { ZoneInfo } from '@/lib/marketing/time-prefs'
 
 const btn = 'rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50'
 
@@ -16,11 +18,11 @@ const btn = 'rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50
  * "Pass to Rocco" (no date; a note about why and what the lead said — Rocco then fixes the call himself). The SELLER sees what was passed to him and can fix or move the call.
  * Every answer from the server is shown as the server wrote it.
  */
-export function HandoverPanel({ leadId, role, canAct, contact }: { leadId: string; role: BoardRole; canAct: boolean; contact: ContactState }) {
+export function HandoverPanel({ leadId, role, canAct, contact, zone }: { leadId: string; role: BoardRole; canAct: boolean; contact: ContactState; zone: ZoneInfo }) {
   const router = useRouter()
   const t = useT()
   const loc = localeFor(useLang())
-  const fw = (iso: string) => formatWhen(iso, 'Europe/Rome', loc)
+  const fw = (iso: string) => formatWhen(iso, zone.viewer, loc)
   const [mode, setMode] = useState<'book' | 'pass' | null>(null)
   const [when, setWhen] = useState('')
   const [note, setNote] = useState('')
@@ -44,7 +46,7 @@ export function HandoverPanel({ leadId, role, canAct, contact }: { leadId: strin
     <section className="rounded-xl border bg-white p-4 text-sm" data-testid="handover-panel">
       <h2 className="text-sm font-semibold text-slate-600">{seller ? t('The call') : t('Lead in target? Pass it to Rocco')}</h2>
       {contact.appointmentAt
-        ? <p className="mt-2 rounded-lg bg-sky-50 px-3 py-2 text-sky-900" data-testid="call-booked">{t('Call booked for {when}', { when: fw(contact.appointmentAt) })}</p>
+        ? <><p className="mt-2 rounded-lg bg-sky-50 px-3 py-2 text-sky-900" data-testid="call-booked">{t('Call booked for {when}', { when: fw(contact.appointmentAt) })} <span className="text-xs text-sky-800">({zoneName(zone.viewer)})</span></p><div className="mt-2"><TimesLine at={contact.appointmentAt} info={zone} /></div></>
         : contact.handedOverAt
           ? <p className="mt-2 rounded-lg bg-sky-50 px-3 py-2 text-sky-900" data-testid="passed-no-date">{seller ? t('Passed to you, no call booked yet.') : t('Passed to Rocco, no call booked yet.')}</p>
           : <p className="mt-2 text-slate-500">{seller ? t('No call booked yet.') : t('Not passed to Rocco yet.')}</p>}
@@ -62,12 +64,13 @@ export function HandoverPanel({ leadId, role, canAct, contact }: { leadId: strin
 
           {mode === 'book' && (
             <div className="mt-3 space-y-2" data-testid="book-form">
-              <label className="block"><span className="text-slate-500">{t('Day and time of the call (Rome time)')}</span>
+              <label className="block"><span className="text-slate-500">{t('Day and time of the call (your time: {zone})', { zone: zoneName(zone.viewer) })}</span>
                 <input type="datetime-local" className="mt-1 w-full rounded-lg border px-3 py-2" value={when} onChange={e => setWhen(e.target.value)} data-testid="appointment-when" /></label>
+              <TimesLine at={localToIso(when, zone.viewer)} info={zone} />
               <label className="block"><span className="text-slate-500">{t('Note for Rocco (optional)')}</span>
                 <textarea className="mt-1 w-full rounded-lg border px-3 py-2" rows={2} value={note} onChange={e => setNote(e.target.value)} placeholder={t('For example: he wants to know the costs')} /></label>
               <button type="button" className={`${btn} bg-slate-900 text-white`} disabled={busy || !when} data-testid="book-confirm"
-                onClick={() => { const at = romeLocalToIso(when); if (!at) { setError(t('Pick a valid day and time.')); return } void send({ action: 'appointment', at, ...(note.trim() ? { note: note.trim() } : {}) }) }}>{t('Save the call')}</button>
+                onClick={() => { const at = localToIso(when, zone.viewer); if (!at) { setError(t('Pick a valid day and time.')); return } void send({ action: 'appointment', at, ...(note.trim() ? { note: note.trim() } : {}) }) }}>{t('Save the call')}</button>
             </div>
           )}
           {mode === 'pass' && (

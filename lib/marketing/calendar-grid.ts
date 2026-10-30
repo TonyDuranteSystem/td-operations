@@ -1,11 +1,10 @@
 /**
- * TD Marketing — the Calendar's day, week, month and pipeline views (pure, safe to use in the browser; dev job 9aec66fa, round 2 step 2). Every day and hour here is ROME time, whatever
- * time zone the computer is set to (the team is not all in Italy): a day is a "YYYY-MM-DD" key read in Rome, an hour is the Rome wall clock. No DOM and no database, so every rule is tested.
+ * TD Marketing — the Calendar's day, week, month and pipeline views (pure, safe to use in the browser; dev job 9aec66fa, round 2 step 2). Every day and hour is read in ONE zone, whatever time zone
+ * the computer is set to: the viewer's own (Addendum K, 30 Oct 2026: Antonio in New York, Rocco in the Canary Islands, the setter in Rome). A day is a "YYYY-MM-DD" key read in that zone, an hour is
+ * its wall clock. Every helper takes the zone and reads Rome when none is given, which is what the screens did before zones. (The names still say "rome" for the same reason.) No DOM and no
+ * database, so every rule is tested.
  */
-import { romeLocalToIso } from "@/lib/marketing/rome-time"
-
-const ROME = "Europe/Rome"
-const PARTS = new Intl.DateTimeFormat("en-GB", { timeZone: ROME, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
+import { ROME, localToIso, zoneParts } from "@/lib/marketing/zones"
 
 /** The hours the day and week grids show; a call outside them is listed in a strip above the grid. */
 export const HOUR_FROM = 8
@@ -15,12 +14,10 @@ export const SNAP_MINUTES = 15
 
 export interface RomeParts { key: string; h: number; m: number }
 
-/** The Rome day and time of an instant, or null when it is not a date. */
-export function romeParts(iso: string): RomeParts | null {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return null
-  const p = Object.fromEntries(PARTS.formatToParts(d).map(x => [x.type, x.value])) as Record<string, string>
-  return { key: `${p.year}-${p.month}-${p.day}`, h: Number(p.hour) % 24, m: Number(p.minute) }
+/** The day and time of an instant in a zone (Rome by default), or null when it is not a date. */
+export function romeParts(iso: string, zone: string = ROME): RomeParts | null {
+  const p = zoneParts(iso, zone)
+  return p ? { key: p.key, h: p.h, m: p.m } : null
 }
 
 const utcOf = (key: string): Date => { const [y, m, d] = key.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d)) }
@@ -46,13 +43,13 @@ export function monthGrid(key: string): string[] {
   return Array.from({ length: 42 }, (_, i) => addDays(start, i))
 }
 
-/** The instant for a Rome day and wall-clock time, or null when it does not exist. */
-export const slotIso = (key: string, h: number, m: number): string | null => romeLocalToIso(`${key}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`)
+/** The instant for a day and wall-clock time in a zone (Rome by default), or null when it does not exist. */
+export const slotIso = (key: string, h: number, m: number, zone: string = ROME): string | null => localToIso(`${key}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`, zone)
 
 /** The same time of day on another day (a drag in the month view, or into Tomorrow). */
-export function moveToDay(iso: string, key: string): string | null {
-  const p = romeParts(iso)
-  return p ? slotIso(key, p.h, p.m) : null
+export function moveToDay(iso: string, key: string, zone: string = ROME): string | null {
+  const p = romeParts(iso, zone)
+  return p ? slotIso(key, p.h, p.m, zone) : null
 }
 
 /** A drop at `fraction` (0..1) of the way down the hour grid becomes a time snapped to 15 minutes, kept inside the grid. */
@@ -66,9 +63,9 @@ export type Bucket = "late" | "today" | "tomorrow" | "week" | "later"
 export const BUCKETS: readonly Bucket[] = ["late", "today", "tomorrow", "week", "later"]
 
 /** Which pipeline group a call is in. "Late" = its time has passed; "This week" = the days after tomorrow up to Sunday. */
-export function bucketOf(atIso: string, nowIso: string): Bucket | null {
-  const at = romeParts(atIso)
-  const now = romeParts(nowIso)
+export function bucketOf(atIso: string, nowIso: string, zone: string = ROME): Bucket | null {
+  const at = romeParts(atIso, zone)
+  const now = romeParts(nowIso, zone)
   if (!at || !now) return null
   if (new Date(atIso).getTime() < new Date(nowIso).getTime()) return "late"
   if (at.key === now.key) return "today"
@@ -80,27 +77,27 @@ export function bucketOf(atIso: string, nowIso: string): Bucket | null {
  * Where a card dropped on a group goes. Today and Tomorrow keep the time of day (a time already past today becomes the next full hour); This week and Later need a person to choose the
  * day, so a starting point is suggested. Late is a result, never a place to drop.
  */
-export function bucketDrop(bucket: Bucket, atIso: string, nowIso: string): { kind: "move"; at: string } | { kind: "choose"; suggest: string } | { kind: "refuse" } {
-  const now = romeParts(nowIso)
+export function bucketDrop(bucket: Bucket, atIso: string, nowIso: string, zone: string = ROME): { kind: "move"; at: string } | { kind: "choose"; suggest: string } | { kind: "refuse" } {
+  const now = romeParts(nowIso, zone)
   if (!now || bucket === "late") return { kind: "refuse" }
   if (bucket === "today") {
-    const same = moveToDay(atIso, now.key)
+    const same = moveToDay(atIso, now.key, zone)
     if (same && new Date(same).getTime() > new Date(nowIso).getTime()) return { kind: "move", at: same }
-    const next = slotIso(now.key, now.h + 1, 0)
+    const next = slotIso(now.key, now.h + 1, 0, zone)
     if (next) return { kind: "move", at: next }
     // late in the evening there is no hour left today: let the person choose, starting tomorrow
-    const tomorrow = moveToDay(atIso, addDays(now.key, 1))
+    const tomorrow = moveToDay(atIso, addDays(now.key, 1), zone)
     return tomorrow ? { kind: "choose", suggest: tomorrow } : { kind: "refuse" }
   }
-  if (bucket === "tomorrow") { const t = moveToDay(atIso, addDays(now.key, 1)); return t ? { kind: "move", at: t } : { kind: "refuse" } }
+  if (bucket === "tomorrow") { const t = moveToDay(atIso, addDays(now.key, 1), zone); return t ? { kind: "move", at: t } : { kind: "refuse" } }
   const target = bucket === "week" ? (addDays(now.key, 2) <= addDays(weekStart(now.key), 6) ? addDays(now.key, 2) : addDays(weekStart(now.key), 6)) : addDays(now.key, 8)
-  const t = moveToDay(atIso, target)
+  const t = moveToDay(atIso, target, zone)
   return t ? { kind: "choose", suggest: t } : { kind: "refuse" }
 }
 
-/** A value for a date-and-time field (Rome time) from an instant: "2026-10-27T11:00". */
-export function romeLocalValue(iso: string): string {
-  const p = romeParts(iso)
+/** A value for a date-and-time field (in a zone, Rome by default) from an instant: "2026-10-27T11:00". */
+export function romeLocalValue(iso: string, zone: string = ROME): string {
+  const p = romeParts(iso, zone)
   return p ? `${p.key}T${String(p.h).padStart(2, "0")}:${String(p.m).padStart(2, "0")}` : ""
 }
 

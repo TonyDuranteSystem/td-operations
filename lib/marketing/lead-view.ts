@@ -69,8 +69,8 @@ export function filterLeads<T extends FilterableLead>(leads: readonly T[], f: { 
 }
 
 /** Plain-English line for a history row. Unknown kinds show their own name so nothing is ever hidden. */
-export function eventText(kind: string, data: Record<string, unknown>, stages: readonly StageOption[], reasons: readonly StageOption[], t: TFn = makeT("en"), locale = "en-GB"): string {
-  const fw = (iso: string | null) => formatWhen(iso, "Europe/Rome", locale)
+export function eventText(kind: string, data: Record<string, unknown>, stages: readonly StageOption[], reasons: readonly StageOption[], t: TFn = makeT("en"), locale = "en-GB", zone = "Europe/Rome"): string {
+  const fw = (iso: string | null) => formatWhen(iso, zone, locale)
   const note = typeof data.note === "string" && data.note ? ` — ${data.note}` : ""
   switch (kind) {
     case "received": return t("Lead arrived from the ad")

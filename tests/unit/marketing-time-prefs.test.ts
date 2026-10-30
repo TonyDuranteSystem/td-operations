@@ -52,14 +52,14 @@ describe("whose zone a screen is read in", () => {
 describe("who takes calls, and who is the seller of a lead", () => {
   const members = [{ userId: ANTONIO, email: "antonio.durante@tonydurante.us" }, { userId: ROCCO, email: "rocco@tonydurante.us" }, { userId: SETTER, email: "ale@x.com" }, { userId: "p", email: "paused@x.com", status: "paused" }]
   it("a member with working hours takes calls; a paused or removed one does not", () => {
-    expect(callTakers(prefs, members)).toEqual([{ userId: ROCCO, label: "Rocco" }])
+    expect(callTakers(prefs, members)).toEqual([{ userId: ROCCO, label: "Rocco", email: "rocco@tonydurante.us" }])
     expect(callTakers({ callHours: { [ROCCO]: {}, p: {} } }, members).map(t => t.userId)).toEqual([ROCCO])
   })
   it("the seller is the one who picked the lead, else the first who takes calls, else nobody", () => {
-    const two = [{ userId: ROCCO, label: "Rocco" }, { userId: "b", label: "Bea" }]
-    expect(sellerForLead(two, "b")).toEqual({ userId: "b", label: "Bea" })
-    expect(sellerForLead(two, SETTER)).toEqual({ userId: ROCCO, label: "Rocco" })
-    expect(sellerForLead(two, null)).toEqual({ userId: ROCCO, label: "Rocco" })
+    const two = [{ userId: ROCCO, label: "Rocco", email: null }, { userId: "b", label: "Bea", email: null }]
+    expect(sellerForLead(two, "b")).toEqual({ userId: "b", label: "Bea", email: null })
+    expect(sellerForLead(two, SETTER)).toEqual({ userId: ROCCO, label: "Rocco", email: null })
+    expect(sellerForLead(two, null)).toEqual({ userId: ROCCO, label: "Rocco", email: null })
     expect(sellerForLead([], ROCCO)).toBeNull()
   })
 })

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useT } from '@/components/marketing/lang-provider'
 import { useLeadWindows } from '@/components/marketing/lead-windows-host'
-import { romeLocalToIso } from '@/lib/marketing/rome-time'
+import { localToIso, zoneName } from '@/lib/marketing/zones'
 import type { CalendarItem } from '@/lib/marketing/calendar'
 import {
   BUCKETS, HOUR_FROM, HOUR_TO, addDays, bucketDrop, bucketOf, layoutDay, monthGrid, monthKey, moveToDay, romeLocalValue, romeParts, shiftMonth, slotIso, timeFromFraction, weekDays,
@@ -22,20 +22,21 @@ const STAGES: Array<{ key: CalendarItem['stage']; label: string }> = [{ key: 'ba
 
 const keyOf = (it: CalendarItem) => `${it.leadId}-${it.kind}`
 const pad = (n: number) => String(n).padStart(2, '0')
-const timeText = (iso: string) => { const p = romeParts(iso); return p ? `${pad(p.h)}:${pad(p.m)}` : '' }
 const TONE = { appointment: 'border-sky-300 bg-sky-50 text-sky-900', callback: 'border-amber-300 bg-amber-50 text-amber-900' } as const
 
 interface Pending { item: CalendarItem; at: string | null; suggest: string }
 
 /**
  * TD Marketing — the Calendar (dev job 9aec66fa, round 2 step 2): Day, Week, Month and Pipeline. A call back and a booked call can be dragged to another day or time (or moved with the
- * "Move…" button, which works from the keyboard); a reason is ALWAYS asked, and the seller and the setter are told. Every day and hour is Rome time (lib/marketing/calendar-grid.ts).
+ * "Move…" button, which works from the keyboard); a reason is ALWAYS asked, and the seller and the setter are told. Every day and hour is read in the viewer's own zone (lib/marketing/calendar-grid.ts; Addendum K).
  */
-export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }: { items: CalendarItem[]; lateMore: number; nowIso: string; canMove: boolean; told: boolean; locale: string }) {
+export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale, zone }: { items: CalendarItem[]; lateMore: number; nowIso: string; canMove: boolean; told: boolean; locale: string; /** the viewer's own zone: every day and hour is read in it */ zone: string }) {
   const t = useT()
+  const rp = (iso: string) => romeParts(iso, zone)
+  const timeText = (iso: string) => { const p = rp(iso); return p ? `${pad(p.h)}:${pad(p.m)}` : '' }
   const router = useRouter()
   const { open } = useLeadWindows()
-  const today = romeParts(nowIso)?.key ?? '1970-01-01'
+  const today = rp(nowIso)?.key ?? '1970-01-01'
   const [view, setView] = useState<View>('week')
   const [anchor, setAnchor] = useState(today)
   const [byWhen, setByWhen] = useState(true)
@@ -54,8 +55,8 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }
   const utc = (key: string) => { const [y, m, d] = key.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)) }
   const dayHead = (key: string) => fmt({ weekday: 'short', day: 'numeric', month: 'short' }).format(utc(key)).replace(',', '')
   const dayLong = (key: string) => fmt({ weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }).format(utc(key)).replace(',', '')
-  const whenText = (iso: string) => { const p = romeParts(iso); return p ? `${dayHead(p.key)} ${pad(p.h)}:${pad(p.m)}` : '' }
-  const byDay = (key: string) => shown.filter(i => romeParts(i.at)?.key === key).sort((a, b) => a.at.localeCompare(b.at))
+  const whenText = (iso: string) => { const p = rp(iso); return p ? `${dayHead(p.key)} ${pad(p.h)}:${pad(p.m)}` : '' }
+  const byDay = (key: string) => shown.filter(i => rp(i.at)?.key === key).sort((a, b) => a.at.localeCompare(b.at))
   const movable = (it: CalendarItem) => canMove && !it.done
 
   const ask = (item: CalendarItem, at: string | null, suggest?: string) => {
@@ -63,19 +64,19 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }
     if (at !== null && new Date(at).getTime() === new Date(item.at).getTime()) return
     setPending({ item, at, suggest: suggest ?? at ?? item.at })
   }
-  const dropOnDay = (key: string) => { const it = drag.current; drag.current = null; if (!it || !canMove) return; const at = moveToDay(it.at, key); if (at) ask(it, at) }
+  const dropOnDay = (key: string) => { const it = drag.current; drag.current = null; if (!it || !canMove) return; const at = moveToDay(it.at, key, zone); if (at) ask(it, at) }
   const dropOnHour = (key: string, e: React.DragEvent<HTMLElement>) => {
     const it = drag.current; drag.current = null
     if (!it || !canMove) return
     const r = e.currentTarget.getBoundingClientRect()
     const { h, m } = timeFromFraction((e.clientY - r.top) / r.height)
-    const at = slotIso(key, h, m)
+    const at = slotIso(key, h, m, zone)
     if (at) ask(it, at)
   }
   const dropOnBucket = (b: Bucket) => {
     const it = drag.current; drag.current = null
     if (!it || !canMove) return
-    const d = bucketDrop(b, it.at, nowIso)
+    const d = bucketDrop(b, it.at, nowIso, zone)
     if (d.kind === 'refuse') { setToast(b === 'late' ? t('A call cannot be moved into Late. Pick Today or later.') : t('That time is not possible.')); return }
     if (d.kind === 'move') ask(it, d.at)
     else ask(it, null, d.suggest)
@@ -96,7 +97,7 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }
 
   const hourGrid = (keys: string[]) => {
     const rows = HOUR_TO - HOUR_FROM
-    const outside = keys.map(k => byDay(k).filter(i => { const p = romeParts(i.at); return !p || p.h < HOUR_FROM || p.h >= HOUR_TO }))
+    const outside = keys.map(k => byDay(k).filter(i => { const p = rp(i.at); return !p || p.h < HOUR_FROM || p.h >= HOUR_TO }))
     return (
       <div className="min-w-[44rem] overflow-x-auto">
         <div className="grid" style={{ gridTemplateColumns: `3.5rem repeat(${keys.length}, minmax(0, 1fr))` }}>
@@ -109,7 +110,7 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }
           <div>{Array.from({ length: rows }, (_, i) => <div key={i} className="border-t px-1 text-[11px] text-slate-500" style={{ height: PX }}>{pad(HOUR_FROM + i)}:00</div>)}</div>
           {keys.map(k => {
             const list = byDay(k)
-            const placed = layoutDay(list.map(i => { const p = romeParts(i.at); return { h: p?.h ?? 0, m: p?.m ?? 0 } }))
+            const placed = layoutDay(list.map(i => { const p = rp(i.at); return { h: p?.h ?? 0, m: p?.m ?? 0 } }))
             return (
               <div key={k} className="relative border-l" style={{ height: rows * PX }} data-day={k} data-testid="cal-col"
                 onDragOver={e => { if (drag.current) e.preventDefault() }} onDrop={e => { e.preventDefault(); dropOnHour(k, e) }}>
@@ -169,7 +170,7 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }
             <p className="mb-2 text-xs text-slate-500">{canMove ? t('Drag a card to another group: Today and Tomorrow keep its time of day; This week and Later ask you for the day and time. You cannot drop into Late. A reason is always asked.') : ''}</p>
             <div className="grid gap-3 overflow-x-auto" style={{ gridTemplateColumns: 'repeat(5, minmax(11rem, 1fr))' }}>
               {BUCKETS.map(b => {
-                const list = open_.filter(i => bucketOf(i.at, nowIso) === b)
+                const list = open_.filter(i => bucketOf(i.at, nowIso, zone) === b)
                 return (
                   <section key={b} data-bucket={b} aria-label={t(BUCKET_LABEL[b])} className="min-w-0 rounded-xl bg-slate-100 p-2"
                     onDragOver={e => { if (drag.current) e.preventDefault() }} onDrop={e => { e.preventDefault(); dropOnBucket(b) }}>
@@ -244,22 +245,22 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }
         </section>
       )}
 
-      {pending && <MoveDialog pending={pending} nowIso={nowIso} told={told} whenText={whenText} onClose={() => setPending(null)}
+      {pending && <MoveDialog pending={pending} nowIso={nowIso} told={told} zone={zone} whenText={whenText} onClose={() => setPending(null)}
         onDone={(item, at, message) => { setMoved(m => ({ ...m, [keyOf(item)]: at })); setPending(null); setToast(message); router.refresh() }} />}
       {toast && <p role="status" className="fixed bottom-16 left-1/2 z-[400] -translate-x-1/2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm text-white shadow-lg" data-testid="cal-toast">{toast}</p>}
     </div>
   )
 }
 
-function MoveDialog({ pending, nowIso, told, whenText, onClose, onDone }: { pending: Pending; nowIso: string; told: boolean; whenText: (iso: string) => string; onClose: () => void; onDone: (item: CalendarItem, at: string, message: string) => void }) {
+function MoveDialog({ pending, nowIso, told, zone, whenText, onClose, onDone }: { pending: Pending; nowIso: string; told: boolean; zone: string; whenText: (iso: string) => string; onClose: () => void; onDone: (item: CalendarItem, at: string, message: string) => void }) {
   const t = useT()
   const { item } = pending
-  const [local, setLocal] = useState(romeLocalValue(pending.suggest))
+  const [local, setLocal] = useState(romeLocalValue(pending.suggest, zone))
   const [reason, setReason] = useState<string | null>(null)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const at = pending.at ?? romeLocalToIso(local)
+  const at = pending.at ?? localToIso(local, zone)
   const past = at !== null && new Date(at).getTime() < new Date(nowIso).getTime() - 5 * 60_000
   const needsNote = reason === 'Other' && note.trim() === ''
   const ready = !!reason && !!at && !past && !needsNote && !busy
@@ -295,7 +296,7 @@ function MoveDialog({ pending, nowIso, told, whenText, onClose, onDone }: { pend
         <p className="text-xs text-slate-500">{t('A reason is required. The seller and the setter are told.')}</p>
         <p className="rounded-lg bg-slate-100 p-2.5 text-sm"><b>{item.name}</b> · {item.kind === 'appointment' ? t('Call with the seller') : t('Call back')}<br />{whenText(item.at)} → {at ? whenText(at) : '…'}</p>
         {pending.at === null && (
-          <label className="block text-xs text-slate-600">{t('New day and time (Rome time)')}
+          <label className="block text-xs text-slate-600">{t('New day and time (your time: {zone})', { zone: zoneName(zone) })}
             <input type="datetime-local" value={local} onChange={e => setLocal(e.target.value)} data-testid="move-when" className="mt-1 w-full rounded-lg border px-2 py-1.5 text-sm" />
           </label>
         )}

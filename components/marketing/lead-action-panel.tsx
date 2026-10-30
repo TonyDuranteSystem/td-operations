@@ -1,6 +1,8 @@
 'use client'
 
-import { romeLocalToIso } from '@/lib/marketing/rome-time'
+import { localToIso, zoneName, ROME } from '@/lib/marketing/zones'
+import { TimesLine } from '@/components/marketing/times-line'
+import type { ZoneInfo } from '@/lib/marketing/time-prefs'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useT } from '@/components/marketing/lang-provider'
@@ -27,10 +29,12 @@ interface Props {
   atContacted?: boolean
   /** the lead is archived */
   archived?: boolean
+  /** whose clocks a typed time is shown in (the viewer's own zone, the lead's, the seller's, never the owner's for a setter) */
+  zone?: ZoneInfo
 }
 
 /** The buttons a setter or the owner uses on one lead. Every server answer (including the refusals) is shown as the server wrote it. */
-export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, checklist, reasons, afterHref, role = 'setter', afterPay = false, atContacted = false, archived = false }: Props) {
+export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, checklist, reasons, afterHref, role = 'setter', afterPay = false, atContacted = false, archived = false, zone = { viewer: ROME, client: null, clientName: '', seller: null, owner: null } }: Props) {
   const router = useRouter()
   const t = useT()
   const [mode, setMode] = useState<Mode>(null)
@@ -109,8 +113,9 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
           )}
           {(mode === 'call_back' || mode === 'not_ready') && (
             <label className="block">
-              <span className="text-slate-500">{mode === 'not_ready' ? t('Day and time to come back (Rome time)') : t('Day and time to call back (Rome time)')}</span>
+              <span className="text-slate-500">{mode === 'not_ready' ? t('Day and time to come back (your time: {zone})', { zone: zoneName(zone.viewer) }) : t('Day and time to call back (your time: {zone})', { zone: zoneName(zone.viewer) })}</span>
               <input type="datetime-local" className="mt-1 w-full rounded-lg border px-3 py-2" value={when} onChange={e => setWhen(e.target.value)} />
+              <span className="mt-2 block"><TimesLine at={localToIso(when, zone.viewer)} info={zone} /></span>
             </label>
           )}
           <label className="block">
@@ -125,8 +130,8 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
               if (mode === 'good') return send({ action: 'good', ticked, note: n })
               if (mode === 'not_in_target') return send({ action: 'not_in_target', reason, note: n })
               if (mode === 'closed' || mode === 'not_closed' || mode === 'contacted' || mode === 'upsell' || mode === 'waiting' || mode === 'archive') return send({ action: mode, note: n })
-              if (mode === 'not_ready') return send({ action: 'not_ready', callbackAt: romeLocalToIso(when) ?? '', note: n })
-              if (mode === 'call_back') return send({ action: 'call_back', callbackAt: romeLocalToIso(when) ?? '', note: n })
+              if (mode === 'not_ready') return send({ action: 'not_ready', callbackAt: localToIso(when, zone.viewer) ?? '', note: n })
+              if (mode === 'call_back') return send({ action: 'call_back', callbackAt: localToIso(when, zone.viewer) ?? '', note: n })
               return send({ action: 'note', note: n })
             }}
           >

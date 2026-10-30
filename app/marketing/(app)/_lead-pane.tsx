@@ -19,6 +19,12 @@ import { getMarketingSetting } from '@/lib/marketing/settings'
 import type { SellerResultStages } from '@/lib/marketing/settings-schema'
 import { hasPaidOrLater, onSellerSide, sellerOf } from '@/lib/marketing/lead-actions'
 import { BookingLinkPanel } from '@/components/marketing/booking-link-panel'
+import type { TimeView } from '@/lib/marketing/time-prefs-server'
+import { bannerClocks, leadClocks, memberZone, sellerForLead, zoneInfoFor } from '@/lib/marketing/time-prefs'
+import { leadZoneOf } from '@/lib/marketing/lead-zone'
+import { ClockRow, SellerBanner } from '@/components/marketing/lead-clocks'
+import { LeadZoneRow } from '@/components/marketing/lead-zone-row'
+import { zoneName } from '@/lib/marketing/zones'
 
 interface Props {
   lead: LeadRow
@@ -39,15 +45,17 @@ interface Props {
   viewingAs?: boolean
   /** the board the person is working from (an owner can use both); default = his own role */
   role?: BoardRole
+  /** the zones and clocks for this viewer (lib/marketing/time-prefs-server.ts): the zone every time on the page is read in, who takes calls, and whether the owner's clock is hidden (a setter) */
+  time: TimeView
 }
 
 /** One lead, everything about it, with the buttons: used by the Leads screen and the Call list. A computer-width panel. Team-scoped by whoever loads it. */
-export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons, checklist, permissions, isOwner, myId, afterHref, paymentLink, myName, viewingAs, role: roleIn }: Props) {
+export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons, checklist, permissions, isOwner, myId, afterHref, paymentLink, myName, viewingAs, role: roleIn, time }: Props) {
   // What the team wrote (notes, the ticks from a call) is read only by people who work the leads; the ad person gets the facts without it.
   const lang = getLang()
   const t = makeT(lang)
   const loc = localeFor(lang)
-  const fw = (iso: string | null | undefined) => formatWhen(iso, 'Europe/Rome', loc)
+  const fw = (iso: string | null | undefined) => formatWhen(iso, time.zone, loc)
   const seesNotes = canSeeNotes(permissions)
   const lead0 = redactLead(leadIn, seesNotes)
   // no phone number (and no phone-looking form answer) in the page for someone who may not see phone numbers
@@ -77,8 +85,18 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
   const withSeller = setterOnly && onSellerSide(lead.status, sellerSettings)
   const lastBookingLink = [...events].reverse().map(e => (e.kind === 'booking_link' && typeof e.data?.url === 'string' ? e.data.url : null)).find(u => u !== null) ?? null
   const where = [lead.campaign_name, lead.adset_name, lead.ad_name].filter(Boolean)
+  // the lead's time zone (from the phone number or set by hand: read from the full history and the full number, never from what the viewer may see) and the clocks this viewer gets
+  const leadZone = leadZoneOf({ phone: leadIn.phone, events: eventsIn })
+  const firstName = (lead.full_name || lead.email || t('Unnamed lead')).trim().split(/\s+/)[0]
+  const sellerTaker = sellerForLead(time.takers, lead.claimed_by)
+  const seller = sellerTaker ? { label: sellerTaker.label, zone: memberZone(time.prefs, sellerTaker.userId) } : null
+  const nowIso = new Date().toISOString()
+  const zoneInfo = zoneInfoFor({ viewerZone: time.zone, clientZone: leadZone.zone, clientName: firstName, seller, owner: time.prefs.ownerClock, hideOwner: time.hideOwner })
+  const clocks = leadClocks({ leadName: firstName, clientZone: leadZone.zone, seller, owner: time.prefs.ownerClock, youZone: time.zone, hideOwner: time.hideOwner })
+  const banner = bannerClocks({ isTaker: time.isTaker, hideOwner: time.hideOwner, youZone: time.zone, owner: time.prefs.ownerClock })
   return (
     <div className="space-y-4">
+      {banner.length > 0 && <SellerBanner clocks={banner} nowIso={nowIso} />}
       <div className="rounded-xl border bg-white p-5">
         <div className="flex items-start justify-between gap-3">
           <h2 className="text-xl font-semibold">{lead.full_name || lead.email || lead.phone || t('Unnamed lead')}</h2>
@@ -93,15 +111,22 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
           {lead.callback_at && <p><span className="text-slate-500">{t('Call back: ')}</span><b>{fw(lead.callback_at)}</b></p>}
           {lead.not_in_target_reason && <p><span className="text-slate-500">{t('Not in target: ')}</span>{t(reasons.find(r => r.key === lead.not_in_target_reason)?.label ?? lead.not_in_target_reason)}</p>}
         </div>
+        <LeadZoneRow leadId={lead.id} name={firstName} zone={leadZone.zone} source={leadZone.source} byName={leadZone.by ? personName(leadZone.by) : null} callingCode={leadZone.callingCode} options={leadZone.options} canSet={hasPermission(permissions, 'leads.mark')} nowIso={nowIso} />
         {flag && <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">{flag}</p>}
         {where.length > 0 && <p className="mt-3 text-xs text-slate-400">{where.join(' › ')}</p>}
+        <p className="mt-2 text-xs text-slate-400">{t('Times on this page are {zone} time.', { zone: zoneName(time.zone) })}</p>
+      </div>
+
+      <div className="space-y-4 rounded-xl border bg-white p-4">
+        <ClockRow clocks={clocks} title={t('Right now')} nowIso={nowIso} />
+        {contact.appointmentAt && <ClockRow clocks={clocks} title={t('The booked call: {when}', { when: fw(contact.appointmentAt) })} nowIso={nowIso} fixedIso={contact.appointmentAt} />}
       </div>
 
       {setterNote && <SetterNoteBlock note={setterNote} ticks={lead.qualification} />}
 
       {role === 'setter' && <ContactPanel leadId={lead.id} canAct={canAct} contact={contact} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} setterName={signer} templates={templates} canEditTemplates={isOwner} canWhatsApp={hasPermission(permissions, 'whatsapp')} />}
 
-      <HandoverPanel leadId={lead.id} role={role} canAct={canAct} contact={contact} />
+      <HandoverPanel leadId={lead.id} role={role} canAct={canAct} contact={contact} zone={zoneInfo} />
 
       <LeadActionPanel
         leadId={lead.id}
@@ -116,6 +141,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
         afterPay={afterPay}
         atContacted={lead.status === sellerKeys.contacted}
         archived={lead.status === sellerKeys.archived}
+        zone={zoneInfo}
       />
 
       {role === 'seller' && afterPay && lead.status !== sellerKeys.archived && <BookingLinkPanel leadId={lead.id} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} email={lead.email} lastLink={lastBookingLink} canAct={canAct} canWhatsApp={hasPermission(permissions, 'whatsapp')} canEmail={hasPermission(permissions, 'inbox')} />}
@@ -141,7 +167,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
         <ol className="mt-2 space-y-1.5">
           {events.map(e => (
             <li key={e.id} className="flex justify-between gap-3 rounded-lg border px-3 py-2">
-              <span className="min-w-0 whitespace-pre-wrap break-words">{eventText(e.kind, e.data, stages, reasons, t, loc)}{e.actor !== 'system' && <span className="text-slate-400"> · {personName(e.actor)}{e.data?.via_view_as === true ? ` ${t('(viewing as)')}` : ''}</span>}</span>
+              <span className="min-w-0 whitespace-pre-wrap break-words">{eventText(e.kind, e.data, stages, reasons, t, loc, time.zone)}{e.actor !== 'system' && <span className="text-slate-400"> · {personName(e.actor)}{e.data?.via_view_as === true ? ` ${t('(viewing as)')}` : ''}</span>}</span>
               <span className="shrink-0 text-xs text-slate-400">{fw(e.created_at)}</span>
             </li>
           ))}

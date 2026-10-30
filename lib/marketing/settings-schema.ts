@@ -180,7 +180,7 @@ export const MARKETING_SETTING_DEFS = {
    * Time zones and calendars (Addendum K, 30 Oct 2026). The business owner's clock: the zone Antonio lives in and the name shown on his clock ("Antonio"). It is the clock shown to the seller
    * and the owner next to a lead's, and NEVER to a setter. Until it is set it reads Rome, as every screen did before.
    */
-  owner_clock: { schema: z.object({ zone: ianaZone, label: z.string().trim().min(1).max(40) }), fallback: { zone: "Europe/Rome", label: "Owner" } as { zone: string; label: string } },
+  owner_clock: { schema: z.object({ zone: ianaZone, label: z.string().trim().min(1).max(40), email: z.string().trim().toLowerCase().max(120).regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/).optional() }), fallback: { zone: "Europe/Rome", label: "Owner" } as { zone: string; label: string; email?: string } },
   /** Each team member's own time zone, by user id; a member without an entry reads Rome time. Set on the Team screen. */
   member_time_zones: { schema: z.record(z.string().uuid(), ianaZone).refine(o => Object.keys(o).length <= 60, "Too many people."), fallback: {} as Record<string, string> },
   /**

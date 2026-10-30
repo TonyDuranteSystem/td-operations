@@ -4,10 +4,10 @@
  * time, she is Rocco's employee") lives in `leadClocks` and is decided on the server: the setter's page is built without the owner's zone, it is not hidden on the screen. No database here.
  */
 import { DEFAULT_CALL_HOURS, type CalendlyLink, type CallHoursInput } from "@/lib/marketing/settings-schema"
-import { ROME, isValidZone } from "@/lib/marketing/zones"
+import { ROME, clockText, isValidZone, utcOffsetText } from "@/lib/marketing/zones"
 import { personName } from "@/lib/marketing/setter-note"
 
-export interface OwnerClock { zone: string; label: string }
+export interface OwnerClock { zone: string; label: string; /** the owner's work mailbox, so the seller's calendar can show his time as Busy */ email?: string }
 export interface TimePrefs {
   ownerClock: OwnerClock
   memberZones: Record<string, string>
@@ -53,11 +53,11 @@ export function viewerZone(p: TimePrefs, v: { userId: string; ownerLogin: boolea
   return memberZone(p, v.viewAsMemberId ?? v.userId)
 }
 
-export interface Taker { userId: string; label: string }
+export interface Taker { userId: string; label: string; /** the person's login (a work mailbox when his calendars are used) */ email: string | null }
 
 /** The members who take calls with leads: the ones that have working hours in the settings, active, in the order given. */
 export function callTakers(p: Pick<TimePrefs, "callHours">, members: ReadonlyArray<{ userId: string; email: string | null; status?: string }>): Taker[] {
-  return members.filter(m => m.status !== "removed" && m.status !== "paused" && Object.prototype.hasOwnProperty.call(p.callHours, m.userId)).map(m => ({ userId: m.userId, label: personName(m.email) }))
+  return members.filter(m => m.status !== "removed" && m.status !== "paused" && Object.prototype.hasOwnProperty.call(p.callHours, m.userId)).map(m => ({ userId: m.userId, label: personName(m.email), email: m.email }))
 }
 
 /** The seller of a lead: the one who picked it, when he takes calls; otherwise the first member who takes calls; nobody when nobody does. */
@@ -76,6 +76,32 @@ export function leadClocks(i: { leadName: string; clientZone: string | null; sel
   const out: Clock[] = [{ key: "client", label: i.leadName, zone: i.clientZone }]
   if (i.seller) out.push({ key: "seller", label: i.seller.label, zone: i.seller.zone })
   out.push(i.hideOwner ? { key: "you", label: "You", zone: i.youZone } : { key: "owner", label: i.owner.label, zone: i.owner.zone })
+  return out
+}
+
+/** Whose times a box that takes a day and time shows next to the typed one: the viewer's own zone, the lead's, the seller's and (never for a setter) the owner's. */
+export interface ZoneInfo {
+  viewer: string
+  client: string | null
+  clientName: string
+  seller: { label: string; zone: string } | null
+  owner: { label: string; zone: string } | null
+}
+
+/** The viewer's information for a lead: the owner's zone is only included for a person who may see it. */
+export function zoneInfoFor(i: { viewerZone: string; clientZone: string | null; clientName: string; seller: { label: string; zone: string } | null; owner: OwnerClock; hideOwner: boolean }): ZoneInfo {
+  return { viewer: i.viewerZone, client: i.clientZone, clientName: i.clientName, seller: i.seller, owner: i.hideOwner ? null : i.owner }
+}
+
+export interface TimeAt { key: "client" | "seller" | "owner"; label: string; zone: string; time: string; offset: string }
+
+/** What time it is for everybody in `info` at one instant: the lead, the seller and (when allowed) the owner; a person whose zone is not known is left out. */
+export function timesAt(at: Date | string | number, info: ZoneInfo): TimeAt[] {
+  const out: TimeAt[] = []
+  const add = (key: TimeAt["key"], label: string, zone: string | null) => { if (zone) out.push({ key, label, zone, time: clockText(at, zone), offset: utcOffsetText(at, zone) }) }
+  add("client", info.clientName, info.client)
+  if (info.seller) add("seller", info.seller.label, info.seller.zone)
+  if (info.owner) add("owner", info.owner.label, info.owner.zone)
   return out
 }
 

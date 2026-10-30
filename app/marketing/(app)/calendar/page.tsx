@@ -6,7 +6,9 @@ import { isSetterOnly } from '@/lib/marketing/lead-chat'
 import { leadDb } from '@/lib/marketing/meta-leads/service'
 import { listMembers } from '@/lib/marketing/members'
 import { loadCalendarData } from '@/lib/marketing/calendar-read'
-import { calendarItems, romeZoneName } from '@/lib/marketing/calendar'
+import { calendarItems } from '@/lib/marketing/calendar'
+import { loadTimeView } from '@/lib/marketing/time-prefs-server'
+import { utcOffsetText, zoneName } from '@/lib/marketing/zones'
 import { CalendarViews } from '@/components/marketing/calendar-views'
 import { personName } from '@/lib/marketing/setter-note'
 import { getLang } from '@/lib/marketing/lang'
@@ -38,7 +40,7 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
   const previewAll = !seesAll && !!g.ctx.viewAs
   const who = seesAll && sp.who && members.some(m => m.user_id === sp.who) ? sp.who : seesAll || previewAll ? 'all' : g.ctx.user.id
   const now = new Date()
-  const data = await loadCalendarData(db, teamId)
+  const [data, time] = await Promise.all([loadCalendarData(db, teamId), loadTimeView(g.ctx)])
   const { items: allItems, lateMore } = calendarItems({ leads: data.leads, events: data.events, members: members.map(m => ({ user_id: m.user_id, email: m.email, status: m.status })), ownerId: who, now, appointments: data.appointments, lang })
   // a setter is never told a call she booked ended in a payment: it is simply a call that is done
   const items = isSetterOnly(perms) ? allItems.map(i => (i.stage === 'paid' ? { ...i, stage: 'done' as const } : i)) : allItems
@@ -47,7 +49,7 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
   return (
     <div className="space-y-4 p-6">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div><h1 className="text-2xl font-semibold">{t('Calendar')}</h1><p className="text-sm text-slate-500" data-testid="cal-sub">{t('Call backs and booked calls.')} {seesAll ? (who === 'all' ? t('Call backs for everyone') : t('Call backs for {name}', { name: personName(members.find(m => m.user_id === who)?.email) })) : t('Your call backs')} · {t('Times are Rome time ({zone}).', { zone: romeZoneName(now) })}</p></div>
+        <div><h1 className="text-2xl font-semibold">{t('Calendar')}</h1><p className="text-sm text-slate-500" data-testid="cal-sub">{t('Call backs and booked calls.')} {seesAll ? (who === 'all' ? t('Call backs for everyone') : t('Call backs for {name}', { name: personName(members.find(m => m.user_id === who)?.email) })) : t('Your call backs')} · {t('Times are {zone} time ({offset}).', { zone: zoneName(time.zone), offset: utcOffsetText(now, time.zone) })}</p></div>
         {seesAll && members.length > 0 && (
           <nav aria-label={t('Whose calendar')} className="flex flex-wrap items-center gap-2" data-testid="cal-picker">
             <span className="text-xs text-slate-500">{t('Whose:')}</span>
@@ -59,7 +61,7 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
       {previewAll && <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="cal-preview">{t("You are viewing as a role that sees only its own call backs. As the team owner you are shown everyone's.")}</p>}
       {data.truncated && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{t('Showing the first call backs only; some later ones are not listed.')}</p>}
       {items.length === 0 && <div className="rounded-xl border border-dashed p-6 text-sm text-slate-600" data-testid="cal-empty">{seesAll && who !== 'all' ? t('This person has no call backs set') : t('No call backs set')}{t('. Nothing is booked or due. To add one, ')}<Link href="/marketing/leads" className="underline">{t('open a lead')}</Link>{t(', press Call back later, and pick a day and time.')}</div>}
-      <CalendarViews items={items} lateMore={lateMore} nowIso={now.toISOString()} canMove={hasPermission(perms, 'leads.mark')} told={g.ctx.viewAs === undefined} locale={localeFor(lang)} />
+      <CalendarViews items={items} lateMore={lateMore} nowIso={now.toISOString()} canMove={hasPermission(perms, 'leads.mark')} told={g.ctx.viewAs === undefined} locale={localeFor(lang)} zone={time.zone} />
     </div>
   )
 }

@@ -14,6 +14,7 @@ import { ThemeSync } from '@/components/marketing/theme-sync'
 import { LeadWindowTabs } from '@/components/marketing/lead-window-tabs'
 import { laneButtons, unreadLanesOfLead } from '@/lib/marketing/lead-chat-server'
 import { resolveBoardRole } from '@/lib/marketing/board'
+import { loadTimeView } from '@/lib/marketing/time-prefs-server'
 import { LeadPane } from '../../(app)/_lead-pane'
 
 export const dynamic = 'force-dynamic'
@@ -43,7 +44,7 @@ export default async function MarketingLeadWindow({ params, searchParams }: { pa
     getTeamLead(db, teamId, id),
   ])
   if (!lead) return note(t('This lead could not be found.'))
-  const events = await leadTimeline(db, lead.id)
+  const [events, time] = await Promise.all([leadTimeline(db, lead.id), loadTimeView(g.ctx)])
   const paymentLink = hasPermission(g.ctx.permissions, 'payment_links.create') ? { leadId: lead.id, ...(await loadPaymentLinkView(db, { teamId, userId: g.ctx.user.id }, lead.id)) } : undefined
   const chatOn = hasPermission(g.ctx.permissions, 'chat')
   // the chats this person has on the lead (one or two) and her unread number in each
@@ -54,7 +55,7 @@ export default async function MarketingLeadWindow({ params, searchParams }: { pa
       <ThemeSync />
       <FrameChangeNotifier />
       <LeadWindowTabs leadId={lead.id} chatOn={chatOn} initialTab={sp.tab ?? 'lead'} lanes={lanes}>
-        <LeadPane role={resolveBoardRole(g.ctx.permissions, sp.role)} lead={lead} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} viewingAs={!!g.ctx.viewAs} paymentLink={paymentLink} />
+        <LeadPane role={resolveBoardRole(g.ctx.permissions, sp.role)} lead={lead} events={events} stages={stages} reasons={reasons} checklist={checklist} permissions={g.ctx.permissions} isOwner={g.ctx.role === 'owner'} myId={g.ctx.user.id} myName={personName(g.ctx.user.email ?? '')} viewingAs={!!g.ctx.viewAs} paymentLink={paymentLink} time={time} />
       </LeadWindowTabs>
     </LangProvider>
   )
