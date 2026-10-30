@@ -12,6 +12,7 @@
  */
 import { formatCalendarDate, formatDetailAmount } from "@/lib/finance/contested-invoice-detail"
 import { isPaidInvoice } from "@/lib/finance/invoice-matchability"
+import { invoicePartyName } from "@/lib/finance/invoice-party"
 
 export interface InvoiceSummaryInput {
   invoice_number: string | null
@@ -143,12 +144,15 @@ export function summaryInputFromMatchedPayment(p: {
   amount_paid: number | null
   invoice_status: string | null
   accounts: { company_name: string } | null
+  contacts?: { full_name: string | null } | { full_name: string | null }[] | null
 }, currency: string | null): InvoiceSummaryInput {
   const total = num(p.total)
   const paid = p.invoice_status === "Paid"
+  const party = invoicePartyName(p)
   return {
     invoice_number: p.invoice_number,
-    party: p.accounts?.company_name?.trim() || null,
+    // A company, else the person the invoice was written to.
+    party: party === "—" ? null : party,
     description: p.description,
     installment: null,
     total,

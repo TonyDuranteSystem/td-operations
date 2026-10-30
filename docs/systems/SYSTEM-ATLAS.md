@@ -81,7 +81,7 @@ This is the single map of the whole system: every feature, where it lives, the r
 
 ## Appendix A — MCP tools
 <!-- GENERATED:mcp-tools -->
-_Regenerated 2026-10-29. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
+_Regenerated 2026-10-30. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
 
 **51 active tool groups**, **223 distinct tool names defined** in `lib/mcp/tools/` (a definition count, NOT a registration count — an unregistered file would inflate it; the group list below is the authoritative active set).
 
@@ -90,7 +90,7 @@ _Regenerated 2026-10-29. Source of truth: uncommented `register*Tools(server)` i
 
 ## Appendix B — Hooks & guardrails
 <!-- GENERATED:hooks -->
-_Regenerated 2026-10-29. Files in `.claude/hooks/` (test harnesses excluded); "registered" = referenced by a command in `.claude/settings.json`._
+_Regenerated 2026-10-30. Files in `.claude/hooks/` (test harnesses excluded); "registered" = referenced by a command in `.claude/settings.json`._
 
 **26 hook scripts**, of which **24 are registered** in settings.
 
@@ -101,7 +101,7 @@ _(bold = registered and firing; plain = present but not wired, e.g. a manual uti
 
 ## Appendix C — Surface area
 <!-- GENERATED:surface -->
-_Regenerated 2026-10-29 by directory scan._
+_Regenerated 2026-10-30 by directory scan._
 
 - CRM dashboard pages (56): `accounts` `addresses` `audit` `bofa-intake` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `forms` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `marketing-leads` `new-calendar` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `research` `sandbox-mail` `service-catalog` `services` `storage` `storage-app` `system-health` `tasks` `tax-returns` `td-talk` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
 - Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
@@ -128,7 +128,7 @@ Every system listed above now has a deep doc under `docs/systems/`, each written
 
 ## Appendix D — Guardrail rules
 <!-- GENERATED:rules -->
-_Regenerated 2026-10-29 from the R-rule list in CLAUDE.md — **42 rules**, highest is R113._
+_Regenerated 2026-10-30 from the R-rule list in CLAUDE.md — **42 rules**, highest is R113._
 
 - **R005** — td-operations.vercel.app is INTERNAL: NEVER send this domain to clients. {file:lib/config.ts}
 - **R012** — All client-facing URLs MUST use APP_BASE_URL from {file:lib/config.ts} — never hardcode domains; the .husky/pre-push hook blocks hardcoded domains.
@@ -176,12 +176,12 @@ _Regenerated 2026-10-29 from the R-rule list in CLAUDE.md — **42 rules**, high
 
 ## Appendix E — Subsystem deep docs
 <!-- GENERATED:deep-docs -->
-_Regenerated 2026-10-29. Every subsystem doc under `docs/systems/` (53 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
+_Regenerated 2026-10-30. Every subsystem doc under `docs/systems/` (53 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-10-13)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-10-18)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-10-29)_
-- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-10-29)_
+- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-10-30)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-28)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-10-12)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-09-23)_

@@ -16,7 +16,7 @@ import {
 import { isCardFeeEnabled, getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
 import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
-import type { OpenInvoice } from './bank-feed-tab'
+import type { OpenInvoice, BankFeedRecord } from './bank-feed-tab'
 import type { InvoiceRecord } from './all-invoices-tab'
 import { listRecurringInvoiceTemplates } from '@/app/(dashboard)/shared/recurring-invoice-actions'
 
@@ -248,7 +248,7 @@ export default async function FinancePage({
   const [bankFeedsRes, bankFeedCountRes, bankOpenInvoicesRes, movedFromMyFinancesRes] = await Promise.all([
     supabaseAdmin
       .from('td_bank_feeds')
-      .select('*, payments:matched_payment_id(invoice_number, description, account_id, total, amount_paid, invoice_status, notes, accounts:account_id(company_name))')
+      .select('*, payments:matched_payment_id(invoice_number, description, account_id, contact_id, total, amount_paid, invoice_status, notes, accounts:account_id(company_name), contacts:payments_contact_id_fkey(full_name))')
       .order('transaction_date', { ascending: false })
       // 1000, not 200: with ~500 rows in the table, the old 200-row window silently hid every
       // older transaction from EVERY tab — a row returned to the queue from My Finances (two
@@ -513,7 +513,9 @@ export default async function FinancePage({
         stats={{ totalOutstanding, totalOverdue, overdueCount, clientCount: clientList.filter(c => c.invoice_count > 0).length, cashThisMonth, avgDaysToPay }}
         agingBuckets={agingBuckets}
         recentAuditLog={recentAuditLog}
-        bankFeeds={bankFeedsWithDetails}
+        // Cast: the `contacts:payments_contact_id_fkey(full_name)` embed on the matched invoice is
+        // correct at runtime, but the generated types cannot resolve a named foreign key.
+        bankFeeds={bankFeedsWithDetails as unknown as BankFeedRecord[]}
         bankOpenInvoices={bankOpenInvoices}
         bankFeedTotalCount={bankFeedTotalCount}
         allInvoicesFlat={allInvoicesFlat}

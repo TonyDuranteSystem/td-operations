@@ -86,6 +86,9 @@ export interface BankFeedRecord {
     invoice_status: string | null
     notes: string | null
     accounts: { company_name: string } | null
+    /** An invoice written to a PERSON (no company) carries the person here — 73 on production. */
+    contact_id?: string | null
+    contacts?: { full_name: string | null } | { full_name: string | null }[] | null
   } | null
 }
 
@@ -2396,7 +2399,7 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
           </span>
         </FastTooltip>
       )}
-      <span className="text-xs truncate">{getCompanyName(payment?.accounts)}</span>
+      <span className="text-xs truncate">{payment ? invoicePartyName(payment) : ''}</span>
       <span className={cn(
         'text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0',
         feed.match_confidence === 'exact' ? 'bg-emerald-100 text-emerald-700' :
@@ -2504,7 +2507,7 @@ function CrashedRow({ feed }: { feed: BankFeedRecord }) {
         <span className="text-xs text-muted-foreground truncate">{feed.sender_name || '—'}</span>
         <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
         <span className="font-mono text-xs text-blue-600 shrink-0">{payment?.invoice_number ?? '—'}</span>
-        <span className="text-xs truncate flex-1">{getCompanyName(payment?.accounts)}</span>
+        <span className="text-xs truncate flex-1">{payment ? invoicePartyName(payment) : ''}</span>
         <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0', STATUS_COLORS.activation_crashed)}>
           activation crashed
         </span>
@@ -2605,6 +2608,40 @@ function IgnoredRow({ feed, isAdmin = false }: { feed: BankFeedRecord; isAdmin?:
 }
 
 // ── Main Component ──
+
+/** Prev / Next with the "Showing a–b of n" line. Shown above AND below the list. */
+function FeedPager({ page, pageSize, total, totalPages, onPage }: {
+  page: number
+  pageSize: number
+  total: number
+  totalPages: number
+  onPage: (next: number) => void
+}) {
+  if (totalPages <= 1) return null
+  return (
+    <div className="flex items-center justify-between text-xs text-muted-foreground">
+      <span>
+        Showing {page * pageSize + 1}–{Math.min((page + 1) * pageSize, total)} of {total}
+      </span>
+      <div className="flex gap-1">
+        <button
+          onClick={() => onPage(Math.max(0, page - 1))}
+          disabled={page === 0}
+          className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50"
+        >
+          Prev
+        </button>
+        <button
+          onClick={() => onPage(Math.min(totalPages - 1, page + 1))}
+          disabled={page >= totalPages - 1}
+          className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  )
+}
 
 export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = false }: Props) {
   const [filter, setFilter] = useState<FilterTab>('all')
@@ -2828,6 +2865,8 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
         </div>
       </div>
 
+      <FeedPager page={page} pageSize={pageSize} total={filtered.length} totalPages={totalPages} onPage={setPage} />
+
       {/* Transaction list */}
       <div className="bg-white rounded-lg border overflow-hidden">
         {/* Header row */}
@@ -2859,7 +2898,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
                   : Number(inv.total ?? inv.amount ?? 0)
                 candidateInfo = {
                   invoice_number: inv.invoice_number,
-                  company_name: getCompanyName(inv.accounts),
+                  company_name: invoicePartyName(inv),
                   amount: invAmount,
                   amount_currency: inv.amount_currency,
                   confidence: feed.match_confidence,
@@ -2868,7 +2907,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
                 // Fallback: payment may not be in the open-invoice set anymore.
                 candidateInfo = {
                   invoice_number: feed.payments.invoice_number,
-                  company_name: getCompanyName(feed.payments.accounts),
+                  company_name: invoicePartyName(feed.payments),
                   amount: Number(feed.amount),
                   amount_currency: feed.currency,
                   confidence: feed.match_confidence,
@@ -2926,30 +2965,8 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
         )}
       </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>
-            Showing {page * pageSize + 1}–{Math.min((page + 1) * pageSize, filtered.length)} of {filtered.length}
-          </span>
-          <div className="flex gap-1">
-            <button
-              onClick={() => setPage(p => Math.max(0, p - 1))}
-              disabled={page === 0}
-              className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50"
-            >
-              Prev
-            </button>
-            <button
-              onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-              disabled={page >= totalPages - 1}
-              className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Pagination (also above the list) */}
+      <FeedPager page={page} pageSize={pageSize} total={filtered.length} totalPages={totalPages} onPage={setPage} />
     </div>
   )
 }
