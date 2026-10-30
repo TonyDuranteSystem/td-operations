@@ -447,6 +447,22 @@ export async function unreadLanesOfLead(ctx: MarketingContext, leadId: string): 
   return out
 }
 
+/**
+ * What other people wrote in MY chats since `sinceIso` and I have not read yet — for the spoken alert ("Message from Rocco"). Read through the same lanes as the unread numbers, so a setter is never told
+ * about the owners chat. A chat that is open on screen has already marked its messages read, so it is not read out. Newest first.
+ */
+export async function newLeadMessages(ctx: MarketingContext, sinceIso: string): Promise<Array<{ id: string; sender_id: string; created_at: string }>> {
+  const d = db()
+  const teamId = ctx.team.id
+  const userId = ctx.user.id
+  const msgs = await readMessages<{ id: string; lead_id: string; lane: string; sender_id: string; created_at: string }>(ctx, "id, lead_id, lane, sender_id, created_at", (cols, lanes) =>
+    d.from("marketing_lead_messages").select(cols).eq("team_id", teamId).in("lane", lanes).neq("sender_id", userId).is("deleted_at", null).gt("created_at", sinceIso).order("created_at", { ascending: false }).limit(50))
+  if (msgs.length === 0) return []
+  const { data: reads } = await d.from("marketing_lead_lane_reads").select("lead_id, lane, last_read_at").eq("team_id", teamId).eq("user_id", userId).in("lead_id", Array.from(new Set(msgs.map(m => m.lead_id))))
+  const readAt = new Map(((reads ?? []) as Array<{ lead_id: string; lane: string; last_read_at: string }>).map(r => [`${r.lead_id}|${r.lane}`, r.last_read_at]))
+  return msgs.filter(m => { const last = readAt.get(`${m.lead_id}|${m.lane}`); return !last || m.created_at > last }).map(({ id, sender_id, created_at }) => ({ id, sender_id, created_at }))
+}
+
 export interface Conversation { leadId: string; lane: Lane; /** the button's words for this chat ("Discuss with Cristina") */ label: string; name: string; last: string; lastAt: string; lastBy: string; unread: number; /** set only when asked for (the owner's Home): what is unread in MY chat is for me, so it is true for all of them */ mentioned?: boolean }
 
 /**
