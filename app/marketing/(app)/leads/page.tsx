@@ -18,6 +18,7 @@ import { isSetterOnly } from '@/lib/marketing/lead-chat'
 import { setterActorsOf, sellerSideTest } from '@/lib/marketing/setter-view'
 import { FilterMenu } from '@/components/marketing/filter-menu'
 import { LeadLink } from '@/components/marketing/lead-link'
+import { loadViewerZone } from '@/lib/marketing/time-prefs-server'
 
 export const dynamic = 'force-dynamic'
 
@@ -33,7 +34,8 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
   if (g.ok === false) redirect('/marketing')
   const lang = getLang()
   const t = makeT(lang)
-  const fw = (iso: string | null | undefined) => formatWhen(iso, 'Europe/Rome', localeFor(lang))
+  const zone = await loadViewerZone(g.ctx)
+  const fw = (iso: string | null | undefined) => formatWhen(iso, zone, localeFor(lang))
   if (!hasPermission(g.ctx.permissions, 'leads.read')) {
     return <main className="mx-auto max-w-xl px-4 py-10"><p className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm">{t('You do not have access to the leads. Ask your team owner.')}</p></main>
   }

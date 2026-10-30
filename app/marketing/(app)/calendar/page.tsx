@@ -6,7 +6,12 @@ import { isSetterOnly } from '@/lib/marketing/lead-chat'
 import { leadDb } from '@/lib/marketing/meta-leads/service'
 import { listMembers } from '@/lib/marketing/members'
 import { loadCalendarData } from '@/lib/marketing/calendar-read'
-import { calendarItems, romeZoneName } from '@/lib/marketing/calendar'
+import { calendarItems } from '@/lib/marketing/calendar'
+import { loadTimeView } from '@/lib/marketing/time-prefs-server'
+import { utcOffsetText, zoneName } from '@/lib/marketing/zones'
+import { googleApi, withDeadline } from '@/lib/marketing/gcal'
+import { loadGoogleLayer } from '@/lib/marketing/calendar-google'
+import { toBlocks, viewerOf, type Viewer } from '@/lib/marketing/calendar-visibility'
 import { CalendarViews } from '@/components/marketing/calendar-views'
 import { personName } from '@/lib/marketing/setter-note'
 import { getLang } from '@/lib/marketing/lang'
@@ -38,16 +43,21 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
   const previewAll = !seesAll && !!g.ctx.viewAs
   const who = seesAll && sp.who && members.some(m => m.user_id === sp.who) ? sp.who : seesAll || previewAll ? 'all' : g.ctx.user.id
   const now = new Date()
-  const data = await loadCalendarData(db, teamId)
+  const [data, time] = await Promise.all([loadCalendarData(db, teamId), loadTimeView(g.ctx)])
   const { items: allItems, lateMore } = calendarItems({ leads: data.leads, events: data.events, members: members.map(m => ({ user_id: m.user_id, email: m.email, status: m.status })), ownerId: who, now, appointments: data.appointments, lang })
   // a setter is never told a call she booked ended in a payment: it is simply a call that is done
+  // what Google holds that this viewer may see: the owner his own calendar; the seller his work calendar, his personal Busy time and the owner's time as Busy; the setter nothing. Every item goes through the
+  // visibility rule on the server before it reaches the page; a failure is a plain warning and never breaks the calendar.
+  const viewer: Viewer = viewerOf(time)
+  const day = 86_400_000
+  const layer = await withDeadline(loadGoogleLayer({ api: googleApi, viewer, viewerUserId: time.memberId, viewerEmail: g.ctx.user.email, prefs: time.prefs, takers: time.takers, fromMs: now.getTime() - 14 * day, toMs: now.getTime() + 42 * day }), 12_000, { items: [], warnings: ['Google did not answer in time, so its events are not shown. Reload to try again.'], share: [], shareOk: true, ownerCalendar: false })
   const items = isSetterOnly(perms) ? allItems.map(i => (i.stage === 'paid' ? { ...i, stage: 'done' as const } : i)) : allItems
   const href = (w: string) => (w ? `/marketing/calendar?who=${encodeURIComponent(w)}` : '/marketing/calendar')
   const chip = (on: boolean) => `rounded-full border px-3 py-1 text-xs ${on ? 'border-slate-900 bg-slate-900 text-white' : 'bg-white text-slate-600'}`
   return (
     <div className="space-y-4 p-6">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div><h1 className="text-2xl font-semibold">{t('Calendar')}</h1><p className="text-sm text-slate-500" data-testid="cal-sub">{t('Call backs and booked calls.')} {seesAll ? (who === 'all' ? t('Call backs for everyone') : t('Call backs for {name}', { name: personName(members.find(m => m.user_id === who)?.email) })) : t('Your call backs')} · {t('Times are Rome time ({zone}).', { zone: romeZoneName(now) })}</p></div>
+        <div><h1 className="text-2xl font-semibold">{t('Calendar')}</h1><p className="text-sm text-slate-500" data-testid="cal-sub">{t('Call backs and booked calls.')} {seesAll ? (who === 'all' ? t('Call backs for everyone') : t('Call backs for {name}', { name: personName(members.find(m => m.user_id === who)?.email) })) : t('Your call backs')} · {t('Times are {zone} time ({offset}).', { zone: zoneName(time.zone), offset: utcOffsetText(now, time.zone) })}</p></div>
         {seesAll && members.length > 0 && (
           <nav aria-label={t('Whose calendar')} className="flex flex-wrap items-center gap-2" data-testid="cal-picker">
             <span className="text-xs text-slate-500">{t('Whose:')}</span>
@@ -59,7 +69,7 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
       {previewAll && <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="cal-preview">{t("You are viewing as a role that sees only its own call backs. As the team owner you are shown everyone's.")}</p>}
       {data.truncated && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{t('Showing the first call backs only; some later ones are not listed.')}</p>}
       {items.length === 0 && <div className="rounded-xl border border-dashed p-6 text-sm text-slate-600" data-testid="cal-empty">{seesAll && who !== 'all' ? t('This person has no call backs set') : t('No call backs set')}{t('. Nothing is booked or due. To add one, ')}<Link href="/marketing/leads" className="underline">{t('open a lead')}</Link>{t(', press Call back later, and pick a day and time.')}</div>}
-      <CalendarViews items={items} lateMore={lateMore} nowIso={now.toISOString()} canMove={hasPermission(perms, 'leads.mark')} told={g.ctx.viewAs === undefined} locale={localeFor(lang)} />
+      <CalendarViews items={items} lateMore={lateMore} nowIso={now.toISOString()} canMove={hasPermission(perms, 'leads.mark')} told={g.ctx.viewAs === undefined} locale={localeFor(lang)} zone={time.zone} google={toBlocks(layer.items)} googleWarnings={layer.warnings} canAddOwner={layer.ownerCalendar && g.ctx.admin === true && !g.ctx.viewAs} shareProblem={time.prefs.busyEnabled && !layer.shareOk && viewer !== 'setter'} />
     </div>
   )
 }

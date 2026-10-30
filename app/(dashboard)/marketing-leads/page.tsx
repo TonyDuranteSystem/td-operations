@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server"
 import { isSecureAdmin } from "@/lib/auth"
 import { adminMemberContext } from "@/lib/marketing/guard"
 import { loadOwnerHome } from "@/lib/marketing/home-server"
+import { loadViewerZone } from "@/lib/marketing/time-prefs-server"
 import { CallsPanel, MessagesPanel, WaitingPanel } from "@/components/marketing/owner-home-panels"
 import { OwnerNeeds } from "@/components/marketing/owner-needs"
 import { HomeNewsCard } from "@/components/marketing/home-news-card"
@@ -57,6 +58,8 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
   // his own dashboard (messages for him, what waits on Rocco, today's calls) is read only when the team on this page is the one he has joined
   const tEn = makeT("en")
   const home = member.ok && team && member.ctx.team.id === team.id ? await loadOwnerHome(member.ctx, new Date(), "Unnamed lead") : null
+  // his calls today are read in his own zone (New York), the Rome day only decides WHICH calls are today's
+  const homeZone = member.ok && team && member.ctx.team.id === team.id ? await loadViewerZone(member.ctx) : "Europe/Rome"
   const teamQuery = team ? `?team=${team.id}` : ""
   const firstStage = master?.stages[0]?.key ?? "new"
   const maxFunnel = master ? Math.max(1, ...master.view.funnel.map(f => f.count)) : 1
@@ -117,7 +120,7 @@ export default async function MarketingLeadsAdminPage({ searchParams }: { search
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
-            {home ? <div className="space-y-4"><CallsPanel model={home.model} mode="crm" t={tEn} locale="en-US" /><WaitingPanel model={home.model} mode="crm" t={tEn} /></div> : <div />}
+            {home ? <div className="space-y-4"><CallsPanel model={home.model} mode="crm" t={tEn} locale="en-US" zone={homeZone} /><WaitingPanel model={home.model} mode="crm" t={tEn} /></div> : <div />}
             <HomeNewsCard news={news} />
           </div>
 

@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useT } from '@/components/marketing/lang-provider'
 import { useLeadWindows } from '@/components/marketing/lead-windows-host'
-import { romeLocalToIso } from '@/lib/marketing/rome-time'
+import { localToIso, zoneName } from '@/lib/marketing/zones'
+import { AddEventDialog, MoveEventDialog } from '@/components/marketing/owner-event-dialogs'
+import type { GoogleBlock } from '@/lib/marketing/calendar-visibility'
 import type { CalendarItem } from '@/lib/marketing/calendar'
 import {
   BUCKETS, HOUR_FROM, HOUR_TO, addDays, bucketDrop, bucketOf, layoutDay, monthGrid, monthKey, moveToDay, romeLocalValue, romeParts, shiftMonth, slotIso, timeFromFraction, weekDays,
@@ -22,31 +24,40 @@ const STAGES: Array<{ key: CalendarItem['stage']; label: string }> = [{ key: 'ba
 
 const keyOf = (it: CalendarItem) => `${it.leadId}-${it.kind}`
 const pad = (n: number) => String(n).padStart(2, '0')
-const timeText = (iso: string) => { const p = romeParts(iso); return p ? `${pad(p.h)}:${pad(p.m)}` : '' }
 const TONE = { appointment: 'border-sky-300 bg-sky-50 text-sky-900', callback: 'border-amber-300 bg-amber-50 text-amber-900' } as const
+/** Google items: the seller's work calendar, the owner's own events, and grey Busy time (hatched; nobody's title) */
+const GTONE = { td: 'border-emerald-300 bg-teal-50 text-teal-900', mine: 'border-emerald-300 bg-emerald-50 text-emerald-900', busy: 'border-slate-300 bg-slate-100 text-slate-600' } as const
+const HATCH = { backgroundImage: 'repeating-linear-gradient(45deg, rgba(100,116,139,.22) 0 6px, transparent 6px 11px)' }
 
 interface Pending { item: CalendarItem; at: string | null; suggest: string }
 
 /**
  * TD Marketing — the Calendar (dev job 9aec66fa, round 2 step 2): Day, Week, Month and Pipeline. A call back and a booked call can be dragged to another day or time (or moved with the
- * "Move…" button, which works from the keyboard); a reason is ALWAYS asked, and the seller and the setter are told. Every day and hour is Rome time (lib/marketing/calendar-grid.ts).
+ * "Move…" button, which works from the keyboard); a reason is ALWAYS asked, and the seller and the setter are told. Every day and hour is read in the viewer's own zone (lib/marketing/calendar-grid.ts; Addendum K).
  */
-export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }: { items: CalendarItem[]; lateMore: number; nowIso: string; canMove: boolean; told: boolean; locale: string }) {
+export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale, zone, google = [], googleWarnings = [], canAddOwner = false, shareProblem = false }: { items: CalendarItem[]; lateMore: number; nowIso: string; canMove: boolean; told: boolean; locale: string; /** the viewer's own zone: every day and hour is read in it */ zone: string; /** what Google holds that this viewer may see (Addendum K): the owner's own events, the seller's work calendar, grey Busy time */ google?: GoogleBlock[]; /** plain sentences for what could not be read */ googleWarnings?: string[]; /** the owner on his own login: "+ Add event" and a Move button on his own events */ canAddOwner?: boolean; /** a personal calendar is shared the wrong way or could not be read: its Busy time and the free slots are hidden */ shareProblem?: boolean }) {
   const t = useT()
+  const rp = (iso: string) => romeParts(iso, zone)
+  const timeText = (iso: string) => { const p = rp(iso); return p ? `${pad(p.h)}:${pad(p.m)}` : '' }
   const router = useRouter()
   const { open } = useLeadWindows()
-  const today = romeParts(nowIso)?.key ?? '1970-01-01'
+  const today = rp(nowIso)?.key ?? '1970-01-01'
   const [view, setView] = useState<View>('week')
   const [anchor, setAnchor] = useState(today)
   const [byWhen, setByWhen] = useState(true)
   const [pending, setPending] = useState<Pending | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  // a warning (the call moved but the seller's Google calendar did not follow) stays long enough to be read
+  const [toastWarn, setToastWarn] = useState(false)
+  const say = (m: string, warn = false) => { setToastWarn(warn); setToast(m) }
+  const [adding, setAdding] = useState(false)
+  const [movingG, setMovingG] = useState<GoogleBlock | null>(null)
   // a move that was saved shows at its new time at once, until the refreshed page arrives
   const [moved, setMoved] = useState<Record<string, string>>({})
   const drag = useRef<CalendarItem | null>(null)
   useEffect(() => { try { const v = window.localStorage.getItem(VIEW_KEY); if (VIEWS.includes(v as View)) setView(v as View) } catch { /* only a convenience */ } }, [])
   useEffect(() => { setMoved({}) }, [items])
-  useEffect(() => { if (!toast) return; const h = setTimeout(() => setToast(null), 4000); return () => clearTimeout(h) }, [toast])
+  useEffect(() => { if (!toast) return; const h = setTimeout(() => setToast(null), toastWarn ? 12_000 : 4000); return () => clearTimeout(h) }, [toast, toastWarn])
   const pick = (v: View) => { setView(v); try { window.localStorage.setItem(VIEW_KEY, v) } catch { /* only a convenience */ } }
 
   const shown = useMemo(() => items.map(it => (moved[keyOf(it)] ? { ...it, at: moved[keyOf(it)], late: false } : it)), [items, moved])
@@ -54,29 +65,29 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }
   const utc = (key: string) => { const [y, m, d] = key.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)) }
   const dayHead = (key: string) => fmt({ weekday: 'short', day: 'numeric', month: 'short' }).format(utc(key)).replace(',', '')
   const dayLong = (key: string) => fmt({ weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }).format(utc(key)).replace(',', '')
-  const whenText = (iso: string) => { const p = romeParts(iso); return p ? `${dayHead(p.key)} ${pad(p.h)}:${pad(p.m)}` : '' }
-  const byDay = (key: string) => shown.filter(i => romeParts(i.at)?.key === key).sort((a, b) => a.at.localeCompare(b.at))
+  const whenText = (iso: string) => { const p = rp(iso); return p ? `${dayHead(p.key)} ${pad(p.h)}:${pad(p.m)}` : '' }
+  const byDay = (key: string) => shown.filter(i => rp(i.at)?.key === key).sort((a, b) => a.at.localeCompare(b.at))
   const movable = (it: CalendarItem) => canMove && !it.done
 
   const ask = (item: CalendarItem, at: string | null, suggest?: string) => {
-    if (at !== null && new Date(at).getTime() < new Date(nowIso).getTime() - 5 * 60_000) { setToast(t('That time has already passed. Pick a day and time in the future.')); return }
+    if (at !== null && new Date(at).getTime() < new Date(nowIso).getTime() - 5 * 60_000) { say(t('That time has already passed. Pick a day and time in the future.')); return }
     if (at !== null && new Date(at).getTime() === new Date(item.at).getTime()) return
     setPending({ item, at, suggest: suggest ?? at ?? item.at })
   }
-  const dropOnDay = (key: string) => { const it = drag.current; drag.current = null; if (!it || !canMove) return; const at = moveToDay(it.at, key); if (at) ask(it, at) }
+  const dropOnDay = (key: string) => { const it = drag.current; drag.current = null; if (!it || !canMove) return; const at = moveToDay(it.at, key, zone); if (at) ask(it, at) }
   const dropOnHour = (key: string, e: React.DragEvent<HTMLElement>) => {
     const it = drag.current; drag.current = null
     if (!it || !canMove) return
     const r = e.currentTarget.getBoundingClientRect()
     const { h, m } = timeFromFraction((e.clientY - r.top) / r.height)
-    const at = slotIso(key, h, m)
+    const at = slotIso(key, h, m, zone)
     if (at) ask(it, at)
   }
   const dropOnBucket = (b: Bucket) => {
     const it = drag.current; drag.current = null
     if (!it || !canMove) return
-    const d = bucketDrop(b, it.at, nowIso)
-    if (d.kind === 'refuse') { setToast(b === 'late' ? t('A call cannot be moved into Late. Pick Today or later.') : t('That time is not possible.')); return }
+    const d = bucketDrop(b, it.at, nowIso, zone)
+    if (d.kind === 'refuse') { say(b === 'late' ? t('A call cannot be moved into Late. Pick Today or later.') : t('That time is not possible.')); return }
     if (d.kind === 'move') ask(it, d.at)
     else ask(it, null, d.suggest)
   }
@@ -94,27 +105,49 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }
     </div>
   )
 
+  const gByDay = (key: string) => google.filter(g => rp(g.start)?.key === key).sort((x, y) => x.start.localeCompare(y.start))
+  const isOut = (iso: string) => { const p = rp(iso); return !p || p.h < HOUR_FROM || p.h >= HOUR_TO }
+  const gBlock = (g: GoogleBlock, style?: React.CSSProperties, compact = false) => (
+    <div key={g.id} data-testid="cal-google" data-tone={g.tone} className={`${compact ? 'relative mt-1' : 'absolute'} overflow-hidden rounded-md border border-l-4 px-1.5 py-0.5 text-xs ${GTONE[g.tone]}`} style={{ ...(g.tone === 'busy' ? HATCH : {}), ...style }}>
+      <span className="flex items-start justify-between gap-1">
+        <b className="min-w-0 truncate font-medium">{g.tone === 'busy' ? t('Busy') : g.title}</b>
+        {g.movable && <button type="button" aria-label={t('Move…')} data-testid="cal-google-move" onClick={() => setMovingG(g)} className="shrink-0 rounded px-1 leading-none hover:bg-white/60">⇄</button>}
+      </span>
+      <span className="block truncate opacity-80">{timeText(g.start)}{g.sub ? ` · ${g.sub}` : ''}</span>
+    </div>
+  )
+
   const hourGrid = (keys: string[]) => {
     const rows = HOUR_TO - HOUR_FROM
-    const outside = keys.map(k => byDay(k).filter(i => { const p = romeParts(i.at); return !p || p.h < HOUR_FROM || p.h >= HOUR_TO }))
+    const outside = keys.map(k => ({ calls: byDay(k).filter(i => isOut(i.at)), gs: gByDay(k).filter(g => isOut(g.start)) }))
     return (
       <div className="min-w-[44rem] overflow-x-auto">
         <div className="grid" style={{ gridTemplateColumns: `3.5rem repeat(${keys.length}, minmax(0, 1fr))` }}>
           <div />
           {keys.map(k => <div key={k} className={`border-b border-l px-2 py-2 text-center text-sm font-medium ${k === today ? 'text-sky-700' : ''}`}>{dayHead(k)}</div>)}
-          {outside.some(o => o.length > 0) && <>
+          {outside.some(o => o.calls.length > 0 || o.gs.length > 0) && <>
             <div className="px-1 py-1 text-[11px] text-slate-500">{t('Outside {from}:00–{to}:00', { from: pad(HOUR_FROM), to: pad(HOUR_TO) })}</div>
-            {outside.map((o, i) => <div key={keys[i]} className="border-b border-l p-1">{o.map(it => block(it, undefined, true))}</div>)}
+            {outside.map((o, i) => <div key={keys[i]} className="border-b border-l p-1">{o.calls.map(it => block(it, undefined, true))}{o.gs.map(g => gBlock(g, undefined, true))}</div>)}
           </>}
           <div>{Array.from({ length: rows }, (_, i) => <div key={i} className="border-t px-1 text-[11px] text-slate-500" style={{ height: PX }}>{pad(HOUR_FROM + i)}:00</div>)}</div>
           {keys.map(k => {
             const list = byDay(k)
-            const placed = layoutDay(list.map(i => { const p = romeParts(i.at); return { h: p?.h ?? 0, m: p?.m ?? 0 } }))
+            const gs = gByDay(k)
+            // the calls and the Google items of the day share the lanes, each as long as it lasts
+            const cells = [
+              ...list.map(it => ({ c: it, g: null as GoogleBlock | null, p: rp(it.at), len: undefined as number | undefined })),
+              ...gs.map(g => ({ c: null as CalendarItem | null, g, p: rp(g.start), len: Math.max(15, Math.round((Date.parse(g.end) - Date.parse(g.start)) / 60000)) })),
+            ]
+            const placed = layoutDay(cells.map(x => ({ h: x.p?.h ?? 0, m: x.p?.m ?? 0, len: x.len })))
             return (
               <div key={k} className="relative border-l" style={{ height: rows * PX }} data-day={k} data-testid="cal-col"
                 onDragOver={e => { if (drag.current) e.preventDefault() }} onDrop={e => { e.preventDefault(); dropOnHour(k, e) }}>
                 {Array.from({ length: rows }, (_, i) => <div key={i} className="border-t" style={{ height: PX }} />)}
-                {placed.map(p => block(list[p.index], { top: p.top * PX, height: PX * 0.62, left: `calc(${(p.lane / p.lanes) * 100}% + 2px)`, width: `calc(${100 / p.lanes}% - 4px)` }))}
+                {placed.map(p => {
+                  const x = cells[p.index]
+                  const pos = { top: p.top * PX, left: `calc(${(p.lane / p.lanes) * 100}% + 2px)`, width: `calc(${100 / p.lanes}% - 4px)` }
+                  return x.c ? block(x.c, { ...pos, height: PX * 0.62 }) : gBlock(x.g as GoogleBlock, { ...pos, height: Math.max(PX * 0.62, ((x.len ?? 30) / 60) * PX) })
+                })}
               </div>
             )
           })}
@@ -169,7 +202,7 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }
             <p className="mb-2 text-xs text-slate-500">{canMove ? t('Drag a card to another group: Today and Tomorrow keep its time of day; This week and Later ask you for the day and time. You cannot drop into Late. A reason is always asked.') : ''}</p>
             <div className="grid gap-3 overflow-x-auto" style={{ gridTemplateColumns: 'repeat(5, minmax(11rem, 1fr))' }}>
               {BUCKETS.map(b => {
-                const list = open_.filter(i => bucketOf(i.at, nowIso) === b)
+                const list = open_.filter(i => bucketOf(i.at, nowIso, zone) === b)
                 return (
                   <section key={b} data-bucket={b} aria-label={t(BUCKET_LABEL[b])} className="min-w-0 rounded-xl bg-slate-100 p-2"
                     onDragOver={e => { if (drag.current) e.preventDefault() }} onDrop={e => { e.preventDefault(); dropOnBucket(b) }}>
@@ -216,12 +249,18 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }
           </div>
         )}
         <b className="text-sm" data-testid="cal-title">{title}</b>
+        {canAddOwner && <button type="button" onClick={() => setAdding(true)} data-testid="cal-add-event" className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm text-white">{t('+ Add event')}</button>}
         <span className="ml-auto flex gap-3 text-xs text-slate-500">
           <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm border border-sky-300 bg-sky-50" />{t('Call with the seller')}</span>
           <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm border border-amber-300 bg-amber-50" />{t('Call back')}</span>
           <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-red-400" />{t('Late')}</span>
+          {google.some(g => g.tone === 'td') && <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm border border-emerald-300 bg-teal-50" />{t('Work calendar')}</span>}
+          {google.some(g => g.tone === 'mine') && <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm border border-emerald-300 bg-emerald-50" />{t('Your Google calendar')}</span>}
+          {google.some(g => g.tone === 'busy') && <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm border border-slate-300 bg-slate-100" />{t('Busy')}</span>}
         </span>
       </div>
+      {shareProblem && <p role="alert" className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-800" data-testid="cal-share-warning"><b>{t("The seller's personal Busy time is hidden.")}</b> {t('His personal calendar is shared wider than free/busy only, or not at all, or could not be read. Ask him to fix the share, then press Check again on the Team page.')}</p>}
+      {googleWarnings.map(w => <p key={w} role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="cal-google-warning">{t(w)}</p>)}
       {!canMove && <p className="text-xs text-slate-500">{t('You can look at the calendar but not move calls.')}</p>}
       {canMove && view !== 'pipeline' && <p className="text-xs text-slate-500">{t('Drag a call to another time or day, or press ⇄ to choose. A reason is always asked.')}</p>}
 
@@ -244,22 +283,24 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale }
         </section>
       )}
 
-      {pending && <MoveDialog pending={pending} nowIso={nowIso} told={told} whenText={whenText} onClose={() => setPending(null)}
-        onDone={(item, at, message) => { setMoved(m => ({ ...m, [keyOf(item)]: at })); setPending(null); setToast(message); router.refresh() }} />}
+      {adding && <AddEventDialog zone={zone} startValue={`${anchor}T11:00`} onClose={() => setAdding(false)} onDone={m => { setAdding(false); say(m); router.refresh() }} />}
+      {movingG && <MoveEventDialog block={movingG} zone={zone} onClose={() => setMovingG(null)} onDone={m => { setMovingG(null); say(m); router.refresh() }} />}
+      {pending && <MoveDialog pending={pending} nowIso={nowIso} told={told} zone={zone} whenText={whenText} onClose={() => setPending(null)}
+        onDone={(item, at, message, warn) => { setMoved(m => ({ ...m, [keyOf(item)]: at })); setPending(null); say(message, warn === true); router.refresh() }} />}
       {toast && <p role="status" className="fixed bottom-16 left-1/2 z-[400] -translate-x-1/2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm text-white shadow-lg" data-testid="cal-toast">{toast}</p>}
     </div>
   )
 }
 
-function MoveDialog({ pending, nowIso, told, whenText, onClose, onDone }: { pending: Pending; nowIso: string; told: boolean; whenText: (iso: string) => string; onClose: () => void; onDone: (item: CalendarItem, at: string, message: string) => void }) {
+function MoveDialog({ pending, nowIso, told, zone, whenText, onClose, onDone }: { pending: Pending; nowIso: string; told: boolean; zone: string; whenText: (iso: string) => string; onClose: () => void; onDone: (item: CalendarItem, at: string, message: string, warn?: boolean) => void }) {
   const t = useT()
   const { item } = pending
-  const [local, setLocal] = useState(romeLocalValue(pending.suggest))
+  const [local, setLocal] = useState(romeLocalValue(pending.suggest, zone))
   const [reason, setReason] = useState<string | null>(null)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const at = pending.at ?? romeLocalToIso(local)
+  const at = pending.at ?? localToIso(local, zone)
   const past = at !== null && new Date(at).getTime() < new Date(nowIso).getTime() - 5 * 60_000
   const needsNote = reason === 'Other' && note.trim() === ''
   const ready = !!reason && !!at && !past && !needsNote && !busy
@@ -281,7 +322,10 @@ function MoveDialog({ pending, nowIso, told, whenText, onClose, onDone }: { pend
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || t('Could not move the call. Please try again.'))
       // only say people were told when a notification really went out
-      onDone(item, at, told && Number(d.notified) > 0 ? t('Moved. The seller and the setter were told.') : t('Moved.'))
+      const base = told && Number(d.notified) > 0 ? t('Moved. The seller and the setter were told.') : t('Moved.')
+      // the call is moved in Marketing either way; if the seller's Google calendar did not follow, Calendly could still sell the old or the new hour: say so
+      if (d.calendar?.state === 'failed') onDone(item, at, `${base} ${t("The seller's calendar was not updated. Tell Antonio.")}`, true)
+      else onDone(item, at, base)
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : t('Could not move the call. Please try again.'))
       setBusy(false)
@@ -295,7 +339,7 @@ function MoveDialog({ pending, nowIso, told, whenText, onClose, onDone }: { pend
         <p className="text-xs text-slate-500">{t('A reason is required. The seller and the setter are told.')}</p>
         <p className="rounded-lg bg-slate-100 p-2.5 text-sm"><b>{item.name}</b> · {item.kind === 'appointment' ? t('Call with the seller') : t('Call back')}<br />{whenText(item.at)} → {at ? whenText(at) : '…'}</p>
         {pending.at === null && (
-          <label className="block text-xs text-slate-600">{t('New day and time (Rome time)')}
+          <label className="block text-xs text-slate-600">{t('New day and time (your time: {zone})', { zone: zoneName(zone) })}
             <input type="datetime-local" value={local} onChange={e => setLocal(e.target.value)} data-testid="move-when" className="mt-1 w-full rounded-lg border px-2 py-1.5 text-sm" />
           </label>
         )}

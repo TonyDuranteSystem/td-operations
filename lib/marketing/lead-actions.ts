@@ -6,6 +6,7 @@
 import { z } from "zod"
 import type { MarketingPermission } from "@/lib/marketing/permissions"
 import type { SellerResultStages } from "@/lib/marketing/settings-schema"
+import { isValidZone } from "@/lib/marketing/zones"
 
 export interface Option { key: string; label: string }
 
@@ -47,6 +48,8 @@ export const leadActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("reschedule"), target: z.enum(["appointment", "callback"]), at: z.string().min(10).max(40), reason: z.string().trim().min(1).max(200), note: note.optional(), from: z.string().max(40).nullable().optional() }),
   // the setter passes an in-target lead to the seller without booking a call (the seller then fixes the call himself)
   z.object({ action: z.literal("handover"), note: note.optional() }),
+  // a person sets the lead's time zone by hand (the phone number gave a wrong or no guess): kept in the history, the newest one wins (Addendum K)
+  z.object({ action: z.literal("zone"), zone: z.string().max(64).refine(isValidZone, "Pick a real time zone.") }),
 ])
 export type LeadActionInput = z.infer<typeof leadActionSchema>
 
@@ -134,11 +137,15 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
   }
 
   // Every other action: a lead someone else picked is theirs to work (the owner can always step in). Moving a call is the exception: the setter and the seller both work the same call, so either may move it.
-  if (someoneElse && actor.role !== "owner" && input.action !== "reschedule") return fail(409, "Someone else picked this lead, so only they (or the team owner) can change it.")
+  // (the lead's time zone is the same for everybody who works it, so either may correct it)
+  if (someoneElse && actor.role !== "owner" && input.action !== "reschedule" && input.action !== "zone") return fail(409, "Someone else picked this lead, so only they (or the team owner) can change it.")
 
   switch (input.action) {
     case "note":
       return { ok: true, change: { patch: {}, event: { kind: "note", data: { text: input.note } } } }
+
+    case "zone":
+      return { ok: true, change: { patch: {}, event: { kind: "zone_set", data: { zone: input.zone } } } }
 
     case "good": {
       if (onSellerSide(lead.status, s)) return fail(409, "This lead has already moved on to Rocco, so nothing is changed.")

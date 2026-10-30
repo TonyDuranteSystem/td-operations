@@ -21,7 +21,8 @@ interface SACredentials {
   token_uri: string
 }
 
-let cachedToken: { token: string; expiresAt: number } | null = null
+/** One cached access token per person the service account acts as (Antonio by default; Marketing also reads the seller's work calendar, Addendum K). */
+const tokenCache = new Map<string, { token: string; expiresAt: number }>()
 
 function getCredentials(): SACredentials {
   const b64 = process.env.GOOGLE_SA_KEY
@@ -36,8 +37,9 @@ const IMPERSONATE_EMAIL = "antonio.durante@tonydurante.us"
 
 // ─── Token Management ───────────────────────────────────────
 
-async function getAccessToken(): Promise<string> {
+async function getAccessToken(subject: string = IMPERSONATE_EMAIL, timeoutMs?: number): Promise<string> {
   // Return cached token if still valid (5 min buffer)
+  const cachedToken = tokenCache.get(subject)
   if (cachedToken && Date.now() < cachedToken.expiresAt - 5 * 60 * 1000) {
     return cachedToken.token
   }
@@ -48,7 +50,7 @@ async function getAccessToken(): Promise<string> {
   const privateKey = await importPKCS8(creds.private_key, "RS256")
   const assertion = await new SignJWT({
     scope: SCOPES,
-    sub: IMPERSONATE_EMAIL,
+    sub: subject,
   })
     .setProtectedHeader({ alg: "RS256", typ: "JWT" })
     .setIssuer(creds.client_email)
@@ -64,6 +66,7 @@ async function getAccessToken(): Promise<string> {
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       assertion,
     }),
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   })
 
   if (!res.ok) {
@@ -72,29 +75,34 @@ async function getAccessToken(): Promise<string> {
   }
 
   const data = (await res.json()) as { access_token: string; expires_in: number }
-  cachedToken = {
+  tokenCache.set(subject, {
     token: data.access_token,
     expiresAt: Date.now() + data.expires_in * 1000,
-  }
+  })
 
   return data.access_token
 }
 
 // ─── API Helpers ────────────────────────────────────────────
 
-const CALENDAR_API = "https://www.googleapis.com/calendar/v3"
+// (the address can be overridden only by the people who run the server, so the Marketing end-to-end test can talk to a stand-in Google; unset = the real one)
+const CALENDAR_API = process.env.GOOGLE_CALENDAR_API_BASE || "https://www.googleapis.com/calendar/v3"
 
-interface CalendarApiOptions {
+export interface CalendarApiOptions {
   method?: string
   params?: Record<string, string>
   body?: Record<string, unknown>
+  /** who the service account acts as; Antonio when left out (what every existing caller gets) */
+  subject?: string
+  /** give up on a Google call that takes longer than this (Marketing's screens must never wait on Google); left out = no limit, as before */
+  timeoutMs?: number
 }
 
 async function calendarRequest(
   endpoint: string,
-  { method = "GET", params, body }: CalendarApiOptions = {}
+  { method = "GET", params, body, subject, timeoutMs }: CalendarApiOptions = {}
 ) {
-  const token = await getAccessToken()
+  const token = await getAccessToken(subject, timeoutMs)
   const url = new URL(`${CALENDAR_API}${endpoint}`)
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -113,6 +121,7 @@ async function calendarRequest(
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   })
 
   if (method === "DELETE" && res.status === 204) {
@@ -128,6 +137,11 @@ async function calendarRequest(
 
   return res.json()
 }
+
+/** The same call as the helpers below, as another person of the company's Google Workspace (Marketing's calendar features; lib/marketing/gcal.ts decides who may be asked). */
+/** How long a Marketing screen waits for one Google call. Google stalls are rare, but a lead window or the Calendar must open anyway, and a booking must answer. */
+export const MARKETING_GOOGLE_TIMEOUT_MS = 6000
+export const calendarRequestAs = (subject: string, endpoint: string, opts: Omit<CalendarApiOptions, "subject"> = {}) => calendarRequest(endpoint, { timeoutMs: MARKETING_GOOGLE_TIMEOUT_MS, ...opts, subject })
 
 // ─── Public API ─────────────────────────────────────────────
 

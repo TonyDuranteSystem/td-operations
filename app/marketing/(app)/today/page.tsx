@@ -19,6 +19,7 @@ import { paidStagesFrom, todayModel, type OutcomeStages } from '@/lib/marketing/
 import { PickButton } from './pick-button'
 import { getLang } from '@/lib/marketing/lang'
 import { localeFor, makeT } from '@/lib/marketing/i18n'
+import { loadViewerZone } from '@/lib/marketing/time-prefs-server'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,7 +31,8 @@ export default async function MarketingToday() {
   if (!hasPermission(g.ctx.permissions, 'leads.pick')) redirect('/marketing/leads')
   const lang = getLang()
   const t = makeT(lang)
-  const fw = (iso: string | null | undefined) => formatWhen(iso, 'Europe/Rome', localeFor(lang))
+  const zone = await loadViewerZone(g.ctx)
+  const fw = (iso: string | null | undefined) => formatWhen(iso, zone, localeFor(lang))
   const age = (ms: number) => ageText(ms, lang === 'it' ? 'g' : 'd')
   const who = (l: { full_name: string | null; email: string | null; phone: string | null }) => l.full_name || l.email || l.phone || t('Unnamed lead')
   const db = leadDb()

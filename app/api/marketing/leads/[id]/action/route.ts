@@ -8,6 +8,9 @@ import { chatMembers } from "@/lib/marketing/lead-chat-server"
 import { sendMarketingPush } from "@/lib/marketing/push"
 import { rescheduleRecipients, reschedulePush } from "@/lib/marketing/calendar-notify"
 import { personName } from "@/lib/marketing/setter-note"
+import { syncAfterAppointment } from "@/lib/marketing/call-sync-server"
+import { loadPrefsAndRows } from "@/lib/marketing/time-prefs-server"
+import { memberZone } from "@/lib/marketing/time-prefs"
 
 const NO_STORE = { "Cache-Control": "no-store" }
 
@@ -26,7 +29,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const r = await applyLeadAction(leadDb(), g.ctx.team.id, id, parsed.value, { id: g.ctx.user.id, email: g.ctx.user.email, role: g.ctx.role }, settings, new Date(), g.ctx.viewAs !== undefined)
   if (r.ok === false) return NextResponse.json({ error: r.error }, { status: r.status, headers: NO_STORE })
   const notified = parsed.value.action === "reschedule" && g.ctx.viewAs === undefined ? await notifyMoved(g.ctx.team.id, g.ctx.user.id, g.ctx.user.email, id, parsed.value) : 0
-  return NextResponse.json({ ok: true, notified }, { headers: NO_STORE })
+  // a call booked, moved or cancelled is also written into the seller's work Google calendar (only while that switch is on; never while Antonio is "viewing as" somebody). The call is already saved: the answer only tells the screen what happened.
+  const a = parsed.value
+  const calendar = g.ctx.viewAs === undefined && (a.action === "appointment" || (a.action === "reschedule" && a.target === "appointment"))
+    ? await syncAfterAppointment({ db: leadDb(), teamId: g.ctx.team.id, leadId: id, actor: g.ctx.user.email ?? g.ctx.user.id, action: a.action === "appointment" && a.at === null ? { kind: "cancel" } : { kind: "set", at: new Date(a.at as string).toISOString() } })
+    : null
+  return NextResponse.json({ ok: true, notified, ...(calendar ? { calendar } : {}) }, { headers: NO_STORE })
 }
 
 /** Tell the seller and the setter that a call was moved. The move is already saved: a failed or slow notification never fails it (and never holds the answer back more than a few seconds). */
@@ -39,11 +47,18 @@ async function notifyMoved(teamId: string, moverId: string, moverEmail: string |
     const to = rescheduleRecipients(members.map(m => ({ user_id: m.id, status: m.status, permissions: m.permissions })), moverId)
     if (to.length === 0) return 0
     // a lead with no name is shown by its email, never its phone number (a notification can sit on a lock screen)
-    const text = reschedulePush({ moverName: personName(moverEmail ?? ""), leadName: lead?.full_name || lead?.email || "Lead", from: a.from ?? null, to: new Date(a.at).toISOString(), reason: a.reason })
+    // each person is told the hour on HER own clock: one notification per zone among the recipients (a bare Rome hour on a Canary phone would make Rocco an hour late)
+    const { prefs } = await loadPrefsAndRows(teamId)
+    const byZone = new Map<string, string[]>()
+    for (const id of to) { const z = memberZone(prefs, id); byZone.set(z, [...(byZone.get(z) ?? []), id]) }
+    const sends = Array.from(byZone, ([zone, ids]) => {
+      const text = reschedulePush({ moverName: personName(moverEmail ?? ""), leadName: lead?.full_name || lead?.email || "Lead", from: a.from ?? null, to: new Date(a.at).toISOString(), reason: a.reason }, "en-GB", zone)
+      return sendMarketingPush(teamId, ids, { ...text, url: `/marketing/board?open=${leadId}`, tag: `moved-${leadId}` })
+    })
     const r = await Promise.race([
-      sendMarketingPush(teamId, to, { ...text, url: `/marketing/board?open=${leadId}`, tag: `moved-${leadId}` }),
+      Promise.all(sends),
       new Promise<null>(resolve => setTimeout(() => resolve(null), 4000)),
     ])
-    return r?.sent ?? 0
+    return r ? r.reduce((n, x) => n + (x?.sent ?? 0), 0) : 0
   } catch { return 0 /* the call is already moved */ }
 }

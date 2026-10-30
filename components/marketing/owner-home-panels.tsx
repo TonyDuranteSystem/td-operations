@@ -3,7 +3,7 @@ import { LeadLink } from '@/components/marketing/lead-link'
 import { CrmLeadChatLink } from '@/components/marketing/crm-lead-chat-link'
 import type { HomeModel, WaitingGroup } from '@/lib/marketing/home'
 import { personName } from '@/lib/marketing/setter-note'
-import { romeTime } from '@/lib/marketing/calendar'
+import { clockText } from '@/lib/marketing/zones'
 import { formatWhen } from '@/lib/marketing/lead-view'
 import type { TFn } from '@/lib/marketing/i18n'
 import { RemindBox, ReplyBox } from '@/components/marketing/owner-home-actions'
@@ -74,14 +74,14 @@ export function WaitingPanel({ model: m, mode, t }: Pick<PanelProps, 'model' | '
 }
 
 /** Today's booked calls. */
-export function CallsPanel({ model: m, mode, t, locale }: Pick<PanelProps, 'model' | 'mode' | 't' | 'locale'>) {
+export function CallsPanel({ model: m, mode, t, locale, zone = 'Europe/Rome' }: Pick<PanelProps, 'model' | 'mode' | 't' | 'locale'> & { /** the zone the viewer reads times in (his own; Rome when not given) */ zone?: string }) {
   return (
     <section className={card} aria-label={t('Calls today')} data-testid="home-calls">
       <h2 className="text-sm font-semibold text-slate-600">{t('Calls today ({n})', { n: m.callsToday.length })}</h2>
       {m.callsToday.length === 0 ? <p className="mt-3 text-sm text-slate-500">{t('No calls booked today.')}</p> : (
         <ul className="mt-2 divide-y">
           {m.callsToday.map(c => (
-            <li key={c.leadId}>{leadLink(mode, c.leadId, c.name, 'flex items-center justify-between gap-3 py-2 text-sm', <><span className="min-w-0 truncate"><b className="font-medium">{romeTime(c.at)}</b> {c.name}</span><span className="shrink-0 text-xs text-slate-500" title={formatWhen(c.at, 'Europe/Rome', locale)}>{t('booked by {name}', { name: personName(c.actor) })}</span></>)}</li>
+            <li key={c.leadId}>{leadLink(mode, c.leadId, c.name, 'flex items-center justify-between gap-3 py-2 text-sm', <><span className="min-w-0 truncate"><b className="font-medium">{clockText(c.at, zone)}</b> {c.name}</span><span className="shrink-0 text-xs text-slate-500" title={formatWhen(c.at, 'Europe/Rome', locale)}>{t('booked by {name}', { name: personName(c.actor) })}</span></>)}</li>
           ))}
         </ul>
       )}
