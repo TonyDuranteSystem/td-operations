@@ -31,6 +31,7 @@ import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-di
 import { VALID_SERVICE_TYPES } from '@/lib/operations/service-types'
 import { PaymentInvestigationPanel, readStoredInvestigation } from './payment-investigation'
 import { prefillPersonName, validateNewPerson } from '@/lib/finance/new-person'
+import { existingTargetFromWho, type ExistingTarget, type InvestigationWho } from '@/lib/finance/feed-investigation'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { InvoiceNoteDot } from '@/components/shared/invoice-note-dot'
 
@@ -769,6 +770,9 @@ function UnmatchedRow({
   // "Write the AI's story on the invoice note" — only meaningful once the payment has an investigation.
   const [saveStory, setSaveStory] = useState(true)
   const storedInvestigation = readStoredInvestigation(feed.review_metadata)
+  // Who the AI identified. The panel keeps it current (a fresh run, a re-run); starting from what is stored means
+  // the first paint already agrees with it.
+  const [aiWho, setAiWho] = useState<InvestigationWho | null>(() => storedInvestigation?.who ?? null)
   const openNewPerson = (name?: string) => {
     setNewPersonName((name && name.trim()) || prefillPersonName(feed.sender_name))
     setNewPersonOpen(true)
@@ -947,6 +951,57 @@ function UnmatchedRow({
     setPaidByResult({})
     setRecordNote('')
   }, [isMatching])
+
+  // The AI named invoices (a paid one among them, which the page does not hold): load them from the same source
+  // the "who paid" box uses and select them exactly as a click on their row would. Nothing is linked here.
+  const selectSuggestedInvoices = async (ids: string[]) => {
+    const missing = ids.filter(id => !openInvoices.some(o => o.id === id))
+    for (const id of ids) {
+      const inv = openInvoices.find(o => o.id === id)
+      if (inv && !selected.has(inv.id)) toggleSelect(inv)
+    }
+    if (missing.length === 0) return
+    const pool = new Map<string, PayerInvoice>((payerData?.invoices ?? []).map(i => [i.id, i]))
+    const params = [
+      aiWho?.account_id ? `account_id=${aiWho.account_id}` : null,
+      aiWho?.contact_id ? `contact_id=${aiWho.contact_id}` : null,
+    ].filter((p): p is string => !!p)
+    for (const param of params) {
+      if (missing.every(id => pool.has(id))) break
+      try {
+        const res = await fetch(`/api/finance/payer-invoices?feed_id=${encodeURIComponent(feed.id)}&${param}`)
+        const d = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(d.error || 'Could not load the suggested invoice.')
+        for (const pi of (d.invoices ?? []) as PayerInvoice[]) pool.set(pi.id, pi)
+      } catch (err) {
+        toast.error(err instanceof Error && err.message ? err.message : 'Could not load the suggested invoice.')
+        return
+      }
+    }
+    let picked = 0
+    let notFound = 0
+    for (const id of missing) {
+      const pi = pool.get(id)
+      if (!pi) { notFound++; continue }
+      if (pi.claimed_by_other) {
+        toast.error(`${pi.invoice_number ?? 'That invoice'} is already linked to another transaction, so it cannot be linked to this one.`)
+        continue
+      }
+      if (!selected.has(pi.id)) toggleSelectPayerInvoice(pi)
+      picked++
+    }
+    if (notFound > 0) toast.error('The suggested invoice could not be loaded here. Search for the company by name to find it.')
+    if (picked > 0) toast.success(`Invoice selected: see the box further down, then press the link button.`)
+  }
+  // The AI found the payer in the CRM: the same step as picking them in the search box and pressing "Create invoice".
+  const createInvoiceForExisting = (t: ExistingTarget) => {
+    if (t.type === 'account') void openCreateModal({ type: 'account', id: t.id, name: t.name, status: null })
+    else if (t.type === 'contact') void openCreateModal({ type: 'contact', id: t.id, name: t.name })
+    else void openCreateModal({ type: 'lead', id: t.id, name: t.name })
+  }
+  // A payer the system already knows must never be offered as "not in the CRM": who the AI identified, or the
+  // companies earlier payments from this sender were linked to.
+  const payerKnown = !!existingTargetFromWho(aiWho) || (payerData?.companies?.length ?? 0) > 0
 
   const selectCombo = (ids: string[]) => {
     const byId = new Map((payerData?.invoices ?? []).map(i => [i.id, i]))
@@ -1502,12 +1557,9 @@ function UnmatchedRow({
             saveStory={saveStory}
             onSaveStoryChange={setSaveStory}
             onCreateNewPerson={openNewPerson}
-            onSelectInvoices={(ids) => {
-              for (const id of ids) {
-                const inv = openInvoices.find(o => o.id === id)
-                if (inv && !selected.has(inv.id)) toggleSelect(inv)
-              }
-            }}
+            onCreateInvoiceForExisting={createInvoiceForExisting}
+            onSelectInvoices={selectSuggestedInvoices}
+            onResolved={setAiWho}
           />
 
           {/* ── From who paid ────────────────────────────────────────
@@ -1706,7 +1758,17 @@ function UnmatchedRow({
           {/* ── Payer not in the CRM: create a plain person + invoice ──────────────────────────
               Antonio, 2026-10-30: "I want a system that I can invoice for someone that is not a client,
               that is not a lead." The search above can only find who already exists. */}
-          {!newPersonOpen ? (
+          {!newPersonOpen && payerKnown ? (
+            // The payer is already in the CRM (the AI found them, or earlier payments from this sender went to
+            // them): the big "new person" prompt would contradict that. It stays one click away for the rare
+            // case where the CRM match is someone else with the same name.
+            <p className="text-[11px] text-zinc-500 px-1" data-testid="not-them-link">
+              Not them?{' '}
+              <button type="button" onClick={() => openNewPerson()} className="underline hover:text-zinc-800">
+                The payer is someone who is not in the CRM
+              </button>
+            </p>
+          ) : !newPersonOpen ? (
             <div className={cn(
               'rounded-md px-3 py-2 text-xs flex items-center gap-2',
               searchQuery.trim().length >= 2 && searchResults.length === 0 && !searchLoading ? 'border border-emerald-300 bg-emerald-50' : 'border border-dashed border-zinc-300',

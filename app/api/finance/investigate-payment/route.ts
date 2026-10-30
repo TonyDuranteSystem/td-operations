@@ -29,6 +29,7 @@ import { updateFeed } from "@/lib/finance/feed-write"
 import { checkRateLimit } from "@/lib/portal/rate-limit"
 import { invoicePartyName } from "@/lib/finance/invoice-party"
 import { buildInvestigatorWorkerOptions } from "@/lib/finance/investigator-options"
+import { CHAT_STORE_LABEL, CHAT_STORES, runChatSweep, summarizeChatSweep, type ChatSweep } from "@/lib/finance/feed-chat-sweep"
 import {
   buildInvestigatorUserMessage,
   markVerifiedSources,
@@ -41,6 +42,7 @@ import {
   type KnownRecord,
   type MailboxSweep,
   type StoredInvestigation,
+  type SweptChat,
   type SweptEmail,
 } from "@/lib/finance/feed-investigation"
 
@@ -56,6 +58,8 @@ const IN_FLIGHT_MS = 5 * 60_000
  * lock held and no answer.
  */
 const SWEEP_TIMEOUT_MS = 30_000
+/** The chats-and-notes sweep is database reads only; it runs at the same time as the mailbox sweep and has less time. */
+const CHAT_SWEEP_TIMEOUT_MS = 20_000
 const MAX_CANDIDATE_INVOICES = 12
 
 type Embedded<T> = T | T[] | null | undefined
@@ -100,6 +104,36 @@ async function sweepWithTimeout(queries: string[], mailboxes: string[]): Promise
   const limit = new Promise<MailboxSweep>((resolve) => { timer = setTimeout(() => resolve(timedOut), SWEEP_TIMEOUT_MS) })
   try {
     return await Promise.race([sweepMailboxes((name, params) => executeTool(name, params), mailboxes, queries), limit])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/** A chats-and-notes sweep that did not run: every place named as NOT searched, with the reason. */
+function chatSweepNotRun(reason: string): ChatSweep {
+  return {
+    terms: [],
+    clients: [],
+    clientLookupError: null,
+    window: null,
+    stores: CHAT_STORES.map((store) => ({ store, label: CHAT_STORE_LABEL[store], searched: false, error: reason, hits: [] })),
+  }
+}
+
+/**
+ * Search the chats and notes, but never wait past the limit, and never let a failure here take the whole
+ * investigation down: the mailboxes and the AI still run, and the screen shows these places as not searched.
+ */
+async function chatSweepWithTimeout(input: Parameters<typeof runChatSweep>[0]): Promise<ChatSweep> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const limit = new Promise<ChatSweep>((resolve) => {
+    timer = setTimeout(() => resolve(chatSweepNotRun(`the search took longer than ${CHAT_SWEEP_TIMEOUT_MS / 1000}s and was given up`)), CHAT_SWEEP_TIMEOUT_MS)
+  })
+  try {
+    return await Promise.race([
+      runChatSweep(input).catch((err: unknown) => chatSweepNotRun(`the search failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200))),
+      limit,
+    ])
   } finally {
     if (timer) clearTimeout(timer)
   }
@@ -191,7 +225,11 @@ export async function POST(req: NextRequest) {
     // Both mailboxes, guaranteed by code (see lib/finance/feed-investigation.ts).
     const mailboxes = allowedMailboxes()
     const queries = payerSearchQueries({ sender_name: feed.sender_name, memo: feed.memo, payer_name: payerFields.payer_name })
-    const sweep = await sweepWithTimeout(queries, mailboxes)
+    // The mailboxes and the chats/notes are searched at the same time: neither waits for the other.
+    const [sweep, chatSweep] = await Promise.all([
+      sweepWithTimeout(queries, mailboxes),
+      chatSweepWithTimeout({ facts: { transaction_date: facts.transaction_date, sender_name: feed.sender_name, memo: feed.memo, payer_name: payerFields.payer_name }, userId: user.id }),
+    ])
 
     // Invoices of exactly this amount, so the model sees the "obvious" candidate and its internal note.
     let candidates: InvoiceContextRow[] = []
@@ -220,7 +258,7 @@ export async function POST(req: NextRequest) {
       }))
     }
 
-    const userMessage = buildInvestigatorUserMessage(facts, sweep, candidates, invoicesUnavailable)
+    const userMessage = buildInvestigatorUserMessage(facts, sweep, candidates, invoicesUnavailable, chatSweep)
     const worker = await callWorker(userMessage, buildInvestigatorWorkerOptions())
 
     // Running out of steps does not mean there is no answer: the loop makes one last call that forces a written
@@ -270,6 +308,9 @@ export async function POST(req: NextRequest) {
       emails.set(h.id, mail)
       if (h.thread_id) emails.set(h.thread_id, mail)
     })
+    // The same for the chats and notes the sweep read: key = the message / note id.
+    const chats = new Map<string, SweptChat>()
+    chatSweep.stores.forEach((store) => store.hits.forEach((h) => chats.set(h.id.toLowerCase(), { storeLabel: store.label, who: h.who, date: h.date })))
     const records = new Map<string, KnownRecord>()
     okSourceContacts.forEach((name, id) => records.set(id, { kind: "crm", name }))
     okSourceAccounts.forEach((name, id) => records.set(id, { kind: "crm", name }))
@@ -280,7 +321,7 @@ export async function POST(req: NextRequest) {
       who: checkedWho && (checkedWho.name || checkedWho.contact_id || checkedWho.account_id || checkedWho.lead_id) ? checkedWho : null,
       summary: parsed.summary,
       story: parsed.story,
-      sources: markVerifiedSources(parsed.sources, { emails, records }),
+      sources: markVerifiedSources(parsed.sources, { emails, records, chats }),
       suggested_invoice_ids: parsed.suggested_invoice_ids.filter((id) => okPayments.has(id)),
       suggested_next: parsed.suggested_next,
       at: new Date().toISOString(),
@@ -288,6 +329,7 @@ export async function POST(req: NextRequest) {
       tools_used: Array.from(new Set(worker.toolsUsed)),
       mailboxes_searched: sweep.searched,
       mailboxes_failed: sweep.failed.map((f) => `${f.mailbox}: ${f.error}`),
+      chats_searched: summarizeChatSweep(chatSweep),
     }
 
     let saved = await updateFeed(feed.id, { review_metadata: { investigation: stored, investigation_started_at: null } }, "investigate-payment:result")
