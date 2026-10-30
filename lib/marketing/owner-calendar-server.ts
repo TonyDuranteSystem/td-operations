@@ -9,7 +9,7 @@ const DAY = 24 * 3600_000
 
 const validIso = (v: unknown): number | null => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v) && !Number.isNaN(Date.parse(v)) ? Date.parse(v) : null)
 
-export async function addOwnerEvent(api: GcalApi, ownerEmail: string | null, zone: string, i: { title: unknown; startIso: unknown; endIso: unknown }): Promise<OwnerResult<{ id: string }>> {
+export async function addOwnerEvent(api: GcalApi, ownerEmail: string | null, zone: string, i: { title?: unknown; startIso?: unknown; endIso?: unknown }): Promise<OwnerResult<{ id: string }>> {
   if (!isWorkMailbox(ownerEmail)) return { ok: false, status: 400, error: "Your Google calendar is not connected for this login." }
   const title = typeof i.title === "string" ? i.title.trim() : ""
   if (!title || title.length > 200) return { ok: false, status: 400, error: "Give the event a title (up to 200 letters)." }
@@ -22,7 +22,7 @@ export async function addOwnerEvent(api: GcalApi, ownerEmail: string | null, zon
   } catch { return { ok: false, status: 502, error: "Google did not accept the event. Nothing was added; try again." } }
 }
 
-export async function moveOwnerEvent(api: GcalApi, ownerEmail: string | null, zone: string, id: string, i: { startIso: unknown; confirmGuests?: unknown }): Promise<OwnerResult<{ id: string }>> {
+export async function moveOwnerEvent(api: GcalApi, ownerEmail: string | null, zone: string, id: string, i: { startIso?: unknown; confirmGuests?: unknown }): Promise<OwnerResult<{ id: string }>> {
   if (!isWorkMailbox(ownerEmail)) return { ok: false, status: 400, error: "Your Google calendar is not connected for this login." }
   if (!/^[a-z0-9_]{5,1024}$/i.test(id)) return { ok: false, status: 404, error: "That event could not be found." }
   const start = validIso(i.startIso)

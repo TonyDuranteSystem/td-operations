@@ -88,6 +88,8 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
       return data.at ? `${t("Call booked for {when}", { when: fw(typeof data.at === "string" ? data.at : null) })}${note}` : `${t("Booked call cancelled")}${note}`
     case "callback_moved": return `${t("Call back moved to {when}. Reason: {reason}", { when: fw(typeof data.callback_at === "string" ? data.callback_at : null), reason: t(String(data.reason ?? "")) })}${note}`
     case "handover": return `${t("Passed to Rocco, no call booked yet")}${note}`
+    case "calendar_synced": return data.removed === true ? t("The call was taken off the seller's calendar") : t("The call was written into the seller's calendar")
+    case "calendar_sync_failed": return t("The call is saved, but the seller's calendar was not updated: {message}", { message: typeof data.message === "string" ? data.message : "—" })
     case "zone_set": return t("Time zone set to {zone}", { zone: typeof data.zone === "string" ? zoneName(data.zone) : "—" })
     case "booking_link": return `${t("Booking link sent by {via}: {url}", { via: data.via === "email" ? t("email") : data.via === "copied" ? t("copy") : "WhatsApp", url: typeof data.url === "string" ? data.url : "" })}${note}`
     case "payment_link_created": return t("Payment link created")

@@ -7,7 +7,9 @@ export const dynamic = "force-dynamic"
 const NO_STORE = { "Cache-Control": "no-store" }
 
 /** The settings Antonio edits from the Settings screen (the others, such as the pipeline stages, are changed with more care elsewhere). */
-const EDITABLE = new Set(["qualification_checklist", "not_in_target_reasons", "owner_may_create_offers", "owner_may_export_leads", "member_invites_need_approval", "allowed_currencies", "seller_payout_currency"])
+const EDITABLE = new Set(["qualification_checklist", "not_in_target_reasons", "owner_may_create_offers", "owner_may_export_leads", "member_invites_need_approval", "allowed_currencies", "seller_payout_currency",
+  // time zones and calendars (Addendum K): each person's zone, who takes calls and their hours, the Calendly links, the personal calendars, and the two switches
+  "owner_clock", "member_time_zones", "member_call_hours", "member_calendly_links", "member_personal_calendars", "calendar_busy_enabled", "calendar_write_through_enabled"])
 
 /** PUT /api/marketing-admin/settings — body { teamId, key, value }. Antonio only (strict check), JSON only. The value is validated by the setting's own rules and every change is kept in the history. */
 export async function PUT(req: NextRequest) {

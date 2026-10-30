@@ -22,19 +22,27 @@ export interface TimeView {
   ownerLogin: boolean
   /** this viewer takes calls with leads (the seller) */
   isTaker: boolean
+  /** whose calendar the viewer is looking through: his own, or ("View as") the member whose role he is previewing */
+  memberId: string
+}
+
+export type MemberRow = { user_id: string; status: string; bundle: string | null }
+
+/** The team's time settings, its members, and the members who take calls (one name lookup each, normally one person). */
+export async function loadPrefsAndTakers(teamId: string): Promise<{ prefs: TimePrefs; takers: Taker[]; rows: MemberRow[] }> {
+  const [all, rows] = await Promise.all([
+    getAllMarketingSettings(teamId),
+    db().from("marketing_team_members").select("user_id, status, bundle").eq("team_id", teamId).then((r: { data: MemberRow[] | null }) => r.data ?? []),
+  ])
+  const prefs = timePrefsFrom(all as Parameters<typeof timePrefsFrom>[0])
+  const callers = rows.filter(m => Object.prototype.hasOwnProperty.call(prefs.callHours, m.user_id))
+  const emails = await Promise.all(callers.map(async m => ({ userId: m.user_id, email: ((await db().auth.admin.getUserById(m.user_id))?.data?.user?.email ?? null) as string | null, status: m.status })))
+  return { prefs, takers: callTakers(prefs, emails), rows }
 }
 
 /** Everything a screen needs to show times for this person. */
 export async function loadTimeView(ctx: Pick<MarketingContext, "user" | "team" | "membership" | "permissions" | "viewAs" | "admin">): Promise<TimeView> {
-  const [all, rows] = await Promise.all([
-    getAllMarketingSettings(ctx.team.id),
-    db().from("marketing_team_members").select("user_id, status, bundle").eq("team_id", ctx.team.id).then((r: { data: Array<{ user_id: string; status: string; bundle: string | null }> | null }) => r.data ?? []),
-  ])
-  const prefs = timePrefsFrom(all as Parameters<typeof timePrefsFrom>[0])
-  // only the people who take calls need a name (one lookup each, normally one person)
-  const callers = rows.filter(m => Object.prototype.hasOwnProperty.call(prefs.callHours, m.user_id))
-  const emails = await Promise.all(callers.map(async m => ({ userId: m.user_id, email: ((await db().auth.admin.getUserById(m.user_id))?.data?.user?.email ?? null) as string | null, status: m.status })))
-  const takers = callTakers(prefs, emails)
+  const { prefs, takers, rows } = await loadPrefsAndTakers(ctx.team.id)
   const ownerLogin = ctx.admin === true && !ctx.viewAs
   // "View as": the zone of a member who holds the chosen role, so the preview reads times as that person does
   const asBundle = ctx.viewAs ? ctx.membership.bundle : null
@@ -42,5 +50,5 @@ export async function loadTimeView(ctx: Pick<MarketingContext, "user" | "team" |
   const zone = viewerZone(prefs, { userId: ctx.user.id, ownerLogin, viewAsMemberId })
   const hideOwner = isSetterOnly(ctx.permissions)
   const isTaker = takers.some(t => t.userId === (viewAsMemberId ?? ctx.user.id))
-  return { prefs, takers, zone, hideOwner, ownerLogin, isTaker }
+  return { prefs, takers, zone, hideOwner, ownerLogin, isTaker, memberId: viewAsMemberId ?? ctx.user.id }
 }

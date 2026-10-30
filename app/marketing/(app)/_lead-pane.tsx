@@ -25,6 +25,8 @@ import { leadZoneOf } from '@/lib/marketing/lead-zone'
 import { ClockRow, SellerBanner } from '@/components/marketing/lead-clocks'
 import { LeadZoneRow } from '@/components/marketing/lead-zone-row'
 import { zoneName } from '@/lib/marketing/zones'
+import { loadSlotOffer } from '@/lib/marketing/slots-server'
+import { leadDb } from '@/lib/marketing/meta-leads/service'
 
 interface Props {
   lead: LeadRow
@@ -94,6 +96,8 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
   const zoneInfo = zoneInfoFor({ viewerZone: time.zone, clientZone: leadZone.zone, clientName: firstName, seller, owner: time.prefs.ownerClock, hideOwner: time.hideOwner })
   const clocks = leadClocks({ leadName: firstName, clientZone: leadZone.zone, seller, owner: time.prefs.ownerClock, youZone: time.zone, hideOwner: time.hideOwner })
   const banner = bannerClocks({ isTaker: time.isTaker, hideOwner: time.hideOwner, youZone: time.zone, owner: time.prefs.ownerClock })
+  // with the calendar switch on, a call is booked from the seller's free slots (start times only); off, or no seller: the typed time as before
+  const offer = canAct && sellerTaker && lead.team_id ? await loadSlotOffer({ db: leadDb(), teamId: lead.team_id, prefs: time.prefs, seller: sellerTaker, excludeLeadId: lead.id }) : null
   return (
     <div className="space-y-4">
       {banner.length > 0 && <SellerBanner clocks={banner} nowIso={nowIso} />}
@@ -126,7 +130,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
 
       {role === 'setter' && <ContactPanel leadId={lead.id} canAct={canAct} contact={contact} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} setterName={signer} templates={templates} canEditTemplates={isOwner} canWhatsApp={hasPermission(permissions, 'whatsapp')} />}
 
-      <HandoverPanel leadId={lead.id} role={role} canAct={canAct} contact={contact} zone={zoneInfo} />
+      <HandoverPanel leadId={lead.id} role={role} canAct={canAct} contact={contact} zone={zoneInfo} offer={offer} />
 
       <LeadActionPanel
         leadId={lead.id}

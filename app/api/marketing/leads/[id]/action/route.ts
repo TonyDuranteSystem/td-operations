@@ -8,6 +8,7 @@ import { chatMembers } from "@/lib/marketing/lead-chat-server"
 import { sendMarketingPush } from "@/lib/marketing/push"
 import { rescheduleRecipients, reschedulePush } from "@/lib/marketing/calendar-notify"
 import { personName } from "@/lib/marketing/setter-note"
+import { syncAfterAppointment } from "@/lib/marketing/call-sync-server"
 
 const NO_STORE = { "Cache-Control": "no-store" }
 
@@ -26,7 +27,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const r = await applyLeadAction(leadDb(), g.ctx.team.id, id, parsed.value, { id: g.ctx.user.id, email: g.ctx.user.email, role: g.ctx.role }, settings, new Date(), g.ctx.viewAs !== undefined)
   if (r.ok === false) return NextResponse.json({ error: r.error }, { status: r.status, headers: NO_STORE })
   const notified = parsed.value.action === "reschedule" && g.ctx.viewAs === undefined ? await notifyMoved(g.ctx.team.id, g.ctx.user.id, g.ctx.user.email, id, parsed.value) : 0
-  return NextResponse.json({ ok: true, notified }, { headers: NO_STORE })
+  // a call booked, moved or cancelled is also written into the seller's work Google calendar (only while that switch is on; never while Antonio is "viewing as" somebody). The call is already saved: the answer only tells the screen what happened.
+  const a = parsed.value
+  const calendar = g.ctx.viewAs === undefined && (a.action === "appointment" || (a.action === "reschedule" && a.target === "appointment"))
+    ? await syncAfterAppointment({ db: leadDb(), teamId: g.ctx.team.id, leadId: id, actor: g.ctx.user.email ?? g.ctx.user.id, action: a.action === "appointment" && a.at === null ? { kind: "cancel" } : { kind: "set", at: new Date(a.at as string).toISOString() } })
+    : null
+  return NextResponse.json({ ok: true, notified, ...(calendar ? { calendar } : {}) }, { headers: NO_STORE })
 }
 
 /** Tell the seller and the setter that a call was moved. The move is already saved: a failed or slow notification never fails it (and never holds the answer back more than a few seconds). */

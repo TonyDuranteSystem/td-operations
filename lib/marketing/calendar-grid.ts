@@ -103,8 +103,8 @@ export function romeLocalValue(iso: string, zone: string = ROME): string {
 
 export interface Placed { index: number; top: number; lane: number; lanes: number }
 /** Place the calls of one day on the hour grid: `top` is hours from the first hour; calls that start close together sit side by side (a lane each). Calls outside the grid are left out. */
-export function layoutDay(starts: ReadonlyArray<{ h: number; m: number }>, overlapMinutes = 40): Placed[] {
-  const items = starts.map((s, index) => ({ index, mins: s.h * 60 + s.m })).filter(i => i.mins >= HOUR_FROM * 60 && i.mins < HOUR_TO * 60).sort((a, b) => a.mins - b.mins)
+export function layoutDay(starts: ReadonlyArray<{ h: number; m: number; /** how long it lasts, in minutes (a call lasts the default) */ len?: number }>, overlapMinutes = 40): Placed[] {
+  const items = starts.map((s, index) => ({ index, mins: s.h * 60 + s.m, len: s.len ?? overlapMinutes })).filter(i => i.mins >= HOUR_FROM * 60 && i.mins < HOUR_TO * 60).sort((a, b) => a.mins - b.mins)
   const out: Placed[] = []
   let cluster: Placed[] = []
   let clusterEnd = -1
@@ -114,8 +114,8 @@ export function layoutDay(starts: ReadonlyArray<{ h: number; m: number }>, overl
     if (cluster.length && it.mins >= clusterEnd) flush()
     let lane = laneEnds.findIndex(e => e <= it.mins)
     if (lane < 0) { lane = laneEnds.length; laneEnds.push(0) }
-    laneEnds[lane] = it.mins + overlapMinutes
-    clusterEnd = cluster.length ? Math.max(clusterEnd, it.mins + overlapMinutes) : it.mins + overlapMinutes
+    laneEnds[lane] = it.mins + it.len
+    clusterEnd = cluster.length ? Math.max(clusterEnd, it.mins + it.len) : it.mins + it.len
     cluster.push({ index: it.index, top: it.mins / 60 - HOUR_FROM, lane, lanes: 1 })
   }
   if (cluster.length) flush()

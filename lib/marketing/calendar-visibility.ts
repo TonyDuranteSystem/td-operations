@@ -42,3 +42,8 @@ export function shownTo(viewer: Viewer, it: GoogleItem, c: VisibilityContext): S
 export function shownList(viewer: Viewer, items: readonly GoogleItem[], c: VisibilityContext): Shown[] {
   return items.map(i => shownTo(viewer, i, c)).filter((x): x is Shown => x !== null).sort((a, b) => a.start - b.start)
 }
+
+/** What the Calendar screen receives for one Google item: serializable (ISO times), with nothing the viewer may not see. */
+export interface GoogleBlock { id: string; start: string; end: string; tone: Tone; title: string; sub: string; movable: boolean; guests: string[] }
+
+export const toBlocks = (shown: readonly Shown[]): GoogleBlock[] => shown.map(s => ({ id: s.id, start: new Date(s.start).toISOString(), end: new Date(s.end).toISOString(), tone: s.tone, title: s.title, sub: s.sub, movable: s.movable, guests: s.guests }))

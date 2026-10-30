@@ -198,7 +198,7 @@ describe("writing a booked call into the seller's calendar", () => {
   })
   it("moving the call moves OUR event; it never creates a second one", async () => {
     const g = world()
-    const first = await syncCall(input(g)); const existing = (first as { event: never }).event
+    const first = await syncCall(input(g)); const existing = (first as unknown as { event: never }).event
     const r = await syncCall(input(g, { action: set("2026-11-04T10:00:00Z"), existing }))
     expect(r.state).toBe("synced")
     expect(g.all(ROC).filter(e => e.marketingLeadId === "lead-7")).toHaveLength(1)
@@ -216,7 +216,7 @@ describe("writing a booked call into the seller's calendar", () => {
   })
   it("cancelling the call removes our event only", async () => {
     const g = world()
-    const first = await syncCall(input(g)); const existing = (first as { event: never }).event
+    const first = await syncCall(input(g)); const existing = (first as unknown as { event: never }).event
     const before = g.all(ROC).length
     expect(await syncCall(input(g, { action: { kind: "cancel" }, existing }))).toEqual({ state: "synced", event: null })
     expect(g.all(ROC).length).toBe(before - 1)
@@ -224,7 +224,7 @@ describe("writing a booked call into the seller's calendar", () => {
   })
   it("a new seller: the old event comes off the old calendar, the new one goes on the new", async () => {
     const g = world(); const BEA = "bea@tonydurante.us"
-    const first = await syncCall(input(g)); const existing = (first as { event: never }).event
+    const first = await syncCall(input(g)); const existing = (first as unknown as { event: never }).event
     const r = await syncCall(input(g, { seller: { email: BEA, label: "Bea" }, existing }))
     expect(r).toMatchObject({ state: "synced", event: { actAs: BEA } })
     expect(g.all(ROC).some(e => e.marketingLeadId === "lead-7")).toBe(false)

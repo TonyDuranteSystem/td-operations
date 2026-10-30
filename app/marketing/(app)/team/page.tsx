@@ -6,6 +6,10 @@ import { getMarketingSetting } from '@/lib/marketing/settings'
 import { listMembers, listOpenInvites } from '@/lib/marketing/members'
 import { grantablePermissions } from '@/lib/marketing/permission-labels'
 import { TeamManager } from '@/components/marketing/team-manager'
+import { TeamTimes } from '@/components/marketing/team-times'
+import { loadPrefsAndTakers } from '@/lib/marketing/time-prefs-server'
+import { checkShare, googleApi, isWorkMailbox } from '@/lib/marketing/gcal'
+import { personName } from '@/lib/marketing/setter-note'
 import { TourPreviewBox } from '@/components/marketing/tour'
 import { getLang } from '@/lib/marketing/lang'
 import { makeT } from '@/lib/marketing/i18n'
@@ -29,6 +33,9 @@ export default async function MarketingTeam() {
   const [members, invites, bundles] = await Promise.all([
     listMembers(teamId), listOpenInvites(teamId), getMarketingSetting('permission_bundles', teamId) as Promise<Record<string, string[]>>,
   ])
+  // time zones and calendars (Addendum K): Antonio's section. The share of each personal calendar is asked of Google every time the page opens (the "Check again" button reloads it).
+  const times = g.ctx.admin === true ? await loadPrefsAndTakers(teamId) : null
+  const share = times ? (await Promise.all(times.takers.map(async tk => (await checkShare(googleApi, tk.email, times.prefs.personalCalendars[tk.userId] ?? [])).map(r => ({ userId: tk.userId, id: r.id, state: r.state }))))).flat() : []
   const roles = Object.entries(bundles).map(([key, perms]) => ({ key, permissions: cleanPermissions(perms) }))
   const grantable: string[] = grantablePermissions(g.ctx.role === 'owner', g.ctx.permissions)
   return (
@@ -47,6 +54,14 @@ export default async function MarketingTeam() {
         }))}
         invites={invites.map(i => ({ id: i.id, email: i.email_lower, role: i.member_role, bundle: i.bundle, permissions: i.permissions ?? [], expiresAt: i.expires_at, sentBy: i.created_by, emailedAt: i.emailed_at ?? null }))}
       />
+      {times && (
+        <div className="mt-6">
+          <TeamTimes
+            teamId={teamId} adminEmail={g.ctx.user.email ?? null} adminLabel={personName(g.ctx.user.email ?? '')} prefs={times.prefs} share={share}
+            members={members.filter(m => m.status !== 'removed').map(m => ({ userId: m.user_id, email: m.email, role: m.member_role, status: m.status, isAdmin: m.is_admin === true, workMailbox: isWorkMailbox(m.email) }))}
+          />
+        </div>
+      )}
       <TourPreviewBox />
     </main>
   )
