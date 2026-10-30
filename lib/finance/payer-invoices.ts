@@ -93,7 +93,7 @@ interface FeedForSuggestions {
   owner_account_number?: string | null
 }
 
-type RawInvoice = {
+export type RawInvoice = {
   id: string
   invoice_number: string | null
   description: string | null
@@ -113,7 +113,7 @@ type RawInvoice = {
   contacts?: { full_name: string | null } | { full_name: string | null }[] | null
 }
 
-const INVOICE_COLUMNS =
+export const INVOICE_COLUMNS =
   "id, invoice_number, description, installment, total, amount, amount_due, amount_paid, amount_currency, invoice_status, status, paid_date, account_id, contact_id, is_test, accounts:account_id(company_name), contacts:payments_contact_id_fkey(full_name)"
 
 const num = (v: number | string | null | undefined): number | null => {
@@ -124,7 +124,7 @@ const num = (v: number | string | null | undefined): number | null => {
 const first = <T,>(v: T | T[] | null | undefined): T | null => (Array.isArray(v) ? (v[0] ?? null) : (v ?? null))
 
 /** An invoice a payment can still be tied to: paid, or genuinely owed. Voided/cancelled/credit/split/refunded are not. */
-function isLinkableForSuggestion(inv: RawInvoice): boolean {
+export function isLinkableForSuggestion(inv: RawInvoice): boolean {
   if (inv.is_test === true) return false
   // Money returned to the client is not a payment to link to, even when the invoice still reads Paid.
   if (String(inv.status ?? "") === "Refunded") return false

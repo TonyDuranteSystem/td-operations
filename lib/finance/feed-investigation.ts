@@ -17,6 +17,8 @@ import { isUsablePayerName, normalizePayerName, parsePayerEmail } from "@/lib/fi
 import { escapeUntrusted, flattenUntrusted } from "@/lib/inbox/whatsapp-worker-context"
 // Type-only: feed-chat-sweep.ts imports `cleanText` from this file, so a value import here would be a cycle.
 import type { ChatStoreSummary, ChatSweep } from "@/lib/finance/feed-chat-sweep"
+// Type-only for the same reason: feed-nearby-sweep.ts imports `cleanText` from this file.
+import type { NearbySummary, NearbySweep } from "@/lib/finance/feed-nearby-sweep"
 
 export const INVESTIGATION_VERDICTS = ["identified", "likely", "unclear"] as const
 export type InvestigationVerdict = (typeof INVESTIGATION_VERDICTS)[number]
@@ -70,6 +72,12 @@ export interface StoredInvestigation extends Omit<ParsedInvestigation, "parsed">
    * result kept before this existed — the screen says so instead of implying they were searched.
    */
   chats_searched?: ChatStoreSummary[]
+  /**
+   * What the CODE looked at around the payment date (counts only, never the names): companies that started,
+   * calls and offers then, and how many were set aside because they are already tied to another payment.
+   * Absent on a result kept before this existed — the screen says so instead of implying it was looked at.
+   */
+  nearby_checked?: NearbySummary
 }
 
 /** Someone who is already in the CRM, as a target the "create an invoice" flow understands. */
@@ -410,13 +418,42 @@ function cleanPayerLabel(line: string): string {
  * The searches the code guarantees: the payer's name (all words, any order — Gmail ANDs bare words) and,
  * when the processor put one in the memo, the payer's email address. Anything beyond is the model's call.
  */
-export function payerSearchQueries(feed: { sender_name?: string | null; memo?: string | null; payer_name?: string | null }): string[] {
+export function payerSearchQueries(feed: { sender_name?: string | null; memo?: string | null; payer_name?: string | null; emails?: readonly string[] | null }): string[] {
   const queries: string[] = []
   const label = cleanPayerLabel(String(feed.payer_name || feed.sender_name || ""))
   if (isUsablePayerName(normalizePayerName(label))) queries.push(label)
   const email = parsePayerEmail(feed.memo)
   if (email) queries.push(`"${email}"`)
+  // Every other address the processor recorded (a card payment's billing and receipt email): the name on a card is
+  // often an agency or a company, while the address is the one thing that reaches the real client. TD's own
+  // addresses are skipped — searching them would return the whole mailbox.
+  let extra = 0
+  for (const raw of feed.emails ?? []) {
+    const clean = String(raw).trim().toLowerCase()
+    if (!PLAIN_EMAIL_RE.test(clean) || OWN_DOMAIN_RE.test(clean)) continue
+    const query = `"${clean}"`
+    if (queries.some((q) => q.toLowerCase() === query) || extra >= MAX_EXTRA_EMAIL_QUERIES) continue
+    queries.push(query)
+    extra++
+  }
   return queries
+}
+
+const PLAIN_EMAIL_RE = /^[^\s"'@<>]+@[^\s"'@<>]+\.[^\s"'@<>]+$/
+const OWN_DOMAIN_RE = /@tonydurante\.us$/
+const MAX_EXTRA_EMAIL_QUERIES = 2
+
+/**
+ * The email addresses on a payment worth showing the AI and searching for: what the processor recorded
+ * (billing, receipt, metadata) and any in the memo. Lower-cased, no duplicates, no TD address, at most 4.
+ */
+export function payerEmailsFor(addresses: readonly string[]): string[] {
+  const out: string[] = []
+  for (const raw of addresses) {
+    const clean = String(raw).trim().toLowerCase()
+    if (PLAIN_EMAIL_RE.test(clean) && !OWN_DOMAIN_RE.test(clean) && !out.includes(clean)) out.push(clean)
+  }
+  return out.slice(0, 4)
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────
@@ -449,6 +486,8 @@ export const INVESTIGATOR_SYSTEM_PROMPT = `You are a careful investigator for th
 HOW TO WORK
 - Use any read tool you have: the CRM (contacts, accounts, leads, payments, services, tasks), client chats, call records, documents, the knowledge base, the Bank Feed itself (read_bank_feeds: what else this payer sent and which invoice each earlier payment was linked to) and BOTH mailboxes. Antonio has explicitly authorised you to search BOTH mailboxes: support@tonydurante.us (the default) and antonio.durante@tonydurante.us (use as_user). A first sweep of both mailboxes is already in the message below — read the threads that matter and search further; do not stop at the sweep.
 - A first sweep of the chats and notes (portal chats, the conversation log, WhatsApp/Telegram, team chat channels, staff notes) is in the message below too. It is only a first look: once you know who the payer is, ALWAYS read that client's own portal chat around the payment date (portal_chat_read or search_portal_messages) and their conversation log (search_conversations) before you conclude, and say in your story what you read there — including "nothing about this payment". A client often explains a payment in the chat and never in an email.
+- When the payer is NOT in the CRM, the message below also shows what started, was called or was offered around the payment date (companies that started, calls, offers), with everything already tied to another payment — by company, by person or by another bank line — SET ASIDE, and it shows the invoices of this exact amount with their paid date and whether a bank line is tied to them. These are LEADS to check, never proof: a company or person with no payment did not necessarily pay this, and a name that differs from the payer's proves nothing either way — a processor often shows an agency, a company or a card holder, not the client. An invoice already marked paid on the same day with no bank line tied to it is the kind of record this line may belong to: check it against the email addresses on the payment and against that client's own emails and chats before you decide. If the part that set records aside could not run, treat the list as unfiltered and say so.
+- The email addresses recorded on the payment (billing, receipt) are searched in both mailboxes for you. Look up whose address each one is in the CRM (search_contacts, search_leads) — an address often identifies the client when the name on the payment does not.
 - Look at the whole picture, not at one signal. An amount that matches an invoice proves nothing by itself; neither does a similar name. Ask who the payer is, what they bought or were promised, who else was involved, what the earlier payments of the same invoice looked like, and whether the story fits.
 - Prefer evidence that contradicts your first idea. If the obvious invoice belongs to a different person with a different story, say so.
 - Never invent anything. Every claim in your story must come from something you actually read; cite it. Use ids (invoice, contact, account, lead) ONLY if they appeared in a tool result. If you cannot tell, the verdict is "unclear".
@@ -475,6 +514,8 @@ export interface InvestigationFacts {
   memo: string | null
   /** Payer fields the processor sent, as they came (already trimmed by the caller). */
   payer_fields: Record<string, string>
+  /** Email addresses recorded on the payment (billing, receipt, metadata, memo) — see `payerEmailsFor`. */
+  payer_emails?: string[]
 }
 
 /** One invoice the caller thinks may be relevant, with its internal note — an earlier investigation lives there. */
@@ -486,6 +527,60 @@ export interface InvoiceContextRow {
   total: number | null
   status: string | null
   notes: string | null
+  /** True when the invoice is already PAID (money received). Absent on a caller that did not work it out. */
+  paid?: boolean
+  /** YYYY-MM-DD the money was received, for a paid invoice. */
+  paid_date?: string | null
+  /** For a paid invoice: is a DIFFERENT bank line already tied to it? "unknown" = that could not be read. */
+  bank_line?: "tied" | "none" | "unknown"
+}
+
+const dayNumber = (day: string): number => Math.round(Date.parse(`${day.slice(0, 10)}T00:00:00Z`) / 86_400_000)
+
+/** Whole days from the payment to the day the invoice was paid (negative = paid before the payment); null if either is unknown. */
+export function daysFromPayment(paymentDate: string | null | undefined, paidDate: string | null | undefined): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}/.test(String(paymentDate ?? "")) || !/^\d{4}-\d{2}-\d{2}/.test(String(paidDate ?? ""))) return null
+  const d = dayNumber(String(paidDate)) - dayNumber(String(paymentDate))
+  return Number.isFinite(d) ? d : null
+}
+
+/**
+ * The paid-timing words appended to an invoice line: "paid 2026-02-13 (same day as this payment) | NOT tied to
+ * any bank line". Empty for an invoice that is not paid.
+ */
+export function invoiceTimingText(inv: InvoiceContextRow, paymentDate: string | null | undefined): string {
+  if (!inv.paid) return ""
+  const days = daysFromPayment(paymentDate, inv.paid_date)
+  const when =
+    days === null ? "paid on an unknown day"
+    : days === 0 ? `paid ${String(inv.paid_date).slice(0, 10)} (same day as this payment)`
+    : `paid ${String(inv.paid_date).slice(0, 10)} (${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"} ${days < 0 ? "before" : "after"} this payment)`
+  const line =
+    inv.bank_line === "tied" ? "already tied to ANOTHER bank line"
+    : inv.bank_line === "none" ? "NOT tied to any bank line"
+    : "whether a bank line is tied to it could not be checked"
+  return ` | ${when} | ${line}`
+}
+
+/**
+ * Which invoices of this amount the AI sees first. The list is capped, and the newest-created ones used to win:
+ * an older paid invoice dropped out as soon as enough newer ones had the same round amount. Now: an invoice paid
+ * within a week of the payment and not tied to a bank line comes first (the likeliest never-matched record), then
+ * the ones still open, then paid ones within a month, then the rest — each group keeps the order it came in.
+ */
+export function rankInvoiceContext(rows: readonly InvoiceContextRow[], paymentDate: string | null | undefined, cap: number): InvoiceContextRow[] {
+  const group = (r: InvoiceContextRow): number => {
+    if (!r.paid) return 1
+    const days = daysFromPayment(paymentDate, r.paid_date)
+    if (days !== null && Math.abs(days) <= 7 && r.bank_line !== "tied") return 0
+    if (days !== null && Math.abs(days) <= 30 && r.bank_line !== "tied") return 2
+    return 3
+  }
+  return rows
+    .map((r, index) => ({ r, index, g: group(r), d: r.paid ? Math.abs(daysFromPayment(paymentDate, r.paid_date) ?? 999) : 0 }))
+    .sort((a, b) => a.g - b.g || (a.g === 0 ? a.d - b.d : 0) || a.index - b.index)
+    .slice(0, cap)
+    .map((x) => x.r)
 }
 
 /** Text written by a stranger (an email, a bank line, an earlier note) → one safe line for the prompt. */
@@ -502,7 +597,7 @@ export function chatSweepPromptLines(chatSweep: ChatSweep): string[] {
   }
   lines.push(`CHATS AND NOTES SWEEP (already run for you — searched for: ${chatSweep.terms.map((t) => `[${safe(t)}]`).join(" ") || "(no words)"})`)
   if (chatSweep.clients.length) {
-    lines.push(`- Matched in the CRM by name: ${chatSweep.clients.map((c) => `${safe(c.name)} (${c.kind === "account" ? "company" : "person"})`).join("; ")} — their chats and notes around the payment date are included`)
+    lines.push(`- Matched in the CRM by name or email address: ${chatSweep.clients.map((c) => `${safe(c.name)} (${c.kind === "account" ? "company" : "person"})`).join("; ")} — their chats and notes around the payment date are included`)
   }
   if (chatSweep.clientLookupError) lines.push(`- Could not ask the CRM who this payer is (${safe(chatSweep.clientLookupError)}): only the word searches ran.`)
   if (chatSweep.window) lines.push(`- Around the payment date: ${chatSweep.window.from} to ${chatSweep.window.to}; word searches look a little wider.`)
@@ -516,12 +611,46 @@ export function chatSweepPromptLines(chatSweep: ChatSweep): string[] {
   return lines
 }
 
+const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
+
+/** The one line the panel shows about the around-the-payment-date look, in plain words (counts only). */
+export function nearbyLineText(n: NearbySummary): string {
+  if (!n.ran || !n.window) return `Not looked at automatically: ${n.error ?? "it did not run"}.`
+  const base =
+    `Around the payment date (${n.window.from} to ${n.window.to}) the system found ${plural(n.companies, "company", "companies")} that started, ` +
+    `${plural(n.calls, "lead call", "lead calls")} and ${plural(n.offers, "offer", "offers")}; ` +
+    `${n.set_aside} of those ${n.set_aside === 1 ? "was" : "were"} already tied to a payment and set aside, ${n.left} left to check.`
+  return n.error ? `${base} Part of it could not be read: ${n.error}.` : base
+}
+
+/** The around-the-payment-date look as lines of the prompt. Names and statuses were written by strangers: escaped. */
+export function nearbyPromptLines(nearby: NearbySweep): string[] {
+  const lines: string[] = [""]
+  if (!nearby.ran || !nearby.window) {
+    lines.push(`AROUND THE PAYMENT DATE: NOT LOOKED AT — ${safe(nearby.error) || "it did not run"}. Look at what started, was called or was offered then yourself if the payer is not in the CRM.`)
+    return lines
+  }
+  lines.push(`AROUND THE PAYMENT DATE (already looked at for you — ${nearby.window.from} to ${nearby.window.to}: companies that started, leads called, offers dated; anything tied to a payment paid up to ${nearby.paidThrough ?? "later"}, or to another bank line, is set aside)`)
+  lines.push("- These are LEADS to check, not proof. Use them when the payer is not in the CRM.")
+  if (nearby.error) lines.push(`- COULD NOT READ PART OF IT (${safe(nearby.error)}): treat the list as incomplete, and what is "unaccounted for" as not fully filtered. Say so in your story.`)
+  const left = nearby.items.filter((i) => !i.setAside)
+  const aside = nearby.items.filter((i) => i.setAside)
+  lines.push(`- Unaccounted for (${nearby.totals.left}${nearby.totals.left > left.length ? `, first ${left.length} shown` : ""}):`)
+  if (left.length === 0) lines.push("  - none")
+  for (const i of left) lines.push(`  - ${i.kind} | ${safe(i.name)} | ${safe(i.what)}${i.status ? ` | status ${safe(i.status)}` : ""} | id=${safe(i.id)}`)
+  lines.push(`- Set aside because already tied to a payment (${nearby.totals.set_aside}${nearby.totals.set_aside > aside.length ? `, first ${aside.length} shown` : ""}):`)
+  if (aside.length === 0) lines.push("  - none")
+  for (const i of aside) lines.push(`  - ${i.kind} | ${safe(i.name)} | ${safe(i.what)} | because ${safe(i.setAside)}`)
+  return lines
+}
+
 export function buildInvestigatorUserMessage(
   facts: InvestigationFacts,
   sweep: MailboxSweep,
   invoices: readonly InvoiceContextRow[] = [],
   invoicesUnavailable = false,
   chatSweep: ChatSweep | null = null,
+  nearby: NearbySweep | null = null,
 ): string {
   const lines: string[] = []
   lines.push("<untrusted_data>")
@@ -533,6 +662,7 @@ export function buildInvestigatorUserMessage(
   if (facts.sender_reference) lines.push(`- Bank reference: ${safe(facts.sender_reference)}`)
   if (facts.memo) lines.push(`- Memo: ${safe(facts.memo)}`)
   for (const [k, v] of Object.entries(facts.payer_fields)) lines.push(`- ${safe(k)}: ${safe(v)}`)
+  if (facts.payer_emails?.length) lines.push(`- Email addresses recorded on this payment (billing, receipt, memo): ${facts.payer_emails.map((e) => safe(e)).join(", ")}`)
 
   lines.push("")
   if (sweep.queries.length === 0) {
@@ -550,6 +680,7 @@ export function buildInvestigatorUserMessage(
   }
 
   if (chatSweep) lines.push(...chatSweepPromptLines(chatSweep))
+  if (nearby) lines.push(...nearbyPromptLines(nearby))
 
   if (invoicesUnavailable && invoices.length === 0) {
     lines.push("")
@@ -559,7 +690,7 @@ export function buildInvestigatorUserMessage(
     lines.push("")
     lines.push("INVOICES THAT MAY BE RELEVANT (the note, if any, may hold an earlier investigation)")
     for (const inv of invoices) {
-      lines.push(`- id=${inv.id} ${safe(inv.invoice_number) || "no number"} | ${safe(inv.party) || "no client"} | ${safe(inv.description)} | total ${inv.total ?? "?"} | ${safe(inv.status) || "?"}${inv.notes ? ` | NOTE (an earlier note — if it starts with [bank-feed-story:…] an AI wrote it and it is UNVERIFIED): ${safe(cleanText(inv.notes, 600))}` : ""}`)
+      lines.push(`- id=${inv.id} ${safe(inv.invoice_number) || "no number"} | ${safe(inv.party) || "no client"} | ${safe(inv.description)} | total ${inv.total ?? "?"} | ${safe(inv.status) || "?"}${invoiceTimingText(inv, facts.transaction_date)}${inv.notes ? ` | NOTE (an earlier note — if it starts with [bank-feed-story:…] an AI wrote it and it is UNVERIFIED): ${safe(cleanText(inv.notes, 600))}` : ""}`)
     }
   }
   lines.push("</untrusted_data>")
