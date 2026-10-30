@@ -68,8 +68,29 @@ export interface TalkMessageTools { onEdit: (m: TalkMessage) => void }
 const LONG_PRESS_MS = 450
 const SWIPE_TRIGGER_PX = 64
 
+/** "Read by 2 of 3" under a message in the "New implementation" chat; a tap shows who read it and who has not. */
+function ReadByLine({ readBy, mine }: { readBy: { read: string[]; waiting: string[] }; mine: boolean }) {
+  const [open, setOpen] = useState(false)
+  const total = readBy.read.length + readBy.waiting.length
+  if (total === 0) return null
+  const all = readBy.waiting.length === 0
+  return (
+    <div className={cn('mt-0.5 text-[11px]', mine ? 'text-right' : 'text-left')} data-testid="talk-read-by">
+      <button type="button" onClick={() => setOpen(o => !o)} className={cn('rounded px-1', all ? 'text-sky-600' : 'text-zinc-500')} data-testid="talk-read-by-toggle">
+        {all ? `Read by everyone (${total})` : `Read by ${readBy.read.length} of ${total}`}
+      </button>
+      {open && (
+        <div className="mt-0.5 rounded bg-zinc-50 px-2 py-1 text-zinc-600" data-testid="talk-read-by-list">
+          {readBy.read.length > 0 && <div>Read: {readBy.read.join(', ')}</div>}
+          {readBy.waiting.length > 0 && <div>Not yet: {readBy.waiting.join(', ')}</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Bubble({
-  m, mine, tick, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo, voiceApi, newestVoiceId, tools,
+  m, mine, tick, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo, voiceApi, newestVoiceId, tools, readBy,
 }: {
   m: TalkMessage; mine: boolean; tick: Tick; showSender: boolean; meId: string; byId: Map<string, TalkMessage>; highlighted: boolean
   onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
@@ -78,6 +99,8 @@ function Bubble({
   newestVoiceId?: string | null
   /** Computer toolbar on hover (emoji, reply, edit, more); absent = TD Talk as it always was. */
   tools?: TalkMessageTools
+  /** The "New implementation" chat: who has read this message (names) and who has not; absent = no line. */
+  readBy?: { read: string[]; waiting: string[] } | null
 }) {
   const { t, ts } = useTalkI18n()
   const atts = (m.attachments ?? []).filter(a => a && a.url)
@@ -182,6 +205,7 @@ function Bubble({
                 : <Check className="h-3.5 w-3.5 text-zinc-400" aria-label={t('Sent')} data-testid="talk-tick-sent" />
           )}
         </div>
+        {readBy && !deleted && m.message?.trim() !== '…' && m.message?.trim() !== '⋯' && <ReadByLine readBy={readBy} mine={mine} />}
         {pills.length > 0 && !deleted && (
           <div className={cn('absolute -bottom-3 flex gap-1', mine ? 'right-2' : 'left-2')} data-testid="talk-reactions">
             {pills.map(p => (
@@ -207,8 +231,10 @@ function Bubble({
  * and never yanks you down while you are reading older ones.
  */
 export function TalkMessages({
-  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo, voiceApi, tools,
+  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo, voiceApi, tools, readByOf,
 }: {
+  /** The "New implementation" chat passes this: who has read a message (names) and who has not. Absent = no line (every other chat). */
+  readByOf?: (m: TalkMessage) => { read: string[]; waiting: string[] } | null
   threadId: string; messages: TalkMessage[]; meId: string
   /** My message's tick: sent / delivered (their device has it) / seen (they read it; a group: everyone did). */
   tickOf: (m: TalkMessage) => Tick
@@ -276,7 +302,7 @@ export function TalkMessages({
               </div>
               {g.messages.map(m => (
                 <Bubble key={m.id} m={m} mine={m.sender_id === meId} tick={m.sender_id === meId ? tickOf(m) : 'sent'} showSender={showSender} meId={meId} byId={byId}
-                  highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} voiceApi={voiceApi} newestVoiceId={newestVoiceId} tools={tools} />
+                  highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} voiceApi={voiceApi} newestVoiceId={newestVoiceId} tools={tools} readBy={readByOf ? readByOf(m) : null} />
               ))}
             </div>
           ))}
