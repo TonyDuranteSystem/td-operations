@@ -269,6 +269,7 @@ export type GuardedNameAction =
   | 'mark_filed'
   | 'mark_sos_rejected'
   | 'withdraw'
+  | 'reinstate'
 
 export const NAME_ACTION_FROM: Record<GuardedNameAction, readonly NameCheckStatus[]> = {
   mark_available: ['pending', 'not_available'],
@@ -277,6 +278,8 @@ export const NAME_ACTION_FROM: Record<GuardedNameAction, readonly NameCheckStatu
   mark_filed: ['accepted'],
   mark_sos_rejected: ['accepted', 'filed'],
   withdraw: ['sent_to_client'],
+  // Only a name the CLIENT refused: it goes back to them for a fresh confirmation. A name the state refused or that was filed stays dead.
+  reinstate: ['rejected_by_client'],
 }
 
 const NAME_ACTION_PROBLEM: Record<GuardedNameAction, string> = {
@@ -286,6 +289,7 @@ const NAME_ACTION_PROBLEM: Record<GuardedNameAction, string> = {
   mark_filed: 'Only a name the client accepted can be marked as filed.',
   mark_sos_rejected: 'Only a name the client accepted (or that was filed) can be marked as refused by the state.',
   withdraw: 'Only a name that is waiting for the client can be withdrawn.',
+  reinstate: 'Only a name the client rejected can be reinstated.',
 }
 
 /** null when `action` may start from `status`, else a plain-English reason. Pure. */

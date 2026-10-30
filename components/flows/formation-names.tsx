@@ -127,6 +127,14 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage, ser
     if (ok) void act(i, 'withdraw', 'available')
   }
 
+  // The client said no (or clicked Reject by mistake) and wants the name back: it goes to them again for a fresh confirmation.
+  function reinstateName(c: NameCheck, i: number) {
+    const ok = window.confirm(
+      `Bring "${c.name}" back?\n\nThe client rejected this name. It will be sent to them again for confirmation — check it is still available on the Secretary of State site first.`,
+    )
+    if (ok) void act(i, 'reinstate', 'sent_to_client')
+  }
+
   async function addName() {
     const name = newName.trim()
     if (!name) return
@@ -272,6 +280,12 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage, ser
         return <Btn onClick={() => withdrawFromClient(c, i)}>Withdraw from client</Btn>
       case 'not_available':
         return <Btn onClick={() => act(i, 'mark_available', 'available')}>Mark Available</Btn>
+      case 'rejected_by_client':
+        // One name at a time (a name change): not while a different name is with the client / accepted / filed.
+        if (policy.oneAtATime && anotherNameInProgress(checks, i)) {
+          return <span className="text-xs text-zinc-500">Another name is already with the client</span>
+        }
+        return <Btn onClick={() => reinstateName(c, i)}>Reinstate</Btn>
       case 'accepted':
         return (
           <>

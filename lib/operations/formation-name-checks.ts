@@ -67,6 +67,9 @@ export type NameAction =
   // or sent by mistake): sent_to_client → available, and the open approval
   // request is cancelled so a late answer can no longer flip it.
   | 'withdraw'
+  // The client rejected a name (or clicked Reject by mistake) and changed their mind: rejected_by_client → sent_to_client, with a fresh
+  // approval card. Same path as send_to_client; the dead-name rule for adding names is untouched.
+  | 'reinstate'
 
 interface SdRow {
   id: string
@@ -660,7 +663,7 @@ export async function handleNameAction(params: {
   if (startProblem) return { ok: false, error: startProblem }
   // Actions that message the client or move the stage never run on a finished case
   // (the stage revert would otherwise flip a completed case back to active).
-  if ((params.action === 'send_to_client' || params.action === 'mark_sos_rejected') && isClosedCase(row)) {
+  if ((params.action === 'send_to_client' || params.action === 'reinstate' || params.action === 'mark_sos_rejected') && isClosedCase(row)) {
     return { ok: false, error: 'This case is already finished — nothing can be sent to the client or reopened from here.' }
   }
 
@@ -671,7 +674,7 @@ export async function handleNameAction(params: {
   if (simple) {
     entry.status = simple
     entry.updated_at = now
-  } else if (params.action === 'send_to_client') {
+  } else if (params.action === 'send_to_client' || params.action === 'reinstate') {
     // One name at a time (the service's rule): another name is already with the client,
     // accepted by them or filed. Formation does not enforce this (policy.oneAtATime is false).
     if (policy.oneAtATime && anotherNameInProgress(checks, params.nameIndex)) {
@@ -694,6 +697,9 @@ export async function handleNameAction(params: {
     // The old order created the client's card, chat note and bell BEFORE this save,
     // so a conflict left an orphan card on the client's portal and a retry created a second one.
     const previousStatus = entry.status
+    const previousNote = entry.note
+    // A reinstated name starts a new round: the client's earlier rejection note no longer applies.
+    if (params.action === 'reinstate') entry.note = null
     entry.status = 'sent_to_client'
     entry.updated_at = now
     const reserved = await writeNameChecks(params.sdId, checks, expectedUpdatedAt)
@@ -712,6 +718,7 @@ export async function handleNameAction(params: {
       // version we just wrote) so the name never sits at "waiting for the client"
       // with no card behind it. Best effort — reported if it cannot be undone.
       entry.status = previousStatus
+      entry.note = previousNote
       entry.updated_at = new Date().toISOString()
       const undone = await writeNameChecks(params.sdId, checks, reserved.updatedAt)
       if (!undone.ok) {
