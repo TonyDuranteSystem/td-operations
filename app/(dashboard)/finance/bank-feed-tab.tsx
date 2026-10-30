@@ -1,13 +1,14 @@
 'use client'
 
-import { useState, useCallback, useEffect, useTransition, useMemo } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useState, useCallback, useEffect, useTransition, useMemo, useRef } from 'react'
+import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 import { usePlaidLink } from 'react-plaid-link'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { readContestedCandidates, readContestedTotal, type ContestedCandidate } from '@/lib/finance/feed-vocabulary'
 import { contestedInvoiceFacts, formatCalendarDate, type ContestedInvoiceDetail } from '@/lib/finance/contested-invoice-detail'
 import { recordOnlyLinkNote } from '@/lib/finance/match-selection'
+import { parseFeedView, writeFeedView } from '@/lib/finance/bank-feed-view-state'
 import {
   summarizeInvoice,
   summaryInputFromPayerInvoice,
@@ -86,6 +87,9 @@ export interface BankFeedRecord {
     invoice_status: string | null
     notes: string | null
     accounts: { company_name: string } | null
+    /** An invoice written to a PERSON (no company) carries the person here — 73 on production. */
+    contact_id?: string | null
+    contacts?: { full_name: string | null } | { full_name: string | null }[] | null
   } | null
 }
 
@@ -546,6 +550,8 @@ interface CandidateInfo {
   amount: number
   amount_currency: string | null
   confidence: string | null
+  /** What the hover card on the proposed invoice's number shows (client, what it is for, amount, status). */
+  summary?: InvoiceSummaryInput
 }
 
 /**
@@ -1413,7 +1419,13 @@ function UnmatchedRow({
               <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
               <p>
                 <span className="font-semibold">Auto-matched candidate:</span>{' '}
-                <span className="font-mono">{candidateInfo.invoice_number ?? '—'}</span>
+                {candidateInfo.summary ? (
+                  <InvoiceNumberTip summary={candidateInfo.summary}>
+                    <span className="font-mono">{candidateInfo.invoice_number ?? '—'}</span>
+                  </InvoiceNumberTip>
+                ) : (
+                  <span className="font-mono">{candidateInfo.invoice_number ?? '—'}</span>
+                )}
                 {' '}for <span className="font-medium">{candidateInfo.company_name}</span>
                 {' '}({formatCurrency(candidateInfo.amount, candidateInfo.amount_currency)}
                 {candidateInfo.confidence ? `, confidence: ${candidateInfo.confidence}` : ''})
@@ -2396,7 +2408,7 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
           </span>
         </FastTooltip>
       )}
-      <span className="text-xs truncate">{getCompanyName(payment?.accounts)}</span>
+      <span className="text-xs truncate">{payment ? invoicePartyName(payment) : ''}</span>
       <span className={cn(
         'text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0',
         feed.match_confidence === 'exact' ? 'bg-emerald-100 text-emerald-700' :
@@ -2504,7 +2516,7 @@ function CrashedRow({ feed }: { feed: BankFeedRecord }) {
         <span className="text-xs text-muted-foreground truncate">{feed.sender_name || '—'}</span>
         <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
         <span className="font-mono text-xs text-blue-600 shrink-0">{payment?.invoice_number ?? '—'}</span>
-        <span className="text-xs truncate flex-1">{getCompanyName(payment?.accounts)}</span>
+        <span className="text-xs truncate flex-1">{payment ? invoicePartyName(payment) : ''}</span>
         <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0', STATUS_COLORS.activation_crashed)}>
           activation crashed
         </span>
@@ -2606,12 +2618,51 @@ function IgnoredRow({ feed, isAdmin = false }: { feed: BankFeedRecord; isAdmin?:
 
 // ── Main Component ──
 
+/** Prev / Next with the "Showing a–b of n" line. Shown above AND below the list. */
+function FeedPager({ page, pageSize, total, totalPages, onPage }: {
+  page: number
+  pageSize: number
+  total: number
+  totalPages: number
+  onPage: (next: number) => void
+}) {
+  if (totalPages <= 1) return null
+  return (
+    <div className="flex items-center justify-between text-xs text-muted-foreground">
+      <span>
+        Showing {page * pageSize + 1}–{Math.min((page + 1) * pageSize, total)} of {total}
+      </span>
+      <div className="flex gap-1">
+        <button
+          onClick={() => onPage(Math.max(0, page - 1))}
+          disabled={page === 0}
+          className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50"
+        >
+          Prev
+        </button>
+        <button
+          onClick={() => onPage(Math.min(totalPages - 1, page + 1))}
+          disabled={page >= totalPages - 1}
+          className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = false }: Props) {
-  const [filter, setFilter] = useState<FilterTab>('all')
-  const [sourceFilter, setSourceFilter] = useState<string[] | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
+  // Where the person is in the list (filter tab, page, search, source) lives in the page address too, so a
+  // browser refresh puts them back where they were instead of on "All", page 1.
+  const searchParams = useSearchParams()
+  const pathname = usePathname()
+  const initialView = useMemo(() => parseFeedView(searchParams), []) // eslint-disable-line react-hooks/exhaustive-deps -- read once, on first render
+  const [filter, setFilter] = useState<FilterTab>(initialView.filter)
+  const [sourceFilter, setSourceFilter] = useState<string[] | null>(initialView.sources)
+  const [searchQuery, setSearchQuery] = useState(initialView.search)
   const [matchingFeed, setMatchingFeed] = useState<string | null>(null)
-  const [page, setPage] = useState(0)
+  const [page, setPage] = useState(initialView.page)
   const [highlightFeedId, setHighlightFeedId] = useState<string | null>(null)
   const pageSize = 50
 
@@ -2656,15 +2707,19 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
 
   // Deep-link from audit panel: ?feed=<uuid> opens this tab scrolled to the feed.
   // Sets source filter from feed.source + search by amount + scrolls + 3s highlight.
-  const searchParams = useSearchParams()
   const deepLinkFeedId = searchParams.get('feed')
+  // Handled ONCE per link: this effect also depends on `bankFeeds`, which changes on every data refresh
+  // (after Confirm / Reject / Match), and used to reset the filter, search and page each time.
+  const handledDeepLink = useRef<string | null>(null)
   useEffect(() => {
     if (!deepLinkFeedId) return
+    if (handledDeepLink.current === deepLinkFeedId) return
     const feed = bankFeeds.find(f => f.id === deepLinkFeedId)
     if (!feed) {
       toast.info('Feed not in current list — try Sync Now')
       return
     }
+    handledDeepLink.current = deepLinkFeedId
     setFilter('all')
     setSourceFilter([feed.source])
     setSearchQuery(String(Number(feed.amount)))
@@ -2722,6 +2777,21 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
   // Paginate
   const paginated = filtered.slice(page * pageSize, (page + 1) * pageSize)
   const totalPages = Math.ceil(filtered.length / pageSize)
+
+  // A saved page number can be past the end once rows have moved (matched, ignored, …): step back to the
+  // last page rather than showing an empty list.
+  useEffect(() => {
+    if (page > 0 && page >= totalPages) setPage(Math.max(0, totalPages - 1))
+  }, [page, totalPages])
+
+  // Keep the address in step with the list. `replaceState`, not `router.replace`: the Finance page is a
+  // server page that loads up to 1,000 feed rows, and re-running it on every keystroke would be heavy.
+  useEffect(() => {
+    const current = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : ''
+    const next = writeFeedView(current, { filter, page, search: searchQuery, sources: sourceFilter })
+    if (next === current) return
+    window.history.replaceState(window.history.state, '', next ? `${pathname}?${next}` : pathname)
+  }, [filter, page, searchQuery, sourceFilter, pathname])
 
   // Counts by status
   const counts = useMemo(() => ({
@@ -2828,6 +2898,8 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
         </div>
       </div>
 
+      <FeedPager page={page} pageSize={pageSize} total={filtered.length} totalPages={totalPages} onPage={setPage} />
+
       {/* Transaction list */}
       <div className="bg-white rounded-lg border overflow-hidden">
         {/* Header row */}
@@ -2859,19 +2931,21 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
                   : Number(inv.total ?? inv.amount ?? 0)
                 candidateInfo = {
                   invoice_number: inv.invoice_number,
-                  company_name: getCompanyName(inv.accounts),
+                  company_name: invoicePartyName(inv),
                   amount: invAmount,
                   amount_currency: inv.amount_currency,
                   confidence: feed.match_confidence,
+                  summary: summaryInputFromOpenInvoice(inv, invoicePartyName(inv)),
                 }
               } else if (feed.payments) {
                 // Fallback: payment may not be in the open-invoice set anymore.
                 candidateInfo = {
                   invoice_number: feed.payments.invoice_number,
-                  company_name: getCompanyName(feed.payments.accounts),
+                  company_name: invoicePartyName(feed.payments),
                   amount: Number(feed.amount),
                   amount_currency: feed.currency,
                   confidence: feed.match_confidence,
+                  summary: summaryInputFromMatchedPayment(feed.payments, feed.currency),
                 }
               }
             }
@@ -2926,30 +3000,8 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
         )}
       </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>
-            Showing {page * pageSize + 1}–{Math.min((page + 1) * pageSize, filtered.length)} of {filtered.length}
-          </span>
-          <div className="flex gap-1">
-            <button
-              onClick={() => setPage(p => Math.max(0, p - 1))}
-              disabled={page === 0}
-              className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50"
-            >
-              Prev
-            </button>
-            <button
-              onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-              disabled={page >= totalPages - 1}
-              className="px-2 py-1 border rounded hover:bg-muted disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Pagination (also above the list) */}
+      <FeedPager page={page} pageSize={pageSize} total={filtered.length} totalPages={totalPages} onPage={setPage} />
     </div>
   )
 }

@@ -119,5 +119,18 @@ describe("the three sources give the same summary", () => {
     }, "USD")
     expect(value(summarizeInvoice(part), "Status")).toBe("Partial — $125.00 still owed")
     expect(value(summarizeInvoice(part), "Client")).toBe("no client on this invoice")
+
+    // An invoice written to a PERSON (no company) names the person — the real INV-002713 case.
+    const person = summaryInputFromMatchedPayment({
+      invoice_number: "INV-002713", description: "Paid Strategy Call", total: 397, amount_paid: 397, invoice_status: "Paid",
+      accounts: null, contacts: { full_name: "Nicola Catacchio" },
+    }, "EUR")
+    expect(value(summarizeInvoice(person), "Client")).toBe("Nicola Catacchio")
+    // The company wins when both exist; the embed may arrive as an array.
+    const both = summaryInputFromMatchedPayment({
+      invoice_number: "INV-1", description: null, total: 10, amount_paid: 10, invoice_status: "Paid",
+      accounts: { company_name: "Acme LLC" }, contacts: [{ full_name: "Mario Rossi" }],
+    }, "USD")
+    expect(value(summarizeInvoice(both), "Client")).toBe("Acme LLC")
   })
 })
