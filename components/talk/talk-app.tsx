@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase/client'
 import { isBeingViewed } from '@/lib/talk/window-front'
 import { reportDelivered } from '@/lib/talk/report-delivered'
 import { TALK_BASE } from '@/lib/talk/paths'
+import { showUnreadBadge, talkSplit } from '@/lib/talk/layout'
 import { isImplementationChat } from '@/lib/talk/voice-alert'
 import { cn } from '@/lib/utils'
 import { uploadTeamAttachment } from '@/lib/team/attachment'
@@ -507,11 +508,11 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     return <TalkNewGroup members={members} meId={meId} creating={groupBusy} onBack={() => setNewGroupOpen(false)} onCreate={(name, ids) => void createNewGroup(name, ids)} />
   }
 
-  // ── People (the short list) ──
-  if (!selected) {
-    return (
-      <div className="flex h-full flex-col bg-white" data-testid="talk-people">
-        <div className="flex shrink-0 items-center justify-between border-b border-zinc-200 px-4 py-3">
+  // ── People (the short list) — the whole screen on a phone, the left column on a wide screen ──
+  const split = talkSplit(base, !!selected)
+  const people = (
+      <div className="flex h-full w-full flex-col bg-white" data-testid="talk-people">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-zinc-200 px-4 py-3">
           <h1 className="text-lg font-semibold text-zinc-900">TD Talk</h1>
           <TalkVoiceWakeBar />
           <div className="flex items-center gap-2">
@@ -527,7 +528,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
             const name = chatName(t, meId, members)
             const other = group ? t.id : (otherUserId(t.dm_key, meId) ?? t.id)
             return (
-              <button key={t.id} type="button" onClick={() => select(t.id)} className="flex w-full items-center gap-3 border-b border-zinc-100 px-4 py-3 text-left active:bg-zinc-50" data-testid={group ? 'talk-group-row' : 'talk-person'}>
+              <button key={t.id} type="button" onClick={() => { if (t.id !== selectedId) select(t.id) }} aria-current={t.id === selectedId ? 'true' : undefined} className={cn('flex w-full items-center gap-3 border-b border-zinc-100 px-4 py-3 text-left active:bg-zinc-50', t.id === selectedId && 'bg-zinc-100')} data-testid={group ? 'talk-group-row' : 'talk-person'}>
                 <Avatar name={name} id={other} size="h-12 w-12 text-base" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[16px] font-medium text-zinc-900">{name}</span>
@@ -537,7 +538,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
                     {t.last_activity_at ? (dayLabel(t.last_activity_at) === 'Today' ? timeLabel(t.last_activity_at) : dayLabel(t.last_activity_at)) : null}
                   </span>
                 </span>
-                {(t.unread_count ?? 0) > 0 && (
+                {showUnreadBadge(t.unread_count, t.id === selectedId, isBeingViewed()) && (
                   <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-[#BE1E2D] px-1.5 text-xs font-semibold text-white">{t.unread_count}</span>
                 )}
               </button>
@@ -560,7 +561,16 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
           )}
         </div>
       </div>
-    )
+  )
+  // the two columns: the list on the left, the open chat (or a note) on the right
+  const columns = (right: React.ReactNode) => (
+    <div className="flex h-full w-full" data-testid="talk-columns">
+      <div className={split.listPane}>{people}</div>
+      <div className={split.chatPane}>{right}</div>
+    </div>
+  )
+  if (!selected) {
+    return columns(<div className={cn('h-full w-full items-center justify-center bg-zinc-50 text-sm text-zinc-400', split.emptyNote)} data-testid="talk-pick-a-chat">Pick a chat on the left.</div>)
   }
 
   // ── The conversation ──
@@ -581,11 +591,11 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const tickOf = (m: TalkMessage) => group
     ? tickStateAll(m, memberIdsNow.filter(id => id !== meId), memberReads, memberDelivered)
     : tickState(m, peerReadAt, peerDeliveredAt)
-  return (
-    <div className="flex h-full flex-col bg-white" data-testid="talk-chat">
+  return columns(
+    <div className="flex h-full w-full min-w-0 flex-col bg-white" data-testid="talk-chat">
       <div className="flex shrink-0 items-center gap-2 border-b border-zinc-200 bg-white px-2 py-2">
         {canGoBack ? (
-          <button type="button" onClick={() => select(null)} aria-label="Back to your chats" className="relative flex h-10 w-10 items-center justify-center rounded-full text-zinc-700 active:bg-zinc-100" data-testid="talk-back">
+          <button type="button" onClick={() => select(null)} aria-label="Back to your chats" className={cn('relative flex h-10 w-10 items-center justify-center rounded-full text-zinc-700 active:bg-zinc-100', split.back)} data-testid="talk-back">
             <ChevronLeft className="h-6 w-6" />
             {otherUnread > 0 && <span className="absolute right-0 top-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#BE1E2D] px-1 text-[10px] font-semibold text-white">{otherUnread}</span>}
           </button>
