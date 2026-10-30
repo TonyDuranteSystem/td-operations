@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
@@ -9,6 +9,7 @@ import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/te
 import { isTalkSurfacePath, isTeamChatPath, teamChatBase } from '@/lib/talk/paths'
 import { speakTalkMessage } from '@/components/talk/talk-voice'
 import { TALK_FEATURE_PHRASE, isImplementationChat } from '@/lib/talk/voice-alert'
+import { catchUpSpeech, threadsWithNewUnread, unreadBaseline, type CatchUpThread } from '@/lib/talk/catch-up'
 
 /**
  * Global realtime notification listener for the CRM dashboard.
@@ -26,6 +27,10 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
   const pathnameRef = useRef(pathname)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const currentUserIdRef = useRef<string | null>(null)
+  // chats the live connection already announced since the last catch-up look, and the live channel itself (to see whether Chrome cut it)
+  const announcedRef = useRef<Set<string>>(new Set())
+  const internalChannelRef = useRef<{ state?: string } | null>(null)
+  const [reconnectKey, setReconnectKey] = useState(0)
 
   useEffect(() => {
     pathnameRef.current = pathname
@@ -291,7 +296,9 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
       // The voice hands back to the beep when Sound is off, the browser cannot speak, or the page has not been touched yet.
       const groupTitle = threadId ? myGroupTitlesRef.current.get(threadId) : undefined
       const featurePhrase = isImplementationChat(groupTitle) ? TALK_FEATURE_PHRASE : undefined
-      if (!(isMyDm && speakTalkMessage(senderName, row?.sender_id, playSound, featurePhrase))) playSound()
+      // the catch-up look (below) must not announce this same message a second time
+      if (isMyDm && threadId) announcedRef.current.add(threadId)
+      if (!(isMyDm && speakTalkMessage(senderName, threadId ?? row?.sender_id, playSound, featurePhrase))) playSound()
 
       toast(
         mentionsMe ? `@mention · ${senderName}`
@@ -310,7 +317,7 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
     }
 
     const internalChannel = supabase
-      .channel('global-internal-messages')
+      .channel(`global-internal-messages${reconnectKey ? `-r${reconnectKey}` : ''}`)
       .on(
         'postgres_changes',
         {
@@ -340,6 +347,7 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
         },
       )
       .subscribe()
+    internalChannelRef.current = internalChannel
 
 
     // ─── Listen for business events in action_log ─────────
@@ -407,7 +415,39 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
       supabase.removeChannel(internalChannel)
       if (actionLogChannel) supabase.removeChannel(actionLogChannel)
     }
-  }, [playSound, router, teamOnly])
+  }, [playSound, router, teamOnly, reconnectKey])
+
+  // ─── Catching up when Chrome slowed or cut the live connection of a tab that is not on screen ───
+  // Every 30 s and the moment the tab comes back: (1) join the live channel again if it was cut; (2) look at the chat list — a direct or group chat whose unread
+  // number went up got a message the live connection never announced, so say it (one line for several chats). The live connection marks what it announced
+  // (announcedRef) so the same message is never spoken twice. See lib/talk/catch-up.ts.
+  useEffect(() => {
+    let cancelled = false
+    let baseline: Record<string, number> | null = null
+    const look = async () => {
+      const st = internalChannelRef.current?.state
+      if (st === 'closed' || st === 'errored') setReconnectKey(k => k + 1)
+      try {
+        const r = await fetch('/api/team/threads', { cache: 'no-store' })
+        if (!r.ok || cancelled) return
+        const d = (await r.json()) as { threads?: CatchUpThread[] }
+        if (!Array.isArray(d.threads) || cancelled) return
+        const p = pathnameRef.current
+        const open = isTalkSurfacePath(p) ? new URLSearchParams(window.location.search).get('thread') : null
+        const fresh = threadsWithNewUnread(baseline, d.threads, { openThreadId: open, suppress: announcedRef.current })
+        baseline = unreadBaseline(d.threads)
+        announcedRef.current.clear()
+        const say = catchUpSpeech(fresh)
+        if (say && !isTeamChatPath(p) && !speakTalkMessage(say.senderName, say.identity, playSound, say.override)) playSound()
+      } catch { /* the next look tries again */ }
+    }
+    void look()
+    const timer = setInterval(() => { void look() }, 30_000)
+    const back = () => { if (document.visibilityState === 'visible') void look() }
+    document.addEventListener('visibilitychange', back)
+    window.addEventListener('online', back)
+    return () => { cancelled = true; clearInterval(timer); document.removeEventListener('visibilitychange', back); window.removeEventListener('online', back) }
+  }, [playSound])
 
   // This component renders nothing — it's a listener only
   return null

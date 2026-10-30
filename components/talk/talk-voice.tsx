@@ -66,9 +66,10 @@ export function TalkVoiceWakeBar() {
     sync()
     const wake = () => setShow(false)
     window.addEventListener(CHANGE, sync)
+    window.addEventListener('focus', sync)
     window.addEventListener('pointerdown', wake, { once: true, capture: true })
     window.addEventListener('keydown', wake, { once: true, capture: true })
-    return () => { window.removeEventListener(CHANGE, sync); window.removeEventListener('pointerdown', wake, { capture: true }); window.removeEventListener('keydown', wake, { capture: true }) }
+    return () => { window.removeEventListener(CHANGE, sync); window.removeEventListener('focus', sync); window.removeEventListener('pointerdown', wake, { capture: true }); window.removeEventListener('keydown', wake, { capture: true }) }
   }, [])
   if (!show) return null
   return (
