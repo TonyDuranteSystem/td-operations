@@ -8,7 +8,8 @@ import { MessageSquare, CreditCard, PenTool, FileText } from 'lucide-react'
 import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
 import { isTalkSurfacePath, isTeamChatPath, teamChatBase } from '@/lib/talk/paths'
 import { speakTalkMessage } from '@/components/talk/talk-voice'
-import { TALK_FEATURE_PHRASE, isImplementationChat } from '@/lib/talk/voice-alert'
+import { CLIENT_MESSAGE_PHRASE, TALK_FEATURE_PHRASE, isImplementationChat } from '@/lib/talk/voice-alert'
+import { TalkVoiceKeepAlive } from '@/components/talk/talk-keep-alive'
 import { catchUpSpeech, threadsWithNewUnread, unreadBaseline, type CatchUpThread } from '@/lib/talk/catch-up'
 
 /**
@@ -162,14 +163,16 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
           // Don't notify if already on portal-chats page looking at this thread
           const isOnChats = pathnameRef.current === '/portal-chats'
 
-          // Play sound regardless of which page (unless already on chats)
-          if (!isOnChats) {
+          const accountId = payload.new?.account_id
+          const contactId = payload.new?.contact_id
+
+          // Sound regardless of which page (unless already on chats): the voice "New message from client" (same Voice switch as TD Talk),
+          // the beep when Voice is Off, the browser cannot speak, or the page has not been touched yet.
+          if (!isOnChats && !speakTalkMessage(null, accountId ?? contactId ?? 'client', playSound, CLIENT_MESSAGE_PHRASE)) {
             playSound()
           }
 
-          // Fetch company name for the toast
-          const accountId = payload.new?.account_id
-          const contactId = payload.new?.contact_id
+          // Company name for the toast
           let senderName = 'A client'
 
           if (accountId) {
@@ -449,6 +452,6 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
     return () => { cancelled = true; clearInterval(timer); document.removeEventListener('visibilitychange', back); window.removeEventListener('online', back) }
   }, [playSound])
 
-  // This component renders nothing — it's a listener only
-  return null
+  // A listener only — plus the keep-alive tone that lets a hidden Chrome tab keep speaking (renders nothing itself)
+  return <TalkVoiceKeepAlive />
 }

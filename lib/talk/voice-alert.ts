@@ -24,6 +24,8 @@ export function talkVoicePhrase(senderName: string | null | undefined): string {
 /** The group where the team posts every new fix and feature (Antonio, 30 Oct 2026). Found by its name; a message in it always says the feature phrase, whoever wrote it. */
 export const IMPLEMENTATION_CHAT_TITLE = "New implementation"
 export const TALK_FEATURE_PHRASE = "New feature posted in TD Talk"
+/** A client wrote in a portal chat (Antonio, 30 Oct 2026: "new message from client"). Generic on purpose: no company name to read out. */
+export const CLIENT_MESSAGE_PHRASE = "New message from client"
 
 /** Is this group the "New implementation" chat? Case and extra spaces do not matter. */
 export function isImplementationChat(title: string | null | undefined): boolean {
