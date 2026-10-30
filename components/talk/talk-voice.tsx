@@ -9,11 +9,15 @@ import { TALK_VOICE_KEY, shouldSpeakTalkPhrase, talkVoiceIsOn, talkVoicePhrase }
  */
 
 const CHANGE = 'td-talk-voice-change'
+/** The event the Voice switch sends when it is turned On or Off (the keep-alive listens to it). */
+export const TALK_VOICE_CHANGE = CHANGE
 // The choice is also kept in memory, so a browser that blocks storage (private mode) still lets the person turn the voice off for this page.
 let memoryChoice: string | null = null
 const read = (): string | null => { try { return window.localStorage.getItem(TALK_VOICE_KEY) ?? memoryChoice } catch { return memoryChoice } }
 const write = (v: string) => { memoryChoice = v; try { window.localStorage.setItem(TALK_VOICE_KEY, v) } catch { /* the choice is only a convenience */ } }
 const voiceOn = () => talkVoiceIsOn(read())
+/** Is TD Talk's Voice On in this browser? (the keep-alive asks) */
+export const isTalkVoiceOn = voiceOn
 
 let lastSpoken: { key: string; at: number } | null = null
 
@@ -34,7 +38,8 @@ function say(text: string, onFail?: () => void): boolean {
   } catch { return false }
 }
 
-/** Has the person touched this page yet? Until then the browser keeps any page silent. A browser that cannot say counts as "yes". */
+/** Has the person touched this page yet? Until then the browser keeps any page silent. A browser that cannot say counts as "yes". Also exported (below): the keep-alive may only start sound after a touch. */
+export function isTalkPageTouched(): boolean { return touchedNow() }
 function touchedNow(): boolean {
   const ua = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation
   return ua ? ua.hasBeenActive : true
