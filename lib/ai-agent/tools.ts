@@ -298,6 +298,7 @@ export const AGENT_TOOLS: ToolDef[] = [
         query: { type: 'string', description: 'Gmail search query. ALWAYS use "from:email@address.com" to search by sender (not by name). Examples: "from:mario@example.com", "from:client@email.com has:attachment", "from:client@email.com newer_than:7d". Supports all Gmail operators.' },
         max_results: { type: 'number', description: 'Max results to return (default 10, max 20)' },
         as_user: { type: 'string', description: "Mailbox to search. Default support@tonydurante.us. Use 'antonio.durante@tonydurante.us' to search Antonio's personal inbox — ONLY when Antonio explicitly asks. Other mailboxes are not permitted." },
+        include_spam_trash: { type: 'boolean', description: 'Also search Spam and Trash (off by default). Use when something that should be there is missing.' },
       },
       required: ['query'],
     },
@@ -1654,6 +1655,7 @@ async function gmailSearch(p: any) {
   const searchResult = await gmailGet('/messages', {
     q: p.query,
     maxResults: String(maxResults),
+    ...(p.include_spam_trash === true ? { includeSpamTrash: 'true' } : {}),
   }, asUser) as { messages?: Array<{ id: string; threadId: string }> }
 
   if (!searchResult.messages?.length) {

@@ -36,6 +36,9 @@ import {
   isValidServiceType,
 } from "@/lib/operations/service-delivery"
 import { createClient } from "@/lib/supabase/server"
+import { findOrCreatePayerContact, removeJustCreatedPayerContact, payerContactIdForFeed } from "@/lib/operations/feed-payer-contact"
+import { writeFeedStoryToInvoices, describeStoryResult } from "@/lib/operations/feed-story-note"
+import { stripeRefundGate } from "@/lib/finance/refund-gate"
 
 export const dynamic = "force-dynamic"
 
@@ -61,6 +64,16 @@ interface Body {
   paid_call?: boolean
   /** Branch C — "revenue only, history kept": the credit is born already used. */
   paid_call_revenue_only?: boolean
+  /**
+   * Branch B only — the payer is NOT in the CRM at all (not a client, not a lead): create a plain person
+   * from this and invoice them. Mutually exclusive with account/contact/lead; never with a paid call.
+   */
+  new_contact?: { full_name?: unknown; email?: unknown }
+  /**
+   * Write the payment's AI investigation, if it has one worth writing, on the invoice note. Default on;
+   * `false` when staff unticked it.
+   */
+  save_story?: boolean
 }
 
 export async function POST(req: NextRequest) {
@@ -99,16 +112,23 @@ export async function POST(req: NextRequest) {
   if (!feedId) {
     return NextResponse.json({ error: "feed_id is required" }, { status: 400 })
   }
-  const targetCount = [accountId, contactId, leadId].filter(Boolean).length
+  const newContact = body.new_contact && typeof body.new_contact === "object" ? body.new_contact : null
+  const targetCount = [accountId, contactId, leadId, newContact].filter(Boolean).length
   if (targetCount === 0) {
     return NextResponse.json(
-      { error: "account_id, contact_id, or lead_id required" },
+      { error: "account_id, contact_id, lead_id or new_contact required" },
       { status: 400 },
     )
   }
   if (targetCount > 1) {
     return NextResponse.json(
-      { error: "pass exactly one of account_id, contact_id, or lead_id" },
+      { error: "pass exactly one of account_id, contact_id, lead_id or new_contact" },
+      { status: 400 },
+    )
+  }
+  if (newContact && (isPaidCall || serviceDeliveryId)) {
+    return NextResponse.json(
+      { error: "A new person gets a service invoice: a paid strategy call and attaching to an existing service need a person who is already in the CRM." },
       { status: 400 },
     )
   }
@@ -148,11 +168,16 @@ export async function POST(req: NextRequest) {
 
     const { data: feedRow } = await supabaseAdmin
       .from("td_bank_feeds")
-      .select("amount, currency, transaction_date, status")
+      .select("amount, currency, transaction_date, status, source, external_id")
       .eq("id", feedId)
       .maybeSingle()
-    const feed = feedRow as { amount: number; currency: string; transaction_date: string; status: string } | null
+    const feed = feedRow as { amount: number; currency: string; transaction_date: string; status: string; source: string | null; external_id: string | null } | null
     if (!feed) return NextResponse.json({ error: "Transaction not found" }, { status: 404 })
+
+    // A refunded or disputed card payment is not our money any more. Asked BEFORE anything is recorded: the
+    // link to the feed refuses a refunded charge too, but only after the invoice and credit already exist.
+    const paidCallRefundGate = await stripeRefundGate(feed)
+    if (paidCallRefundGate.error) return NextResponse.json({ error: paidCallRefundGate.error }, { status: 409 })
 
     // Resolve the target's email/name/is_test regardless of whether it's an
     // existing contact or a lead who hasn't become one yet — recordPaidCall
@@ -279,7 +304,7 @@ export async function POST(req: NextRequest) {
   const { data: feed, error: feedErr } = await supabaseAdmin
     .from("td_bank_feeds")
     .select(
-      "id, source, transaction_date, amount, currency, sender_name, status, matched_payment_id",
+      "id, source, external_id, transaction_date, amount, currency, sender_name, status, matched_payment_id, owner_account_number",
     )
     .eq("id", feedId)
     .single()
@@ -294,6 +319,22 @@ export async function POST(req: NextRequest) {
       { error: "Bank feed already matched to a payment" },
       { status: 409 },
     )
+  }
+  // TD's own private money, and a transaction already marked a duplicate, are not for client invoices.
+  if (feed.status === "outgoing" || feed.status === "owner_ledger" || feed.status === "duplicate" || feed.owner_account_number) {
+    return NextResponse.json({ error: "This transaction cannot be invoiced from here." }, { status: 400 })
+  }
+  // An invoice can only be USD or EUR (createTDInvoice). Any other currency used to be quietly relabelled
+  // USD — an invoice for the wrong money. A payment that is not positive would become a credit note.
+  const feedCurrency = String(feed.currency ?? "").toUpperCase()
+  if (feedCurrency !== "USD" && feedCurrency !== "EUR") {
+    return NextResponse.json(
+      { error: `This payment is in ${feedCurrency || "an unknown currency"}. Invoices can only be in USD or EUR, so it cannot be invoiced from here.` },
+      { status: 400 },
+    )
+  }
+  if (!(Number(feed.amount) > 0)) {
+    return NextResponse.json({ error: "Only a payment received (a positive amount) can be invoiced." }, { status: 400 })
   }
 
   // ── Validate the SD belongs to the chosen target (Branch A) ────────
@@ -332,17 +373,75 @@ export async function POST(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: existingPayment } = await (supabaseAdmin as any)
     .from("payments")
-    .select("id")
+    .select("id, account_id, contact_id, invoice_number")
     .eq("idempotency_key", idempotencyKey)
     .maybeSingle()
   if (existingPayment?.id) {
+    // The invoice is keyed on the PAYMENT, not on who it was for. A retry that names a DIFFERENT person or
+    // company would otherwise link the payment to the first attempt's invoice and report success for the
+    // new pick: money stays on the wrong party under a green message. Refuse and say where it went.
+    const wantedContactId = newContact ? payerContactIdForFeed(feedId) : contactId
+    const sameTarget = accountId
+      ? existingPayment.account_id === accountId
+      : !!wantedContactId && existingPayment.contact_id === wantedContactId
+    if (!sameTarget) {
+      return NextResponse.json(
+        {
+          error:
+            `This payment already has an invoice${existingPayment.invoice_number ? ` (${existingPayment.invoice_number})` : ""} made for someone else. ` +
+            "Picking a different person or company here will not move it. If that was the wrong pick, correct it on that invoice.",
+        },
+        { status: 409 },
+      )
+    }
+    // The invoice already exists for this payment. If the earlier attempt made it but the link to the feed
+    // failed, a retry must finish that link — not report success over a payment that is still unmatched.
+    const invoiceNumber: string | null = existingPayment.invoice_number ?? null
+    let warning: string | undefined
+    let linked = feed.status === "matched" && feed.matched_payment_id === existingPayment.id
+    if (!linked) {
+      const retry = await manualMatch(feedId, existingPayment.id)
+      if (retry.matched) linked = true
+      else warning = `Invoice already created, but the feed link failed: ${retry.error}`
+    }
+    // The first attempt stopped before the story step, so the retry that finishes the link writes it.
+    const retryStory = linked && body.save_story !== false
+      ? describeStoryResult(await writeFeedStoryToInvoices(feedId, [existingPayment.id], [existingPayment.id]))
+      : null
     return NextResponse.json({
       payment_id: existingPayment.id,
+      invoice_number: invoiceNumber,
       idempotent: true,
+      ...(warning ? { warning } : {}),
+      ...(retryStory ? { story: retryStory } : {}),
     })
   }
 
-  const currency = (feed.currency || "USD").toUpperCase()
+  // A refunded or disputed card payment is not our money any more, and the link to the feed refuses it — but
+  // only AFTER the person, the service delivery and a PAID invoice exist. Ask Stripe before creating anything.
+  // (After the idempotency guard: an invoice that already exists is finished by the retry above.)
+  const refundGate = await stripeRefundGate(feed)
+  if (refundGate.error) return NextResponse.json({ error: refundGate.error }, { status: 409 })
+
+  // ── New person (the payer is not in the CRM) ───────────────────────
+  // After the idempotency guard, so a repeat never makes a second person; before the service delivery,
+  // so a refusal ("already in the CRM") leaves nothing behind.
+  let effectiveContactId: string | undefined = contactId
+  let createdContactId: string | null = null
+  if (newContact) {
+    const made = await findOrCreatePayerContact(newContact, feedId)
+    if (made.ok === false) {
+      const status = made.kind === "exists" || made.kind === "in_progress" ? 409 : made.kind === "invalid" ? 400 : 500
+      return NextResponse.json({ error: made.error, ...(made.kind === "exists" ? { existing: made.existing } : {}) }, { status })
+    }
+    effectiveContactId = made.contactId
+    if (made.created) createdContactId = made.contactId
+  }
+  const undoNewContact = async () => {
+    if (createdContactId) await removeJustCreatedPayerContact(createdContactId)
+  }
+
+  const currency = feedCurrency
   const txnDate: string =
     typeof feed.transaction_date === "string"
       ? feed.transaction_date.slice(0, 10)
@@ -356,7 +455,7 @@ export async function POST(req: NextRequest) {
     try {
       const sd = await createBackfilledSD({
         account_id: accountId,
-        contact_id: contactId,
+        contact_id: effectiveContactId,
         service_type: serviceType!,
         service_name: serviceName,
         amount: Number(feed.amount),
@@ -366,6 +465,7 @@ export async function POST(req: NextRequest) {
       })
       sdId = sd.id
     } catch (err) {
+      await undoNewContact()
       return NextResponse.json(
         {
           error: `Failed to create service delivery: ${err instanceof Error ? err.message : "unknown"}`,
@@ -380,12 +480,12 @@ export async function POST(req: NextRequest) {
   // ── createTDInvoice — paid, idempotent ─────────────────────────────
   const description =
     serviceName ||
-    (contactId ? `Wire payment from ${feed.sender_name ?? "individual"}` : "Service")
+    (effectiveContactId ? `Wire payment from ${feed.sender_name ?? "individual"}` : "Service")
   let invoice
   try {
     invoice = await createTDInvoice({
       account_id: accountId,
-      contact_id: contactId,
+      contact_id: effectiveContactId,
       line_items: [
         { description, unit_price: Number(feed.amount), quantity: 1 },
       ],
@@ -400,9 +500,17 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     // Roll back the SD only if WE just created it (Branch B). Branch A's
     // SD pre-existed and is not ours to delete.
+    let sdRolledBack = true
     if (!isAttachBranch && sdId) {
-      await supabaseAdmin.from("service_deliveries").delete().eq("id", sdId)
+      const { error: rollbackErr } = await supabaseAdmin.from("service_deliveries").delete().eq("id", sdId)
+      if (rollbackErr) {
+        sdRolledBack = false
+        console.error(`[create-from-feed] could not roll back service delivery ${sdId} after an invoice failure:`, rollbackErr.message)
+      }
     }
+    // The new person goes too — but only if the service delivery that pointed at them is gone (otherwise the
+    // database would refuse, and a person somebody references must stay).
+    if (sdRolledBack) await undoNewContact()
     return NextResponse.json(
       {
         error: `Failed to create invoice: ${err instanceof Error ? err.message : "unknown"}`,
@@ -418,15 +526,22 @@ export async function POST(req: NextRequest) {
       sd_id: sdId,
       payment_id: invoice.paymentId,
       invoice_number: invoice.invoiceNumber,
+      contact_id: effectiveContactId ?? null,
       attached: isAttachBranch,
       warning: `Invoice created, but feed link failed: ${matchResult.error}`,
     })
   }
 
+  // The payment's AI investigation, if it has one worth writing, goes on this invoice's internal note.
+  // Best effort: never fails the invoice.
+  const story = body.save_story === false ? null : describeStoryResult(await writeFeedStoryToInvoices(feedId, [invoice.paymentId], [invoice.paymentId]))
+
   return NextResponse.json({
     sd_id: sdId,
     payment_id: invoice.paymentId,
     invoice_number: invoice.invoiceNumber,
+    contact_id: effectiveContactId ?? null,
     attached: isAttachBranch,
+    ...(story ? { story } : {}),
   })
 }
