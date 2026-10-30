@@ -49,6 +49,8 @@ export const MAX_HITS_PER_STORE = 12
 export const MAX_HIT_CHARS = 240
 const MAX_TERMS = 6
 const MAX_CLIENTS = 3
+/** Addresses on one payment that are looked up in the CRM. */
+const MAX_CLIENT_EMAILS = 4
 const PER_QUERY_LIMIT = 8
 
 export interface ChatHit {
@@ -148,9 +150,10 @@ function cleanTerm(value: string): string {
 
 /**
  * What the code searches the chats for: the payer's name (when it says something), the email the processor
- * put in the memo, and every invoice number written on the bank line. Never more than 6, no duplicates.
+ * put in the memo, the addresses it recorded, and every invoice number written on the bank line. Never more
+ * than 6, no duplicates.
  */
-export function chatSearchTerms(feed: { sender_name?: string | null; memo?: string | null; payer_name?: string | null }): string[] {
+export function chatSearchTerms(feed: { sender_name?: string | null; memo?: string | null; payer_name?: string | null; emails?: readonly string[] | null }): string[] {
   const terms: string[] = []
   const add = (t: string) => {
     const clean = cleanTerm(t)
@@ -160,6 +163,8 @@ export function chatSearchTerms(feed: { sender_name?: string | null; memo?: stri
   if (isUsablePayerName(normalizePayerName(core))) add(core)
   const email = parsePayerEmail(feed.memo)
   if (email) add(email)
+  // The addresses the processor recorded (a card payment's billing/receipt email), after the memo's own.
+  for (const e of feed.emails ?? []) add(e)
   for (const v of invoiceNumberVariants(`${feed.sender_name ?? ""} ${feed.memo ?? ""}`)) add(v)
   return terms.slice(0, MAX_TERMS)
 }
@@ -257,13 +262,13 @@ async function runStore(
 }
 
 interface SweepInput {
-  facts: { transaction_date?: string | null; sender_name?: string | null; memo?: string | null; payer_name?: string | null }
+  facts: { transaction_date?: string | null; sender_name?: string | null; memo?: string | null; payer_name?: string | null; emails?: readonly string[] | null }
   /** The person running the investigation — staff notes are filtered to what this person may see. */
   userId: string
   db?: Db
 }
 
-async function findClients(db: Db, core: string, email: string | null): Promise<{ clients: ChatClient[]; error: string | null }> {
+async function findClients(db: Db, core: string, emails: readonly string[]): Promise<{ clients: ChatClient[]; error: string | null }> {
   const clients: ChatClient[] = []
   const errors: string[] = []
   const usable = isUsablePayerName(normalizePayerName(core))
@@ -280,7 +285,7 @@ async function findClients(db: Db, core: string, email: string | null): Promise<
       }),
     )
   }
-  if (email) {
+  for (const email of emails) {
     jobs.push(
       db.from("contacts").select("id, full_name").ilike("email", escapeLikePattern(email)).limit(MAX_CLIENTS).then((r) => {
         if (r.error) errors.push(r.error.message)
@@ -302,14 +307,15 @@ export async function runChatSweep(input: SweepInput): Promise<ChatSweep> {
   const facts = input.facts
   const terms = chatSearchTerms(facts)
   const core = payerNameCore(facts.payer_name || facts.sender_name)
-  const email = parsePayerEmail(facts.memo)
+  const memoEmail = parsePayerEmail(facts.memo)
+  const emails = Array.from(new Set([...(memoEmail ? [memoEmail] : []), ...(facts.emails ?? [])].map((e) => String(e).trim().toLowerCase()).filter(Boolean))).slice(0, MAX_CLIENT_EMAILS)
   const clientWindow = chatWindow(facts.transaction_date, CLIENT_WINDOW_DAYS)
   const textWindow = chatWindow(facts.transaction_date, TEXT_WINDOW_DAYS)
 
   let clients: ChatClient[] = []
   let clientLookupError: string | null = null
   try {
-    const found = await findClients(db, core, email)
+    const found = await findClients(db, core, emails)
     clients = found.clients
     clientLookupError = found.error
   } catch (err) {

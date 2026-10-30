@@ -30,12 +30,18 @@ import { checkRateLimit } from "@/lib/portal/rate-limit"
 import { invoicePartyName } from "@/lib/finance/invoice-party"
 import { buildInvestigatorWorkerOptions } from "@/lib/finance/investigator-options"
 import { CHAT_STORE_LABEL, CHAT_STORES, runChatSweep, summarizeChatSweep, type ChatSweep } from "@/lib/finance/feed-chat-sweep"
+import { nearbyNotRun, runNearbySweep, summarizeNearby, type NearbySweep } from "@/lib/finance/feed-nearby-sweep"
+import { readClaimedInvoiceIds } from "@/lib/finance/claimed-invoices"
+import { isPaidInvoice } from "@/lib/finance/invoice-matchability"
+import { extractFeedEmails } from "@/lib/finance/feed-signals"
 import {
   buildInvestigatorUserMessage,
   markVerifiedSources,
   parseInvestigationReply,
+  payerEmailsFor,
   payerFieldsFromRaw,
   payerSearchQueries,
+  rankInvoiceContext,
   sweepMailboxes,
   type InvestigationFacts,
   type InvoiceContextRow,
@@ -60,7 +66,11 @@ const IN_FLIGHT_MS = 5 * 60_000
 const SWEEP_TIMEOUT_MS = 30_000
 /** The chats-and-notes sweep is database reads only; it runs at the same time as the mailbox sweep and has less time. */
 const CHAT_SWEEP_TIMEOUT_MS = 20_000
+/** The around-the-payment-date look is database reads only too; same limit, same "never fatal". */
+const NEARBY_SWEEP_TIMEOUT_MS = 20_000
+/** Invoices of this amount shown to the AI. More are read, then ranked (see rankInvoiceContext), so an older paid one is not cut. */
 const MAX_CANDIDATE_INVOICES = 12
+const READ_CANDIDATE_INVOICES = 60
 
 type Embedded<T> = T | T[] | null | undefined
 
@@ -85,6 +95,8 @@ interface CandidateRow {
   description: string | null
   total: number | string | null
   invoice_status: string | null
+  status: string | null
+  paid_date: string | null
   notes: string | null
   accounts: Embedded<{ company_name: string | null }>
   contacts: Embedded<{ full_name: string | null }>
@@ -132,6 +144,25 @@ async function chatSweepWithTimeout(input: Parameters<typeof runChatSweep>[0]): 
   try {
     return await Promise.race([
       runChatSweep(input).catch((err: unknown) => chatSweepNotRun(`the search failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200))),
+      limit,
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/**
+ * Look around the payment date, but never wait past the limit, and never let a failure here take the whole
+ * investigation down: the AI still runs, and the screen says this look did not happen.
+ */
+async function nearbySweepWithTimeout(input: Parameters<typeof runNearbySweep>[0]): Promise<NearbySweep> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const limit = new Promise<NearbySweep>((resolve) => {
+    timer = setTimeout(() => resolve(nearbyNotRun(`the look took longer than ${NEARBY_SWEEP_TIMEOUT_MS / 1000}s and was given up`)), NEARBY_SWEEP_TIMEOUT_MS)
+  })
+  try {
+    return await Promise.race([
+      runNearbySweep(input).catch((err: unknown) => nearbyNotRun(`the look failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200))),
       limit,
     ])
   } finally {
@@ -210,6 +241,9 @@ export async function POST(req: NextRequest) {
   try {
     const amount = feed.amount == null ? null : Number(feed.amount)
     const payerFields = payerFieldsFromRaw(feed.raw_data)
+    // The addresses the processor recorded (a card payment's billing and receipt email live inside nested fields the
+    // payer fields above never reach): shown to the AI, searched in both mailboxes, and looked up in the CRM.
+    const payerEmails = payerEmailsFor(extractFeedEmails(feed))
     const facts: InvestigationFacts = {
       feed_id: feed.id,
       transaction_date: feed.transaction_date ? String(feed.transaction_date).slice(0, 10) : null,
@@ -220,15 +254,17 @@ export async function POST(req: NextRequest) {
       sender_reference: feed.sender_reference,
       memo: feed.memo,
       payer_fields: payerFields,
+      payer_emails: payerEmails,
     }
 
     // Both mailboxes, guaranteed by code (see lib/finance/feed-investigation.ts).
     const mailboxes = allowedMailboxes()
-    const queries = payerSearchQueries({ sender_name: feed.sender_name, memo: feed.memo, payer_name: payerFields.payer_name })
-    // The mailboxes and the chats/notes are searched at the same time: neither waits for the other.
-    const [sweep, chatSweep] = await Promise.all([
+    const queries = payerSearchQueries({ sender_name: feed.sender_name, memo: feed.memo, payer_name: payerFields.payer_name, emails: payerEmails })
+    // The mailboxes, the chats/notes and the look around the payment date run at the same time: none waits for another.
+    const [sweep, chatSweep, nearby] = await Promise.all([
       sweepWithTimeout(queries, mailboxes),
-      chatSweepWithTimeout({ facts: { transaction_date: facts.transaction_date, sender_name: feed.sender_name, memo: feed.memo, payer_name: payerFields.payer_name }, userId: user.id }),
+      chatSweepWithTimeout({ facts: { transaction_date: facts.transaction_date, sender_name: feed.sender_name, memo: feed.memo, payer_name: payerFields.payer_name, emails: payerEmails }, userId: user.id }),
+      nearbySweepWithTimeout({ facts: { transaction_date: facts.transaction_date }, feedId: feed.id }),
     ])
 
     // Invoices of exactly this amount, so the model sees the "obvious" candidate and its internal note.
@@ -237,28 +273,43 @@ export async function POST(req: NextRequest) {
     if (amount !== null && feed.currency) {
       const { data: cand, error: candError } = await supabaseAdmin
         .from("payments")
-        .select("id, invoice_number, description, total, invoice_status, notes, accounts:account_id(company_name), contacts:payments_contact_id_fkey(full_name)")
+        .select("id, invoice_number, description, total, invoice_status, status, paid_date, notes, accounts:account_id(company_name), contacts:payments_contact_id_fkey(full_name)")
         .eq("amount_currency", feed.currency as "USD" | "EUR")
-        .or(`total.eq.${amount},amount_due.eq.${amount}`)
+        .or(`total.eq.${amount},amount_due.eq.${amount},amount.eq.${amount}`)
         .not("is_test", "is", true)
         .order("created_at", { ascending: false })
-        .limit(MAX_CANDIDATE_INVOICES)
+        .limit(READ_CANDIDATE_INVOICES)
       if (candError) {
         console.error("[investigate-payment] could not load the invoices of this amount:", candError.message)
         invoicesUnavailable = true
       }
-      candidates = ((cand ?? []) as unknown as CandidateRow[]).map((c) => ({
-        id: c.id,
-        invoice_number: c.invoice_number,
-        party: invoicePartyName({ accounts: c.accounts, contacts: c.contacts }),
-        description: c.description,
-        total: c.total == null ? null : Number(c.total),
-        status: c.invoice_status,
-        notes: c.notes,
-      }))
+      const rows = (cand ?? []) as unknown as CandidateRow[]
+      // For the paid ones: is a DIFFERENT bank line already tied to the invoice? A paid invoice that no bank line
+      // accounts for is the kind of record this payment may belong to (it was recorded by hand and never matched).
+      const paidIds = rows.filter((c) => isPaidInvoice({ invoice_status: c.invoice_status, status: c.status })).map((c) => c.id)
+      const claimed = paidIds.length ? await readClaimedInvoiceIds(paidIds, feed.id).catch(() => null) : new Set<string>()
+      candidates = rankInvoiceContext(
+        rows.map((c): InvoiceContextRow => {
+          const paid = isPaidInvoice({ invoice_status: c.invoice_status, status: c.status })
+          return {
+            id: c.id,
+            invoice_number: c.invoice_number,
+            party: invoicePartyName({ accounts: c.accounts, contacts: c.contacts }),
+            description: c.description,
+            total: c.total == null ? null : Number(c.total),
+            status: c.invoice_status ?? c.status,
+            notes: c.notes,
+            paid,
+            paid_date: paid && c.paid_date ? String(c.paid_date).slice(0, 10) : null,
+            bank_line: paid ? (claimed === null ? "unknown" : claimed.has(c.id) ? "tied" : "none") : undefined,
+          }
+        }),
+        facts.transaction_date,
+        MAX_CANDIDATE_INVOICES,
+      )
     }
 
-    const userMessage = buildInvestigatorUserMessage(facts, sweep, candidates, invoicesUnavailable, chatSweep)
+    const userMessage = buildInvestigatorUserMessage(facts, sweep, candidates, invoicesUnavailable, chatSweep, nearby)
     const worker = await callWorker(userMessage, buildInvestigatorWorkerOptions())
 
     // Running out of steps does not mean there is no answer: the loop makes one last call that forces a written
@@ -330,6 +381,7 @@ export async function POST(req: NextRequest) {
       mailboxes_searched: sweep.searched,
       mailboxes_failed: sweep.failed.map((f) => `${f.mailbox}: ${f.error}`),
       chats_searched: summarizeChatSweep(chatSweep),
+      nearby_checked: summarizeNearby(nearby),
     }
 
     let saved = await updateFeed(feed.id, { review_metadata: { investigation: stored, investigation_started_at: null } }, "investigate-payment:result")

@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { existingTargetFromWho, suggestedInvoiceLabel, type ExistingTarget, type InvestigationWho, type StoredInvestigation } from '@/lib/finance/feed-investigation'
+import { existingTargetFromWho, nearbyLineText, suggestedInvoiceLabel, type ExistingTarget, type InvestigationWho, type StoredInvestigation } from '@/lib/finance/feed-investigation'
 
 const VERDICT_STYLE: Record<string, { label: string; className: string }> = {
   identified: { label: 'Identified', className: 'bg-emerald-100 text-emerald-800' },
@@ -196,6 +196,13 @@ export function PaymentInvestigationPanel({ feedId, stored, isOwner, knownInvoic
               </>
             ) : (
               <>Chats and notes were not searched automatically in this older result. Press &quot;Run again&quot; to include them.</>
+            )}
+          </p>
+          <p className="text-[10px] text-zinc-500" data-testid="investigation-nearby">
+            {current.nearby_checked ? (
+              nearbyLineText(current.nearby_checked)
+            ) : (
+              <>The days around the payment were not looked at automatically in this older result. Press &quot;Run again&quot; to include them.</>
             )}
           </p>
           <p className="text-[10px] text-zinc-500">AI-written, so check the sources. Run {String(current.at).slice(0, 10)}.</p>

@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { NextRequest } from "next/server"
 import type { ChatSweep } from "@/lib/finance/feed-chat-sweep"
+import type { NearbySweep } from "@/lib/finance/feed-nearby-sweep"
 
 const FEED_ID = "228b5a19-9a35-4221-84bc-1226d4a605c0"
 const CONTACT_ID = "11ba2e7c-36fe-48bd-986e-13b0d6f24a24"
@@ -28,6 +29,9 @@ const executeTool = vi.fn()
 const runChatSweep = vi.fn()
 let chatSweepResult: ChatSweep
 let chatSweepThrows: Error | null
+const runNearbySweep = vi.fn()
+let nearbyResult: NearbySweep
+let nearbyThrows: Error | null
 const fromCalls: string[] = []
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -42,6 +46,11 @@ vi.mock("@/lib/ai-agent/worker-tools", () => ({ callWorker: (...a: unknown[]) =>
 vi.mock("@/lib/finance/feed-chat-sweep", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/finance/feed-chat-sweep")>()),
   runChatSweep: (...a: unknown[]) => runChatSweep(...a),
+}))
+// The look around the payment date is tested on its own (feed-nearby-sweep.test.ts); here only what the route does with it.
+vi.mock("@/lib/finance/feed-nearby-sweep", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/finance/feed-nearby-sweep")>()),
+  runNearbySweep: (...a: unknown[]) => runNearbySweep(...a),
 }))
 vi.mock("@/lib/finance/feed-write", () => ({ updateFeed: (...a: unknown[]) => updateFeed(...a) }))
 vi.mock("@/lib/supabase-admin", () => ({
@@ -137,6 +146,20 @@ beforeEach(() => {
   }
   runChatSweep.mockReset()
   runChatSweep.mockImplementation(async () => { if (chatSweepThrows) throw chatSweepThrows; return chatSweepResult })
+  nearbyThrows = null
+  nearbyResult = {
+    ran: true,
+    window: { from: "2026-05-15", to: "2026-06-05" },
+    paidThrough: "2026-07-05",
+    items: [
+      { kind: "company", id: "c-left", name: "Left Over Test LLC", what: "onboarded 2026-05-20", date: "2026-05-20", status: "Active", setAside: null },
+      { kind: "company", id: "c-aside", name: "Set Aside Test LLC", what: "onboarded 2026-05-21", date: "2026-05-21", status: "Active", setAside: "2500 EUR paid on 2026-05-22" },
+    ],
+    totals: { companies: 2, calls: 0, offers: 0, set_aside: 1, left: 1 },
+    error: null,
+  }
+  runNearbySweep.mockReset()
+  runNearbySweep.mockImplementation(async () => { if (nearbyThrows) throw nearbyThrows; return nearbyResult })
   executeTool.mockReset()
   // The deposit notice sits in the support mailbox only; the owner's mailbox has nothing for this name.
   executeTool.mockImplementation(async (_name: string, params: { as_user?: string }) =>
@@ -383,5 +406,109 @@ describe("the chats and notes", () => {
     const body = await res.json()
     expect(callWorker).toHaveBeenCalledTimes(1)
     expect(body.investigation.chats_searched.every((c: { searched: boolean; error: string }) => c.searched === false && /pool exhausted/.test(c.error))).toBe(true)
+  })
+})
+
+
+describe("the look around the payment date", () => {
+  it("is run for the payment's own date and bank line, and for nobody else", async () => {
+    await POST(req({ feed_id: FEED_ID }))
+    expect(runNearbySweep).toHaveBeenCalledTimes(1)
+    expect(runNearbySweep.mock.calls[0][0]).toMatchObject({ facts: { transaction_date: "2026-05-29" }, feedId: FEED_ID })
+
+    runNearbySweep.mockClear()
+    owner = false
+    await POST(req({ feed_id: FEED_ID }))
+    expect(runNearbySweep).not.toHaveBeenCalled()
+  })
+
+  it("reaches the AI as untrusted data in its first message", async () => {
+    await POST(req({ feed_id: FEED_ID }))
+    const message = callWorker.mock.calls[0][0] as string
+    expect(message).toContain("AROUND THE PAYMENT DATE")
+    expect(message).toContain("Left Over Test LLC")
+    expect(message).toContain("because 2500 EUR paid on 2026-05-22")
+  })
+
+  it("is kept on the payment as counts only, never the names", async () => {
+    const body = await (await POST(req({ feed_id: FEED_ID }))).json()
+    expect(body.investigation.nearby_checked).toEqual({ ran: true, window: { from: "2026-05-15", to: "2026-06-05" }, error: null, companies: 2, calls: 0, offers: 0, set_aside: 1, left: 1 })
+    expect(JSON.stringify(body.investigation.nearby_checked)).not.toContain("Test LLC")
+  })
+
+  it("a look that CRASHES does not take the investigation down: it is kept as 'not looked at', with the reason", async () => {
+    nearbyThrows = new Error("pool exhausted")
+    const res = await POST(req({ feed_id: FEED_ID }))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(callWorker).toHaveBeenCalledTimes(1)
+    expect(body.investigation.nearby_checked).toMatchObject({ ran: false, left: 0 })
+    expect(body.investigation.nearby_checked.error).toMatch(/pool exhausted/)
+    expect(callWorker.mock.calls[0][0] as string).toContain("AROUND THE PAYMENT DATE: NOT LOOKED AT")
+  })
+})
+
+describe("the email address the processor recorded", () => {
+  const stripeFeed = () => ({ ...feedRow!, source: "stripe", sender_name: "EXODUS DIGITAL GROUP LIMITED", amount: 3000, raw_data: { billing_details: { email: "Billing@Agency.example", name: "EXODUS DIGITAL GROUP LIMITED" }, receipt_email: null } })
+
+  it("is searched in BOTH mailboxes, quoted, even though it sits in a nested field", async () => {
+    feedRow = stripeFeed()
+    await POST(req({ feed_id: FEED_ID }))
+    const queries = executeTool.mock.calls.map((c) => (c[1] as { query: string }).query)
+    expect(queries).toContain('"billing@agency.example"')
+    const mailboxes = executeTool.mock.calls.filter((c) => (c[1] as { query: string }).query === '"billing@agency.example"').map((c) => (c[1] as { as_user: string }).as_user)
+    expect(mailboxes.sort()).toEqual(["antonio.durante@tonydurante.us", "support@tonydurante.us"])
+  })
+
+  it("is looked up in the chats and the CRM, and shown to the AI", async () => {
+    feedRow = stripeFeed()
+    await POST(req({ feed_id: FEED_ID }))
+    expect((runChatSweep.mock.calls[0][0] as { facts: { emails: string[] } }).facts.emails).toEqual(["billing@agency.example"])
+    expect(callWorker.mock.calls[0][0] as string).toContain("Email addresses recorded on this payment (billing, receipt, memo): billing@agency.example")
+  })
+
+  it("a payment without one behaves as before", async () => {
+    await POST(req({ feed_id: FEED_ID }))
+    expect((runChatSweep.mock.calls[0][0] as { facts: { emails: string[] } }).facts.emails).toEqual([])
+    expect(callWorker.mock.calls[0][0] as string).not.toContain("Email addresses recorded")
+  })
+})
+
+describe("the invoices of this amount", () => {
+  const PAID_ID = "0e2d2f6e-4f41-4d6a-9b0a-111111111111"
+  const candidate = (id: string, over: Record<string, unknown> = {}) => ({
+    id, invoice_number: `INV-${id.slice(0, 4)}`, description: "Setup", total: 500, invoice_status: "Sent", status: "Pending", paid_date: null, notes: null,
+    accounts: { company_name: "Open Co" }, contacts: null, ...over,
+  })
+
+  it("an older PAID invoice from the day of the payment is not cut by newer open ones, and says it is not tied to a bank line", async () => {
+    lookupRows.candidates = [
+      ...Array.from({ length: 20 }, (_, i) => candidate(`aaaa${String(i).padStart(4, "0")}-0000-4000-8000-000000000000`)),
+      candidate(PAID_ID, { invoice_number: "INV-PAID-ONE", invoice_status: null, status: "Paid", paid_date: "2026-05-29", accounts: null, contacts: { full_name: "Paid Person" } }),
+    ]
+    await POST(req({ feed_id: FEED_ID }))
+    const message = callWorker.mock.calls[0][0] as string
+    expect(message).toContain("INV-PAID-ONE | Paid Person")
+    expect(message).toContain("paid 2026-05-29 (same day as this payment) | NOT tied to any bank line")
+    // it is the first invoice line the AI reads
+    const firstInvoiceLine = message.split("\n").find((l) => l.startsWith("- id="))
+    expect(firstInvoiceLine).toContain("INV-PAID-ONE")
+    // and no more than twelve reach the AI
+    expect(message.split("\n").filter((l) => l.startsWith("- id=")).length).toBe(12)
+  })
+
+  it("a paid invoice that ANOTHER bank line already points at says so", async () => {
+    lookupRows.candidates = [candidate(PAID_ID, { invoice_number: "INV-TAKEN", invoice_status: null, status: "Paid", paid_date: "2026-05-29" })]
+    lookupRows.td_bank_feeds = [{ id: PAID_ID, matched_payment_id: PAID_ID }]
+    await POST(req({ feed_id: FEED_ID }))
+    expect(callWorker.mock.calls[0][0] as string).toContain("already tied to ANOTHER bank line")
+  })
+
+  it("an open invoice gets no paid words", async () => {
+    lookupRows.candidates = [candidate("bbbb0000-0000-4000-8000-000000000000")]
+    await POST(req({ feed_id: FEED_ID }))
+    const message = callWorker.mock.calls[0][0] as string
+    expect(message).toContain("INV-bbbb")
+    expect(message).not.toContain("NOT tied to any bank line")
   })
 })

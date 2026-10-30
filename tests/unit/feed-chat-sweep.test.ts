@@ -288,3 +288,34 @@ describe("summarizeChatSweep", () => {
     expect(JSON.stringify(summary)).not.toContain("no invoices due")
   })
 })
+
+describe("the addresses the processor recorded (a card payment's billing email)", () => {
+  it("are searched in the chats, after the memo's own address and before the invoice numbers", () => {
+    const terms = chatSearchTerms({ sender_name: "EXODUS DIGITAL GROUP LIMITED", memo: "email: a@memo.com - INV 2026 001", emails: ["billing@agency.example"] })
+    expect(terms).toEqual(["EXODUS DIGITAL GROUP LIMITED", "a@memo.com", "billing@agency.example", "INV-2026-001", "INV 2026 001"])
+  })
+
+  it("never push the list past six, and never repeat an address", () => {
+    const terms = chatSearchTerms({ sender_name: "Some Real Company LLC", memo: "email: a@memo.com", emails: ["A@memo.com", "b@x.com", "c@x.com", "d@x.com", "e@x.com", "f@x.com"] })
+    expect(terms.length).toBeLessThanOrEqual(6)
+    expect(new Set(terms.map((t) => t.toLowerCase())).size).toBe(terms.length)
+  })
+
+  it("are looked up in the CRM: a contact with that address becomes a client whose chats are read", async () => {
+    handler = (table, calls) => {
+      if (table === "contacts" && calls.some((c) => c.method === "ilike" && c.args[0] === "email" && c.args[1] === "billing@agency.example")) {
+        return { data: [{ id: "c-billing", full_name: "Billing Owner" }], error: null }
+      }
+      return defaultHandler(table)
+    }
+    const sweep = await runChatSweep({ facts: { transaction_date: "2026-02-13", sender_name: "EXODUS DIGITAL GROUP LIMITED", memo: null, emails: ["billing@agency.example"] }, userId: USER_ID, db: fakeDb })
+    expect(sweep.clients).toContainEqual({ kind: "contact", id: "c-billing", name: "Billing Owner" })
+    expect(callsOf("portal_messages").some((e) => hasCall(e, "in", "contact_id", ["c-billing"]))).toBe(true)
+  })
+
+  it("leave the old behaviour alone when there are none", async () => {
+    const sweep = await runChatSweep({ facts: FACTS, userId: USER_ID, db: fakeDb })
+    expect(callsOf("contacts").every((e) => !e.calls.some((c) => c.method === "ilike" && c.args[0] === "email"))).toBe(true)
+    expect(sweep.clients).toEqual([{ kind: "account", id: ACCOUNT_ID, name: "Active Acres Properties LLC" }])
+  })
+})
