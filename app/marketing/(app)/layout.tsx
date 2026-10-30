@@ -10,6 +10,7 @@ import { WorkspaceNav } from './workspace-nav'
 import { ExitViewButton } from './exit-view-button'
 import { frameFor } from '@/lib/marketing/frame'
 import { OwnerNav } from '@/components/marketing/owner-nav'
+import { MessageVoice, VoiceSwitch } from '@/components/marketing/message-voice'
 import { LangProvider } from '@/components/marketing/lang-provider'
 import { LangSwitch } from '@/components/marketing/lang-switch'
 import { MarketingPushBanner } from '@/components/marketing/push-banner'
@@ -68,6 +69,7 @@ export default async function MarketingAppLayout({ children }: { children: React
   return (
     <LangProvider lang={lang}>
     <TourProvider own={{ key: tourKey, steps: ownSteps }} previews={previews} autoStart={autoStart} recordable={!ctx.viewAs}>
+    <MessageVoice wakeText={ownerLogin ? undefined : t('Sound is on. Click anywhere on this page to start it.')} />
     <div>
       {ctx.viewAs && (
         <div className="flex items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900" role="status">
@@ -79,7 +81,7 @@ export default async function MarketingAppLayout({ children }: { children: React
       <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col gap-4 overflow-y-auto border-r bg-white p-4" data-testid={ownerLogin ? 'frame-owner' : 'frame-team'}>
         <div>
           {fromCrm && !ownerLogin && <Link href="/marketing-leads" className="mb-3 block rounded-lg border border-slate-300 px-3 py-2 text-center text-sm font-medium text-slate-700 hover:bg-slate-50" data-testid="back-to-crm">&#9666; {t('Back to Marketing')}</Link>}
-          {ownerLogin && <Link href="/" className="mb-2 inline-block text-xs text-slate-500 underline" data-testid="back-to-crm">&#9666; CRM</Link>}
+          {ownerLogin && <Link href="/marketing-leads" className="mb-2 inline-block text-xs text-slate-500 underline" data-testid="back-to-home">&#9666; Home</Link>}
           <p className="text-xs uppercase tracking-wide text-slate-400">TD Marketing</p>
           <p className="truncate font-semibold">{ownerLogin ? 'Owner' : ctx.team.name}</p>
         </div>
@@ -89,6 +91,7 @@ export default async function MarketingAppLayout({ children }: { children: React
           {!ownerLogin && <TourButton />}
           <p className="truncate text-slate-500" title={ctx.user.email ?? ''}>{ctx.user.email}</p>
           <p className="text-xs text-slate-400">{ownerLogin ? 'Business owner' : ctx.role === 'owner' ? t('Team owner') : tAccessLabel(t, accessLabel(ctx.permissions, bundlesSetting))}</p>
+          <VoiceSwitch label={ownerLogin ? 'Sound' : t('Sound')} onText={ownerLogin ? 'On' : t('On')} offText={ownerLogin ? 'Off' : t('Off')} />
           <ThemeSwitch initial={getTheme()} />
           <LangSwitch />
           <SignOutButton />

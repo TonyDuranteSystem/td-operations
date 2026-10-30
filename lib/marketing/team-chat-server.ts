@@ -173,6 +173,28 @@ export async function unreadByThread(ctx: MarketingContext): Promise<Map<string,
   return out
 }
 
+/** What other people wrote in MY direct messages and groups since `sinceIso` and I have not read yet — for the spoken alert. Newest first. */
+export async function newTeamMessages(ctx: MarketingContext, sinceIso: string): Promise<Array<{ id: string; sender_id: string; created_at: string }>> {
+  const d = db()
+  const me = ctx.user.id
+  const { data: mine } = await d.from("marketing_chat_thread_members").select("thread_id").eq("user_id", me).limit(1000)
+  const ids = ((mine ?? []) as Array<{ thread_id: string }>).map(x => x.thread_id)
+  if (ids.length === 0) return []
+  const out: Array<{ id: string; sender_id: string; created_at: string }> = []
+  for (const part of chunk(ids, 100)) {
+    const [{ data: rs }, { data: ms }] = await Promise.all([
+      d.from("marketing_team_chat_reads").select("thread_id, last_read_at").eq("user_id", me).in("thread_id", part),
+      d.from("marketing_team_messages").select("id, thread_id, sender_id, created_at").eq("team_id", ctx.team.id).neq("sender_id", me).is("deleted_at", null).gt("created_at", sinceIso).in("thread_id", part).order("created_at", { ascending: false }).limit(50),
+    ])
+    const readAt = new Map(((rs ?? []) as Array<{ thread_id: string; last_read_at: string }>).map(r => [r.thread_id, r.last_read_at]))
+    for (const m of (ms ?? []) as Array<{ id: string; thread_id: string; sender_id: string; created_at: string }>) {
+      const last = readAt.get(m.thread_id)
+      if (!last || m.created_at > last) out.push({ id: m.id, sender_id: m.sender_id, created_at: m.created_at })
+    }
+  }
+  return out
+}
+
 /** The direct message with another person: opened, or created the first time. One chat per pair. */
 export async function openDm(ctx: MarketingContext, otherId: unknown): Promise<Res<{ threadId: string }>> {
   if (!isUuid(otherId)) return fail("Pick a person.", 400)

@@ -8,6 +8,7 @@ import { draftCount } from "@/lib/marketing/news-server"
 import { VIEW_AS_COOKIE, parseViewAs } from "@/lib/marketing/view-as"
 import { OwnerNav } from "@/components/marketing/owner-nav"
 import { ClearViewAs } from "@/components/marketing/clear-view-as"
+import { VoiceSwitch } from "@/components/marketing/message-voice"
 
 /**
  * TD Marketing — Antonio's section of the CRM (dev job 9aec66fa, Addendum H): his one Marketing menu on the left of every page (the same menu also frames the team screens he opens, so he never has to
@@ -27,6 +28,7 @@ export default async function MarketingAdminLayout({ children }: { children: Rea
       <aside className="sticky top-0 w-52 shrink-0 self-start border-r bg-white p-3" aria-label="Marketing menu">
         <p className="mb-2 px-3 text-xs uppercase tracking-wide text-slate-400">TD Marketing</p>
         <OwnerNav badges={{ messages, news }} />
+        <VoiceSwitch />
       </aside>
       <div className="min-w-0 flex-1">{children}</div>
     </div>
