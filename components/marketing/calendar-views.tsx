@@ -47,6 +47,9 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale, 
   const [byWhen, setByWhen] = useState(true)
   const [pending, setPending] = useState<Pending | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  // a warning (the call moved but the seller's Google calendar did not follow) stays long enough to be read
+  const [toastWarn, setToastWarn] = useState(false)
+  const say = (m: string, warn = false) => { setToastWarn(warn); setToast(m) }
   const [adding, setAdding] = useState(false)
   const [movingG, setMovingG] = useState<GoogleBlock | null>(null)
   // a move that was saved shows at its new time at once, until the refreshed page arrives
@@ -54,7 +57,7 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale, 
   const drag = useRef<CalendarItem | null>(null)
   useEffect(() => { try { const v = window.localStorage.getItem(VIEW_KEY); if (VIEWS.includes(v as View)) setView(v as View) } catch { /* only a convenience */ } }, [])
   useEffect(() => { setMoved({}) }, [items])
-  useEffect(() => { if (!toast) return; const h = setTimeout(() => setToast(null), 4000); return () => clearTimeout(h) }, [toast])
+  useEffect(() => { if (!toast) return; const h = setTimeout(() => setToast(null), toastWarn ? 12_000 : 4000); return () => clearTimeout(h) }, [toast, toastWarn])
   const pick = (v: View) => { setView(v); try { window.localStorage.setItem(VIEW_KEY, v) } catch { /* only a convenience */ } }
 
   const shown = useMemo(() => items.map(it => (moved[keyOf(it)] ? { ...it, at: moved[keyOf(it)], late: false } : it)), [items, moved])
@@ -67,7 +70,7 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale, 
   const movable = (it: CalendarItem) => canMove && !it.done
 
   const ask = (item: CalendarItem, at: string | null, suggest?: string) => {
-    if (at !== null && new Date(at).getTime() < new Date(nowIso).getTime() - 5 * 60_000) { setToast(t('That time has already passed. Pick a day and time in the future.')); return }
+    if (at !== null && new Date(at).getTime() < new Date(nowIso).getTime() - 5 * 60_000) { say(t('That time has already passed. Pick a day and time in the future.')); return }
     if (at !== null && new Date(at).getTime() === new Date(item.at).getTime()) return
     setPending({ item, at, suggest: suggest ?? at ?? item.at })
   }
@@ -84,7 +87,7 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale, 
     const it = drag.current; drag.current = null
     if (!it || !canMove) return
     const d = bucketDrop(b, it.at, nowIso, zone)
-    if (d.kind === 'refuse') { setToast(b === 'late' ? t('A call cannot be moved into Late. Pick Today or later.') : t('That time is not possible.')); return }
+    if (d.kind === 'refuse') { say(b === 'late' ? t('A call cannot be moved into Late. Pick Today or later.') : t('That time is not possible.')); return }
     if (d.kind === 'move') ask(it, d.at)
     else ask(it, null, d.suggest)
   }
@@ -280,16 +283,16 @@ export function CalendarViews({ items, lateMore, nowIso, canMove, told, locale, 
         </section>
       )}
 
-      {adding && <AddEventDialog zone={zone} startValue={`${anchor}T11:00`} onClose={() => setAdding(false)} onDone={m => { setAdding(false); setToast(m); router.refresh() }} />}
-      {movingG && <MoveEventDialog block={movingG} zone={zone} onClose={() => setMovingG(null)} onDone={m => { setMovingG(null); setToast(m); router.refresh() }} />}
+      {adding && <AddEventDialog zone={zone} startValue={`${anchor}T11:00`} onClose={() => setAdding(false)} onDone={m => { setAdding(false); say(m); router.refresh() }} />}
+      {movingG && <MoveEventDialog block={movingG} zone={zone} onClose={() => setMovingG(null)} onDone={m => { setMovingG(null); say(m); router.refresh() }} />}
       {pending && <MoveDialog pending={pending} nowIso={nowIso} told={told} zone={zone} whenText={whenText} onClose={() => setPending(null)}
-        onDone={(item, at, message) => { setMoved(m => ({ ...m, [keyOf(item)]: at })); setPending(null); setToast(message); router.refresh() }} />}
+        onDone={(item, at, message, warn) => { setMoved(m => ({ ...m, [keyOf(item)]: at })); setPending(null); say(message, warn === true); router.refresh() }} />}
       {toast && <p role="status" className="fixed bottom-16 left-1/2 z-[400] -translate-x-1/2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm text-white shadow-lg" data-testid="cal-toast">{toast}</p>}
     </div>
   )
 }
 
-function MoveDialog({ pending, nowIso, told, zone, whenText, onClose, onDone }: { pending: Pending; nowIso: string; told: boolean; zone: string; whenText: (iso: string) => string; onClose: () => void; onDone: (item: CalendarItem, at: string, message: string) => void }) {
+function MoveDialog({ pending, nowIso, told, zone, whenText, onClose, onDone }: { pending: Pending; nowIso: string; told: boolean; zone: string; whenText: (iso: string) => string; onClose: () => void; onDone: (item: CalendarItem, at: string, message: string, warn?: boolean) => void }) {
   const t = useT()
   const { item } = pending
   const [local, setLocal] = useState(romeLocalValue(pending.suggest, zone))
@@ -319,7 +322,10 @@ function MoveDialog({ pending, nowIso, told, zone, whenText, onClose, onDone }: 
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || t('Could not move the call. Please try again.'))
       // only say people were told when a notification really went out
-      onDone(item, at, told && Number(d.notified) > 0 ? t('Moved. The seller and the setter were told.') : t('Moved.'))
+      const base = told && Number(d.notified) > 0 ? t('Moved. The seller and the setter were told.') : t('Moved.')
+      // the call is moved in Marketing either way; if the seller's Google calendar did not follow, Calendly could still sell the old or the new hour: say so
+      if (d.calendar?.state === 'failed') onDone(item, at, `${base} ${t("The seller's calendar was not updated. Tell Antonio.")}`, true)
+      else onDone(item, at, base)
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : t('Could not move the call. Please try again.'))
       setBusy(false)

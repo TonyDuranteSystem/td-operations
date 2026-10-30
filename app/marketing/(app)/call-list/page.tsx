@@ -11,6 +11,7 @@ import { withoutPhone } from '@/lib/marketing/lead-privacy'
 import { LeadLink } from '@/components/marketing/lead-link'
 import { getLang } from '@/lib/marketing/lang'
 import { localeFor, makeT } from '@/lib/marketing/i18n'
+import { loadViewerZone } from '@/lib/marketing/time-prefs-server'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,7 +24,8 @@ export default async function MarketingCallList() {
   if (g.ok === false) redirect('/marketing')
   const lang = getLang()
   const t = makeT(lang)
-  const fw = (iso: string | null | undefined) => formatWhen(iso, 'Europe/Rome', localeFor(lang))
+  const zone = await loadViewerZone(g.ctx)
+  const fw = (iso: string | null | undefined) => formatWhen(iso, zone, localeFor(lang))
   const age = (ms: number) => ageText(ms, lang === 'it' ? 'g' : 'd')
   if (!hasPermission(g.ctx.permissions, 'leads.read') || !hasPermission(g.ctx.permissions, 'leads.worklist')) {
     return <main className="mx-auto max-w-xl px-4 py-10"><p className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm">{t('You do not have access to the leads. Ask your team owner.')}</p></main>

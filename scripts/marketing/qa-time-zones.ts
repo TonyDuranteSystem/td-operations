@@ -435,6 +435,30 @@ async function main() {
   ck("E3 in Italian: the clocks and the zone row are translated", /il cliente/i.test(t) && /Fuso orario:/.test(t) && /dal numero di telefono/.test(t), t.slice(0, 300))
   await p.close()
 
+  // ═════ F. the bug hunt of 30 Oct 2026: a setter that somebody marked as "takes calls" must still get nothing of the owner's or the seller's time
+  await put("member_call_hours", { [ids.sellerA]: {}, [ids.setterA]: {} }); await put("calendar_busy_enabled", true)
+  world.lists[SELLER][1].accessRole = "freeBusyReader"
+  const adminBeforeF = asAdmin()
+  const sf = await open(setter, "/marketing/calendar")
+  t = await text(sf); html = await sf.content()
+  ck("F1 the setter marked as 'takes calls': her Calendar still shows no Google item, no share warning, nothing of the owner", (await sf.locator("[data-testid=cal-google]").count()) === 0 && (await sf.getByTestId("cal-share-warning").count()) === 0 && !/New York|Antonio|America\/New_York/.test(t + html), t.slice(0, 200))
+  await sf.close()
+  p = await open(setter, `/marketing/window/${Marco}`)
+  t = await text(p); html = await p.content()
+  ck("F2 …and her lead page has no banner, no owner clock, nothing of the owner", (await p.getByTestId("seller-banner").count()) === 0 && (await p.locator("[data-clock=owner]").count()) === 0 && !/New York|Antonio|America\/New_York/.test(t + html))
+  ck("F3 …and no Google request was made about the owner, nor acting as the setter", asAdmin() === adminBeforeF && !world.log.some(l => l.endsWith(`as ${em("setterA")}`)), world.log.slice(-6))
+  await p.close()
+  const tf = await open(admin, "/marketing/team")
+  ck("F4 the Team page does not offer the setter 'Takes calls'", (await tf.getByTestId("setter-no-calls").count()) === 1 && (await tf.getByTestId("takes-calls").count()) === 1, await tf.getByTestId("takes-calls").count())
+  await tf.close()
+  // the list screens read times in the viewer's zone and still open
+  for (const [who, path, label] of [[seller, "/marketing/leads", "seller Leads"], [seller, "/marketing/board", "seller Board"], [seller, "/marketing/today", "seller Today"], [setter, "/marketing/call-list", "setter Call list"], [setter, "/marketing/board", "setter Board"]] as const) {
+    const pg = await open(who, path); const tx = await text(pg)
+    ck(`F5 ${label} opens (times read in the viewer's zone)`, tx.length > 40 && !/Application error|Something went wrong|This page could not/i.test(tx), tx.slice(0, 160))
+    await pg.close()
+  }
+  await put("member_call_hours", { [ids.sellerA]: {} })
+
   await browser.close(); fake.close(); await db.end()
   console.log(`\n${pass} passed, ${fail} failed`)
   process.exit(fail ? 1 : 0)

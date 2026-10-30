@@ -13,7 +13,8 @@ export function rescheduleRecipients(members: readonly NotifyMember[], moverId: 
 }
 
 /** The notification text: who moved which lead, from when to when, and why. */
-export function reschedulePush(i: { moverName: string; leadName: string; from: string | null; to: string; reason: string }, locale = "en-GB"): { title: string; body: string } {
-  const when = (iso: string) => formatWhen(iso, "Europe/Rome", locale)
+export function reschedulePush(i: { moverName: string; leadName: string; from: string | null; to: string; reason: string }, locale = "en-GB", zone = "Europe/Rome"): { title: string; body: string } {
+  // the hours are read in the zone of the person who gets the notification (Rocco's phone says his own hour, not Rome's)
+  const when = (iso: string) => formatWhen(iso, zone, locale)
   return { title: `${i.moverName} moved a call · ${i.leadName}`, body: `${i.from ? `${when(i.from)} → ` : ""}${when(i.to)}. ${i.reason}` }
 }

@@ -8,8 +8,9 @@ import { grantablePermissions } from '@/lib/marketing/permission-labels'
 import { TeamManager } from '@/components/marketing/team-manager'
 import { TeamTimes } from '@/components/marketing/team-times'
 import { loadPrefsAndTakers } from '@/lib/marketing/time-prefs-server'
-import { checkShare, googleApi, isWorkMailbox } from '@/lib/marketing/gcal'
+import { checkShare, googleApi, isWorkMailbox, withDeadline } from '@/lib/marketing/gcal'
 import { personName } from '@/lib/marketing/setter-note'
+import { isSetterOnly } from '@/lib/marketing/lead-chat'
 import { TourPreviewBox } from '@/components/marketing/tour'
 import { getLang } from '@/lib/marketing/lang'
 import { makeT } from '@/lib/marketing/i18n'
@@ -35,7 +36,7 @@ export default async function MarketingTeam() {
   ])
   // time zones and calendars (Addendum K): Antonio's section. The share of each personal calendar is asked of Google every time the page opens (the "Check again" button reloads it).
   const times = g.ctx.admin === true ? await loadPrefsAndTakers(teamId) : null
-  const share = times ? (await Promise.all(times.takers.map(async tk => (await checkShare(googleApi, tk.email, times.prefs.personalCalendars[tk.userId] ?? [])).map(r => ({ userId: tk.userId, id: r.id, state: r.state }))))).flat() : []
+  const share = times ? (await Promise.all(times.takers.map(async tk => (await withDeadline(checkShare(googleApi, tk.email, times.prefs.personalCalendars[tk.userId] ?? []), 9000, (times.prefs.personalCalendars[tk.userId] ?? []).map(id => ({ id, state: 'error' as const, access: null })))).map(r => ({ userId: tk.userId, id: r.id, state: r.state }))))).flat() : []
   const roles = Object.entries(bundles).map(([key, perms]) => ({ key, permissions: cleanPermissions(perms) }))
   const grantable: string[] = grantablePermissions(g.ctx.role === 'owner', g.ctx.permissions)
   return (
@@ -58,7 +59,7 @@ export default async function MarketingTeam() {
         <div className="mt-6">
           <TeamTimes
             teamId={teamId} adminEmail={g.ctx.user.email ?? null} adminLabel={personName(g.ctx.user.email ?? '')} prefs={times.prefs} share={share}
-            members={members.filter(m => m.status !== 'removed').map(m => ({ userId: m.user_id, email: m.email, role: m.member_role, status: m.status, isAdmin: m.is_admin === true, workMailbox: isWorkMailbox(m.email) }))}
+            members={members.filter(m => m.status !== 'removed').map(m => ({ userId: m.user_id, email: m.email, role: m.member_role, status: m.status, isAdmin: m.is_admin === true, setterOnly: isSetterOnly(effectivePermissions({ memberRole: m.member_role, bundle: m.bundle, bundles, extra: m.permissions }) as string[]), workMailbox: isWorkMailbox(m.email) }))}
           />
         </div>
       )}

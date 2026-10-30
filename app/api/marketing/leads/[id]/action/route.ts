@@ -9,6 +9,8 @@ import { sendMarketingPush } from "@/lib/marketing/push"
 import { rescheduleRecipients, reschedulePush } from "@/lib/marketing/calendar-notify"
 import { personName } from "@/lib/marketing/setter-note"
 import { syncAfterAppointment } from "@/lib/marketing/call-sync-server"
+import { loadPrefsAndRows } from "@/lib/marketing/time-prefs-server"
+import { memberZone } from "@/lib/marketing/time-prefs"
 
 const NO_STORE = { "Cache-Control": "no-store" }
 
@@ -45,11 +47,18 @@ async function notifyMoved(teamId: string, moverId: string, moverEmail: string |
     const to = rescheduleRecipients(members.map(m => ({ user_id: m.id, status: m.status, permissions: m.permissions })), moverId)
     if (to.length === 0) return 0
     // a lead with no name is shown by its email, never its phone number (a notification can sit on a lock screen)
-    const text = reschedulePush({ moverName: personName(moverEmail ?? ""), leadName: lead?.full_name || lead?.email || "Lead", from: a.from ?? null, to: new Date(a.at).toISOString(), reason: a.reason })
+    // each person is told the hour on HER own clock: one notification per zone among the recipients (a bare Rome hour on a Canary phone would make Rocco an hour late)
+    const { prefs } = await loadPrefsAndRows(teamId)
+    const byZone = new Map<string, string[]>()
+    for (const id of to) { const z = memberZone(prefs, id); byZone.set(z, [...(byZone.get(z) ?? []), id]) }
+    const sends = Array.from(byZone, ([zone, ids]) => {
+      const text = reschedulePush({ moverName: personName(moverEmail ?? ""), leadName: lead?.full_name || lead?.email || "Lead", from: a.from ?? null, to: new Date(a.at).toISOString(), reason: a.reason }, "en-GB", zone)
+      return sendMarketingPush(teamId, ids, { ...text, url: `/marketing/board?open=${leadId}`, tag: `moved-${leadId}` })
+    })
     const r = await Promise.race([
-      sendMarketingPush(teamId, to, { ...text, url: `/marketing/board?open=${leadId}`, tag: `moved-${leadId}` }),
+      Promise.all(sends),
       new Promise<null>(resolve => setTimeout(() => resolve(null), 4000)),
     ])
-    return r?.sent ?? 0
+    return r ? r.reduce((n, x) => n + (x?.sent ?? 0), 0) : 0
   } catch { return 0 /* the call is already moved */ }
 }

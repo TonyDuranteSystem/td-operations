@@ -38,11 +38,16 @@ export async function loadSlotOffer(i: { api?: GcalApi; db: Db; teamId: string; 
     const fb = await api.freeBusy(i.seller.email, ids, new Date(nowMs).toISOString(), new Date(toMs).toISOString())
     if (ids.some(id => !fb[id] || fb[id].error)) return { state: "hidden", sellerLabel: i.seller.label, reason: "error" }
     const busy: Interval[] = ids.flatMap(id => fb[id].busy.map(b => ({ start: b.start, end: b.end })))
-    // the calls already booked in Marketing hold their hour too (the lead's own call, when it is being moved, does not hold it against itself)
+    // the calls already booked in Marketing hold their hour too. The lead's own call, when it is being moved, does not hold it against itself: not here, and not as the event Marketing wrote in the seller's
+    // calendar for it (that event shows up in Google's busy answer as exactly the same hour, so that one interval is taken out)
     const { appointments } = await loadCalendarData(i.db, i.teamId)
     for (const a of appointments) {
       const at = Date.parse(a.at)
-      if (a.lead.id !== i.excludeLeadId && !Number.isNaN(at) && at >= nowMs - 3_600_000) busy.push({ start: at, end: at + hours.slot * 60_000 })
+      if (Number.isNaN(at)) continue
+      if (a.lead.id === i.excludeLeadId) {
+        const k = busy.findIndex(b => b.start === at && b.end === at + hours.slot * 60_000)
+        if (k >= 0) busy.splice(k, 1)
+      } else if (at >= nowMs - 3_600_000) busy.push({ start: at, end: at + hours.slot * 60_000 })
     }
     return buildSlotOffer({ prefs: i.prefs, seller: i.seller, nowMs, busy })
   } catch { return { state: "hidden", sellerLabel: i.seller.label, reason: "error" } }

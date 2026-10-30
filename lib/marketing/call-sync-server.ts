@@ -25,16 +25,24 @@ export async function syncAfterAppointment(i: { db: Db; teamId: string; leadId: 
     const out = await syncCall({
       api: i.api ?? googleApi, enabled: true, seller: seller ? { email: seller.email, label: seller.label } : null,
       action: i.action.kind === "set" ? { kind: "set", startIso: i.action.at, minutes: hours.slot, zone: seller ? memberZone(prefs, seller.userId) : ROME } : { kind: "cancel" },
-      leadId: i.leadId, leadName: (lead as { full_name?: string | null; email?: string | null }).full_name || (lead as { email?: string | null }).email || "Lead", existing,
+      leadId: i.leadId, leadName: (lead as { full_name?: string | null }).full_name || "Lead", existing,
     })
     if (out.state === "synced") {
-      await i.db.from("marketing_lead_events").insert({ lead_id: i.leadId, kind: "calendar_synced", actor: i.actor, data: { event_id: out.event?.eventId ?? null, act_as: out.event?.actAs ?? existing?.actAs ?? null, calendar_id: out.event?.calendarId ?? existing?.calendarId ?? null, removed: out.event === null } })
+      const wrote = await i.db.from("marketing_lead_events").insert({ lead_id: i.leadId, kind: "calendar_synced", actor: i.actor, data: { event_id: out.event?.eventId ?? null, act_as: out.event?.actAs ?? existing?.actAs ?? null, calendar_id: out.event?.calendarId ?? existing?.calendarId ?? null, removed: out.event === null } })
+      // a NEW event whose id could not be written down would never be found again (the next move would make a second one): take it back off the calendar and say so
+      if (wrote?.error && out.event && out.event.eventId !== existing?.eventId) {
+        try { await (i.api ?? googleApi).removeEvent(out.event.actAs, out.event.calendarId, out.event.eventId) } catch { /* said below */ }
+        return { state: "failed", message: "The call was saved, but its calendar entry could not be recorded, so it was not kept on the seller's calendar." }
+      }
       return { state: "synced" }
     }
     if (out.state === "failed") {
       await i.db.from("marketing_lead_events").insert({ lead_id: i.leadId, kind: "calendar_sync_failed", actor: i.actor, data: { message: out.message } })
       return { state: "failed", message: out.message }
     }
+    // the switch is on but there was nobody to write for: a booking that silently never reaches the seller's calendar is the thing to avoid, so say it (a cancel with nothing to remove is not a problem)
+    if (out.reason === "no_seller") return { state: "failed", message: "Nobody is set up to take calls, so nothing was written to a calendar." }
+    if (out.reason === "no_mailbox") return { state: "failed", message: "The seller's login is not a company mailbox, so nothing was written to a calendar." }
     return { state: "skipped" }
   } catch { return { state: "failed", message: "Could not update the seller's calendar." } }
 }

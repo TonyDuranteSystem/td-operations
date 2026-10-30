@@ -9,10 +9,10 @@ import type { SetterNote } from '@/lib/marketing/setter-note'
  * The "Setter's note" (TD Marketing, dev job 9aec66fa, build step 2): at the top of every lead, what the setter decided and why: the outcome, who and when, her note, the ticks
  * from the call, and the latest other notes. Plain labels, not colour alone. Long text wraps. Only people who may read the team's notes are given this block.
  */
-export function SetterNoteBlock({ note, ticks, noteDay }: { note: SetterNote; ticks: Array<{ item: string; ticked: boolean }> | null; noteDay?: string }) {
+export function SetterNoteBlock({ note, ticks, noteDay, zone = 'Europe/Rome' }: { note: SetterNote; ticks: Array<{ item: string; ticked: boolean }> | null; noteDay?: string; /** the zone the viewer reads times in (the same as the rest of the page) */ zone?: string }) {
   const t = useT()
   const loc = localeFor(useLang())
-  const fw = (iso: string | null | undefined) => formatWhen(iso, 'Europe/Rome', loc)
+  const fw = (iso: string | null | undefined) => formatWhen(iso, zone, loc)
   const o = note.outcome
   const empty = !o && note.notes.length === 0 && (!ticks || ticks.length === 0)
   // nothing written yet: no frame at all (an empty yellow box only took room and made people look for a note that was not there)

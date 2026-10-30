@@ -70,11 +70,20 @@ export const googleApi: GcalApi = {
     return out
   },
   async listEvents(actAs, calendarId, timeMinIso, timeMaxIso) {
-    const r = (await calendarRequestAs(actAs, `${CAL}/${enc(calendarId)}/events`, { params: { timeMin: timeMinIso, timeMax: timeMaxIso, singleEvents: "true", orderBy: "startTime", maxResults: "250" } })) as { items?: RawEvent[] }
-    return (r.items ?? []).map(e => eventFromGoogle(e, calendarId)).filter((e): e is GEvent => e !== null)
+    // Google hands out at most 250 events at a time: follow the pages so a busy calendar (a daily repeat alone is 56 in the window) is never cut off at the end and shown as free. More than 1,500 is not
+    // plausible for a person's calendar in this window; it is reported as an error (the screen warns) and never as a shorter list.
+    const out: GEvent[] = []
+    let pageToken: string | undefined
+    for (let page = 0; page < 6; page++) {
+      const r = (await calendarRequestAs(actAs, `${CAL}/${enc(calendarId)}/events`, { params: { timeMin: timeMinIso, timeMax: timeMaxIso, singleEvents: "true", orderBy: "startTime", maxResults: "250", ...(pageToken ? { pageToken } : {}) } })) as { items?: RawEvent[]; nextPageToken?: string }
+      for (const e of r.items ?? []) { const ev = eventFromGoogle(e, calendarId); if (ev) out.push(ev) }
+      if (!r.nextPageToken) return out
+      pageToken = r.nextPageToken
+    }
+    throw new Error("The calendar has too many events in this window to list.")
   },
   async getEvent(actAs, calendarId, eventId) {
-    try { return eventFromGoogle((await calendarRequestAs(actAs, `${CAL}/${enc(calendarId)}/events/${enc(eventId)}`)) as RawEvent, calendarId) } catch (e) { if (/Calendar API 404/.test(String((e as Error).message))) return null; throw e }
+    try { return eventFromGoogle((await calendarRequestAs(actAs, `${CAL}/${enc(calendarId)}/events/${enc(eventId)}`)) as RawEvent, calendarId) } catch (e) { if (/Calendar API (404|410)/.test(String((e as Error).message))) return null; throw e }
   },
   async createEvent(actAs, calendarId, input) {
     const body: Record<string, unknown> = { summary: input.title, start: { dateTime: input.startIso, timeZone: input.timeZone }, end: { dateTime: input.endIso, timeZone: input.timeZone } }
@@ -90,6 +99,14 @@ export const googleApi: GcalApi = {
     return ev
   },
   async removeEvent(actAs, calendarId, eventId) { await calendarRequestAs(actAs, `${CAL}/${enc(calendarId)}/events/${enc(eventId)}`, { method: "DELETE" }) },
+}
+
+/** Wait for `work` at most `ms`; if it is late or fails, answer `onLate` instead. A screen that asks Google must open anyway (reads only; never wrap a write in this: the write would carry on unseen). */
+export function withDeadline<T>(work: Promise<T>, ms: number, onLate: T): Promise<T> {
+  return new Promise<T>(resolve => {
+    const h = setTimeout(() => resolve(onLate), ms)
+    work.then(v => { clearTimeout(h); resolve(v) }, () => { clearTimeout(h); resolve(onLate) })
+  })
 }
 
 // ── the share check ─────────────────────────────────────────────────────────────────────────────

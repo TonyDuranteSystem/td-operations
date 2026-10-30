@@ -37,7 +37,7 @@ const IMPERSONATE_EMAIL = "antonio.durante@tonydurante.us"
 
 // ─── Token Management ───────────────────────────────────────
 
-async function getAccessToken(subject: string = IMPERSONATE_EMAIL): Promise<string> {
+async function getAccessToken(subject: string = IMPERSONATE_EMAIL, timeoutMs?: number): Promise<string> {
   // Return cached token if still valid (5 min buffer)
   const cachedToken = tokenCache.get(subject)
   if (cachedToken && Date.now() < cachedToken.expiresAt - 5 * 60 * 1000) {
@@ -66,6 +66,7 @@ async function getAccessToken(subject: string = IMPERSONATE_EMAIL): Promise<stri
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       assertion,
     }),
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   })
 
   if (!res.ok) {
@@ -93,13 +94,15 @@ export interface CalendarApiOptions {
   body?: Record<string, unknown>
   /** who the service account acts as; Antonio when left out (what every existing caller gets) */
   subject?: string
+  /** give up on a Google call that takes longer than this (Marketing's screens must never wait on Google); left out = no limit, as before */
+  timeoutMs?: number
 }
 
 async function calendarRequest(
   endpoint: string,
-  { method = "GET", params, body, subject }: CalendarApiOptions = {}
+  { method = "GET", params, body, subject, timeoutMs }: CalendarApiOptions = {}
 ) {
-  const token = await getAccessToken(subject)
+  const token = await getAccessToken(subject, timeoutMs)
   const url = new URL(`${CALENDAR_API}${endpoint}`)
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -118,6 +121,7 @@ async function calendarRequest(
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   })
 
   if (method === "DELETE" && res.status === 204) {
@@ -135,7 +139,9 @@ async function calendarRequest(
 }
 
 /** The same call as the helpers below, as another person of the company's Google Workspace (Marketing's calendar features; lib/marketing/gcal.ts decides who may be asked). */
-export const calendarRequestAs = (subject: string, endpoint: string, opts: Omit<CalendarApiOptions, "subject"> = {}) => calendarRequest(endpoint, { ...opts, subject })
+/** How long a Marketing screen waits for one Google call. Google stalls are rare, but a lead window or the Calendar must open anyway, and a booking must answer. */
+export const MARKETING_GOOGLE_TIMEOUT_MS = 6000
+export const calendarRequestAs = (subject: string, endpoint: string, opts: Omit<CalendarApiOptions, "subject"> = {}) => calendarRequest(endpoint, { timeoutMs: MARKETING_GOOGLE_TIMEOUT_MS, ...opts, subject })
 
 // ─── Public API ─────────────────────────────────────────────
 

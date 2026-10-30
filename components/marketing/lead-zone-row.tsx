@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useT } from '@/components/marketing/lang-provider'
-import { utcOffsetText, zoneName, zoneOptions } from '@/lib/marketing/zones'
+import { utcOffsetText, zoneName } from '@/lib/marketing/zones'
+import { useZoneOptions } from '@/components/marketing/use-zone-options'
 
 interface Props {
   leadId: string
@@ -31,6 +32,7 @@ export function LeadZoneRow({ leadId, name, zone, source, byName, callingCode, o
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const allOptions = useZoneOptions()
 
   async function save(value: string) {
     if (!value) { setEditing(false); return }
@@ -47,7 +49,7 @@ export function LeadZoneRow({ leadId, name, zone, source, byName, callingCode, o
 
   const known = zone !== null
   const first = new Set(options)
-  const rest = zoneOptions().filter(o => !first.has(o.zone))
+  const rest = allOptions.filter(o => !first.has(o.zone))
   const picker = (
     <label className="flex flex-wrap items-center gap-2">
       <span className="text-slate-500">{known ? t('Time zone:') : t('Choose:')}</span>

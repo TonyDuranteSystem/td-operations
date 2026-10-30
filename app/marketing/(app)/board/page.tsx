@@ -17,6 +17,7 @@ import type { SellerResultStages } from '@/lib/marketing/settings-schema'
 import { sellerOf } from '@/lib/marketing/lead-actions'
 import { LeadBoard } from '@/components/marketing/lead-board'
 import { unreadDetailByLead } from '@/lib/marketing/lead-chat-server'
+import { loadViewerZone } from '@/lib/marketing/time-prefs-server'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,7 +54,8 @@ export default async function MarketingBoard() {
   // a setter reads only what setters wrote under a card (never the seller's or Antonio's notes)
   const onlyBy = isSetterOnly(g.ctx.permissions) ? await setterActorsOf(g.ctx.team.id) : undefined
   const activity = leads.length > 0 ? await loadLeadActivity(db, leads.map(l => l.id), onlyBy) : null
-  const fw = (iso: string | null | undefined) => formatWhen(iso, 'Europe/Rome', localeFor(lang))
+  const zone = await loadViewerZone(g.ctx)
+  const fw = (iso: string | null | undefined) => formatWhen(iso, zone, localeFor(lang))
   const cards: BoardCard[] = leads.map(l => {
     const contact = activity?.contact.get(l.id) ?? EMPTY_CONTACT
     return {

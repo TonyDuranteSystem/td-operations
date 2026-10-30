@@ -44,7 +44,12 @@ export async function loadGoogleLayer(i: {
       } catch { warnings.push("Could not read your Google calendar right now.") }
     } else if (i.prefs.busyEnabled) {
       // the seller sees the owner's time only as Busy: the question asked is free/busy, never the events
-      try { (await i.api.freeBusy(ownerEmail, ["primary"], min, max)).primary?.busy.forEach((b, k) => raw.push(itemFromBusy(b, "owner", "o", k))) } catch { warnings.push(`Could not read ${owner.label}'s calendar right now.`) }
+      try {
+        const fb = (await i.api.freeBusy(ownerEmail, ["primary"], min, max)).primary
+        // an answer with an error is not "free": warn, never show him as free
+        if (!fb || fb.error) warnings.push(`Could not read ${owner.label}'s calendar right now.`)
+        else fb.busy.forEach((b, k) => raw.push(itemFromBusy(b, "owner", "o", k)))
+      } catch { warnings.push(`Could not read ${owner.label}'s calendar right now.`) }
     }
   }
 

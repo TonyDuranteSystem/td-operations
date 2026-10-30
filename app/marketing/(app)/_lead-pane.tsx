@@ -25,7 +25,8 @@ import { leadZoneOf } from '@/lib/marketing/lead-zone'
 import { ClockRow, SellerBanner } from '@/components/marketing/lead-clocks'
 import { LeadZoneRow } from '@/components/marketing/lead-zone-row'
 import { zoneName } from '@/lib/marketing/zones'
-import { loadSlotOffer } from '@/lib/marketing/slots-server'
+import { loadSlotOffer, type SlotOffer } from '@/lib/marketing/slots-server'
+import { withDeadline } from '@/lib/marketing/gcal'
 import { leadDb } from '@/lib/marketing/meta-leads/service'
 
 interface Props {
@@ -97,7 +98,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
   const clocks = leadClocks({ leadName: firstName, clientZone: leadZone.zone, seller, owner: time.prefs.ownerClock, youZone: time.zone, hideOwner: time.hideOwner })
   const banner = bannerClocks({ isTaker: time.isTaker, hideOwner: time.hideOwner, youZone: time.zone, owner: time.prefs.ownerClock })
   // with the calendar switch on, a call is booked from the seller's free slots (start times only); off, or no seller: the typed time as before
-  const offer = canAct && sellerTaker && lead.team_id ? await loadSlotOffer({ db: leadDb(), teamId: lead.team_id, prefs: time.prefs, seller: sellerTaker, excludeLeadId: lead.id }) : null
+  const offer = canAct && sellerTaker && lead.team_id ? await withDeadline(loadSlotOffer({ db: leadDb(), teamId: lead.team_id, prefs: time.prefs, seller: sellerTaker, excludeLeadId: lead.id }), 9000, { state: 'hidden', sellerLabel: sellerTaker.label, reason: 'error' } as SlotOffer) : null
   return (
     <div className="space-y-4">
       {banner.length > 0 && <SellerBanner clocks={banner} nowIso={nowIso} />}
@@ -126,7 +127,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
         {contact.appointmentAt && <ClockRow clocks={clocks} title={t('The booked call: {when}', { when: fw(contact.appointmentAt) })} nowIso={nowIso} fixedIso={contact.appointmentAt} />}
       </div>
 
-      {setterNote && <SetterNoteBlock note={setterNote} ticks={lead.qualification} />}
+      {setterNote && <SetterNoteBlock note={setterNote} ticks={lead.qualification} zone={time.zone} />}
 
       {role === 'setter' && <ContactPanel leadId={lead.id} canAct={canAct} contact={contact} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} setterName={signer} templates={templates} canEditTemplates={isOwner} canWhatsApp={hasPermission(permissions, 'whatsapp')} />}
 

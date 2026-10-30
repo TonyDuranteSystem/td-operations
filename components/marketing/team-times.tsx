@@ -4,10 +4,11 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useT } from '@/components/marketing/lang-provider'
 import { resolveCallHours, type TimePrefs } from '@/lib/marketing/time-prefs'
-import { zoneName, zoneOptions } from '@/lib/marketing/zones'
+import { zoneName } from '@/lib/marketing/zones'
+import { useZoneOptions } from '@/components/marketing/use-zone-options'
 import type { CalendlyLink, CallHoursInput } from '@/lib/marketing/settings-schema'
 
-export interface TimeMemberView { userId: string; email: string | null; role: 'owner' | 'member'; status: string; isAdmin: boolean; /** the login is a company mailbox, so its Google calendars can be read */ workMailbox: boolean }
+export interface TimeMemberView { userId: string; email: string | null; role: 'owner' | 'member'; status: string; isAdmin: boolean; /** a setter and nothing more: she books the seller's calls and takes none, so she gets no call hours, no calendar and no owner time */ setterOnly: boolean; /** the login is a company mailbox, so its Google calendars can be read */ workMailbox: boolean }
 export interface ShareView { userId: string; id: string; state: 'free_busy' | 'wide' | 'missing' | 'error' }
 
 const btn = 'rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50'
@@ -33,7 +34,7 @@ export function TeamTimes({ teamId, adminEmail, adminLabel, members, prefs: init
   const [done, setDone] = useState<string | null>(null)
   const [newLink, setNewLink] = useState<Record<string, { name: string; url: string }>>({})
   const [newCal, setNewCal] = useState<Record<string, string>>({})
-  const options = zoneOptions()
+  const options = useZoneOptions()
 
   async function put(key: string, value: unknown, apply: (p: TimePrefs, v: never) => TimePrefs): Promise<boolean> {
     setBusy(true); setError(null); setDone(null)
@@ -87,12 +88,12 @@ export function TeamTimes({ teamId, adminEmail, adminLabel, members, prefs: init
             <li key={m.userId} className="rounded-lg border p-3" data-testid="member-times">
               <p className="truncate font-medium">{m.email ?? t('Unknown login')} <span className="text-xs font-normal text-slate-500">{m.role === 'owner' ? t('Team owner') : ''}</span></p>
               {row(t('Time zone'), zoneSelect(zone, z => put('member_time_zones', { ...prefs.memberZones, [m.userId]: z }, (p, v) => ({ ...p, memberZones: v as TimePrefs['memberZones'] })), t('Time zone')))}
-              {row(t('Takes calls'), <label className="flex items-center gap-2"><input type="checkbox" checked={takes} disabled={busy} data-testid="takes-calls" onChange={e => {
+              {m.setterOnly ? row(t('Takes calls'), <span className="text-xs text-slate-500" data-testid="setter-no-calls">{t('No: the setter books the seller\'s calls and takes none herself.')}</span>) : row(t('Takes calls'), <label className="flex items-center gap-2"><input type="checkbox" checked={takes} disabled={busy} data-testid="takes-calls" onChange={e => {
                 const next = { ...prefs.callHours }
                 if (e.target.checked) next[m.userId] = {}; else delete next[m.userId]
                 void put('member_call_hours', next, (p, v) => ({ ...p, callHours: v as TimePrefs['callHours'] }))
               }} /><span>{takes ? t('Yes: the setter books this person\'s calls') : t('No')}</span></label>)}
-              {takes && <>
+              {takes && !m.setterOnly && <>
                 {row(t('Working hours'), <>
                   <select className={sel} value={h.start} disabled={busy} aria-label={t('Starts')} onChange={e => void setHours(m.userId, { start: Number(e.target.value) })}>{Array.from({ length: 24 }, (_, i) => i).map(v => <option key={v} value={v}>{String(v).padStart(2, '0')}:00</option>)}</select>
                   <span className="text-slate-500">{t('to')}</span>

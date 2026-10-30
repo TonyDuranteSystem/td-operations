@@ -9,9 +9,9 @@ import { loadCalendarData } from '@/lib/marketing/calendar-read'
 import { calendarItems } from '@/lib/marketing/calendar'
 import { loadTimeView } from '@/lib/marketing/time-prefs-server'
 import { utcOffsetText, zoneName } from '@/lib/marketing/zones'
-import { googleApi } from '@/lib/marketing/gcal'
+import { googleApi, withDeadline } from '@/lib/marketing/gcal'
 import { loadGoogleLayer } from '@/lib/marketing/calendar-google'
-import { toBlocks, type Viewer } from '@/lib/marketing/calendar-visibility'
+import { toBlocks, viewerOf, type Viewer } from '@/lib/marketing/calendar-visibility'
 import { CalendarViews } from '@/components/marketing/calendar-views'
 import { personName } from '@/lib/marketing/setter-note'
 import { getLang } from '@/lib/marketing/lang'
@@ -48,9 +48,9 @@ export default async function MarketingCalendar({ searchParams }: { searchParams
   // a setter is never told a call she booked ended in a payment: it is simply a call that is done
   // what Google holds that this viewer may see: the owner his own calendar; the seller his work calendar, his personal Busy time and the owner's time as Busy; the setter nothing. Every item goes through the
   // visibility rule on the server before it reaches the page; a failure is a plain warning and never breaks the calendar.
-  const viewer: Viewer = time.ownerLogin ? 'owner' : time.isTaker ? 'seller' : 'setter'
+  const viewer: Viewer = viewerOf(time)
   const day = 86_400_000
-  const layer = await loadGoogleLayer({ api: googleApi, viewer, viewerUserId: time.memberId, viewerEmail: g.ctx.user.email, prefs: time.prefs, takers: time.takers, fromMs: now.getTime() - 14 * day, toMs: now.getTime() + 42 * day })
+  const layer = await withDeadline(loadGoogleLayer({ api: googleApi, viewer, viewerUserId: time.memberId, viewerEmail: g.ctx.user.email, prefs: time.prefs, takers: time.takers, fromMs: now.getTime() - 14 * day, toMs: now.getTime() + 42 * day }), 12_000, { items: [], warnings: ['Google did not answer in time, so its events are not shown. Reload to try again.'], share: [], shareOk: true, ownerCalendar: false })
   const items = isSetterOnly(perms) ? allItems.map(i => (i.stage === 'paid' ? { ...i, stage: 'done' as const } : i)) : allItems
   const href = (w: string) => (w ? `/marketing/calendar?who=${encodeURIComponent(w)}` : '/marketing/calendar')
   const chip = (on: boolean) => `rounded-full border px-3 py-1 text-xs ${on ? 'border-slate-900 bg-slate-900 text-white' : 'bg-white text-slate-600'}`

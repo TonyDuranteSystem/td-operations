@@ -6,6 +6,14 @@
 export type SourceKind = "seller_personal" | "seller_td" | "owner"
 export interface GoogleItem { id: string; kind: SourceKind; start: number; end: number; title: string; guests: readonly string[] }
 export type Viewer = "owner" | "seller" | "setter"
+
+/**
+ * Which calendar view a person gets. The owner on his own login is the owner; anyone who is a setter and nothing more is a setter even if somebody ticked "takes calls" for her (she never gets the
+ * owner's or the seller's time, Antonio 30 Oct 2026); a member who takes calls is the seller; anyone else (analyst, content...) is shown nothing of Google.
+ */
+export function viewerOf(v: { ownerLogin: boolean; hideOwner: boolean; isTaker: boolean }): Viewer {
+  return v.ownerLogin ? "owner" : v.hideOwner ? "setter" : v.isTaker ? "seller" : "setter"
+}
 export type Tone = "td" | "mine" | "busy"
 export interface Shown { id: string; kind: SourceKind; start: number; end: number; tone: Tone; title: string; /** whose time a Busy block is, "" when it is the viewer's own */ sub: string; movable: boolean; guests: string[] }
 
