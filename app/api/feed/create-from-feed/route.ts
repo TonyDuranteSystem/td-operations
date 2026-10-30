@@ -36,8 +36,9 @@ import {
   isValidServiceType,
 } from "@/lib/operations/service-delivery"
 import { createClient } from "@/lib/supabase/server"
-import { findOrCreatePayerContact, removeJustCreatedPayerContact } from "@/lib/operations/feed-payer-contact"
+import { findOrCreatePayerContact, removeJustCreatedPayerContact, payerContactIdForFeed } from "@/lib/operations/feed-payer-contact"
 import { writeFeedStoryToInvoices, describeStoryResult } from "@/lib/operations/feed-story-note"
+import { stripeRefundGate } from "@/lib/finance/refund-gate"
 
 export const dynamic = "force-dynamic"
 
@@ -167,11 +168,16 @@ export async function POST(req: NextRequest) {
 
     const { data: feedRow } = await supabaseAdmin
       .from("td_bank_feeds")
-      .select("amount, currency, transaction_date, status")
+      .select("amount, currency, transaction_date, status, source, external_id")
       .eq("id", feedId)
       .maybeSingle()
-    const feed = feedRow as { amount: number; currency: string; transaction_date: string; status: string } | null
+    const feed = feedRow as { amount: number; currency: string; transaction_date: string; status: string; source: string | null; external_id: string | null } | null
     if (!feed) return NextResponse.json({ error: "Transaction not found" }, { status: 404 })
+
+    // A refunded or disputed card payment is not our money any more. Asked BEFORE anything is recorded: the
+    // link to the feed refuses a refunded charge too, but only after the invoice and credit already exist.
+    const paidCallRefundGate = await stripeRefundGate(feed)
+    if (paidCallRefundGate.error) return NextResponse.json({ error: paidCallRefundGate.error }, { status: 409 })
 
     // Resolve the target's email/name/is_test regardless of whether it's an
     // existing contact or a lead who hasn't become one yet — recordPaidCall
@@ -298,7 +304,7 @@ export async function POST(req: NextRequest) {
   const { data: feed, error: feedErr } = await supabaseAdmin
     .from("td_bank_feeds")
     .select(
-      "id, source, transaction_date, amount, currency, sender_name, status, matched_payment_id, owner_account_number",
+      "id, source, external_id, transaction_date, amount, currency, sender_name, status, matched_payment_id, owner_account_number",
     )
     .eq("id", feedId)
     .single()
@@ -367,26 +373,55 @@ export async function POST(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: existingPayment } = await (supabaseAdmin as any)
     .from("payments")
-    .select("id")
+    .select("id, account_id, contact_id, invoice_number")
     .eq("idempotency_key", idempotencyKey)
     .maybeSingle()
   if (existingPayment?.id) {
+    // The invoice is keyed on the PAYMENT, not on who it was for. A retry that names a DIFFERENT person or
+    // company would otherwise link the payment to the first attempt's invoice and report success for the
+    // new pick: money stays on the wrong party under a green message. Refuse and say where it went.
+    const wantedContactId = newContact ? payerContactIdForFeed(feedId) : contactId
+    const sameTarget = accountId
+      ? existingPayment.account_id === accountId
+      : !!wantedContactId && existingPayment.contact_id === wantedContactId
+    if (!sameTarget) {
+      return NextResponse.json(
+        {
+          error:
+            `This payment already has an invoice${existingPayment.invoice_number ? ` (${existingPayment.invoice_number})` : ""} made for someone else. ` +
+            "Picking a different person or company here will not move it. If that was the wrong pick, correct it on that invoice.",
+        },
+        { status: 409 },
+      )
+    }
     // The invoice already exists for this payment. If the earlier attempt made it but the link to the feed
     // failed, a retry must finish that link — not report success over a payment that is still unmatched.
-    const { data: inv } = await supabaseAdmin.from("payments").select("invoice_number").eq("id", existingPayment.id).maybeSingle()
-    const invoiceNumber = (inv as { invoice_number: string | null } | null)?.invoice_number ?? null
+    const invoiceNumber: string | null = existingPayment.invoice_number ?? null
     let warning: string | undefined
-    if (feed.status !== "matched" || feed.matched_payment_id !== existingPayment.id) {
+    let linked = feed.status === "matched" && feed.matched_payment_id === existingPayment.id
+    if (!linked) {
       const retry = await manualMatch(feedId, existingPayment.id)
-      if (!retry.matched) warning = `Invoice already created, but the feed link failed: ${retry.error}`
+      if (retry.matched) linked = true
+      else warning = `Invoice already created, but the feed link failed: ${retry.error}`
     }
+    // The first attempt stopped before the story step, so the retry that finishes the link writes it.
+    const retryStory = linked && body.save_story !== false
+      ? describeStoryResult(await writeFeedStoryToInvoices(feedId, [existingPayment.id], [existingPayment.id]))
+      : null
     return NextResponse.json({
       payment_id: existingPayment.id,
       invoice_number: invoiceNumber,
       idempotent: true,
       ...(warning ? { warning } : {}),
+      ...(retryStory ? { story: retryStory } : {}),
     })
   }
+
+  // A refunded or disputed card payment is not our money any more, and the link to the feed refuses it — but
+  // only AFTER the person, the service delivery and a PAID invoice exist. Ask Stripe before creating anything.
+  // (After the idempotency guard: an invoice that already exists is finished by the retry above.)
+  const refundGate = await stripeRefundGate(feed)
+  if (refundGate.error) return NextResponse.json({ error: refundGate.error }, { status: 409 })
 
   // ── New person (the payer is not in the CRM) ───────────────────────
   // After the idempotency guard, so a repeat never makes a second person; before the service delivery,

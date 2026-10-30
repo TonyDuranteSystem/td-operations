@@ -50,6 +50,8 @@ export function PaymentInvestigationPanel({ feedId, stored, isOwner, knownInvoic
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [unfinished, setUnfinished] = useState<string | null>(null)
+  // The server answered but could not keep the result: it is on this screen only, so it must not look saved.
+  const [notSaved, setNotSaved] = useState(false)
 
   const current = result ?? stored
   // Only the owner can run it, and only the owner needs to see an empty panel.
@@ -59,6 +61,7 @@ export function PaymentInvestigationPanel({ feedId, stored, isOwner, knownInvoic
     setRunning(true)
     setError(null)
     setUnfinished(null)
+    setNotSaved(false)
     try {
       const res = await fetch('/api/finance/investigate-payment', {
         method: 'POST',
@@ -71,7 +74,8 @@ export function PaymentInvestigationPanel({ feedId, stored, isOwner, knownInvoic
         setUnfinished(typeof d.text === 'string' ? d.text : 'The investigation did not reach a conclusion. Nothing was saved.')
       } else if (d.investigation) {
         setResult(d.investigation as StoredInvestigation)
-        router.refresh()
+        if (d.saved === false) setNotSaved(true)
+        else router.refresh()
       }
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'The investigation could not be run. Try again in a moment.')
@@ -82,7 +86,7 @@ export function PaymentInvestigationPanel({ feedId, stored, isOwner, knownInvoic
 
   const verdict = current ? (VERDICT_STYLE[current.verdict] ?? VERDICT_STYLE.unclear) : null
   const suggested = (current?.suggested_invoice_ids ?? []).map((id) => knownInvoices.find((i) => i.id === id)).filter((i): i is { id: string; invoice_number: string | null } => !!i)
-  const writable = current && (current.verdict === 'identified' || current.verdict === 'likely')
+  const writable = current && !notSaved && (current.verdict === 'identified' || current.verdict === 'likely')
 
   return (
     <div className="rounded-md border border-violet-200 bg-violet-50/40 p-2.5 space-y-2" data-testid="payment-investigation">
@@ -114,6 +118,11 @@ export function PaymentInvestigationPanel({ feedId, stored, isOwner, knownInvoic
       )}
       {error && <p className="text-xs text-red-600">{error}</p>}
       {unfinished && <p className="text-xs text-amber-700 whitespace-pre-wrap">{unfinished}</p>}
+      {notSaved && (
+        <p className="text-xs text-amber-700" data-testid="investigation-not-saved">
+          This result could not be saved. It is shown here only: it will be gone when you close this window and it will NOT be written on an invoice. Press &quot;Run again&quot; to try once more.
+        </p>
+      )}
 
       {current && (
         <div className="space-y-2">
@@ -145,7 +154,16 @@ export function PaymentInvestigationPanel({ feedId, stored, isOwner, knownInvoic
           )}
 
           <p className="text-[10px] text-zinc-500">
-            Mailboxes searched: {current.mailboxes_searched.length ? current.mailboxes_searched.join(', ') : 'none'}.
+            {current.mailboxes_searched.length > 0 ? (
+              <>Searched automatically: {current.mailboxes_searched.join(', ')}.</>
+            ) : current.mailboxes_failed.length === 0 ? (
+              <>
+                No automatic mailbox search was run: nothing in this payment (no usable name or email) could be searched for.{' '}
+                {(current.tools_used ?? []).includes('gmail_search') ? 'The AI searched by itself.' : 'The AI did not search a mailbox either, so the story has no email behind it.'}
+              </>
+            ) : (
+              <>No mailbox could be searched automatically.</>
+            )}
             {current.mailboxes_failed.length > 0 && <span className="text-red-600"> Could not search: {current.mailboxes_failed.join('; ')}.</span>}
             {' '}Spam and Trash included; an email that is only a picture or HTML may show just a preview.
           </p>

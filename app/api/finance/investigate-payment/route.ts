@@ -38,8 +38,10 @@ import {
   sweepMailboxes,
   type InvestigationFacts,
   type InvoiceContextRow,
+  type KnownRecord,
   type MailboxSweep,
   type StoredInvestigation,
+  type SweptEmail,
 } from "@/lib/finance/feed-investigation"
 
 export const dynamic = "force-dynamic"
@@ -48,8 +50,12 @@ export const maxDuration = 300
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** A run that started this recently and never finished blocks a second one (a double click, a second tab). */
 const IN_FLIGHT_MS = 5 * 60_000
-/** The mailbox sweep gets this long before it is given up and reported as failed. */
-const SWEEP_TIMEOUT_MS = 60_000
+/**
+ * The mailbox sweep gets this long before it is given up and reported as failed. The AI's own loop can use up to
+ * 250 s after it, so the two together must stay inside maxDuration (300 s): a function killed mid-run leaves the
+ * lock held and no answer.
+ */
+const SWEEP_TIMEOUT_MS = 30_000
 const MAX_CANDIDATE_INVOICES = 12
 
 type Embedded<T> = T | T[] | null | undefined
@@ -88,7 +94,8 @@ async function sweepWithTimeout(queries: string[], mailboxes: string[]): Promise
     failed: mailboxes.map((mailbox) => ({ mailbox, error: `the search took longer than ${SWEEP_TIMEOUT_MS / 1000}s and was given up` })),
     hits: [],
   }
-  if (queries.length === 0) return { queries, searched: [...mailboxes], failed: [], hits: [] }
+  // Nothing to search for means nothing was searched: never report a mailbox as searched when no query ran.
+  if (queries.length === 0) return { queries, searched: [], failed: [], hits: [] }
   let timer: ReturnType<typeof setTimeout> | undefined
   const limit = new Promise<MailboxSweep>((resolve) => { timer = setTimeout(() => resolve(timedOut), SWEEP_TIMEOUT_MS) })
   try {
@@ -98,11 +105,23 @@ async function sweepWithTimeout(queries: string[], mailboxes: string[]): Promise
   }
 }
 
-/** Which of these ids really exist, per table — the model's ids are never trusted as they come. */
-async function existingIds(table: "contacts" | "accounts" | "leads" | "payments", ids: string[]): Promise<Set<string>> {
-  if (ids.length === 0) return new Set()
-  const { data } = await supabaseAdmin.from(table).select("id").in("id", ids)
-  return new Set(((data ?? []) as Array<{ id: string }>).map((r) => r.id.toLowerCase()))
+const NAME_COLUMN = { contacts: "full_name", accounts: "company_name", leads: "full_name", payments: "invoice_number" } as const
+
+/**
+ * Which of these ids really exist, per table, with the name each really has — the model's ids are never
+ * trusted as they come. A database read that FAILS throws: treating it as "none exist" would strip every
+ * check from a result that is then kept for good.
+ */
+async function lookupNames(table: keyof typeof NAME_COLUMN, ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (ids.length === 0) return out
+  const column = NAME_COLUMN[table]
+  const { data, error } = await supabaseAdmin.from(table).select(`id, ${column}`).in("id", ids)
+  if (error) throw new Error(`could not check ${table}: ${error.message}`)
+  for (const row of (data ?? []) as unknown as Array<Record<string, string | null>>) {
+    out.set(String(row.id).toLowerCase(), String(row[column] ?? ""))
+  }
+  return out
 }
 
 export async function POST(req: NextRequest) {
@@ -176,8 +195,9 @@ export async function POST(req: NextRequest) {
 
     // Invoices of exactly this amount, so the model sees the "obvious" candidate and its internal note.
     let candidates: InvoiceContextRow[] = []
+    let invoicesUnavailable = false
     if (amount !== null && feed.currency) {
-      const { data: cand } = await supabaseAdmin
+      const { data: cand, error: candError } = await supabaseAdmin
         .from("payments")
         .select("id, invoice_number, description, total, invoice_status, notes, accounts:account_id(company_name), contacts:payments_contact_id_fkey(full_name)")
         .eq("amount_currency", feed.currency as "USD" | "EUR")
@@ -185,6 +205,10 @@ export async function POST(req: NextRequest) {
         .not("is_test", "is", true)
         .order("created_at", { ascending: false })
         .limit(MAX_CANDIDATE_INVOICES)
+      if (candError) {
+        console.error("[investigate-payment] could not load the invoices of this amount:", candError.message)
+        invoicesUnavailable = true
+      }
       candidates = ((cand ?? []) as unknown as CandidateRow[]).map((c) => ({
         id: c.id,
         invoice_number: c.invoice_number,
@@ -196,19 +220,12 @@ export async function POST(req: NextRequest) {
       }))
     }
 
-    const userMessage = buildInvestigatorUserMessage(facts, sweep, candidates)
+    const userMessage = buildInvestigatorUserMessage(facts, sweep, candidates, invoicesUnavailable)
     const worker = await callWorker(userMessage, buildInvestigatorWorkerOptions())
 
-    if (worker.reachedMaxLoops) {
-      await clearLock()
-      return NextResponse.json({
-        ok: true,
-        investigation: null,
-        unfinished: true,
-        text: "The investigation ran out of steps before it reached a conclusion. Nothing was saved. Try again, or search by hand.",
-      })
-    }
-
+    // Running out of steps does not mean there is no answer: the loop makes one last call that forces a written
+    // conclusion. If that conclusion carries a readable result block it is as good as any other; if it does
+    // not (the generic "working limit" notice, a cut-off reply) it falls to the "no result" branch below.
     const parsed = parseInvestigationReply(worker.reply)
     if (!parsed.parsed) {
       await clearLock()
@@ -216,7 +233,9 @@ export async function POST(req: NextRequest) {
         ok: true,
         investigation: null,
         unfinished: true,
-        text: parsed.story || "The assistant did not give a result. Nothing was saved.",
+        text: worker.reachedMaxLoops
+          ? "The investigation ran out of steps before it reached a conclusion. Nothing was saved. Try again, or search by hand."
+          : parsed.story || "The assistant did not give a result. Nothing was saved.",
       })
     }
 
@@ -228,13 +247,13 @@ export async function POST(req: NextRequest) {
     const wantPayments = parsed.suggested_invoice_ids
     const sourceRecordIds = parsed.sources.filter((s) => s.kind !== "email" && s.id).map((s) => (s.id as string).toLowerCase()).filter((id) => UUID.test(id))
     const [okContacts, okAccounts, okLeads, okPayments, okSourceContacts, okSourceAccounts, okSourcePayments] = await Promise.all([
-      existingIds("contacts", wantContacts),
-      existingIds("accounts", wantAccounts),
-      existingIds("leads", wantLeads),
-      existingIds("payments", wantPayments),
-      existingIds("contacts", sourceRecordIds),
-      existingIds("accounts", sourceRecordIds),
-      existingIds("payments", sourceRecordIds),
+      lookupNames("contacts", wantContacts),
+      lookupNames("accounts", wantAccounts),
+      lookupNames("leads", wantLeads),
+      lookupNames("payments", wantPayments),
+      lookupNames("contacts", sourceRecordIds),
+      lookupNames("accounts", sourceRecordIds),
+      lookupNames("payments", sourceRecordIds),
     ])
     const checkedWho = who
       ? {
@@ -244,18 +263,24 @@ export async function POST(req: NextRequest) {
           lead_id: who.lead_id && okLeads.has(who.lead_id) ? who.lead_id : null,
         }
       : null
-    const emailIds = new Set(sweep.hits.flatMap((h) => [h.id, h.thread_id].filter(Boolean)))
-    const recordIds = new Set<string>()
-    okSourceContacts.forEach((id) => recordIds.add(id))
-    okSourceAccounts.forEach((id) => recordIds.add(id))
-    okSourcePayments.forEach((id) => recordIds.add(id))
+    // What the SERVER saw, in its own words: a source is "verified" only against these, and shown with these.
+    const emails = new Map<string, SweptEmail>()
+    sweep.hits.forEach((h) => {
+      const mail: SweptEmail = { mailbox: h.mailbox, from: h.from, subject: h.subject, date: h.date }
+      emails.set(h.id, mail)
+      if (h.thread_id) emails.set(h.thread_id, mail)
+    })
+    const records = new Map<string, KnownRecord>()
+    okSourceContacts.forEach((name, id) => records.set(id, { kind: "crm", name }))
+    okSourceAccounts.forEach((name, id) => records.set(id, { kind: "crm", name }))
+    okSourcePayments.forEach((name, id) => records.set(id, { kind: "payment", name }))
 
     const stored: StoredInvestigation = {
       verdict: parsed.verdict,
       who: checkedWho && (checkedWho.name || checkedWho.contact_id || checkedWho.account_id || checkedWho.lead_id) ? checkedWho : null,
       summary: parsed.summary,
       story: parsed.story,
-      sources: markVerifiedSources(parsed.sources, { emailIds, recordIds }),
+      sources: markVerifiedSources(parsed.sources, { emails, records }),
       suggested_invoice_ids: parsed.suggested_invoice_ids.filter((id) => okPayments.has(id)),
       suggested_next: parsed.suggested_next,
       at: new Date().toISOString(),
@@ -265,7 +290,8 @@ export async function POST(req: NextRequest) {
       mailboxes_failed: sweep.failed.map((f) => `${f.mailbox}: ${f.error}`),
     }
 
-    const saved = await updateFeed(feed.id, { review_metadata: { investigation: stored, investigation_started_at: null } }, "investigate-payment:result")
+    let saved = await updateFeed(feed.id, { review_metadata: { investigation: stored, investigation_started_at: null } }, "investigate-payment:result")
+    if (!saved.ok) saved = await updateFeed(feed.id, { review_metadata: { investigation: stored, investigation_started_at: null } }, "investigate-payment:result-retry")
     if (!saved.ok) await clearLock()
     return NextResponse.json({ ok: true, cached: false, investigation: stored, saved: saved.ok })
   } catch (err) {

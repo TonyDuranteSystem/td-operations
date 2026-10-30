@@ -10,6 +10,7 @@ type Call = { table: string; method: string; args: unknown[] }
 let calls: Call[] = []
 let feedRow: Record<string, unknown> | null
 let invoiceRows: Array<Record<string, unknown>>
+let invoiceReadError: { message: string } | null
 /** What each read of one invoice's note returns, in order; the last value repeats. */
 let noteReads: Array<string | null>
 let updateResults: Array<{ data: Array<{ id: string }> | null; error: { message: string } | null }>
@@ -26,7 +27,7 @@ vi.mock("@/lib/supabase-admin", () => ({
           if (name === "then") {
             return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => {
               // list read: payments in (...)
-              return Promise.resolve({ data: invoiceRows, error: null }).then(res, rej)
+              return Promise.resolve({ data: invoiceReadError ? null : invoiceRows, error: invoiceReadError }).then(res, rej)
             }
           }
           if (name === "maybeSingle") {
@@ -72,6 +73,7 @@ beforeEach(() => {
   calls = []
   feedRow = { id: FEED_ID, source: "airwallex_api", transaction_date: "2026-05-29", amount: 500, currency: "EUR", sender_name: "Simone Fattor", review_metadata: { investigation: investigation() } }
   invoiceRows = [{ id: INV_A, account_id: null, contact_id: CONTACT }, { id: INV_B, account_id: "acct-other", contact_id: null }]
+  invoiceReadError = null
   noteReads = [null]
   updateResults = [{ data: [{ id: INV_A }], error: null }]
 })
@@ -99,6 +101,23 @@ describe("writeFeedStoryToInvoices", () => {
     expect(notes).toContain(storyMarker(FEED_ID))
     expect(notes).toMatch(/AI-written, UNVERIFIED/)
     expect(notes).toContain("apostille")
+  })
+
+  it("a failed read of the invoices is reported as a FAILURE, not as 'Invoice not found'", async () => {
+    invoiceReadError = { message: "connection reset" }
+    const r = await writeFeedStoryToInvoices(FEED_ID, [INV_A])
+    expect(r.written).toEqual([])
+    expect(r.skipped).toEqual([])
+    expect(r.failed[0].error).toMatch(/could not read the invoices: connection reset/)
+    expect(describeStoryResult(r)).toMatch(/could NOT be saved/)
+  })
+
+  it("a malformed invoice id is skipped on its own and does not spoil the valid one next to it", async () => {
+    const r = await writeFeedStoryToInvoices(FEED_ID, ["not-a-uuid", INV_A])
+    expect(r.skipped).toEqual([{ paymentId: "not-a-uuid", reason: "Not a valid invoice id." }])
+    expect(r.written).toEqual([INV_A])
+    const read = calls.find((c) => c.table === "payments" && c.method === "in")!
+    expect(read.args[1]).toEqual([INV_A])
   })
 
   it("writes NOTHING for an 'unclear' result, and does not even touch the invoice", async () => {

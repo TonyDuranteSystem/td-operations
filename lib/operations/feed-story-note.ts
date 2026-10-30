@@ -41,6 +41,7 @@ export interface FeedStoryResult {
 const none = (): FeedStoryResult => ({ hadStory: false, written: [], alreadyThere: [], skipped: [], failed: [] })
 
 const WRITABLE: readonly InvestigationVerdict[] = ["identified", "likely"]
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 interface FeedRow {
   id: string
@@ -117,7 +118,19 @@ export async function writeFeedStoryToInvoices(
       return result
     }
 
-    const { data: invoices } = await supabaseAdmin.from("payments").select("id, account_id, contact_id").in("id", [...paymentIds])
+    // Only ids shaped like an invoice id go to the database: a malformed one would fail the whole read and
+    // every invoice would then be reported "not found". A failed read is reported as a failure, not as that.
+    const validIds = paymentIds.filter((id) => UUID.test(id))
+    for (const id of paymentIds) {
+      if (!UUID.test(id)) result.skipped.push({ paymentId: id, reason: "Not a valid invoice id." })
+    }
+    const { data: invoices, error: invoicesError } = validIds.length
+      ? await supabaseAdmin.from("payments").select("id, account_id, contact_id").in("id", validIds)
+      : { data: [] as Array<{ id: string; account_id: string | null; contact_id: string | null }>, error: null }
+    if (invoicesError) {
+      result.failed.push({ paymentId: "", error: `could not read the invoices: ${invoicesError.message}` })
+      return result
+    }
     const byId = new Map(((invoices ?? []) as Array<{ id: string; account_id: string | null; contact_id: string | null }>).map((i) => [i.id, i]))
 
     const amount = feed.amount == null ? null : Number(feed.amount)
@@ -137,7 +150,7 @@ export async function writeFeedStoryToInvoices(
       sources: story.sources,
     })
 
-    for (const id of paymentIds) {
+    for (const id of validIds) {
       const invoice = byId.get(id)
       if (!invoice) {
         result.skipped.push({ paymentId: id, reason: "Invoice not found." })

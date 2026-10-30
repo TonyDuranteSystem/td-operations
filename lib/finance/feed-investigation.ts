@@ -80,8 +80,27 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 export function cleanText(value: unknown, max: number): string {
   if (typeof value !== "string") return ""
   // eslint-disable-next-line no-control-regex
-  const s = value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\n{3,}/g, "\n\n").trim()
-  return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s
+  const s = dropLoneSurrogates(value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")).replace(/\n{3,}/g, "\n\n").trim()
+  // A cut between the two halves of an emoji would leave a lone half, which the database refuses to store.
+  return s.length > max ? `${dropLoneSurrogates(s.slice(0, max - 1)).trimEnd()}…` : s
+}
+
+/** Remove half-characters (a high or low surrogate without its partner): JSON in Postgres rejects them. */
+function dropLoneSurrogates(text: string): string {
+  let out = ""
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = text.charCodeAt(i + 1)
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        out += text.charAt(i) + text.charAt(i + 1)
+        i++
+      }
+    } else if (c < 0xdc00 || c > 0xdfff) {
+      out += text.charAt(i)
+    }
+  }
+  return out
 }
 
 /**
@@ -128,18 +147,49 @@ export function extractVerdictJson(reply: string): { json: Record<string, unknow
   return null
 }
 
+/** What the mailbox sweep itself returned for one message — the server's own words, not the model's. */
+export interface SweptEmail {
+  mailbox: string
+  from: string
+  subject: string
+  date: string
+}
+
+/** A database record the server looked up: what kind it is and the name it really has. */
+export interface KnownRecord {
+  kind: "crm" | "payment"
+  name: string
+}
+
 /**
- * Mark which cited sources the SERVER can vouch for. `emailIds` = the message/thread ids the mailbox sweep
- * returned; `recordIds` = ids confirmed to exist in the database. Everything else stays "cited by the AI".
+ * Mark which cited sources the SERVER can vouch for — and, for those, replace what the model WROTE about them
+ * with what the server KNOWS. A green "found by the system" next to a model-written label would vouch for words
+ * nobody checked: an invented sentence pinned to a real message id would look verified. So a verified email
+ * shows the sweep's own subject, sender, date and mailbox, and a verified record shows its real name.
+ * `emails` is keyed by message id AND thread id; `records` by lower-case uuid. Everything else stays "cited by
+ * the AI", with the model's wording.
  */
 export function markVerifiedSources(
   sources: readonly InvestigationSource[],
-  proof: { emailIds: ReadonlySet<string>; recordIds: ReadonlySet<string> },
+  proof: { emails: ReadonlyMap<string, SweptEmail>; records: ReadonlyMap<string, KnownRecord> },
 ): InvestigationSource[] {
   return sources.map((s) => {
     const id = s.id ?? ""
-    const ok = !!id && (s.kind === "email" ? proof.emailIds.has(id) : proof.recordIds.has(id.toLowerCase()))
-    return { ...s, verified: ok }
+    if (!id) return { ...s, verified: false }
+    if (s.kind === "email") {
+      const mail = proof.emails.get(id)
+      if (!mail) return { ...s, verified: false }
+      return {
+        ...s,
+        verified: true,
+        label: cleanText(`${mail.subject || "(no subject)"} — from ${mail.from || "unknown"}`, 200),
+        date: mail.date || s.date,
+        mailbox: mail.mailbox,
+      }
+    }
+    const rec = proof.records.get(id.toLowerCase())
+    if (!rec) return { ...s, verified: false }
+    return { ...s, verified: true, kind: rec.kind, label: cleanText(rec.name, 200) || s.label }
   })
 }
 
@@ -254,6 +304,8 @@ export const SWEEP_MAX_HITS = 30
  */
 export async function sweepMailboxes(run: ToolRunner, mailboxes: readonly string[], queries: readonly string[]): Promise<MailboxSweep> {
   const sweep: MailboxSweep = { queries: [...queries], searched: [], failed: [], hits: [] }
+  // No query means NO search ran. Never report a mailbox as searched when nothing was asked of it.
+  if (queries.length === 0) return sweep
   const seen = new Set<string>()
 
   for (const mailbox of mailboxes) {
@@ -389,7 +441,12 @@ export interface InvoiceContextRow {
 /** Text written by a stranger (an email, a bank line, an earlier note) → one safe line for the prompt. */
 const safe = (text: string | null | undefined): string => escapeUntrusted(flattenUntrusted(String(text ?? "")))
 
-export function buildInvestigatorUserMessage(facts: InvestigationFacts, sweep: MailboxSweep, invoices: readonly InvoiceContextRow[] = []): string {
+export function buildInvestigatorUserMessage(
+  facts: InvestigationFacts,
+  sweep: MailboxSweep,
+  invoices: readonly InvoiceContextRow[] = [],
+  invoicesUnavailable = false,
+): string {
   const lines: string[] = []
   lines.push("<untrusted_data>")
   lines.push("PAYMENT TO INVESTIGATE")
@@ -402,14 +459,24 @@ export function buildInvestigatorUserMessage(facts: InvestigationFacts, sweep: M
   for (const [k, v] of Object.entries(facts.payer_fields)) lines.push(`- ${safe(k)}: ${safe(v)}`)
 
   lines.push("")
-  lines.push(`MAILBOX SWEEP (already run for you — queries: ${sweep.queries.length ? sweep.queries.map((q) => `[${q}]`).join(" ") : "none could be built from this payment"})`)
-  lines.push(`- Searched: ${sweep.searched.length ? sweep.searched.join(", ") : "NO mailbox could be searched"}`)
-  if (sweep.failed.length) lines.push(`- COULD NOT SEARCH: ${sweep.failed.map((f) => `${f.mailbox} (${f.error})`).join("; ")} — say so in your story; try it yourself.`)
-  if (sweep.hits.length === 0) lines.push("- No email matched those queries.")
+  if (sweep.queries.length === 0) {
+    lines.push("MAILBOX SWEEP: NONE WAS RUN — nothing in this payment (no usable name, no email address) could be searched for.")
+    lines.push("- Search BOTH mailboxes yourself with whatever you can find, and say in your story that the automatic search had nothing to go on.")
+  } else {
+    // The payer's name becomes a search query, and a payer chooses their own name: it is stranger-written text.
+    lines.push(`MAILBOX SWEEP (already run for you — queries: ${sweep.queries.map((q) => `[${safe(q)}]`).join(" ")})`)
+    lines.push(`- Searched: ${sweep.searched.length ? sweep.searched.join(", ") : "NO mailbox could be searched"}`)
+    if (sweep.failed.length) lines.push(`- COULD NOT SEARCH: ${sweep.failed.map((f) => `${safe(f.mailbox)} (${safe(f.error)})`).join("; ")} — say so in your story; try it yourself.`)
+    if (sweep.hits.length === 0) lines.push("- No email matched those queries.")
+  }
   for (const h of sweep.hits) {
     lines.push(`- [${safe(h.mailbox)}] ${safe(h.date)} | from ${safe(h.from)} | "${safe(h.subject)}" | ${safe(h.snippet)} | message_id=${safe(h.id)} thread_id=${safe(h.thread_id)}`)
   }
 
+  if (invoicesUnavailable && invoices.length === 0) {
+    lines.push("")
+    lines.push("INVOICES OF THIS AMOUNT: the list could not be loaded just now — look them up yourself with your tools.")
+  }
   if (invoices.length) {
     lines.push("")
     lines.push("INVOICES THAT MAY BE RELEVANT (the note, if any, may hold an earlier investigation)")
