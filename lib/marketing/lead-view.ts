@@ -1,5 +1,6 @@
 /** Small pure helpers for showing a lead (client-safe; TD Marketing, dev job 9aec66fa). */
 import { makeT, type TFn } from "@/lib/marketing/i18n"
+import { zoneName } from "@/lib/marketing/zones"
 
 export interface StageOption { key: string; label: string }
 
@@ -87,6 +88,7 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
       return data.at ? `${t("Call booked for {when}", { when: fw(typeof data.at === "string" ? data.at : null) })}${note}` : `${t("Booked call cancelled")}${note}`
     case "callback_moved": return `${t("Call back moved to {when}. Reason: {reason}", { when: fw(typeof data.callback_at === "string" ? data.callback_at : null), reason: t(String(data.reason ?? "")) })}${note}`
     case "handover": return `${t("Passed to Rocco, no call booked yet")}${note}`
+    case "zone_set": return t("Time zone set to {zone}", { zone: typeof data.zone === "string" ? zoneName(data.zone) : "—" })
     case "booking_link": return `${t("Booking link sent by {via}: {url}", { via: data.via === "email" ? t("email") : data.via === "copied" ? t("copy") : "WhatsApp", url: typeof data.url === "string" ? data.url : "" })}${note}`
     case "payment_link_created": return t("Payment link created")
     case "payment_received": return t("Payment received")

@@ -9,8 +9,31 @@
  * offers and lead export are ON for the team owner (Rocco has every option); member approvals start OFF.
  */
 import { z } from "zod"
+import { isValidZone } from "@/lib/marketing/zones"
 
 const label = z.string().trim().min(1).max(80)
+/** A real time zone name ("Atlantic/Canary"). */
+const ianaZone = z.string().refine(isValidZone, "Pick a real time zone.")
+/** The built-in working hours of a seller: Monday to Friday, 09:00 to 18:00 in his own zone, 30-minute slots, a 15-minute gap, no minimum notice, two weeks ahead. */
+export const DEFAULT_CALL_HOURS: { start: number; end: number; slot: number; gap: number; notice: number; ahead: number; days: number[] } = { start: 9, end: 18, slot: 30, gap: 15, notice: 0, ahead: 14, days: [1, 2, 3, 4, 5] }
+/** Hours a seller takes calls (see member_call_hours); every field is optional and a missing one takes the built-in value. */
+const callHours = z.object({
+  start: z.number().int().min(0).max(23).optional(),
+  end: z.number().int().min(1).max(24).optional(),
+  slot: z.number().int().min(10).max(240).optional(),
+  gap: z.number().int().min(0).max(120).optional(),
+  notice: z.number().int().min(0).max(10080).optional(),
+  ahead: z.number().int().min(1).max(60).optional(),
+  /** the weekdays he takes calls: 0 = Sunday … 6 = Saturday */
+  days: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
+}).refine(h => (h.start ?? DEFAULT_CALL_HOURS.start) < (h.end ?? DEFAULT_CALL_HOURS.end), "The working day must end after it starts.")
+const calendlyLink = z.object({
+  id: z.string().regex(/^[a-z0-9-]{1,40}$/),
+  name: z.string().trim().min(1).max(40),
+  url: z.string().trim().max(500).refine(u => /^https:\/\/[^\s/]+\.[^\s/]+\S*$/i.test(u), "Use a link that starts with https://"),
+})
+export type CalendlyLink = z.infer<typeof calendlyLink>
+export type CallHoursInput = z.infer<typeof callHours>
 const optionList = z
   .array(z.object({ key: z.string().trim().min(1).max(40).regex(/^[a-z0-9_]+$/), label }))
   .min(1)
@@ -153,6 +176,26 @@ export const MARKETING_SETTING_DEFS = {
   },
   /** Which team the leads arriving from Meta belong to. Empty text = no team chosen: the only ACTIVE team if there is exactly one, else nobody's yet (Antonio sees them and assigns). */
   lead_intake_team_id: { schema: z.union([z.string().uuid(), z.literal("")]), fallback: "" as string },
+  /**
+   * Time zones and calendars (Addendum K, 30 Oct 2026). The business owner's clock: the zone Antonio lives in and the name shown on his clock ("Antonio"). It is the clock shown to the seller
+   * and the owner next to a lead's, and NEVER to a setter. Until it is set it reads Rome, as every screen did before.
+   */
+  owner_clock: { schema: z.object({ zone: ianaZone, label: z.string().trim().min(1).max(40) }), fallback: { zone: "Europe/Rome", label: "Owner" } as { zone: string; label: string } },
+  /** Each team member's own time zone, by user id; a member without an entry reads Rome time. Set on the Team screen. */
+  member_time_zones: { schema: z.record(z.string().uuid(), ianaZone).refine(o => Object.keys(o).length <= 60, "Too many people."), fallback: {} as Record<string, string> },
+  /**
+   * The people who TAKE CALLS with leads (the seller), and their hours: an entry here is what makes a member bookable. Working hours in the member's own zone, the length of a slot, the gap kept around
+   * anything busy, the shortest notice for a booking (minutes) and how far ahead (days) a slot is offered. A field left out takes the built-in value (DEFAULT_CALL_HOURS).
+   */
+  member_call_hours: { schema: z.record(z.string().uuid(), callHours).refine(o => Object.keys(o).length <= 60, "Too many people."), fallback: {} as Record<string, CallHoursInput> },
+  /** A member's own booking links (Calendly), by user id: any number, each with a name ("Solo call", "With Antonio"). The booking box on a paid lead offers them. */
+  member_calendly_links: { schema: z.record(z.string().uuid(), z.array(calendlyLink).max(12)).refine(o => Object.keys(o).length <= 60, "Too many people."), fallback: {} as Record<string, CalendlyLink[]> },
+  /** The personal Google calendars (addresses) whose BUSY time a member's slots must avoid, by user id. They are shared with his work mailbox as "free/busy only"; the system asks Google only when he is busy. */
+  member_personal_calendars: { schema: z.record(z.string().uuid(), z.array(z.string().trim().toLowerCase().max(120).regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)).max(6)).refine(o => Object.keys(o).length <= 60, "Too many people."), fallback: {} as Record<string, string[]> },
+  /** Switch: show the seller's Busy time on the Calendar and offer the setter only the seller's free slots. OFF until the go-live check (Addendum K, K.7 B6). */
+  calendar_busy_enabled: { schema: z.boolean(), fallback: false },
+  /** Switch: a call booked, moved or cancelled in Marketing is also written into the seller's work Google calendar, so Calendly cannot offer the same hour. OFF until the go-live check. */
+  calendar_write_through_enabled: { schema: z.boolean(), fallback: false },
 } as const
 
 export type MarketingSettingKey = keyof typeof MARKETING_SETTING_DEFS
