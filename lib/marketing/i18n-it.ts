@@ -999,6 +999,7 @@ export const IT: Record<string, string> = {
   "Mark as read": "Segna come letto",
   "With the seller": "Dal venditore",
   // Time zones and calendars (Addendum K, 30 Oct 2026)
+  "Which link?": "Quale link?",
   "(switch these on only after the go-live check)": "(attivali solo dopo il controllo prima di partire)",
   "Add": "Aggiungi",
   "Add link": "Aggiungi link",

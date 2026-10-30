@@ -84,7 +84,8 @@ async function getAccessToken(subject: string = IMPERSONATE_EMAIL): Promise<stri
 
 // ─── API Helpers ────────────────────────────────────────────
 
-const CALENDAR_API = "https://www.googleapis.com/calendar/v3"
+// (the address can be overridden only by the people who run the server, so the Marketing end-to-end test can talk to a stand-in Google; unset = the real one)
+const CALENDAR_API = process.env.GOOGLE_CALENDAR_API_BASE || "https://www.googleapis.com/calendar/v3"
 
 export interface CalendarApiOptions {
   method?: string

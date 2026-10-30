@@ -148,7 +148,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
         zone={zoneInfo}
       />
 
-      {role === 'seller' && afterPay && lead.status !== sellerKeys.archived && <BookingLinkPanel leadId={lead.id} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} email={lead.email} lastLink={lastBookingLink} canAct={canAct} canWhatsApp={hasPermission(permissions, 'whatsapp')} canEmail={hasPermission(permissions, 'inbox')} />}
+      {role === 'seller' && afterPay && lead.status !== sellerKeys.archived && <BookingLinkPanel leadId={lead.id} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} email={lead.email} lastLink={lastBookingLink} canAct={canAct} canWhatsApp={hasPermission(permissions, 'whatsapp')} canEmail={hasPermission(permissions, 'inbox')} links={time.prefs.links[time.memberId] ?? []} />}
 
       {paymentLink && <PaymentLinkPanel {...paymentLink} />}
 
