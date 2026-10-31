@@ -1,8 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, Send } from 'lucide-react'
+import { Languages, Loader2, Send, Wand2, X } from 'lucide-react'
+import { toast } from 'sonner'
 import { normalizeTopic, resolveTypedTopic, topicChoices } from '@/lib/portal/document-share-text'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { requestPolish } from '@/lib/flows/polish-draft'
 
 interface FlowChatProps {
   /** Either this (the normal case, backs /api/flows/[id]/chat) or apiPath
@@ -50,6 +53,12 @@ export function FlowChat({ serviceDeliveryId, apiPath, label }: FlowChatProps) {
   const [topicInfo, setTopicInfo] = useState<{ defaultTopic: string | null; topics: string[] } | null>(null)
   const [pickedTopic, setPickedTopic] = useState<string | null>(null) // null = the job's own topic
   const [newTopic, setNewTopic] = useState('')
+  // AI Polish (Luca, td-bug 2026-10-28) — same behaviour as Portal Chats: matches the client's language unless "keep as written" is on,
+  // and asks which language when the client has not written anything it can read.
+  const [clientIds, setClientIds] = useState<{ accountId: string | null; contactId: string | null }>({ accountId: null, contactId: null })
+  const [polishing, setPolishing] = useState(false)
+  const [preserveLanguage, setPreserveLanguage] = useState(false)
+  const [polishAskLanguage, setPolishAskLanguage] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -59,6 +68,7 @@ export function FlowChat({ serviceDeliveryId, apiPath, label }: FlowChatProps) {
         throw new Error(data.error || 'Could not load messages.')
       }
       setMessages(data.messages ?? [])
+      setClientIds({ accountId: (data.account_id as string | null | undefined) ?? null, contactId: (data.contact_id as string | null | undefined) ?? null })
       if (data.default_topic !== undefined) {
         setTopicInfo({ defaultTopic: (data.default_topic as string | null) ?? null, topics: Array.isArray(data.topics) ? (data.topics as string[]) : [] })
       }
@@ -111,6 +121,27 @@ export function FlowChat({ serviceDeliveryId, apiPath, label }: FlowChatProps) {
       setError(err instanceof Error && err.message ? err.message : 'Could not send the message.')
     } finally {
       setSending(false)
+    }
+  }
+
+  async function polish(targetLanguage?: string) {
+    const text = draft
+    if (!text.trim() || polishing) return
+    setPolishing(true)
+    try {
+      const result = await requestPolish({ message: text, ...clientIds, preserveLanguage, targetLanguage })
+      if (result.kind === 'ask') {
+        setPolishAskLanguage(true)
+        return
+      }
+      setPolishAskLanguage(false)
+      // Staff kept typing while it was working — never overwrite what they wrote since.
+      setDraft((current) => (current === text ? result.text : current))
+      toast.success(result.appliedLanguage ? `Polished — translated to ${result.appliedLanguage}` : 'Polished — language kept as written')
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'AI polish failed — please try again.')
+    } finally {
+      setPolishing(false)
     }
   }
 
@@ -219,6 +250,49 @@ export function FlowChat({ serviceDeliveryId, apiPath, label }: FlowChatProps) {
             maxLength={5000}
             className="flex-1 resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
           />
+          {draft.trim() && (clientIds.accountId || clientIds.contactId) && (polishAskLanguage ? (
+            <div className="flex items-center gap-1 pb-1">
+              <span className="text-xs text-zinc-500 pr-1">Which language?</span>
+              {['English', 'Italian'].map((lang) => (
+                <button
+                  key={lang}
+                  type="button"
+                  onClick={() => polish(lang)}
+                  disabled={polishing}
+                  className="rounded-full bg-violet-100 px-2 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-200 disabled:opacity-50"
+                >
+                  {lang}
+                </button>
+              ))}
+              <button type="button" onClick={() => setPolishAskLanguage(false)} aria-label="Cancel" className="rounded-full p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1 pb-1">
+              <FastTooltip label={preserveLanguage ? 'Polish will keep the language as written — click to match the client instead' : "Polish will match the language the client is writing — click to keep it as written instead"}>
+                <button
+                  type="button"
+                  onClick={() => setPreserveLanguage((v) => !v)}
+                  aria-label={preserveLanguage ? 'Polish will keep the language as written — click to match the client instead' : "Polish will match the language the client is writing — click to keep it as written instead"}
+                  className={`rounded-full p-2 ${preserveLanguage ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600'}`}
+                >
+                  <Languages className="h-5 w-5" />
+                </button>
+              </FastTooltip>
+              <FastTooltip label={preserveLanguage ? 'AI Polish — clean up grammar, keep language as written' : "AI Polish — clean up grammar and match the client's language"}>
+                <button
+                  type="button"
+                  onClick={() => polish()}
+                  disabled={polishing}
+                  aria-label="AI Polish"
+                  className="rounded-full bg-violet-100 p-2 text-violet-600 hover:bg-violet-200 disabled:opacity-50"
+                >
+                  {polishing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Wand2 className="h-5 w-5" />}
+                </button>
+              </FastTooltip>
+            </div>
+          ))}
           <button
             type="button"
             onClick={send}

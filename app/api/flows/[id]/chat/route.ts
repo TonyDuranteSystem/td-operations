@@ -172,6 +172,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       messages: (data ?? []).map((r) => flatten(r, { serviceDeliveryId, topic })),
       default_topic: topic,
       topics,
+      // Which client conversation this is — the AI Polish button sends these to the Polish route so it can read the client's own words.
+      account_id: accountId,
+      contact_id: contactId,
     })
   } catch (e) {
     return NextResponse.json(
