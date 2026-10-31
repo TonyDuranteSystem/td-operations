@@ -242,7 +242,8 @@ async function main() {
 
   p = await open(seller, `/marketing/window/${Marco}`)
   t = await text(p)
-  ck("A11 seller: the banner has his time and Antonio's", (await p.getByTestId("seller-banner").count()) === 1 && /Your time/.test(t) && /Antonio's time/.test(t) && /New York/.test(t) && /Canary Islands/.test(t), t.slice(0, 300))
+  ck("A11 seller: the lead window no longer carries a banner of its own (the persistent one is on every screen)", (await p.getByTestId("seller-banner").count()) === 0, t.slice(0, 200))
+  ck("A11b seller: the clocks are slim (one short strip, not big cards)", ((await p.getByTestId("lead-clocks").first().boundingBox())?.height ?? 999) < 90, await p.getByTestId("lead-clocks").first().boundingBox())
   ck("A12 seller: three clocks, the third is the owner's", JSON.stringify(await p.locator("[data-clock]").evaluateAll(e => e.map(x => x.getAttribute("data-clock")))) === JSON.stringify(["client", "seller", "owner"]))
   await shot(p, "A-seller-lead")
   await p.getByTestId("handover-book").click()
@@ -385,7 +386,10 @@ async function main() {
   ck("C10 the seller has no 'Add event' (it is the owner's own calendar)", (await sc.getByTestId("cal-add-event").count()) === 0)
   await sc.close()
   const sc2 = await open(setter, "/marketing/calendar")
-  ck("C11 the setter's Calendar shows no Google item at all", (await sc2.locator("[data-testid=cal-google]").count()) === 0)
+  await sc2.getByTestId("cal-view-week").click(); await wd(sc2); await sc2.waitForTimeout(1500)
+  const sc2Items = await sc2.locator(`[data-day="${D}"] [data-testid=cal-google]`).evaluateAll(e => e.map(x => ({ tone: x.getAttribute("data-tone"), text: (x as HTMLElement).innerText.replace(/\s+/g, " ") })))
+  ck("C11 the setter's Calendar shows the SELLER's busy time only as grey Busy blocks: no title, nothing of the owner", sc2Items.length > 0 && sc2Items.every(g => g.tone === "busy" && /^Busy/.test(g.text) && !/Antonio|Weekly|Private|Bank|Focus/.test(g.text)), sc2Items)
+  ck("C11b …and the setter's Calendar is built without the owner's zone", !/New York|America\/New_York/.test(await sc2.content()))
   await sc2.close()
   // share too wide: the owner sees the warning and no personal Busy
   world.lists[SELLER][1].accessRole = "writer"
@@ -441,7 +445,8 @@ async function main() {
   const adminBeforeF = asAdmin()
   const sf = await open(setter, "/marketing/calendar")
   t = await text(sf); html = await sf.content()
-  ck("F1 the setter marked as 'takes calls': her Calendar still shows no Google item, no share warning, nothing of the owner", (await sf.locator("[data-testid=cal-google]").count()) === 0 && (await sf.getByTestId("cal-share-warning").count()) === 0 && !/New York|Antonio|America\/New_York/.test(t + html), t.slice(0, 200))
+  await sf.getByTestId("cal-view-week").click(); await wd(sf); await sf.waitForTimeout(1500)
+  ck("F1 the setter marked as 'takes calls': still only the seller's Busy blocks, no share warning, nothing of the owner", (await sf.locator(`[data-day="${D}"] [data-testid=cal-google]`).count()) > 0 && (await sf.locator("[data-testid=cal-google]:not([data-tone=busy])").count()) === 0 && (await sf.getByTestId("cal-share-warning").count()) === 0 && !/New York|Antonio|America\/New_York/.test(t + html), t.slice(0, 200))
   await sf.close()
   p = await open(setter, `/marketing/window/${Marco}`)
   t = await text(p); html = await p.content()
@@ -475,14 +480,36 @@ async function main() {
     ck(`G2 …and shows exactly what his own page shows that day (his Busy time, his TD calendar, the owner's time as Busy)`, sellerItems.length > 0 && JSON.stringify(items) === JSON.stringify(sellerItems), { sellerItems, items })
     await pv.close(); await vc.close()
   }
-  for (const [key, label] of [["bundle=setter", "setter"], ["bundle=analyst", "analyst"]] as const) {
-    const vc = await viewAsCtx(key), pv = await open(vc, "/marketing/calendar"); const tv = await text(pv)
-    ck(`G3 View as ${label} still shows no Google item and no warning`, (await pv.locator("[data-testid=cal-google]").count()) === 0 && (await pv.getByTestId("cal-share-warning").count()) === 0 && !/Canary Islands/.test(tv), tv.slice(0, 200))
-    await pv.close(); await vc.close()
+  {
+    const vc = await viewAsCtx("bundle=setter"), pv = await open(vc, "/marketing/calendar"); const tv = await text(pv)
+    await pv.getByTestId("cal-view-week").click(); await wd(pv); await pv.waitForTimeout(1500)
+    const its = await pv.locator(`[data-day="${D}"] [data-testid=cal-google]`).evaluateAll(e => e.map(x => x.getAttribute("data-tone")))
+    ck("G3 View as setter: only the seller's grey Busy blocks, nothing of the owner, no banner", its.length > 0 && its.every(x => x === "busy") && !/New York|America\/New_York/.test(tv + await pv.content()) && (await pv.getByTestId("seller-banner").count()) === 0, its)
+    await shot(pv, "G-view-as-setter"); await pv.close(); await vc.close()
+    const va = await viewAsCtx("bundle=analyst"), pa = await open(va, "/marketing/calendar"); const ta = await text(pa)
+    ck("G3b View as analyst: no Google item at all, no warning, no banner", (await pa.locator("[data-testid=cal-google]").count()) === 0 && (await pa.getByTestId("cal-share-warning").count()) === 0 && (await pa.getByTestId("seller-banner").count()) === 0 && !/Canary Islands/.test(ta), ta.slice(0, 200))
+    await pa.close(); await va.close()
   }
   const own = await open(admin, "/marketing/calendar")
   ck("G4 Antonio on his own login still reads New York time", /New York/.test(await text(own)))
   await own.close()
+
+  // ═════ H. the persistent banner (Antonio, 31 Oct 2026: "a persistent banner in Rocco's place with my timezone and his timezone"; the clocks "too big")
+  for (const path of ["/marketing/leads", "/marketing/calendar", "/marketing/board", "/marketing/today"]) {
+    const pg = await open(seller, path); const tx = await text(pg), bn = pg.getByTestId("seller-banner")
+    ck(`H1 seller ${path}: the banner shows his time and Antonio's`, (await bn.count()) === 1 && /Your time/.test(await bn.innerText()) && /Antonio's time/.test(await bn.innerText()) && /Canary Islands/.test(await bn.innerText()) && /New York/.test(await bn.innerText()), tx.slice(0, 160))
+    ck(`H2 …and it is slim (one thin bar)`, ((await bn.boundingBox())?.height ?? 999) < 60, await bn.boundingBox())
+    if (path === "/marketing/leads") { await shot(pg, "H-seller-banner"); await pg.evaluate(() => window.scrollTo(0, 400)); ck("H3 …and it stays at the top while the page scrolls", ((await bn.boundingBox())?.y ?? 999) < 5, await bn.boundingBox()) }
+    await pg.close()
+  }
+  for (const [path, who, label] of [["/marketing/leads", setter, "the setter"], ["/marketing/calendar", setter, "the setter"], ["/marketing/calendar", admin, "Antonio on his own login"]] as const) {
+    const pg = await open(who, path)
+    ck(`H4 ${label} ${path}: no banner`, (await pg.getByTestId("seller-banner").count()) === 0)
+    await pg.close()
+  }
+  { const vc = await viewAsCtx("owner"), pv = await open(vc, "/marketing/leads"); const bn = pv.getByTestId("seller-banner")
+    ck("H5 View as team owner: the banner is on Rocco's page too (his time and Antonio's)", (await bn.count()) === 1 && /Canary Islands/.test(await bn.innerText()) && /New York/.test(await bn.innerText()))
+    await pv.close(); await vc.close() }
 
   await browser.close(); fake.close(); await db.end()
   console.log(`\n${pass} passed, ${fail} failed`)

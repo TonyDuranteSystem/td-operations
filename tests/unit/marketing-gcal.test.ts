@@ -66,12 +66,22 @@ describe("the share check: only 'free/busy only' is accepted", () => {
 })
 
 describe("the Google layer: who sees what, and what is never asked", () => {
-  const base = (g: FakeGcal, viewer: "owner" | "seller" | "setter", p = prefs()) => loadGoogleLayer({ api: g, viewer, viewerUserId: viewer === "seller" ? ROCCO_ID : "owner-id", viewerEmail: viewer === "seller" ? ROC : ANT, prefs: p, takers, fromMs: FROM, toMs: TO })
+  const base = (g: FakeGcal, viewer: "owner" | "seller" | "setter" | "none", p = prefs()) => loadGoogleLayer({ api: g, viewer, viewerUserId: viewer === "seller" ? ROCCO_ID : "owner-id", viewerEmail: viewer === "seller" ? ROC : ANT, prefs: p, takers, fromMs: FROM, toMs: TO })
 
-  it("the setter gets nothing and Google is not called at all", async () => {
+  it("anyone who is neither the owner, the seller nor the setter gets nothing and Google is not called at all", async () => {
     const g = world()
-    expect(await base(g, "setter")).toMatchObject({ items: [], warnings: [] })
+    expect(await base(g, "none")).toMatchObject({ items: [], warnings: [] })
     expect(g.log).toEqual([])
+  })
+  it("the setter: only the SELLER's time, only as Busy, and Google is never asked about the owner (Antonio, 31 Oct 2026)", async () => {
+    const g = world()
+    const r = await base(g, "setter")
+    expect(r.items.length).toBeGreaterThan(0)
+    expect(r.items.every(i => i.tone === "busy" && i.title === "Busy" && i.guests.length === 0 && i.kind !== "owner")).toBe(true)
+    const all = JSON.stringify(r)
+    for (const secret of ["Bank meeting", "Weekly call", "Private appointment", "Antonio", ANT]) expect(all).not.toContain(secret)
+    expect(g.log.join("\n")).not.toContain(ANT) // nothing was asked about, or as, the owner
+    expect(r.ownerCalendar).toBe(false)
   })
   it("the owner: his own events in full; Rocco's personal time and unshared events only as Busy; the event he is a guest of in full", async () => {
     const g = world()
