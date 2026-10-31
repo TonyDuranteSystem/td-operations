@@ -1,18 +1,18 @@
 /**
  * TD Marketing — who sees what on the Calendar (pure; dev job 9aec66fa, Addendum K, rule K.4). Each person sees their own calendar in full and other people's time only as a grey "Busy"; the setter
- * sees nothing of anybody's Google calendar (she works for the seller and only reads calls and call backs). This is the ONE place the rule is written, so no screen decides it on its own, and the
+ * sees when the SELLER is busy (a grey block, no title, no guest; she works for him and manages his diary, Antonio 31 Oct 2026) and NOTHING of the owner's time; anyone else sees no Google at all. This is the ONE place the rule is written, so no screen decides it on its own, and the
  * server runs every Google item through it before anything reaches a page. No database and no network here.
  */
 export type SourceKind = "seller_personal" | "seller_td" | "owner"
 export interface GoogleItem { id: string; kind: SourceKind; start: number; end: number; title: string; guests: readonly string[] }
-export type Viewer = "owner" | "seller" | "setter"
+export type Viewer = "owner" | "seller" | "setter" | "none"
 
 /**
  * Which calendar view a person gets. The owner on his own login is the owner; anyone who is a setter and nothing more is a setter even if somebody ticked "takes calls" for her (she never gets the
- * owner's or the seller's time, Antonio 30 Oct 2026); a member who takes calls is the seller; anyone else (analyst, content...) is shown nothing of Google.
+ * owner's or the seller's time, Antonio 30 Oct 2026); a member who takes calls is the seller; anyone else (analyst, content...) is shown nothing of Google ("none").
  */
 export function viewerOf(v: { ownerLogin: boolean; hideOwner: boolean; isTaker: boolean }): Viewer {
-  return v.ownerLogin ? "owner" : v.hideOwner ? "setter" : v.isTaker ? "seller" : "setter"
+  return v.ownerLogin ? "owner" : v.hideOwner ? "setter" : v.isTaker ? "seller" : "none"
 }
 export type Tone = "td" | "mine" | "busy"
 export interface Shown { id: string; kind: SourceKind; start: number; end: number; tone: Tone; title: string; /** whose time a Busy block is, "" when it is the viewer's own */ sub: string; movable: boolean; guests: string[] }
@@ -27,9 +27,15 @@ export interface VisibilityContext {
 
 /** What this viewer sees of one Google item: the item in full, a "Busy" block, or nothing (null). */
 export function shownTo(viewer: Viewer, it: GoogleItem, c: VisibilityContext): Shown | null {
-  if (viewer === "setter") return null
+  if (viewer === "none") return null
   const base = { id: it.id, kind: it.kind, start: it.start, end: it.end }
   const busy = (sub: string): Shown => ({ ...base, tone: "busy", title: "Busy", sub, movable: false, guests: [] })
+  if (viewer === "setter") {
+    // the seller's time only, always as Busy (never a title, never a guest); anything of the owner is never shown to her
+    if (it.kind === "owner") return null
+    if (it.kind === "seller_personal" && !c.shareOk) return null
+    return busy(c.sellerLabel)
+  }
   if (it.kind === "seller_personal") {
     if (!c.shareOk) return null
     return busy(viewer === "owner" ? c.sellerLabel : "")

@@ -134,7 +134,14 @@ describe("who sees what on the Calendar (Addendum K.4)", () => {
   const weekly: GoogleItem = { id: "t1", kind: "seller_td", start: 3, end: 4, title: "Weekly call", guests: ["rocco@tonydurante.us", "Antonio.Durante@tonydurante.us"] }
   const other: GoogleItem = { id: "t2", kind: "seller_td", start: 5, end: 6, title: "Private thing", guests: [] }
   const bank: GoogleItem = { id: "o1", kind: "owner", start: 7, end: 8, title: "Bank meeting", guests: ["x@bank.com"] }
-  it("the setter sees nothing of any Google calendar", () => { for (const i of [personal, weekly, other, bank]) expect(shownTo("setter", i, ctx)).toBeNull() })
+  it("the setter sees the seller's time only as a grey Busy (no title, no guest) and NOTHING of the owner (Antonio, 31 Oct 2026)", () => {
+    expect(shownTo("setter", bank, ctx)).toBeNull() // the owner's own calendar is never shown to her
+    for (const i of [personal, weekly, other]) expect(shownTo("setter", i, ctx)).toMatchObject({ tone: "busy", title: "Busy", sub: "Rocco", movable: false, guests: [] })
+    const all = JSON.stringify([personal, weekly, other].map(i => shownTo("setter", i, ctx)))
+    expect(all).not.toContain("Weekly call"); expect(all).not.toContain("Private thing"); expect(all).not.toContain("Dentist"); expect(all).not.toContain("Antonio")
+    expect(shownTo("setter", personal, { ...ctx, shareOk: false })).toBeNull() // a share that is not free/busy-only hides his personal Busy from her too
+  })
+  it("anyone who is neither the owner, the seller nor the setter (an analyst, an ad person) sees no Google at all", () => { for (const i of [personal, weekly, other, bank]) expect(shownTo("none", i, ctx)).toBeNull() })
   it("Rocco's personal time is only Busy (no title) to Antonio and to Rocco, and nothing when the share is not right", () => {
     expect(shownTo("owner", personal, ctx)).toMatchObject({ tone: "busy", title: "Busy", sub: "Rocco", movable: false })
     expect(shownTo("seller", personal, ctx)).toMatchObject({ tone: "busy", title: "Busy", sub: "" })
@@ -154,6 +161,7 @@ describe("who sees what on the Calendar (Addendum K.4)", () => {
   })
   it("a list is sorted by time and drops what the viewer may not see", () => {
     expect(shownList("owner", [bank, personal, weekly], ctx).map(x => x.id)).toEqual(["p1", "t1", "o1"])
-    expect(shownList("setter", [bank, personal, weekly], ctx)).toEqual([])
+    expect(shownList("setter", [bank, personal, weekly], ctx).map(x => x.id)).toEqual(["p1", "t1"]) // the seller's Busy time, never the owner's event
+    expect(shownList("none", [bank, personal, weekly], ctx)).toEqual([])
   })
 })
