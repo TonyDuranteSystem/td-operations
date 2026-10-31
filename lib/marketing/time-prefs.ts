@@ -53,6 +53,22 @@ export function viewerZone(p: TimePrefs, v: { userId: string; ownerLogin: boolea
   return memberZone(p, v.viewAsMemberId ?? v.userId)
 }
 
+/**
+ * "View as": whose page the preview is. A member who holds the previewed role comes first. When nobody holds it (the roles are not stored on the members today), a role that hosts calls
+ * (the team owner and the seller have `calls.host`) is previewed as the seller himself, the first member who takes calls, so the preview reads his zone and his Google time exactly as his own
+ * page does (Antonio, 31 Oct 2026: "the screenshot is from Rocco's page and I don't see them"). Any other role (the setter, the analyst) stays nobody: it shows no Google, as before.
+ */
+export function viewAsMember(
+  v: { previewing: boolean; bundle: string | null; hostsCalls: boolean },
+  rows: ReadonlyArray<{ user_id: string; status: string; bundle: string | null }>,
+  takerIds: readonly string[],
+): string | null {
+  if (!v.previewing) return null
+  const holder = v.bundle ? rows.find(m => m.status === "active" && m.bundle === v.bundle)?.user_id ?? null : null
+  if (holder) return holder
+  return v.hostsCalls ? takerIds[0] ?? null : null
+}
+
 export interface Taker { userId: string; label: string; /** the person's login (a work mailbox when his calendars are used) */ email: string | null }
 
 /** The members who take calls with leads: the ones that have working hours in the settings, active, in the order given. */

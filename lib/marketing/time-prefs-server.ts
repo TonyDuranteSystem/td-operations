@@ -5,7 +5,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { MarketingContext } from "@/lib/marketing/guard"
 import { getAllMarketingSettings } from "@/lib/marketing/settings"
-import { callTakers, timePrefsFrom, viewerZone, type Taker, type TimePrefs } from "@/lib/marketing/time-prefs"
+import { callTakers, timePrefsFrom, viewAsMember, viewerZone, type Taker, type TimePrefs } from "@/lib/marketing/time-prefs"
 import { isSetterOnly } from "@/lib/marketing/lead-chat"
 import { effectivePermissions } from "@/lib/marketing/permissions"
 
@@ -55,23 +55,28 @@ export async function loadPrefsAndTakers(teamId: string): Promise<{ prefs: TimeP
   return { prefs, takers: callTakers(prefs, emails), rows }
 }
 
-/** The zone this person reads times in, for the screens that only need that (no name lookups). Same rule as `loadTimeView`. */
-export async function loadViewerZone(ctx: Pick<MarketingContext, "user" | "team" | "membership" | "viewAs" | "admin">): Promise<string> {
-  const { prefs, rows } = await loadPrefsAndRows(ctx.team.id)
-  return viewerZone(prefs, { userId: ctx.user.id, ownerLogin: ctx.admin === true && !ctx.viewAs, viewAsMemberId: viewAsMemberOf(ctx, rows) })
+/** The ids of the members who take calls with leads: working hours in the settings, active, and not "a setter and nothing more". Same members as `loadPrefsAndTakers` finds, without the name lookups. */
+export function takerIdsOf(prefs: Pick<TimePrefs, "callHours">, rows: readonly MemberRow[], bundles: Record<string, string[]>): string[] {
+  const setters = setterOnlyIds(rows, bundles)
+  return rows.filter(m => m.status === "active" && Object.prototype.hasOwnProperty.call(prefs.callHours, m.user_id) && !setters.has(m.user_id)).map(m => m.user_id)
 }
 
-/** "View as": the first active member who holds the previewed role, so the preview reads times as that person does. */
-function viewAsMemberOf(ctx: Pick<MarketingContext, "membership" | "viewAs">, rows: readonly MemberRow[]): string | null {
-  const asBundle = ctx.viewAs ? ctx.membership.bundle : null
-  return asBundle ? rows.find(m => m.status === "active" && m.bundle === asBundle)?.user_id ?? null : null
+/** The zone this person reads times in, for the screens that only need that (no name lookups). Same rule as `loadTimeView`. */
+export async function loadViewerZone(ctx: Pick<MarketingContext, "user" | "team" | "membership" | "permissions" | "viewAs" | "admin">): Promise<string> {
+  const { prefs, rows, bundles } = await loadPrefsAndRows(ctx.team.id)
+  return viewerZone(prefs, { userId: ctx.user.id, ownerLogin: ctx.admin === true && !ctx.viewAs, viewAsMemberId: viewAsMemberOf(ctx, rows, takerIdsOf(prefs, rows, bundles)) })
+}
+
+/** "View as": whose page the preview is (see `viewAsMember`): the member who holds the role, else the seller for a role that hosts calls. */
+function viewAsMemberOf(ctx: Pick<MarketingContext, "membership" | "permissions" | "viewAs">, rows: readonly MemberRow[], takerIds: readonly string[]): string | null {
+  return viewAsMember({ previewing: !!ctx.viewAs, bundle: ctx.membership.bundle, hostsCalls: (ctx.permissions as readonly string[]).includes("calls.host") }, rows, takerIds)
 }
 
 /** Everything a screen needs to show times for this person. */
 export async function loadTimeView(ctx: Pick<MarketingContext, "user" | "team" | "membership" | "permissions" | "viewAs" | "admin">): Promise<TimeView> {
   const { prefs, takers, rows } = await loadPrefsAndTakers(ctx.team.id)
   const ownerLogin = ctx.admin === true && !ctx.viewAs
-  const viewAsMemberId = viewAsMemberOf(ctx, rows)
+  const viewAsMemberId = viewAsMemberOf(ctx, rows, takers.map(t => t.userId))
   const zone = viewerZone(prefs, { userId: ctx.user.id, ownerLogin, viewAsMemberId })
   const hideOwner = isSetterOnly(ctx.permissions)
   // a setter is never the seller, whatever the Team page says about her (belt and braces: the takers already leave her out)
