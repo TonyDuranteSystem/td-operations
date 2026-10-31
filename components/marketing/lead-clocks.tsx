@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useT } from '@/components/marketing/lang-provider'
 import { clockText, utcOffsetText, zoneName } from '@/lib/marketing/zones'
+import { isUsableDeviceZone } from '@/lib/marketing/zone-report'
 import type { Clock, ClockKey } from '@/lib/marketing/time-prefs'
 
 const TONE: Record<ClockKey, string> = { client: 'text-amber-800', seller: 'text-teal-800', owner: 'text-sky-800', you: 'text-sky-800' }
@@ -37,22 +38,31 @@ export function ClockRow({ clocks, title, nowIso, fixedIso }: { clocks: Clock[];
   )
 }
 
-/** The persistent banner on every screen of the seller's workspace: his time and the owner's (Antonio's requests of 30 and 31 Oct 2026). Slim, and it stays at the top while the page scrolls. */
-export function SellerBanner({ clocks, nowIso }: { clocks: Clock[]; nowIso: string }) {
-  const t = useT()
+/**
+ * The persistent banner on every screen of the seller's workspace: his time and the owner's, nothing else (Antonio, 31 Oct 2026: no words, "it must change according to where we connect").
+ * Slim, and it stays at the top while the page scrolls. The viewer's OWN clock reads the zone of this browser, so a person who travels sees it change at once (`liveYou`; a "View as" preview
+ * is somebody else's page, so it keeps the zone the server holds); the other person's clock is the zone the server holds for them, which their own browser keeps up to date.
+ */
+export function SellerBanner({ clocks, nowIso, liveYou }: { clocks: Clock[]; nowIso: string; liveYou: boolean }) {
   const [now, setNow] = useState(nowIso)
+  const [device, setDevice] = useState<string | null>(null)
   useEffect(() => {
+    if (liveYou) { try { const z = Intl.DateTimeFormat().resolvedOptions().timeZone; if (isUsableDeviceZone(z)) setDevice(z) } catch { /* keep the zone from the server */ } }
     const h = setInterval(() => setNow(new Date().toISOString()), 20_000)
     return () => clearInterval(h)
-  }, [])
+  }, [liveYou])
   if (clocks.length === 0) return null
   return (
-    <div className="sticky top-0 z-30 flex flex-wrap items-center gap-x-6 gap-y-0.5 border-b border-emerald-300 bg-emerald-50 px-6 py-1.5 text-sm text-emerald-900" data-testid="seller-banner">
-      {clocks.map(c => c.zone && (
-        <span key={c.key}>
-          {c.key === 'you' ? t('Your time') : t("{name}'s time", { name: c.label })} <b className="font-mono text-base text-emerald-800" suppressHydrationWarning>{clockText(now, c.zone)}</b> <span className="text-emerald-800">{zoneName(c.zone)} · {utcOffsetText(now, c.zone)}</span>
-        </span>
-      ))}
+    <div className="sticky top-0 z-30 flex flex-wrap items-baseline gap-x-6 gap-y-0.5 border-b border-emerald-300 bg-emerald-50 px-6 py-1.5 text-sm text-emerald-900" data-testid="seller-banner">
+      {clocks.map((c, i) => {
+        const zone = c.key === 'you' && device ? device : c.zone
+        return zone && (
+          <span key={c.key} className={`flex items-baseline gap-1.5 ${i > 0 ? 'border-l border-emerald-300 pl-6' : ''}`} data-banner-clock={c.key}>
+            <b className="font-mono text-base text-emerald-800" suppressHydrationWarning>{clockText(now, zone)}</b>
+            <span className="text-emerald-800" suppressHydrationWarning>{zoneName(zone)} · {utcOffsetText(now, zone)}</span>
+          </span>
+        )
+      })}
     </div>
   )
 }

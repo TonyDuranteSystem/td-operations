@@ -67,6 +67,7 @@ export function TeamTimes({ teamId, adminEmail, adminLabel, members, prefs: init
     <section className="rounded-xl border bg-white p-4 text-sm" data-testid="team-times">
       <h2 className="text-sm font-semibold text-slate-600">{t('Time zones and calendars')}</h2>
       <p className="mt-1 text-xs text-slate-500">{t('Every time on the Marketing screens is read in the zone of the person looking. The setter never sees the owner\'s time.')}</p>
+      <p className="mt-1 text-xs text-slate-500">{t("A person's zone follows where they connect: their browser reports it each time they open Marketing, so a change made here lasts until they connect from somewhere else.")}</p>
       {error && <p role="alert" className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-rose-800">{error}</p>}
       {done && <p role="status" className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-emerald-800">{done}</p>}
 

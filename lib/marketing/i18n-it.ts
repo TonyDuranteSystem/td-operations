@@ -17,6 +17,8 @@ export const IT: Record<string, string> = {
   " · {n} changes: ": " · {n} modifiche: ",
   "(tick to change)": "(spunta per cambiare)",
   "(viewing as)": "(in vista come)",
+  "Viewing as": "In vista come",
+  "A person's zone follows where they connect: their browser reports it each time they open Marketing, so a change made here lasts until they connect from somewhere else.": "Il fuso di una persona segue il luogo da cui si collega: il suo browser lo comunica ogni volta che apre Marketing, quindi una modifica fatta qui dura finché non si collega da un altro posto.",
   "(you)": "(tu)",
   ", press Call back later, and pick a day and time.": ", premi Richiama più tardi e scegli giorno e ora.",
   ", {n} late": ", {n} in ritardo",
