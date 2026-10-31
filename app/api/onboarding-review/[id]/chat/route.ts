@@ -78,6 +78,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     const rows = (data ?? []) as unknown as ChatRow[]
     return NextResponse.json({
       success: true,
+      // The client's conversation — the AI Polish button sends this to the Polish route so it can read the client's own words.
+      contact_id: contactId,
       messages: rows.map((r) => {
         const { contacts, ...rest } = r
         return {
