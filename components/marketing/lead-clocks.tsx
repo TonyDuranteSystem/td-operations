@@ -22,14 +22,14 @@ export function ClockRow({ clocks, title, nowIso, fixedIso }: { clocks: Clock[];
   const at = fixedIso ?? now
   return (
     <div data-testid="lead-clocks">
-      <p className="mb-2 text-xs font-semibold text-slate-500">{title}</p>
-      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.max(1, clocks.length)}, minmax(0, 1fr))` }}>
+      <p className="mb-1 text-xs font-semibold text-slate-500">{title}</p>
+      <div className="flex flex-wrap gap-x-2 gap-y-1.5">
         {clocks.map(c => (
-          <div key={c.key} className="min-w-0 rounded-lg border bg-white p-3" data-clock={c.key}>
-            <div className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500">{c.key === 'client' ? t('{name}, the client', { name: c.label }) : c.key === 'you' ? t('You') : c.label}</div>
+          <div key={c.key} className="flex min-w-0 items-baseline gap-2 rounded-md border bg-white px-2.5 py-1" data-clock={c.key}>
+            <span className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500">{c.key === 'client' ? t('{name}, the client', { name: c.label }) : c.key === 'you' ? t('You') : c.label}</span>
             {c.zone
-              ? <><div className={`font-mono text-2xl ${TONE[c.key]}`} suppressHydrationWarning>{clockText(at, c.zone)}</div><div className="text-xs text-slate-500" suppressHydrationWarning>{zoneName(c.zone)} · {utcOffsetText(at, c.zone)}</div></>
-              : <><div className="font-mono text-2xl text-slate-400">--:--</div><div className="text-xs text-slate-500">{t('Pick a time zone first')}</div></>}
+              ? <><span className={`font-mono text-base ${TONE[c.key]}`} suppressHydrationWarning>{clockText(at, c.zone)}</span><span className="text-[11px] text-slate-500" suppressHydrationWarning>{zoneName(c.zone)} · {utcOffsetText(at, c.zone)}</span></>
+              : <><span className="font-mono text-base text-slate-400">--:--</span><span className="text-[11px] text-slate-500">{t('Pick a time zone first')}</span></>}
           </div>
         ))}
       </div>
@@ -37,7 +37,7 @@ export function ClockRow({ clocks, title, nowIso, fixedIso }: { clocks: Clock[];
   )
 }
 
-/** The banner at the top of the seller's page: his time and the owner's (Antonio's request of 30 Oct 2026). */
+/** The persistent banner on every screen of the seller's workspace: his time and the owner's (Antonio's requests of 30 and 31 Oct 2026). Slim, and it stays at the top while the page scrolls. */
 export function SellerBanner({ clocks, nowIso }: { clocks: Clock[]; nowIso: string }) {
   const t = useT()
   const [now, setNow] = useState(nowIso)
@@ -47,10 +47,10 @@ export function SellerBanner({ clocks, nowIso }: { clocks: Clock[]; nowIso: stri
   }, [])
   if (clocks.length === 0) return null
   return (
-    <div className="flex flex-wrap items-center gap-x-8 gap-y-1 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900" data-testid="seller-banner">
+    <div className="sticky top-0 z-30 flex flex-wrap items-center gap-x-6 gap-y-0.5 border-b border-emerald-300 bg-emerald-50 px-6 py-1.5 text-sm text-emerald-900" data-testid="seller-banner">
       {clocks.map(c => c.zone && (
         <span key={c.key}>
-          {c.key === 'you' ? t('Your time') : t("{name}'s time", { name: c.label })} <b className="font-mono text-lg text-emerald-800" suppressHydrationWarning>{clockText(now, c.zone)}</b> <span className="text-emerald-800">{zoneName(c.zone)} · {utcOffsetText(now, c.zone)}</span>
+          {c.key === 'you' ? t('Your time') : t("{name}'s time", { name: c.label })} <b className="font-mono text-base text-emerald-800" suppressHydrationWarning>{clockText(now, c.zone)}</b> <span className="text-emerald-800">{zoneName(c.zone)} · {utcOffsetText(now, c.zone)}</span>
         </span>
       ))}
     </div>

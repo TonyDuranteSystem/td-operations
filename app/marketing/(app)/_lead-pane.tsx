@@ -20,9 +20,9 @@ import type { SellerResultStages } from '@/lib/marketing/settings-schema'
 import { hasPaidOrLater, onSellerSide, sellerOf } from '@/lib/marketing/lead-actions'
 import { BookingLinkPanel } from '@/components/marketing/booking-link-panel'
 import type { TimeView } from '@/lib/marketing/time-prefs-server'
-import { bannerClocks, leadClocks, memberZone, sellerForLead, zoneInfoFor } from '@/lib/marketing/time-prefs'
+import { leadClocks, memberZone, sellerForLead, zoneInfoFor } from '@/lib/marketing/time-prefs'
 import { leadZoneOf } from '@/lib/marketing/lead-zone'
-import { ClockRow, SellerBanner } from '@/components/marketing/lead-clocks'
+import { ClockRow } from '@/components/marketing/lead-clocks'
 import { LeadZoneRow } from '@/components/marketing/lead-zone-row'
 import { zoneName } from '@/lib/marketing/zones'
 import { loadSlotOffer, type SlotOffer } from '@/lib/marketing/slots-server'
@@ -96,12 +96,10 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
   const nowIso = new Date().toISOString()
   const zoneInfo = zoneInfoFor({ viewerZone: time.zone, clientZone: leadZone.zone, clientName: firstName, seller, owner: time.prefs.ownerClock, hideOwner: time.hideOwner })
   const clocks = leadClocks({ leadName: firstName, clientZone: leadZone.zone, seller, owner: time.prefs.ownerClock, youZone: time.zone, hideOwner: time.hideOwner })
-  const banner = bannerClocks({ isTaker: time.isTaker, hideOwner: time.hideOwner, youZone: time.zone, owner: time.prefs.ownerClock })
   // with the calendar switch on, a call is booked from the seller's free slots (start times only); off, or no seller: the typed time as before
   const offer = canAct && sellerTaker && lead.team_id ? await withDeadline(loadSlotOffer({ db: leadDb(), teamId: lead.team_id, prefs: time.prefs, seller: sellerTaker, excludeLeadId: lead.id }), 9000, { state: 'hidden', sellerLabel: sellerTaker.label, reason: 'error' } as SlotOffer) : null
   return (
     <div className="space-y-4">
-      {banner.length > 0 && <SellerBanner clocks={banner} nowIso={nowIso} />}
       <div className="rounded-xl border bg-white p-5">
         <div className="flex items-start justify-between gap-3">
           <h2 className="text-xl font-semibold">{lead.full_name || lead.email || lead.phone || t('Unnamed lead')}</h2>
