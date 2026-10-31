@@ -459,6 +459,31 @@ async function main() {
   }
   await put("member_call_hours", { [ids.sellerA]: {} })
 
+  // ═════ G. "View as" is a real person's page (31 Oct 2026, Antonio: "the screenshot is from Rocco's page and I don't see them"). No member holds a role, so the team owner and seller previews used to
+  // fall back to Antonio himself: Rome time and no Google. Now they are the seller's page (his zone, his Google time); the setter and analyst previews still show no Google.
+  resetWorld(); world.lists[SELLER][1].accessRole = "freeBusyReader"; await put("calendar_busy_enabled", true)
+  const dayItems = async (pg: Page) => { await pg.getByTestId("cal-view-week").click(); await wd(pg); await pg.waitForTimeout(1500); return pg.locator(`[data-day="${D}"] [data-testid=cal-google]`).evaluateAll(e => e.map(x => `${x.getAttribute("data-tone")}|${(x as HTMLElement).innerText.replace(/\s+/g, " ")}`).sort()) }
+  const viewAsCtx = async (key: string) => { const c = await session(ADMIN); await c.addCookies([{ name: "td_marketing_view_as", value: `${team.id}:${key}`, domain: new URL(BASE).hostname, path: "/" }]); return c }
+  const realSeller = await open(seller, "/marketing/calendar")
+  const sellerItems = await dayItems(realSeller)
+  await shot(realSeller, "G0-seller-own-calendar"); await realSeller.close()
+  for (const [key, label] of [["owner", "team owner"], ["bundle=seller", "seller"]] as const) {
+    const vc = await viewAsCtx(key), pv = await open(vc, "/marketing/calendar")
+    const tv = await text(pv), items = await dayItems(pv)
+    await shot(pv, `G-view-as-${label.replace(" ", "-")}`)
+    ck(`G1 View as ${label} reads Rocco's zone (Canary Islands), not Rome`, /Canary Islands/.test(tv) && !/Times are Rome/.test(tv), tv.slice(0, 220))
+    ck(`G2 …and shows exactly what his own page shows that day (his Busy time, his TD calendar, the owner's time as Busy)`, sellerItems.length > 0 && JSON.stringify(items) === JSON.stringify(sellerItems), { sellerItems, items })
+    await pv.close(); await vc.close()
+  }
+  for (const [key, label] of [["bundle=setter", "setter"], ["bundle=analyst", "analyst"]] as const) {
+    const vc = await viewAsCtx(key), pv = await open(vc, "/marketing/calendar"); const tv = await text(pv)
+    ck(`G3 View as ${label} still shows no Google item and no warning`, (await pv.locator("[data-testid=cal-google]").count()) === 0 && (await pv.getByTestId("cal-share-warning").count()) === 0 && !/Canary Islands/.test(tv), tv.slice(0, 200))
+    await pv.close(); await vc.close()
+  }
+  const own = await open(admin, "/marketing/calendar")
+  ck("G4 Antonio on his own login still reads New York time", /New York/.test(await text(own)))
+  await own.close()
+
   await browser.close(); fake.close(); await db.end()
   console.log(`\n${pass} passed, ${fail} failed`)
   process.exit(fail ? 1 : 0)
