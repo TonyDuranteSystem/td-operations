@@ -5,7 +5,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { MarketingContext } from "@/lib/marketing/guard"
 import { getAllMarketingSettings } from "@/lib/marketing/settings"
-import { callTakers, timePrefsFrom, viewAsMember, viewerZone, type Taker, type TimePrefs } from "@/lib/marketing/time-prefs"
+import { bannerClocks, callTakers, timePrefsFrom, viewAsMember, viewerZone, type Clock, type Taker, type TimePrefs } from "@/lib/marketing/time-prefs"
 import { isSetterOnly } from "@/lib/marketing/lead-chat"
 import { effectivePermissions } from "@/lib/marketing/permissions"
 
@@ -70,6 +70,19 @@ export async function loadViewerZone(ctx: Pick<MarketingContext, "user" | "team"
 /** "View as": whose page the preview is (see `viewAsMember`): the member who holds the role, else the seller for a role that hosts calls. */
 function viewAsMemberOf(ctx: Pick<MarketingContext, "membership" | "permissions" | "viewAs">, rows: readonly MemberRow[], takerIds: readonly string[]): string | null {
   return viewAsMember({ previewing: !!ctx.viewAs, bundle: ctx.membership.bundle, hostsCalls: (ctx.permissions as readonly string[]).includes("calls.host") }, rows, takerIds)
+}
+
+/**
+ * The persistent banner of the seller's workspace: his time and the owner's, on every screen (Antonio, 31 Oct 2026: "a persistent banner in Rocco's place with my timezone and his timezone").
+ * One light read (settings + members, no name lookups). Only a person who takes calls and may see the owner's clock gets one; Antonio on his own login and the setter never do.
+ */
+export async function loadBannerClocks(ctx: Pick<MarketingContext, "user" | "team" | "membership" | "permissions" | "viewAs" | "admin">): Promise<Clock[]> {
+  if (ctx.admin === true && !ctx.viewAs) return []
+  const { prefs, rows, bundles } = await loadPrefsAndRows(ctx.team.id)
+  const takerIds = takerIdsOf(prefs, rows, bundles)
+  const asId = viewAsMemberOf(ctx, rows, takerIds)
+  const hideOwner = isSetterOnly(ctx.permissions)
+  return bannerClocks({ isTaker: !hideOwner && takerIds.includes(asId ?? ctx.user.id), hideOwner, youZone: viewerZone(prefs, { userId: ctx.user.id, ownerLogin: false, viewAsMemberId: asId }), owner: prefs.ownerClock })
 }
 
 /** Everything a screen needs to show times for this person. */

@@ -21,7 +21,7 @@ describe("the setter never gets the seller's or the owner's calendar, whatever t
   it("the owner on his own login is the owner; a seller who takes calls is the seller; anyone else sees no Google", () => {
     expect(viewerOf({ ownerLogin: true, hideOwner: false, isTaker: false })).toBe("owner")
     expect(viewerOf({ ownerLogin: false, hideOwner: false, isTaker: true })).toBe("seller")
-    expect(viewerOf({ ownerLogin: false, hideOwner: false, isTaker: false })).toBe("setter")
+    expect(viewerOf({ ownerLogin: false, hideOwner: false, isTaker: false })).toBe("none") // an analyst or an ad person: no Google at all, not even the seller's Busy time
   })
   const bundles = { setter: ["leads.read", "leads.worklist", "leads.mark"], seller: ["leads.read", "leads.pick", "calls.host", "leads.mark"] }
   const row = (user_id: string, bundle: string | null, member_role = "member", permissions: string[] | null = null): MemberRow => ({ user_id, status: "active", bundle, member_role, permissions })

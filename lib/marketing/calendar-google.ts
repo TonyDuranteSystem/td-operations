@@ -25,10 +25,11 @@ const EMPTY: GoogleLayer = { items: [], warnings: [], share: [], shareOk: true, 
 export async function loadGoogleLayer(i: {
   api: GcalApi; viewer: Viewer; viewerUserId: string; viewerEmail: string | null; prefs: TimePrefs; takers: readonly Taker[]; fromMs: number; toMs: number
 }): Promise<GoogleLayer> {
-  if (i.viewer === "setter") return { ...EMPTY }
+  if (i.viewer === "none") return { ...EMPTY }
+  const isSetter = i.viewer === "setter" // she is asked about the SELLER only: nothing of the owner is read, kept or passed on
   const min = new Date(i.fromMs).toISOString(), max = new Date(i.toMs).toISOString()
   const owner = i.prefs.ownerClock
-  const ownerEmail = owner.email ?? (i.viewer === "owner" ? i.viewerEmail : null)
+  const ownerEmail = isSetter ? null : owner.email ?? (i.viewer === "owner" ? i.viewerEmail : null)
   const sellers = i.viewer === "seller" ? i.takers.filter(t => t.userId === i.viewerUserId) : [...i.takers]
   const raw: GoogleItem[] = []
   const warnings: string[] = []
@@ -89,6 +90,6 @@ export async function loadGoogleLayer(i: {
     if (it.kind === "owner" && it.title === "Busy") return !sharedTd.some(t => t.start === it.start && t.end === it.end)
     return true
   })
-  const items = shownList(i.viewer, deduped, { shareOk: allShared, ownerEmail: ownerEmail ?? null, ownerLabel: owner.label, sellerLabel: sellers[0]?.label ?? "Seller" })
+  const items = shownList(i.viewer, deduped, { shareOk: allShared, ownerEmail: ownerEmail ?? null, ownerLabel: isSetter ? "" : owner.label, sellerLabel: sellers[0]?.label ?? "Seller" })
   return { items, warnings, share, shareOk: allShared, ownerCalendar }
 }
