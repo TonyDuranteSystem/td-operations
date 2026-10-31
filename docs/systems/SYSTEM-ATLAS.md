@@ -195,7 +195,7 @@ _Regenerated 2026-10-31. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-21)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-28)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-29)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-30)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-28)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-23)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-28)_
@@ -206,7 +206,7 @@ _Regenerated 2026-10-31. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-28)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-23)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-27)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-21)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-31)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-10-22)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
