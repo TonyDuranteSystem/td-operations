@@ -2,14 +2,22 @@
  * The WhatsApp notification sound — browser side (dev job c84dfb4d). Pure helpers + localStorage; the tones themselves live in
  * lib/hooks/use-notification-sound.ts (SOUND_LIBRARY, synthesized in the browser — no audio files).
  *
- * Each person picks their own tone (or Off) per browser. Default: 'pop' — deliberately NOT the 'chime' that portal chat, team chat
- * and business events already use, so a WhatsApp message can be told apart without looking.
+ * Each person picks their own sound (or Off) per browser. Default: the recorded voice "New WhatsApp message" (Antonio, 31 Oct 2026) — a
+ * short sound file, played like any tone, NOT the browser's speech engine (that one needs a click on the page after every reload; a
+ * sound file can be allowed for good in Chrome: lock icon, Site settings, Sound, Allow). If the browser still refuses to play it,
+ * the 'pop' tone sounds instead, so a message is never silent. Tones stay available as a choice; 'pop' is deliberately NOT the 'chime'
+ * that portal chat, team chat and business events use.
  */
 
 import { SOUND_LIBRARY, SOUND_NONE } from "@/lib/hooks/use-notification-sound"
 
 export const WA_SOUND_PREF_KEY = "td-wa-sound"
-export const WA_SOUND_DEFAULT = "pop"
+/** The choice that plays the recorded voice instead of a tone. */
+export const WA_SOUND_VOICE = "voice"
+export const WA_SOUND_DEFAULT = WA_SOUND_VOICE
+/** The tone that sounds when the browser refuses to play the voice file. */
+export const WA_SOUND_FALLBACK_TONE = "pop"
+export const WA_VOICE_CLIP_URL = "/sounds/new-whatsapp-message.mp3"
 
 /** Last 'whatsapp' event this BROWSER already played a sound for — shared by all tabs of the browser (localStorage). */
 export const WA_SOUND_LAST_EVENT_KEY = "td-wa-sound-last-event"
@@ -23,7 +31,7 @@ export interface SoundStorage {
   setItem(key: string, value: string): void
 }
 
-const VALID_IDS = new Set<string>([SOUND_NONE, ...SOUND_LIBRARY.map((s) => s.id)])
+const VALID_IDS = new Set<string>([SOUND_NONE, WA_SOUND_VOICE, ...SOUND_LIBRARY.map((s) => s.id)])
 
 /** A stored value → a usable tone id. Unknown / missing / hand-edited values fall back to the default. */
 export function normalizeSoundPref(raw: string | null | undefined): string {
@@ -72,4 +80,18 @@ export function claimSoundEvent(storage: SoundStorage | null, eventId: string): 
 /** Enough time since this tab's last sound? */
 export function gapElapsed(nowMs: number, lastPlayedMs: number): boolean {
   return nowMs - lastPlayedMs >= WA_SOUND_MIN_GAP_MS
+}
+
+/**
+ * Plays the recorded voice. `onFail` runs when the browser refuses (no click on the page yet and Sound not allowed for the site, a missing
+ * file, no audio): the caller plays the fallback tone then. Never throws.
+ */
+export function playVoiceClip(onFail: () => void): void {
+  try {
+    const clip = new Audio(WA_VOICE_CLIP_URL)
+    const started = clip.play()
+    if (started && typeof started.catch === "function") started.catch(() => onFail())
+  } catch {
+    onFail()
+  }
 }

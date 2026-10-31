@@ -5,7 +5,7 @@ import { Check, Volume2, VolumeX } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { SOUND_LIBRARY, SOUND_NONE, useNotificationSound } from '@/lib/hooks/use-notification-sound'
-import { readSoundPref, writeSoundPref, WA_SOUND_DEFAULT } from '@/lib/whatsapp-sound'
+import { readSoundPref, writeSoundPref, playVoiceClip, WA_SOUND_DEFAULT, WA_SOUND_VOICE, WA_SOUND_FALLBACK_TONE } from '@/lib/whatsapp-sound'
 
 /**
  * "Which sound do I hear for a new WhatsApp message?" — a small speaker button in the WhatsApp Inbox bar (dev job c84dfb4d).
@@ -42,7 +42,8 @@ export function WhatsAppSoundPicker() {
   const choose = (id: string) => {
     setPref(id)
     writeSoundPref(window.localStorage, id)
-    if (id !== SOUND_NONE) previewSound(id)
+    if (id === WA_SOUND_VOICE) playVoiceClip(() => previewSound(WA_SOUND_FALLBACK_TONE))
+    else if (id !== SOUND_NONE) previewSound(id)
   }
 
   const off = pref === SOUND_NONE
@@ -61,9 +62,9 @@ export function WhatsAppSoundPicker() {
         </button>
       </FastTooltip>
       {open && (
-        <div role="menu" className="absolute right-0 top-full z-30 mt-1 w-48 rounded-md border bg-white py-1 shadow-lg">
+        <div role="menu" className="absolute right-0 top-full z-30 mt-1 w-64 rounded-md border bg-white py-1 shadow-lg">
           <p className="px-3 py-1 text-[11px] text-zinc-500">Sound for a new WhatsApp message (this browser)</p>
-          {[...SOUND_LIBRARY.map(s => ({ id: s.id, label: s.label })), { id: SOUND_NONE, label: 'Off' }].map(s => (
+          {[{ id: WA_SOUND_VOICE, label: 'Voice: “New WhatsApp message”' }, ...SOUND_LIBRARY.map(s => ({ id: s.id, label: s.label })), { id: SOUND_NONE, label: 'Off' }].map(s => (
             <button
               key={s.id}
               type="button"
@@ -77,6 +78,11 @@ export function WhatsAppSoundPicker() {
               {pref === s.id && <Check className="h-3.5 w-3.5 text-green-600" />}
             </button>
           ))}
+          {pref === WA_SOUND_VOICE && (
+            <p className="border-t px-3 py-1.5 text-[11px] text-zinc-500" data-testid="wa-voice-hint">
+              If you hear a beep instead of the voice, allow sound for this site in Chrome (lock icon → Site settings → Sound → Allow).
+            </p>
+          )}
         </div>
       )}
     </div>

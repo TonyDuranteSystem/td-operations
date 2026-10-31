@@ -23,7 +23,7 @@ import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 import { onReconnected } from '@/lib/hooks/use-connection-state'
 import { WHATSAPP_LIVE_QUERY_KEYS, WHATSAPP_LIST_QUERY_KEY, WHATSAPP_LIVE_DEBOUNCE_MS, WHATSAPP_LIVE_MAX_WAIT_MS } from '@/lib/ui-event-whatsapp-keys'
 import { useNotificationSound, SOUND_NONE } from '@/lib/hooks/use-notification-sound'
-import { inboundCountFromPayload, readSoundPref, claimSoundEvent, gapElapsed } from '@/lib/whatsapp-sound'
+import { inboundCountFromPayload, readSoundPref, claimSoundEvent, gapElapsed, playVoiceClip, WA_SOUND_VOICE, WA_SOUND_FALLBACK_TONE } from '@/lib/whatsapp-sound'
 
 /** kind → react-query keys to invalidate */
 const UI_EVENT_QUERY_KEYS: Record<string, string[]> = {
@@ -139,7 +139,7 @@ export function UiEventListener() {
           const kind = (msg.new as { kind?: string })?.kind
           if (!kind) return
           if (kind === 'whatsapp') {
-            // A fresh CUSTOMER message (the receiver adds { inbound: n }) rings this person's chosen tone — dev job c84dfb4d.
+            // A fresh CUSTOMER message (the receiver adds { inbound: n }) rings this person's chosen sound (the recorded voice by default) — dev job c84dfb4d.
             // Several tabs of one browser get the same signal: a few ms of random delay, then only the first to claim it plays.
             if (inboundCountFromPayload((msg.new as { payload?: unknown })?.payload) > 0) {
               const row = msg.new as { id?: unknown; created_at?: unknown }
@@ -152,7 +152,8 @@ export function UiEventListener() {
                   const nowMs = Date.now()
                   if (!gapElapsed(nowMs, lastWaSoundRef.current)) return
                   lastWaSoundRef.current = nowMs
-                  playToneRef.current(pref)
+                  if (pref === WA_SOUND_VOICE) playVoiceClip(() => playToneRef.current(WA_SOUND_FALLBACK_TONE))
+                  else playToneRef.current(pref)
                 } catch {
                   /* a sound must never break the live update */
                 }
