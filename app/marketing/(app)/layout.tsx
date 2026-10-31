@@ -28,9 +28,9 @@ import { TourButton, TourProvider } from '@/components/marketing/tour'
 import { PREVIEW_TOURS, resolveTour, tourKeyFor, type ResolvedStep, type TourKey } from '@/lib/marketing/tour'
 import { tourSeen } from '@/lib/marketing/tour-seen'
 import { getLang } from '@/lib/marketing/lang'
-import { loadBannerClocks } from '@/lib/marketing/time-prefs-server'
-import type { Clock } from '@/lib/marketing/time-prefs'
+import { loadLayoutTime } from '@/lib/marketing/time-prefs-server'
 import { SellerBanner } from '@/components/marketing/lead-clocks'
+import { ZoneReporter } from '@/components/marketing/zone-reporter'
 import { makeT, tAccessLabel } from '@/lib/marketing/i18n'
 
 export const dynamic = 'force-dynamic'
@@ -58,12 +58,12 @@ export default async function MarketingAppLayout({ children }: { children: React
   // Antonio on his own login gets HIS frame (his own menu on every Marketing screen), never Rocco's; "View as" and everybody else get the team's frame (lib/marketing/frame.ts holds the rule).
   // He posts the news, so he has no strip and no unread news; the red number on What's New is, for him, the drafts waiting for his OK
   const ownerLogin = frameFor({ admin: fromCrm, viewAs: !!ctx.viewAs }) === 'owner'
-  const [chatUnread, seen, news, drafts, bannerList] = await Promise.all([
+  const [chatUnread, seen, news, drafts, layoutTime] = await Promise.all([
     marketingChatUnread(ctx),
     ctx.viewAs || ownSteps.length === 0 ? Promise.resolve(true) : tourSeen(ctx.user.id, ctx.team.id, tourKey),
     ownerLogin ? Promise.resolve([] as NewsItem[]) : listNewsFor(ctx),
     ownerLogin ? draftCount() : Promise.resolve(0),
-    ownerLogin ? Promise.resolve([] as Clock[]) : loadBannerClocks(ctx),
+    loadLayoutTime(ctx),
   ])
   const unreadNews = news.filter(n => n.unread)
   const autoStart = !ctx.viewAs && !ownerLogin && ownSteps.length > 0 && !seen
@@ -88,6 +88,7 @@ export default async function MarketingAppLayout({ children }: { children: React
           {ownerLogin && <Link href="/marketing-leads" className="mb-2 inline-block text-xs text-slate-500 underline" data-testid="back-to-home">&#9666; Home</Link>}
           <p className="text-xs uppercase tracking-wide text-slate-400">TD Marketing</p>
           <p className="truncate font-semibold">{ownerLogin ? 'Owner' : ctx.team.name}</p>
+          {ctx.viewAs && <p className="mt-1.5 inline-block rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900" data-testid="view-as-chip">{t('Viewing as')}: {ctx.viewAs.label.charAt(0).toUpperCase() + ctx.viewAs.label.slice(1)}</p>}
         </div>
 
         {ownerLogin ? <OwnerNav badges={{ messages: chatUnread, news: drafts }} /> : <WorkspaceNav items={nav} />}
@@ -103,7 +104,8 @@ export default async function MarketingAppLayout({ children }: { children: React
       </aside>
       <div className="min-w-0 flex-1">
         <LeadWindowsHost defaultRole={boardRole(ctx.permissions)} roles={availableBoardRoles(ctx.permissions)} chatOn={chatOn} pollOn={chatAny}>
-          {bannerList.length > 0 && <SellerBanner clocks={bannerList} nowIso={new Date().toISOString()} />}
+          <ZoneReporter knownZone={layoutTime.selfZone} />
+          {layoutTime.banner.length > 0 && <SellerBanner clocks={layoutTime.banner} nowIso={new Date().toISOString()} liveYou={!ctx.viewAs} />}
           {unreadNews.length > 0 && <NewsStrip title={newsText(unreadNews[0], lang).title} more={unreadNews.length - 1} t={t} />}
           {hasPermission(ctx.permissions, 'chat') && <MarketingPushBanner />}
           {hasPermission(ctx.permissions, 'leads.read') && <div className="flex items-center gap-3 border-b bg-white px-6 py-2"><LeadSearch /></div>}

@@ -189,8 +189,8 @@ async function main() {
     await ctx.clearCookies()
     await ctx.addCookies([{ name: base, value: "base64-" + Buffer.from(JSON.stringify(sess), "utf8").toString("base64url"), domain: new URL(BASE).hostname, path: "/", httpOnly: false, secure: false, sameSite: "Lax" }])
   }
-  async function session(email: string, lang = "en"): Promise<BrowserContext> {
-    const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
+  async function session(email: string, lang = "en", tz = "Europe/Rome"): Promise<BrowserContext> {
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: tz })
     const page = await ctx.newPage()
     await page.goto(`${BASE}/login`, { waitUntil: "networkidle", timeout: 180000 })
     await page.waitForTimeout(2500)
@@ -207,11 +207,12 @@ async function main() {
   const open = async (ctx: BrowserContext, path: string) => { const p = await ctx.newPage(); await p.goto(BASE + path, { waitUntil: "networkidle", timeout: 240000 }); return p }
   const events = async (lead: string, kind: string) => (await db.query("select data, actor from marketing_lead_events where lead_id=$1 and kind=$2 order by created_at desc, id desc", [lead, kind])).rows
   const shot = (p: Page, name: string) => p.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: true })
+  const bannerShot = async (p: Page, name: string) => { await p.evaluate(() => { document.querySelectorAll("div").forEach(d => { if (/SANDBOX — NOT PRODUCTION/.test(d.textContent ?? "") && getComputedStyle(d).position === "fixed") d.remove() }) }); await p.screenshot({ path: `${SHOTS}/${name}.png`, clip: { x: 0, y: 0, width: 1440, height: 160 } }) }
   const setting = async (key: string) => (await db.query("select value from marketing_settings where key=$1 and team_id=$2", [key, team.id])).rows[0]?.value
   const sellerEvents = () => world.events[`${SELLER}|primary`] ?? []
   const asAdmin = () => world.log.filter(l => l.endsWith(`as ${ADMIN}`)).length
 
-  const setter = await session(em("setterA")), seller = await session(SELLER), admin = await session(ADMIN)
+  const setter = await session(em("setterA"), "en", "Europe/Rome"), seller = await session(SELLER, "en", "Atlantic/Canary"), admin = await session(ADMIN, "en", "America/New_York")
 
   // ═════ A. B1/B2 with the switches OFF
   let p = await open(setter, `/marketing/window/${Marco}`)
@@ -433,7 +434,7 @@ async function main() {
   await p.getByTestId("booking-link-choice").filter({ hasText: "With Antonio" }).first().click()
   ck("E2 choosing a link puts it in the message", /calendly\.com\/qa\/with-antonio/.test(await p.getByTestId("booking-message").inputValue()) && /with-antonio/.test(await p.getByTestId("booking-link-url").innerText()))
   await shot(p, "E-booking"); await p.close()
-  const it = await session(em("setterA"), "it")
+  const it = await session(em("setterA"), "it", "Europe/Rome")
   p = await open(it, `/marketing/window/${Marco}`)
   t = await text(p)
   ck("E3 in Italian: the clocks and the zone row are translated", /il cliente/i.test(t) && /Fuso orario:/.test(t) && /dal numero di telefono/.test(t), t.slice(0, 300))
@@ -468,7 +469,7 @@ async function main() {
   // fall back to Antonio himself: Rome time and no Google. Now they are the seller's page (his zone, his Google time); the setter and analyst previews still show no Google.
   resetWorld(); world.lists[SELLER][1].accessRole = "freeBusyReader"; await put("calendar_busy_enabled", true)
   const dayItems = async (pg: Page) => { await pg.getByTestId("cal-view-week").click(); await wd(pg); await pg.waitForTimeout(1500); return pg.locator(`[data-day="${D}"] [data-testid=cal-google]`).evaluateAll(e => e.map(x => `${x.getAttribute("data-tone")}|${(x as HTMLElement).innerText.replace(/\s+/g, " ")}`).sort()) }
-  const viewAsCtx = async (key: string) => { const c = await session(ADMIN); await c.addCookies([{ name: "td_marketing_view_as", value: `${team.id}:${key}`, domain: new URL(BASE).hostname, path: "/" }]); return c }
+  const viewAsCtx = async (key: string) => { const c = await session(ADMIN, "en", "America/New_York"); await c.addCookies([{ name: "td_marketing_view_as", value: `${team.id}:${key}`, domain: new URL(BASE).hostname, path: "/" }]); return c }
   const realSeller = await open(seller, "/marketing/calendar")
   const sellerItems = await dayItems(realSeller)
   await shot(realSeller, "G0-seller-own-calendar"); await realSeller.close()
@@ -484,7 +485,7 @@ async function main() {
     const vc = await viewAsCtx("bundle=setter"), pv = await open(vc, "/marketing/calendar"); const tv = await text(pv)
     await pv.getByTestId("cal-view-week").click(); await wd(pv); await pv.waitForTimeout(1500)
     const its = await pv.locator(`[data-day="${D}"] [data-testid=cal-google]`).evaluateAll(e => e.map(x => x.getAttribute("data-tone")))
-    ck("G3 View as setter: only the seller's grey Busy blocks, nothing of the owner, no banner", its.length > 0 && its.every(x => x === "busy") && !/New York|America\/New_York/.test(tv + await pv.content()) && (await pv.getByTestId("seller-banner").count()) === 0, its)
+    ck("G3 View as setter: only the seller's grey Busy blocks, nothing of the owner, no banner", its.length > 0 && its.every(x => x === "busy") && !/New York/.test(tv) && (await pv.getByTestId("seller-banner").count()) === 0, its)
     await shot(pv, "G-view-as-setter"); await pv.close(); await vc.close()
     const va = await viewAsCtx("bundle=analyst"), pa = await open(va, "/marketing/calendar"); const ta = await text(pa)
     ck("G3b View as analyst: no Google item at all, no warning, no banner", (await pa.locator("[data-testid=cal-google]").count()) === 0 && (await pa.getByTestId("cal-share-warning").count()) === 0 && (await pa.getByTestId("seller-banner").count()) === 0 && !/Canary Islands/.test(ta), ta.slice(0, 200))
@@ -496,10 +497,10 @@ async function main() {
 
   // ═════ H. the persistent banner (Antonio, 31 Oct 2026: "a persistent banner in Rocco's place with my timezone and his timezone"; the clocks "too big")
   for (const path of ["/marketing/leads", "/marketing/calendar", "/marketing/board", "/marketing/today"]) {
-    const pg = await open(seller, path); const tx = await text(pg), bn = pg.getByTestId("seller-banner")
-    ck(`H1 seller ${path}: the banner shows his time and Antonio's`, (await bn.count()) === 1 && /Your time/.test(await bn.innerText()) && /Antonio's time/.test(await bn.innerText()) && /Canary Islands/.test(await bn.innerText()) && /New York/.test(await bn.innerText()), tx.slice(0, 160))
+    const pg = await open(seller, path); const bn = pg.getByTestId("seller-banner")
+    ck(`H1 seller ${path}: the banner shows his time and Antonio's as two clocks, places only, no words`, (await bn.count()) === 1 && (await bn.locator("[data-banner-clock]").count()) === 2 && /^\s*\d\d:\d\d\s+Canary Islands/.test(await bn.innerText()) && /\d\d:\d\d\s+New York/.test(await bn.innerText()) && !/Your time|Antonio|time/i.test(await bn.innerText()), await bn.innerText())
     ck(`H2 …and it is slim (one thin bar)`, ((await bn.boundingBox())?.height ?? 999) < 60, await bn.boundingBox())
-    if (path === "/marketing/leads") { await shot(pg, "H-seller-banner"); await pg.evaluate(() => window.scrollTo(0, 400)); ck("H3 …and it stays at the top while the page scrolls", ((await bn.boundingBox())?.y ?? 999) < 5, await bn.boundingBox()) }
+    if (path === "/marketing/leads") { await bannerShot(pg, "H-seller-banner"); await pg.evaluate(() => window.scrollTo(0, 400)); ck("H3 …and it stays at the top while the page scrolls", ((await bn.boundingBox())?.y ?? 999) < 5, await bn.boundingBox()) }
     await pg.close()
   }
   for (const [path, who, label] of [["/marketing/leads", setter, "the setter"], ["/marketing/calendar", setter, "the setter"], ["/marketing/calendar", admin, "Antonio on his own login"]] as const) {
@@ -510,6 +511,45 @@ async function main() {
   { const vc = await viewAsCtx("owner"), pv = await open(vc, "/marketing/leads"); const bn = pv.getByTestId("seller-banner")
     ck("H5 View as team owner: the banner is on Rocco's page too (his time and Antonio's)", (await bn.count()) === 1 && /Canary Islands/.test(await bn.innerText()) && /New York/.test(await bn.innerText()))
     await pv.close(); await vc.close() }
+
+  // ═════ I. the times follow where we connect (Antonio, 31 Oct 2026) and a role preview says which role it is
+  const until = async (f: () => Promise<boolean>, ms = 25000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await f()) return true; await new Promise(r => setTimeout(r, 500)) } return false }
+  const NYCLOCK = { zone: "America/New_York", label: "Antonio", email: ADMIN }
+  {
+    const rc = await session(SELLER, "en", "Europe/Rome"), pg = await open(rc, "/marketing/leads")
+    ck("I1 Rocco connects from Rome: his stored zone follows", await until(async () => (await setting("member_time_zones"))?.[ids.sellerA] === "Europe/Rome"), await setting("member_time_zones"))
+    await pg.waitForTimeout(2500); const bt = await pg.getByTestId("seller-banner").innerText(); await bannerShot(pg, "I-rocco-in-rome")
+    ck("I2 …and his banner shows Rome as his clock and New York as Antonio's, with no words", /^\s*\d\d:\d\d\s+Rome/.test(bt) && /New York/.test(bt) && !/Your time|Antonio|time/i.test(bt), bt)
+    await pg.close(); await rc.close()
+    await put("member_time_zones", { [ids.sellerA]: "Atlantic/Canary", [ids.setterA]: "Europe/Rome" })
+  }
+  {
+    const ac = await session(ADMIN, "en", "America/Chicago"), pg = await open(ac, "/marketing/calendar")
+    ck("I3 Antonio connects from Chicago: the owner's clock follows, its name and address are kept", await until(async () => { const o = await setting("owner_clock"); return o?.zone === "America/Chicago" && o?.label === "Antonio" && o?.email === ADMIN }), await setting("owner_clock"))
+    const rc = await session(SELLER, "en", "Atlantic/Canary"), pr = await open(rc, "/marketing/leads"); const bt = await pr.getByTestId("seller-banner").innerText()
+    ck("I4 …and Rocco's banner now shows Chicago for Antonio, still Canary Islands for himself", /Canary Islands/.test(bt) && /Chicago/.test(bt), bt)
+    await pr.close(); await rc.close(); await pg.close(); await ac.close()
+    await put("owner_clock", NYCLOCK)
+  }
+  {
+    const vc = await session(ADMIN, "en", "America/Los_Angeles"); await vc.addCookies([{ name: "td_marketing_view_as", value: `${team.id}:owner`, domain: new URL(BASE).hostname, path: "/" }])
+    const pv = await open(vc, "/marketing/leads")
+    ck("I5 'View as' with Antonio travelling: HIS zone follows (the owner clock), Rocco's stored zone is untouched", await until(async () => (await setting("owner_clock"))?.zone === "America/Los_Angeles") && (await setting("member_time_zones"))?.[ids.sellerA] === "Atlantic/Canary", { oc: await setting("owner_clock"), mz: await setting("member_time_zones") })
+    await pv.waitForTimeout(2500); const bt = await pv.getByTestId("seller-banner").innerText()
+    ck("I6 …and the preview of Rocco's page keeps Rocco's own zone as his clock (not this browser's)", /^\s*\d\d:\d\d\s+Canary Islands/.test(bt) && /Los Angeles/.test(bt), bt)
+    await pv.close(); await vc.close(); await put("owner_clock", NYCLOCK)
+  }
+  {
+    const uc = await session(ADMIN, "en", "UTC"), pg = await open(uc, "/marketing/calendar"); await pg.waitForTimeout(3500)
+    ck("I7 a browser that hides its zone (reports UTC) changes nothing", (await setting("owner_clock"))?.zone === "America/New_York", await setting("owner_clock"))
+    await pg.close(); await uc.close()
+  }
+  for (const [key, want] of [["bundle=setter", /Viewing as: Setter/i], ["owner", /Viewing as: The team owner/i]] as const) {
+    const vc = await viewAsCtx(key), pg = await open(vc, "/marketing/leads"), chip = pg.getByTestId("view-as-chip")
+    ck(`I8 View as ${key}: the sidebar says which role it is`, (await chip.count()) === 1 && want.test(await chip.innerText()), (await chip.count()) ? await chip.innerText() : "no chip")
+    await pg.close(); await vc.close()
+  }
+  { const pg = await open(seller, "/marketing/leads"); ck("I9 a real login has no preview tag", (await pg.getByTestId("view-as-chip").count()) === 0); await pg.close() }
 
   await browser.close(); fake.close(); await db.end()
   console.log(`\n${pass} passed, ${fail} failed`)

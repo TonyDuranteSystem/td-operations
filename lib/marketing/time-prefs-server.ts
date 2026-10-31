@@ -5,7 +5,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { MarketingContext } from "@/lib/marketing/guard"
 import { getAllMarketingSettings } from "@/lib/marketing/settings"
-import { bannerClocks, callTakers, timePrefsFrom, viewAsMember, viewerZone, type Clock, type Taker, type TimePrefs } from "@/lib/marketing/time-prefs"
+import { bannerClocks, callTakers, memberZone, timePrefsFrom, viewAsMember, viewerZone, type Clock, type Taker, type TimePrefs } from "@/lib/marketing/time-prefs"
 import { isSetterOnly } from "@/lib/marketing/lead-chat"
 import { effectivePermissions } from "@/lib/marketing/permissions"
 
@@ -73,16 +73,19 @@ function viewAsMemberOf(ctx: Pick<MarketingContext, "membership" | "permissions"
 }
 
 /**
- * The persistent banner of the seller's workspace: his time and the owner's, on every screen (Antonio, 31 Oct 2026: "a persistent banner in Rocco's place with my timezone and his timezone").
- * One light read (settings + members, no name lookups). Only a person who takes calls and may see the owner's clock gets one; Antonio on his own login and the setter never do.
+ * What the team workspace's frame needs about time, in one light read (settings + members, no name lookups): the persistent banner (his time and the owner's, on every screen: Antonio, 31 Oct 2026)
+ * and the zone the server holds for the person AT THE KEYBOARD (Antonio's owner clock when he is the admin, even in "View as"; anybody else's own zone), which the browser compares with its own
+ * to follow a person who travels. Only a person who takes calls and may see the owner's clock gets a banner; Antonio on his own login and the setter never do.
  */
-export async function loadBannerClocks(ctx: Pick<MarketingContext, "user" | "team" | "membership" | "permissions" | "viewAs" | "admin">): Promise<Clock[]> {
-  if (ctx.admin === true && !ctx.viewAs) return []
+export async function loadLayoutTime(ctx: Pick<MarketingContext, "user" | "team" | "membership" | "permissions" | "viewAs" | "admin">): Promise<{ banner: Clock[]; selfZone: string }> {
   const { prefs, rows, bundles } = await loadPrefsAndRows(ctx.team.id)
+  const selfZone = ctx.admin === true ? prefs.ownerClock.zone : memberZone(prefs, ctx.user.id)
+  if (ctx.admin === true && !ctx.viewAs) return { banner: [], selfZone }
   const takerIds = takerIdsOf(prefs, rows, bundles)
   const asId = viewAsMemberOf(ctx, rows, takerIds)
   const hideOwner = isSetterOnly(ctx.permissions)
-  return bannerClocks({ isTaker: !hideOwner && takerIds.includes(asId ?? ctx.user.id), hideOwner, youZone: viewerZone(prefs, { userId: ctx.user.id, ownerLogin: false, viewAsMemberId: asId }), owner: prefs.ownerClock })
+  const banner = bannerClocks({ isTaker: !hideOwner && takerIds.includes(asId ?? ctx.user.id), hideOwner, youZone: viewerZone(prefs, { userId: ctx.user.id, ownerLogin: false, viewAsMemberId: asId }), owner: prefs.ownerClock })
+  return { banner, selfZone }
 }
 
 /** Everything a screen needs to show times for this person. */
