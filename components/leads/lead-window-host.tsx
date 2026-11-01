@@ -1,0 +1,458 @@
+'use client'
+
+/**
+ * The floating lead window (dev job 6fc63c52, phase A) — read-only.
+ *
+ * Click a lead on the Leads page (table row or board card) and it opens in a
+ * window over the list: movable, up to four at once, minimizes to a pill at
+ * the bottom, remembers where you left it. It shows the lead's calls, offer,
+ * notes and one story, and reads a call's transcript in place. A plain click
+ * opens the window; Ctrl/Cmd/Shift-click, middle-click, and any screen under
+ * 1024px keep the old behaviour (go to the full page), so no link is lost.
+ *
+ * Nothing in here writes. Every action that changes a lead stays on the full page.
+ *
+ * Stacking: the notes layer is z-45 and the team chat z-46, modals 70/80. These
+ * windows stay at 40–43 (stack order = array order) so they can never cover
+ * the chat or trap a modal's buttons.
+ */
+
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import Link from 'next/link'
+import { format, parseISO } from 'date-fns'
+import {
+  X, Minus, GripVertical, ExternalLink, Phone, Mail, FileText, CheckCircle2, UserPlus, Zap, Search, RefreshCw,
+} from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { STAGE_STEPS, type WindowData, type WindowStoryEvent, type WindowCall, type TranscriptLine } from '@/lib/leads/window-data'
+
+interface OpenWin { id: string; name: string; minimized: boolean; x: number; y: number; seq: number }
+
+const POS_KEY = 'td-lead-window-pos'
+const MAX_WINDOWS = 4
+const WIN_W = 1040
+const WIN_H = 760
+
+function readPos(): { x: number; y: number } | null {
+  try {
+    const raw = window.localStorage.getItem(POS_KEY)
+    if (!raw) return null
+    const p = JSON.parse(raw)
+    return typeof p?.x === 'number' && typeof p?.y === 'number' ? p : null
+  } catch { return null }
+}
+function savePos(p: { x: number; y: number }) {
+  try { window.localStorage.setItem(POS_KEY, JSON.stringify(p)) } catch { /* private mode / quota */ }
+}
+function clampPos(p: { x: number; y: number }, w: number): { x: number; y: number } {
+  const vw = window.innerWidth, vh = window.innerHeight
+  // The whole window stays inside the screen sideways; it may be dragged down until only its title bar shows.
+  return { x: Math.min(Math.max(0, p.x), Math.max(0, vw - w)), y: Math.min(Math.max(0, p.y), Math.max(0, vh - 56)) }
+}
+function winSize() {
+  return { w: Math.min(WIN_W, window.innerWidth - 48), h: Math.min(WIN_H, window.innerHeight - 48) }
+}
+
+// ── context ──────────────────────────────────────────────────────────────
+
+const Ctx = createContext<{ open: (id: string, name: string) => void } | null>(null)
+
+/** Returns a click handler factory for a lead link; null-safe outside the provider. */
+export function useLeadWindowOpener() {
+  const ctx = useContext(Ctx)
+  return useCallback((id: string, name: string) => (e: React.MouseEvent) => {
+    if (!ctx) return
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+    if (typeof window === 'undefined' || !window.matchMedia('(min-width: 1024px)').matches) return
+    e.preventDefault()
+    ctx.open(id, name)
+  }, [ctx])
+}
+
+export function LeadWindowProvider({ children }: { children: React.ReactNode }) {
+  const [wins, setWins] = useState<OpenWin[]>([])
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
+
+  // Stack order is a counter, not the array order: re-ordering the elements on a
+  // click would move them in the page and drop the drag that is just starting.
+  const seqRef = useRef(0)
+  const open = useCallback((id: string, name: string) => {
+    setWins(prev => {
+      const seq = ++seqRef.current
+      const existing = prev.find(w => w.id === id)
+      if (existing) return prev.map(w => (w.id === id ? { ...w, minimized: false, seq } : w))
+      const base = readPos() ?? { x: 260, y: 40 }
+      const pos = clampPos({ x: base.x + 28 * prev.length, y: base.y + 28 * prev.length }, winSize().w)
+      const next = [...prev, { id, name, minimized: false, x: pos.x, y: pos.y, seq }]
+      return next.length > MAX_WINDOWS ? [...next].sort((a, b) => a.seq - b.seq).slice(next.length - MAX_WINDOWS) : next
+    })
+  }, [])
+  const close = useCallback((id: string) => setWins(prev => prev.filter(w => w.id !== id)), [])
+  const setMin = useCallback((id: string, minimized: boolean) =>
+    setWins(prev => prev.map(w => (w.id === id ? { ...w, minimized, seq: minimized ? w.seq : ++seqRef.current } : w))), [])
+  const focus = useCallback((id: string) =>
+    setWins(prev => {
+      const top = Math.max(...prev.map(w => w.seq))
+      const w = prev.find(x => x.id === id)
+      if (!w || w.seq === top) return prev
+      return prev.map(x => (x.id === id ? { ...x, seq: ++seqRef.current } : x))
+    }), [])
+  const move = useCallback((id: string, x: number, y: number) =>
+    setWins(prev => prev.map(w => (w.id === id ? { ...w, x, y } : w))), [])
+
+  const value = useMemo(() => ({ open }), [open])
+  const minimized = wins.filter(w => w.minimized)
+
+  return (
+    <Ctx.Provider value={value}>
+      {children}
+      {mounted && createPortal(
+        <>
+          {wins.map(w => (
+            <LeadWindow
+              key={w.id}
+              win={w}
+              z={40 + [...wins].sort((a, b) => a.seq - b.seq).findIndex(x => x.id === w.id)}
+              onClose={() => close(w.id)}
+              onMinimize={() => setMin(w.id, true)}
+              onFocus={() => focus(w.id)}
+              onMove={(x, y) => move(w.id, x, y)}
+            />
+          ))}
+          {minimized.length > 0 && (
+            <div className="fixed bottom-4 left-4 lg:left-72 flex gap-2 z-[45]">
+              {minimized.map(w => (
+                <button
+                  key={w.id}
+                  type="button"
+                  onClick={() => setMin(w.id, false)}
+                  className="flex items-center gap-2 rounded-xl border bg-white px-3 py-2 text-sm font-medium shadow-lg hover:bg-zinc-50"
+                  aria-label={`Open ${w.name}`}
+                >
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-900 text-[10px] font-semibold text-white">{initials(w.name)}</span>
+                  {w.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </>,
+        document.body,
+      )}
+    </Ctx.Provider>
+  )
+}
+
+// ── small helpers ────────────────────────────────────────────────────────
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  return ((parts[0]?.[0] ?? '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase() || '?'
+}
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return ''
+  try { return format(parseISO(iso), 'd MMM yyyy') } catch { return iso.slice(0, 10) }
+}
+
+const CALL_CHIP: Record<WindowCall['state'], string> = {
+  done: 'bg-emerald-50 text-emerald-800',
+  scheduled: 'bg-blue-50 text-blue-800',
+  due_today: 'bg-amber-50 text-amber-800',
+  not_confirmed: 'bg-red-50 text-red-700',
+}
+const COLOR_DOT: Record<string, string> = {
+  gray: 'bg-zinc-100 text-zinc-600', blue: 'bg-blue-50 text-blue-600', green: 'bg-green-50 text-green-600',
+  amber: 'bg-amber-50 text-amber-600', purple: 'bg-violet-50 text-violet-600', indigo: 'bg-indigo-50 text-indigo-600',
+  emerald: 'bg-emerald-50 text-emerald-600', sky: 'bg-sky-50 text-sky-600', red: 'bg-red-50 text-red-600',
+}
+function storyIcon(type: WindowStoryEvent['type']) {
+  if (type === 'call_completed') return Phone
+  if (type.startsWith('offer') || type === 'activation_created') return FileText
+  if (type.startsWith('email')) return Mail
+  if (type === 'contract_signed' || type === 'payment_confirmed') return CheckCircle2
+  if (type === 'lead_created') return UserPlus
+  return Zap
+}
+
+async function readError(res: Response, fallback: string): Promise<string> {
+  const d = await res.json().catch(() => ({}))
+  return (d && typeof d.error === 'string' && d.error) || fallback
+}
+
+// ── one window ───────────────────────────────────────────────────────────
+
+function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
+  win: OpenWin; z: number; onClose: () => void; onMinimize: () => void; onFocus: () => void; onMove: (x: number, y: number) => void
+}) {
+  const [data, setData] = useState<WindowData | null>(null)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState<'all' | 'calls' | 'offer'>('all')
+  const [reading, setReading] = useState<string | null>(null)
+  const drag = useRef<{ sx: number; sy: number; x0: number; y0: number } | null>(null)
+  const size = useRef(winSize())
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`/api/crm/leads/${win.id}/window`)
+      if (!res.ok) throw new Error(await readError(res, 'Could not load this lead — please try again.'))
+      const d = await res.json()
+      setData(d.data as WindowData)
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not load this lead — please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }, [win.id])
+  useEffect(() => { load() }, [load])
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest('button,a')) return
+    onFocus()
+    drag.current = { sx: e.clientX, sy: e.clientY, x0: win.x, y0: win.y }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = drag.current
+    if (!d) return
+    const p = clampPos({ x: d.x0 + e.clientX - d.sx, y: d.y0 + e.clientY - d.sy }, size.current.w)
+    onMove(p.x, p.y)
+  }
+  const onPointerUp = () => {
+    if (drag.current) { savePos({ x: win.x, y: win.y }); drag.current = null }
+  }
+
+  if (win.minimized) return null
+  const stage = data?.lead.stageIndex ?? -1
+
+  return (
+    <div
+      role="dialog"
+      aria-label={`Lead ${win.name}`}
+      tabIndex={-1}
+      onMouseDown={onFocus}
+      onKeyDown={e => { if (e.key === 'Escape') onClose() }}
+      style={{ left: win.x, top: win.y, width: size.current.w, height: size.current.h, zIndex: z }}
+      className="fixed flex flex-col overflow-hidden rounded-2xl border bg-white shadow-2xl outline-none"
+    >
+      {/* title bar */}
+      <div
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        className="flex cursor-move select-none items-center gap-3 border-b bg-zinc-50 px-4 py-3 touch-none"
+      >
+        <GripVertical className="h-4 w-4 text-zinc-400" />
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-sm font-semibold text-white">{initials(win.name)}</div>
+        <div className="min-w-0">
+          <div className="truncate text-lg font-bold leading-tight">{data?.lead.name ?? win.name}</div>
+          {data && (
+            <div className="truncate text-xs text-zinc-500">
+              {[data.lead.email, data.lead.phone, data.lead.language].filter(Boolean).join('  |  ')}
+            </div>
+          )}
+        </div>
+        {data?.lead.badges.map(b => (
+          <span key={b} className="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">{b}</span>
+        ))}
+        <div className="flex-1" />
+        <Link href={`/leads/${win.id}`} className="flex shrink-0 items-center gap-1.5 rounded-lg border bg-white px-3 py-1.5 text-sm font-semibold hover:bg-zinc-50">
+          Open full page <ExternalLink className="h-3.5 w-3.5" />
+        </Link>
+        <button type="button" onClick={onMinimize} aria-label="Minimize" className="flex h-8 w-8 items-center justify-center rounded-lg border bg-white hover:bg-zinc-50"><Minus className="h-4 w-4" /></button>
+        <button type="button" onClick={onClose} aria-label="Close" className="flex h-8 w-8 items-center justify-center rounded-lg border bg-white hover:bg-zinc-50"><X className="h-4 w-4" /></button>
+      </div>
+
+      {loading && !data && <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">Loading…</div>}
+      {error && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+          <p className="text-sm text-red-600">{error}</p>
+          <button type="button" onClick={load} className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-zinc-50"><RefreshCw className="h-3.5 w-3.5" />Try again</button>
+        </div>
+      )}
+
+      {data && !error && (
+        <>
+          {/* stage bar */}
+          <div className="flex gap-1.5 border-b px-4 py-3">
+            {STAGE_STEPS.map((label, i) => (
+              <div
+                key={label}
+                className={cn(
+                  'flex-1 rounded-lg py-1.5 text-center text-xs font-semibold',
+                  stage < 0 ? 'bg-zinc-100 text-zinc-500' : i < stage ? 'bg-zinc-900 text-white' : i === stage ? 'bg-blue-600 text-white' : 'bg-zinc-100 text-zinc-500',
+                )}
+              >
+                {label}
+              </div>
+            ))}
+          </div>
+          {stage < 0 && data.lead.status && (
+            <div className="border-b bg-zinc-50 px-4 py-2 text-sm font-semibold text-zinc-700">Status: {data.lead.status}</div>
+          )}
+
+          {/* next action */}
+          <div className="flex items-center gap-4 border-b border-blue-100 bg-blue-50 px-4 py-3">
+            <span className="shrink-0 text-[11px] font-bold tracking-wider text-blue-700">NEXT ACTION</span>
+            <span className="text-[15px] font-semibold">{data.nextAction}</span>
+          </div>
+
+          {reading ? (
+            <TranscriptReader leadId={win.id} callId={reading} onBack={() => setReading(null)} />
+          ) : (
+            <div className="flex min-h-0 flex-1">
+              {/* left rail */}
+              <div className="w-[380px] shrink-0 space-y-4 overflow-auto border-r p-5">
+                <div>
+                  <div className="mb-2 text-[11px] font-bold tracking-wider text-zinc-500">CALLS</div>
+                  {data.calls.length === 0 && <p className="text-sm text-zinc-500">No call yet.</p>}
+                  <div className="space-y-2.5">
+                    {data.calls.map(c => (
+                      <div key={c.key} className={cn('rounded-xl border p-3.5', c.state === 'not_confirmed' && 'border-red-200', c.state === 'scheduled' && 'border-blue-200 bg-blue-50/40')}>
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold">{c.title}</span>
+                          <span className={cn('rounded-full px-2.5 py-0.5 text-xs font-semibold', CALL_CHIP[c.state])}>{c.chip}</span>
+                        </div>
+                        <dl className="mt-2 grid grid-cols-[84px_1fr] gap-x-2 gap-y-1 text-sm text-zinc-700">
+                          {c.scheduledFor && (<><dt className="text-zinc-500">Planned for</dt><dd>{fmtDate(c.scheduledFor)}</dd></>)}
+                          {c.happenedAt && (<><dt className="text-zinc-500">Happened</dt><dd>{fmtDate(c.happenedAt)}{c.durationMin ? `, ${c.durationMin} min` : ''}</dd></>)}
+                        </dl>
+                        {c.summary && <p className="mt-2 text-sm leading-relaxed text-zinc-700"><span className="text-[11px] font-bold tracking-wide text-violet-700">SUMMARY </span>{c.summary}</p>}
+                        {c.state === 'not_confirmed' && <p className="mt-2 text-sm text-red-700">The date passed and no recording came back.</p>}
+                        {(c.hasTranscript || c.recordingUrl) && (
+                          <div className="mt-3 flex gap-2">
+                            {c.hasTranscript && c.callId && (
+                              <button type="button" onClick={() => setReading(c.callId)} className="rounded-lg border bg-white px-3 py-1.5 text-sm font-semibold hover:bg-zinc-50">Read transcript</button>
+                            )}
+                            {c.recordingUrl && (
+                              <a href={c.recordingUrl} target="_blank" rel="noopener noreferrer" className="rounded-lg border bg-white px-3 py-1.5 text-sm font-semibold hover:bg-zinc-50">Recording</a>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border p-3.5">
+                  <div className="mb-1.5 text-[11px] font-bold tracking-wider text-zinc-500">OFFER</div>
+                  {data.offer ? (
+                    <>
+                      <div className="font-semibold">{data.offer.line}</div>
+                      {data.offer.sub && <div className="mt-1 text-sm text-zinc-500">{data.offer.sub}</div>}
+                    </>
+                  ) : <p className="text-sm text-zinc-500">No offer yet.</p>}
+                </div>
+
+                <div className="rounded-xl border p-3.5">
+                  <div className="mb-1.5 text-[11px] font-bold tracking-wider text-zinc-500">NOTES</div>
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700">{data.notes ?? 'No notes.'}</p>
+                </div>
+                <p className="text-sm text-zinc-500">Source: {data.lead.source ?? 'unknown'}. Referrer: {data.lead.referrer ?? 'none'}.</p>
+              </div>
+
+              {/* story */}
+              <div className="min-w-0 flex-1 space-y-4 overflow-auto p-5">
+                <div className="flex items-center gap-2">
+                  <span className="mr-1 text-[11px] font-bold tracking-wider text-zinc-500">STORY</span>
+                  {([['all', 'All'], ['calls', 'Calls'], ['offer', 'Offer and money']] as const).map(([k, label]) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setFilter(k)}
+                      className={cn('rounded-full border px-3 py-1 text-sm font-semibold', filter === k ? 'border-zinc-900 bg-zinc-900 text-white' : 'bg-white text-zinc-700 hover:bg-zinc-50')}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <ol className="relative space-y-4 pl-9">
+                  <span className="absolute bottom-2 left-[13px] top-2 w-0.5 bg-zinc-200" />
+                  {data.story.filter(e => filter === 'all' || e.group === filter).map((e, i) => {
+                    const Icon = storyIcon(e.type)
+                    return (
+                      <li key={`${e.date}-${e.type}-${i}`} className="relative">
+                        <span className={cn('absolute -left-9 top-0 flex h-7 w-7 items-center justify-center rounded-full', COLOR_DOT[e.color] ?? COLOR_DOT.gray)}><Icon className="h-3.5 w-3.5" /></span>
+                        <div className="flex flex-wrap items-baseline gap-2"><span className="font-bold">{e.title}</span><span className="text-sm text-zinc-500">{fmtDate(e.date)}</span></div>
+                        {e.detail && <p className="mt-0.5 text-sm leading-relaxed text-zinc-700">{e.detail}</p>}
+                      </li>
+                    )
+                  })}
+                  {data.story.filter(e => filter === 'all' || e.group === filter).length === 0 && <li className="text-sm text-zinc-500">Nothing here yet.</li>}
+                </ol>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── transcript reader ────────────────────────────────────────────────────
+
+function Highlight({ text, q }: { text: string; q: string }) {
+  if (!q) return <>{text}</>
+  const i = text.toLowerCase().indexOf(q.toLowerCase())
+  if (i < 0) return <>{text}</>
+  return <>{text.slice(0, i)}<mark className="rounded bg-amber-200 px-0.5">{text.slice(i, i + q.length)}</mark><Highlight text={text.slice(i + q.length)} q={q} /></>
+}
+
+function TranscriptReader({ leadId, callId, onBack }: { leadId: string; callId: string; onBack: () => void }) {
+  const [lines, setLines] = useState<TranscriptLine[] | null>(null)
+  const [title, setTitle] = useState('')
+  const [error, setError] = useState('')
+  const [q, setQ] = useState('')
+
+  useEffect(() => {
+    let live = true
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/crm/leads/${leadId}/window/transcript?call=${callId}`)
+        if (!res.ok) throw new Error(await readError(res, 'Could not load the transcript — please try again.'))
+        const d = await res.json()
+        if (!live) return
+        setLines(d.lines as TranscriptLine[])
+        setTitle(d.title ?? 'Call')
+      } catch (err) {
+        if (live) setError(err instanceof Error && err.message ? err.message : 'Could not load the transcript — please try again.')
+      }
+    })()
+    return () => { live = false }
+  }, [leadId, callId])
+
+  const shown = (lines ?? []).filter(l => !q || l.text.toLowerCase().includes(q.toLowerCase()))
+  return (
+    <div className="flex min-h-0 flex-1 flex-col p-5">
+      <div className="mb-3 flex items-center gap-3">
+        <button type="button" onClick={onBack} className="rounded-lg border bg-white px-3 py-1.5 text-sm font-semibold hover:bg-zinc-50">Back to story</button>
+        <span className="font-bold">{title}</span>
+        <div className="flex-1" />
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search this call" aria-label="Search this call" className="w-56 rounded-lg border py-1.5 pl-8 pr-3 text-sm" />
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 space-y-1 overflow-auto">
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        {!error && lines === null && <p className="text-sm text-zinc-500">Loading…</p>}
+        {lines && lines.length === 0 && <p className="text-sm text-zinc-500">This call has no saved transcript text.</p>}
+        {shown.map((l, i) => (
+          l.time || l.speaker ? (
+            <div key={i} className="grid grid-cols-[56px_140px_1fr] gap-3 rounded-lg px-2 py-1.5 leading-relaxed">
+              <span className="text-sm text-zinc-500">{l.time}</span>
+              <span className="text-sm font-bold">{l.speaker}</span>
+              <span className="text-sm"><Highlight text={l.text} q={q} /></span>
+            </div>
+          ) : (
+            <p key={i} className="whitespace-pre-wrap rounded-lg px-2 py-1.5 text-sm leading-relaxed"><Highlight text={l.text} q={q} /></p>
+          )
+        ))}
+        {lines && lines.length > 0 && shown.length === 0 && <p className="text-sm text-zinc-500">No line matches “{q}”.</p>}
+      </div>
+    </div>
+  )
+}

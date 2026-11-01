@@ -7,6 +7,7 @@ import { ChevronRight, ChevronLeft, Phone, Mail, UserCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { LeadListItem } from '@/lib/types'
 import { LeadRowActions } from '@/components/leads/lead-row-actions'
+import { useLeadWindowOpener } from '@/components/leads/lead-window-host'
 import { deriveLeadDisplayStatus } from '@/lib/leads/display-status'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -56,6 +57,7 @@ export function LeadsTable({ items, stats, currentPage, totalPages, totalCount }
   const router = useRouter()
   const searchParams = useSearchParams()
   const [isPending, startTransition] = useTransition()
+  const openLead = useLeadWindowOpener()
 
   function goToPage(page: number) {
     const params = new URLSearchParams(searchParams.toString())
@@ -109,6 +111,7 @@ export function LeadsTable({ items, stats, currentPage, totalPages, totalCount }
               <Link
                 key={item.id}
                 href={`/leads/${item.id}`}
+                onClick={openLead(item.id, item.full_name)}
                 className="grid grid-cols-1 md:grid-cols-[1fr,160px,100px,100px,120px,100px,32px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center cursor-pointer"
               >
                 {/* Name — badges here (not a hidden md:* column) so they're
