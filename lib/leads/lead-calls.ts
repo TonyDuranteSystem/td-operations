@@ -19,6 +19,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { updateLeadColumnGuarded, isGuardedFailure, type LeadDb } from '@/lib/leads/guarded-update'
 import { nyDate, daysBetween } from '@/lib/leads/ny-date'
+import { todayInNewYork } from '@/lib/leads/list-filters'
+import { autoCallDoneEnabled } from '@/lib/leads/flags'
 
 export type LeadCallState = 'scheduled' | 'done' | 'no_show' | 'moved' | 'cancelled'
 
@@ -26,6 +28,7 @@ export const MIN_AUTO_SECONDS = 180
 export const UNDO_WINDOW_HOURS = 24
 export const AUTO_REASON = 'auto_call_done'
 export const STAFF_REASON = 'staff_confirmed_call'
+export const DRY_RUN_REASON = 'dry_run_auto_call_done'
 
 export interface LeadCallRow {
   id: string
@@ -85,7 +88,7 @@ export interface AutoMoveInput {
   /** the lead's own latest call date, used only when it has no call rows at all */
   leadCallDate: string | null
   recordingIso: string
-  /** an automatic move of this lead was undone before — never move it automatically again */
+  /** the automatic move made for THIS call was undone — a re-delivery of the same recording must not move it again */
   priorUndoneAutoMove: boolean
 }
 
@@ -94,7 +97,7 @@ export interface AutoMoveDecision { move: boolean; reason: string }
 export function decideAutoCallDone(i: AutoMoveInput): AutoMoveDecision {
   if (i.leadStatus !== 'Call Scheduled') return { move: false, reason: 'the lead is not on Call Scheduled' }
   if (i.existingClientTag) return { move: false, reason: 'the lead is an existing client' }
-  if (i.priorUndoneAutoMove) return { move: false, reason: 'an automatic move was undone before' }
+  if (i.priorUndoneAutoMove) return { move: false, reason: 'the automatic move for this call was undone' }
   if (i.linkReview) return { move: false, reason: 'the recording is waiting for a link review' }
   if (i.durationSeconds !== null && i.durationSeconds < MIN_AUTO_SECONDS) return { move: false, reason: 'the recording is shorter than 3 minutes' }
   if (i.matchedCall) return { move: true, reason: 'a recording came back within a day of the booked call' }
@@ -134,7 +137,8 @@ export async function fetchLeadCallData(db: unknown, leadId: string): Promise<{ 
     sb.from('lead_calls').select('*').eq('lead_id', leadId),
     sb.from('lead_status_moves').select('*').eq('lead_id', leadId).order('created_at', { ascending: true }),
   ])
-  return { calls: (calls.data ?? []) as LeadCallRow[], moves: (moves.data ?? []) as StatusMoveRow[] }
+  // Before the migration has been run the tables do not exist: the window then falls back to recordings + call date.
+  return { calls: calls.error ? [] : ((calls.data ?? []) as LeadCallRow[]), moves: moves.error ? [] : ((moves.data ?? []) as StatusMoveRow[]) }
 }
 
 export interface BookingInput {
@@ -186,40 +190,59 @@ export interface RecordingInput {
   linkReview: string | null
 }
 
-export interface RecordingResult { ok: boolean; moved: boolean; reason: string; callId?: string; error?: string }
+export interface RecordingResult { ok: boolean; moved: boolean; reason: string; callId?: string; error?: string; dryRun?: boolean }
 
-/** A recording was saved and linked to a lead: confirm its call, and move the lead to Call Done when the rules allow. */
-export async function applyRecording(db: unknown, r: RecordingInput, now: Date = new Date()): Promise<RecordingResult> {
+/** Put the lead back where it was after a failed log write, so a status never changes without its undo record. */
+async function revertStatus(sb: Db, leadId: string, from: string, to: string): Promise<void> {
+  await updateLeadColumnGuarded(sb as unknown as LeadDb, { leadId, column: 'status', newValue: from, expected: to, hasExpected: true })
+}
+
+/**
+ * A recording was saved and linked to a lead: confirm its call, and move the lead to Call Done when the rules allow
+ * AND the switch (LEAD_AUTO_CALL_DONE) is on. With the switch off the decision is only logged as a dry run.
+ * Safe to run twice for the same recording (Circleback re-delivers): the call is found by its summary id and the
+ * move decision is re-evaluated, so a move that failed the first time is retried and one already made is not repeated.
+ */
+export async function applyRecording(db: unknown, r: RecordingInput, opts: { now?: Date; autoMove?: boolean } = {}): Promise<RecordingResult> {
+  const now = opts.now ?? new Date()
+  const autoMove = opts.autoMove ?? autoCallDoneEnabled()
   try {
     const sb = asDb(db)
     const { data: lead } = await sb.from('leads').select('id, status, call_date, existing_client_contact_id').eq('id', r.leadId).maybeSingle()
     if (!lead) return { ok: false, moved: false, reason: 'lead not found' }
 
-    // Already confirmed for this recording (re-delivery)? Nothing to do twice.
-    const { data: already } = await sb.from('lead_calls').select('id').eq('call_summary_id', r.summaryId).maybeSingle()
-    if (already) return { ok: true, moved: false, reason: 'already recorded', callId: already.id as string }
-
     const { data: callsData } = await sb.from('lead_calls').select('*').eq('lead_id', r.leadId)
     const calls = (callsData ?? []) as LeadCallRow[]
-    const matched = pickCallForRecording(calls, r.recordingIso)
 
-    let callId: string
-    if (matched) {
-      const up = await sb.from('lead_calls')
-        .update({ state: 'done', happened_at: r.recordingIso, call_summary_id: r.summaryId, confirmed_by: 'recording', updated_at: now.toISOString() })
-        .eq('id', matched.id).is('call_summary_id', null).select('id')
-      if (up.error) return { ok: false, moved: false, reason: 'could not update the call', error: up.error.message }
-      callId = matched.id
-    } else {
-      const ins = await sb.from('lead_calls')
-        .insert({ lead_id: r.leadId, state: 'done', happened_at: r.recordingIso, call_summary_id: r.summaryId, source: 'recording', confirmed_by: 'recording' })
-        .select('id').single()
-      if (ins.error) return { ok: false, moved: false, reason: 'could not save the call', error: ins.error.message }
-      callId = ins.data.id as string
+    let call = calls.find(c => c.call_summary_id === r.summaryId) ?? null
+    let matched: LeadCallRow | null = call
+    if (!call) {
+      matched = pickCallForRecording(calls, r.recordingIso)
+      if (matched) {
+        const up = await sb.from('lead_calls')
+          .update({ state: 'done', happened_at: r.recordingIso, call_summary_id: r.summaryId, confirmed_by: 'recording', updated_at: now.toISOString() })
+          .eq('id', matched.id).is('call_summary_id', null).select('id')
+        if (up.error) return { ok: false, moved: false, reason: 'could not update the call', error: up.error.message }
+        if (up.data && up.data.length > 0) call = { ...matched, state: 'done', call_summary_id: r.summaryId }
+        else matched = null // someone else claimed that call first: this recording gets a row of its own
+      }
+      if (!call) {
+        const ins = await sb.from('lead_calls')
+          .insert({ lead_id: r.leadId, state: 'done', happened_at: r.recordingIso, call_summary_id: r.summaryId, source: 'recording', confirmed_by: 'recording' })
+          .select('*').single()
+        if (ins.error) {
+          // A parallel delivery may have just inserted it (unique index on the summary): read it back.
+          const again = await sb.from('lead_calls').select('*').eq('call_summary_id', r.summaryId).maybeSingle()
+          if (!again.data) return { ok: false, moved: false, reason: 'could not save the call', error: ins.error.message }
+          call = again.data as LeadCallRow
+        } else call = ins.data as LeadCallRow
+      }
     }
+    const callId = (call as LeadCallRow).id
 
+    // Only a move made for THIS call that was undone blocks this call; a later call is judged on its own.
     const { data: undone } = await sb.from('lead_status_moves')
-      .select('id').eq('lead_id', r.leadId).eq('reason', AUTO_REASON).not('undone_at', 'is', null).limit(1)
+      .select('id').eq('lead_id', r.leadId).eq('reason', AUTO_REASON).eq('call_id', callId).not('undone_at', 'is', null).limit(1)
 
     const decision = decideAutoCallDone({
       leadStatus: (lead.status as string | null) ?? null,
@@ -234,15 +257,27 @@ export async function applyRecording(db: unknown, r: RecordingInput, now: Date =
     })
     if (!decision.move) return { ok: true, moved: false, reason: decision.reason, callId }
 
+    if (!autoMove) {
+      const { data: seen } = await sb.from('lead_status_moves').select('id').eq('lead_id', r.leadId).eq('call_id', callId).eq('reason', DRY_RUN_REASON).limit(1)
+      if (!seen || seen.length === 0) {
+        await sb.from('lead_status_moves').insert({ lead_id: r.leadId, from_status: 'Call Scheduled', to_status: 'Call Done', reason: DRY_RUN_REASON, source: 'circleback', call_id: callId })
+      }
+      return { ok: true, moved: false, dryRun: true, reason: 'the automatic move is switched off; logged only', callId }
+    }
+
     const moved = await updateLeadColumnGuarded(sb as unknown as LeadDb, {
       leadId: r.leadId, column: 'status', newValue: 'Call Done', expected: 'Call Scheduled', hasExpected: true,
     })
     if (isGuardedFailure(moved)) return { ok: true, moved: false, reason: `the status changed meanwhile (${moved.reason})`, callId }
 
-    await sb.from('lead_status_moves').insert({
+    const log = await sb.from('lead_status_moves').insert({
       lead_id: r.leadId, from_status: 'Call Scheduled', to_status: 'Call Done', reason: AUTO_REASON, source: 'circleback',
       call_id: callId, undo_until: new Date(now.getTime() + UNDO_WINDOW_HOURS * 3_600_000).toISOString(),
     })
+    if (log.error) {
+      await revertStatus(sb, r.leadId, 'Call Scheduled', 'Call Done')
+      return { ok: false, moved: false, reason: 'could not log the move, so it was not made', error: log.error.message, callId }
+    }
     return { ok: true, moved: true, reason: decision.reason, callId }
   } catch (err) {
     return { ok: false, moved: false, reason: 'unexpected error', error: err instanceof Error ? err.message : String(err) }
@@ -254,24 +289,27 @@ export type ConfirmAction = 'happened' | 'no_show' | 'rebook'
 export interface ConfirmResult { ok: boolean; status: number; message: string; moved?: boolean }
 
 /** Staff answer "Did this call happen?" for a booked call with no recording. */
-export async function confirmCall(db: unknown, args: { leadId: string; callId: string; action: ConfirmAction; actor: string }): Promise<ConfirmResult> {
+export async function confirmCall(db: unknown, args: { leadId: string; callId: string; action: ConfirmAction; actor: string }, now: Date = new Date()): Promise<ConfirmResult> {
   const sb = asDb(db)
   const { data: call } = await sb.from('lead_calls').select('*').eq('id', args.callId).eq('lead_id', args.leadId).maybeSingle()
   if (!call) return { ok: false, status: 404, message: 'Call not found for this lead.' }
   const row = call as LeadCallRow
   if (row.state !== 'scheduled') return { ok: false, status: 409, message: 'This call was already answered. Reload to see the latest.' }
+  if (row.scheduled_date && daysBetween(todayInNewYork(now), row.scheduled_date) > 0) {
+    return { ok: false, status: 409, message: 'This call is still in the future, so there is nothing to confirm yet.' }
+  }
 
-  const now = new Date().toISOString()
+  const stamp = now.toISOString()
   if (args.action === 'no_show' || args.action === 'rebook') {
     const up = await sb.from('lead_calls')
-      .update({ state: args.action === 'no_show' ? 'no_show' : 'moved', confirmed_by: args.actor, updated_at: now })
+      .update({ state: args.action === 'no_show' ? 'no_show' : 'moved', confirmed_by: args.actor, updated_at: stamp })
       .eq('id', row.id).eq('state', 'scheduled').select('id')
     if (up.error || !up.data?.length) return { ok: false, status: 409, message: 'This call changed meanwhile. Reload to see the latest.' }
     return { ok: true, status: 200, message: args.action === 'no_show' ? 'Marked as a no-show.' : 'Marked as moved. The new date arrives with its booking.' }
   }
 
   const up = await sb.from('lead_calls')
-    .update({ state: 'done', happened_at: now, confirmed_by: args.actor, updated_at: now })
+    .update({ state: 'done', happened_at: stamp, confirmed_by: args.actor, updated_at: stamp })
     .eq('id', row.id).eq('state', 'scheduled').select('id')
   if (up.error || !up.data?.length) return { ok: false, status: 409, message: 'This call changed meanwhile. Reload to see the latest.' }
 
@@ -281,13 +319,17 @@ export async function confirmCall(db: unknown, args: { leadId: string; callId: s
     leadId: args.leadId, column: 'status', newValue: 'Call Done', expected: 'Call Scheduled', hasExpected: true,
   })
   if (isGuardedFailure(moved)) return { ok: true, status: 200, message: 'Marked as happened. The lead status changed meanwhile, so it was left alone.', moved: false }
-  await sb.from('lead_status_moves').insert({
+  const log = await sb.from('lead_status_moves').insert({
     lead_id: args.leadId, from_status: 'Call Scheduled', to_status: 'Call Done', reason: STAFF_REASON, source: args.actor, call_id: row.id,
   })
+  if (log.error) {
+    await revertStatus(sb, args.leadId, 'Call Scheduled', 'Call Done')
+    return { ok: false, status: 500, message: 'The move could not be logged, so the lead was left on Call Scheduled. Please try again.' }
+  }
   return { ok: true, status: 200, message: 'Marked as happened. The lead moved to Call Done.', moved: true }
 }
 
-/** Undo an automatic move within its window; the lead goes back to where it was and is never moved automatically again. */
+/** Undo an automatic move within its window; the lead goes back to where it was and this call is never moved automatically again. */
 export async function undoMove(db: unknown, args: { leadId: string; moveId: string; actor: string }, now: Date = new Date()): Promise<ConfirmResult> {
   const sb = asDb(db)
   const { data } = await sb.from('lead_status_moves').select('*').eq('id', args.moveId).eq('lead_id', args.leadId).maybeSingle()
@@ -296,12 +338,18 @@ export async function undoMove(db: unknown, args: { leadId: string; moveId: stri
   if (m.reason !== AUTO_REASON) return { ok: false, status: 400, message: 'Only an automatic move can be undone here.' }
   if (m.undone_at) return { ok: false, status: 409, message: 'This move was already undone.' }
   if (!undoOpen(m, now)) return { ok: false, status: 410, message: 'The 24-hour undo window has closed. Change the status by hand if needed.' }
+
+  // Mark it undone FIRST (only if nobody did meanwhile): the stickiness marker must exist before the status changes back.
+  const mark = await sb.from('lead_status_moves')
+    .update({ undone_at: now.toISOString(), undone_by: args.actor }).eq('id', m.id).is('undone_at', null).select('id')
+  if (mark.error || !mark.data?.length) return { ok: false, status: 409, message: 'This move was already undone.' }
+
   const back = await updateLeadColumnGuarded(sb as unknown as LeadDb, {
     leadId: args.leadId, column: 'status', newValue: m.from_status ?? 'Call Scheduled', expected: m.to_status, hasExpected: true,
   })
   if (isGuardedFailure(back)) {
+    await sb.from('lead_status_moves').update({ undone_at: null, undone_by: null }).eq('id', m.id)
     return { ok: false, status: back.reason === 'conflict' ? 409 : 500, message: back.reason === 'conflict' ? 'The lead status changed since. Nothing was undone.' : back.message }
   }
-  await sb.from('lead_status_moves').update({ undone_at: now.toISOString(), undone_by: args.actor }).eq('id', m.id)
-  return { ok: true, status: 200, message: 'Undone. The lead is back on its earlier status and will not move automatically again.' }
+  return { ok: true, status: 200, message: 'Undone. The lead is back on its earlier status and this call will not move it again.' }
 }

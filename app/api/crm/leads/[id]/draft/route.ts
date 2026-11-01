@@ -17,6 +17,7 @@ import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { checkRateLimit } from "@/lib/portal/rate-limit"
 import { callAI } from "@/lib/portal/ai-provider"
 import { loadLeadWindowData, loadLeadMessageEvents, findWhatsAppReplyTarget } from "@/lib/leads/window-loader"
+import { leadSendEnabled } from "@/lib/leads/flags"
 import {
   buildDraftFacts, buildDraftSystemPrompt, buildDraftUserPrompt, parseDraftOutput, parseReviewOutput, validateLeadDraft,
   draftLanguage, notPromisedLines, type DraftChannel, type DraftMode,
@@ -55,15 +56,19 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const loaded = await loadLeadWindowData(supabase, supabaseAdmin, params.id)
     if (!loaded.data) return NextResponse.json({ error: loaded.error }, { status: loaded.status })
     const data = loaded.data
-    const messages = (await loadLeadMessageEvents(supabaseAdmin, params.id)).events ?? []
+    // A chat matched only by a phone number may belong to someone else who shares it: it stays in the story as a
+    // 'possible' line but never reaches the AI.
+    const messages = ((await loadLeadMessageEvents(supabaseAdmin, params.id)).events ?? []).filter(m => m.matchReason !== "matched by phone number")
     const facts = buildDraftFacts(data, messages)
     const lang = draftLanguage(data.lead.language)
 
     // Where each channel can be sent from, so the window can say so before the person tries.
     const reply = channel === "whatsapp" ? await findWhatsAppReplyTarget(supabaseAdmin, params.id) : null
+    const sendOn = leadSendEnabled()
+    const switchedOff = "Sending from here is switched off. Copy the text and send it by hand."
     const target = channel === "whatsapp"
-      ? { to: data.lead.phone, canSend: !!reply?.conversationId && !!data.lead.phone, conversationId: reply?.conversationId ?? null, reason: reply?.conversationId ? "" : (reply?.reason ?? "") }
-      : { to: data.lead.email, canSend: !!data.lead.email, conversationId: null, reason: data.lead.email ? "" : "This lead has no email address." }
+      ? { to: data.lead.phone, canSend: sendOn && !!reply?.conversationId && !!data.lead.phone, conversationId: reply?.conversationId ?? null, reason: !sendOn ? switchedOff : reply?.conversationId ? "" : (reply?.reason ?? "") }
+      : { to: data.lead.email, canSend: sendOn && !!data.lead.email, conversationId: null, reason: !sendOn ? switchedOff : data.lead.email ? "" : "This lead has no email address." }
 
     const system = buildDraftSystemPrompt(channel, lang.name, mode)
     const ask = (extra?: string) => callAI({
@@ -79,7 +84,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
       return NextResponse.json({ review: parseReviewOutput(r.text), language: lang.name, target })
     }
 
-    const allowed = `${facts.join("\n")}\n${instruction}\n${currentText}`
+    // Only staff-side facts, the instruction and the text being rewritten count as permission for a number, link or promise.
+    const allowed = `${facts.trusted.join("\n")}\n${instruction}\n${currentText}`
     let lastMessage = "The assistant could not write a safe message. Your text was left as it is."
     let extra: string | undefined
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -93,7 +99,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           subject: channel === "email" ? (parsed.subject || "Following up") : null,
           placeholders: v.placeholders,
           language: lang.name,
-          based_on: facts,
+          based_on: [...facts.trusted, ...facts.context],
           not_promised: notPromisedLines(data, v.placeholders),
           target,
         })

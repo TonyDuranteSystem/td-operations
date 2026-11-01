@@ -21,11 +21,16 @@ const CALL_COLUMNS = "id, meeting_name, duration_seconds, notes, recording_url, 
 export interface LoadResult { status: number; error?: string; data?: WindowData }
 
 export async function loadLeadWindowData(supabase: UserDb, supabaseAdmin: AdminDb, id: string): Promise<LoadResult> {
-  const { data: lead, error: leadError } = await supabase
-    .from("leads")
-    .select("id, full_name, email, phone, language, source, referrer_name, status, call_date, notes, created_at, updated_at, existing_client_contact_id, converted_to_contact_id, circleback_call_id, owner, follow_up_date")
-    .eq("id", id)
-    .maybeSingle()
+  const BASE_COLUMNS = "id, full_name, email, phone, language, source, referrer_name, status, call_date, notes, created_at, updated_at, existing_client_contact_id, converted_to_contact_id, circleback_call_id"
+  // owner / follow_up_date arrive with the phase B+D migration. If the code is deployed before that migration has been
+  // run, the window must still open (without those two fields) instead of failing for every lead.
+  let { data: lead, error: leadError } = await supabase
+    .from("leads").select(`${BASE_COLUMNS}, owner, follow_up_date`).eq("id", id).maybeSingle()
+  if (leadError && /owner|follow_up_date|column/i.test(leadError.message)) {
+    const retry = await supabase.from("leads").select(BASE_COLUMNS).eq("id", id).maybeSingle()
+    lead = retry.data as typeof lead
+    leadError = retry.error
+  }
   if (leadError) {
     console.error("[leads/window] lead query failed:", leadError.message)
     return { status: 500, error: "Could not load this lead — please try again." }

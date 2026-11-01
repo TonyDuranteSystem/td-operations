@@ -81,7 +81,7 @@ export interface WindowInput {
   now?: Date
 }
 
-export type CallState = 'done' | 'scheduled' | 'due_today' | 'not_confirmed' | 'no_show' | 'moved' | 'cancelled'
+export type CallState = 'done' | 'scheduled' | 'due_today' | 'not_confirmed' | 'unrecorded' | 'no_show' | 'moved' | 'cancelled'
 
 export interface WindowCall {
   key: string
@@ -266,7 +266,11 @@ export function buildCalls(args: {
 }
 
 /** Calls from the lead's own records (lead_calls). A recording with no record yet is shown as a Done call. */
+/** Statuses where a booked call with no recording is still an open question for staff. Later stages obviously held their call. */
+const EARLY_STATUSES = new Set(['New', 'Contacted', 'Qualified', 'Call Scheduled'])
+
 export function buildCallsFromRows(args: {
+  leadStatus?: string | null
   rows: LeadCallRow[]
   recordings: WindowCallRow[]
   transcriptCallIds: string[]
@@ -298,6 +302,8 @@ export function buildCallsFromRows(args: {
       const diff = daysBetween(today, planned)
       state = diff > 0 ? 'scheduled' : diff === 0 ? 'due_today' : 'not_confirmed'
       chip = state === 'scheduled' ? `Scheduled, in ${plural(diff, 'day', 'days')}` : state === 'due_today' ? 'Due today' : 'Not confirmed'
+      // A passed date on a lead that is long past Call Scheduled is history, not a question.
+      if (state !== 'scheduled' && !EARLY_STATUSES.has(args.leadStatus ?? '')) { state = 'unrecorded'; chip = 'No recording' }
     }
     return {
       key: `call-${r.id}`,
@@ -432,6 +438,14 @@ export function buildStory(input: WindowInput, calls: WindowCall[]): WindowStory
   const now = input.now ?? new Date()
   const moveEvents: WindowStoryEvent[] = []
   for (const m of input.moves ?? []) {
+    if (m.reason === 'dry_run_auto_call_done') {
+      moveEvents.push({
+        date: m.created_at, type: 'status_moved', color: 'gray', group: 'calls', undo: null,
+        title: 'Would have moved to Call Done (the automatic move is switched off)',
+        detail: 'Nothing was changed. This is only a record of what the rules decided.',
+      })
+      continue
+    }
     const auto = m.reason === 'auto_call_done'
     moveEvents.push({
       date: m.created_at,
@@ -466,7 +480,7 @@ export function buildStory(input: WindowInput, calls: WindowCall[]): WindowStory
 
 export function buildLeadWindowData(input: WindowInput): WindowData {
   const calls = input.leadCalls && input.leadCalls.length > 0
-    ? buildCallsFromRows({ rows: input.leadCalls, recordings: input.calls, transcriptCallIds: input.transcriptCallIds, now: input.now })
+    ? buildCallsFromRows({ leadStatus: input.lead.status, rows: input.leadCalls, recordings: input.calls, transcriptCallIds: input.transcriptCallIds, now: input.now })
     : buildCalls({ leadCallDate: input.lead.call_date, recordings: input.calls, transcriptCallIds: input.transcriptCallIds, now: input.now })
   const offer = currentOffer(input.offers)
   const badges: string[] = []

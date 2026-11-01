@@ -223,6 +223,7 @@ describe('buildCallsFromRows', () => {
 
   it('a passed date with no recording asks staff; no-show, moved, cancelled keep their label', () => {
     const calls = buildCallsFromRows({
+      leadStatus: 'Call Scheduled',
       rows: [
         row({ id: 'a', scheduled_date: '2026-10-20', scheduled_start: '2026-10-20T19:00:00Z' }),
         row({ id: 'b', scheduled_date: '2026-10-21', scheduled_start: '2026-10-21T19:00:00Z', state: 'no_show' }),
@@ -246,6 +247,34 @@ describe('buildCallsFromRows', () => {
   it('a call confirmed by staff has no recording and says so', () => {
     const calls = buildCallsFromRows({ rows: [row({ state: 'done', happened_at: '2026-10-13T10:00:00Z', confirmed_by: 'luca' })], recordings: [], transcriptCallIds: [], now: NOW })
     expect(calls[0]).toMatchObject({ state: 'done', chip: 'Done, confirmed by staff', callId: null })
+  })
+})
+
+describe('old bookings on later-stage leads and dry-run moves', () => {
+  it('a passed date with no recording on a lead past Call Scheduled is history, not a question', () => {
+    const calls = buildCallsFromRows({ leadStatus: 'Offer Sent', rows: [row({ scheduled_date: '2026-09-01', scheduled_start: '2026-09-01T19:00:00Z' })], recordings: [], transcriptCallIds: [], now: NOW })
+    expect(calls[0]).toMatchObject({ state: 'unrecorded', chip: 'No recording', canConfirm: false })
+  })
+  it('the same row on a Call Scheduled lead still asks', () => {
+    const calls = buildCallsFromRows({ leadStatus: 'Call Scheduled', rows: [row({ scheduled_date: '2026-10-20', scheduled_start: '2026-10-20T19:00:00Z' })], recordings: [], transcriptCallIds: [], now: NOW })
+    expect(calls[0]).toMatchObject({ state: 'not_confirmed', canConfirm: true })
+  })
+  it('a future call is never turned into history', () => {
+    const calls = buildCallsFromRows({ leadStatus: 'Offer Sent', rows: [row({ scheduled_date: '2026-11-04' })], recordings: [], transcriptCallIds: [], now: NOW })
+    expect(calls[0].state).toBe('scheduled')
+  })
+  it('a dry-run record shows as "would have moved" with no undo', () => {
+    const lead: WindowInput['lead'] = {
+      id: 'l1', full_name: 'S', email: null, phone: null, language: null, source: null, referrer_name: null, status: 'Call Scheduled', call_date: null,
+      notes: null, created_at: '2026-10-02T10:00:00Z', updated_at: null, existing_client_contact_id: null, converted_to_contact_id: null,
+    }
+    const d = buildLeadWindowData({
+      lead, offers: [], calls: [], transcriptCallIds: [], emails: [], contracts: [], activation: null, isLiveClient: false, now: NOW,
+      moves: [{ id: 'm', lead_id: 'l1', from_status: 'Call Scheduled', to_status: 'Call Done', reason: 'dry_run_auto_call_done', source: 'circleback', call_id: null, undo_until: null, undone_at: null, undone_by: null, created_at: '2026-10-12T20:00:00Z' }],
+    })
+    const ev = d.story.find(e => e.type === 'status_moved')
+    expect(ev?.title).toMatch(/Would have moved to Call Done/)
+    expect(ev?.undo).toBeNull()
   })
 })
 

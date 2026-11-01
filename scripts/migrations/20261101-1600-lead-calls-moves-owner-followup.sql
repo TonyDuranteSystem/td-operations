@@ -74,7 +74,7 @@ SELECT l.id,
        ) l ON true
  WHERE we.source = 'calendly'
    AND we.event_type = 'invitee.created'
-   AND p->'payload'->'scheduled_event'->>'start_time' IS NOT NULL
+   AND p->'payload'->'scheduled_event'->>'start_time' ~ '^\d{4}-\d{2}-\d{2}T'   -- a malformed time must not abort the migration
    AND p->'payload'->>'event' IS NOT NULL
 ON CONFLICT (calendly_event_uri) WHERE calendly_event_uri IS NOT NULL DO NOTHING;
 

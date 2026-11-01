@@ -162,6 +162,7 @@ const CALL_CHIP: Record<WindowCall['state'], string> = {
   scheduled: 'bg-blue-50 text-blue-800',
   due_today: 'bg-amber-50 text-amber-800',
   not_confirmed: 'bg-red-50 text-red-700',
+  unrecorded: 'bg-zinc-100 text-zinc-600',
   no_show: 'bg-zinc-100 text-zinc-700',
   moved: 'bg-zinc-100 text-zinc-700',
   cancelled: 'bg-zinc-100 text-zinc-700',
@@ -221,18 +222,20 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
   const drag = useRef<{ sx: number; sy: number; x0: number; y0: number } | null>(null)
   const size = useRef(winSize())
 
+  const loadSeq = useRef(0)
   const load = useCallback(async () => {
+    const mine = ++loadSeq.current // only the newest request may write its answer
     setLoading(true)
     setError('')
     try {
       const res = await fetch(`/api/crm/leads/${win.id}/window`)
       if (!res.ok) throw new Error(await readError(res, 'Could not load this lead — please try again.'))
       const d = await res.json()
-      setData(d.data as WindowData)
+      if (mine === loadSeq.current) setData(d.data as WindowData)
     } catch (err) {
-      setError(err instanceof Error && err.message ? err.message : 'Could not load this lead — please try again.')
+      if (mine === loadSeq.current) setError(err instanceof Error && err.message ? err.message : 'Could not load this lead — please try again.')
     } finally {
-      setLoading(false)
+      if (mine === loadSeq.current) setLoading(false)
     }
   }, [win.id])
   useEffect(() => { load() }, [load])
@@ -421,7 +424,7 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
           </div>
 
           {drafting ? (
-            <DraftPanel leadId={win.id} leadName={data.lead.name} onBack={() => setDrafting(false)} onSent={load} />
+            <DraftPanel leadId={win.id} leadName={data.lead.name} currentFollowUp={data.lead.followUpDate} onBack={() => setDrafting(false)} onSent={load} />
           ) : reading ? (
             <TranscriptReader leadId={win.id} callId={reading} onBack={() => setReading(null)} />
           ) : (
@@ -546,7 +549,7 @@ interface DraftInfo {
   target: { to: string | null; canSend: boolean; conversationId: string | null; reason: string }
 }
 
-function DraftPanel({ leadId, leadName, onBack, onSent }: { leadId: string; leadName: string; onBack: () => void; onSent: () => void }) {
+function DraftPanel({ leadId, leadName, currentFollowUp, onBack, onSent }: { leadId: string; leadName: string; currentFollowUp: string | null; onBack: () => void; onSent: () => void }) {
   const [channel, setChannel] = useState<'whatsapp' | 'email'>('whatsapp')
   const [texts, setTexts] = useState<Record<string, string>>({ whatsapp: '', email: '' })
   const [subject, setSubject] = useState('')
@@ -558,11 +561,14 @@ function DraftPanel({ leadId, leadName, onBack, onSent }: { leadId: string; lead
   const [confirm, setConfirm] = useState(false)
   const [sentMsg, setSentMsg] = useState('')
   const [copied, setCopied] = useState(false)
+  const [followUpSet, setFollowUpSet] = useState(true)
+  const [sending, setSending] = useState(false)
   const text = texts[channel]
   const cur = info[channel]
   const placeholders = Array.from(new Set(text.match(/\[[^\]\n]{1,60}\]/g) ?? []))
 
   async function run(mode: 'draft' | 'rewrite' | 'check', instruction = '') {
+    if (busy) return
     setBusy(true)
     setError('')
     setConfirm(false)
@@ -575,7 +581,7 @@ function DraftPanel({ leadId, leadName, onBack, onSent }: { leadId: string; lead
       if (!res.ok) throw new Error((d && d.error) || 'Could not reach the assistant — please try again.')
       if (mode === 'check') {
         setLog(l => [...l, { who: 'You', text: 'Check the draft against the story' }, { who: 'Worker', text: (d.review as string[] | undefined)?.join('\n') || 'Nothing to report.' }])
-        if (d.target) setInfo(i => ({ ...i, [channel]: { ...(i[channel] as DraftInfo), target: d.target } }))
+        if (d.target) setInfo(i => ({ ...i, [channel]: { basedOn: [], notPromised: [], language: d.language ?? '', ...(i[channel] ?? {}), target: d.target } }))
         return
       }
       setTexts(t => ({ ...t, [channel]: d.text as string }))
@@ -594,7 +600,8 @@ function DraftPanel({ leadId, leadName, onBack, onSent }: { leadId: string; lead
   useEffect(() => { if (!texts[channel] && !info[channel]) run('draft') }, [channel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function send() {
-    if (!cur) return
+    if (!cur || sending) return
+    setSending(true)
     setBusy(true)
     setError('')
     try {
@@ -611,10 +618,11 @@ function DraftPanel({ leadId, leadName, onBack, onSent }: { leadId: string; lead
       if (!res.ok) throw new Error((d && d.error) || 'The message was not sent — please try again.')
       // The next follow-up moves out by the usual days, so this lead leaves the "follow up today" list.
       const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
-      await fetch(`/api/crm/leads/${leadId}/window/fields`, {
+      const fu = await fetch(`/api/crm/leads/${leadId}/window/fields`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ follow_up_date: addDaysYmd(today, FOLLOW_UP_DAYS_AFTER_CALL) }),
-      }).catch(() => undefined)
+        body: JSON.stringify({ follow_up_date: addDaysYmd(today, FOLLOW_UP_DAYS_AFTER_CALL), expected_follow_up_date: currentFollowUp }),
+      }).catch(() => null)
+      setFollowUpSet(!!fu && fu.ok)
       setSentMsg(channel === 'email' ? 'Email sent.' : (d && d.queued ? 'Queued on WhatsApp. It goes out through the WhatsApp line.' : 'Sent on WhatsApp.'))
       setConfirm(false)
       onSent()
@@ -623,6 +631,7 @@ function DraftPanel({ leadId, leadName, onBack, onSent }: { leadId: string; lead
       setConfirm(false)
     } finally {
       setBusy(false)
+      setSending(false)
     }
   }
 
@@ -659,7 +668,7 @@ function DraftPanel({ leadId, leadName, onBack, onSent }: { leadId: string; lead
         {placeholders.length > 0 && <p className="text-sm font-semibold text-amber-700">Fill in {placeholders.join(', ')} before sending.</p>}
         {cur && !cur.target.canSend && cur.target.reason && <p className="text-sm text-zinc-600">{cur.target.reason}</p>}
         {sentMsg ? (
-          <p className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">{sentMsg} The next follow-up is set for {FOLLOW_UP_DAYS_AFTER_CALL} days from now.</p>
+          <p className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">{sentMsg} {followUpSet ? `The next follow-up is set for ${FOLLOW_UP_DAYS_AFTER_CALL} days from now.` : 'The follow-up date was NOT changed (someone else changed it, or it could not be saved). Set it by hand.'}</p>
         ) : (
           <div className="flex flex-wrap items-center gap-2">
             {confirm ? (
@@ -702,7 +711,7 @@ function DraftPanel({ leadId, leadName, onBack, onSent }: { leadId: string; lead
       <div className="w-[330px] shrink-0 space-y-4 overflow-auto border-l p-5">
         <div>
           <div className="mb-2 text-[11px] font-bold tracking-wider text-zinc-500">WHAT THE WORKER SAW</div>
-          {cur?.basedOn.map((b, i) => <div key={i} className="mb-1.5 rounded-lg bg-zinc-100 px-2.5 py-2 text-sm leading-snug text-zinc-700">{b}</div>)}
+          {cur?.basedOn?.map((b, i) => <div key={i} className="mb-1.5 rounded-lg bg-zinc-100 px-2.5 py-2 text-sm leading-snug text-zinc-700">{b}</div>)}
           {!cur && <p className="text-sm text-zinc-500">{busy ? 'Reading the story…' : 'Nothing yet.'}</p>}
         </div>
         {cur && (
@@ -713,7 +722,7 @@ function DraftPanel({ leadId, leadName, onBack, onSent }: { leadId: string; lead
             </div>
             <div>
               <div className="mb-1.5 text-[11px] font-bold tracking-wider text-amber-800">WHAT IT DOES NOT PROMISE</div>
-              {cur.notPromised.map((n, i) => <p key={i} className="mb-1 text-sm leading-snug text-zinc-700">{n}</p>)}
+              {cur.notPromised?.map((n, i) => <p key={i} className="mb-1 text-sm leading-snug text-zinc-700">{n}</p>)}
             </div>
           </>
         )}
