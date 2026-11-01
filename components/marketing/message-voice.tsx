@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { clipUrlFor, playClipQueued, soundAllowedWithoutClick } from '@/lib/voice-clips'
 import { VOICE_KEYS, VOICE_POLL_MS, notSpokenYet, parseSpoken, rememberSpoken, voicePhrases, type VoiceAlertItem } from '@/lib/marketing/voice-alert'
 
 /**
@@ -19,6 +20,13 @@ const voiceOn = () => read(VOICE_KEYS.on) === 'on'
 
 /** Says the words in English with the first English voice the browser has. A page that cannot speak stays silent. */
 function say(text: string): void {
+  // a recorded clip when there is one (one after the other); the browser voice when there is none, or when the browser refuses the clip
+  const clip = clipUrlFor(text)
+  if (clip) { playClipQueued(clip, () => speak(text)); return }
+  speak(text)
+}
+
+function speak(text: string): void {
   try {
     const s = window.speechSynthesis
     if (!s) return
@@ -60,6 +68,8 @@ async function lookAlone(): Promise<'ok' | 'stop'> {
 function useTouched(): boolean {
   const [touched, setTouched] = useState(true)
   useEffect(() => {
+    // a browser that already lets a recorded clip start without a click (Site settings, Sound, Allow) needs no bar
+    void soundAllowedWithoutClick().then(ok => { if (ok) setTouched(true) })
     const ua = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation
     setTouched(ua ? ua.hasBeenActive : true)
     const wake = () => setTouched(true)

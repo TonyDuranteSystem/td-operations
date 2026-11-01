@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { clipUrlFor, playClip, soundAllowedWithoutClick } from '@/lib/voice-clips'
 import { TALK_VOICE_KEY, shouldSpeakTalkPhrase, talkVoiceIsOn, talkVoicePhrase } from '@/lib/talk/voice-alert'
 
 /**
@@ -51,13 +52,22 @@ function touchedNow(): boolean {
  * `phraseOverride` replaces the words (the "New implementation" chat says its own phrase whoever wrote). `fallback` is the beep: it runs if the browser accepts the words and then reports that it could not say them, so a failed voice is never a silent message.
  */
 export function speakTalkMessage(senderName: string | null | undefined, senderId: string | null | undefined, fallback: () => void, phraseOverride?: string): boolean {
-  if (typeof window === 'undefined' || !voiceOn() || !touchedNow()) return false
+  if (typeof window === 'undefined' || !voiceOn()) return false
   const phrase = phraseOverride ?? talkVoicePhrase(senderName)
+  // a recorded clip is a sound file: it needs no click when the site's Sound is allowed in the browser; the browser's own voice always needs one
+  const clip = clipUrlFor(phrase)
+  if (!clip && !touchedNow()) return false
   const key = `${phraseOverride ? '' : (senderId ?? senderName ?? '')}|${phrase}`
   const now = Date.now()
   if (!shouldSpeakTalkPhrase(lastSpoken, key, now)) return true
   // a failed voice must not silence the next message: forget it was spoken, then beep
   const failed = () => { lastSpoken = null; fallback() }
+  if (clip) {
+    // the clip first; if the browser refuses it, the browser voice tries, and if that fails too the beep sounds
+    void playClip(clip, () => { if (!touchedNow() || !say(phrase, failed)) failed() })
+    lastSpoken = { key, at: now }
+    return true
+  }
   if (!say(phrase, failed)) return false
   lastSpoken = { key, at: now }
   return true
@@ -67,8 +77,11 @@ export function speakTalkMessage(senderName: string | null | undefined, senderId
 export function TalkVoiceWakeBar() {
   const [show, setShow] = useState(false)
   useEffect(() => {
-    const sync = () => setShow(voiceOn() && !touchedNow())
+    let allowed = false
+    const sync = () => setShow(voiceOn() && !touchedNow() && !allowed)
     sync()
+    // the browser may already let a recorded clip start without a click (Site settings, Sound, Allow): then no bar
+    void soundAllowedWithoutClick().then(ok => { allowed = ok; sync() })
     const wake = () => setShow(false)
     window.addEventListener(CHANGE, sync)
     window.addEventListener('focus', sync)
@@ -97,7 +110,7 @@ export function TalkVoiceSwitch() {
   const toggle = useCallback(() => {
     const next = !voiceOn()
     write(next ? 'on' : 'off')
-    if (next) say('Sound on')
+    if (next) { const c = clipUrlFor('Sound on'); if (c) void playClip(c, () => { say('Sound on') }); else say('Sound on') }
     else { try { window.speechSynthesis?.cancel() } catch { /* silent */ } }
     setOn(next)
     window.dispatchEvent(new Event(CHANGE))
