@@ -1,9 +1,9 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { useEffect, useRef, useState, useTransition } from 'react'
-import { Search, ChevronRight, ChevronLeft, Phone, Mail, UserCheck } from 'lucide-react'
+import { useTransition } from 'react'
+import { ChevronRight, ChevronLeft, Phone, Mail, UserCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { LeadListItem } from '@/lib/types'
 import { LeadRowActions } from '@/components/leads/lead-row-actions'
@@ -37,8 +37,6 @@ const OFFER_COLORS: Record<string, string> = {
 
 interface LeadsTableProps {
   items: LeadListItem[]
-  query: string
-  statusFilter: string
   stats: {
     total: number
     new: number
@@ -52,106 +50,24 @@ interface LeadsTableProps {
   totalCount: number
 }
 
-export function LeadsTable({ items, query, statusFilter, stats, currentPage, totalPages, totalCount }: LeadsTableProps) {
+// Search and every filter live in the filter bar above the list (it works for
+// both the table and the board); this component only shows the rows and pages.
+export function LeadsTable({ items, stats, currentPage, totalPages, totalCount }: LeadsTableProps) {
   const router = useRouter()
-  const [search, setSearch] = useState(query)
+  const searchParams = useSearchParams()
   const [isPending, startTransition] = useTransition()
-  // The filter values we've actually told the server about — updated
-  // synchronously the instant we act, NOT after the async navigation
-  // resolves. React keeps every filter PROP stale for the whole pending
-  // window (that's what the opacity-50 dimming below is showing), so a
-  // second action fired before the first navigation lands must never read a
-  // prop directly for this purpose. Covers EVERY filter, not just search: a
-  // fast search-clear could otherwise be skipped or resurrected (round 1),
-  // and firing two different filters back-to-back could otherwise silently
-  // drop the first one (round 2 — found by adversarial review, 2026-09-03,
-  // on the sibling Accounts/Conversations pages which have more than one
-  // non-search filter; applied here too for the same guarantee).
-  const lastFiltersRef = useRef({ q: query, status: statusFilter })
-
-  // Resync when the URL changed for a reason OTHER than our own action above
-  // — browser back/forward, or a link elsewhere setting these params.
-  // Guarded on the ref (not a plain "prop changed" check): when a prop
-  // finally catches up to what WE set, that's our own change settling, and
-  // must NOT overwrite the search box — the user may have already typed
-  // something newer in the meantime. Only an unexpected prop value (one we
-  // didn't just ask for) means an external navigation happened.
-  useEffect(() => {
-    if (query !== lastFiltersRef.current.q || statusFilter !== lastFiltersRef.current.status) {
-      lastFiltersRef.current = { q: query, status: statusFilter }
-      setSearch(query)
-    }
-  }, [query, statusFilter])
-
-  function buildParams(overrides: Record<string, string> = {}) {
-    const params = new URLSearchParams()
-    const q = overrides.q ?? lastFiltersRef.current.q
-    const s = overrides.status ?? lastFiltersRef.current.status
-    const p = overrides.page ?? ''
-    if (q) params.set('q', q)
-    if (s && s !== 'all') params.set('status', s)
-    if (p && p !== '1') params.set('page', p)
-    return params.toString()
-  }
-
-  function updateFilter(key: 'q' | 'status', value: string) {
-    lastFiltersRef.current = { ...lastFiltersRef.current, [key]: value }
-    startTransition(() => {
-      router.push(`/leads?${buildParams({ [key]: value, page: '1' })}`)
-    })
-  }
 
   function goToPage(page: number) {
+    const params = new URLSearchParams(searchParams.toString())
+    if (page > 1) params.set('page', String(page))
+    else params.delete('page')
     startTransition(() => {
-      router.push(`/leads?${buildParams({ page: String(page) })}`)
+      router.push(`/leads?${params.toString()}`)
     })
-  }
-
-  function handleSearch(e: React.FormEvent) {
-    e.preventDefault()
-    updateFilter('q', search)
-  }
-
-  // Typing only searches on submit (below), but CLEARING the box must reset
-  // immediately — otherwise backspacing to empty, or a phone keyboard's own
-  // clear control, leaves the list stuck on the last search with no visible
-  // way to get back to the full list (reported live, 2026-09-02).
-  function handleSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const value = e.target.value
-    setSearch(value)
-    if (value === '' && lastFiltersRef.current.q !== '') {
-      updateFilter('q', '')
-    }
   }
 
   return (
     <div className="space-y-4">
-      {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <form onSubmit={handleSearch} className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input
-            type="text"
-            value={search}
-            onChange={handleSearchChange}
-            placeholder="Search name or email..."
-            className="w-full pl-9 pr-4 py-2 rounded-lg border bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </form>
-        <select
-          value={statusFilter}
-          onChange={e => updateFilter('status', e.target.value)}
-          className="px-3 py-2 rounded-lg border bg-white text-sm"
-        >
-          <option value="all">All statuses</option>
-          <option value="New">New</option>
-          <option value="Contacted">Contacted</option>
-          <option value="Qualified">Qualified</option>
-          <option value="Converted">Converted</option>
-          <option value="Lost">Lost</option>
-        </select>
-      </div>
-
       {/* Stats row */}
       <div className="flex gap-3 flex-wrap text-sm">
         <span className="px-3 py-1 rounded-full bg-zinc-100 text-zinc-700 font-medium">
@@ -202,12 +118,18 @@ export function LeadsTable({ items, query, statusFilter, stats, currentPage, tot
                   {item.referrer_name && (
                     <p className="text-xs text-muted-foreground truncate">Ref: {item.referrer_name}</p>
                   )}
-                  {(item.existing_client_contact_id || item.has_call_recording) && (
+                  {(item.existing_client_contact_id || item.is_live_client || item.has_call_recording) && (
                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                       {item.existing_client_contact_id && (
                         <span className="flex items-center gap-1 text-xs bg-zinc-100 text-zinc-600 px-1.5 py-0.5 rounded-md">
                           <UserCheck className="h-3 w-3" />
                           Existing client
+                        </span>
+                      )}
+                      {item.is_live_client && (
+                        <span className="flex items-center gap-1 text-xs bg-amber-50 text-amber-800 px-1.5 py-0.5 rounded-md">
+                          <UserCheck className="h-3 w-3" />
+                          Already a client
                         </span>
                       )}
                       {item.has_call_recording && (

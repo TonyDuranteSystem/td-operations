@@ -8,21 +8,28 @@ import { CreateLeadButton } from './components/create-lead-button'
 import type { LeadListItem } from '@/lib/types'
 import { findExistingClientNewCalls } from '@/lib/leads/existing-client-new-calls'
 import { findLeadIdsByPhone, leadSearchOrFilter } from '@/lib/leads/phone-search'
+import { buildClientEmailSet, isLiveClient } from '@/lib/leads/client-match'
+import { LeadsFilterBar } from '@/components/leads/leads-filter-bar'
+import { parseLeadFilters, filterLeads, quickCounts, distinctValues } from '@/lib/leads/list-filters'
 
 const NEW_CALL_WINDOW_DAYS = 14
 
 const PAGE_SIZE = 50
+const KANBAN_LIMIT = 200
+// One group of leads is fetched whole so the filters and button counts are exact.
+const GROUP_FETCH_LIMIT = 1000
 
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: { q?: string; status?: string; page?: string; view?: string; client?: string }
+  searchParams: Record<string, string | string[] | undefined>
 }) {
   const supabase = createClient()
-  const query = searchParams.q?.trim() ?? ''
-  const statusFilter = searchParams.status ?? 'all'
-  const currentPage = Math.max(1, parseInt(searchParams.page ?? '1', 10) || 1)
-  const viewMode = searchParams.view === 'kanban' ? 'kanban' : 'table'
+  const str = (v: string | string[] | undefined) => (Array.isArray(v) ? (v[0] ?? '') : (v ?? ''))
+  const query = str(searchParams.q).trim()
+  const filters = parseLeadFilters(searchParams)
+  const currentPage = Math.max(1, parseInt(str(searchParams.page) || '1', 10) || 1)
+  const viewMode = str(searchParams.view) === 'kanban' ? 'kanban' : 'table'
   // A real 3-way switch (dev job 93580372) — not "reveal on top of", but "show
   // exactly one group" — between the open sales pipeline, bookings from
   // people who are already clients, and leads that actually converted.
@@ -30,21 +37,24 @@ export default async function LeadsPage({
   // final state), then the existing-client tag, then everything else is a
   // real open lead. Applied to BOTH table and kanban queries so a row can't
   // silently pile up in the pipeline board just because the table switched.
-  const rawClientFilter = searchParams.client
+  const rawClientFilter = str(searchParams.client)
   const clientFilter: 'leads' | 'clients' | 'converted' =
     rawClientFilter === 'clients' ? 'clients' : rawClientFilter === 'converted' ? 'converted' : 'leads'
 
-  // For kanban view, fetch all non-converted/non-lost leads (up to 200)
-  // For table view, use pagination as before
   const isKanban = viewMode === 'kanban'
 
   // Phone-looking search text also matches phones stored in any format.
   const phoneIds = query ? await findLeadIdsByPhone(supabase, query) : []
   const searchFilter = leadSearchOrFilter(query, phoneIds)
 
+  // The whole selected group (name/email/phone search applied in the database).
+  // Every other filter is applied below on the finished rows, because "has a
+  // recording" and "current offer" are not columns on the lead. The group is a
+  // few hundred rows, so one fetch keeps the table, the board and the button
+  // counts all using the same rules (dev job 6fc63c52).
   let dbQuery = supabase
     .from('leads')
-    .select('id, full_name, email, phone, status, source, channel, language, referrer_name, call_date, offer_status, offer_year1_amount, offer_year1_currency, created_at, existing_client_contact_id, offers(status, superseded_by, created_at)', { count: 'exact' })
+    .select('id, full_name, email, phone, status, source, channel, language, referrer_name, call_date, offer_status, offer_year1_amount, offer_year1_currency, created_at, updated_at, existing_client_contact_id, offers(status, superseded_by, created_at)')
     .order('created_at', { ascending: false })
 
   if (clientFilter === 'converted') {
@@ -54,26 +64,9 @@ export default async function LeadsPage({
   } else {
     dbQuery = dbQuery.is('existing_client_contact_id', null).neq('status', 'Converted')
   }
+  if (query) dbQuery = dbQuery.or(searchFilter)
 
-  if (!isKanban) {
-    if (statusFilter && statusFilter !== 'all') {
-      dbQuery = dbQuery.eq('status', statusFilter)
-    }
-    if (query) {
-      dbQuery = dbQuery.or(searchFilter)
-    }
-    const from = (currentPage - 1) * PAGE_SIZE
-    dbQuery = dbQuery.range(from, from + PAGE_SIZE - 1)
-  } else {
-    // Kanban: fetch all (up to 200), no status filter
-    if (query) {
-      dbQuery = dbQuery.or(searchFilter)
-    }
-    dbQuery = dbQuery.range(0, 199)
-  }
-
-  const { data: leads, count: totalCount } = await dbQuery
-  const totalPages = Math.ceil((totalCount ?? 0) / PAGE_SIZE)
+  const { data: leads } = await dbQuery.range(0, GROUP_FETCH_LIMIT - 1)
 
   // Real counts for all three switch buttons, not just the active one — so
   // clicking over is never a guess at what's on the other side.
@@ -84,30 +77,36 @@ export default async function LeadsPage({
   ])
 
   // "Has this call actually happened" — a fact (a recording came back), never
-  // a guess from call_date. Batched: one query for the whole visible page,
-  // matched on lead_id (the normal path) OR the lead's tagged contact_id
-  // (Circleback can link a call to the CONTACT before the matching Calendly
-  // lead even exists — confirmed load-bearing by council review).
-  const leadIds = (leads ?? []).map(l => l.id)
-  const taggedContactIds = Array.from(
-    new Set((leads ?? []).map(l => l.existing_client_contact_id).filter((id): id is string => !!id))
-  )
+  // a guess from call_date. Every call recording linked to a lead or contact,
+  // paged so growth past one page can never silently drop some.
   const recordedLeadIds = new Set<string>()
   const recordedContactIds = new Set<string>()
-  if (leadIds.length > 0) {
-    const orParts = [`lead_id.in.(${leadIds.join(',')})`]
-    if (taggedContactIds.length > 0) orParts.push(`contact_id.in.(${taggedContactIds.join(',')})`)
-    const { data: calls } = await supabase
-      .from('call_summaries')
-      .select('lead_id, contact_id')
-      .or(orParts.join(','))
-    for (const c of calls ?? []) {
-      if (c.lead_id) recordedLeadIds.add(c.lead_id)
-      if (c.contact_id) recordedContactIds.add(c.contact_id)
+  if ((leads ?? []).length > 0) {
+    for (let from = 0; ; from += 1000) {
+      const { data: calls } = await supabase
+        .from('call_summaries')
+        .select('lead_id, contact_id')
+        .or('lead_id.not.is.null,contact_id.not.is.null')
+        .order('id')
+        .range(from, from + 999)
+      for (const c of calls ?? []) {
+        if (c.lead_id) recordedLeadIds.add(c.lead_id)
+        if (c.contact_id) recordedContactIds.add(c.contact_id)
+      }
+      if ((calls ?? []).length < 1000) break
     }
   }
 
-  const items: LeadListItem[] = (leads ?? []).map(l => {
+  // Contacts that belong to at least one company — for the live "Already a
+  // client" badge (exact email, badge only, never moves a lead between tabs).
+  const { data: clientContacts } = await supabase
+    .from('contacts')
+    .select('email, account_contacts!inner(account_id)')
+    .not('email', 'is', null)
+    .range(0, 4999)
+  const clientEmails = buildClientEmailSet(clientContacts ?? [])
+
+  const allItems: LeadListItem[] = (leads ?? []).map(l => {
     // Live current-offer status from the offers table (authoritative). Pick the
     // non-superseded offer, else the most recent — same rule as the lead detail page.
     const offersArr = (Array.isArray((l as { offers?: unknown }).offers)
@@ -136,25 +135,39 @@ export default async function LeadsPage({
       offer_year1_amount: l.offer_year1_amount,
       offer_year1_currency: l.offer_year1_currency,
       created_at: l.created_at,
+      updated_at: l.updated_at,
       existing_client_contact_id: l.existing_client_contact_id,
       has_call_recording: hasCallRecording,
+      is_live_client: l.status !== 'Converted' && !l.existing_client_contact_id && isLiveClient(l.email, clientEmails),
     }
   })
 
+  const quickButtonCounts = quickCounts(allItems)
+  const sourceOptions = distinctValues(allItems.map(i => i.source))
+  const referrerOptions = distinctValues(allItems.map(i => i.referrer_name))
+  const filtered = filterLeads(allItems, filters, { ignoreStatus: isKanban })
+
+  const totalCount = filtered.length
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE)
+  // Kanban shows everything that matches (capped, as before); the table pages.
+  const items = isKanban
+    ? filtered.slice(0, KANBAN_LIMIT)
+    : filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+
   const stats = {
-    total: totalCount ?? 0,
-    new: items.filter(l => l.status === 'New').length,
-    contacted: items.filter(l => l.status === 'Contacted').length,
-    qualified: items.filter(l => l.status === 'Qualified').length,
-    converted: items.filter(l => l.status === 'Converted').length,
-    lost: items.filter(l => l.status === 'Lost').length,
+    total: totalCount,
+    new: filtered.filter(l => l.status === 'New').length,
+    contacted: filtered.filter(l => l.status === 'Contacted').length,
+    qualified: filtered.filter(l => l.status === 'Qualified').length,
+    converted: filtered.filter(l => l.status === 'Converted').length,
+    lost: filtered.filter(l => l.status === 'Lost').length,
   }
 
   // Existing clients with a new call — independent of the tab/pagination
   // above, so it stays visible no matter which of the 3 tabs is selected.
   const { data: existingClientLeads } = await supabase
     .from('leads')
-    .select('id, full_name, existing_client_contact_id, converted_to_contact_id')
+    .select('id, full_name, existing_client_contact_id, converted_to_contact_id, converted_at')
     .or('status.eq.Converted,existing_client_contact_id.not.is.null')
 
   let existingClientNewCalls: ReturnType<typeof findExistingClientNewCalls> = []
@@ -200,13 +213,23 @@ export default async function LeadsPage({
         />
       </div>
 
+      <div className="mb-4">
+        <LeadsFilterBar
+          query={query}
+          filters={filters}
+          sources={sourceOptions}
+          referrers={referrerOptions}
+          quickCounts={quickButtonCounts}
+          isKanban={isKanban}
+          shownCount={totalCount}
+        />
+      </div>
+
       {isKanban ? (
         <LeadsKanban items={items} />
       ) : (
         <LeadsTable
           items={items}
-          query={query}
-          statusFilter={statusFilter}
           stats={stats}
           currentPage={currentPage}
           totalPages={totalPages}

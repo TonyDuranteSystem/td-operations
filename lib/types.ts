@@ -307,12 +307,17 @@ export interface LeadListItem {
   offer_year1_amount: number | null
   offer_year1_currency: string | null
   created_at: string
+  /** Last edit of the lead row — the list's "no change for N days" button measures from it. */
+  updated_at: string | null
   /** Set when this booking's email matched an already-established client —
    *  it's a booking record, not an open sales lead (dev job 93580372). */
   existing_client_contact_id: string | null
   /** True when an actual call recording has come back for this lead (via
    *  Circleback), computed server-side — never a guess from call_date. */
   has_call_recording: boolean
+  /** Live exact-email match to a contact that already has a company. Badge only —
+   *  false for leads already tagged or Converted (they have their own labels). */
+  is_live_client?: boolean
 }
 
 export interface ContactListItem {
