@@ -93,6 +93,10 @@ export default function LoginPage() {
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
           </form>
+          <p className="mt-4 text-center text-xs text-muted-foreground">
+            TD Marketing login?{' '}
+            <a href="/marketing/forgot" className="underline hover:text-foreground">Forgot your password?</a>
+          </p>
         </div>
       </div>
     </div>

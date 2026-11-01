@@ -156,7 +156,7 @@ export async function listMembers(teamId: string) {
   return out
 }
 
-function mayManage(actor: Actor): boolean {
+export function mayManage(actor: Actor): boolean {
   return actor.kind !== "member" || actor.permissions.includes("team.manage")
 }
 
@@ -183,7 +183,7 @@ export async function revokeInvite(input: { teamId: string; inviteId: string; ac
   return { ok: true }
 }
 
-async function loadMember(teamId: string, userId: string) {
+export async function loadMember(teamId: string, userId: string) {
   const { data } = await db().from("marketing_team_members").select("*").eq("team_id", teamId).eq("user_id", userId).maybeSingle()
   return data as { user_id: string; member_role: "owner" | "member"; status: string; token_version: number; bundle: string | null; permissions: string[] } | null
 }

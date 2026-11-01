@@ -115,6 +115,12 @@ const PUBLIC_PREFIXES = [
   // the accept route answers every failure with one generic message.
   '/marketing/accept',
   '/api/marketing/accept',
+  // TD Marketing password reset: "Forgot password?" and the one-time link. Same rules as the invitation: single-use hashed token,
+  // expiry, one generic answer for every failure; the forgot route never says whether an address has a login.
+  '/marketing/forgot',
+  '/marketing/reset',
+  '/api/marketing/forgot',
+  '/api/marketing/reset',
   // Client-facing forms (email-gated, no Supabase auth)
   '/offer',
   '/tax-form',
