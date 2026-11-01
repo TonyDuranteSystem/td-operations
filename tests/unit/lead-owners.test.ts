@@ -8,8 +8,14 @@ describe('parseOwner', () => {
     expect(parseOwner('').ok).toBe(true)
   })
   it('rejects anyone else, including odd types', () => {
-    for (const bad of ['luca', 'Marco', 'Luca ', 5, {}, undefined]) expect(parseOwner(bad).ok).toBe(false)
-    expect(parseOwner('Marco').message).toMatch(/Antonio, Luca, Rocco, Ale/)
+    for (const bad of ['antonio', 'Luca', 'Rocco', 'Ale', 'Antonio ', 5, {}, undefined]) expect(parseOwner(bad).ok).toBe(false)
+    expect(parseOwner('Luca').message).toMatch(/must be one of Antonio\./)
+  })
+})
+
+describe('owner list', () => {
+  it('is Antonio only (Rocco and Ale belong to TD Marketing)', () => {
+    expect([...LEAD_OWNERS]).toEqual(['Antonio'])
   })
 })
 

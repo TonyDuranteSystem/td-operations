@@ -4,7 +4,7 @@
 
 import type { createClient } from "@/lib/supabase/server"
 import type { supabaseAdmin } from "@/lib/supabase-admin"
-import { buildLeadWindowData, type WindowCallRow, type WindowData } from "@/lib/leads/window-data"
+import { buildLeadWindowData, type WindowCallRow, type WindowLeadRow, type WindowData } from "@/lib/leads/window-data"
 import { fetchLeadCallData } from "@/lib/leads/lead-calls"
 import { digitsOnly } from "@/lib/messaging/phone"
 import {
@@ -22,14 +22,16 @@ export interface LoadResult { status: number; error?: string; data?: WindowData 
 
 export async function loadLeadWindowData(supabase: UserDb, supabaseAdmin: AdminDb, id: string): Promise<LoadResult> {
   const BASE_COLUMNS = "id, full_name, email, phone, language, source, referrer_name, status, call_date, notes, created_at, updated_at, existing_client_contact_id, converted_to_contact_id, circleback_call_id"
-  // owner / follow_up_date arrive with the phase B+D migration. If the code is deployed before that migration has been
-  // run, the window must still open (without those two fields) instead of failing for every lead.
-  let { data: lead, error: leadError } = await supabase
-    .from("leads").select(`${BASE_COLUMNS}, owner, follow_up_date`).eq("id", id).maybeSingle()
-  if (leadError && /owner|follow_up_date|column/i.test(leadError.message)) {
-    const retry = await supabase.from("leads").select(BASE_COLUMNS).eq("id", id).maybeSingle()
-    lead = retry.data as typeof lead
-    leadError = retry.error
+  // owner / follow_up_date (phase B+D migration) and last_follow_up_* (follow-up-sent migration) may not exist yet if the
+  // code is deployed before a migration is run: the window must still open, keeping whichever of those fields exist.
+  const COLUMN_STEPS = [", owner, follow_up_date, last_follow_up_sent_at, last_follow_up_channel", ", owner, follow_up_date", ""]
+  let lead: (WindowLeadRow & { circleback_call_id?: string | null }) | null = null
+  let leadError: { message: string } | null = null
+  for (const extra of COLUMN_STEPS) {
+    const r = await supabase.from("leads").select(`${BASE_COLUMNS}${extra}`).eq("id", id).maybeSingle()
+    lead = r.data as unknown as typeof lead
+    leadError = r.error
+    if (!(leadError && /owner|follow_up|column/i.test(leadError.message))) break
   }
   if (leadError) {
     console.error("[leads/window] lead query failed:", leadError.message)

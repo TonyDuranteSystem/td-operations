@@ -31,6 +31,8 @@ export interface WindowLeadRow {
   converted_to_contact_id: string | null
   owner?: string | null
   follow_up_date?: string | null
+  last_follow_up_sent_at?: string | null
+  last_follow_up_channel?: string | null
 }
 
 export interface WindowOfferRow {
@@ -140,6 +142,8 @@ export interface WindowData {
     createdAt: string
     owner: string | null
     followUpDate: string | null
+    /** when a follow-up last left this window, and on which channel (null = none sent from here) */
+    lastFollowUp: { at: string; channel: string | null } | null
   }
   nextAction: string
   calls: WindowCall[]
@@ -502,6 +506,7 @@ export function buildLeadWindowData(input: WindowInput): WindowData {
       createdAt: input.lead.created_at,
       owner: input.lead.owner ?? null,
       followUpDate: input.lead.follow_up_date ?? null,
+      lastFollowUp: input.lead.last_follow_up_sent_at ? { at: input.lead.last_follow_up_sent_at, channel: input.lead.last_follow_up_channel ?? null } : null,
     },
     nextAction: nextActionText({ status: input.lead.status, offer, calls, now: input.now }),
     calls,

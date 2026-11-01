@@ -27,6 +27,7 @@ import {
 import { cn } from '@/lib/utils'
 import { STAGE_STEPS, type WindowData, type WindowStoryEvent, type WindowCall, type TranscriptLine } from '@/lib/leads/window-data'
 import { LEAD_OWNERS, addDaysYmd, FOLLOW_UP_DAYS_AFTER_CALL } from '@/lib/leads/owners'
+import { followUpTagText } from '@/lib/leads/follow-up-sent'
 import type { MessageEvent } from '@/lib/leads/window-messages'
 
 interface OpenWin { id: string; name: string; minimized: boolean; x: number; y: number; seq: number }
@@ -419,6 +420,9 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
                 className="rounded-lg border bg-white px-2 py-1 font-semibold text-zinc-900"
               />
             </label>
+            {followUpTagText(data.lead.lastFollowUp?.at, data.lead.lastFollowUp?.channel) && (
+              <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-800">{followUpTagText(data.lead.lastFollowUp?.at, data.lead.lastFollowUp?.channel)}</span>
+            )}
             {notice && <span className={cn('text-sm font-semibold', notice.ok ? 'text-emerald-700' : 'text-red-600')}>{notice.text}</span>}
           </div>
 
@@ -636,6 +640,10 @@ function DraftPanel({ leadId, leadName, currentFollowUp, onBack, onSent }: { lea
         body: JSON.stringify({ follow_up_date: addDaysYmd(today, FOLLOW_UP_DAYS_AFTER_CALL), expected_follow_up_date: currentFollowUp }),
       }).catch(() => null)
       setFollowUpSet(!!fu && fu.ok)
+      // Keep the mark ("Follow-up sent · WhatsApp · 1 Nov"); a failure here never undoes the send.
+      await fetch(`/api/crm/leads/${leadId}/window/follow-up-sent`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel }),
+      }).catch(() => null)
       setSentTexts(t => ({ ...t, [channel]: text }))
       setSentMsg(channel === 'email' ? 'Email sent.' : (d && d.queued ? 'Queued on WhatsApp. It goes out through the WhatsApp line.' : 'Sent on WhatsApp.'))
       setConfirm(false)
