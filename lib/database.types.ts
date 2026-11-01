@@ -10136,6 +10136,56 @@ export type Database = {
           },
         ]
       }
+      marketing_password_resets: {
+        Row: {
+          created_at: string
+          email_lower: string
+          expires_at: string
+          id: string
+          requested_by: string
+          requested_by_user_id: string | null
+          revoked_at: string | null
+          team_id: string
+          token_hash: string
+          used_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          email_lower: string
+          expires_at: string
+          id?: string
+          requested_by: string
+          requested_by_user_id?: string | null
+          revoked_at?: string | null
+          team_id: string
+          token_hash: string
+          used_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          email_lower?: string
+          expires_at?: string
+          id?: string
+          requested_by?: string
+          requested_by_user_id?: string | null
+          revoked_at?: string | null
+          team_id?: string
+          token_hash?: string
+          used_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_password_resets_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       marketing_push_subscriptions: {
         Row: {
           auth_key: string

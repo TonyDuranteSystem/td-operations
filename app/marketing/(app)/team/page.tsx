@@ -6,6 +6,7 @@ import { getMarketingSetting } from '@/lib/marketing/settings'
 import { listMembers, listOpenInvites } from '@/lib/marketing/members'
 import { grantablePermissions } from '@/lib/marketing/permission-labels'
 import { TeamManager } from '@/components/marketing/team-manager'
+import { APP_BASE_URL } from '@/lib/config'
 import { TeamTimes } from '@/components/marketing/team-times'
 import { loadPrefsAndTakers } from '@/lib/marketing/time-prefs-server'
 import { checkShare, googleApi, isWorkMailbox, withDeadline } from '@/lib/marketing/gcal'
@@ -46,6 +47,8 @@ export default async function MarketingTeam() {
       <TeamManager
         me={g.ctx.user.id}
         iAmOwner={g.ctx.role === 'owner'}
+        iAmAdmin={g.ctx.admin === true}
+        workspaceUrl={`${APP_BASE_URL}/marketing`}
         roles={roles}
         grantable={grantable}
         members={members.filter(m => m.status !== 'removed').map(m => ({
