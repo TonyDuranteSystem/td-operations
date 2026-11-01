@@ -11,6 +11,8 @@
 
 import { assembleTimeline, type TimelineEvent } from '@/lib/lifecycle-timeline'
 import { todayInNewYork } from '@/lib/leads/list-filters'
+import { nyDate, daysBetween } from '@/lib/leads/ny-date'
+import { undoOpen, undoHoursLeft, type LeadCallRow, type StatusMoveRow } from '@/lib/leads/lead-calls'
 
 export interface WindowLeadRow {
   id: string
@@ -27,6 +29,8 @@ export interface WindowLeadRow {
   updated_at: string | null
   existing_client_contact_id: string | null
   converted_to_contact_id: string | null
+  owner?: string | null
+  follow_up_date?: string | null
 }
 
 export interface WindowOfferRow {
@@ -70,10 +74,14 @@ export interface WindowInput {
   activation: WindowActivationRow | null
   /** a live exact-email match to a contact that already has a company */
   isLiveClient: boolean
+  /** the lead's own call records (lead_calls); when empty the older recordings + call_date logic is used */
+  leadCalls?: LeadCallRow[]
+  /** automatic / staff status moves made from calls */
+  moves?: StatusMoveRow[]
   now?: Date
 }
 
-export type CallState = 'done' | 'scheduled' | 'due_today' | 'not_confirmed'
+export type CallState = 'done' | 'scheduled' | 'due_today' | 'not_confirmed' | 'no_show' | 'moved' | 'cancelled'
 
 export interface WindowCall {
   key: string
@@ -89,17 +97,26 @@ export interface WindowCall {
   hasTranscript: boolean
   recordingUrl: string | null
   callId: string | null
+  /** lead_calls id — the target of staff answers; null for a call that has no record yet */
+  rowId: string | null
+  bookedAt: string | null
+  scheduledStart: string | null
+  /** staff may answer 'Did this call happen?' */
+  canConfirm: boolean
+  confirmedBy: string | null
 }
 
 export type StoryGroup = 'calls' | 'offer' | 'other'
 
 export interface WindowStoryEvent {
   date: string
-  type: TimelineEvent['type']
+  type: TimelineEvent['type'] | 'call_booked' | 'status_moved'
   color: TimelineEvent['color']
   title: string
   detail?: string
   group: StoryGroup
+  /** an automatic move that can still be undone */
+  undo?: { moveId: string; hoursLeft: number } | null
 }
 
 export interface WindowData {
@@ -116,6 +133,8 @@ export interface WindowData {
     stageIndex: number
     badges: string[]
     createdAt: string
+    owner: string | null
+    followUpDate: string | null
   }
   nextAction: string
   calls: WindowCall[]
@@ -143,19 +162,7 @@ export function stageIndexFor(status: string | null): number {
 
 // ── dates ────────────────────────────────────────────────────────────────
 
-/** New York calendar date (YYYY-MM-DD) of an ISO timestamp — the business clock. */
-export function nyDate(iso: string): string {
-  return todayInNewYork(new Date(iso))
-}
-
-function toDayNumber(ymd: string): number {
-  const [y, m, d] = ymd.slice(0, 10).split('-').map(Number)
-  return Math.round(Date.UTC(y, (m || 1) - 1, d || 1) / 86_400_000)
-}
-
-export function daysBetween(fromYmd: string, toYmd: string): number {
-  return toDayNumber(toYmd) - toDayNumber(fromYmd)
-}
+export { nyDate, daysBetween }
 
 const OFFER_LABEL: Record<string, string> = {
   draft: 'Draft',
@@ -221,6 +228,11 @@ export function buildCalls(args: {
     hasTranscript: withText.has(r.id),
     recordingUrl: r.recording_url,
     callId: r.id,
+    rowId: null,
+    bookedAt: null,
+    scheduledStart: null,
+    canConfirm: false,
+    confirmedBy: null,
   }))
 
   if (planned && coverIndex === -1) {
@@ -238,9 +250,69 @@ export function buildCalls(args: {
       hasTranscript: false,
       recordingUrl: null,
       callId: null,
+      rowId: null,
+      bookedAt: null,
+      scheduledStart: null,
+      canConfirm: false,
+      confirmedBy: null,
     })
   }
   return calls
+}
+
+/** Calls from the lead's own records (lead_calls). A recording with no record yet is shown as a Done call. */
+export function buildCallsFromRows(args: {
+  rows: LeadCallRow[]
+  recordings: WindowCallRow[]
+  transcriptCallIds: string[]
+  now?: Date
+}): WindowCall[] {
+  const today = todayInNewYork(args.now ?? new Date())
+  const withText = new Set(args.transcriptCallIds)
+  const recById = new Map(args.recordings.map(r => [r.id, r]))
+  const linked = new Set(args.rows.map(r => r.call_summary_id).filter((x): x is string => !!x))
+  const virtual = args.recordings.filter(r => !linked.has(r.id)).map(r => ({
+    id: `rec-${r.id}`, lead_id: '', booked_at: null, scheduled_start: null, scheduled_date: null, state: 'done',
+    happened_at: r.created_at, call_summary_id: r.id, calendly_event_uri: null, moved_to: null, source: 'recording',
+    confirmed_by: 'recording', created_at: r.created_at,
+  } as LeadCallRow))
+  const key = (r: LeadCallRow) => r.scheduled_start ?? r.scheduled_date ?? r.happened_at ?? r.created_at
+  const rows = [...args.rows, ...virtual].sort((a, b) => key(a).localeCompare(key(b)))
+
+  return rows.map((r, i) => {
+    const rec = r.call_summary_id ? recById.get(r.call_summary_id) : undefined
+    const planned = r.scheduled_date
+    let state: CallState
+    let chip: string
+    if (r.state === 'done') { state = 'done'; chip = rec || r.confirmed_by === 'recording' ? 'Done' : 'Done, confirmed by staff' }
+    else if (r.state === 'no_show') { state = 'no_show'; chip = 'No-show' }
+    else if (r.state === 'moved') { state = 'moved'; chip = 'Moved' }
+    else if (r.state === 'cancelled') { state = 'cancelled'; chip = 'Cancelled' }
+    else if (!planned) { state = 'not_confirmed'; chip = 'Not confirmed' }
+    else {
+      const diff = daysBetween(today, planned)
+      state = diff > 0 ? 'scheduled' : diff === 0 ? 'due_today' : 'not_confirmed'
+      chip = state === 'scheduled' ? `Scheduled, in ${plural(diff, 'day', 'days')}` : state === 'due_today' ? 'Due today' : 'Not confirmed'
+    }
+    return {
+      key: `call-${r.id}`,
+      title: `Call ${i + 1}`,
+      state,
+      chip,
+      scheduledFor: planned,
+      happenedAt: r.happened_at,
+      durationMin: rec?.duration_seconds ? Math.max(1, Math.round(rec.duration_seconds / 60)) : null,
+      summary: clipSummary(rec?.notes ?? null),
+      hasTranscript: rec ? withText.has(rec.id) : false,
+      recordingUrl: rec?.recording_url ?? null,
+      callId: rec?.id ?? null,
+      rowId: r.id.startsWith('rec-') ? null : r.id,
+      bookedAt: r.booked_at,
+      scheduledStart: r.scheduled_start,
+      canConfirm: (state === 'not_confirmed' || state === 'due_today') && !r.id.startsWith('rec-'),
+      confirmedBy: r.confirmed_by,
+    }
+  })
 }
 
 // ── offer ────────────────────────────────────────────────────────────────
@@ -305,8 +377,8 @@ const OFFER_TYPES = new Set<TimelineEvent['type']>([
   'offer_created', 'offer_viewed', 'offer_superseded', 'contract_signed', 'activation_created', 'payment_confirmed',
 ])
 
-export function storyGroup(type: TimelineEvent['type']): StoryGroup {
-  if (type === 'call_completed') return 'calls'
+export function storyGroup(type: WindowStoryEvent['type']): StoryGroup {
+  if (type === 'call_completed' || type === 'call_booked' || type === 'status_moved') return 'calls'
   if (OFFER_TYPES.has(type)) return 'offer'
   return 'other'
 }
@@ -330,30 +402,67 @@ export function buildStory(input: WindowInput, calls: WindowCall[]): WindowStory
     activations: input.activation ? [input.activation] : [],
   })
 
-  const callEvents: TimelineEvent[] = calls
+  const callEvents: WindowStoryEvent[] = calls
     .filter(c => c.state === 'done' && c.happenedAt)
     .map(c => ({
       date: c.happenedAt as string,
       type: 'call_completed' as const,
       color: 'purple' as const,
-      title: `${c.title} recorded`,
+      title: c.callId ? `${c.title} recorded` : `${c.title} confirmed by staff`,
       detail: [c.durationMin ? `${c.durationMin} min` : null, c.summary].filter(Boolean).join('. ') || undefined,
+      group: 'calls' as const,
     }))
 
-  return [...base, ...callEvents]
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .map(e => ({ date: e.date, type: e.type, color: e.color, title: e.title, detail: e.detail, group: storyGroup(e.type) }))
+  const bookedEvents: WindowStoryEvent[] = calls
+    .filter(c => c.bookedAt)
+    .map(c => ({
+      date: c.bookedAt as string,
+      type: 'call_booked' as const,
+      color: 'sky' as const,
+      title: `${c.title} booked`,
+      detail: c.scheduledFor ? `For ${fmtYmd(c.scheduledFor)}.${c.state === 'moved' ? ' Moved to a later date.' : ''}` : undefined,
+      group: 'calls' as const,
+    }))
+
+  const now = input.now ?? new Date()
+  const moveEvents: WindowStoryEvent[] = []
+  for (const m of input.moves ?? []) {
+    const auto = m.reason === 'auto_call_done'
+    moveEvents.push({
+      date: m.created_at,
+      type: 'status_moved',
+      color: 'gray',
+      title: auto ? `Moved to ${m.to_status} automatically` : `Moved to ${m.to_status} after you confirmed the call`,
+      detail: auto ? 'A recording came back for a booked call.' : undefined,
+      group: 'calls',
+      undo: auto && undoOpen(m, now) ? { moveId: m.id, hoursLeft: undoHoursLeft(m, now) } : null,
+    })
+    if (m.undone_at) {
+      moveEvents.push({
+        date: m.undone_at,
+        type: 'status_moved',
+        color: 'gray',
+        title: `Undone: back to ${m.from_status ?? 'the earlier status'}`,
+        detail: 'This lead will not be moved automatically again.',
+        group: 'calls',
+        undo: null,
+      })
+    }
+  }
+
+  const fromTimeline: WindowStoryEvent[] = base
+    .filter(e => !(input.leadCalls?.length && e.type === 'call_completed'))
+    .map(e => ({ date: e.date, type: e.type, color: e.color, title: e.title, detail: e.detail, group: storyGroup(e.type), undo: null }))
+
+  return [...fromTimeline, ...callEvents, ...bookedEvents, ...moveEvents].sort((a, b) => b.date.localeCompare(a.date))
 }
 
 // ── everything ───────────────────────────────────────────────────────────
 
 export function buildLeadWindowData(input: WindowInput): WindowData {
-  const calls = buildCalls({
-    leadCallDate: input.lead.call_date,
-    recordings: input.calls,
-    transcriptCallIds: input.transcriptCallIds,
-    now: input.now,
-  })
+  const calls = input.leadCalls && input.leadCalls.length > 0
+    ? buildCallsFromRows({ rows: input.leadCalls, recordings: input.calls, transcriptCallIds: input.transcriptCallIds, now: input.now })
+    : buildCalls({ leadCallDate: input.lead.call_date, recordings: input.calls, transcriptCallIds: input.transcriptCallIds, now: input.now })
   const offer = currentOffer(input.offers)
   const badges: string[] = []
   if (input.lead.existing_client_contact_id) badges.push('Existing client')
@@ -372,6 +481,8 @@ export function buildLeadWindowData(input: WindowInput): WindowData {
       stageIndex: stageIndexFor(input.lead.status),
       badges,
       createdAt: input.lead.created_at,
+      owner: input.lead.owner ?? null,
+      followUpDate: input.lead.follow_up_date ?? null,
     },
     nextAction: nextActionText({ status: input.lead.status, offer, calls, now: input.now }),
     calls,

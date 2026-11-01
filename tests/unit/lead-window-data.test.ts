@@ -9,11 +9,13 @@ import {
   clipSummary,
   stageIndexFor,
   fmtYmd,
+  buildCallsFromRows,
   daysBetween,
   type WindowCallRow,
   type WindowInput,
   type WindowOfferRow,
 } from '@/lib/leads/window-data'
+import type { LeadCallRow, StatusMoveRow } from '@/lib/leads/lead-calls'
 
 const NOW = new Date('2026-11-01T15:00:00Z') // 2026-11-01 in New York
 
@@ -192,5 +194,109 @@ describe('buildLeadWindowData', () => {
 
   it('empty notes become null', () => {
     expect(buildLeadWindowData({ ...base, lead: { ...lead, notes: '   ' } }).notes).toBeNull()
+  })
+})
+
+function row(over: Partial<LeadCallRow> = {}): LeadCallRow {
+  return {
+    id: 'r1', lead_id: 'l1', booked_at: '2026-10-02T10:00:00Z', scheduled_start: '2026-10-12T19:00:00Z', scheduled_date: '2026-10-12',
+    state: 'scheduled', happened_at: null, call_summary_id: null, calendly_event_uri: 'e1', moved_to: null, source: 'calendly',
+    confirmed_by: null, created_at: '2026-10-02T10:00:00Z', ...over,
+  }
+}
+
+describe('buildCallsFromRows', () => {
+  it('numbers calls by date and shows booked, planned and happened', () => {
+    const calls = buildCallsFromRows({
+      rows: [
+        row({ id: 'r2', scheduled_date: '2026-11-04', scheduled_start: '2026-11-04T20:00:00Z', booked_at: '2026-10-28T10:00:00Z' }),
+        row({ id: 'r1', state: 'done', happened_at: '2026-10-12T20:00:00Z', call_summary_id: 'a', confirmed_by: 'recording' }),
+      ],
+      recordings: [rec('a', '2026-10-12T20:00:00Z')],
+      transcriptCallIds: ['a'],
+      now: NOW,
+    })
+    expect(calls.map(c => [c.title, c.state, c.rowId])).toEqual([['Call 1', 'done', 'r1'], ['Call 2', 'scheduled', 'r2']])
+    expect(calls[0]).toMatchObject({ hasTranscript: true, callId: 'a', durationMin: 41, canConfirm: false })
+    expect(calls[1]).toMatchObject({ chip: 'Scheduled, in 3 days', bookedAt: '2026-10-28T10:00:00Z', canConfirm: false })
+  })
+
+  it('a passed date with no recording asks staff; no-show, moved, cancelled keep their label', () => {
+    const calls = buildCallsFromRows({
+      rows: [
+        row({ id: 'a', scheduled_date: '2026-10-20', scheduled_start: '2026-10-20T19:00:00Z' }),
+        row({ id: 'b', scheduled_date: '2026-10-21', scheduled_start: '2026-10-21T19:00:00Z', state: 'no_show' }),
+        row({ id: 'c', scheduled_date: '2026-10-22', scheduled_start: '2026-10-22T19:00:00Z', state: 'moved' }),
+        row({ id: 'd', scheduled_date: '2026-10-23', scheduled_start: '2026-10-23T19:00:00Z', state: 'cancelled' }),
+        row({ id: 'e', scheduled_date: '2026-11-01', scheduled_start: '2026-11-01T19:00:00Z' }),
+      ],
+      recordings: [], transcriptCallIds: [], now: NOW,
+    })
+    expect(calls.map(c => [c.state, c.canConfirm])).toEqual([
+      ['not_confirmed', true], ['no_show', false], ['moved', false], ['cancelled', false], ['due_today', true],
+    ])
+  })
+
+  it('a recording with no call record yet still appears as a Done call', () => {
+    const calls = buildCallsFromRows({ rows: [], recordings: [rec('z', '2026-10-20T15:00:00Z')], transcriptCallIds: [], now: NOW })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ state: 'done', rowId: null, canConfirm: false, callId: 'z' })
+  })
+
+  it('a call confirmed by staff has no recording and says so', () => {
+    const calls = buildCallsFromRows({ rows: [row({ state: 'done', happened_at: '2026-10-13T10:00:00Z', confirmed_by: 'luca' })], recordings: [], transcriptCallIds: [], now: NOW })
+    expect(calls[0]).toMatchObject({ state: 'done', chip: 'Done, confirmed by staff', callId: null })
+  })
+})
+
+describe('window data with call records and moves', () => {
+  const lead: WindowInput['lead'] = {
+    id: 'l1', full_name: 'Sofia', email: 's@example.com', phone: null, language: 'Italian', source: 'Calendly', referrer_name: null,
+    status: 'Call Done', call_date: '2026-10-12', notes: null, created_at: '2026-10-02T10:00:00Z', updated_at: null,
+    existing_client_contact_id: null, converted_to_contact_id: null, owner: 'Luca', follow_up_date: '2026-11-04',
+  }
+  const move = (over: Partial<StatusMoveRow> = {}): StatusMoveRow => ({
+    id: 'm1', lead_id: 'l1', from_status: 'Call Scheduled', to_status: 'Call Done', reason: 'auto_call_done', source: 'circleback', call_id: 'r1',
+    undo_until: '2026-11-01T20:00:00Z', undone_at: null, undone_by: null, created_at: '2026-10-12T20:05:00Z', ...over,
+  })
+  const base: WindowInput = {
+    lead, offers: [], calls: [rec('a', '2026-10-12T20:00:00Z')], transcriptCallIds: [], emails: [], contracts: [], activation: null, isLiveClient: false,
+    leadCalls: [row({ state: 'done', happened_at: '2026-10-12T20:00:00Z', call_summary_id: 'a', confirmed_by: 'recording' })], moves: [move()], now: NOW,
+  }
+
+  it('passes owner and follow-up through', () => {
+    const d = buildLeadWindowData(base)
+    expect(d.lead.owner).toBe('Luca')
+    expect(d.lead.followUpDate).toBe('2026-11-04')
+  })
+
+  it('story: booked, recorded and moved events; the open undo is offered with hours left', () => {
+    const d = buildLeadWindowData(base)
+    const titles = d.story.map(e => e.title)
+    expect(titles).toContain('Call 1 booked')
+    expect(titles).toContain('Call 1 recorded')
+    const moved = d.story.find(e => e.type === 'status_moved')
+    expect(moved?.title).toBe('Moved to Call Done automatically')
+    expect(moved?.undo).toEqual({ moveId: 'm1', hoursLeft: 5 })
+    expect(d.story.filter(e => e.type === 'call_completed')).toHaveLength(1)
+  })
+
+  it('an undone move shows both events and offers no undo', () => {
+    const d = buildLeadWindowData({ ...base, moves: [move({ undone_at: '2026-10-12T21:00:00Z', undone_by: 'luca' })] })
+    const moves = d.story.filter(e => e.type === 'status_moved')
+    expect(moves).toHaveLength(2)
+    expect(moves.every(e => !e.undo)).toBe(true)
+    expect(moves.map(e => e.title).some(t => t.startsWith('Undone'))).toBe(true)
+  })
+
+  it('an expired undo window offers no undo', () => {
+    const d = buildLeadWindowData({ ...base, moves: [move({ undo_until: '2026-10-13T20:00:00Z' })] })
+    expect(d.story.find(e => e.type === 'status_moved')?.undo).toBeNull()
+  })
+
+  it('falls back to recordings + call date when the lead has no call records', () => {
+    const d = buildLeadWindowData({ ...base, leadCalls: [], moves: [] })
+    expect(d.calls.length).toBeGreaterThan(0)
+    expect(d.story.some(e => e.type === 'call_booked')).toBe(false)
   })
 })

@@ -22,10 +22,11 @@ import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { format, parseISO } from 'date-fns'
 import {
-  X, Minus, GripVertical, ExternalLink, Phone, Mail, FileText, CheckCircle2, UserPlus, Zap, Search, RefreshCw,
+  X, Minus, GripVertical, ExternalLink, Phone, Mail, FileText, CheckCircle2, UserPlus, Zap, Search, RefreshCw, CalendarPlus, ArrowRightLeft,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { STAGE_STEPS, type WindowData, type WindowStoryEvent, type WindowCall, type TranscriptLine } from '@/lib/leads/window-data'
+import { LEAD_OWNERS } from '@/lib/leads/owners'
 
 interface OpenWin { id: string; name: string; minimized: boolean; x: number; y: number; seq: number }
 
@@ -160,6 +161,9 @@ const CALL_CHIP: Record<WindowCall['state'], string> = {
   scheduled: 'bg-blue-50 text-blue-800',
   due_today: 'bg-amber-50 text-amber-800',
   not_confirmed: 'bg-red-50 text-red-700',
+  no_show: 'bg-zinc-100 text-zinc-700',
+  moved: 'bg-zinc-100 text-zinc-700',
+  cancelled: 'bg-zinc-100 text-zinc-700',
 }
 const COLOR_DOT: Record<string, string> = {
   gray: 'bg-zinc-100 text-zinc-600', blue: 'bg-blue-50 text-blue-600', green: 'bg-green-50 text-green-600',
@@ -168,6 +172,8 @@ const COLOR_DOT: Record<string, string> = {
 }
 function storyIcon(type: WindowStoryEvent['type']) {
   if (type === 'call_completed') return Phone
+  if (type === 'call_booked') return CalendarPlus
+  if (type === 'status_moved') return ArrowRightLeft
   if (type.startsWith('offer') || type === 'activation_created') return FileText
   if (type.startsWith('email')) return Mail
   if (type === 'contract_signed' || type === 'payment_confirmed') return CheckCircle2
@@ -180,6 +186,22 @@ async function readError(res: Response, fallback: string): Promise<string> {
   return (d && typeof d.error === 'string' && d.error) || fallback
 }
 
+function fmtStart(iso: string | null): string {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleString('en-US', {
+      timeZone: 'America/New_York', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit',
+    }) + ' New York'
+  } catch { return iso }
+}
+
+async function postJson(url: string, body: unknown, fallback: string): Promise<{ message: string }> {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) })
+  const d = await res.json().catch(() => ({}))
+  if (!res.ok || d?.ok === false) throw new Error((d && (d.message || d.error)) || fallback)
+  return { message: d?.message ?? '' }
+}
+
 // ── one window ───────────────────────────────────────────────────────────
 
 function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
@@ -190,6 +212,8 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<'all' | 'calls' | 'offer'>('all')
   const [reading, setReading] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const drag = useRef<{ sx: number; sy: number; x0: number; y0: number } | null>(null)
   const size = useRef(winSize())
 
@@ -208,6 +232,33 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
     }
   }, [win.id])
   useEffect(() => { load() }, [load])
+
+  async function act(run: () => Promise<{ message: string }>, fallback: string) {
+    setBusy(true)
+    setNotice(null)
+    try {
+      const r = await run()
+      setNotice({ ok: true, text: r.message || 'Done.' })
+    } catch (err) {
+      setNotice({ ok: false, text: err instanceof Error && err.message ? err.message : fallback })
+    } finally {
+      setBusy(false)
+      load()
+    }
+  }
+  const answerCall = (rowId: string, action: 'happened' | 'no_show' | 'rebook') =>
+    act(() => postJson(`/api/crm/leads/${win.id}/calls/${rowId}`, { action }, 'Could not save your answer — please try again.'), 'Could not save your answer — please try again.')
+  const undoMove = (moveId: string) =>
+    act(() => postJson(`/api/crm/leads/${win.id}/moves/${moveId}/undo`, {}, 'Could not undo — please try again.'), 'Could not undo — please try again.')
+  const saveField = (field: 'owner' | 'follow_up_date', value: string | null, expected: string | null) =>
+    act(async () => {
+      const res = await fetch(`/api/crm/leads/${win.id}/window/fields`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: value, [`expected_${field}`]: expected }),
+      })
+      if (!res.ok) throw new Error(await readError(res, 'Could not save — please try again.'))
+      return { message: 'Saved.' }
+    }, 'Could not save — please try again.')
 
   const onPointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest('button,a')) return
@@ -294,6 +345,35 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
             <div className="border-b bg-zinc-50 px-4 py-2 text-sm font-semibold text-zinc-700">Status: {data.lead.status}</div>
           )}
 
+          {/* owner + follow-up */}
+          <div className="flex flex-wrap items-center gap-4 border-b px-4 py-2.5 text-sm">
+            <label className="flex items-center gap-2 text-zinc-500">
+              Owner
+              <select
+                value={data.lead.owner ?? ''}
+                disabled={busy}
+                onChange={e => saveField('owner', e.target.value || null, data.lead.owner)}
+                aria-label="Owner"
+                className="rounded-lg border bg-white px-2 py-1 font-semibold text-zinc-900"
+              >
+                <option value="">No owner</option>
+                {LEAD_OWNERS.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 text-zinc-500">
+              Follow-up
+              <input
+                type="date"
+                value={data.lead.followUpDate ?? ''}
+                disabled={busy}
+                onChange={e => saveField('follow_up_date', e.target.value || null, data.lead.followUpDate)}
+                aria-label="Follow-up date"
+                className="rounded-lg border bg-white px-2 py-1 font-semibold text-zinc-900"
+              />
+            </label>
+            {notice && <span className={cn('text-sm font-semibold', notice.ok ? 'text-emerald-700' : 'text-red-600')}>{notice.text}</span>}
+          </div>
+
           {/* next action */}
           <div className="flex items-center gap-4 border-b border-blue-100 bg-blue-50 px-4 py-3">
             <span className="shrink-0 text-[11px] font-bold tracking-wider text-blue-700">NEXT ACTION</span>
@@ -311,17 +391,28 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
                   {data.calls.length === 0 && <p className="text-sm text-zinc-500">No call yet.</p>}
                   <div className="space-y-2.5">
                     {data.calls.map(c => (
-                      <div key={c.key} className={cn('rounded-xl border p-3.5', c.state === 'not_confirmed' && 'border-red-200', c.state === 'scheduled' && 'border-blue-200 bg-blue-50/40')}>
+                      <div key={c.key} className={cn('rounded-xl border p-3.5', c.state === 'not_confirmed' && 'border-red-200', c.state === 'scheduled' && 'border-blue-200 bg-blue-50/40', (c.state === 'moved' || c.state === 'cancelled') && 'bg-zinc-50 text-zinc-500')}>
                         <div className="flex items-center justify-between">
-                          <span className="font-bold">{c.title}</span>
+                          <span className={cn('font-bold', (c.state === 'moved' || c.state === 'cancelled') && 'line-through')}>{c.title}</span>
                           <span className={cn('rounded-full px-2.5 py-0.5 text-xs font-semibold', CALL_CHIP[c.state])}>{c.chip}</span>
                         </div>
                         <dl className="mt-2 grid grid-cols-[84px_1fr] gap-x-2 gap-y-1 text-sm text-zinc-700">
-                          {c.scheduledFor && (<><dt className="text-zinc-500">Planned for</dt><dd>{fmtDate(c.scheduledFor)}</dd></>)}
+                          {c.bookedAt && (<><dt className="text-zinc-500">Booked</dt><dd>{fmtDate(c.bookedAt)}</dd></>)}
+                          {(c.scheduledStart || c.scheduledFor) && (<><dt className="text-zinc-500">Planned for</dt><dd>{c.scheduledStart ? fmtStart(c.scheduledStart) : fmtDate(c.scheduledFor)}</dd></>)}
                           {c.happenedAt && (<><dt className="text-zinc-500">Happened</dt><dd>{fmtDate(c.happenedAt)}{c.durationMin ? `, ${c.durationMin} min` : ''}</dd></>)}
                         </dl>
                         {c.summary && <p className="mt-2 text-sm leading-relaxed text-zinc-700"><span className="text-[11px] font-bold tracking-wide text-violet-700">SUMMARY </span>{c.summary}</p>}
-                        {c.state === 'not_confirmed' && <p className="mt-2 text-sm text-red-700">The date passed and no recording came back.</p>}
+                        {c.state === 'moved' && <p className="mt-2 text-sm">Moved to a later date. The new call is below.</p>}
+                        {c.canConfirm && c.rowId && (
+                          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3">
+                            <p className="text-sm font-semibold text-red-700">{c.state === 'due_today' ? 'This call is today. Did it happen?' : 'The date passed and no recording came back. Did it happen?'}</p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button type="button" disabled={busy} onClick={() => answerCall(c.rowId as string, 'happened')} className="rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">Yes, it happened</button>
+                              <button type="button" disabled={busy} onClick={() => answerCall(c.rowId as string, 'no_show')} className="rounded-lg border bg-white px-3 py-1.5 text-sm font-semibold hover:bg-zinc-50 disabled:opacity-50">No-show</button>
+                              <button type="button" disabled={busy} onClick={() => answerCall(c.rowId as string, 'rebook')} className="rounded-lg border bg-white px-3 py-1.5 text-sm font-semibold hover:bg-zinc-50 disabled:opacity-50">Rebook</button>
+                            </div>
+                          </div>
+                        )}
                         {(c.hasTranscript || c.recordingUrl) && (
                           <div className="mt-3 flex gap-2">
                             {c.hasTranscript && c.callId && (
@@ -378,6 +469,11 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
                         <span className={cn('absolute -left-9 top-0 flex h-7 w-7 items-center justify-center rounded-full', COLOR_DOT[e.color] ?? COLOR_DOT.gray)}><Icon className="h-3.5 w-3.5" /></span>
                         <div className="flex flex-wrap items-baseline gap-2"><span className="font-bold">{e.title}</span><span className="text-sm text-zinc-500">{fmtDate(e.date)}</span></div>
                         {e.detail && <p className="mt-0.5 text-sm leading-relaxed text-zinc-700">{e.detail}</p>}
+                        {e.undo && (
+                          <button type="button" disabled={busy} onClick={() => undoMove(e.undo!.moveId)} className="mt-1.5 rounded-lg border bg-white px-2.5 py-1 text-xs font-semibold hover:bg-zinc-50 disabled:opacity-50">
+                            Undo, {e.undo.hoursLeft} {e.undo.hoursLeft === 1 ? 'hour' : 'hours'} left
+                          </button>
+                        )}
                       </li>
                     )
                   })}

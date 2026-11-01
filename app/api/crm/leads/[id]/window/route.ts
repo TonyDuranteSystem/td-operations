@@ -16,6 +16,7 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { buildLeadWindowData, type WindowCallRow } from "@/lib/leads/window-data"
+import { fetchLeadCallData } from "@/lib/leads/lead-calls"
 
 export const dynamic = "force-dynamic"
 
@@ -35,7 +36,7 @@ export async function GET(_request: Request, { params }: { params: { id: string 
     const supabase = createClient()
     const { data: lead, error: leadError } = await supabase
       .from("leads")
-      .select("id, full_name, email, phone, language, source, referrer_name, status, call_date, notes, created_at, updated_at, existing_client_contact_id, converted_to_contact_id, circleback_call_id")
+      .select("id, full_name, email, phone, language, source, referrer_name, status, call_date, notes, created_at, updated_at, existing_client_contact_id, converted_to_contact_id, circleback_call_id, owner, follow_up_date")
       .eq("id", id)
       .maybeSingle()
     if (leadError) {
@@ -50,7 +51,7 @@ export async function GET(_request: Request, { params }: { params: { id: string 
       .eq("lead_id", id)
     const offerTokens = (offers ?? []).map(o => o.token)
 
-    const [emailsRes, contractsRes, activationRes, callsRes, textRes] = await Promise.all([
+    const [emailsRes, contractsRes, activationRes, callsRes, textRes, callData] = await Promise.all([
       supabase.from("email_tracking").select("id, subject, created_at, first_opened_at").eq("lead_id", id).order("created_at", { ascending: true }),
       offerTokens.length > 0
         ? supabase.from("contracts").select("offer_token, signed_at").in("offer_token", offerTokens)
@@ -64,6 +65,8 @@ export async function GET(_request: Request, { params }: { params: { id: string 
         .maybeSingle(),
       supabaseAdmin.from("call_summaries").select(CALL_COLUMNS).eq("lead_id", id).order("created_at", { ascending: true }),
       supabaseAdmin.from("call_summaries").select("id").eq("lead_id", id).not("transcript", "is", null),
+      // The lead's own call records and the moves made from them (phase B). New tables: untyped client.
+      fetchLeadCallData(supabaseAdmin, id),
     ])
 
     let calls = (callsRes.data ?? []) as WindowCallRow[]
@@ -103,6 +106,8 @@ export async function GET(_request: Request, { params }: { params: { id: string 
       contracts: contractsRes.data ?? [],
       activation: activationRes.data ?? null,
       isLiveClient,
+      leadCalls: callData.calls,
+      moves: callData.moves,
     })
     return NextResponse.json({ data })
   } catch (err) {

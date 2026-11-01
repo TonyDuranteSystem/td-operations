@@ -18,7 +18,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { updateLeadColumnGuarded, isGuardedFailure, type LeadDb } from '@/lib/leads/guarded-update'
-import { nyDate, daysBetween } from '@/lib/leads/window-data'
+import { nyDate, daysBetween } from '@/lib/leads/ny-date'
 
 export type LeadCallState = 'scheduled' | 'done' | 'no_show' | 'moved' | 'cancelled'
 
@@ -126,6 +126,16 @@ export function oldEventUriFromInvitee(oldInvitee: unknown): string | null {
 
 type Db = SupabaseClient
 const asDb = (db: unknown) => db as Db
+
+/** The lead's call records and status moves, for the window (new tables: read through the untyped client). */
+export async function fetchLeadCallData(db: unknown, leadId: string): Promise<{ calls: LeadCallRow[]; moves: StatusMoveRow[] }> {
+  const sb = asDb(db)
+  const [calls, moves] = await Promise.all([
+    sb.from('lead_calls').select('*').eq('lead_id', leadId),
+    sb.from('lead_status_moves').select('*').eq('lead_id', leadId).order('created_at', { ascending: true }),
+  ])
+  return { calls: (calls.data ?? []) as LeadCallRow[], moves: (moves.data ?? []) as StatusMoveRow[] }
+}
 
 export interface BookingInput {
   leadId: string
