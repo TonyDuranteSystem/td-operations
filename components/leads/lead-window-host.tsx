@@ -22,10 +22,12 @@ import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { format, parseISO } from 'date-fns'
 import {
-  X, Minus, GripVertical, ExternalLink, Phone, Mail, FileText, CheckCircle2, UserPlus, Zap, Search, RefreshCw,
+  X, Minus, GripVertical, ExternalLink, Phone, Mail, FileText, CheckCircle2, UserPlus, Zap, Search, RefreshCw, CalendarPlus, ArrowRightLeft, MessageCircle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { STAGE_STEPS, type WindowData, type WindowStoryEvent, type WindowCall, type TranscriptLine } from '@/lib/leads/window-data'
+import { LEAD_OWNERS, addDaysYmd, FOLLOW_UP_DAYS_AFTER_CALL } from '@/lib/leads/owners'
+import type { MessageEvent } from '@/lib/leads/window-messages'
 
 interface OpenWin { id: string; name: string; minimized: boolean; x: number; y: number; seq: number }
 
@@ -160,6 +162,10 @@ const CALL_CHIP: Record<WindowCall['state'], string> = {
   scheduled: 'bg-blue-50 text-blue-800',
   due_today: 'bg-amber-50 text-amber-800',
   not_confirmed: 'bg-red-50 text-red-700',
+  unrecorded: 'bg-zinc-100 text-zinc-600',
+  no_show: 'bg-zinc-100 text-zinc-700',
+  moved: 'bg-zinc-100 text-zinc-700',
+  cancelled: 'bg-zinc-100 text-zinc-700',
 }
 const COLOR_DOT: Record<string, string> = {
   gray: 'bg-zinc-100 text-zinc-600', blue: 'bg-blue-50 text-blue-600', green: 'bg-green-50 text-green-600',
@@ -168,6 +174,8 @@ const COLOR_DOT: Record<string, string> = {
 }
 function storyIcon(type: WindowStoryEvent['type']) {
   if (type === 'call_completed') return Phone
+  if (type === 'call_booked') return CalendarPlus
+  if (type === 'status_moved') return ArrowRightLeft
   if (type.startsWith('offer') || type === 'activation_created') return FileText
   if (type.startsWith('email')) return Mail
   if (type === 'contract_signed' || type === 'payment_confirmed') return CheckCircle2
@@ -180,6 +188,22 @@ async function readError(res: Response, fallback: string): Promise<string> {
   return (d && typeof d.error === 'string' && d.error) || fallback
 }
 
+function fmtStart(iso: string | null): string {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleString('en-US', {
+      timeZone: 'America/New_York', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit',
+    }) + ' New York'
+  } catch { return iso }
+}
+
+async function postJson(url: string, body: unknown, fallback: string): Promise<{ message: string }> {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) })
+  const d = await res.json().catch(() => ({}))
+  if (!res.ok || d?.ok === false) throw new Error((d && (d.message || d.error)) || fallback)
+  return { message: d?.message ?? '' }
+}
+
 // ── one window ───────────────────────────────────────────────────────────
 
 function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
@@ -188,26 +212,76 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
   const [data, setData] = useState<WindowData | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState<'all' | 'calls' | 'offer'>('all')
+  const [filter, setFilter] = useState<'all' | 'calls' | 'messages' | 'offer'>('all')
+  const [messages, setMessages] = useState<MessageEvent[]>([])
+  const [messagesError, setMessagesError] = useState('')
   const [reading, setReading] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [drafting, setDrafting] = useState(false)
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const drag = useRef<{ sx: number; sy: number; x0: number; y0: number } | null>(null)
   const size = useRef(winSize())
 
+  const loadSeq = useRef(0)
   const load = useCallback(async () => {
+    const mine = ++loadSeq.current // only the newest request may write its answer
     setLoading(true)
     setError('')
     try {
       const res = await fetch(`/api/crm/leads/${win.id}/window`)
       if (!res.ok) throw new Error(await readError(res, 'Could not load this lead — please try again.'))
       const d = await res.json()
-      setData(d.data as WindowData)
+      if (mine === loadSeq.current) setData(d.data as WindowData)
     } catch (err) {
-      setError(err instanceof Error && err.message ? err.message : 'Could not load this lead — please try again.')
+      if (mine === loadSeq.current) setError(err instanceof Error && err.message ? err.message : 'Could not load this lead — please try again.')
     } finally {
-      setLoading(false)
+      if (mine === loadSeq.current) setLoading(false)
     }
   }, [win.id])
   useEffect(() => { load() }, [load])
+
+  // Emails and WhatsApp come in their own call so a slow inbox never holds the window back.
+  useEffect(() => {
+    let live = true
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/crm/leads/${win.id}/window/messages`)
+        if (!res.ok) throw new Error(await readError(res, 'Could not load the messages — please try again.'))
+        const d = await res.json()
+        if (live) { setMessages((d.events ?? []) as MessageEvent[]); setMessagesError('') }
+      } catch (err) {
+        if (live) setMessagesError(err instanceof Error && err.message ? err.message : 'Could not load the messages — please try again.')
+      }
+    })()
+    return () => { live = false }
+  }, [win.id])
+
+  async function act(run: () => Promise<{ message: string }>, fallback: string) {
+    setBusy(true)
+    setNotice(null)
+    try {
+      const r = await run()
+      setNotice({ ok: true, text: r.message || 'Done.' })
+    } catch (err) {
+      setNotice({ ok: false, text: err instanceof Error && err.message ? err.message : fallback })
+    } finally {
+      setBusy(false)
+      load()
+    }
+  }
+  const answerCall = (rowId: string, action: 'happened' | 'no_show' | 'rebook') =>
+    act(() => postJson(`/api/crm/leads/${win.id}/calls/${rowId}`, { action }, 'Could not save your answer — please try again.'), 'Could not save your answer — please try again.')
+  const undoMove = (moveId: string) =>
+    act(() => postJson(`/api/crm/leads/${win.id}/moves/${moveId}/undo`, {}, 'Could not undo — please try again.'), 'Could not undo — please try again.')
+  const saveField = (field: 'owner' | 'follow_up_date', value: string | null, expected: string | null) =>
+    act(async () => {
+      const res = await fetch(`/api/crm/leads/${win.id}/window/fields`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: value, [`expected_${field}`]: expected }),
+      })
+      if (!res.ok) throw new Error(await readError(res, 'Could not save — please try again.'))
+      return { message: 'Saved.' }
+    }, 'Could not save — please try again.')
 
   const onPointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest('button,a')) return
@@ -227,6 +301,25 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
 
   if (win.minimized) return null
   const stage = data?.lead.stageIndex ?? -1
+  // One story: call/offer events from the window data plus the emails and chats, newest first.
+  const messageEvents: WindowStoryEvent[] = messages.map(m => ({
+    date: m.date,
+    type: m.channel === 'email' ? 'email_sent' : 'call_booked',
+    color: m.channel === 'email' ? 'sky' : 'green',
+    title: m.title,
+    detail: m.detail,
+    group: 'messages',
+    undo: null,
+    channel: m.channel,
+    direction: m.direction,
+    matchReason: m.matchReason,
+    count: m.count,
+  }))
+  const shownStory = data
+    ? [...data.story, ...messageEvents]
+        .filter(e => filter === 'all' || e.group === filter)
+        .sort((a, b) => b.date.localeCompare(a.date))
+    : []
 
   return (
     <div
@@ -267,15 +360,21 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
       </div>
 
       {loading && !data && <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">Loading…</div>}
-      {error && (
+      {error && !data && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
           <p className="text-sm text-red-600">{error}</p>
           <button type="button" onClick={load} className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-zinc-50"><RefreshCw className="h-3.5 w-3.5" />Try again</button>
         </div>
       )}
 
-      {data && !error && (
+      {data && (
         <>
+          {error && (
+            <div className="flex items-center gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">
+              <span className="flex-1">{error}</span>
+              <button type="button" onClick={load} className="rounded-lg border border-red-200 bg-white px-3 py-1 text-xs font-semibold hover:bg-red-50">Try again</button>
+            </div>
+          )}
           {/* stage bar */}
           <div className="flex gap-1.5 border-b px-4 py-3">
             {STAGE_STEPS.map((label, i) => (
@@ -294,13 +393,45 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
             <div className="border-b bg-zinc-50 px-4 py-2 text-sm font-semibold text-zinc-700">Status: {data.lead.status}</div>
           )}
 
+          {/* owner + follow-up */}
+          <div className="flex flex-wrap items-center gap-4 border-b px-4 py-2.5 text-sm">
+            <label className="flex items-center gap-2 text-zinc-500">
+              Owner
+              <select
+                value={data.lead.owner ?? ''}
+                disabled={busy}
+                onChange={e => saveField('owner', e.target.value || null, data.lead.owner)}
+                aria-label="Owner"
+                className="rounded-lg border bg-white px-2 py-1 font-semibold text-zinc-900"
+              >
+                <option value="">No owner</option>
+                {LEAD_OWNERS.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 text-zinc-500">
+              Follow-up
+              <input
+                type="date"
+                value={data.lead.followUpDate ?? ''}
+                disabled={busy}
+                onChange={e => saveField('follow_up_date', e.target.value || null, data.lead.followUpDate)}
+                aria-label="Follow-up date"
+                className="rounded-lg border bg-white px-2 py-1 font-semibold text-zinc-900"
+              />
+            </label>
+            {notice && <span className={cn('text-sm font-semibold', notice.ok ? 'text-emerald-700' : 'text-red-600')}>{notice.text}</span>}
+          </div>
+
           {/* next action */}
           <div className="flex items-center gap-4 border-b border-blue-100 bg-blue-50 px-4 py-3">
             <span className="shrink-0 text-[11px] font-bold tracking-wider text-blue-700">NEXT ACTION</span>
-            <span className="text-[15px] font-semibold">{data.nextAction}</span>
+            <span className="flex-1 text-[15px] font-semibold">{data.nextAction}</span>
+            <button type="button" onClick={() => { setReading(null); setDrafting(true) }} className="shrink-0 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">Draft follow-up</button>
           </div>
 
-          {reading ? (
+          {drafting ? (
+            <DraftPanel leadId={win.id} leadName={data.lead.name} currentFollowUp={data.lead.followUpDate} onBack={() => setDrafting(false)} onSent={load} />
+          ) : reading ? (
             <TranscriptReader leadId={win.id} callId={reading} onBack={() => setReading(null)} />
           ) : (
             <div className="flex min-h-0 flex-1">
@@ -311,17 +442,28 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
                   {data.calls.length === 0 && <p className="text-sm text-zinc-500">No call yet.</p>}
                   <div className="space-y-2.5">
                     {data.calls.map(c => (
-                      <div key={c.key} className={cn('rounded-xl border p-3.5', c.state === 'not_confirmed' && 'border-red-200', c.state === 'scheduled' && 'border-blue-200 bg-blue-50/40')}>
+                      <div key={c.key} className={cn('rounded-xl border p-3.5', c.state === 'not_confirmed' && 'border-red-200', c.state === 'scheduled' && 'border-blue-200 bg-blue-50/40', (c.state === 'moved' || c.state === 'cancelled') && 'bg-zinc-50 text-zinc-500')}>
                         <div className="flex items-center justify-between">
-                          <span className="font-bold">{c.title}</span>
+                          <span className={cn('font-bold', (c.state === 'moved' || c.state === 'cancelled') && 'line-through')}>{c.title}</span>
                           <span className={cn('rounded-full px-2.5 py-0.5 text-xs font-semibold', CALL_CHIP[c.state])}>{c.chip}</span>
                         </div>
                         <dl className="mt-2 grid grid-cols-[84px_1fr] gap-x-2 gap-y-1 text-sm text-zinc-700">
-                          {c.scheduledFor && (<><dt className="text-zinc-500">Planned for</dt><dd>{fmtDate(c.scheduledFor)}</dd></>)}
+                          {c.bookedAt && (<><dt className="text-zinc-500">Booked</dt><dd>{fmtDate(c.bookedAt)}</dd></>)}
+                          {(c.scheduledStart || c.scheduledFor) && (<><dt className="text-zinc-500">Planned for</dt><dd>{c.scheduledStart ? fmtStart(c.scheduledStart) : fmtDate(c.scheduledFor)}</dd></>)}
                           {c.happenedAt && (<><dt className="text-zinc-500">Happened</dt><dd>{fmtDate(c.happenedAt)}{c.durationMin ? `, ${c.durationMin} min` : ''}</dd></>)}
                         </dl>
                         {c.summary && <p className="mt-2 text-sm leading-relaxed text-zinc-700"><span className="text-[11px] font-bold tracking-wide text-violet-700">SUMMARY </span>{c.summary}</p>}
-                        {c.state === 'not_confirmed' && <p className="mt-2 text-sm text-red-700">The date passed and no recording came back.</p>}
+                        {c.state === 'moved' && <p className="mt-2 text-sm">Moved to a later date. The new call is below.</p>}
+                        {c.canConfirm && c.rowId && (
+                          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3">
+                            <p className="text-sm font-semibold text-red-700">{c.state === 'due_today' ? 'This call is today. Did it happen?' : 'The date passed and no recording came back. Did it happen?'}</p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button type="button" disabled={busy} onClick={() => answerCall(c.rowId as string, 'happened')} className="rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">Yes, it happened</button>
+                              <button type="button" disabled={busy} onClick={() => answerCall(c.rowId as string, 'no_show')} className="rounded-lg border bg-white px-3 py-1.5 text-sm font-semibold hover:bg-zinc-50 disabled:opacity-50">No-show</button>
+                              <button type="button" disabled={busy} onClick={() => answerCall(c.rowId as string, 'rebook')} className="rounded-lg border bg-white px-3 py-1.5 text-sm font-semibold hover:bg-zinc-50 disabled:opacity-50">Rebook</button>
+                            </div>
+                          </div>
+                        )}
                         {(c.hasTranscript || c.recordingUrl) && (
                           <div className="mt-3 flex gap-2">
                             {c.hasTranscript && c.callId && (
@@ -358,7 +500,7 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
               <div className="min-w-0 flex-1 space-y-4 overflow-auto p-5">
                 <div className="flex items-center gap-2">
                   <span className="mr-1 text-[11px] font-bold tracking-wider text-zinc-500">STORY</span>
-                  {([['all', 'All'], ['calls', 'Calls'], ['offer', 'Offer and money']] as const).map(([k, label]) => (
+                  {([['all', 'All'], ['calls', 'Calls'], ['messages', 'Messages'], ['offer', 'Offer and money']] as const).map(([k, label]) => (
                     <button
                       key={k}
                       type="button"
@@ -369,25 +511,238 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
                     </button>
                   ))}
                 </div>
+                {messagesError && <p className="text-sm text-red-600">{messagesError}</p>}
                 <ol className="relative space-y-4 pl-9">
                   <span className="absolute bottom-2 left-[13px] top-2 w-0.5 bg-zinc-200" />
-                  {data.story.filter(e => filter === 'all' || e.group === filter).map((e, i) => {
-                    const Icon = storyIcon(e.type)
+                  {shownStory.map((e, i) => {
+                    const Icon = e.channel === 'whatsapp' ? MessageCircle : e.channel === 'email' ? Mail : storyIcon(e.type)
                     return (
                       <li key={`${e.date}-${e.type}-${i}`} className="relative">
                         <span className={cn('absolute -left-9 top-0 flex h-7 w-7 items-center justify-center rounded-full', COLOR_DOT[e.color] ?? COLOR_DOT.gray)}><Icon className="h-3.5 w-3.5" /></span>
                         <div className="flex flex-wrap items-baseline gap-2"><span className="font-bold">{e.title}</span><span className="text-sm text-zinc-500">{fmtDate(e.date)}</span></div>
-                        {e.detail && <p className="mt-0.5 text-sm leading-relaxed text-zinc-700">{e.detail}</p>}
+                        {e.channel && (
+                          <div className="mt-0.5 text-xs text-zinc-500">
+                            {e.channel === 'email' ? 'Email' : 'WhatsApp'}, {e.direction === 'in' ? 'from them' : 'from us'}
+                            {e.count && e.count > 1 && e.channel === 'email' ? `, ${e.count} messages in the thread` : ''}. Matched: {e.matchReason}.
+                          </div>
+                        )}
+                        {e.detail && <p className="mt-0.5 whitespace-pre-line text-sm leading-relaxed text-zinc-700">{e.detail}</p>}
+                        {e.undo && (
+                          <button type="button" disabled={busy} onClick={() => undoMove(e.undo!.moveId)} className="mt-1.5 rounded-lg border bg-white px-2.5 py-1 text-xs font-semibold hover:bg-zinc-50 disabled:opacity-50">
+                            Undo, {e.undo.hoursLeft} {e.undo.hoursLeft === 1 ? 'hour' : 'hours'} left
+                          </button>
+                        )}
                       </li>
                     )
                   })}
-                  {data.story.filter(e => filter === 'all' || e.group === filter).length === 0 && <li className="text-sm text-zinc-500">Nothing here yet.</li>}
+                  {shownStory.length === 0 && <li className="text-sm text-zinc-500">Nothing here yet.</li>}
                 </ol>
               </div>
             </div>
           )}
         </>
       )}
+    </div>
+  )
+}
+
+// ── follow-up draft + rewrite assistant ──────────────────────────────────
+
+interface DraftInfo {
+  basedOn: string[]
+  notPromised: string[]
+  language: string
+  target: { to: string | null; canSend: boolean; conversationId: string | null; reason: string }
+}
+
+function DraftPanel({ leadId, leadName, currentFollowUp, onBack, onSent }: { leadId: string; leadName: string; currentFollowUp: string | null; onBack: () => void; onSent: () => void }) {
+  const [channel, setChannel] = useState<'whatsapp' | 'email'>('whatsapp')
+  const [texts, setTexts] = useState<Record<string, string>>({ whatsapp: '', email: '' })
+  const [subject, setSubject] = useState('')
+  const [info, setInfo] = useState<Record<string, DraftInfo | undefined>>({})
+  const [pending, setPending] = useState(0)
+  const busy = pending > 0
+  const [error, setError] = useState('')
+  const [log, setLog] = useState<{ who: string; text: string }[]>([])
+  const [instr, setInstr] = useState('')
+  const [confirm, setConfirm] = useState(false)
+  const [sentMsg, setSentMsg] = useState('')
+  const [copied, setCopied] = useState(false)
+  const [followUpSet, setFollowUpSet] = useState(true)
+  const [sending, setSending] = useState(false)
+  const [sentTexts, setSentTexts] = useState<Record<string, string>>({})
+  const text = texts[channel]
+  const cur = info[channel]
+  const placeholders = Array.from(new Set(text.match(/\[[^\]\n]{1,60}\]/g) ?? []))
+
+  async function run(mode: 'draft' | 'rewrite' | 'check', instruction = '') {
+    if (busy && mode !== 'draft') return
+    const forChannel = channel
+    setPending(n => n + 1)
+    setError('')
+    setConfirm(false)
+    try {
+      const res = await fetch(`/api/crm/leads/${leadId}/draft`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: forChannel, mode, instruction, current_text: texts[forChannel] }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error((d && d.error) || 'Could not reach the assistant — please try again.')
+      if (mode === 'check') {
+        setLog(l => [...l, { who: 'You', text: 'Check the draft against the story' }, { who: 'Worker', text: (d.review as string[] | undefined)?.join('\n') || 'Nothing to report.' }])
+        if (d.target) setInfo(i => ({ ...i, [forChannel]: { basedOn: [], notPromised: [], language: d.language ?? '', ...(i[forChannel] ?? {}), target: d.target } }))
+        return
+      }
+      // A first draft never overwrites what the person typed while it was being written.
+      setTexts(t => (mode === 'draft' && t[forChannel] ? t : { ...t, [forChannel]: d.text as string }))
+      if (d.subject && forChannel === 'email') setSubject(s0 => (mode === 'draft' && s0 ? s0 : (d.subject as string)))
+      setInfo(i => ({ ...i, [forChannel]: { basedOn: d.based_on, notPromised: d.not_promised, language: d.language, target: d.target } }))
+      if (mode === 'rewrite') setLog(l => [...l, { who: 'You', text: instruction }, { who: 'Worker', text: 'Rewritten. Read it before you send.' }])
+      setInstr('')
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not reach the assistant — please try again.')
+    } finally {
+      setPending(n => Math.max(0, n - 1))
+    }
+  }
+
+  // First draft for a channel is written when the person opens it; a "Write a draft" button covers a refused or failed one.
+  useEffect(() => { if (!texts[channel] && !info[channel]) run('draft') }, [channel]) // eslint-disable-line react-hooks/exhaustive-deps
+  const emptyAndIdle = !text.trim() && !busy
+
+  async function send() {
+    if (!cur || sending || sentTexts[channel] === text) return
+    setSending(true)
+    setPending(n => n + 1)
+    setError('')
+    try {
+      const sw = await fetch(`/api/crm/leads/${leadId}/window/send-status`).then(r => r.json()).catch(() => ({ enabled: false }))
+      if (!sw.enabled) throw new Error('Sending from here is switched off. Copy the text and send it by hand.')
+      const res = channel === 'email'
+        ? await fetch('/api/inbox/compose', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: cur.target.to, subject: subject || 'Following up', message: text, lead_id: leadId, wrap_with_brand: true, mailbox: 'support' }),
+          })
+        : await fetch('/api/inbox/reply', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ conversationId: cur.target.conversationId, channel: 'whatsapp', message: text, clientMsgId: crypto.randomUUID() }),
+          })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error((d && d.error) || 'The message was not sent — please try again.')
+      // The next follow-up moves out by the usual days, so this lead leaves the "follow up today" list.
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+      const fu = await fetch(`/api/crm/leads/${leadId}/window/fields`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ follow_up_date: addDaysYmd(today, FOLLOW_UP_DAYS_AFTER_CALL), expected_follow_up_date: currentFollowUp }),
+      }).catch(() => null)
+      setFollowUpSet(!!fu && fu.ok)
+      setSentTexts(t => ({ ...t, [channel]: text }))
+      setSentMsg(channel === 'email' ? 'Email sent.' : (d && d.queued ? 'Queued on WhatsApp. It goes out through the WhatsApp line.' : 'Sent on WhatsApp.'))
+      setConfirm(false)
+      onSent()
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'The message was not sent — please try again.')
+      setConfirm(false)
+    } finally {
+      setPending(n => Math.max(0, n - 1))
+      setSending(false)
+    }
+  }
+
+  const alreadySent = sentTexts[channel] === text
+  const blocked = busy || !text.trim() || placeholders.length > 0 || !cur?.target.canSend || alreadySent
+
+  return (
+    <div className="flex min-h-0 flex-1">
+      <div className="min-w-0 flex-1 space-y-3 overflow-auto p-5">
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" onClick={onBack} className="rounded-lg border bg-white px-3 py-1.5 text-sm font-semibold hover:bg-zinc-50">Back to story</button>
+          <span className="font-bold">Follow-up for {leadName}</span>
+          <span className="rounded-full bg-violet-50 px-2.5 py-0.5 text-xs font-semibold text-violet-700">Draft written by AI from the story</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {(['whatsapp', 'email'] as const).map(k => (
+            <button key={k} type="button" onClick={() => setChannel(k)}
+              className={cn('rounded-full border px-4 py-1.5 text-sm font-semibold', channel === k ? 'border-zinc-900 bg-zinc-900 text-white' : 'bg-white hover:bg-zinc-50')}>
+              {k === 'whatsapp' ? 'WhatsApp' : 'Email'}
+            </button>
+          ))}
+          {cur?.target.to && <span className="ml-2 text-sm text-zinc-500">To: <span className="font-semibold text-zinc-900">{cur.target.to}</span></span>}
+        </div>
+        {channel === 'email' && (
+          <input value={subject} onChange={e => setSubject(e.target.value)} placeholder="Subject" aria-label="Subject" className="w-full rounded-lg border px-3 py-2 text-sm font-semibold" />
+        )}
+        <textarea
+          value={text}
+          onChange={e => { setTexts(t => ({ ...t, [channel]: e.target.value })); setConfirm(false); setSentMsg('') }}
+          placeholder={busy && !text ? 'Writing the draft…' : 'The draft appears here. You can write or edit it yourself.'}
+          aria-label="Message text"
+          className="h-56 w-full resize-none rounded-xl border p-3.5 text-[15px] leading-relaxed"
+        />
+        {emptyAndIdle && <button type="button" onClick={() => run('draft')} className="rounded-lg border bg-white px-4 py-2 text-sm font-semibold hover:bg-zinc-50">Write a draft from the story</button>}
+        {error && <p className="text-sm font-semibold text-red-600">{error}</p>}
+        {placeholders.length > 0 && <p className="text-sm font-semibold text-amber-700">Fill in {placeholders.join(', ')} before sending.</p>}
+        {cur && !cur.target.canSend && cur.target.reason && <p className="text-sm text-zinc-600">{cur.target.reason}</p>}
+        {sentMsg && alreadySent ? (
+          <p className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">{sentMsg} {followUpSet ? `The next follow-up is set for ${FOLLOW_UP_DAYS_AFTER_CALL} days from now.` : 'The follow-up date was NOT changed (someone else changed it, or it could not be saved). Set it by hand.'}</p>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            {confirm ? (
+              <>
+                <button type="button" disabled={blocked} onClick={send} className="rounded-lg bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">
+                  Confirm: send to {cur?.target.to}
+                </button>
+                <button type="button" onClick={() => setConfirm(false)} className="rounded-lg border bg-white px-4 py-2 text-sm font-semibold hover:bg-zinc-50">Cancel</button>
+              </>
+            ) : (
+              <button type="button" disabled={blocked} onClick={() => setConfirm(true)} className="rounded-lg bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">
+                {channel === 'email' ? 'Send by email' : 'Send on WhatsApp'}
+              </button>
+            )}
+            <button type="button" onClick={() => { navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => undefined) }} disabled={!text.trim()} className="rounded-lg border bg-white px-4 py-2 text-sm font-semibold hover:bg-zinc-50 disabled:opacity-50">
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+            <span className="text-xs text-zinc-500">Nothing is sent until you press the green button and confirm.</span>
+          </div>
+        )}
+
+        <div className="rounded-xl border border-violet-200 bg-violet-50/40 p-3.5">
+          <div className="flex items-center gap-2"><span className="text-[11px] font-bold tracking-wider text-violet-700">ASK THE WORKER</span><span className="text-xs text-zinc-500">It reads the story and rewrites or checks this text. It cannot send.</span></div>
+          {log.map((m, i) => (
+            <div key={i} className={cn('mt-2 whitespace-pre-line rounded-lg px-3 py-2 text-sm leading-relaxed', m.who === 'You' ? 'bg-zinc-100' : 'bg-violet-100 text-violet-950')}><span className="font-bold">{m.who}: </span>{m.text}</div>
+          ))}
+          <div className="mt-2.5 flex flex-wrap gap-2">
+            <button type="button" disabled={busy || !text.trim()} onClick={() => run('rewrite', 'Make it shorter. Keep the question and any date.')} className="rounded-full border border-violet-300 bg-white px-3 py-1 text-sm font-semibold text-violet-800 hover:bg-violet-50 disabled:opacity-50">Shorter</button>
+            <button type="button" disabled={busy || !text.trim()} onClick={() => run('rewrite', 'Make it a little warmer and more friendly. Add no new facts.')} className="rounded-full border border-violet-300 bg-white px-3 py-1 text-sm font-semibold text-violet-800 hover:bg-violet-50 disabled:opacity-50">Warmer</button>
+            <button type="button" disabled={busy || !text.trim()} onClick={() => run('check')} className="rounded-full border border-violet-300 bg-white px-3 py-1 text-sm font-semibold text-violet-800 hover:bg-violet-50 disabled:opacity-50">Check it against the story</button>
+          </div>
+          <div className="mt-2.5 flex gap-2">
+            <input value={instr} onChange={e => setInstr(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && instr.trim() && !busy && text.trim()) run('rewrite', instr.trim()) }}
+              placeholder="Tell the worker what is wrong or what to change" aria-label="Tell the worker what to change" className="flex-1 rounded-lg border bg-white px-3 py-2 text-sm" />
+            <button type="button" disabled={busy || !instr.trim() || !text.trim()} onClick={() => run('rewrite', instr.trim())} className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-800 disabled:opacity-50">{busy ? 'Working…' : 'Rewrite'}</button>
+          </div>
+        </div>
+      </div>
+
+      <div className="w-[330px] shrink-0 space-y-4 overflow-auto border-l p-5">
+        <div>
+          <div className="mb-2 text-[11px] font-bold tracking-wider text-zinc-500">WHAT THE WORKER SAW</div>
+          {cur?.basedOn?.map((b, i) => <div key={i} className="mb-1.5 rounded-lg bg-zinc-100 px-2.5 py-2 text-sm leading-snug text-zinc-700">{b}</div>)}
+          {!cur && <p className="text-sm text-zinc-500">{busy ? 'Reading the story…' : 'Nothing yet.'}</p>}
+        </div>
+        {cur && (
+          <>
+            <div>
+              <div className="mb-1.5 text-[11px] font-bold tracking-wider text-zinc-500">LANGUAGE</div>
+              <p className="text-sm text-zinc-700">Written in {cur.language} because that is the language in the CRM.</p>
+            </div>
+            <div>
+              <div className="mb-1.5 text-[11px] font-bold tracking-wider text-amber-800">WHAT IT DOES NOT PROMISE</div>
+              {cur.notPromised?.map((n, i) => <p key={i} className="mb-1 text-sm leading-snug text-zinc-700">{n}</p>)}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   )
 }

@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { decideCallLinks, isInternalEmail, normalizeAttendeeEmail } from '@/lib/circleback/link-call'
+import { applyRecording } from '@/lib/leads/lead-calls'
 
 let _supabase: SupabaseClient | null = null
 function getSupabase() {
@@ -188,6 +189,27 @@ export async function POST(req: NextRequest) {
       console.error('Circleback webhook: circleback_id type', typeof circleback_id, circleback_id)
       console.error('Circleback webhook: tags', JSON.stringify(tags))
       return NextResponse.json({ error: 'Database error', details: error.message, code: error.code, hint: error.hint }, { status: 500 })
+    }
+
+    // A recording linked to a lead confirms that lead's booked call and, when the rules allow, moves it to
+    // Call Done (lib/leads/lead-calls.ts). Best-effort: the recording itself is already saved above, and a
+    // failure here is logged, never returned as an error (Circleback would re-deliver and re-run it).
+    if (lead_id) {
+      try {
+        const { data: saved } = await db.from('call_summaries').select('id, created_at').eq('circleback_id', circleback_id).maybeSingle()
+        if (saved?.id) {
+          const outcome = await applyRecording(db, {
+            leadId: lead_id,
+            summaryId: saved.id as string,
+            recordingIso: (saved.created_at as string) || new Date().toISOString(),
+            durationSeconds: record.duration_seconds,
+            linkReview: finalReview,
+          })
+          if (!outcome.ok) console.error('Circleback webhook: lead call update failed:', outcome.error ?? outcome.reason)
+        }
+      } catch (err) {
+        console.error('Circleback webhook: lead call update error:', err instanceof Error ? err.message : String(err))
+      }
     }
 
     return NextResponse.json({ ok: true, lead_id })
