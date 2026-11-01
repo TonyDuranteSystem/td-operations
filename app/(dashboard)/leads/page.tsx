@@ -8,6 +8,7 @@ import { CreateLeadButton } from './components/create-lead-button'
 import type { LeadListItem } from '@/lib/types'
 import { findExistingClientNewCalls } from '@/lib/leads/existing-client-new-calls'
 import { findLeadIdsByPhone, leadSearchOrFilter } from '@/lib/leads/phone-search'
+import { buildClientEmailSet, isLiveClient } from '@/lib/leads/client-match'
 import { LeadsFilterBar } from '@/components/leads/leads-filter-bar'
 import { parseLeadFilters, filterLeads, quickCounts, distinctValues } from '@/lib/leads/list-filters'
 
@@ -96,6 +97,15 @@ export default async function LeadsPage({
     }
   }
 
+  // Contacts that belong to at least one company — for the live "Already a
+  // client" badge (exact email, badge only, never moves a lead between tabs).
+  const { data: clientContacts } = await supabase
+    .from('contacts')
+    .select('email, account_contacts!inner(account_id)')
+    .not('email', 'is', null)
+    .range(0, 4999)
+  const clientEmails = buildClientEmailSet(clientContacts ?? [])
+
   const allItems: LeadListItem[] = (leads ?? []).map(l => {
     // Live current-offer status from the offers table (authoritative). Pick the
     // non-superseded offer, else the most recent — same rule as the lead detail page.
@@ -128,6 +138,7 @@ export default async function LeadsPage({
       updated_at: l.updated_at,
       existing_client_contact_id: l.existing_client_contact_id,
       has_call_recording: hasCallRecording,
+      is_live_client: l.status !== 'Converted' && !l.existing_client_contact_id && isLiveClient(l.email, clientEmails),
     }
   })
 
@@ -156,7 +167,7 @@ export default async function LeadsPage({
   // above, so it stays visible no matter which of the 3 tabs is selected.
   const { data: existingClientLeads } = await supabase
     .from('leads')
-    .select('id, full_name, existing_client_contact_id, converted_to_contact_id')
+    .select('id, full_name, existing_client_contact_id, converted_to_contact_id, converted_at')
     .or('status.eq.Converted,existing_client_contact_id.not.is.null')
 
   let existingClientNewCalls: ReturnType<typeof findExistingClientNewCalls> = []

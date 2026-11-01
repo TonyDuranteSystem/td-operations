@@ -20,6 +20,9 @@ export interface ExistingClientLeadRow {
   full_name: string
   existing_client_contact_id: string | null
   converted_to_contact_id: string | null
+  /** When the lead became a paying client. A call before this was the sales
+   *  call that led to it, not a new one. Optional: older Converted leads have none. */
+  converted_at?: string | null
 }
 
 export interface CallSummaryRow {
@@ -54,6 +57,8 @@ export function findExistingClientNewCalls(
       (call.contact_id && leadsByContactId.get(call.contact_id)) ||
       null
     if (!matched) continue
+    // Only calls AFTER the lead became a client are "new" (dev job 6fc63c52).
+    if (matched.converted_at && call.created_at <= matched.converted_at) continue
     const current = latestByLead.get(matched.id)
     if (!current || call.created_at > current) {
       latestByLead.set(matched.id, call.created_at)

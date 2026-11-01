@@ -315,6 +315,9 @@ export interface LeadListItem {
   /** True when an actual call recording has come back for this lead (via
    *  Circleback), computed server-side — never a guess from call_date. */
   has_call_recording: boolean
+  /** Live exact-email match to a contact that already has a company. Badge only —
+   *  false for leads already tagged or Converted (they have their own labels). */
+  is_live_client?: boolean
 }
 
 export interface ContactListItem {

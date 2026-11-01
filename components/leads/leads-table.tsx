@@ -118,12 +118,18 @@ export function LeadsTable({ items, stats, currentPage, totalPages, totalCount }
                   {item.referrer_name && (
                     <p className="text-xs text-muted-foreground truncate">Ref: {item.referrer_name}</p>
                   )}
-                  {(item.existing_client_contact_id || item.has_call_recording) && (
+                  {(item.existing_client_contact_id || item.is_live_client || item.has_call_recording) && (
                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                       {item.existing_client_contact_id && (
                         <span className="flex items-center gap-1 text-xs bg-zinc-100 text-zinc-600 px-1.5 py-0.5 rounded-md">
                           <UserCheck className="h-3 w-3" />
                           Existing client
+                        </span>
+                      )}
+                      {item.is_live_client && (
+                        <span className="flex items-center gap-1 text-xs bg-amber-50 text-amber-800 px-1.5 py-0.5 rounded-md">
+                          <UserCheck className="h-3 w-3" />
+                          Already a client
                         </span>
                       )}
                       {item.has_call_recording && (

@@ -79,3 +79,18 @@ describe('findExistingClientNewCalls', () => {
     expect(r).toEqual([{ id: 'lead-1', full_name: 'Luca Gallacci', call_date: '2026-09-01T00:00:00Z' }])
   })
 })
+
+describe('findExistingClientNewCalls — only calls after becoming a client', () => {
+  const conv = { id: 'lead-9', full_name: 'Christian Ranieri', existing_client_contact_id: null, converted_to_contact_id: 'c-9', converted_at: '2026-10-30T15:46:00Z' }
+  it('hides a call that happened before the lead was converted', () => {
+    expect(findExistingClientNewCalls([conv], [{ lead_id: 'lead-9', contact_id: null, created_at: '2026-10-23T14:11:00Z' }])).toEqual([])
+  })
+  it('shows a call after conversion', () => {
+    const r = findExistingClientNewCalls([conv], [{ lead_id: 'lead-9', contact_id: null, created_at: '2026-10-31T10:00:00Z' }])
+    expect(r.map(x => x.id)).toEqual(['lead-9'])
+  })
+  it('keeps old behaviour when there is no conversion date', () => {
+    const noDate = { ...conv, converted_at: null }
+    expect(findExistingClientNewCalls([noDate], [{ lead_id: 'lead-9', contact_id: null, created_at: '2026-10-23T14:11:00Z' }])).toHaveLength(1)
+  })
+})
