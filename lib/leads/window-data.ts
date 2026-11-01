@@ -106,7 +106,7 @@ export interface WindowCall {
   confirmedBy: string | null
 }
 
-export type StoryGroup = 'calls' | 'offer' | 'other'
+export type StoryGroup = 'calls' | 'offer' | 'messages' | 'other'
 
 export interface WindowStoryEvent {
   date: string
@@ -117,6 +117,11 @@ export interface WindowStoryEvent {
   group: StoryGroup
   /** an automatic move that can still be undone */
   undo?: { moveId: string; hoursLeft: number } | null
+  /** set only on email / WhatsApp lines (phase C) */
+  channel?: 'email' | 'whatsapp'
+  direction?: 'in' | 'out'
+  matchReason?: string
+  count?: number
 }
 
 export interface WindowData {
