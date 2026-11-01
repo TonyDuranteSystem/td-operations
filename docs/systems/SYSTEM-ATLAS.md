@@ -180,7 +180,7 @@ _Regenerated 2026-11-01. Every subsystem doc under `docs/systems/` (53 docs), wi
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-10-30)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-10-30)_
-- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-10-29)_
+- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-01)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-10-30)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-28)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-10-12)_
@@ -201,7 +201,7 @@ _Regenerated 2026-11-01. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-31)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-28)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-27)_
-- [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-10-31)_
+- [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-01)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-28)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-31)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-23)_
