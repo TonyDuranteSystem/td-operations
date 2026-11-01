@@ -103,6 +103,7 @@ describe('facts and prompts', () => {
     const s = buildDraftSystemPrompt('email', 'Italian', 'draft')
     expect(s).toContain('Write in Italian')
     expect(s).toContain('USE ONLY the FACTS')
+    expect(s).toContain('NEVER say it is accepted, agreed, included')
     expect(s).toContain('<subject>')
     expect(buildDraftSystemPrompt('whatsapp', 'English', 'draft')).not.toContain('<subject>')
     expect(buildDraftSystemPrompt('whatsapp', 'English', 'check')).toContain('- Everything in the draft matches the facts.')
