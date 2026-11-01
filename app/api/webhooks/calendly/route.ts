@@ -28,6 +28,7 @@ import { notifyReferrerLinked } from "@/lib/operations/referral-notify"
 import { extractPaidBooking } from "@/lib/calendly/paid-booking"
 import { recordPaidCall } from "@/lib/operations/paid-call-credit"
 import { isEstablishedClientContact } from "@/lib/calendly/existing-client-tag"
+import { recordBooking } from "@/lib/leads/lead-calls"
 
 // Escape ILIKE metacharacters so a real email containing `_`/`%` can't
 // pattern-match an unrelated row (same pattern as app/api/webhooks/circleback/route.ts).
@@ -113,6 +114,25 @@ async function verifyCalendlySignature(
 // payload-shape notes (real Calendly v2 vs legacy nested invitee).
 
 // ─── Main Handler ───────────────────────────────────────────
+
+// Every booking is kept as its own call on the lead (lead_calls), so a rebooking never erases the first
+// booking. Best-effort by design: a failure here is logged and must never lose the booking itself.
+async function keepBooking(db: SupabaseClient, leadId: string, payload: Record<string, unknown>) {
+  try {
+    const p = (payload.payload as Record<string, unknown>) || {}
+    const scheduled = p.scheduled_event as Record<string, unknown> | undefined
+    const res = await recordBooking(db, {
+      leadId,
+      bookedAt: new Date().toISOString(),
+      scheduledStart: (scheduled?.start_time as string) || null,
+      eventUri: (p.event as string) || null,
+      oldInvitee: p.old_invitee,
+    })
+    if (!res.ok) console.error("[calendly-webhook] could not record the call:", res.error)
+  } catch (err) {
+    console.error("[calendly-webhook] could not record the call:", err instanceof Error ? err.message : String(err))
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -347,6 +367,7 @@ export async function POST(req: NextRequest) {
       }
 
       await db.from("leads").update(updates).eq("id", lead.id)
+      await keepBooking(db, lead.id, payload)
 
       console.warn(`[calendly-webhook] [legacy] Updated existing lead ${lead.id} — ${fields.name} (${fields.email})`)
       return NextResponse.json({ lead_id: lead.id, action: "updated" })
@@ -417,6 +438,8 @@ export async function POST(req: NextRequest) {
         /* attribution is additive — never block lead creation */
       }
     }
+
+    await keepBooking(db, newLead.id, payload)
 
     console.warn(`[calendly-webhook] Created new lead ${newLead.id} — ${fields.name} (${fields.email})`)
     return NextResponse.json({
