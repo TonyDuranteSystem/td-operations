@@ -307,6 +307,8 @@ export interface LeadListItem {
   offer_year1_amount: number | null
   offer_year1_currency: string | null
   created_at: string
+  /** Last edit of the lead row — the list's "no change for N days" button measures from it. */
+  updated_at: string | null
   /** Set when this booking's email matched an already-established client —
    *  it's a booking record, not an open sales lead (dev job 93580372). */
   existing_client_contact_id: string | null
