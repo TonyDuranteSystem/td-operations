@@ -360,15 +360,21 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
       </div>
 
       {loading && !data && <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">Loading…</div>}
-      {error && (
+      {error && !data && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
           <p className="text-sm text-red-600">{error}</p>
           <button type="button" onClick={load} className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-zinc-50"><RefreshCw className="h-3.5 w-3.5" />Try again</button>
         </div>
       )}
 
-      {data && !error && (
+      {data && (
         <>
+          {error && (
+            <div className="flex items-center gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">
+              <span className="flex-1">{error}</span>
+              <button type="button" onClick={load} className="rounded-lg border border-red-200 bg-white px-3 py-1 text-xs font-semibold hover:bg-red-50">Try again</button>
+            </div>
+          )}
           {/* stage bar */}
           <div className="flex gap-1.5 border-b px-4 py-3">
             {STAGE_STEPS.map((label, i) => (
@@ -554,7 +560,8 @@ function DraftPanel({ leadId, leadName, currentFollowUp, onBack, onSent }: { lea
   const [texts, setTexts] = useState<Record<string, string>>({ whatsapp: '', email: '' })
   const [subject, setSubject] = useState('')
   const [info, setInfo] = useState<Record<string, DraftInfo | undefined>>({})
-  const [busy, setBusy] = useState(false)
+  const [pending, setPending] = useState(0)
+  const busy = pending > 0
   const [error, setError] = useState('')
   const [log, setLog] = useState<{ who: string; text: string }[]>([])
   const [instr, setInstr] = useState('')
@@ -563,48 +570,54 @@ function DraftPanel({ leadId, leadName, currentFollowUp, onBack, onSent }: { lea
   const [copied, setCopied] = useState(false)
   const [followUpSet, setFollowUpSet] = useState(true)
   const [sending, setSending] = useState(false)
+  const [sentTexts, setSentTexts] = useState<Record<string, string>>({})
   const text = texts[channel]
   const cur = info[channel]
   const placeholders = Array.from(new Set(text.match(/\[[^\]\n]{1,60}\]/g) ?? []))
 
   async function run(mode: 'draft' | 'rewrite' | 'check', instruction = '') {
-    if (busy) return
-    setBusy(true)
+    if (busy && mode !== 'draft') return
+    const forChannel = channel
+    setPending(n => n + 1)
     setError('')
     setConfirm(false)
     try {
       const res = await fetch(`/api/crm/leads/${leadId}/draft`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel, mode, instruction, current_text: text }),
+        body: JSON.stringify({ channel: forChannel, mode, instruction, current_text: texts[forChannel] }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error((d && d.error) || 'Could not reach the assistant — please try again.')
       if (mode === 'check') {
         setLog(l => [...l, { who: 'You', text: 'Check the draft against the story' }, { who: 'Worker', text: (d.review as string[] | undefined)?.join('\n') || 'Nothing to report.' }])
-        if (d.target) setInfo(i => ({ ...i, [channel]: { basedOn: [], notPromised: [], language: d.language ?? '', ...(i[channel] ?? {}), target: d.target } }))
+        if (d.target) setInfo(i => ({ ...i, [forChannel]: { basedOn: [], notPromised: [], language: d.language ?? '', ...(i[forChannel] ?? {}), target: d.target } }))
         return
       }
-      setTexts(t => ({ ...t, [channel]: d.text as string }))
-      if (d.subject) setSubject(d.subject as string)
-      setInfo(i => ({ ...i, [channel]: { basedOn: d.based_on, notPromised: d.not_promised, language: d.language, target: d.target } }))
+      // A first draft never overwrites what the person typed while it was being written.
+      setTexts(t => (mode === 'draft' && t[forChannel] ? t : { ...t, [forChannel]: d.text as string }))
+      if (d.subject && forChannel === 'email') setSubject(s0 => (mode === 'draft' && s0 ? s0 : (d.subject as string)))
+      setInfo(i => ({ ...i, [forChannel]: { basedOn: d.based_on, notPromised: d.not_promised, language: d.language, target: d.target } }))
       if (mode === 'rewrite') setLog(l => [...l, { who: 'You', text: instruction }, { who: 'Worker', text: 'Rewritten. Read it before you send.' }])
       setInstr('')
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not reach the assistant — please try again.')
     } finally {
-      setBusy(false)
+      setPending(n => Math.max(0, n - 1))
     }
   }
 
-  // First draft for a channel is written when the person opens it.
+  // First draft for a channel is written when the person opens it; a "Write a draft" button covers a refused or failed one.
   useEffect(() => { if (!texts[channel] && !info[channel]) run('draft') }, [channel]) // eslint-disable-line react-hooks/exhaustive-deps
+  const emptyAndIdle = !text.trim() && !busy
 
   async function send() {
-    if (!cur || sending) return
+    if (!cur || sending || sentTexts[channel] === text) return
     setSending(true)
-    setBusy(true)
+    setPending(n => n + 1)
     setError('')
     try {
+      const sw = await fetch(`/api/crm/leads/${leadId}/window/send-status`).then(r => r.json()).catch(() => ({ enabled: false }))
+      if (!sw.enabled) throw new Error('Sending from here is switched off. Copy the text and send it by hand.')
       const res = channel === 'email'
         ? await fetch('/api/inbox/compose', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -623,6 +636,7 @@ function DraftPanel({ leadId, leadName, currentFollowUp, onBack, onSent }: { lea
         body: JSON.stringify({ follow_up_date: addDaysYmd(today, FOLLOW_UP_DAYS_AFTER_CALL), expected_follow_up_date: currentFollowUp }),
       }).catch(() => null)
       setFollowUpSet(!!fu && fu.ok)
+      setSentTexts(t => ({ ...t, [channel]: text }))
       setSentMsg(channel === 'email' ? 'Email sent.' : (d && d.queued ? 'Queued on WhatsApp. It goes out through the WhatsApp line.' : 'Sent on WhatsApp.'))
       setConfirm(false)
       onSent()
@@ -630,12 +644,13 @@ function DraftPanel({ leadId, leadName, currentFollowUp, onBack, onSent }: { lea
       setError(err instanceof Error && err.message ? err.message : 'The message was not sent — please try again.')
       setConfirm(false)
     } finally {
-      setBusy(false)
+      setPending(n => Math.max(0, n - 1))
       setSending(false)
     }
   }
 
-  const blocked = busy || !text.trim() || placeholders.length > 0 || !cur?.target.canSend
+  const alreadySent = sentTexts[channel] === text
+  const blocked = busy || !text.trim() || placeholders.length > 0 || !cur?.target.canSend || alreadySent
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -647,7 +662,7 @@ function DraftPanel({ leadId, leadName, currentFollowUp, onBack, onSent }: { lea
         </div>
         <div className="flex items-center gap-2">
           {(['whatsapp', 'email'] as const).map(k => (
-            <button key={k} type="button" onClick={() => { setChannel(k); setSentMsg('') }}
+            <button key={k} type="button" onClick={() => setChannel(k)}
               className={cn('rounded-full border px-4 py-1.5 text-sm font-semibold', channel === k ? 'border-zinc-900 bg-zinc-900 text-white' : 'bg-white hover:bg-zinc-50')}>
               {k === 'whatsapp' ? 'WhatsApp' : 'Email'}
             </button>
@@ -664,10 +679,11 @@ function DraftPanel({ leadId, leadName, currentFollowUp, onBack, onSent }: { lea
           aria-label="Message text"
           className="h-56 w-full resize-none rounded-xl border p-3.5 text-[15px] leading-relaxed"
         />
+        {emptyAndIdle && <button type="button" onClick={() => run('draft')} className="rounded-lg border bg-white px-4 py-2 text-sm font-semibold hover:bg-zinc-50">Write a draft from the story</button>}
         {error && <p className="text-sm font-semibold text-red-600">{error}</p>}
         {placeholders.length > 0 && <p className="text-sm font-semibold text-amber-700">Fill in {placeholders.join(', ')} before sending.</p>}
         {cur && !cur.target.canSend && cur.target.reason && <p className="text-sm text-zinc-600">{cur.target.reason}</p>}
-        {sentMsg ? (
+        {sentMsg && alreadySent ? (
           <p className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">{sentMsg} {followUpSet ? `The next follow-up is set for ${FOLLOW_UP_DAYS_AFTER_CALL} days from now.` : 'The follow-up date was NOT changed (someone else changed it, or it could not be saved). Set it by hand.'}</p>
         ) : (
           <div className="flex flex-wrap items-center gap-2">

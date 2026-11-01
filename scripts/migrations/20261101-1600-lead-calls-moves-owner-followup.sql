@@ -127,7 +127,20 @@ SELECT l.id, l.call_date::date, 'scheduled', 'backfill_lead'
    AND NOT EXISTS (
          SELECT 1 FROM public.lead_calls lc
           WHERE lc.lead_id = l.id AND lc.scheduled_date IS NOT NULL
-            AND abs(lc.scheduled_date - l.call_date::date) <= 1);
+            AND abs(lc.scheduled_date - l.call_date::date) <= 1)
+   -- a recording that came back within a day of the call date already covers it (no phantom second call)
+   AND NOT EXISTS (
+         SELECT 1 FROM public.lead_calls lc
+          WHERE lc.lead_id = l.id AND lc.happened_at IS NOT NULL
+            AND abs((lc.happened_at AT TIME ZONE 'America/New_York')::date - l.call_date::date) <= 1);
+
+-- Clean up phantom rows an earlier run of this backfill may have made on a sandbox (re-run safe; production never ran the old version).
+DELETE FROM public.lead_calls ph
+ USING public.leads l
+ WHERE ph.lead_id = l.id AND ph.source = 'backfill_lead' AND ph.state = 'scheduled' AND ph.call_summary_id IS NULL
+   AND EXISTS (SELECT 1 FROM public.lead_calls lc
+                WHERE lc.lead_id = ph.lead_id AND lc.id <> ph.id AND lc.happened_at IS NOT NULL
+                  AND abs((lc.happened_at AT TIME ZONE 'America/New_York')::date - ph.scheduled_date) <= 1);
 
 -- verify
 DO $$

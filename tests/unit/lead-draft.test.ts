@@ -75,6 +75,35 @@ describe('validator against client-supplied text and softer cheats', () => {
   })
 })
 
+describe('validator: amounts with units, bare domains, more words', () => {
+  it('an invented amount, percent or period is refused even when the bare digits appear in a date', () => {
+    const facts = 'Call 2 planned for 24 Nov 2026 at 3:00 PM New York time. Offer sent 10 Oct 2026. Held on 12 Oct 2026.'
+    for (const t of ['Hi, we offer a 10% discount. Luca', 'Hi, we will reply in 2 days. Luca', 'Hi, within 24 hours you get it. Luca', 'Hi, it is $250 only. Luca', 'Hi, it is 250 USD. Luca']) {
+      expect(validateLeadDraft({ text: t, allowed: facts, channel: 'whatsapp', language: 'en' }).code).toBe('new_number')
+    }
+    // the same dates written as dates stay fine
+    expect(validateLeadDraft({ text: 'Hi, see you on 24 Nov at 3:00 PM New York time. Luca', allowed: facts, channel: 'whatsapp', language: 'en' }).ok).toBe(true)
+  })
+  it('an amount that IS in the allowed text is accepted with its unit', () => {
+    expect(ok('Hi, the plan is 250 USD a year. Luca', { allowed: FACTS + ' The plan is 250 USD a year.' }).ok).toBe(true)
+  })
+  it('a bare web address that was not supplied is a link', () => {
+    expect(ok('Hi, log in at portal.tonydurante.us today. Luca').code).toBe('new_link')
+    expect(ok('Hi, log in at portal.tonydurante.us today. Luca', { allowed: FACTS + ' portal.tonydurante.us' }).ok).toBe(true)
+  })
+  it('catches feminine and plural Italian promise forms and "free consultation"', () => {
+    for (const t of ['La consulenza gratuita è inclusa.', 'La richiesta è approvata.', 'Sarà tutto garantita per te.', 'La proposta è accettata.']) {
+      expect(validateLeadDraft({ text: t, allowed: FACTS, channel: 'whatsapp', language: 'it' }).code).toBe('promise')
+    }
+    expect(ok('Hi, we offer a free consultation. Luca').code).toBe('promise')
+  })
+  it('number words: more of them are caught, and everyday Italian "grazie mille" is not', () => {
+    expect(ok('Hi, within three days. Luca').code).toBe('new_number')
+    expect(ok('Hi, in twelve months. Luca').code).toBe('new_number')
+    expect(validateLeadDraft({ text: 'Ciao Sofia, grazie mille per la tua email di oggi, ti rispondiamo presto.', allowed: FACTS, channel: 'whatsapp', language: 'it' }).ok).toBe(true)
+  })
+})
+
 describe('parsing helpers', () => {
   it('parses draft and subject tags, and refuses an untagged answer', () => {
     expect(parseDraftOutput('<subject> Our call </subject>\n<draft>\nHello\n</draft>')).toEqual({ text: 'Hello', subject: 'Our call' })

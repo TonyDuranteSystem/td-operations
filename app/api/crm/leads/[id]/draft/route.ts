@@ -67,7 +67,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const sendOn = leadSendEnabled()
     const switchedOff = "Sending from here is switched off. Copy the text and send it by hand."
     const target = channel === "whatsapp"
-      ? { to: data.lead.phone, canSend: sendOn && !!reply?.conversationId && !!data.lead.phone, conversationId: reply?.conversationId ?? null, reason: !sendOn ? switchedOff : reply?.conversationId ? "" : (reply?.reason ?? "") }
+      ? { to: reply?.label ?? data.lead.phone, canSend: sendOn && !!reply?.conversationId && !!data.lead.phone, conversationId: reply?.conversationId ?? null, reason: !sendOn ? switchedOff : reply?.conversationId ? "" : (reply?.reason ?? "") }
       : { to: data.lead.email, canSend: sendOn && !!data.lead.email, conversationId: null, reason: !sendOn ? switchedOff : data.lead.email ? "" : "This lead has no email address." }
 
     const system = buildDraftSystemPrompt(channel, lang.name, mode)

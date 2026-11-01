@@ -141,14 +141,23 @@ export function findPlaceholders(text: string): string[] {
 const PROMISE_TERMS = [
   'guarantee', 'guarantees', 'guaranteed', 'promise', 'promised', 'promises', 'definitely', 'certainly', 'absolutely',
   'approved', 'accepted', 'free of charge', 'no cost', 'at no charge',
-  'garantisco', 'garantiamo', 'garantirò', 'garantiremo', 'garantito', 'prometto', 'promettiamo', 'sicuramente',
-  'certamente', 'assolutamente', 'senza dubbio', 'approvato', 'accettato', 'gratis', 'gratuito', 'gratuitamente', 'senza costi', '100%',
+  'free consultation', 'free call', 'free of cost', 'complimentary',
+  'garantisco', 'garantiamo', 'garantirò', 'garantiremo', 'garantito', 'garantita', 'garantiti', 'garantite', 'prometto', 'promettiamo',
+  'sicuramente', 'certamente', 'assolutamente', 'senza dubbio', 'approvato', 'approvata', 'approvati', 'approvate',
+  'accettato', 'accettata', 'accettati', 'accettate', 'gratis', 'gratuito', 'gratuita', 'gratuiti', 'gratuite', 'gratuitamente', 'senza costi', '100%',
 ]
 // Amounts and counts written as words carry no digits, so the number check cannot see them.
+// Left out on purpose because they are everyday words in the other language or idioms: 'one', 'due' (also "owed"), 'sei' (also "you are"), 'mille' ("grazie mille").
 const NUMBER_TERMS = [
-  'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'twenty', 'thirty', 'forty', 'fifty', 'hundred', 'thousand', 'million',
-  'tre', 'quattro', 'cinque', 'sette', 'otto', 'nove', 'dieci', 'venti', 'trenta', 'quaranta', 'cinquanta', 'cento', 'cinquecento', 'mille', 'milione',
+  'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'twenty', 'thirty', 'forty', 'fifty', 'hundred', 'thousand', 'million',
+  'tre', 'quattro', 'cinque', 'sette', 'otto', 'nove', 'dieci', 'undici', 'dodici', 'quindici', 'venti', 'trenta', 'quaranta', 'cinquanta', 'cento', 'cinquecento', 'milione',
 ]
+
+// A digit run next to a money / percent / time unit must appear WITH that unit in the allowed text. A bare digit can come
+// from any date in the facts (day 10, year 2026...), so "10% discount" or "in 2 days" would otherwise slip through.
+const AMOUNT_PHRASE = /(?:[$€£]\s*\d[\d.,]*|\d[\d.,]*\s*(?:%|\$|€|£|usd|eur|dollars?|euros?|days?|giorni|hours?|ore|weeks?|settimane|months?|mesi))/gi
+// A web address without a scheme ("portal.example.us") is still a link.
+const BARE_DOMAIN = /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|us|it|io|net|org|co|eu|ai|app|me|info)\b/gi
 
 function normWords(text: string): string {
   return ' ' + text.toLowerCase().split(/[^a-zà-öø-ÿ0-9%]+/).filter(Boolean).join(' ') + ' '
@@ -192,6 +201,12 @@ export function validateLeadDraft(args: { text: string; subject?: string | null;
   const strayLink = (whole.match(URL_OR_EMAIL) ?? []).find(x => !allowedLinks.has(clean(x)))
   if (strayLink) return fail('new_link', 'The assistant added a link or address that is not in the story. Your text was left as it is.')
 
+  const squash = (t: string) => t.toLowerCase().replace(/\s+/g, ' ')
+  const allowedSquashed = squash(args.allowed)
+  const strayAmount = (squash(whole).match(AMOUNT_PHRASE) ?? []).find(m => !allowedSquashed.includes(m))
+  if (strayAmount) return fail('new_number', `The assistant wrote an amount or period ("${strayAmount.trim()}") that is not in the story. Your text was left as it is.`)
+  const strayDomain = (whole.match(BARE_DOMAIN) ?? []).find(d => !allowedSquashed.includes(d.toLowerCase()))
+  if (strayDomain) return fail('new_link', 'The assistant added a web address that is not in the story. Your text was left as it is.')
   const strayWord = strayTerm(whole, args.allowed, NUMBER_TERMS)
   if (strayWord) return fail('new_number', `The assistant wrote a number in words ("${strayWord}") that is not in the story. Your text was left as it is.`)
   const promise = strayTerm(whole, args.allowed, PROMISE_TERMS)

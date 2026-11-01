@@ -38,8 +38,8 @@ describe('pickCallForRecording', () => {
     expect(pickCallForRecording([call({ state: 'no_show' })], '2026-10-12T20:00:00Z')).toBeNull()
     expect(pickCallForRecording([call({ state: 'done' })], '2026-10-12T20:00:00Z')).toBeNull()
   })
-  it('can use a call marked moved (the old date may still have been the one held)', () => {
-    expect(pickCallForRecording([call({ state: 'moved' })], '2026-10-12T20:00:00Z')?.id).toBe('c1')
+  it('never matches a call that was moved to another date (a recording near its old date is another meeting)', () => {
+    expect(pickCallForRecording([call({ state: 'moved' })], '2026-10-12T20:00:00Z')).toBeNull()
   })
   it('prefers the nearest date, then the earlier start', () => {
     const a = call({ id: 'a', scheduled_date: '2026-10-11', scheduled_start: '2026-10-11T19:00:00Z' })

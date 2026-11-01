@@ -68,7 +68,8 @@ export function pickCallForRecording(calls: LeadCallRow[], recordingIso: string)
   let best: { c: LeadCallRow; d: number } | null = null
   for (const c of calls) {
     if (c.call_summary_id || !c.scheduled_date) continue
-    if (c.state !== 'scheduled' && c.state !== 'moved') continue
+    // A call that was moved to another date is not matched: a recording near its OLD date is more likely another meeting.
+    if (c.state !== 'scheduled') continue
     const d = Math.abs(daysBetween(c.scheduled_date, rec))
     if (d > 1) continue
     if (!best || d < best.d || (d === best.d && (c.scheduled_start ?? '') < (best.c.scheduled_start ?? ''))) best = { c, d }
@@ -217,7 +218,9 @@ export async function applyRecording(db: unknown, r: RecordingInput, opts: { now
     let call = calls.find(c => c.call_summary_id === r.summaryId) ?? null
     let matched: LeadCallRow | null = call
     if (!call) {
-      matched = pickCallForRecording(calls, r.recordingIso)
+      // A recording too short to count as the call (a test, a no-show that opened the room) must not close the booked call.
+      const tooShort = r.durationSeconds !== null && r.durationSeconds < MIN_AUTO_SECONDS
+      matched = tooShort ? null : pickCallForRecording(calls, r.recordingIso)
       if (matched) {
         const up = await sb.from('lead_calls')
           .update({ state: 'done', happened_at: r.recordingIso, call_summary_id: r.summaryId, confirmed_by: 'recording', updated_at: now.toISOString() })
@@ -324,7 +327,9 @@ export async function confirmCall(db: unknown, args: { leadId: string; callId: s
   })
   if (log.error) {
     await revertStatus(sb, args.leadId, 'Call Scheduled', 'Call Done')
-    return { ok: false, status: 500, message: 'The move could not be logged, so the lead was left on Call Scheduled. Please try again.' }
+    // Re-open the call too, so the same answer can be given again instead of "already answered".
+    await sb.from('lead_calls').update({ state: 'scheduled', happened_at: null, confirmed_by: null, updated_at: new Date().toISOString() }).eq('id', row.id).eq('state', 'done')
+    return { ok: false, status: 500, message: 'The move could not be logged, so nothing was changed. Please try again.' }
   }
   return { ok: true, status: 200, message: 'Marked as happened. The lead moved to Call Done.', moved: true }
 }

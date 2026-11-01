@@ -152,24 +152,27 @@ export async function loadLeadMessageEvents(supabaseAdmin: AdminDb, id: string):
   return { status: 200, events: events.slice(0, 120), truncated: (emailRows ?? []).length >= MAX_EMAIL_ROWS || messages.length >= MAX_CHAT_MESSAGES }
 }
 
-export interface ReplyTarget { conversationId: string | null; reason: string }
+export interface ReplyTarget { conversationId: string | null; reason: string; label: string | null }
 
 /**
  * Where a WhatsApp message to this lead can be sent from the CRM. The existing reply path only answers a chat that has
  * already written to us (a first message to a lead is made from the phone), so a chat with an inbound message is
- * required. Returns why not when there is none. Service client: the caller must have checked the person is staff.
+ * required. A group chat is never a target. `label` is the number the message really goes to, shown to the person
+ * before they confirm. Service client: the caller must have checked the person is staff.
  */
 export async function findWhatsAppReplyTarget(supabaseAdmin: AdminDb, id: string): Promise<ReplyTarget> {
   const { data: lead } = await supabaseAdmin.from("leads").select("phone").eq("id", id).maybeSingle()
   const digits = lead?.phone ? digitsOnly(lead.phone) : ""
   const jids = digits.length >= 7 ? [`${digits}@c.us`, digits] : []
   const filter = jids.length ? `lead_id.eq.${id},external_group_id.in.(${jids.join(",")})` : `lead_id.eq.${id}`
-  const { data: chats } = await supabaseAdmin.from("messaging_groups").select("id").or(filter)
-  const ids = (chats ?? []).map(c => c.id)
-  if (ids.length === 0) return { conversationId: null, reason: "This lead has no WhatsApp chat yet. Copy the text and send it from the phone." }
+  const { data: chatRows } = await supabaseAdmin.from("messaging_groups").select("id, group_type, external_group_id").or(filter)
+  const chats = (chatRows ?? []).filter(c => c.group_type !== "support_group" && !(c.external_group_id ?? "").endsWith("@g.us"))
+  if (chats.length === 0) return { conversationId: null, label: null, reason: "This lead has no one-to-one WhatsApp chat yet. Copy the text and send it from the phone." }
   const { data: inbound } = await supabaseAdmin
-    .from("messages").select("group_id").in("group_id", ids).eq("direction", "inbound").is("deleted_at", null)
+    .from("messages").select("group_id").in("group_id", chats.map(c => c.id)).eq("direction", "inbound").is("deleted_at", null)
     .order("created_at", { ascending: false }).limit(1)
-  if (!inbound || inbound.length === 0) return { conversationId: null, reason: "This lead has not written on WhatsApp yet, and the first message is sent from the phone. Copy the text and send it from there." }
-  return { conversationId: inbound[0].group_id as string, reason: "" }
+  if (!inbound || inbound.length === 0) return { conversationId: null, label: null, reason: "This lead has not written on WhatsApp yet, and the first message is sent from the phone. Copy the text and send it from there." }
+  const chat = chats.find(c => c.id === inbound[0].group_id)
+  const num = chat ? digitsOnly(chat.external_group_id ?? "") : ""
+  return { conversationId: inbound[0].group_id as string, label: num ? `+${num}` : null, reason: "" }
 }
