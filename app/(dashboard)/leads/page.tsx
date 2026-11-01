@@ -10,6 +10,7 @@ import { findExistingClientNewCalls } from '@/lib/leads/existing-client-new-call
 import { findLeadIdsByPhone, leadSearchOrFilter } from '@/lib/leads/phone-search'
 import { buildClientEmailSet, isLiveClient } from '@/lib/leads/client-match'
 import { LeadsFilterBar } from '@/components/leads/leads-filter-bar'
+import { LeadWindowProvider } from '@/components/leads/lead-window-host'
 import { parseLeadFilters, filterLeads, quickCounts, distinctValues } from '@/lib/leads/list-filters'
 
 const NEW_CALL_WINDOW_DAYS = 14
@@ -188,6 +189,7 @@ export default async function LeadsPage({
   }
 
   return (
+    <LeadWindowProvider>
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -237,5 +239,6 @@ export default async function LeadsPage({
         />
       )}
     </div>
+    </LeadWindowProvider>
   )
 }

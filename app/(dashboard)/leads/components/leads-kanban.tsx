@@ -7,6 +7,7 @@ import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-p
 import { Mail, Clock, DollarSign, Phone, UserCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { useLeadWindowOpener } from '@/components/leads/lead-window-host'
 
 interface LeadKanbanItem {
   id: string
@@ -54,6 +55,7 @@ function daysInStage(createdAt: string): number {
 }
 
 export function LeadsKanban({ items }: LeadsKanbanProps) {
+  const openLead = useLeadWindowOpener()
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
@@ -149,7 +151,7 @@ export function LeadsKanban({ items }: LeadsKanbanProps) {
                             snapshot.isDragging && 'shadow-lg ring-2 ring-blue-200'
                           )}
                         >
-                          <Link href={`/leads/${item.id}`} className="block">
+                          <Link href={`/leads/${item.id}`} onClick={openLead(item.id, item.full_name)} className="block">
                             <p className="text-sm font-medium text-zinc-900 truncate">
                               {item.full_name}
                             </p>
