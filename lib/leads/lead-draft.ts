@@ -203,9 +203,11 @@ export function validateLeadDraft(args: { text: string; subject?: string | null;
 
   const squash = (t: string) => t.toLowerCase().replace(/\s+/g, ' ')
   const allowedSquashed = squash(args.allowed)
-  const strayAmount = (squash(whole).match(AMOUNT_PHRASE) ?? []).find(m => !allowedSquashed.includes(m))
+  const amountHits: string[] = squash(whole).match(AMOUNT_PHRASE) ?? []
+  const strayAmount = amountHits.find(m => !allowedSquashed.includes(m))
   if (strayAmount) return fail('new_number', `The assistant wrote an amount or period ("${strayAmount.trim()}") that is not in the story. Your text was left as it is.`)
-  const strayDomain = (whole.match(BARE_DOMAIN) ?? []).find(d => !allowedSquashed.includes(d.toLowerCase()))
+  const domainHits: string[] = whole.match(BARE_DOMAIN) ?? []
+  const strayDomain = domainHits.find(d => !allowedSquashed.includes(d.toLowerCase()))
   if (strayDomain) return fail('new_link', 'The assistant added a web address that is not in the story. Your text was left as it is.')
   const strayWord = strayTerm(whole, args.allowed, NUMBER_TERMS)
   if (strayWord) return fail('new_number', `The assistant wrote a number in words ("${strayWord}") that is not in the story. Your text was left as it is.`)
