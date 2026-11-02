@@ -70,6 +70,8 @@ export interface TalkMessage {
   pinned_at?: string | null
   /** A message Claude posted for a person (dictated): the person it was written for. The server sends it with every message row. */
   on_behalf_of_user_id?: string | null
+  /** Only on a message still in the phone's outbox (never sent by the server): `sending` = on its way, `waiting` = no connection, will send by itself, `failed` = refused, needs Retry / Delete. */
+  local?: { state: 'sending' | 'waiting' | 'failed'; error?: string; files: { name: string; voice: boolean }[] }
 }
 
 export function isGroupThread(t: Pick<TalkThread, 'thread_type'>): boolean {
