@@ -9,6 +9,8 @@ import { sendMarketingPush } from "@/lib/marketing/push"
 import { rescheduleRecipients, reschedulePush } from "@/lib/marketing/calendar-notify"
 import { personName } from "@/lib/marketing/setter-note"
 import { syncAfterAppointment } from "@/lib/marketing/call-sync-server"
+import { followStaffChange } from "@/lib/marketing/joint-booking"
+import { liveJointEnv } from "@/lib/marketing/joint-live"
 import { loadPrefsAndRows } from "@/lib/marketing/time-prefs-server"
 import { memberZone } from "@/lib/marketing/time-prefs"
 
@@ -34,6 +36,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const calendar = g.ctx.viewAs === undefined && (a.action === "appointment" || (a.action === "reschedule" && a.target === "appointment"))
     ? await syncAfterAppointment({ db: leadDb(), teamId: g.ctx.team.id, leadId: id, actor: g.ctx.user.email ?? g.ctx.user.id, action: a.action === "appointment" && a.at === null ? { kind: "cancel" } : { kind: "set", at: new Date(a.at as string).toISOString() } })
     : null
+  // a call that came from a booking link: the link, the Zoom meeting and the client follow the staff change (never fails the change; a problem is written on the lead)
+  if (g.ctx.viewAs === undefined && (a.action === "appointment" || (a.action === "reschedule" && a.target === "appointment"))) {
+    try {
+      const note = await followStaffChange(liveJointEnv(), { teamId: g.ctx.team.id, leadId: id, change: a.action === "appointment" && a.at === null ? { kind: "cancel" } : { kind: "set", at: new Date(a.at as string).toISOString() } })
+      if (note) await leadDb().from("marketing_lead_events").insert({ lead_id: id, kind: "calendar_sync_failed", actor: g.ctx.user.email ?? g.ctx.user.id, data: { message: note, joint: true } })
+    } catch { /* the staff change is already saved */ }
+  }
   return NextResponse.json({ ok: true, notified, ...(calendar ? { calendar } : {}) }, { headers: NO_STORE })
 }
 
