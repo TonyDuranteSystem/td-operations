@@ -2336,6 +2336,15 @@ export type Database = {
           opener_hash: string | null
           partner_name: string | null
           recipients: string[]
+          replaces_id: string | null
+          return_note: string | null
+          returned_at: string | null
+          returned_by: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          sent_by: string | null
+          sent_to: string[] | null
+          staff_note: string | null
           status: string
           store_archived_at: string | null
           store_error: string | null
@@ -2362,6 +2371,15 @@ export type Database = {
           opener_hash?: string | null
           partner_name?: string | null
           recipients?: string[]
+          replaces_id?: string | null
+          return_note?: string | null
+          returned_at?: string | null
+          returned_by?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          sent_by?: string | null
+          sent_to?: string[] | null
+          staff_note?: string | null
           status?: string
           store_archived_at?: string | null
           store_error?: string | null
@@ -2388,6 +2406,15 @@ export type Database = {
           opener_hash?: string | null
           partner_name?: string | null
           recipients?: string[]
+          replaces_id?: string | null
+          return_note?: string | null
+          returned_at?: string | null
+          returned_by?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          sent_by?: string | null
+          sent_to?: string[] | null
+          staff_note?: string | null
           status?: string
           store_archived_at?: string | null
           store_error?: string | null
@@ -2396,7 +2423,15 @@ export type Database = {
           token?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "bofa_intake_requests_replaces_id_fkey"
+            columns: ["replaces_id"]
+            isOneToOne: false
+            referencedRelation: "bofa_intake_requests"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       call_summaries: {
         Row: {

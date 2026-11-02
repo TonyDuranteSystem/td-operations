@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Check, CheckCheck, CornerUpLeft, FileText, MoreHorizontal, Pencil, Smile } from 'lucide-react'
+import { Check, CheckCheck, Clock, CornerUpLeft, FileText, Mic, MoreHorizontal, Pencil, Smile } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import { useTalkI18n } from '@/components/talk/talk-i18n'
@@ -90,7 +90,7 @@ function ReadByLine({ readBy, mine }: { readBy: { read: string[]; waiting: strin
 }
 
 function Bubble({
-  m, mine, tick, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo, voiceApi, newestVoiceId, tools, readBy,
+  m, mine, tick, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo, voiceApi, newestVoiceId, tools, readBy, outbox,
 }: {
   m: TalkMessage; mine: boolean; tick: Tick; showSender: boolean; meId: string; byId: Map<string, TalkMessage>; highlighted: boolean
   onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
@@ -101,8 +101,12 @@ function Bubble({
   tools?: TalkMessageTools
   /** The "New implementation" chat: who has read this message (names) and who has not; absent = no line. */
   readBy?: { read: string[]; waiting: string[] } | null
+  /** Retry / Delete for a message that is still in the phone's outbox. */
+  outbox?: { retry: (id: string) => void; discard: (id: string) => void }
 }) {
   const { t, ts } = useTalkI18n()
+  // a message still in the phone's outbox: no menu, no reply swipe, no reactions — it has not reached anybody yet
+  const local = m.local
   const atts = (m.attachments ?? []).filter(a => a && a.url)
   const deleted = !!m.deleted_at
   const quote = quotedPreview(m, byId)
@@ -115,7 +119,7 @@ function Bubble({
   const [dx, setDx] = useState(0)
   const clear = () => { if (press.current?.timer) clearTimeout(press.current.timer) }
   const onTouchStart = (e: React.TouchEvent) => {
-    if (deleted) return
+    if (deleted || local) return
     const t = e.touches[0]
     press.current = { x: t.clientX, y: t.clientY, swiped: false, fired: false, dx: 0, timer: setTimeout(() => { if (press.current) { press.current.fired = true; onMenu(m) } }, LONG_PRESS_MS) }
   }
@@ -143,7 +147,7 @@ function Bubble({
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
         onTouchCancel={onTouchEnd}
-        onContextMenu={e => { e.preventDefault(); if (!deleted) onMenu(m) }}
+        onContextMenu={e => { e.preventDefault(); if (!deleted && !local) onMenu(m) }}
         style={{ transform: dx ? `translateX(${dx}px)` : undefined, transition: dx ? 'none' : 'transform 150ms' }}
         className={cn(
           'relative max-w-[82%] rounded-2xl px-3 py-2 shadow-sm [-webkit-touch-callout:none]',
@@ -153,6 +157,7 @@ function Bubble({
           highlighted && 'ring-2 ring-amber-400',
         )}
       >
+        {!local && <>
         {!deleted && !tools && (
           <button
             type="button"
@@ -172,6 +177,7 @@ function Bubble({
             {emojiOpen && <TalkEmojiPopover mine={pills.filter(p => p.mine).map(p => p.emoji)} align={mine ? 'right' : 'left'} onClose={() => setEmojiOpen(false)} onPick={e => { setEmojiOpen(false); onReact(m, e) }} />}
           </div>
         )}
+        </>}
         {deleted ? (
           <p className="text-sm italic text-zinc-400">{t('This message was deleted')}</p>
         ) : (
@@ -190,6 +196,12 @@ function Bubble({
                 <span className="block truncate text-[13px] text-zinc-600">{ts(quote.text)}</span>
               </button>
             )}
+            {local && local.files.map((f, i) => (
+              <span key={`${f.name}-${i}`} className="flex items-center gap-1.5 rounded-lg bg-black/5 px-2 py-1.5 text-sm text-zinc-700" data-testid="talk-local-file">
+                {f.voice ? <Mic className="h-4 w-4 shrink-0" /> : <FileText className="h-4 w-4 shrink-0" />}
+                <span className="truncate">{f.voice ? t('Voice message') : f.name}</span>
+              </span>
+            ))}
             {atts.map((a, i) => <Attachment key={`${a.url}-${i}`} a={a} messageId={m.id} index={i} voiceApi={voiceApi} eager={m.id === newestVoiceId} />)}
             {m.message ? <Text text={m.message} /> : null}
           </div>
@@ -197,7 +209,10 @@ function Bubble({
         <div className="mt-0.5 flex items-center justify-end gap-1 text-[11px] text-zinc-500">
           {m.edited_at && !deleted && <span>{t('edited')}</span>}
           <span>{timeLabel(m.created_at)}</span>
-          {mine && !deleted && (
+          {local && (
+            <Clock className={cn('h-3.5 w-3.5', local.state === 'failed' ? 'text-red-600' : 'text-zinc-400')} aria-label={t('Not sent yet')} data-testid="talk-tick-waiting" />
+          )}
+          {mine && !deleted && !local && (
             tick === 'seen'
               ? <CheckCheck className="h-3.5 w-3.5 text-sky-600" aria-label={t('Seen')} data-testid="talk-tick-seen" />
               : tick === 'delivered'
@@ -205,6 +220,19 @@ function Bubble({
                 : <Check className="h-3.5 w-3.5 text-zinc-400" aria-label={t('Sent')} data-testid="talk-tick-sent" />
           )}
         </div>
+        {local && local.state !== 'sending' && (
+          <div className="mt-1 space-y-1 text-xs" data-testid="talk-local-note">
+            <p className={local.state === 'failed' ? 'font-medium text-red-700' : 'text-zinc-600'}>
+              {local.state === 'failed' ? (local.error ? t(local.error) : t('Could not be sent.')) : t("Not sent yet — it will send by itself when you're back online.")}
+            </p>
+            {outbox && (
+              <div className="flex gap-3">
+                <button type="button" onClick={() => outbox.retry(m.id)} className="font-semibold text-[#BE1E2D]" data-testid="talk-local-retry">{t('Send now')}</button>
+                <button type="button" onClick={() => outbox.discard(m.id)} className="font-semibold text-zinc-600" data-testid="talk-local-discard">{t('Delete')}</button>
+              </div>
+            )}
+          </div>
+        )}
         {readBy && !deleted && m.message?.trim() !== '…' && m.message?.trim() !== '⋯' && <ReadByLine readBy={readBy} mine={mine} />}
         {pills.length > 0 && !deleted && (
           <div className={cn('absolute -bottom-3 flex gap-1', mine ? 'right-2' : 'left-2')} data-testid="talk-reactions">
@@ -231,8 +259,10 @@ function Bubble({
  * and never yanks you down while you are reading older ones.
  */
 export function TalkMessages({
-  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo, voiceApi, tools, readByOf,
+  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo, voiceApi, tools, readByOf, outbox,
 }: {
+  /** Retry / Delete for the messages still in the phone's outbox (they arrive in `messages` marked `local`). */
+  outbox?: { retry: (id: string) => void; discard: (id: string) => void }
   /** The "New implementation" chat passes this: who has read a message (names) and who has not. Absent = no line (every other chat). */
   readByOf?: (m: TalkMessage) => { read: string[]; waiting: string[] } | null
   threadId: string; messages: TalkMessage[]; meId: string
@@ -303,7 +333,7 @@ export function TalkMessages({
               </div>
               {g.messages.map(m => (
                 <Bubble key={m.id} m={m} mine={m.sender_id === meId} tick={m.sender_id === meId ? tickOf(m) : 'sent'} showSender={showSender} meId={meId} byId={byId}
-                  highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} voiceApi={voiceApi} newestVoiceId={newestVoiceId} tools={tools} readBy={readByOf ? readByOf(m) : null} />
+                  highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} voiceApi={voiceApi} newestVoiceId={newestVoiceId} tools={tools} readBy={readByOf ? readByOf(m) : null} outbox={outbox} />
               ))}
             </div>
           ))}

@@ -12,7 +12,7 @@
  */
 import type { ChatAttachment } from '@/lib/types'
 import { validateChatAttachment, CHAT_ATTACHMENT_MAX_MB } from '@/lib/portal/chat-attachment'
-import { fetchWithNetworkRetry } from '@/lib/chat/upload-with-retry'
+import { fetchWithNetworkRetry, PermanentError, type RetryOptions } from '@/lib/chat/upload-with-retry'
 
 /** Max files that can ride on a single chat message. */
 export const CHAT_ATTACHMENT_MAX_COUNT = 5
@@ -109,9 +109,9 @@ function reportTeamAttachmentError(payload: { route: string; message: string; th
  * composer keeps the typed text + staged files for the user on failure, so a
  * transparent retry means most people never see an error at all.
  */
-export async function uploadTeamAttachment(file: File, threadId: string): Promise<ChatAttachment> {
+export async function uploadTeamAttachment(file: File, threadId: string, retry?: RetryOptions): Promise<ChatAttachment> {
   const validationError = validateChatAttachment(file.name, file.size, file.type)
-  if (validationError) throw new Error(validationError)
+  if (validationError) throw new PermanentError(validationError)
 
   let urlRes: Response
   try {
@@ -119,7 +119,7 @@ export async function uploadTeamAttachment(file: File, threadId: string): Promis
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ thread_id: threadId, file_name: file.name }),
-    })
+    }, retry)
   } catch (err) {
     reportTeamAttachmentError({
       route: 'team-chat:upload-url',
@@ -131,7 +131,8 @@ export async function uploadTeamAttachment(file: File, threadId: string): Promis
   }
   if (!urlRes.ok) {
     const d = await urlRes.json().catch(() => ({}))
-    throw new Error(d.error || 'Could not start the upload. Please try again.')
+    // a 4xx is the server's real answer (not allowed, not found): sending again will not change it; a 5xx may pass
+    throw urlRes.status >= 500 || urlRes.status === 408 || urlRes.status === 429 ? new Error(d.error || 'Could not start the upload. Please try again.') : new PermanentError(d.error || 'Could not start the upload. Please try again.')
   }
   const { signedUrl, publicUrl } = await urlRes.json()
   if (!signedUrl || !publicUrl) {
@@ -146,7 +147,7 @@ export async function uploadTeamAttachment(file: File, threadId: string): Promis
       // again every time a chat is opened (storage's default is "ask again every time").
       headers: { 'Content-Type': file.type || 'application/octet-stream', 'cache-control': 'max-age=31536000' },
       body: file,
-    })
+    }, retry)
   } catch (err) {
     reportTeamAttachmentError({
       route: 'team-chat:upload-put',
@@ -158,7 +159,7 @@ export async function uploadTeamAttachment(file: File, threadId: string): Promis
   }
   if (!putRes.ok) {
     if (putRes.status === 413) {
-      throw new Error(`File too large. Maximum allowed: ${CHAT_ATTACHMENT_MAX_MB} MB.`)
+      throw new PermanentError(`File too large. Maximum allowed: ${CHAT_ATTACHMENT_MAX_MB} MB.`)
     }
     throw new Error('Upload failed. Please check your connection and try again.')
   }

@@ -2,6 +2,7 @@
  * TD Marketing — the lead chat, server side (dev job 9aec66fa, Addendum G). Every function takes the guard's context: the team id is in every query and the lead is
  * always read through the team first, so another team's lead id finds nothing. The words and the rules are in `lead-chat.ts` (pure, tested); this file only reads and writes.
  */
+import { parseClientId } from "@/lib/chat/client-id"
 import { randomUUID } from "crypto"
 import { NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -241,10 +242,22 @@ export async function markDelivered(ctx: MarketingContext, items: ReadonlyArray<
   return rows.length
 }
 
-export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body: { message?: unknown; attachments?: unknown; reply_to_id?: unknown }, lane: Lane): Promise<{ ok: true; message: unknown } | { ok: false; error: string; status: number }> {
+export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body: { message?: unknown; attachments?: unknown; reply_to_id?: unknown; client_id?: unknown; sender_id?: unknown }, lane: Lane): Promise<{ ok: true; message: unknown } | { ok: false; error: string; status: number }> {
+  // a queued message (the phone's outbox) names its writer: if the browser has since signed in as somebody else it is refused, never sent under the wrong name
+  if (typeof body.sender_id === "string" && body.sender_id && body.sender_id !== ctx.user.id) return { ok: false, error: "This message was written by somebody else. Sign in as the person who wrote it, or delete it.", status: 409 }
   const c = checkSend({ message: body.message, attachments: body.attachments, teamId: ctx.team.id, leadId: lead.id })
   if (c.ok === false) return { ok: false, error: c.error, status: 400 }
   const d = db()
+  // a message the phone queued and sends again carries the id it was queued under: a send that already worked answers with its own row (nobody is told twice)
+  let clientId = parseClientId(body.client_id)
+  if (clientId) {
+    const { data: already } = await d.from("marketing_lead_messages").select(`${MESSAGE_COLS}, lead_id, lane`).eq("id", clientId).maybeSingle()
+    if (already) {
+      const a = already as unknown as ChatMessageRow & { lead_id: string; lane: Lane }
+      if (a.sender_id === ctx.user.id && a.lead_id === lead.id && a.lane === lane) { const [message] = await shape([a], []); return { ok: true, message } }
+      clientId = null
+    }
+  }
   let replyTo: string | null = null
   if (body.reply_to_id != null) {
     if (!isUuid(body.reply_to_id)) return { ok: false, error: "The message you are answering was not found.", status: 400 }
@@ -258,11 +271,16 @@ export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body
   // the sender is shown by the name on her profile ("Cristina"), else by her email's name
   const senderName = members.find(m => m.id === ctx.user.id)?.name ?? personName(ctx.user.email ?? "")
   const mentions = parseMentions(c.message, members.filter(m => isInvolved(m.permissions) && inLane(m, lane)).map(m => ({ id: m.id, name: m.name })), ctx.user.id)
-  const base = { team_id: ctx.team.id, lead_id: lead.id, lane, sender_id: ctx.user.id, sender_name: senderName, message: c.message, attachments: c.attachments.length ? c.attachments : null, reply_to_id: replyTo }
+  const base = { ...(clientId ? { id: clientId } : {}), team_id: ctx.team.id, lead_id: lead.id, lane, sender_id: ctx.user.id, sender_name: senderName, message: c.message, attachments: c.attachments.length ? c.attachments : null, reply_to_id: replyTo }
   // `mentions` is only written when somebody IS named, so a team that has not run the team-chat migration yet can still send ordinary messages
   let { data: row, error } = await d.from("marketing_lead_messages").insert(mentions.length ? { ...base, mentions } : base).select(MESSAGE_COLS).single()
   // the mentions column is not there yet (migration not run): send the message without it rather than not at all (the person is still notified below)
   if (error && mentions.length && (error as { code?: string }).code === "42703") ({ data: row, error } = await d.from("marketing_lead_messages").insert(base).select(MESSAGE_COLS).single())
+  if (error && clientId && (error as { code?: string }).code === "23505") {
+    // two tries at once: the second finds the first one's row
+    const { data: raced } = await d.from("marketing_lead_messages").select(MESSAGE_COLS).eq("id", clientId).eq("sender_id", ctx.user.id).maybeSingle()
+    if (raced) { const [message] = await shape([raced as unknown as ChatMessageRow], []); return { ok: true, message } }
+  }
   if (error || !row) return { ok: false, error: "Could not send. Please try again.", status: 500 }
   // what you send you have read, and this device has it
   await Promise.all([markLeadRead(ctx, lead.id, lane), markDelivered(ctx, [{ lead_id: lead.id, lane }])])

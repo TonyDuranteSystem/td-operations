@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
 import { validateTeamCard } from '@/lib/team/workspace'
 import { resolveMentions } from '@/lib/team/directory'
+import { parseClientId } from '@/lib/chat/client-id'
 import { triggerClaudeReply } from '@/lib/team/claude-trigger'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import { sendPushToStaffExcept } from '@/lib/team/notify'
@@ -31,6 +32,10 @@ export async function POST(
   }
   const { id: threadId } = await params
   const body = await request.json().catch(() => ({}))
+  // a queued message (the phone's outbox) names its writer: if the browser has since signed in as somebody else it is refused, never sent under the wrong name
+  if (typeof body.sender_id === 'string' && body.sender_id && body.sender_id !== user.id) {
+    return NextResponse.json({ error: 'This message was written by somebody else. Sign in as the person who wrote it, or delete it.' }, { status: 409 })
+  }
 
   const message: string = (body.message ?? '').toString().trim()
   const replyToId: string | null = body.reply_to_id ?? null
@@ -120,6 +125,18 @@ export async function POST(
     rootId = parent.root_id ?? parent.id
   }
 
+  // A message the phone queued and sends again carries the id it was queued under: a send that already worked answers with its own row instead of
+  // posting twice (the answer to the first try may simply have been lost). An id that belongs to somebody else's row is ignored.
+  let clientId = parseClientId(body.client_id)
+  if (clientId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: already } = await (supabaseAdmin as any).from('internal_messages').select().eq('id', clientId).maybeSingle()
+    if (already) {
+      if (already.sender_id === user.id && already.thread_id === threadId) return NextResponse.json({ message: already, duplicate: true })
+      clientId = null
+    }
+  }
+
   // Resolve @mentions against the staff directory.
   const mentions = await resolveMentions(message, user.id)
 
@@ -130,6 +147,7 @@ export async function POST(
   const { data: msg, error } = await (supabaseAdmin as any)
     .from('internal_messages')
     .insert({
+      ...(clientId ? { id: clientId } : {}),
       thread_id: threadId,
       sender_id: user.id,
       sender_name: displayName,
@@ -146,7 +164,15 @@ export async function POST(
     })
     .select()
     .single()
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    // two tries at once (a retry while the first was still running): the second finds the first one's row
+    if (clientId && (error as { code?: string }).code === '23505') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: raced } = await (supabaseAdmin as any).from('internal_messages').select().eq('id', clientId).eq('sender_id', user.id).maybeSingle()
+      if (raced) return NextResponse.json({ message: raced, duplicate: true })
+    }
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
 
   // A reply into an ARCHIVED thread brings it back. Without this the message is
   // accepted, followers are pushed, and yet the thread is hidden from the
