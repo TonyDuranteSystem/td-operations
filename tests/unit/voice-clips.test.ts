@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { MARKETING_CLIP_NAMES, TALK_CLIP_NAMES, clipNameKey, clipUrlFor, playClip, resetSoundProbe, soundAllowedWithoutClick } from '@/lib/voice-clips'
-import { talkVoicePhrase, CLIENT_MESSAGE_PHRASE, TALK_FEATURE_PHRASE, TD_BUG_PHRASE, isNewTdBugPost } from '@/lib/talk/voice-alert'
+import { talkVoicePhrase, CLIENT_MESSAGE_PHRASE, TALK_FEATURE_PHRASE, TD_BUG_PHRASE, isNewTdBugPost, channelVoicePhrase } from '@/lib/talk/voice-alert'
 import { voicePhrases } from '@/lib/marketing/voice-alert'
 
 describe('clipNameKey', () => {
@@ -26,6 +26,14 @@ describe('clipUrlFor', () => {
     expect(clipUrlFor('Sound on')).toBe('/sounds/voice/sound-on.mp3')
     expect(clipUrlFor(TD_BUG_PHRASE)).toBe('/sounds/voice/td-bug.mp3')
   })
+  it('replies have their own clips: in #td-bug, and in any other channel', () => {
+    expect(channelVoicePhrase('td-bug', null)).toBe('New TD bug')
+    expect(channelVoicePhrase('td-bug', 'r1')).toBe('New TD bug reply')
+    expect(channelVoicePhrase('td-dev', 'r1')).toBe('New reply')
+    expect(channelVoicePhrase('td-dev', null)).toBeNull()
+    expect(clipUrlFor('New TD bug reply')).toBe('/sounds/voice/td-bug-reply.mp3')
+    expect(clipUrlFor('New reply')).toBe('/sounds/voice/channel-reply.mp3')
+  })
   it('a new bug is a top-level post in #td-bug; a reply or another channel is not', () => {
     expect(isNewTdBugPost('td-bug', null)).toBe(true)
     expect(isNewTdBugPost(' TD-Bug ', undefined)).toBe(true)
@@ -46,7 +54,7 @@ describe('clipUrlFor', () => {
     const urls = [
       ...TALK_CLIP_NAMES.map(n => clipUrlFor(`New ${n} message in TD Talk`)),
       ...MARKETING_CLIP_NAMES.map(n => clipUrlFor(`Message from ${n}`)),
-      clipUrlFor('Sound on'), clipUrlFor(TALK_FEATURE_PHRASE), clipUrlFor(CLIENT_MESSAGE_PHRASE), clipUrlFor(TD_BUG_PHRASE),
+      clipUrlFor('Sound on'), clipUrlFor(TALK_FEATURE_PHRASE), clipUrlFor(CLIENT_MESSAGE_PHRASE), clipUrlFor(TD_BUG_PHRASE), clipUrlFor('New TD bug reply'), clipUrlFor('New reply'),
       clipUrlFor('New team message in TD Talk'), clipUrlFor('Message from someone'),
     ]
     for (const u of urls) {
