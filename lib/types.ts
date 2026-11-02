@@ -318,6 +318,8 @@ export interface LeadListItem {
   /** Live exact-email match to a contact that already has a company. Badge only —
    *  false for leads already tagged or Converted (they have their own labels). */
   is_live_client?: boolean
+  /** The CRM suggests this lead may already be a client but is not sure: a question is waiting for Antonio (dev job 6fc63c52). */
+  needs_client_check?: boolean
   /** When a follow-up last left the lead window, and on which channel (dev job 6fc63c52). Absent until the follow-up-sent migration is run. */
   last_follow_up_sent_at?: string | null
   last_follow_up_channel?: string | null
