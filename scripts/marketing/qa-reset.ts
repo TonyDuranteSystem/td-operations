@@ -100,7 +100,16 @@ async function main() {
     await page.close()
     return ctx
   }
-  const anon = async () => { const c = await browser.newContext({ viewport: { width: 1280, height: 900 } }); await c.addCookies([{ name: "tdm_lang", value: "en", domain: new URL(BASE).hostname, path: "/" }]); return c }
+  let ipSeq = 10
+  const nextIp = () => `10.20.30.${++ipSeq}`
+  const anon = async () => { const c = await browser.newContext({ viewport: { width: 1280, height: 900 } }); await c.setExtraHTTPHeaders({ "x-forwarded-for": nextIp() }); await c.addCookies([{ name: "tdm_lang", value: "en", domain: new URL(BASE).hostname, path: "/" }]); return c }
+  const JSON_FROM = (ip: string = nextIp()) => ({ "Content-Type": "application/json", "x-forwarded-for": ip })
+  const SUPA = process.env.NEXT_PUBLIC_SUPABASE_URL!
+  const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  const restLogin = async (email: string, password: string) => { const r = await fetch(`${SUPA}/auth/v1/token?grant_type=password`, { method: "POST", headers: { "Content-Type": "application/json", apikey: ANON_KEY }, body: JSON.stringify({ email, password }) }); return r.status === 200 ? (await r.json()) as { access_token: string; refresh_token: string } : null }
+  const restUserStatus = async (access: string) => (await fetch(`${SUPA}/auth/v1/user`, { headers: { apikey: ANON_KEY, Authorization: `Bearer ${access}` } })).status
+  const restRefreshStatus = async (refresh: string) => (await fetch(`${SUPA}/auth/v1/token?grant_type=refresh_token`, { method: "POST", headers: { "Content-Type": "application/json", apikey: ANON_KEY }, body: JSON.stringify({ refresh_token: refresh }) })).status
+  const metaOf = async (userId: string) => (await db.query("select raw_app_meta_data from auth.users where id=$1", [userId])).rows[0].raw_app_meta_data as Record<string, unknown>
   const passwordWorks = async (email: string, password: string) => {
     const r = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/token?grant_type=password`, { method: "POST", headers: { "Content-Type": "application/json", apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY! }, body: JSON.stringify({ email, password }) })
     return r.status === 200
@@ -124,7 +133,7 @@ async function main() {
     await p.screenshot({ path: `${SHOTS}/rs-forgot.png` })
     const rp = await c.newPage(); const r = await rp.goto(`${BASE}/marketing/reset?token=${"A".repeat(43)}`, { waitUntil: "networkidle", timeout: 180000 })
     ck("3 the new-password page opens without signing in", r?.status() === 200 && (await rp.locator("#reset-password").count()) === 1, r?.status())
-    const bad = await fetch(`${BASE}/api/marketing/forgot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "not an email" }) })
+    const bad = await fetch(`${BASE}/api/marketing/forgot`, { method: "POST", headers: JSON_FROM(), body: JSON.stringify({ email: "not an email" }) })
     ck("4 something that is not an email is the only thing refused", bad.status === 400)
     const noTok = await fetch(`${BASE}/api/marketing/reset`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: "A".repeat(43), password: NEW1 }) })
     ck("5 a made-up link is refused with the generic answer", noTok.status === 400 && /cannot be used/.test((await noTok.json()).error))
@@ -145,7 +154,7 @@ async function main() {
   ck("6 a member, a paused member, a client, an admin, a staff login and a stranger all get the SAME answer", answers.every(a => a === answers[0]) && /link to choose a new password is on its way/.test(answers[0]), answers)
   const mailSetter = await captured(em("setterA"))
   ck("7 the member got ONE email, at his own address, in the page's language (English here)", mailSetter.length === 1 && /Choose a new password/i.test(String(mailSetter[0].subject)), mailSetter.map(m => m.subject))
-  await fetch(`${BASE}/api/marketing/forgot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: em("aleA") }) })
+  await fetch(`${BASE}/api/marketing/forgot`, { method: "POST", headers: JSON_FROM(), body: JSON.stringify({ email: em("aleA") }) })
   const mailAle = await captured(em("aleA"))
   ck("7b with no language chosen the email is in Italian (the workspace default)", mailAle.length === 1 && /nuova password/i.test(String(mailAle[0].subject)) && /Ciao/.test(String(mailAle[0].body)), mailAle.map(m => m.subject))
   const otherMails = (await db.query("select recipient from sandbox_captured_emails where recipient ilike '%qa-rs-%' and recipient not ilike $1 and recipient not ilike $2", [`%${em("setterA")}%`, `%${em("aleA")}%`])).rows
@@ -174,6 +183,8 @@ async function main() {
     ck("14 a good password signs him in and lands on the second step (he still needs his code)", /\/mfa\/verify/.test(p.url()), p.url())
     ck("15 the old password stops working, the new one works", !(await passwordWorks(em("setterA"), PASS)) && (await passwordWorks(em("setterA"), NEW1)))
     ck("16 the link is marked used", (await rowsFor(ids.setterA))[0].used_at !== null)
+    const setterMeta = await metaOf(ids.setterA)
+    ck("16b the reset bumped the remember-this-device version and kept the marketing role", setterMeta.mfa_rd_version === 1 && setterMeta.role === "marketing", setterMeta)
     const again = await c.newPage(); await again.goto(localLink(emailLink), { waitUntil: "networkidle", timeout: 180000 })
     await again.fill("#reset-password", NEW2); await again.fill("#reset-again", NEW2); await again.click("#reset-submit")
     await again.waitForSelector('p[role="alert"]', { timeout: 30000 })
@@ -205,12 +216,25 @@ async function main() {
     ck("22 the server also refuses an owner's link made by another owner", refuse.s === 400 && /Only Antonio/.test(refuse.b.error), refuse)
     const self = await p.evaluate(async (id: string) => { const r = await fetch(`/api/marketing/team/members/${id}/reset`, { method: "POST" }); return r.status }, ids.ownerA)
     ck("23 and a link for yourself", self === 400)
+    // a sign-in the seller already has open (old password) - in a browser AND as raw tokens - must be ended by the reset
+    const sellerOld = await session(em("sellerA"))
+    const oldPage = await sellerOld.newPage()
+    await oldPage.goto(`${BASE}/marketing`, { waitUntil: "networkidle", timeout: 180000 })
+    ck("23b before the reset his old sign-in opens the workspace", /\/marketing/.test(oldPage.url()) && !/\/login/.test(oldPage.url()), oldPage.url())
+    const oldTokens = await restLogin(em("sellerA"), PASS)
+    ck("23c and his raw tokens work", !!oldTokens && (await restUserStatus(oldTokens.access_token)) === 200)
     // the seller uses the link
     const c = await anon(); const sp = await c.newPage()
     await sp.goto(`${BASE}/marketing/reset?token=${new URL(link).searchParams.get("token")}`, { waitUntil: "networkidle", timeout: 180000 })
     await sp.fill("#reset-password", NEW2); await sp.fill("#reset-again", NEW2); await sp.click("#reset-submit")
     await sp.waitForURL(/\/mfa\/(verify|enroll)/, { timeout: 90000 })
     ck("24 the seller chooses a password from the owner's link and reaches the second step", await passwordWorks(em("sellerA"), NEW2) && !(await passwordWorks(em("sellerA"), PASS)))
+    await oldPage.goto(`${BASE}/marketing`, { waitUntil: "networkidle", timeout: 180000 })
+    ck("24b the sign-in he had open before is ended: the old browser is sent to the login page", /\/login/.test(oldPage.url()), oldPage.url())
+    ck("24c and the old raw tokens are refused (access AND refresh)", !!oldTokens && (await restUserStatus(oldTokens.access_token)) !== 200 && (await restRefreshStatus(oldTokens.refresh_token)) !== 200)
+    const sellerMeta = await metaOf(ids.sellerA)
+    ck("24d the owner's-link reset also bumped the remember-this-device version", sellerMeta.mfa_rd_version === 1 && sellerMeta.role === "marketing", sellerMeta)
+    await sellerOld.close()
     await c.close()
     // a newer link cancels the older one
     await p.reload({ waitUntil: "networkidle" })
@@ -244,6 +268,49 @@ async function main() {
   {
     const r = await fetch(`${BASE}/api/marketing/team/members/${ids.setterA}/reset`, { method: "POST" })
     ck("29 the owner's route is closed to anyone not signed in", r.status === 401 || r.status === 403 || r.status === 307, r.status)
+  }
+
+  // ── 6b. after the bug hunt: owner links survive Forgot, bad bodies, the speed bump, and Antonio is told of a problem ──
+  {
+    const p = await ownerCtx.newPage()
+    await p.goto(`${BASE}/marketing/team`, { waitUntil: "networkidle", timeout: 180000 })
+    const made = await p.evaluate(async (id: string) => (await fetch(`/api/marketing/team/members/${id}/reset`, { method: "POST" })).json(), ids.aleA)
+    const ownerToken = new URL(made.resetUrl).searchParams.get("token") ?? ""
+    const mailsBefore = (await captured(em("aleA"))).length
+    const f = await fetch(`${BASE}/api/marketing/forgot`, { method: "POST", headers: JSON_FROM(), body: JSON.stringify({ email: em("aleA") }) })
+    const openAfter = (await rowsFor(ids.aleA)).filter(r => !r.used_at && !r.revoked_at)
+    ck("31 pressing Forgot while the owner's link is open: same answer, NO new email, the owner's link is still the open one", f.status === 200 && (await captured(em("aleA"))).length === mailsBefore && openAfter.length === 1 && openAfter[0].requested_by === em("ownerA"), { s: f.status, open: openAfter.map(r => r.requested_by) })
+    const fin = await fetch(`${BASE}/api/marketing/reset`, { method: "POST", headers: JSON_FROM(), body: JSON.stringify({ token: ownerToken, password: NEW1 }) })
+    ck("32 and the owner's link still works", fin.status === 200 && (await passwordWorks(em("aleA"), NEW1)), fin.status)
+    for (const path of ["forgot", "reset"]) {
+      for (const raw of ["null", "[]", "\"text\""]) {
+        const r = await fetch(`${BASE}/api/marketing/${path}`, { method: "POST", headers: JSON_FROM(), body: raw })
+        ck(`33 ${path} with a body of ${raw} is a normal 400, not a server error`, r.status === 400, r.status)
+      }
+    }
+    const ip = "198.51.100.77"
+    const codes: number[] = []
+    let retryAfter: string | null = null
+    for (let i = 0; i < 7; i++) { const r = await fetch(`${BASE}/api/marketing/forgot`, { method: "POST", headers: JSON_FROM(ip), body: JSON.stringify({ email: "nobody@example.test" }) }); codes.push(r.status); if (r.status === 429) retryAfter = r.headers.get("retry-after") }
+    ck("34 one place is slowed down after five requests a minute (matched or not), with a wait time", codes.slice(0, 5).every(c => c === 200) && codes[5] === 429 && codes[6] === 429 && !!retryAfter, { codes, retryAfter })
+    const other = await fetch(`${BASE}/api/marketing/forgot`, { method: "POST", headers: JSON_FROM(), body: JSON.stringify({ email: "nobody@example.test" }) })
+    ck("34b another place is not slowed down", other.status === 200)
+    // Antonio is told (team chat + error list), once per person, in words that say what to do
+    // the chat helper imports "server-only" (a Next.js guard that a plain script cannot load): give this one script an empty stand-in
+    const Mod = (await import("node:module")).default as unknown as { _load: (request: string, ...rest: unknown[]) => unknown }
+    const realLoad = Mod._load
+    Mod._load = function (this: unknown, request: string, ...rest: unknown[]) { return request === "server-only" ? {} : realLoad.call(this, request, ...rest) }
+    const { alertForgotProblem } = await import("@/lib/marketing/reset-alert")
+    await db.query("delete from system_errors where route = '/api/marketing/forgot'")
+    await db.query("delete from internal_messages where message like '%qa-rs-%pressed%'")
+    await alertForgotProblem(em("sellerA"), "the email could not be sent: qa test")
+    await alertForgotProblem(em("sellerA"), "the email could not be sent: qa test again")
+    const errs = await db.query("select message from system_errors where route = '/api/marketing/forgot'")
+    const chat = await db.query("select message from internal_messages where message like '%qa-rs-%pressed%'")
+    ck("35 a Forgot problem is recorded and told in the bug channel ONCE, naming the person, the reason and the fix", errs.rows.length === 1 && chat.rows.length === 1 && chat.rows[0].message.includes(em("sellerA")) && /Reset password/.test(chat.rows[0].message) && /qa test/.test(chat.rows[0].message) && !/again/.test(chat.rows[0].message), { errs: errs.rows.length, chat: chat.rows.length })
+    await db.query("delete from system_errors where route = '/api/marketing/forgot'")
+    await db.query("delete from internal_messages where message like '%qa-rs-%pressed%'")
+    await p.close()
   }
 
   // ── 7. the table never holds a client / staff / admin login's link ───────────────

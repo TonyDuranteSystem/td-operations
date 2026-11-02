@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest"
 import {
   FORGOT_ANSWER, GENERIC_RESET_ERROR, MAX_OWNER_RESETS_PER_HOUR, MAX_SELF_REQUESTS_PER_HOUR, RESET_TTL_OWNER_MS, RESET_TTL_SELF_MS,
-  eligibleForForgot, mayResetMember, overOwnerLimit, overSelfLimit, resetExpiry, resetUrl,
+  FORGOT_MAX_PER_MINUTE, TOO_MANY_ATTEMPTS_ERROR, bodyObject, eligibleForForgot, mayResetMember, openOwnerLink, overOwnerLimit, overSelfLimit, resetExpiry, resetUrl,
 } from "@/lib/marketing/reset-rules"
 import { buildResetEmail } from "@/lib/marketing/reset-email"
 import { buildInviteMime } from "@/lib/marketing/invite-email"
@@ -105,5 +105,37 @@ describe("buildResetEmail", () => {
     expect(mime).toMatch(/^Subject: =\?utf-8\?B\?/m)
     expect(mime).not.toContain("Subject: Scegli")
     expect(mime).toContain("To: rocco@tonydurante.us")
+  })
+})
+
+describe("bodyObject (a public request with no body, `null`, a list or text must not crash the route)", () => {
+  it("an object stays an object; everything else is an empty object", () => {
+    expect(bodyObject({ email: "a@b.co" })).toEqual({ email: "a@b.co" })
+    for (const raw of [null, undefined, "text", 42, true, [], [1, 2]]) expect(bodyObject(raw)).toEqual({})
+  })
+})
+
+describe("openOwnerLink (a person's own request must not replace a live link from the team owner)", () => {
+  const now = new Date("2026-11-01T12:00:00Z")
+  const live = { requested_by: "owner@td.us", used_at: null, revoked_at: null, expires_at: "2026-11-02T12:00:00Z" }
+  it("a live link made by an owner (or Antonio) counts", () => {
+    expect(openOwnerLink([live], now)).toBe(true)
+  })
+  it("expired, used, cancelled, or the person's own link do not", () => {
+    expect(openOwnerLink([{ ...live, expires_at: "2026-11-01T11:59:59Z" }], now)).toBe(false)
+    expect(openOwnerLink([{ ...live, used_at: "2026-11-01T10:00:00Z" }], now)).toBe(false)
+    expect(openOwnerLink([{ ...live, revoked_at: "2026-11-01T10:00:00Z" }], now)).toBe(false)
+    expect(openOwnerLink([{ ...live, requested_by: "self" }], now)).toBe(false)
+    expect(openOwnerLink([], now)).toBe(false)
+  })
+})
+
+describe("the public Forgot page", () => {
+  it("allows a few requests a minute, and its answers say the same thing to everybody", () => {
+    expect(FORGOT_MAX_PER_MINUTE).toBeGreaterThanOrEqual(3)
+    expect(FORGOT_MAX_PER_MINUTE).toBeLessThanOrEqual(10)
+    expect(TOO_MANY_ATTEMPTS_ERROR).toMatch(/Too many attempts/)
+    expect(FORGOT_ANSWER).toMatch(/team owner sent you a link/)
+    expect(FORGOT_ANSWER).toMatch(/newest email/)
   })
 })
