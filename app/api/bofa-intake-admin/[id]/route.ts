@@ -1,5 +1,5 @@
 /**
- * Staff-only (admin) detail + revoke for one Bank of America intake link.
+ * Staff-only (admins + the logins named in lib/auth/forms-access.ts) detail + revoke for one Bank of America intake link.
  *   GET   /api/bofa-intake-admin/[id]                  — the answers + a 1-hour download link per document
  *   PATCH /api/bofa-intake-admin/[id] { action: "revoke" }     — kill a link that has not been submitted
  *                                      { action: "archive" }      — (re)save a submitted application in CRM Storage
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic"
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { isSecureAdmin } from "@/lib/auth"
+import { canUseForms } from "@/lib/auth"
 import { BOFA_BUCKET, BOFA_DOC_SLOTS } from "@/lib/bofa-intake/schema"
 import { deliverSubmission } from "@/lib/bofa-intake/deliver"
 import { archiveSubmission } from "@/lib/bofa-intake/archive"
@@ -24,10 +24,11 @@ type Params = { params: Promise<{ id: string }> }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- new table not in the generated DB types
 const table = () => (supabaseAdmin as any).from("bofa_intake_requests")
 
+// Administrators plus the staff logins named in lib/auth/forms-access.ts (the same rule as the Forms menu item and page guard).
 async function adminUser() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  return user && isSecureAdmin(user) ? user : null
+  return user && canUseForms(user) ? user : null
 }
 
 /** Delete everything uploaded under a link that never produced a submission (passports must not linger). */

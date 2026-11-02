@@ -9,7 +9,7 @@ import { DashboardHeader } from '@/components/dashboard/dashboard-header'
 import { AiAgentPanel } from '@/components/dashboard/ai-agent-panel'
 import { Providers } from '@/components/providers'
 import { ThemeScript, ThemeSync } from '@/components/dashboard/theme-sync'
-import { isAdmin, isDashboardUser, isProtectedAdminEmail } from '@/lib/auth'
+import { canUseForms, isAdmin, isDashboardUser, isProtectedAdminEmail } from '@/lib/auth'
 import { countTeamNotifications, countTalkNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
 import { SwRegister } from '@/components/dashboard/sw-register'
 import { RealtimeNotifications } from '@/components/dashboard/realtime-notifications'
@@ -143,6 +143,8 @@ export default async function DashboardLayout({
   }
 
   const admin = isAdmin(user)
+  // Menu items an administrator-only entry may still show to this non-administrator (named people, lib/auth/forms-access.ts).
+  const extraNavIds = !admin && canUseForms(user) ? ['forms'] : []
   // The OWNER allow-list (code-level, not a grantable role) — only this
   // account may switch its own two-factor requirement off.
   const owner = isProtectedAdminEmail(user.email)
@@ -211,6 +213,7 @@ export default async function DashboardLayout({
             user={user}
             isAdmin={admin}
             isOwner={owner}
+            extraNavIds={extraNavIds}
             badgeCounts={badgeCounts}
             enabledFeatures={showNewCalendar ? ['new-calendar'] : []}
           />

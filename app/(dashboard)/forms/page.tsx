@@ -3,7 +3,8 @@
 /**
  * /forms — every standalone form (one that is not tied to a client account), in one place:
  * view it, make a one-time link and copy it, or open its links and submissions.
- * Admin only (side-menu item + middleware). The list lives in lib/forms-hub/registry.ts.
+ * Admins, plus the staff logins named in lib/auth/forms-access.ts (side-menu item + middleware + the staff routes).
+ * The list lives in lib/forms-hub/registry.ts.
  */
 
 import { useState } from "react"

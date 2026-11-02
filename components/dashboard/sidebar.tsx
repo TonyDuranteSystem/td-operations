@@ -111,6 +111,8 @@ interface SidebarProps {
   isAdmin?: boolean
   /** True only for the code-level owner account (see lib/auth). */
   isOwner?: boolean
+  /** Ids of administrator-only items this non-administrator may still see (e.g. 'forms' for the people named in lib/auth/forms-access.ts). */
+  extraNavIds?: string[]
   badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; talk?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; marketing?: number; devBoard?: number }
   enabledFeatures?: string[]
 }
@@ -136,7 +138,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'team-chat', name: 'Team Chat', href: '/team-chat', icon: MessageSquare, tooltip: 'Internal chat between team members. Messages are identified by sender with unique sounds per person.' },
   { id: 'dev-board', name: 'Dev Board', href: '/dev-board', icon: LayoutGrid, tooltip: 'Dev-tracker board — every dev job by channel (td-dev/td-bug/td-support): request, findings, approved plan, milestones and status. Claude Code sessions keep it current so nothing is lost.' },
   { id: 'storage', name: 'Storage', href: '/storage', icon: HardDrive, tooltip: 'General-purpose CRM storage — folders and files organized by staff. Not connected to Google Drive.' },
-  { id: 'forms', name: 'Forms', href: '/forms', icon: ClipboardList, adminOnly: true, tooltip: 'Standalone forms that are not tied to a client — view a form, make a one-time link to send, and read what comes back. Admin only.' },
+  { id: 'forms', name: 'Forms', href: '/forms', icon: ClipboardList, adminOnly: true, tooltip: 'Standalone forms that are not tied to a client — view a form, make a one-time link to send, and read what comes back. Admins and the staff logins named for it.' },
   { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
   { id: 'marketing', name: 'Marketing', href: '/marketing-leads', icon: Megaphone, adminOnly: true, tooltip: 'TD Marketing — the master view of Rocco\'s team: leads from the ads, who is working them, what needs you today, and the Meta connection. Admin only.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
@@ -366,6 +368,7 @@ export function Sidebar({
   user,
   isAdmin = false,
   isOwner = false,
+  extraNavIds = [],
   badgeCounts,
   enabledFeatures = [],
 }: SidebarProps) {
@@ -659,7 +662,7 @@ export function Sidebar({
     })
     .filter((item): item is NavItem => {
       if (!item) return false
-      if (item.adminOnly && !isAdmin) return false
+      if (item.adminOnly && !isAdmin && !extraNavIds.includes(item.id)) return false
       if (item.ownerOnly && !isOwner) return false
       if (item.featureFlag && !enabledFeatures.includes(item.featureFlag)) return false
       return true

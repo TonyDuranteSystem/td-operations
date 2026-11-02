@@ -47,8 +47,8 @@ describe("sidebar wiring", () => {
 
   it("the launcher is handed the SAME permission-filtered list the menu renders", () => {
     expect(sidebar).toContain("<WindowsLauncher items={orderedNav} />")
-    // orderedNav is the list after the admin-only / owner-only / feature-flag filter
-    const filter = sidebar.indexOf("if (item.adminOnly && !isAdmin) return false")
+    // orderedNav is the list after the admin-only (or named-person, extraNavIds) / owner-only / feature-flag filter
+    const filter = sidebar.indexOf("if (item.adminOnly && !isAdmin && !extraNavIds.includes(item.id)) return false")
     expect(filter).toBeGreaterThan(sidebar.indexOf("const orderedNav"))
     expect(filter).toBeLessThan(sidebar.indexOf("<WindowsLauncher"))
   })
