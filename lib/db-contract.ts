@@ -222,6 +222,11 @@ export const NOT_A_VOCABULARY = new Set([
   // production but not in the committed PRODUCTION snapshot until it is next fully regenerated. At the NEXT full `npm run snapshot:constraints`, MOVE each
   // into CONSTRAINT_CONTRACTS with its code-side list and delete these lines.
   "marketing_commission_terms_basis_check",
+  // TEMPORARY (2026-11-02, CI "Lint + tests" red on PR 921, dev job 0b916784): the booking link with Antonio's table `marketing_joint_links` (already run in production). Its two
+  // value lists are written only by lib/marketing/joint-*.ts (`lang` it|en, `status` open|booking|booked|cancelled|failed). At the NEXT full `npm run snapshot:constraints`,
+  // MOVE them into CONSTRAINT_CONTRACTS with their code-side lists and delete these lines.
+  "marketing_joint_links_lang_check",
+  "marketing_joint_links_status_check",
   "marketing_invites_member_role_check",
   "marketing_leadgen_events_source_check",
   "marketing_leadgen_events_status_check",
