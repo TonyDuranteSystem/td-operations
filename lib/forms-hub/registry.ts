@@ -21,7 +21,7 @@ export const STANDALONE_FORMS: StandaloneForm[] = [
     id: "bank-application",
     name: "Bank account application",
     description:
-      "A one-time link for a client (ours or a partner's) to apply for a US business bank account: their details, a description of the business, and six documents. Everything is stored with us; if you add email addresses when you make the link, the finished form is also emailed to them.",
+      "A one-time link for a client (ours or a partner's) to apply for a US business bank account: their details, a description of the business, and six documents. Everything is stored with us. A submitted application waits for our review and goes to the bank contact only when we press Submit.",
     viewHref: "/forms/bank-application/preview",
     manageHref: "/bofa-intake",
     createLinkApi: "/api/bofa-intake-admin",

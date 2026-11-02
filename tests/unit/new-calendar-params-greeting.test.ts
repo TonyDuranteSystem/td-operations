@@ -139,6 +139,16 @@ describe("the Payments to confirm tab", () => {
   })
 })
 
+describe("the Applications to review tab", () => {
+  it("is chosen only by tab=applications (any case); it has no filters of its own", () => {
+    expect(parseParams({ tab: "applications" }).tab).toBe("applications")
+    expect(parseParams({ tab: " APPLICATIONS " }).tab).toBe("applications")
+    for (const bad of ["application", "apps", "__proto__"]) expect(parseParams({ tab: bad }).tab).toBe("jobs")
+    expect(toQueryString(withTab(parseParams({ b: "closed", q: "acme" }), "applications"))).toBe("?tab=applications")
+    expect(toQueryString(withTab(parseParams({ tab: "applications" }), "jobs"))).toBe("")
+  })
+})
+
 describe("greeting", () => {
   it("uses the login's full name, then its name, then the part of the email before the first dot or dash", () => {
     expect(firstNameOf({ email: "x@y.us", user_metadata: { full_name: "Luca Bianchi" } })).toBe("Luca")

@@ -6,12 +6,14 @@ import { loadNewCalendarInputs } from '@/lib/new-calendar/load'
 import { buildNewCalendar } from '@/lib/new-calendar/build'
 import { loadNoteSummaries } from '@/lib/job-notes/read'
 import { firstNameOf, greetingWord } from '@/lib/new-calendar/greeting'
-import { parseParams, type RawSearchParams } from '@/lib/new-calendar/params'
+import { parseParams, withTab, type RawSearchParams } from '@/lib/new-calendar/params'
 import type { CalendarModel } from '@/lib/new-calendar/types'
 import { NewCalendarView } from '@/components/new-calendar/new-calendar-view'
 import { LiveRefresh } from '@/components/new-calendar/live-refresh'
 import { loadWaitingPayments } from '@/lib/incoming-payments/load'
 import type { WaitingRow } from '@/lib/incoming-payments/classify'
+import { canUseForms } from '@/lib/auth'
+import { loadWaitingApplications, type WaitingApplication } from '@/lib/bofa-intake/waiting'
 
 /**
  * New Calendar (dev job 40235e3c, child of be7da01a): the day-by-day work list the team opens every morning — what is on us,
@@ -28,7 +30,11 @@ export default async function NewCalendarPage({ searchParams }: { searchParams: 
   const access = await requireOpenServicesAccess()
   if (!access.ok) notFound()
 
-  const params = parseParams(searchParams ?? {})
+  // The Applications to review tab holds applicants' names, so only people who may use the Forms area see it (same rule as
+  // the Forms menu item). Anyone else who types the address of that tab simply lands on the first tab.
+  const seesApplications = canUseForms(access.user)
+  const requested = parseParams(searchParams ?? {})
+  const params = requested.tab === 'applications' && !seesApplications ? withTab(requested, 'jobs') : requested
   const now = new Date()
 
   // The What's New tab does not use the Open services data: skip the (heavy) load there, so a failed Open services read
@@ -44,6 +50,17 @@ export default async function NewCalendarPage({ searchParams }: { searchParams: 
   } catch (err) {
     console.error('[new-calendar] payments to confirm could not be read:', err)
     Sentry.captureException(err, { tags: { area: 'new-calendar-payments' } })
+  }
+  // Bank applications a client submitted that nobody has sent on yet. Same tolerance as the payments: if it cannot be read the
+  // Calendar still opens, and only that tab says so.
+  let applications: WaitingApplication[] | null = null
+  if (seesApplications) {
+    try {
+      applications = await loadWaitingApplications()
+    } catch (err) {
+      console.error('[new-calendar] bank applications to review could not be read:', err)
+      Sentry.captureException(err, { tags: { area: 'new-calendar-applications' } })
+    }
   }
   try {
     if (wantsJobs) {
@@ -81,5 +98,5 @@ export default async function NewCalendarPage({ searchParams }: { searchParams: 
     )
   }
 
-  return <NewCalendarView model={model} params={params} greeting={greeting} payments={payments} />
+  return <NewCalendarView model={model} params={params} greeting={greeting} payments={payments} applications={applications} showApplications={seesApplications} />
 }
