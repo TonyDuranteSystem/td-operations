@@ -3,6 +3,7 @@
  * conversation is always read through the team AND my membership first, so another team's id — or a conversation I am not in — finds nothing. The rules are in `team-chat.ts` (pure, tested)
  * and `lead-chat.ts` (shared with the lead chat); the screen is the same TD Talk pieces. This file only reads and writes.
  */
+import { parseClientId } from "@/lib/chat/client-id"
 import { randomUUID } from "crypto"
 import { NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -340,10 +341,22 @@ async function tell(teamId: string, userIds: readonly string[], p: { title: stri
   } catch { return 0 }
 }
 
-export async function sendThreadMessage(ctx: MarketingContext, t: { thread: Thread; memberIds: string[] }, body: { message?: unknown; attachments?: unknown; reply_to_id?: unknown }): Promise<{ ok: true; message: unknown } | { ok: false; error: string; status: number }> {
+export async function sendThreadMessage(ctx: MarketingContext, t: { thread: Thread; memberIds: string[] }, body: { message?: unknown; attachments?: unknown; reply_to_id?: unknown; client_id?: unknown; sender_id?: unknown }): Promise<{ ok: true; message: unknown } | { ok: false; error: string; status: number }> {
+  // a queued message (the phone's outbox) names its writer: if the browser has since signed in as somebody else it is refused, never sent under the wrong name
+  if (typeof body.sender_id === "string" && body.sender_id && body.sender_id !== ctx.user.id) return { ok: false, error: "This message was written by somebody else. Sign in as the person who wrote it, or delete it.", status: 409 }
   const c = checkSend({ message: body.message, attachments: body.attachments, teamId: ctx.team.id, leadId: t.thread.id })
   if (c.ok === false) return { ok: false, error: c.error, status: 400 }
   const d = db()
+  // a message the phone queued and sends again carries the id it was queued under: a send that already worked answers with its own row (nobody is told twice)
+  let clientId = parseClientId(body.client_id)
+  if (clientId) {
+    const { data: already } = await d.from("marketing_team_messages").select(`${MESSAGE_COLS}, thread_id`).eq("id", clientId).maybeSingle()
+    if (already) {
+      const a = already as unknown as ChatMessageRow & { thread_id: string }
+      if (a.sender_id === ctx.user.id && a.thread_id === t.thread.id) { const [message] = await shape([a], []); return { ok: true, message } }
+      clientId = null
+    }
+  }
   let replyTo: string | null = null
   if (body.reply_to_id != null) {
     if (!isUuid(body.reply_to_id)) return { ok: false, error: "The message you are answering was not found.", status: 400 }
@@ -356,8 +369,13 @@ export async function sendThreadMessage(ctx: MarketingContext, t: { thread: Thre
   const mentions = parseMentions(c.message, inChat.map(m => ({ id: m.id, name: m.name })), ctx.user.id)
   const senderName = personName(ctx.user.email ?? "")
   const { data: row, error } = await d.from("marketing_team_messages").insert({
-    team_id: ctx.team.id, thread_id: t.thread.id, sender_id: ctx.user.id, sender_name: senderName, message: c.message, attachments: c.attachments.length ? c.attachments : null, reply_to_id: replyTo, mentions,
+    ...(clientId ? { id: clientId } : {}), team_id: ctx.team.id, thread_id: t.thread.id, sender_id: ctx.user.id, sender_name: senderName, message: c.message, attachments: c.attachments.length ? c.attachments : null, reply_to_id: replyTo, mentions,
   }).select(MESSAGE_COLS).single()
+  if (error && clientId && (error as { code?: string }).code === "23505") {
+    // two tries at once: the second finds the first one's row
+    const { data: raced } = await d.from("marketing_team_messages").select(MESSAGE_COLS).eq("id", clientId).eq("sender_id", ctx.user.id).maybeSingle()
+    if (raced) { const [message] = await shape([raced as unknown as ChatMessageRow], []); return { ok: true, message } }
+  }
   if (error || !row) return { ok: false, error: "Could not send. Please try again.", status: 500 }
   await Promise.all([markThreadRead(ctx, t.thread.id), markThreadsDelivered(ctx, [t.thread.id])])
   const [message] = await shape([row as ChatMessageRow], [])
