@@ -16,6 +16,7 @@
  * whatever a component composes.
  */
 
+import { chosenInvoiceDescription } from "@/lib/offers/invoice-description"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { hasStaffSession } from "@/lib/offers/public-offer-access"
@@ -36,7 +37,7 @@ export async function GET(req: NextRequest) {
     // Narrow-cast: payment_plan postdates the deliberately-stale generated types.
     const offersQuery = supabaseAdmin
       .from("offers")
-      .select("token, client_name, currency, status, services, payment_plan, referrer_name, referrer_contact_id, referrer_account_id, partner_id, partner_payout_model, commission_released_at" as never)
+      .select("token, client_name, currency, status, services, invoice_description, payment_plan, referrer_name, referrer_contact_id, referrer_account_id, partner_id, partner_payout_model, commission_released_at" as never)
       .eq("account_id", accountId)
       .not("payment_plan" as never, "is", null) as unknown as {
         then: PromiseLike<{
@@ -46,6 +47,7 @@ export async function GET(req: NextRequest) {
             currency: string | null
             status: string | null
             services: unknown
+            invoice_description?: string | null
             payment_plan?: unknown
             referrer_name: string | null
             referrer_contact_id: string | null
@@ -73,6 +75,7 @@ export async function GET(req: NextRequest) {
       if (!status) continue // stored plan no longer validates — the money rails already refuse
 
       const serviceLabel =
+        chosenInvoiceDescription(o) ||
         (Array.isArray(o.services) && (o.services[0] as { name?: string } | undefined)?.name) ||
         "Setup Fee"
 

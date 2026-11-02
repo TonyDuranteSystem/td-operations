@@ -42,6 +42,7 @@ export const OFFER_PRIVATE_FIELDS = [
   'credit_payment_id',
   'commission_released_at',
   'bill_to',
+  'invoice_description',
   'superseded_by',
   'bundled_pipeline_entry_ids',
 ] as const

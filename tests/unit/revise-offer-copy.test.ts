@@ -195,6 +195,10 @@ describe("buildRevisedOfferInsert — Invoice to (S1 2026-09-27)", () => {
     const billTo = { type: "entity", entity: { name: "Rossi Srl", vat_number: "IT1" } }
     expect(buildRevisedOfferInsert({ ...fullOriginal(), bill_to: billTo }, seed).bill_to).toEqual(billTo)
   })
+  it("carries the chosen invoice wording to v2, and null stays null", () => {
+    expect(buildRevisedOfferInsert({ ...fullOriginal(), invoice_description: "LLC formation for Blue Corp" }, seed).invoice_description).toBe("LLC formation for Blue Corp")
+    expect(buildRevisedOfferInsert(fullOriginal(), seed).invoice_description).toBeNull()
+  })
   it("a pre-S1 original with no bill_to revises to null, not a default", () => {
     expect(buildRevisedOfferInsert(fullOriginal(), seed).bill_to).toBeNull()
   })

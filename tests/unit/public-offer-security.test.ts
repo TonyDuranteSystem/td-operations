@@ -34,6 +34,11 @@ describe('public offer view', () => {
     }
   })
 
+  it('the invoice wording stays private (never on the public offer page)', () => {
+    expect((OFFER_PRIVATE_FIELDS as readonly string[]).includes('invoice_description')).toBe(true)
+    expect(toPublicOfferView({ token: 't', invoice_description: 'secret wording' })).not.toHaveProperty('invoice_description')
+  })
+
   it('shapes a renewal agreement the way the contract page always built it', () => {
     const v = toPublicRenewalView({ id: 'x', account_id: 'acc', token: 't', client_name: 'A', services: null, cost_summary: null, status: 'draft', agreement_year: 2027 })
     expect(v).toMatchObject({ contract_type: 'renewal', currency: 'USD', installment_currency: 'USD', services: [], cost_summary: [], token: 't', agreement_year: 2027 })

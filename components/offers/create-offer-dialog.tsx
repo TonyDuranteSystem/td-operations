@@ -259,6 +259,8 @@ export function CreateOfferDialog({
   const [billToOptions, setBillToOptions] = useState<{ companies: Array<{ id: string; name: string }>; entities: Array<{ id: string; name: string }>; personName?: string | null }>({ companies: [], entities: [] })
   // Staff picked "Invoice to" / typed the client name themselves → never overridden below.
   const [billToTouched, setBillToTouched] = useState(false)
+  // "Invoice description": the wording printed on the invoice. Empty = the automatic "<services> - <client name>".
+  const [invoiceDescription, setInvoiceDescription] = useState('')
   const [clientNameTouched, setClientNameTouched] = useState(false)
   const [newPayer, setNewPayer] = useState({ name: '', address: '', country: '', vat_number: '' })
   useEffect(() => {
@@ -744,6 +746,13 @@ export function CreateOfferDialog({
     return deriveContractType(selected.map(s => catalog.find(c => c.id === s.id)?.contract_type))
   }, [selected, catalog])
 
+  // What the invoice says when no wording is typed: the services, a dash, the client (the signing invoice's own rule).
+  const automaticInvoiceDescription = useMemo(() => {
+    const names = selected.map(s => catalog.find(c => c.id === s.id)?.name).filter((n): n is string => !!n)
+    const who = clientNameValue || 'the client'
+    return names.length > 0 ? `${names.join(', ')} - ${who}` : `Automatic: services - ${who}`
+  }, [selected, catalog, clientNameValue])
+
   // Services picked but none has its own contract type → the offer would silently
   // become a full formation contract (Company Change Name, 2026-10-15).
   const untypedFallback = useMemo(() => {
@@ -1203,6 +1212,7 @@ export function CreateOfferDialog({
             payment_gateway: paymentGateway,
             bank_preference: bankPreference,
             bill_to: billToPayload(),
+            invoice_description: invoiceDescription.trim() || null,
             currency,
             installment_currency: showAnnual ? installmentCurrency : null,
             // Reached only when `splitBlockReason` is null (both submit gates return
@@ -1735,6 +1745,24 @@ export function CreateOfferDialog({
             ) : (
               <p className="text-xs text-zinc-400 mt-0.5">The invoice is addressed to this payer. Default: where this offer is made.</p>
             )}
+          </div>
+
+          {/* Invoice description — optional wording printed on the invoice */}
+          <div>
+            <label htmlFor="offer-invoice-description" className="block text-xs font-medium mb-1">Invoice description <span className="font-normal text-zinc-400">(optional)</span></label>
+            <input
+              id="offer-invoice-description"
+              value={invoiceDescription}
+              onChange={e => setInvoiceDescription(e.target.value)}
+              maxLength={200}
+              placeholder={automaticInvoiceDescription}
+              className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-zinc-400 mt-0.5">
+              {invoiceDescription.trim()
+                ? 'The invoice shows exactly this text.'
+                : 'Leave empty to use the automatic text shown in the box.'}
+            </p>
           </div>
 
           {/* Entity Type — formation and onboarding offers */}

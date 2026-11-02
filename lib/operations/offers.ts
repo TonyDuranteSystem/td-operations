@@ -22,6 +22,7 @@ import { getConfiguredCardFeeRate } from "@/lib/payments/card-fee-config"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { accountIdForOffer } from "@/lib/operations/offer-scope"
 import { parseBillTo } from "@/lib/offers/bill-to"
+import { parseInvoiceDescription } from "@/lib/offers/invoice-description"
 import { isFormationContractWithoutFormation } from "@/lib/operations/activation-start-services"
 import { normalizeFormationState } from "@/lib/formation/states"
 import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operations/credit-netting"
@@ -239,6 +240,8 @@ export interface CreateOfferParams {
   /** "Invoice to" (S1 2026-09-27) — see lib/offers/bill-to.ts. Null = the
    *  offer's company if it has one, else the person. */
   bill_to?: unknown
+  /** Optional wording for the invoice (lib/offers/invoice-description.ts). Empty = the automatic "<services> - <client name>". */
+  invoice_description?: string | null
   deal_id?: string | null
   contact_id?: string | null
 
@@ -536,6 +539,10 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     const billToParsed = parseBillTo(params.bill_to)
     if (billToParsed.error) {
       return { success: false, outcome: "validation_error", error: billToParsed.error }
+    }
+    const invoiceDescParsed = parseInvoiceDescription(params.invoice_description)
+    if (invoiceDescParsed.error) {
+      return { success: false, outcome: "validation_error", error: invoiceDescParsed.error }
     }
     // "Invoice to" must belong to THIS client: the company the offer is made
     // under or one the person is linked to; a saved payer of this person.
@@ -897,6 +904,8 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         installment_currency: params.installment_currency ?? null,
         bundled_pipelines: params.bundled_pipelines ?? [],
         bill_to: (billToParsed.billTo ?? null) as unknown as Json,
+        // invoice_description postdates the generated types (spread so the object literal is not excess-checked)
+        ...({ invoice_description: invoiceDescParsed.value ?? null } as Record<string, unknown>),
         entity_type: normalizeEntityType(params.entity_type),
         formation_state: normalizeFormationState(params.formation_state),
         bank_details: bank_details as unknown as Json,
