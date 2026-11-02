@@ -11,7 +11,7 @@ import { findLeadIdsByPhone, leadSearchOrFilter } from '@/lib/leads/phone-search
 import { buildClientEmailSet, isLiveClient } from '@/lib/leads/client-match'
 import { LeadsFilterBar } from '@/components/leads/leads-filter-bar'
 import { LeadWindowProvider } from '@/components/leads/lead-window-host'
-import { parseLeadFilters, filterLeads, quickCounts, distinctValues } from '@/lib/leads/list-filters'
+import { parseLeadFilters, filterLeads, quickCounts, distinctValues, upcomingCallsFirst, todayInNewYork } from '@/lib/leads/list-filters'
 
 const NEW_CALL_WINDOW_DAYS = 14
 
@@ -170,9 +170,11 @@ export default async function LeadsPage({
   const totalCount = filtered.length
   const totalPages = Math.ceil(totalCount / PAGE_SIZE)
   // Kanban shows everything that matches (capped, as before); the table pages.
+  // The table puts the calls still to come on top (soonest first); the board keeps its own order.
+  const tableOrder = upcomingCallsFirst(filtered, todayInNewYork())
   const items = isKanban
     ? filtered.slice(0, KANBAN_LIMIT)
-    : filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+    : tableOrder.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
   const stats = {
     total: totalCount,
