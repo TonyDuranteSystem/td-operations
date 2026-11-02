@@ -24,7 +24,9 @@ import type { JointEnv } from "@/lib/marketing/joint-booking"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the marketing tables are newer than the generated types
 const rawDb = () => supabaseAdmin as unknown as Db
 
-const ACTOR = { id: "client-booking-link", email: "client (booking link)", role: "member" as const }
+// The booking link acts for the team, not as a seller: as "member" the lead rules refuse every lead somebody picked ("Someone else picked this lead"), which is every lead the link is made for.
+export const JOINT_ACTOR = { id: "client-booking-link", email: "client (booking link)", role: "owner" as const }
+const ACTOR = JOINT_ACTOR
 
 export function liveJointEnv(): JointEnv {
   const db = rawDb()
