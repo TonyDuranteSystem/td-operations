@@ -323,6 +323,8 @@ export interface LeadListItem {
   /** When a follow-up last left the lead window, and on which channel (dev job 6fc63c52). Absent until the follow-up-sent migration is run. */
   last_follow_up_sent_at?: string | null
   last_follow_up_channel?: string | null
+  /** The date the next follow-up is planned for (YYYY-MM-DD); filtered on by "Follow-up due". */
+  follow_up_date?: string | null
 }
 
 export interface ContactListItem {

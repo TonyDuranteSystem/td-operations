@@ -32,6 +32,12 @@ export const CALL_FILTERS = [
   { value: 'date_passed', label: 'Call date passed' },
 ] as const
 
+export const FOLLOW_UP_FILTERS = [
+  { value: 'sent', label: 'Follow-up sent' },
+  { value: 'not_sent', label: 'No follow-up sent yet' },
+  { value: 'due', label: 'Follow-up due (today or earlier)' },
+] as const
+
 /** Days without any change on a lead before "Offer sent" counts as stuck. */
 export const OFFER_STALE_DAYS = 5
 
@@ -61,6 +67,7 @@ export interface LeadListFilters {
   ref: string
   offer: string
   call: string
+  follow: string
   quick: QuickKey | ''
 }
 
@@ -73,6 +80,10 @@ export interface FilterableLead {
   current_offer_status: string | null
   has_call_recording: boolean
   updated_at: string | null
+  /** when a follow-up last left the lead window (absent until the follow-up-sent migration is run) */
+  last_follow_up_sent_at?: string | null
+  /** the date the next follow-up is planned for, YYYY-MM-DD */
+  follow_up_date?: string | null
 }
 
 const first = (v: string | string[] | undefined): string => (Array.isArray(v) ? (v[0] ?? '') : (v ?? ''))
@@ -81,6 +92,7 @@ export function parseLeadFilters(sp: Record<string, string | string[] | undefine
   const status = first(sp.status)
   const offer = first(sp.offer)
   const call = first(sp.call)
+  const follow = first(sp.follow)
   const quick = first(sp.quick)
   return {
     status: status && status !== 'all' ? status : '',
@@ -88,12 +100,13 @@ export function parseLeadFilters(sp: Record<string, string | string[] | undefine
     ref: first(sp.ref),
     offer: OFFER_FILTERS.some(o => o.value === offer) ? offer : '',
     call: CALL_FILTERS.some(c => c.value === call) ? call : '',
+    follow: FOLLOW_UP_FILTERS.some(f => f.value === follow) ? follow : '',
     quick: QUICK_FILTERS.some(q => q.key === quick) ? (quick as QuickKey) : '',
   }
 }
 
 export function hasActiveFilters(f: LeadListFilters): boolean {
-  return !!(f.status || f.src || f.ref || f.offer || f.call || f.quick)
+  return !!(f.status || f.src || f.ref || f.offer || f.call || f.follow || f.quick)
 }
 
 /** Today's date (YYYY-MM-DD) in New York — the business clock, not UTC. */
@@ -167,6 +180,9 @@ export function filterLeads<T extends FilterableLead>(
     if (f.call === 'recorded' && !l.has_call_recording) return false
     if (f.call === 'not_recorded' && l.has_call_recording) return false
     if (f.call === 'date_passed' && !callDatePassed(l, today)) return false
+    if (f.follow === 'sent' && !l.last_follow_up_sent_at) return false
+    if (f.follow === 'not_sent' && l.last_follow_up_sent_at) return false
+    if (f.follow === 'due' && !(l.follow_up_date && l.follow_up_date.slice(0, 10) <= today)) return false
     if (f.quick && !matchesQuick(f.quick, l, now)) return false
     return true
   })

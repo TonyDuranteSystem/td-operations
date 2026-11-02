@@ -27,7 +27,7 @@ function lead(over: Partial<FilterableLead> = {}): FilterableLead {
 
 describe('parseLeadFilters', () => {
   it('returns empty filters for empty params', () => {
-    expect(parseLeadFilters({})).toEqual({ status: '', src: '', ref: '', offer: '', call: '', quick: '' })
+    expect(parseLeadFilters({})).toEqual({ status: '', src: '', ref: '', offer: '', call: '', follow: '', quick: '' })
   })
   it('treats status=all as no status filter', () => {
     expect(parseLeadFilters({ status: 'all' }).status).toBe('')

@@ -122,16 +122,21 @@ export default async function LeadsPage({
   // "Follow-up sent" marks: a separate best-effort read so the page still opens if the follow-up-sent migration has not
   // been run yet (the columns would not exist) — the tag then simply does not show.
   const followUpMarks = new Map<string, { at: string | null; channel: string | null }>()
+  const followUpDates = new Map<string, string>()
   const markIds = (leads ?? []).map(l => l.id)
   if (markIds.length > 0) {
-    const { data: marks, error: marksError } = await supabase
-      .from('leads')
-      .select('id, last_follow_up_sent_at, last_follow_up_channel')
-      .in('id', markIds)
-      .not('last_follow_up_sent_at' as never, 'is', null)
+    const [{ data: marks, error: marksError }, { data: dates, error: datesError }] = await Promise.all([
+      supabase.from('leads').select('id, last_follow_up_sent_at, last_follow_up_channel').not('last_follow_up_sent_at' as never, 'is', null),
+      supabase.from('leads').select('id, follow_up_date').not('follow_up_date' as never, 'is', null),
+    ])
     if (!marksError) {
       for (const m of (marks ?? []) as unknown as Array<{ id: string; last_follow_up_sent_at: string | null; last_follow_up_channel: string | null }>) {
         followUpMarks.set(m.id, { at: m.last_follow_up_sent_at, channel: m.last_follow_up_channel })
+      }
+    }
+    if (!datesError) {
+      for (const d of (dates ?? []) as unknown as Array<{ id: string; follow_up_date: string | null }>) {
+        if (d.follow_up_date) followUpDates.set(d.id, d.follow_up_date)
       }
     }
   }
@@ -170,6 +175,7 @@ export default async function LeadsPage({
       has_call_recording: hasCallRecording,
       last_follow_up_sent_at: followUpMarks.get(l.id)?.at ?? null,
       last_follow_up_channel: followUpMarks.get(l.id)?.channel ?? null,
+      follow_up_date: followUpDates.get(l.id) ?? null,
       is_live_client: l.status !== 'Converted' && !l.existing_client_contact_id && (isLiveClient(l.email, clientEmails) || clientVerdicts.get(l.id)?.verdict === 'sure'),
       needs_client_check: l.status !== 'Converted' && !l.existing_client_contact_id && clientVerdicts.get(l.id)?.verdict === 'maybe',
     }
