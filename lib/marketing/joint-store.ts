@@ -25,7 +25,7 @@ export function makeJointStore(db: Db, now: () => number = Date.now): JointStore
     },
     async hold(id, from, range, client) {
       const patch: Record<string, unknown> = { status: from === "open" ? "booking" : "booked", starts_at: range.startsAt, ends_at: range.endsAt, lock_from: range.lockFrom, lock_to: range.lockTo, ...(from === "open" ? { held_at: new Date(now()).toISOString() } : {}) }
-      if (client) Object.assign(patch, { client_name: client.name, client_email: client.email, client_zone: client.zone })
+      if (client) Object.assign(patch, { client_name: client.name, client_email: client.email, client_zone: client.zone, ...(client.lang ? { lang: client.lang } : {}) })
       const { data, error } = await db.from("marketing_joint_links").update(patch).eq("id", id).eq("status", from).is("revoked_at", null).select("id")
       if (error) return isOverlapViolation(error) ? ("taken" as HoldResult) : (() => { throw new Error(`joint hold: ${error.message}`) })()
       return Array.isArray(data) && data.length === 1 ? "ok" : "changed"

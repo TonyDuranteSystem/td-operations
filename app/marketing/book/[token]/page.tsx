@@ -1,6 +1,7 @@
 'use client'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
+import { jointErrorText } from '@/lib/marketing/joint-errors'
 
 /**
  * The client's page for a booking link WITH Antonio (dev job 0b916784, 1 Nov 2026; mockup approved by Antonio). No login: the link is the key. Before booking it shows the free times in the CLIENT's own time zone
@@ -103,7 +104,7 @@ export default function BookPage() {
     try {
       const res = await fetch(`/api/marketing/book/${encodeURIComponent(token)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(typeof data.error === 'string' && data.error ? data.error : t.unavailable); return { ok: false, data } }
+      if (!res.ok) { setError(typeof data.error === 'string' && data.error ? jointErrorText(data.error, lang) : t.unavailable); return { ok: false, data } }
       return { ok: true, data }
     } catch { setError(t.unavailable); return { ok: false, data: {} } } finally { setBusy(false) }
   }
@@ -111,7 +112,7 @@ export default function BookPage() {
   const book = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!picked) return
-    const r = await post({ action: 'book', startIso: picked, name, email, zone })
+    const r = await post({ action: 'book', startIso: picked, name, email, zone, lang })
     if (r.ok) { setNotice(r.data.mailed ? t.emailSent : t.emailNot); setPicked(null); setStep('pick'); await load() } else await load()
   }
   const move = async () => {

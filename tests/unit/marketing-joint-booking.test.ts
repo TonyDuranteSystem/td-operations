@@ -32,7 +32,7 @@ function fakeStore() {
       if (!row || row.status !== from || row.revoked_at) return "changed"
       const lock: [number, number] = [Date.parse(range.lockFrom), Date.parse(range.lockTo)]
       for (const o of rows.values()) if (o.id !== id && (o.status === "booking" || o.status === "booked") && o.lock && lock[0] < o.lock[1] && lock[1] > o.lock[0]) return "taken"
-      Object.assign(row, { status: from === "open" ? "booking" : "booked", starts_at: range.startsAt, ends_at: range.endsAt, lock, ...(from === "open" ? { held_at: iso(NOW) } : {}) }, client ? { client_name: client.name, client_email: client.email, client_zone: client.zone } : {})
+      Object.assign(row, { status: from === "open" ? "booking" : "booked", starts_at: range.startsAt, ends_at: range.endsAt, lock, ...(from === "open" ? { held_at: iso(NOW) } : {}) }, client ? { client_name: client.name, client_email: client.email, client_zone: client.zone, ...(client.lang ? { lang: client.lang } : {}) } : {})
       return "ok"
     },
     async releaseHold(id) { const r = rows.get(id); if (r && r.status === "booking") Object.assign(r, { status: "open", starts_at: null, ends_at: null, lock: null, client_name: null, client_email: null, client_zone: null }) },
@@ -52,7 +52,7 @@ function makeEnv(o: { sellerBusy?: Array<{ start: number; end: number }>; ownerB
   const events = new Map<string, { actAs: string; start: string; attendees: string[]; location: string | undefined }>()
   const meetings = new Map<string, string>()
   const ops: CallOp[] = []
-  const mails: Array<{ to: string; subject: string }> = []
+  const mails: Array<{ to: string; subject: string; text: string }> = []
   const synced: Array<{ kind: string; data: Record<string, unknown> }> = []
   const gcal = {
     async freeBusy(actAs: string, ids: string[]) {
@@ -78,7 +78,7 @@ function makeEnv(o: { sellerBusy?: Array<{ start: number; end: number }>; ownerB
     async lead(_t, id) { if (o.leadThrows) throw new Error("db blip"); return { id, full_name: "Marco Rossi", email: null, phone: "+39 333 1234567", country: null, claimed_by: SELLER } },
     async recordCall(_t, _l, op) { ops.push(op); return o.recordFails ? { ok: false, error: "no" } : { ok: true } },
     async recordSynced(_l, kind, data) { synced.push({ kind, data }) },
-    async sendMail(to, mail) { mails.push({ to, subject: mail.subject }) },
+    async sendMail(to, mail) { mails.push({ to, subject: mail.subject, text: mail.text }) },
     async tellSeller() { calls.push("tell") },
   }
   return { env, rows, calls, events, meetings, ops, mails, synced }
@@ -360,5 +360,54 @@ describe("the three fixes after the bug hunt", () => {
     const note = await followStaffChange(m.env, { teamId: "team-1", leadId: "lead-1", change: { kind: "set", at: ov.starts[8] } })
     expect(note).toMatch(/kept its old time/)
     expect([...m.rows.values()][0].starts_at).toBe(v.starts[0])
+  })
+})
+
+describe("the leftovers after the production test", () => {
+  it("when the call cannot be written on the lead, Google is never asked to invite anybody", async () => {
+    const m = await linked({ recordFails: true })
+    expect((await bookJoint(m.env, m.token, { startIso: iso(T1), ...who })).ok).toBe(false)
+    expect(m.calls).not.toContain("event.create")
+    expect(m.meetings.size).toBe(0)
+  })
+  it("the invitation is made only after the call is written", async () => {
+    const m = await linked()
+    expect((await bookJoint(m.env, m.token, { startIso: iso(T1), ...who })).ok).toBe(true)
+    expect(m.calls.indexOf("zoom.create")).toBeLessThan(m.calls.indexOf("event.create"))
+    expect(m.ops[0]).toMatchObject({ kind: "set" })
+  })
+  it("the emails follow the language the client chose on the page, then stay in it", async () => {
+    const m = await linked() // the lead has an Italian number, so the link starts in Italian
+    expect([...m.rows.values()][0].lang).toBe("it")
+    expect((await bookJoint(m.env, m.token, { startIso: iso(T1), ...who, lang: "en" })).ok).toBe(true)
+    expect([...m.rows.values()][0].lang).toBe("en")
+    expect(m.mails[0].subject).not.toMatch(/Chiamata/)
+    expect((await cancelJoint(m.env, m.token)).ok).toBe(true)
+    expect(m.mails[1].subject).not.toMatch(/Chiamata/)
+  })
+  it("a language that is neither it nor en is ignored", async () => {
+    const m = await linked()
+    expect((await bookJoint(m.env, m.token, { startIso: iso(T1), ...who, lang: "fr" })).ok).toBe(true)
+    expect([...m.rows.values()][0].lang).toBe("it")
+  })
+})
+
+describe("every refusal the client page can show has an Italian text", () => {
+  it("covers each sentence in the booking code and the route", async () => {
+    const { readFileSync } = await import("node:fs")
+    const { jointErrorText, jointErrorKeys } = await import("@/lib/marketing/joint-errors")
+    const { GENERIC_LINK_ERROR, TIME_TAKEN_ERROR } = await import("@/lib/marketing/joint-rules")
+    const found = new Set<string>()
+    for (const f of ["lib/marketing/joint-booking.ts", "app/api/marketing/book/[token]/route.ts"]) {
+      for (const m of readFileSync(f, "utf8").matchAll(/(?:nope|fail)\("([^"]+)"/g)) found.add(m[1])
+    }
+    found.add("Something went wrong. Please try again in a moment.")
+    expect(found.size).toBeGreaterThan(6)
+    for (const e of found) expect(jointErrorKeys(), e).toContain(e)
+    expect(jointErrorKeys()).toContain(GENERIC_LINK_ERROR)
+    expect(jointErrorKeys()).toContain(TIME_TAKEN_ERROR)
+    expect(jointErrorText(TIME_TAKEN_ERROR, "it")).toMatch(/orario/)
+    expect(jointErrorText(TIME_TAKEN_ERROR, "en")).toBe(TIME_TAKEN_ERROR)
+    expect(jointErrorText("A sentence nobody wrote", "it")).toBe("A sentence nobody wrote")
   })
 })
