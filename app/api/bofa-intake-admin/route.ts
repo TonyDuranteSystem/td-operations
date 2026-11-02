@@ -13,17 +13,18 @@ import { NextRequest, NextResponse } from "next/server"
 import { randomBytes } from "crypto"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { isSecureAdmin } from "@/lib/auth"
+import { canUseForms } from "@/lib/auth"
 import { bofaLinkUrl as linkUrl } from "@/lib/bofa-intake/url"
 import { parseRecipients } from "@/lib/bofa-intake/recipients"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- new table not in the generated DB types
 const table = () => (supabaseAdmin as any).from("bofa_intake_requests")
 
+// Administrators plus the staff logins named in lib/auth/forms-access.ts (the same rule as the Forms menu item and page guard).
 async function adminUser() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  return user && isSecureAdmin(user) ? user : null
+  return user && canUseForms(user) ? user : null
 }
 
 export async function GET() {

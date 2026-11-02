@@ -1,6 +1,7 @@
 import type { User } from "@supabase/supabase-js"
 import { isStaffAuthRole } from "@/lib/team/workspace"
 import { isMarketingRole } from "@/lib/auth/role-door"
+import { hasFormsAccess } from "@/lib/auth/forms-access"
 
 // The protected admin (MFA self-only, admin by email). Deliberately ONE login.
 const ADMIN_EMAILS = ["antonio.durante@tonydurante.us"]
@@ -60,6 +61,16 @@ export function isSecureAdmin(user: User | null): boolean {
   if (!user) return false
   if (ADMIN_EMAILS.includes(user.email ?? "")) return true
   return user.app_metadata?.role === "admin"
+}
+
+/**
+ * May this login use the Forms area (Forms page, bank-application list, and their two staff routes)? Administrators, plus the
+ * staff logins named in lib/auth/forms-access.ts. The ONE answer the sidebar item and the /api/bofa-intake-admin routes use;
+ * the middleware page guard uses the same hasFormsAccess rule. Reads app_metadata only (never user_metadata).
+ */
+export function canUseForms(user: User | null): boolean {
+  if (!user) return false
+  return isAdmin(user) || hasFormsAccess(user.email, user.app_metadata?.role)
 }
 
 /** Accounts that may never be MFA-reset by anyone but themselves. */

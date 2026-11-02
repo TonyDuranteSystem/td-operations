@@ -3,6 +3,7 @@ import { isTalkPath } from '@/lib/talk/paths'
 import { NextResponse, type NextRequest } from 'next/server'
 import { verifyViewAs, VIEW_AS_COOKIE } from '@/lib/portal/view-as'
 import { isStaffAuthRole } from '@/lib/team/workspace'
+import { hasFormsAccess, isFormsAreaPath } from '@/lib/auth/forms-access'
 import { resolveMfaGate } from '@/lib/auth/mfa-gate'
 import { verifyMfaRememberDevice, MFA_RD_COOKIE } from '@/lib/auth/mfa-remember-device'
 import { isSandboxBlockedWebhook } from '@/lib/sandbox-webhook-guard'
@@ -563,7 +564,10 @@ export async function middleware(request: NextRequest) {
     const ADMIN_ONLY_PATHS = ['/dev-tools', '/team-management', '/research', '/bofa-intake', '/forms']
     const isAdminEmail = user.email && ['antonio.durante@tonydurante.us'].includes(user.email)
     const isAdminRole = user.app_metadata?.role === 'admin' // never user_metadata: the account holder can write it
-    if (ADMIN_ONLY_PATHS.some(p => pathname === p || pathname.startsWith(p + '/')) && !isAdminEmail && !isAdminRole) {
+    // The Forms area (/forms, /bofa-intake) is also open to the staff logins NAMED in lib/auth/forms-access.ts — same rule the
+    // sidebar item and the /api/bofa-intake-admin routes use. Only those two paths; every other admin-only page stays closed.
+    const namedForFormsArea = isFormsAreaPath(pathname) && hasFormsAccess(user.email, user.app_metadata?.role)
+    if (ADMIN_ONLY_PATHS.some(p => pathname === p || pathname.startsWith(p + '/')) && !isAdminEmail && !isAdminRole && !namedForFormsArea) {
       const url = request.nextUrl.clone()
       url.pathname = '/'
       url.searchParams.set('denied', 'admin_only')
