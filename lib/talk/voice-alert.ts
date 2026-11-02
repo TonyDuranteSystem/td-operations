@@ -27,6 +27,26 @@ export const TALK_FEATURE_PHRASE = "New feature posted in TD Talk"
 /** A client wrote in a portal chat (Antonio, 30 Oct 2026: "new message from client"). Generic on purpose: no company name to read out. */
 export const CLIENT_MESSAGE_PHRASE = "New message from client"
 
+/** A new bug posted in the #td-bug channel (Antonio, 2 Nov 2026: "add the voice for new td bug"). Only a NEW bug (a top-level post) says it; a reply inside a bug keeps the beep. */
+export const TD_BUG_CHANNEL_SLUG = "td-bug"
+export const TD_BUG_PHRASE = "New TD bug"
+
+/** Is this message a brand-new bug: in the #td-bug channel and not a reply (no root message)? Case does not matter. */
+export function isNewTdBugPost(channelLabel: string | null | undefined, rootId: string | null | undefined): boolean {
+  return (channelLabel ?? "").trim().toLowerCase() === TD_BUG_CHANNEL_SLUG && !rootId
+}
+
+/** A reply inside a bug or any other channel thread (Antonio, 2 Nov 2026: "reply voice in td bug or wherever"). */
+export const TD_BUG_REPLY_PHRASE = "New TD bug reply"
+export const CHANNEL_REPLY_PHRASE = "New reply"
+
+/** The words for a channel post: new bug, bug reply, or a reply elsewhere; null when it keeps the beep (a top-level post in another channel). */
+export function channelVoicePhrase(channelLabel: string | null | undefined, rootId: string | null | undefined): string | null {
+  const isBugChannel = (channelLabel ?? "").trim().toLowerCase() === TD_BUG_CHANNEL_SLUG
+  if (!rootId) return isBugChannel ? TD_BUG_PHRASE : null
+  return isBugChannel ? TD_BUG_REPLY_PHRASE : CHANNEL_REPLY_PHRASE
+}
+
 /** Is this group the "New implementation" chat? Case and extra spaces do not matter. */
 export function isImplementationChat(title: string | null | undefined): boolean {
   return (title ?? "").trim().replace(/\s+/g, " ").toLowerCase() === IMPLEMENTATION_CHAT_TITLE.toLowerCase()

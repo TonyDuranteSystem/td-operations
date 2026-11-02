@@ -12431,6 +12431,7 @@ export type Database = {
           installment_currency: string | null
           intro_en: string | null
           intro_it: string | null
+          invoice_description: string | null
           issues: Json | null
           language: string
           lead_id: string | null
@@ -12506,6 +12507,7 @@ export type Database = {
           installment_currency?: string | null
           intro_en?: string | null
           intro_it?: string | null
+          invoice_description?: string | null
           issues?: Json | null
           language?: string
           lead_id?: string | null
@@ -12581,6 +12583,7 @@ export type Database = {
           installment_currency?: string | null
           intro_en?: string | null
           intro_it?: string | null
+          invoice_description?: string | null
           issues?: Json | null
           language?: string
           lead_id?: string | null

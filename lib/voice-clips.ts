@@ -5,7 +5,7 @@
  * person, a sender nobody recorded) still falls back to the browser voice. The WhatsApp clip lives in lib/whatsapp-sound.ts and is separate.
  * Pure helpers + three small browser helpers (play a clip, queue clips, ask whether the browser would let a sound start without a click).
  */
-import { CLIENT_MESSAGE_PHRASE, TALK_FEATURE_PHRASE } from "@/lib/talk/voice-alert"
+import { CLIENT_MESSAGE_PHRASE, TALK_FEATURE_PHRASE, TD_BUG_PHRASE, TD_BUG_REPLY_PHRASE, CHANNEL_REPLY_PHRASE } from "@/lib/talk/voice-alert"
 
 export const VOICE_CLIP_BASE = "/sounds/voice/"
 
@@ -26,6 +26,9 @@ export function clipUrlFor(phrase: string): string | null {
   if (p === "Sound on") return file("sound-on")
   if (p === TALK_FEATURE_PHRASE) return file("talk-feature")
   if (p === CLIENT_MESSAGE_PHRASE) return file("client-message")
+  if (p === TD_BUG_PHRASE) return file("td-bug")
+  if (p === TD_BUG_REPLY_PHRASE) return file("td-bug-reply")
+  if (p === CHANNEL_REPLY_PHRASE) return file("channel-reply")
   const talk = /^New (.+) message in TD Talk$/.exec(p)
   if (talk) {
     const key = clipNameKey(talk[1])

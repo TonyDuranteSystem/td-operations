@@ -8,7 +8,7 @@ import { MessageSquare, CreditCard, PenTool, FileText } from 'lucide-react'
 import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
 import { isTalkSurfacePath, isTeamChatPath, teamChatBase } from '@/lib/talk/paths'
 import { speakTalkMessage } from '@/components/talk/talk-voice'
-import { CLIENT_MESSAGE_PHRASE, TALK_FEATURE_PHRASE, isImplementationChat } from '@/lib/talk/voice-alert'
+import { CLIENT_MESSAGE_PHRASE, TALK_FEATURE_PHRASE, channelVoicePhrase, isImplementationChat } from '@/lib/talk/voice-alert'
 import { TalkVoiceKeepAlive } from '@/components/talk/talk-keep-alive'
 import { catchUpSpeech, threadsWithNewUnread, unreadBaseline, type CatchUpThread } from '@/lib/talk/catch-up'
 
@@ -301,7 +301,11 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
       const featurePhrase = isImplementationChat(groupTitle) ? TALK_FEATURE_PHRASE : undefined
       // the catch-up look (below) must not announce this same message a second time
       if (isMyDm && threadId) announcedRef.current.add(threadId)
-      if (!(isMyDm && speakTalkMessage(senderName, threadId ?? row?.sender_id, playSound, featurePhrase))) playSound()
+      // a channel post has its own recorded voice: a new bug "New TD bug", a reply in a bug "New TD bug reply", a reply elsewhere "New reply"; a top-level post in another channel keeps the beep
+      const channelPhrase = !isMyDm && channelLabel ? channelVoicePhrase(channelLabel, rootId) : null
+      if (channelPhrase) {
+        if (!speakTalkMessage(senderName, row?.id ?? threadId, playSound, channelPhrase)) playSound()
+      } else if (!(isMyDm && speakTalkMessage(senderName, threadId ?? row?.sender_id, playSound, featurePhrase))) playSound()
 
       toast(
         mentionsMe ? `@mention · ${senderName}`
