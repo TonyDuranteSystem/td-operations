@@ -9088,10 +9088,12 @@ export type Database = {
         Row: {
           call_id: string | null
           created_at: string
+          evidence: Json | null
           from_status: string | null
           id: string
           lead_id: string
           reason: string
+          reason_text: string | null
           source: string | null
           to_status: string
           undo_until: string | null
@@ -9101,10 +9103,12 @@ export type Database = {
         Insert: {
           call_id?: string | null
           created_at?: string
+          evidence?: Json | null
           from_status?: string | null
           id?: string
           lead_id: string
           reason: string
+          reason_text?: string | null
           source?: string | null
           to_status: string
           undo_until?: string | null
@@ -9114,10 +9118,12 @@ export type Database = {
         Update: {
           call_id?: string | null
           created_at?: string
+          evidence?: Json | null
           from_status?: string | null
           id?: string
           lead_id?: string
           reason?: string
+          reason_text?: string | null
           source?: string | null
           to_status?: string
           undo_until?: string | null
