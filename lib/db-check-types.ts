@@ -160,6 +160,12 @@ export type MarketingCommissionTermsBasis = "amount_paid" | "net_of_fees"
 /** marketing_invites.member_role — CHECK constraint */
 export type MarketingInvitesMemberRole = "owner" | "member"
 
+/** marketing_joint_links.lang — CHECK constraint */
+export type MarketingJointLinksLang = "it" | "en"
+
+/** marketing_joint_links.status — CHECK constraint */
+export type MarketingJointLinksStatus = "open" | "booking" | "booked" | "cancelled" | "failed"
+
 /** marketing_leadgen_events.source — CHECK constraint */
 export type MarketingLeadgenEventsSource = "webhook" | "reconcile"
 
