@@ -9104,6 +9104,8 @@ export type Database = {
           id: string
           is_test: boolean | null
           language: string | null
+          last_follow_up_channel: string | null
+          last_follow_up_sent_at: string | null
           last_name: string | null
           notes: string | null
           offer_annual_amount: number | null
@@ -9149,6 +9151,8 @@ export type Database = {
           id?: string
           is_test?: boolean | null
           language?: string | null
+          last_follow_up_channel?: string | null
+          last_follow_up_sent_at?: string | null
           last_name?: string | null
           notes?: string | null
           offer_annual_amount?: number | null
@@ -9194,6 +9198,8 @@ export type Database = {
           id?: string
           is_test?: boolean | null
           language?: string | null
+          last_follow_up_channel?: string | null
+          last_follow_up_sent_at?: string | null
           last_name?: string | null
           notes?: string | null
           offer_annual_amount?: number | null
