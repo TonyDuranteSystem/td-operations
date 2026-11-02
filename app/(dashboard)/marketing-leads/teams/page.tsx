@@ -68,7 +68,7 @@ export default async function MarketingTeamsPage() {
                   <thead className="border-b text-xs text-slate-500"><tr><th className="py-2 pr-3">Person</th><th className="pr-3">Role</th><th className="pr-3">Status</th><th className="pr-3">Last seen</th><th className="text-right">Password</th></tr></thead>
                   <tbody className="divide-y">{members.map(m => (
                     <PersonRow key={m.user_id} teamId={t.id} userId={m.user_id} email={m.email ?? "Unknown login"}
-                      roleText={m.member_role === "owner" ? "Team owner" : accessLabel(effectivePermissions({ memberRole: "member", bundle: m.bundle, bundles, extra: m.permissions }), bundles)}
+                      roleText={m.is_admin === true ? "Owner" : m.member_role === "owner" ? "Team owner" : accessLabel(effectivePermissions({ memberRole: "member", bundle: m.bundle, bundles, extra: m.permissions }), bundles)}
                       statusText={m.status === "paused" ? "Paused" : "Active"}
                       seenText={m.last_sign_in_at ? `${ageText(Date.now() - new Date(m.last_sign_in_at).getTime())} ago` : "has not signed in yet"}
                       canReset={m.user_id !== user.id && m.status === "active"} />
