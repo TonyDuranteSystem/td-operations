@@ -13,8 +13,12 @@ export const MAX_SELF_REQUESTS_PER_HOUR = 3
 export const MAX_OWNER_RESETS_PER_HOUR = 20
 
 export const GENERIC_RESET_ERROR = "This link cannot be used. Ask for a new one."
-/** What "Forgot password?" always answers, whether or not the address belongs to a marketing login. */
-export const FORGOT_ANSWER = "If this email belongs to a TD Marketing login, a link to choose a new password is on its way. It works once and expires in one hour."
+/** What "Forgot password?" always answers, whether or not the address belongs to a marketing login. The two extra sentences are the same for everyone: a link from the team owner is NOT replaced
+ *  by this request (so no email may come), and only the newest email works. */
+export const FORGOT_ANSWER = "If this email belongs to a TD Marketing login, a link to choose a new password is on its way. It works once and expires in one hour. If you asked more than once, use the newest email. If your team owner sent you a link that has not expired, you can use that one."
+/** The public Forgot page: how many requests one address may make in a minute (every request is charged, matched or not, so a refusal reveals nothing). */
+export const FORGOT_MAX_PER_MINUTE = 5
+export const TOO_MANY_ATTEMPTS_ERROR = "Too many attempts. Please wait a minute and try again."
 
 export type ResetKind = "self" | "owner"
 
@@ -49,6 +53,16 @@ export function mayResetMember(input: {
   if (input.targetBanned) return { ok: false, error: "This login is closed." }
   if (input.targetMemberRole === "owner" && input.actorKind !== "admin") return { ok: false, error: "Only Antonio can make a reset link for a team owner." }
   return { ok: true }
+}
+
+/** The body of a public request as a plain object: anything else (no body, `null`, a list, text) is an empty object, so the route answers its normal "not valid" instead of crashing. */
+export function bodyObject(raw: unknown): Record<string, unknown> {
+  return raw !== null && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+}
+
+/** A link made by a team owner (or Antonio) is still open: not used, not cancelled, not expired. A person's own "Forgot password?" request must not replace it. */
+export function openOwnerLink(rows: Array<{ requested_by: string; used_at: string | null; revoked_at: string | null; expires_at: string }>, now: Date): boolean {
+  return rows.some(r => r.requested_by !== "self" && !r.used_at && !r.revoked_at && new Date(r.expires_at).getTime() > now.getTime())
 }
 
 /** The page the person opens. Built from the app's own address and the token only. */

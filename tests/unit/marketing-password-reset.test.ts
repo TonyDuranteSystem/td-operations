@@ -10,10 +10,13 @@ type Row = Record<string, unknown>
 const tables: Record<string, Row[]> = {}
 let seq = 0
 let tableMissing = false
+/** tables whose reads fail, and whether giving a link back (used_at -> null) fails */
+const readFails = new Set<string>()
+let unclaimFails = false
 
 function builder(table: string) {
   const filters: Array<(r: Row) => boolean> = []
-  let op: "select" | "insert" | "update" = "select"
+  let op: "select" | "insert" | "update" | "delete" = "select"
   let payload: Row = {}
   let opts: { count?: string; head?: boolean } | undefined
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -21,6 +24,7 @@ function builder(table: string) {
     select: (_c?: string, o?: { count?: string; head?: boolean }) => { opts = o ?? opts; return b },
     insert: (p: Row) => { op = "insert"; payload = p; return b },
     update: (p: Row) => { op = "update"; payload = p; return b },
+    delete: () => { op = "delete"; return b },
     eq: (c: string, v: unknown) => { filters.push(r => r[c] === v); return b },
     in: (c: string, v: unknown[]) => { filters.push(r => v.includes(r[c])); return b },
     is: (c: string, v: unknown) => { filters.push(r => (r[c] ?? null) === v); return b },
@@ -33,6 +37,13 @@ function builder(table: string) {
   async function run(): Promise<{ data: Row[] | null; count?: number; error: { code?: string; message?: string } | null }> {
     if (tableMissing && table === "marketing_password_resets") return { data: null, error: { code: "42P01", message: 'relation "marketing_password_resets" does not exist' } }
     const rows = (tables[table] ||= [])
+    if (op === "select" && readFails.has(table)) return { data: null, error: { message: "database timeout" } }
+    if (op === "update" && unclaimFails && payload.used_at === null) return { data: null, error: { message: "database timeout" } }
+    if (op === "delete") {
+      const gone = rows.filter(r => filters.every(f => f(r)))
+      gone.forEach(r => rows.splice(rows.indexOf(r), 1))
+      return { data: gone.map(r => ({ id: r.id })), error: null }
+    }
     if (op === "insert") {
       if (table === "marketing_password_resets" && rows.some(r => r.user_id === payload.user_id && !r.used_at && !r.revoked_at)) return { data: null, error: { code: "23505", message: "duplicate" } }
       rows.push({ id: `id-${++seq}`, created_at: new Date().toISOString(), used_at: null, revoked_at: null, ...payload })
@@ -59,6 +70,8 @@ vi.mock("@/lib/supabase-admin", () => ({
     } },
   },
 }))
+const alertForgotProblem = vi.fn(async (_email: string, _reason: string) => {})
+vi.mock("@/lib/marketing/reset-alert", () => ({ alertForgotProblem: (e: string, r: string) => alertForgotProblem(e, r) }))
 const findMarketing = vi.fn()
 vi.mock("@/lib/auth-admin-helpers", () => ({ findMarketingAuthUserByEmail: (e: string) => findMarketing(e) }))
 vi.mock("@/lib/config", () => ({ APP_BASE_URL: "https://app.example" }))
@@ -71,6 +84,7 @@ vi.mock("@/lib/mcp/safe-send", () => ({
 }))
 
 import { completeReset, createOwnerReset, requestForgotPassword } from "@/lib/marketing/password-reset"
+import { GENERIC_RESET_ERROR } from "@/lib/marketing/reset-rules"
 import type { Actor } from "@/lib/marketing/members"
 
 const TEAM = "team-1"
@@ -90,6 +104,7 @@ beforeEach(() => {
   for (const k of Object.keys(tables)) delete tables[k]
   for (const k of Object.keys(users)) delete users[k]
   sent.length = 0; sendFails = false; tableMissing = false; getUserByIdFails.status = undefined
+  readFails.clear(); unclaimFails = false; alertForgotProblem.mockClear()
   updateUserById.mockReset(); updateUserById.mockResolvedValue({ error: null })
   findMarketing.mockReset()
   tables.marketing_team_members = []
@@ -207,12 +222,66 @@ describe("requestForgotPassword", () => {
     expect(sent).toHaveLength(3)
     expect(resetRows().filter(r => !r.revoked_at && !r.used_at)).toHaveLength(1)
   })
-  it("if the email cannot be sent the link is cancelled and the answer does not change", async () => {
+  it("if the email cannot be sent the link is removed, Antonio is told, and the answer to the person does not change", async () => {
     sendFails = true
     const r = await requestForgotPassword({ email: "rocco@example.test" })
     expect(r.valid).toBe(true)
+    expect(resetRows()).toHaveLength(0)
+    expect(alertForgotProblem).toHaveBeenCalledTimes(1)
+    expect(alertForgotProblem.mock.calls[0][0]).toBe("rocco@example.test")
+    expect(alertForgotProblem.mock.calls[0][1]).toMatch(/could not be sent.*gmail down/)
+  })
+  it("failed sends do not use up the three requests an hour", async () => {
+    sendFails = true
+    for (let i = 0; i < 5; i++) await requestForgotPassword({ email: "rocco@example.test" })
+    expect(resetRows()).toHaveLength(0)
+    sendFails = false
+    await requestForgotPassword({ email: "rocco@example.test" })
+    expect(sent).toHaveLength(1)
     expect(resetRows()).toHaveLength(1)
-    expect(resetRows()[0].revoked_at).toBeTruthy()
+  })
+  it("a link made by the team owner that is still open is NOT replaced by the person's own request (no email, the owner's link keeps working)", async () => {
+    const made = await createOwnerReset({ teamId: TEAM, userId: "00000000-0000-4000-8000-000000000002", actor: owner })
+    const ownerToken = /token=(.+)$/.exec(made.data!.resetUrl)![1]
+    expect((await requestForgotPassword({ email: "rocco@example.test" })).valid).toBe(true)
+    expect(sent).toHaveLength(0)
+    expect(resetRows()).toHaveLength(1)
+    expect(resetRows()[0].revoked_at).toBeNull()
+    expect(alertForgotProblem).not.toHaveBeenCalled()
+    expect((await completeReset({ token: ownerToken, password: PASSWORD })).ok).toBe(true)
+  })
+  it("an owner link that has expired, was used or was cancelled does not block the person's own request", async () => {
+    await createOwnerReset({ teamId: TEAM, userId: "00000000-0000-4000-8000-000000000002", actor: owner })
+    resetRows()[0].expires_at = new Date(Date.now() - 1000).toISOString()
+    await requestForgotPassword({ email: "rocco@example.test" })
+    expect(sent).toHaveLength(1)
+    // the person's own earlier link IS replaced by a newer one of his own
+    await requestForgotPassword({ email: "rocco@example.test" })
+    expect(sent).toHaveLength(2)
+    expect(resetRows().filter(r => !r.revoked_at && !r.used_at)).toHaveLength(1)
+  })
+  it("every other problem is told to Antonio, never to the person: the team cannot be read, the link cannot be stored, the lookup crashes, the database step is missing", async () => {
+    readFails.add("marketing_team_members")
+    expect((await requestForgotPassword({ email: "rocco@example.test" })).valid).toBe(true)
+    expect(alertForgotProblem.mock.calls.at(-1)![1]).toMatch(/team could not be read/)
+    readFails.clear(); readFails.add("marketing_password_resets")
+    await requestForgotPassword({ email: "rocco@example.test" })
+    expect(alertForgotProblem.mock.calls.at(-1)![1]).toMatch(/earlier link could not be checked/)
+    readFails.clear(); tableMissing = true
+    await requestForgotPassword({ email: "rocco@example.test" })
+    expect(alertForgotProblem.mock.calls.at(-1)![1]).toMatch(/not ready yet/)
+    tableMissing = false
+    findMarketing.mockRejectedValueOnce(new Error("listUsers failed"))
+    expect((await requestForgotPassword({ email: "rocco@example.test" })).valid).toBe(true)
+    expect(alertForgotProblem.mock.calls.at(-1)![1]).toMatch(/unexpected error: listUsers failed/)
+    expect(alertForgotProblem).toHaveBeenCalledTimes(4)
+    expect(sent).toHaveLength(0)
+  })
+  it("an address that is not a login at all, a paused member and a client are never reported to Antonio", async () => {
+    addLogin("p", "paused@example.test", "marketing", "member", "paused")
+    addLogin("c", "client@example.test", "client", "member")
+    for (const e of ["nobody@example.test", "paused@example.test", "client@example.test"]) await requestForgotPassword({ email: e })
+    expect(alertForgotProblem).not.toHaveBeenCalled()
   })
 })
 
@@ -227,7 +296,8 @@ describe("completeReset", () => {
     const r = await completeReset({ token, password: PASSWORD })
     expect(r.ok).toBe(true)
     expect(r.data!.email).toBe("rocco@example.test")
-    expect(updateUserById).toHaveBeenCalledWith("00000000-0000-4000-8000-000000000002", { password: PASSWORD })
+    // one call: the new password AND a bumped remember-this-device version (starts at 0), keeping everything else in app_metadata (the role)
+    expect(updateUserById).toHaveBeenCalledWith("00000000-0000-4000-8000-000000000002", { password: PASSWORD, app_metadata: { role: "marketing", mfa_rd_version: 1 } })
     expect(resetRows()[0].used_at).toBeTruthy()
     updateUserById.mockClear()
     const again = await completeReset({ token, password: PASSWORD })
@@ -298,6 +368,42 @@ describe("completeReset", () => {
     const r = await completeReset({ token: token2, password: PASSWORD })
     expect(r.error).toBe(TRY_AGAIN_ERROR)
     expect(resetRows().at(-1)!.used_at).toBeNull()
+  })
+  it("a version that was already bumped goes up by one, and a reset keeps the rest of app_metadata", async () => {
+    users["00000000-0000-4000-8000-000000000002"].app_metadata = { role: "marketing", mfa_rd_version: 3, provider: "email" }
+    const token = await makeLink()
+    expect((await completeReset({ token, password: PASSWORD })).ok).toBe(true)
+    expect(updateUserById).toHaveBeenCalledWith("00000000-0000-4000-8000-000000000002", { password: PASSWORD, app_metadata: { role: "marketing", mfa_rd_version: 4, provider: "email" } })
+  })
+  it("a failed READ is not 'no longer eligible': the link is given back, not cancelled", async () => {
+    const token = await makeLink()
+    readFails.add("marketing_team_members")
+    const r = await completeReset({ token, password: PASSWORD })
+    expect(r.error).toBe(TRY_AGAIN_ERROR)
+    expect(resetRows()[0].used_at).toBeNull()
+    expect(resetRows()[0].revoked_at).toBeNull()
+    expect(updateUserById).not.toHaveBeenCalled()
+    readFails.clear(); readFails.add("marketing_teams")
+    expect((await completeReset({ token, password: PASSWORD })).error).toBe(TRY_AGAIN_ERROR)
+    expect(resetRows()[0].revoked_at).toBeNull()
+    readFails.clear()
+    expect((await completeReset({ token, password: PASSWORD })).ok).toBe(true)
+  })
+  it("if the link itself cannot be read, nothing is touched and the person is told to try again", async () => {
+    const token = await makeLink()
+    readFails.add("marketing_password_resets")
+    expect((await completeReset({ token, password: PASSWORD })).error).toBe(TRY_AGAIN_ERROR)
+    readFails.clear()
+    expect(resetRows()[0].used_at).toBeNull()
+    expect((await completeReset({ token, password: PASSWORD })).ok).toBe(true)
+  })
+  it("if the link cannot be given back, the person is told to ask for a new one (not 'try again' on a dead link)", async () => {
+    const token = await makeLink()
+    updateUserById.mockResolvedValue({ error: { message: "database timeout" } })
+    unclaimFails = true
+    const r = await completeReset({ token, password: PASSWORD })
+    expect(r.error).toBe(GENERIC_RESET_ERROR)
+    expect(resetRows()[0].used_at).toBeTruthy()
   })
   it("two people using the same link together: only one changes the password", async () => {
     const token = await makeLink()
