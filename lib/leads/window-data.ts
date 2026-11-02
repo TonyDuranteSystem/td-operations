@@ -13,7 +13,7 @@ import { assembleTimeline, type TimelineEvent } from '@/lib/lifecycle-timeline'
 import { todayInNewYork } from '@/lib/leads/list-filters'
 import { nyDate, daysBetween } from '@/lib/leads/ny-date'
 import type { ClientVerdict, ClientReason } from '@/lib/leads/client-context'
-import { undoOpen, undoHoursLeft, type LeadCallRow, type StatusMoveRow } from '@/lib/leads/lead-calls'
+import { undoAvailable, type LeadCallRow, type StatusMoveRow } from '@/lib/leads/lead-calls'
 
 export interface WindowLeadRow {
   id: string
@@ -121,7 +121,7 @@ export interface WindowStoryEvent {
   detail?: string
   group: StoryGroup
   /** an automatic move that can still be undone */
-  undo?: { moveId: string; hoursLeft: number } | null
+  undo?: { moveId: string } | null
   /** set only on email / WhatsApp lines (phase C) */
   channel?: 'email' | 'whatsapp'
   direction?: 'in' | 'out'
@@ -444,14 +444,13 @@ export function buildStory(input: WindowInput, calls: WindowCall[]): WindowStory
       group: 'calls' as const,
     }))
 
-  const now = input.now ?? new Date()
   const moveEvents: WindowStoryEvent[] = []
   for (const m of input.moves ?? []) {
     if (m.reason === 'dry_run_auto_call_done') {
       moveEvents.push({
         date: m.created_at, type: 'status_moved', color: 'gray', group: 'calls', undo: null,
         title: 'Would have moved to Call Done (the automatic move is switched off)',
-        detail: 'Nothing was changed. This is only a record of what the rules decided.',
+        detail: `Nothing was changed. ${m.reason_text ? m.reason_text : 'This is only a record of what the rules decided.'}`,
       })
       continue
     }
@@ -461,9 +460,9 @@ export function buildStory(input: WindowInput, calls: WindowCall[]): WindowStory
       type: 'status_moved',
       color: 'gray',
       title: auto ? `Moved to ${m.to_status} automatically` : `Moved to ${m.to_status} after you confirmed the call`,
-      detail: auto ? 'A recording came back for a booked call.' : undefined,
+      detail: auto ? (m.reason_text || 'A recording came back for a booked call.') : undefined,
       group: 'calls',
-      undo: auto && undoOpen(m, now) ? { moveId: m.id, hoursLeft: undoHoursLeft(m, now) } : null,
+      undo: undoAvailable(m, input.lead.status, input.moves ?? []) ? { moveId: m.id } : null,
     })
     if (m.undone_at) {
       moveEvents.push({
@@ -471,7 +470,7 @@ export function buildStory(input: WindowInput, calls: WindowCall[]): WindowStory
         type: 'status_moved',
         color: 'gray',
         title: `Undone: back to ${m.from_status ?? 'the earlier status'}`,
-        detail: 'This lead will not be moved automatically again.',
+        detail: 'This call will not move the lead automatically again.',
         group: 'calls',
         undo: null,
       })

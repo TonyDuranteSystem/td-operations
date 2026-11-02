@@ -11,9 +11,12 @@
 //  - A lead tagged as an existing client is never moved: its recording may be a client call, not a sales call.
 //  - The recording must land within one day (New York) of a call the lead actually booked. A rebooked lead's
 //    old recording must not close the NEW call.
-//  - A recording the matcher flagged for review (link_review) or a very short one (< 3 min) is recorded but
-//    does not move the lead.
-//  - Every automatic move is logged with a 24-hour undo; an UNDONE move stops that lead ever being moved
+//  - A recording the matcher flagged for review (link_review), a very short one (< 3 min) or one where no real
+//    conversation took place (lib/leads/call-substance.ts: two voices, each with real words) is recorded but
+//    does not move the lead and does NOT close the booked call, so the lead keeps asking "Did this call happen?".
+//  - A call a person already answered (no show, rebook, confirmed) is never moved by a later copy of the recording.
+//  - Every automatic move is logged with the reason in plain words. Undo has no clock: it works while the lead is still
+//    where the system put it and nothing else happened to it since. An UNDONE move stops that call ever being moved
 //    automatically again (re-delivered webhooks re-run this code).
 
 import { resolveForLead, ensureOpenCheck } from '@/lib/leads/client-check-data'
@@ -23,11 +26,13 @@ import { updateLeadColumnGuarded, isGuardedFailure, type LeadDb } from '@/lib/le
 import { nyDate, daysBetween } from '@/lib/leads/ny-date'
 import { todayInNewYork } from '@/lib/leads/list-filters'
 import { autoCallDoneEnabled } from '@/lib/leads/flags'
+import { assessSubstance, type Substance } from '@/lib/leads/call-substance'
+import { isInternalEmail } from '@/lib/circleback/link-call'
 
 export type LeadCallState = 'scheduled' | 'done' | 'no_show' | 'moved' | 'cancelled'
 
+/** A floor against empty recordings only. What decides is whether a real conversation happened (call-substance.ts). */
 export const MIN_AUTO_SECONDS = 180
-export const UNDO_WINDOW_HOURS = 24
 export const AUTO_REASON = 'auto_call_done'
 export const STAFF_REASON = 'staff_confirmed_call'
 export const DRY_RUN_REASON = 'dry_run_auto_call_done'
@@ -60,6 +65,10 @@ export interface StatusMoveRow {
   undone_at: string | null
   undone_by: string | null
   created_at: string
+  /** the reason in plain words, saved when the decision was made (absent on moves made before it existed) */
+  reason_text?: string | null
+  /** the numbers behind it (voices and words, duration); never used to decide anything later */
+  evidence?: unknown
 }
 
 // ── pure rules ───────────────────────────────────────────────────────────
@@ -95,6 +104,10 @@ export interface AutoMoveInput {
   priorUndoneAutoMove: boolean
   /** the CRM suggests this lead may already be a client and Antonio has not answered yet: the move waits */
   clientQuestionOpen?: boolean
+  /** a person already answered this call (no show, rebooked, cancelled, or confirmed by hand): a later copy of the recording must not overrule it */
+  staffAnswered?: boolean
+  /** who spoke on THIS recording; null = it cannot be judged (no transcript), which is treated as "not shown" */
+  substance?: Substance | null
 }
 
 export interface AutoMoveDecision { move: boolean; reason: string }
@@ -104,24 +117,38 @@ export function decideAutoCallDone(i: AutoMoveInput): AutoMoveDecision {
   if (i.existingClientTag) return { move: false, reason: 'the lead is an existing client' }
   if (i.clientQuestionOpen) return { move: false, reason: 'waiting for your answer: is this person already a client?' }
   if (i.priorUndoneAutoMove) return { move: false, reason: 'the automatic move for this call was undone' }
+  if (i.staffAnswered) return { move: false, reason: 'a person already answered this call' }
   if (i.linkReview) return { move: false, reason: 'the recording is waiting for a link review' }
   if (i.durationSeconds !== null && i.durationSeconds < MIN_AUTO_SECONDS) return { move: false, reason: 'the recording is shorter than 3 minutes' }
-  if (i.matchedCall) return { move: true, reason: 'a recording came back within a day of the booked call' }
+  if (!i.substance) return { move: false, reason: 'the recording has no transcript, so it cannot be told whether a conversation happened' }
+  if (!i.substance.enough) return { move: false, reason: i.substance.reason }
+  if (i.matchedCall) return { move: true, reason: `A real conversation took place and the recording came back within a day of the booked call. ${i.substance.reason}` }
   // No booked call matched. Only a lead with NO call rows at all may fall back to its own call date.
   if (i.leadCallCount === 0 && i.leadCallDate && Math.abs(daysBetween(i.leadCallDate.slice(0, 10), nyDate(i.recordingIso))) <= 1) {
-    return { move: true, reason: 'a recording came back within a day of the lead call date' }
+    return { move: true, reason: `A real conversation took place and the recording came back within a day of the lead call date. ${i.substance.reason}` }
   }
   return { move: false, reason: 'the recording does not match a booked call date' }
 }
 
-export function undoOpen(move: Pick<StatusMoveRow, 'undone_at' | 'undo_until'>, now: Date = new Date()): boolean {
-  return !move.undone_at && !!move.undo_until && new Date(move.undo_until).getTime() > now.getTime()
+/**
+ * Can this automatic move still be undone? No clock. It can while it is the system's own move, not undone, the lead is
+ * still on the status the system set, and no later move (other than a dry-run record) happened to the lead since.
+ */
+export function undoAvailable(move: StatusMoveRow, leadStatus: string | null, allMoves: StatusMoveRow[]): boolean {
+  if (move.reason !== AUTO_REASON || move.undone_at) return false
+  if (leadStatus !== move.to_status) return false
+  return !allMoves.some(o => o.id !== move.id && o.reason !== DRY_RUN_REASON && !o.undone_at && o.created_at > move.created_at)
 }
 
-/** Hours left on an open undo window, rounded up, for the label ("4 hours left"). */
-export function undoHoursLeft(move: Pick<StatusMoveRow, 'undone_at' | 'undo_until'>, now: Date = new Date()): number {
-  if (!undoOpen(move, now)) return 0
-  return Math.max(1, Math.ceil((new Date(move.undo_until as string).getTime() - now.getTime()) / 3_600_000))
+/** Insert a move row with its plain-words reason; before the reason columns exist (migration not run) it saves without them. */
+async function insertMove(sb: SupabaseClient, row: Record<string, unknown>, reasonText: string, evidence: unknown): Promise<{ error: { message: string } | null }> {
+  const full = await sb.from('lead_status_moves').insert({ ...row, reason_text: reasonText, evidence })
+  if (!full.error) return { error: null }
+  if (/reason_text|evidence|column/i.test(full.error.message)) {
+    const plain = await sb.from('lead_status_moves').insert(row)
+    return { error: plain.error ? { message: plain.error.message } : null }
+  }
+  return { error: { message: full.error.message } }
 }
 
 /** Calendly names the old booking of a reschedule as an invitee URI; its event is the part before /invitees/. */
@@ -194,6 +221,9 @@ export interface RecordingInput {
   recordingIso: string
   durationSeconds: number | null
   linkReview: string | null
+  /** this recording's own speaker-labelled transcript and attendee list, from the same delivery */
+  transcript?: unknown
+  attendees?: unknown
 }
 
 export interface RecordingResult { ok: boolean; moved: boolean; reason: string; callId?: string; error?: string; dryRun?: boolean }
@@ -227,12 +257,16 @@ export async function applyRecording(db: unknown, r: RecordingInput, opts: { now
     const { data: callsData } = await sb.from('lead_calls').select('*').eq('lead_id', r.leadId)
     const calls = (callsData ?? []) as LeadCallRow[]
 
+    // Who spoke on THIS recording (never the lead's other recordings). null = no usable transcript.
+    const substance = assessSubstance(r.transcript, r.attendees, isInternalEmail)
+
     let call = calls.find(c => c.call_summary_id === r.summaryId) ?? null
     let matched: LeadCallRow | null = call
     if (!call) {
-      // A recording too short to count as the call (a test, a no-show that opened the room) must not close the booked call.
-      const tooShort = r.durationSeconds !== null && r.durationSeconds < MIN_AUTO_SECONDS
-      matched = tooShort ? null : pickCallForRecording(calls, r.recordingIso)
+      // A recording too short, or with no real conversation (a mistaken connection, a no-show that opened the room), must
+      // not close the booked call: it stays open and the lead keeps asking "Did this call happen?".
+      const notAConversation = (r.durationSeconds !== null && r.durationSeconds < MIN_AUTO_SECONDS) || !substance || !substance.enough
+      matched = notAConversation ? null : pickCallForRecording(calls, r.recordingIso)
       if (matched) {
         const up = await sb.from('lead_calls')
           .update({ state: 'done', happened_at: r.recordingIso, call_summary_id: r.summaryId, confirmed_by: 'recording', updated_at: now.toISOString() })
@@ -270,14 +304,17 @@ export async function applyRecording(db: unknown, r: RecordingInput, opts: { now
       leadCallDate: (lead.call_date as string | null) ?? null,
       recordingIso: r.recordingIso,
       priorUndoneAutoMove: (undone ?? []).length > 0,
+      staffAnswered: ['no_show', 'moved', 'cancelled'].indexOf((call as LeadCallRow).state) !== -1 || (!!(call as LeadCallRow).confirmed_by && (call as LeadCallRow).confirmed_by !== 'recording'),
+      substance,
     })
+    const evidence = { voices: substance?.voices ?? null, durationSeconds: r.durationSeconds, summaryId: r.summaryId }
     if (clientVerdict && clientVerdict.verdict === 'maybe' && (lead.status as string | null) === 'Call Scheduled') await ensureOpenCheck(db, r.leadId, clientVerdict)
     if (!decision.move) return { ok: true, moved: false, reason: decision.reason, callId }
 
     if (!autoMove) {
       const { data: seen } = await sb.from('lead_status_moves').select('id').eq('lead_id', r.leadId).eq('call_id', callId).eq('reason', DRY_RUN_REASON).limit(1)
       if (!seen || seen.length === 0) {
-        await sb.from('lead_status_moves').insert({ lead_id: r.leadId, from_status: 'Call Scheduled', to_status: 'Call Done', reason: DRY_RUN_REASON, source: 'circleback', call_id: callId })
+        await insertMove(sb, { lead_id: r.leadId, from_status: 'Call Scheduled', to_status: 'Call Done', reason: DRY_RUN_REASON, source: 'circleback', call_id: callId }, decision.reason, evidence)
       }
       return { ok: true, moved: false, dryRun: true, reason: 'the automatic move is switched off; logged only', callId }
     }
@@ -287,10 +324,9 @@ export async function applyRecording(db: unknown, r: RecordingInput, opts: { now
     })
     if (isGuardedFailure(moved)) return { ok: true, moved: false, reason: `the status changed meanwhile (${moved.reason})`, callId }
 
-    const log = await sb.from('lead_status_moves').insert({
-      lead_id: r.leadId, from_status: 'Call Scheduled', to_status: 'Call Done', reason: AUTO_REASON, source: 'circleback',
-      call_id: callId, undo_until: new Date(now.getTime() + UNDO_WINDOW_HOURS * 3_600_000).toISOString(),
-    })
+    const log = await insertMove(sb, {
+      lead_id: r.leadId, from_status: 'Call Scheduled', to_status: 'Call Done', reason: AUTO_REASON, source: 'circleback', call_id: callId,
+    }, decision.reason, evidence)
     if (log.error) {
       await revertStatus(sb, r.leadId, 'Call Scheduled', 'Call Done')
       return { ok: false, moved: false, reason: 'could not log the move, so it was not made', error: log.error.message, callId }
@@ -348,7 +384,7 @@ export async function confirmCall(db: unknown, args: { leadId: string; callId: s
   return { ok: true, status: 200, message: 'Marked as happened. The lead moved to Call Done.', moved: true }
 }
 
-/** Undo an automatic move within its window; the lead goes back to where it was and this call is never moved automatically again. */
+/** Undo an automatic move (no time limit) while nothing else happened to the lead since; the lead goes back to where it was and this call is never moved automatically again. */
 export async function undoMove(db: unknown, args: { leadId: string; moveId: string; actor: string }, now: Date = new Date()): Promise<ConfirmResult> {
   const sb = asDb(db)
   const { data } = await sb.from('lead_status_moves').select('*').eq('id', args.moveId).eq('lead_id', args.leadId).maybeSingle()
@@ -356,7 +392,13 @@ export async function undoMove(db: unknown, args: { leadId: string; moveId: stri
   const m = data as StatusMoveRow
   if (m.reason !== AUTO_REASON) return { ok: false, status: 400, message: 'Only an automatic move can be undone here.' }
   if (m.undone_at) return { ok: false, status: 409, message: 'This move was already undone.' }
-  if (!undoOpen(m, now)) return { ok: false, status: 410, message: 'The 24-hour undo window has closed. Change the status by hand if needed.' }
+  const [{ data: leadRow }, { data: movesRows }] = await Promise.all([
+    sb.from('leads').select('status').eq('id', args.leadId).maybeSingle(),
+    sb.from('lead_status_moves').select('*').eq('lead_id', args.leadId),
+  ])
+  if (!undoAvailable(m, (leadRow?.status as string | null) ?? null, (movesRows ?? []) as StatusMoveRow[])) {
+    return { ok: false, status: 409, message: 'The lead has changed since this move, so it can no longer be undone here. Change the status by hand if needed.' }
+  }
 
   // Mark it undone FIRST (only if nobody did meanwhile): the stickiness marker must exist before the status changes back.
   const mark = await sb.from('lead_status_moves')
