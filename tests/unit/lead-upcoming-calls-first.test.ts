@@ -30,3 +30,28 @@ describe('upcomingCallsFirst', () => {
     expect(ids(upcomingCallsFirst(past, '2026-11-02'))).toBe('a,b')
   })
 })
+
+describe('Follow-up filter', () => {
+  const base = { status: 'Offer Sent', source: null, referrer_name: null, call_date: null, current_offer_status: null, has_call_recording: false, updated_at: null }
+  const rows = [
+    { id: 'sent', ...base, last_follow_up_sent_at: '2026-11-01T23:06:00Z', follow_up_date: '2026-11-04' },
+    { id: 'due', ...base, last_follow_up_sent_at: null, follow_up_date: '2026-11-02' },
+    { id: 'later', ...base, last_follow_up_sent_at: null, follow_up_date: '2026-12-01' },
+    { id: 'none', ...base, last_follow_up_sent_at: null, follow_up_date: null },
+  ]
+  const f = (follow: string) => ({ status: '', src: '', ref: '', offer: '', call: '', follow, quick: '' as const })
+  const now = new Date('2026-11-02T15:00:00Z')
+  it('sent / not sent / due pick the right leads', async () => {
+    const { filterLeads } = await import('@/lib/leads/list-filters')
+    expect(filterLeads(rows, f('sent'), { now }).map(r => r.id)).toEqual(['sent'])
+    expect(filterLeads(rows, f('not_sent'), { now }).map(r => r.id)).toEqual(['due', 'later', 'none'])
+    expect(filterLeads(rows, f('due'), { now }).map(r => r.id)).toEqual(['due'])
+    expect(filterLeads(rows, f(''), { now })).toHaveLength(4)
+  })
+  it('parses only known values and counts as an active filter', async () => {
+    const { parseLeadFilters, hasActiveFilters } = await import('@/lib/leads/list-filters')
+    expect(parseLeadFilters({ follow: 'due' }).follow).toBe('due')
+    expect(parseLeadFilters({ follow: 'nonsense' }).follow).toBe('')
+    expect(hasActiveFilters(parseLeadFilters({ follow: 'sent' }))).toBe(true)
+  })
+})

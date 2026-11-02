@@ -53,9 +53,12 @@ function toClientContact(c: ContactRow): ClientContact {
 export async function loadAnswers(db: unknown, leadIds: string[]): Promise<Map<string, ClientAnswer[]>> {
   const out = new Map<string, ClientAnswer[]>()
   if (leadIds.length === 0) return out
-  const { data, error } = await asDb(db).from('lead_client_checks').select('lead_id, contact_id, status').in('lead_id', leadIds)
+  // One lead: ask for it. Many (the table): read the whole small table and keep the wanted ones, so no long id list goes in the URL.
+  const q = asDb(db).from('lead_client_checks').select('lead_id, contact_id, status')
+  const { data, error } = leadIds.length === 1 ? await q.eq('lead_id', leadIds[0]) : await q
   if (error) return out
-  for (const r of (data ?? []) as { lead_id: string; contact_id: string; status: string }[]) {
+  const wanted = new Set(leadIds)
+  for (const r of ((data ?? []) as { lead_id: string; contact_id: string; status: string }[]).filter(x => wanted.has(x.lead_id))) {
     const list = out.get(r.lead_id) ?? []
     list.push({ contactId: r.contact_id, status: r.status as AnswerStatus })
     out.set(r.lead_id, list)

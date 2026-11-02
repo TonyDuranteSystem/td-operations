@@ -9,6 +9,7 @@ import {
   LEAD_STATUSES,
   OFFER_FILTERS,
   CALL_FILTERS,
+  FOLLOW_UP_FILTERS,
   QUICK_FILTERS,
   hasActiveFilters,
   type LeadListFilters,
@@ -68,7 +69,7 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
     setSearch('')
     setSuggestions([])
     setOpen(false)
-    setParams({ q: '', status: '', src: '', ref: '', offer: '', call: '', quick: '' })
+    setParams({ q: '', status: '', src: '', ref: '', offer: '', call: '', follow: '', quick: '' })
   }
 
   // --- live search -------------------------------------------------------
@@ -218,6 +219,10 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
           <select aria-label="Call" value={filters.call} onChange={e => setParams({ call: e.target.value })} className={SELECT_CLASS}>
             <option value="">Any call</option>
             {CALL_FILTERS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+          </select>
+          <select aria-label="Follow-up" value={filters.follow} onChange={e => setParams({ follow: e.target.value })} className={SELECT_CLASS}>
+            <option value="">Any follow-up</option>
+            {FOLLOW_UP_FILTERS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
           </select>
           <select aria-label="Source" value={filters.src} onChange={e => setParams({ src: e.target.value })} className={SELECT_CLASS}>
             <option value="">All sources</option>
