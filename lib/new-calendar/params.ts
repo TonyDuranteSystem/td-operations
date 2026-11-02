@@ -11,8 +11,8 @@ import { LISTS, MAX_LIMIT, MAX_TEXT_LENGTH, PAGE_SIZE, type ListKey } from "@/li
 
 export type RawSearchParams = Record<string, string | string[] | undefined>
 
-/** Which page of the New Calendar: the open jobs, the What's New feed, or the payments waiting for confirmation. */
-export const TABS = ["jobs", "news", "payments"] as const
+/** Which page of the New Calendar: the open jobs, the What's New feed, the payments waiting for confirmation, or the bank applications waiting for review. */
+export const TABS = ["jobs", "news", "payments", "applications"] as const
 export type CalendarTab = (typeof TABS)[number]
 
 export interface NewCalendarParams {
@@ -69,7 +69,7 @@ export function clampLimit(n: number): number {
 
 export function parseParams(raw: RawSearchParams): NewCalendarParams {
   const tabRaw = first(raw.tab).trim().toLowerCase()
-  const tab: CalendarTab = tabRaw === "news" ? "news" : tabRaw === "payments" ? "payments" : "jobs"
+  const tab: CalendarTab = tabRaw === "news" ? "news" : tabRaw === "payments" ? "payments" : tabRaw === "applications" ? "applications" : "jobs"
   const bRaw = first(raw.b).trim().toLowerCase()
   const b: ListKey = (LISTS as readonly string[]).includes(bRaw) ? (bRaw as ListKey) : DEFAULT_BUCKET
   const s = cleanText(first(raw.s))
@@ -88,6 +88,8 @@ export function toQueryString(p: NewCalendarParams): string {
   if (p.tab === "news") return "?tab=news"
   // So does the payments tab.
   if (p.tab === "payments") return "?tab=payments"
+  // And the bank applications tab.
+  if (p.tab === "applications") return "?tab=applications"
   const sp = new URLSearchParams()
   if (p.b !== DEFAULT_BUCKET) sp.set("b", p.b)
   if (p.s) sp.set("s", p.s)

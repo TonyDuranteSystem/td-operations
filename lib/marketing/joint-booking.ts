@@ -40,7 +40,7 @@ export interface JointStore {
   /** Takes back every link of the lead that is still open, then adds the new one. */
   createLink(row: { teamId: string; leadId: string; sellerUserId: string; tokenHash: string; lang: JointLang; createdBy: string | null; expiresAt: string }): Promise<void>
   /** Holds a time: `from` must be the row's current status. "taken" = another call holds an overlapping time; "changed" = the row is no longer in `from`. */
-  hold(id: string, from: "open" | "booked", range: HoldRange, client?: { name: string; email: string; zone: string }): Promise<HoldResult>
+  hold(id: string, from: "open" | "booked", range: HoldRange, client?: { name: string; email: string; zone: string; lang?: JointLang }): Promise<HoldResult>
   /** The time is not wanted any more (a step failed): back to open, with nothing left on the row. */
   releaseHold(id: string): Promise<void>
   /** A moved call whose later steps failed: back to the time it had. */
@@ -189,7 +189,7 @@ async function tryMail(env: JointEnv, to: string | null, kind: JointMailKind, ro
   } catch { return false }
 }
 
-export async function bookJoint(env: JointEnv, token: unknown, i: { startIso: unknown; name: unknown; email: unknown; zone: unknown }): Promise<JointResult> {
+export async function bookJoint(env: JointEnv, token: unknown, i: { startIso: unknown; name: unknown; email: unknown; zone: unknown; lang?: unknown }): Promise<JointResult> {
   const row = await rowFor(env, token)
   if (!row || linkState(row, env.now()) !== "open") return nope(GENERIC_LINK_ERROR, 404)
   const email = normalizeEmail(i.email)
@@ -205,7 +205,8 @@ export async function bookJoint(env: JointEnv, token: unknown, i: { startIso: un
   const range = rangeOf(startMs, offer.minutes, offer.gap)
   const endMs = Date.parse(range.endsAt)
 
-  const held = await env.store.hold(row.id, "open", range, { name, email, zone })
+  const lang: JointLang = i.lang === "en" || i.lang === "it" ? i.lang : row.lang
+  const held = await env.store.hold(row.id, "open", range, { name, email, zone, lang })
   if (held === "taken") return nope(TIME_TAKEN_ERROR)
   if (held === "changed") return nope(GENERIC_LINK_ERROR, 404)
 
@@ -220,19 +221,20 @@ export async function bookJoint(env: JointEnv, token: unknown, i: { startIso: un
 
     const zoom = await env.zoom.createMeeting({ topic: `Call with Antonio Durante · ${firstNameOf(name) || "client"}`, startIso: range.startsAt, minutes: offer.minutes, timeZone: offer.sellerZone })
     undo.push(async () => env.zoom.deleteMeeting(zoom.id))
+    const recorded = await env.recordCall(row.team_id, row.lead_id, { kind: "set", at: range.startsAt, note: "Booked by the client through the booking link with Antonio (Zoom)" })
+    if (recorded.ok === false) return await fail("The booking could not be saved. Please try again.", 502)
+    undo.push(async () => { await env.recordCall(row.team_id, row.lead_id, { kind: "cancel", note: "The booking could not be finished and was taken back" }) })
+    // the Google invitation reaches Antonio and the client only now, when the lead already has the call: a booking that fails before this point never sends one
     const ev = await env.gcal.createEvent(offer.seller.email as string, "primary", {
       title: eventTitle(lead?.full_name ?? name), startIso: range.startsAt, endIso: range.endsAt, timeZone: offer.sellerZone, leadId: row.lead_id,
       attendees: [offer.ownerEmail, email], location: zoom.joinUrl, description: eventDescription({ joinUrl: zoom.joinUrl, manageUrl: manageUrl(env, t), sellerLabel: offer.seller.label, clientName: name }), sendUpdates: "all",
     })
     undo.push(async () => env.gcal.removeEvent(offer.seller.email as string, "primary", ev.id))
-    const recorded = await env.recordCall(row.team_id, row.lead_id, { kind: "set", at: range.startsAt, note: "Booked by the client through the booking link with Antonio (Zoom)" })
-    if (recorded.ok === false) return await fail("The booking could not be saved. Please try again.", 502)
-    undo.push(async () => { await env.recordCall(row.team_id, row.lead_id, { kind: "cancel", note: "The booking could not be finished and was taken back" }) })
     const done = await env.store.finishBooking(row.id, { zoomMeetingId: zoom.id, zoomJoinUrl: zoom.joinUrl, gcalActAs: offer.seller.email as string, gcalEventId: ev.id })
     if (!done) return await fail("The booking could not be saved. Please try again.", 502)
 
     await env.recordSynced(row.lead_id, "calendar_synced", { event_id: ev.id, act_as: offer.seller.email, calendar_id: "primary", removed: false, joint: true })
-    const mailed = await tryMail(env, email, "booked", { ...row, client_name: name }, t, startMs, endMs, zone, zoom.joinUrl)
+    const mailed = await tryMail(env, email, "booked", { ...row, client_name: name, lang }, t, startMs, endMs, zone, zoom.joinUrl)
     return { ok: true, startIso: range.startsAt, endIso: range.endsAt, joinUrl: zoom.joinUrl, mailed, warnings: mailed ? [] : ["The confirmation email could not be sent."] }
   } catch (e) {
     return await fail(e instanceof Error && /Zoom/.test(e.message) ? "The video call could not be created. Please try again in a few minutes." : "The booking could not be finished. Please try again.", 502)

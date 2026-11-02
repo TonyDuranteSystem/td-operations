@@ -2,7 +2,8 @@
 
 /**
  * /forms — every standalone form (one that is not tied to a client account), in one place:
- * view it, make a one-time link and copy it, or open its links and submissions.
+ * view it, make a one-time link and copy it, or open its links and submissions. The bank-application card also holds
+ * its two address settings (where a reviewed application is submitted, who is told when one arrives).
  * Admins, plus the staff logins named in lib/auth/forms-access.ts (side-menu item + middleware + the staff routes).
  * The list lives in lib/forms-hub/registry.ts.
  */
@@ -10,10 +11,10 @@
 import { useState } from "react"
 import Link from "next/link"
 import { STANDALONE_FORMS, type StandaloneForm } from "@/lib/forms-hub/registry"
+import { BankApplicationSettings } from "@/components/forms/bank-application-settings"
 
 function FormCard({ form }: { form: StandaloneForm }) {
   const [partner, setPartner] = useState("")
-  const [recipients, setRecipients] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const [created, setCreated] = useState<{ label: string; url: string } | null>(null)
@@ -27,13 +28,12 @@ function FormCard({ form }: { form: StandaloneForm }) {
       const res = await fetch(form.createLinkApi, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ partner_name: partner, recipients }),
+        body: JSON.stringify({ partner_name: partner }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || "Could not create the link.")
       setCreated({ label: d.link.partner_name || "Direct link (no partner)", url: d.link.url })
       setPartner("")
-      setRecipients("")
       try {
         await navigator.clipboard.writeText(d.link.url)
         setCopied(true)
@@ -76,14 +76,7 @@ function FormCard({ form }: { form: StandaloneForm }) {
         onChange={(e) => { setPartner(e.target.value); setError("") }}
         placeholder="Type the partner's name, or leave empty"
       />
-      <label className="text-sm font-medium block mb-1">Send the submitted form to <span className="text-xs font-normal text-muted-foreground">(optional)</span></label>
-      <p className="text-xs text-muted-foreground mb-2">One or more email addresses, separated by commas. When the form is submitted, the answers and documents are emailed to them. Leave empty to keep it only with us.</p>
-      <input
-        className="w-full h-9 rounded-md border px-3 text-sm mb-4"
-        value={recipients}
-        onChange={(e) => setRecipients(e.target.value)}
-        placeholder="Type one or more email addresses"
-      />
+      <p className="text-xs text-muted-foreground mb-4">When the client submits, the answers wait for our review. They are sent to the bank contact only when we press Submit (addresses are set further down on this card).</p>
       <button className="h-9 px-4 rounded-md bg-gray-900 text-white text-sm disabled:opacity-60" onClick={createLink} disabled={busy}>
         {busy ? "Creating…" : "Create and copy link"}
       </button>
@@ -96,6 +89,7 @@ function FormCard({ form }: { form: StandaloneForm }) {
           <p className="text-xs text-muted-foreground mt-2">Do not open it yourself: the first person to press Start on it becomes the only one who can use it.</p>
         </div>
       )}
+      {form.id === "bank-application" && <BankApplicationSettings />}
     </div>
   )
 }

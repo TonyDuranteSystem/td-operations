@@ -61,7 +61,7 @@ export function permissionFor(a: LeadActionInput["action"]): MarketingPermission
 const SELLER_ONLY_ACTIONS: ReadonlySet<string> = new Set(["not_ready", "closed", "not_closed", "contacted", "booking_link", "upsell", "waiting", "archive"])
 
 /** `callback_at` and `appointment_at` (the booked call that still stands) are only given when moving a call needs them. */
-export interface LeadFacts { claimed_by: string | null; status: string; callback_at?: string | null; appointment_at?: string | null }
+export interface LeadFacts { claimed_by: string | null; status: string; callback_at?: string | null; appointment_at?: string | null; /** the stage the lead was in when its current call was booked (only read when the call is cancelled) */ booked_from?: string | null }
 export interface Actor { id: string; email: string | null; role: "owner" | "member" }
 
 export interface PlannedChange {
@@ -185,14 +185,20 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
     }
 
     case "appointment": {
-      if (input.at === null) return { ok: true, change: { patch: {}, event: { kind: "appointment", data: { at: null, note: input.note ?? null } } } }
+      if (input.at === null) {
+        // cancelling the call puts a lead that is still in "booked" back where it was before it was booked (never a "not ready now" / "not closed" one: those lost their call-back day when the call was booked)
+        const back = lead.booked_from
+        const goBack = lead.status === "booked" && !!back && back !== "booked" && stageExists(back) && back !== sellerOf(s).not_ready && back !== sellerOf(s).not_closed
+        return { ok: true, change: { patch: goBack ? { status: back as string } : {}, event: { kind: "appointment", data: { at: null, note: input.note ?? null, ...(goBack ? { back_to: back } : {}) } } } }
+      }
       const at = new Date(input.at)
       if (Number.isNaN(at.getTime())) return fail(400, "Pick a valid day and time.")
       if (at.getTime() < now.getTime() - GRACE_MS) return fail(400, "That time has already passed. Pick a day and time in the future.")
       if (at.getTime() > now.getTime() + MAX_AHEAD_MS) return fail(400, "That is too far away. Pick a day within the next six months.")
+      const patch = movedToBooked(lead, s)
       return { ok: true, change: {
-        patch: movedToBooked(lead, s),
-        event: { kind: "appointment", data: { at: at.toISOString(), note: input.note ?? null } },
+        patch,
+        event: { kind: "appointment", data: { at: at.toISOString(), note: input.note ?? null, ...(typeof patch.status === "string" ? { from_status: lead.status } : {}) } },
       } }
     }
 

@@ -1,13 +1,19 @@
 /**
- * Staff-only (admins + the logins named in lib/auth/forms-access.ts) detail + revoke for one Bank of America intake link.
+ * Staff-only (admins + the logins named in lib/auth/forms-access.ts) detail + actions for one Bank of America intake link.
  *   GET   /api/bofa-intake-admin/[id]                  — the answers + a 1-hour download link per document
- *   PATCH /api/bofa-intake-admin/[id] { action: "revoke" }     — kill a link that has not been submitted
+ *   PATCH /api/bofa-intake-admin/[id] { action: "review" }     — mark a submitted application Reviewed (enables Submit)
+ *                                      { action: "submit", confirm_to: [...] } — email the reviewed application to the
+ *                                        saved bank-contact address(es); confirm_to must be what the confirm box showed
+ *                                      { action: "send_back", note }  — write a note, make a NEW one-time link, email the client
+ *                                      { action: "revoke" }     — kill a link that has not been submitted
  *                                      { action: "archive" }      — (re)save a submitted application in CRM Storage
- *                                      { action: "resend_email" } — email a submitted application again to its addresses
  *                                      { action: "reset_lock" } — hand an opened-but-unsubmitted link back
  *                                        to "not opened" (the client switched browser / cleared cookies)
+ * There is deliberately NO "resend" action: it used to be the way around the review. A failed Submit is retried by Submit.
  */
 
+// Submit runs the whole send here (reading up to ~18 MB of documents, then Gmail), so it gets the same room the old submit route had.
+export const maxDuration = 120
 export const dynamic = "force-dynamic"
 
 import { NextRequest, NextResponse } from "next/server"
@@ -17,6 +23,9 @@ import { canUseForms } from "@/lib/auth"
 import { BOFA_BUCKET, BOFA_DOC_SLOTS } from "@/lib/bofa-intake/schema"
 import { deliverSubmission } from "@/lib/bofa-intake/deliver"
 import { archiveSubmission } from "@/lib/bofa-intake/archive"
+import { markReviewed } from "@/lib/bofa-intake/review"
+import { sendBackToClient } from "@/lib/bofa-intake/send-back"
+import { DETAIL_COLUMNS, readWithReviewColumns } from "@/lib/bofa-intake/columns"
 import { signedUrlForSubmissionFile, type SubmissionFile } from "@/lib/bofa-intake/files"
 
 type Params = { params: Promise<{ id: string }> }
@@ -48,10 +57,9 @@ async function removeUploads(token: string): Promise<void> {
 export async function GET(_req: NextRequest, { params }: Params) {
   if (!(await adminUser())) return NextResponse.json({ error: "Admin access required" }, { status: 403 })
   const { id } = await params
-  const { data: row, error } = await table()
-    .select("id, label, partner_name, recipients, email_status, email_sent_at, email_error, status, opened_at, completed_at, created_at, created_by, form_data, files, notified_at, store_owner_id, store_folder_id, store_archived_at, store_error")
-    .eq("id", id)
-    .maybeSingle()
+  const { data: row, error, reviewReady } = await readWithReviewColumns<Record<string, unknown>>(DETAIL_COLUMNS, (columns) =>
+    table().select(columns).eq("id", id).maybeSingle(),
+  )
   if (error || !row) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
   const files = Array.isArray(row.files) ? (row.files as SubmissionFile[]) : []
@@ -62,11 +70,12 @@ export async function GET(_req: NextRequest, { params }: Params) {
       return { key: f.key, label: slot?.label ?? f.key, name: f.name, url }
     }),
   )
-  return NextResponse.json({ link: { ...row, files: withUrls } })
+  return NextResponse.json({ review_ready: reviewReady, link: { ...row, files: withUrls } })
 }
 
 export async function PATCH(req: NextRequest, { params }: Params) {
-  if (!(await adminUser())) return NextResponse.json({ error: "Admin access required" }, { status: 403 })
+  const user = await adminUser()
+  if (!user) return NextResponse.json({ error: "Admin access required" }, { status: 403 })
   const { id } = await params
   const body = await req.json().catch(() => ({}))
 
@@ -76,10 +85,23 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     return NextResponse.json({ ok: true, folder_id: r.folderId, already: r.already })
   }
 
-  if (body.action === "resend_email") {
-    const r = await deliverSubmission(id, true)
+  if (body.action === "review") {
+    const r = await markReviewed(id, user.email ?? "staff")
+    if ("error" in r) return NextResponse.json({ error: r.error }, { status: 409 })
+    return NextResponse.json({ ok: true })
+  }
+
+  if (body.action === "submit") {
+    const confirmTo = Array.isArray(body.confirm_to) ? body.confirm_to.filter((x: unknown): x is string => typeof x === "string") : []
+    const r = await deliverSubmission(id, { by: user.email ?? "staff", confirmTo })
     if ("error" in r) return NextResponse.json({ error: r.error }, { status: 409 })
     return NextResponse.json({ ok: true, sent_to: r.sentTo })
+  }
+
+  if (body.action === "send_back") {
+    const r = await sendBackToClient(id, user.email ?? "staff", body.note)
+    if ("error" in r) return NextResponse.json({ error: r.error }, { status: 409 })
+    return NextResponse.json({ ok: true, new_id: r.newId, url: r.url, emailed: r.emailed, emailed_to: r.emailedTo, email_error: r.emailError ?? null })
   }
 
   if (body.action === "reset_lock") {

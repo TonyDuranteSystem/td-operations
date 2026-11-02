@@ -7,11 +7,13 @@
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib"
 import { BOFA_TEXT_FIELDS } from "./schema"
+import { BOFA_SHIPPING_FIELDS, BOFA_SHIPPING_KEYS } from "./shipping"
 
 const SECTIONS: { title: string; keys: string[] }[] = [
   { title: "Applicant", keys: ["full_name", "email", "phone", "citizenship", "itin", "home_street", "home_city", "home_region", "home_zip", "home_country"] },
   { title: "Company", keys: ["company_name", "ein", "state_of_formation", "company_street", "company_city", "company_region", "company_zip", "company_country", "website"] },
   { title: "The business", keys: ["business_description", "customers", "revenue_model", "monthly_deposits", "first_deposit_source"] },
+  { title: "Shipping address", keys: BOFA_SHIPPING_KEYS },
 ]
 
 /** Replace characters the standard font cannot encode. */
@@ -75,11 +77,13 @@ export async function buildSummaryPdf(p: { data: Record<string, string>; partner
 
   const labelW = 150
   for (const sec of SECTIONS) {
+    // an application saved before the shipping block existed has no such answers: no empty heading
+    if (!sec.keys.some((k) => p.data[k])) continue
     need(40)
     y -= 6
     line(sec.title, bold, 13, M, rgb(0.12, 0.23, 0.37))
     for (const key of sec.keys) {
-      const f = BOFA_TEXT_FIELDS.find((x) => x.key === key)
+      const f = BOFA_TEXT_FIELDS.find((x) => x.key === key) ?? BOFA_SHIPPING_FIELDS.find((x) => x.key === key)
       const value = p.data[key]
       if (!f || !value) continue
       const lines = wrapText(printable(value, font), font, 10, W - M * 2 - labelW)
