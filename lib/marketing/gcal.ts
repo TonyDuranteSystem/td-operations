@@ -35,13 +35,14 @@ export interface GcalApi {
 type RawEvent = {
   id: string; status?: string; summary?: string; transparency?: string
   start?: { dateTime?: string; date?: string }; end?: { dateTime?: string; date?: string }
-  attendees?: Array<{ email: string; resource?: boolean }>
+  attendees?: Array<{ email: string; resource?: boolean; self?: boolean; responseStatus?: string }>
   extendedProperties?: { private?: Record<string, string> }
 }
 
-/** One Google event in the shape Marketing uses; null for one that is cancelled or has no usable time. */
+/** One Google event in the shape Marketing uses; null for one that is cancelled, that the calendar's own owner declined (Google hides those and never counts them as busy), or that has no usable time. */
 export function eventFromGoogle(raw: RawEvent, calendarId: string): GEvent | null {
   if (!raw || raw.status === "cancelled") return null
+  if ((raw.attendees ?? []).some(a => a.self === true && a.responseStatus === "declined")) return null
   const allDay = !raw.start?.dateTime
   const startMs = Date.parse(raw.start?.dateTime ?? raw.start?.date ?? "")
   const endMs = Date.parse(raw.end?.dateTime ?? raw.end?.date ?? "")
