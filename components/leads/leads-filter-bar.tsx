@@ -134,6 +134,16 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
     setParams({ q: search.trim() })
   }
 
+  // Take Antonio to the person's row in the list (right tab, other filters cleared, row highlighted). Nothing opens:
+  // he decides whether to open the floating window or act from the row.
+  function showInList(s: Suggestion) {
+    const q = (s.email || s.full_name).trim()
+    const tab = s.status === 'Converted' ? 'converted' : s.existing_client_contact_id ? 'clients' : ''
+    setOpen(false)
+    setSearch(q)
+    setParams({ q, client: tab, focus: s.id, status: '', src: '', ref: '', offer: '', call: '', follow: '', quick: '' })
+  }
+
   function onSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
     const value = e.target.value
     setSearch(value)
@@ -172,7 +182,7 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
                     <button
                       key={s.id}
                       type="button"
-                      onClick={() => { setOpen(false); router.push(`/leads/${s.id}`) }}
+                      onClick={() => showInList(s)}
                       className="w-full text-left px-3 py-2 hover:bg-zinc-50 border-b last:border-b-0 flex items-center justify-between gap-3"
                     >
                       <span className="min-w-0">
