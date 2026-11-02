@@ -17,7 +17,8 @@ export interface GCalendarEntry { id: string; accessRole: string; primary: boole
 export interface GBusy { start: number; end: number }
 export interface GFreeBusy { busy: GBusy[]; /** a reason Google gave for not answering ("notFound": the calendar is not shared with this mailbox) */ error: string | null }
 
-export interface GEventInput { title: string; startIso: string; endIso: string; timeZone: string; leadId?: string }
+/** `attendees` + `sendUpdates: "all"` make the event an invitation (the booking with the owner: the owner and the client are invited, Google emails the client). `location` carries the video link. */
+export interface GEventInput { title: string; startIso: string; endIso: string; timeZone: string; leadId?: string; attendees?: string[]; description?: string; location?: string; sendUpdates?: "all" | "none" }
 
 /** The few things Marketing asks of Google. Real implementation below; tests pass a fake. */
 export interface GcalApi {
@@ -26,7 +27,8 @@ export interface GcalApi {
   listEvents(actAs: string, calendarId: string, timeMinIso: string, timeMaxIso: string): Promise<GEvent[]>
   getEvent(actAs: string, calendarId: string, eventId: string): Promise<GEvent | null>
   createEvent(actAs: string, calendarId: string, input: GEventInput): Promise<GEvent>
-  moveEvent(actAs: string, calendarId: string, eventId: string, input: { startIso: string; endIso: string; timeZone: string }): Promise<GEvent>
+  /** `notify`: tell the guests of the event (the booking with the owner, where the client is a guest) */
+  moveEvent(actAs: string, calendarId: string, eventId: string, input: { startIso: string; endIso: string; timeZone: string; notify?: boolean }): Promise<GEvent>
   removeEvent(actAs: string, calendarId: string, eventId: string): Promise<void>
 }
 
@@ -88,17 +90,20 @@ export const googleApi: GcalApi = {
   async createEvent(actAs, calendarId, input) {
     const body: Record<string, unknown> = { summary: input.title, start: { dateTime: input.startIso, timeZone: input.timeZone }, end: { dateTime: input.endIso, timeZone: input.timeZone } }
     if (input.leadId) body.extendedProperties = { private: { td_marketing_call: input.leadId } }
-    const ev = eventFromGoogle((await calendarRequestAs(actAs, `${CAL}/${enc(calendarId)}/events`, { method: "POST", body })) as RawEvent, calendarId)
+    if (input.attendees?.length) body.attendees = input.attendees.map(email => ({ email }))
+    if (input.description) body.description = input.description
+    if (input.location) body.location = input.location
+    const ev = eventFromGoogle((await calendarRequestAs(actAs, `${CAL}/${enc(calendarId)}/events`, { method: "POST", body, ...(input.attendees?.length ? { params: { sendUpdates: input.sendUpdates ?? "all" } } : {}) })) as RawEvent, calendarId)
     if (!ev) throw new Error("Google did not return the event it created.")
     return ev
   },
   async moveEvent(actAs, calendarId, eventId, input) {
     const body = { start: { dateTime: input.startIso, timeZone: input.timeZone }, end: { dateTime: input.endIso, timeZone: input.timeZone } }
-    const ev = eventFromGoogle((await calendarRequestAs(actAs, `${CAL}/${enc(calendarId)}/events/${enc(eventId)}`, { method: "PATCH", body })) as RawEvent, calendarId)
+    const ev = eventFromGoogle((await calendarRequestAs(actAs, `${CAL}/${enc(calendarId)}/events/${enc(eventId)}`, { method: "PATCH", body, ...(input.notify ? { params: { sendUpdates: "all" } } : {}) })) as RawEvent, calendarId)
     if (!ev) throw new Error("Google did not return the event it changed.")
     return ev
   },
-  async removeEvent(actAs, calendarId, eventId) { await calendarRequestAs(actAs, `${CAL}/${enc(calendarId)}/events/${enc(eventId)}`, { method: "DELETE" }) },
+  async removeEvent(actAs, calendarId, eventId) { await calendarRequestAs(actAs, `${CAL}/${enc(calendarId)}/events/${enc(eventId)}`, { method: "DELETE", params: { sendUpdates: "all" } }) },
 }
 
 /** Wait for `work` at most `ms`; if it is late or fails, answer `onLate` instead. A screen that asks Google must open anyway (reads only; never wrap a write in this: the write would carry on unseen). */

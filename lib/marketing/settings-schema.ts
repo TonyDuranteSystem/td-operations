@@ -27,6 +27,14 @@ const callHours = z.object({
   /** the weekdays he takes calls: 0 = Sunday … 6 = Saturday */
   days: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
 }).refine(h => (h.start ?? DEFAULT_CALL_HOURS.start) < (h.end ?? DEFAULT_CALL_HOURS.end), "The working day must end after it starts.")
+/** The owner's hours for calls booked with him (see owner_call_hours): minutes after midnight in his own zone, the weekdays (0 = Sunday), and the shortest notice in minutes. */
+const ownerCallHours = z.object({
+  startMin: z.number().int().min(0).max(1439),
+  endMin: z.number().int().min(1).max(1440),
+  days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+  notice: z.number().int().min(0).max(10080),
+}).refine(h => h.startMin < h.endMin, "The working day must end after it starts.")
+export type OwnerCallHours = z.infer<typeof ownerCallHours>
 const calendlyLink = z.object({
   id: z.string().regex(/^[a-z0-9-]{1,40}$/),
   name: z.string().trim().min(1).max(40),
@@ -192,6 +200,11 @@ export const MARKETING_SETTING_DEFS = {
   member_calendly_links: { schema: z.record(z.string().uuid(), z.array(calendlyLink).max(12)).refine(o => Object.keys(o).length <= 60, "Too many people."), fallback: {} as Record<string, CalendlyLink[]> },
   /** The personal Google calendars (addresses) whose BUSY time a member's slots must avoid, by user id. They are shared with his work mailbox as "free/busy only"; the system asks Google only when he is busy. */
   member_personal_calendars: { schema: z.record(z.string().uuid(), z.array(z.string().trim().toLowerCase().max(120).regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)).max(6)).refine(o => Object.keys(o).length <= 60, "Too many people."), fallback: {} as Record<string, string[]> },
+  /**
+   * The owner's own hours for calls the seller books WITH him (the "Link with Antonio" booking, 1 Nov 2026), in his own zone (owner_clock). Minutes after midnight, so 8:00 to 1:30 pm is 480 to 810; the
+   * shortest notice (minutes) keeps a client from booking him ten minutes from now. A time is offered only when the seller AND the owner are both free inside their own hours.
+   */
+  owner_call_hours: { schema: ownerCallHours, fallback: { startMin: 480, endMin: 810, days: [1, 2, 3, 4, 5], notice: 120 } as OwnerCallHours },
   /** Switch: show the seller's Busy time on the Calendar and offer the setter only the seller's free slots. OFF until the go-live check (Addendum K, K.7 B6). */
   calendar_busy_enabled: { schema: z.boolean(), fallback: false },
   /** Switch: a call booked, moved or cancelled in Marketing is also written into the seller's work Google calendar, so Calendly cannot offer the same hour. OFF until the go-live check. */

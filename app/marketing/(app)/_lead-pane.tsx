@@ -19,6 +19,7 @@ import { getMarketingSetting } from '@/lib/marketing/settings'
 import type { SellerResultStages } from '@/lib/marketing/settings-schema'
 import { hasPaidOrLater, onSellerSide, sellerOf } from '@/lib/marketing/lead-actions'
 import { BookingLinkPanel } from '@/components/marketing/booking-link-panel'
+import { JointLinkPanel } from '@/components/marketing/joint-link-panel'
 import type { TimeView } from '@/lib/marketing/time-prefs-server'
 import { leadClocks, memberZone, sellerForLead, zoneInfoFor } from '@/lib/marketing/time-prefs'
 import { leadZoneOf } from '@/lib/marketing/lead-zone'
@@ -146,6 +147,8 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
         archived={lead.status === sellerKeys.archived}
         zone={zoneInfo}
       />
+
+      {role === 'seller' && lead.claimed_by !== null && lead.status !== sellerKeys.archived && <JointLinkPanel leadId={lead.id} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} email={lead.email} canAct={canAct} canWhatsApp={hasPermission(permissions, 'whatsapp')} canEmail={hasPermission(permissions, 'inbox')} />}
 
       {role === 'seller' && afterPay && lead.status !== sellerKeys.archived && <BookingLinkPanel leadId={lead.id} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} email={lead.email} lastLink={lastBookingLink} canAct={canAct} canWhatsApp={hasPermission(permissions, 'whatsapp')} canEmail={hasPermission(permissions, 'inbox')} links={time.prefs.links[time.memberId] ?? []} />}
 

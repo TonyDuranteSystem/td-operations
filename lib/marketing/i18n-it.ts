@@ -1177,4 +1177,10 @@ export const IT: Record<string, string> = {
   "Send this link to them. It is shown only now and cannot be shown again (you can make a new one). It works once and expires {when}.": "Mandagli questo link. Viene mostrato solo adesso e non può essere mostrato di nuovo (puoi farne uno nuovo). Funziona una sola volta e scade {when}.",
   "Password reset link": "Link per reimpostare la password",
   "Could not make the reset link. Please try again.": "Non è stato possibile creare il link. Riprova.",
+  "Link with Antonio": "Link con Antonio",
+  "A link that offers only the times when you and Antonio are both free. The client books, gets a Zoom link by email and can cancel or move the call.": "Un link che propone solo gli orari in cui tu e Antonio siete liberi entrambi. Il cliente prenota, riceve il link Zoom per email e può annullare o spostare la chiamata.",
+  "Make the link": "Crea il link",
+  "Make a new link": "Crea un nuovo link",
+  "Email sent. It is written on the lead.": "Email inviata. È scritto sul lead.",
+  "Recorded. It is written on the lead.": "Registrato. È scritto sul lead.",
 }
