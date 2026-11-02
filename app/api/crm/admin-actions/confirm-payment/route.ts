@@ -33,6 +33,7 @@
 // money and activation together. Bound it explicitly, as its siblings do.
 export const maxDuration = 60
 
+import { chosenInvoiceDescription } from "@/lib/offers/invoice-description"
 import type { ShortContractType } from "@/lib/offers/standalone-contract-types"
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
@@ -133,13 +134,14 @@ export async function POST(request: Request) {
       services: unknown
       selected_services: unknown
       bill_to: unknown
+      invoice_description?: string | null
       account_id: string | null
       contact_id: string | null
       lead_id: string | null
       formation_state: string | null
     }
     const offerSelect =
-      "token, status, contract_type, bundled_pipelines, cost_summary, client_email, client_name, services, selected_services, bill_to, account_id, contact_id, lead_id, formation_state"
+      "token, status, contract_type, bundled_pipelines, cost_summary, client_email, client_name, services, selected_services, bill_to, invoice_description, account_id, contact_id, lead_id, formation_state"
     let offer: ResolvedOffer | null = null
 
     if (offer_token) {
@@ -506,7 +508,8 @@ export async function POST(request: Request) {
           contact_id: resolvedContactId || undefined,
           billing_entity_id: resolvedBillingEntityId,
           line_items: [{
-            description: confirmedPaymentInvoiceLabel({
+            // The wording staff chose on the offer wins; else the automatic label.
+            description: chosenInvoiceDescription(offer) ?? confirmedPaymentInvoiceLabel({
               contractType: contract_type,
               clientName,
               services: offer?.services,

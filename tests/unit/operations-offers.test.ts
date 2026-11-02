@@ -471,6 +471,22 @@ describe("createOffer — no automatic anchor lead (workspace-only plan S1)", ()
     expect(insert?.bill_to).toMatchObject({ type: "entity", entity: { name: "Rossi Srl" } })
   })
 
+  it("the invoice description is cleaned and saved on the offer; empty saves nothing; too long is refused", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    const base = {
+      client_name: "X", language: "en" as const, payment_type: "bank_transfer", contract_type: "renewal",
+      services: [{ name: "Annual Renewal", price: "$500" }], cost_summary: [{ label: "Total", total: "$500" }],
+      account_id: "existing-account-123",
+    }
+    const long = await createOffer({ ...base, token: "test-invdesc-long", invoice_description: "x".repeat(201) })
+    expect(long.outcome).toBe("validation_error")
+    await createOffer({ ...base, token: "test-invdesc-ok", invoice_description: "  LLC formation   for\nBlue Corp  " })
+    expect(offerInserts.find((o) => !o.__update && o.token === "test-invdesc-ok")?.invoice_description).toBe("LLC formation for Blue Corp")
+    await createOffer({ ...base, token: "test-invdesc-empty", invoice_description: "   " })
+    expect(offerInserts.find((o) => !o.__update && o.token === "test-invdesc-empty")?.invoice_description).toBeNull()
+  })
+
   it("S1: 'Invoice to' must belong to this client (company / saved payer)", async () => {
     accountExists = true
     const { createOffer } = await import("@/lib/operations/offers")

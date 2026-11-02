@@ -30,6 +30,7 @@
  * success and failure, same as every other cron in this codebase.
  */
 
+import { chosenInvoiceDescription } from "@/lib/offers/invoice-description"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
@@ -53,6 +54,7 @@ interface CandidateOffer {
   currency: string | null
   services: unknown
   bill_to: unknown
+  invoice_description?: string | null
   lead_id: string | null
 }
 
@@ -73,7 +75,7 @@ export async function GET(req: NextRequest) {
     // eslint-disable-next-line no-restricted-syntax -- payment_plan postdates the generated types for this table.
     const offerQuery = supabaseAdmin
       .from("offers")
-      .select("token, client_name, account_id, contact_id, currency, services, bill_to, lead_id, payment_plan" as never)
+      .select("token, client_name, account_id, contact_id, currency, services, bill_to, invoice_description, lead_id, payment_plan" as never)
       .in("status", ["signed", "completed"])
       .not("payment_plan" as never, "is", null) as unknown as {
         then: PromiseLike<{ data: (CandidateOffer & { payment_plan: unknown })[] | null; error: { message: string } | null }>["then"]
@@ -119,6 +121,7 @@ export async function GET(req: NextRequest) {
         }
 
         const serviceLabel =
+          chosenInvoiceDescription(offer) ||
           (Array.isArray(offer.services) && (offer.services[0] as { name?: string } | undefined)?.name) ||
           "Setup Fee"
 

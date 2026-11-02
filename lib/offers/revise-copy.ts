@@ -98,6 +98,8 @@ export function buildRevisedOfferInsert(
     // "Invoice to" (S1 2026-09-27) is a fact of the deal — who pays. Dropping it
     // silently re-addressed v2's invoice to the person (bug-hunter).
     bill_to: (original.bill_to as unknown) ?? null,
+    // The wording chosen for the invoice is part of the deal too: v2 must not silently fall back to the automatic text.
+    invoice_description: (original.invoice_description as string | null | undefined) ?? null,
     // WS-C: the payment plan is a FACT OF THE DEAL — what the client agreed to pay and when.
     // Copied VERBATIM, triggers included. Two reasons it cannot be left to regeneration:
     // dropping it would silently turn a EUR1,250 + EUR1,250 agreement back into one EUR2,500

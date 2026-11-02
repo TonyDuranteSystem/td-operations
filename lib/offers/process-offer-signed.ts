@@ -8,6 +8,7 @@
  *
  * Idempotent: an existing pending activation short-circuits ("Already pending").
  */
+import { chosenInvoiceDescription } from "@/lib/offers/invoice-description"
 import { invoiceTargetForOffer } from "@/lib/offers/bill-to-server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
@@ -245,7 +246,8 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
       offerToken: offer_token,
       offerGross: totalAmount,
       offerCurrency,
-      baseDescription: getInvoiceDescription(contractType, selectedServices, offer.client_name, offer.services),
+      // The wording staff chose on the offer ("Invoice description") wins; empty = the automatic "<services> - <client name>".
+      baseDescription: chosenInvoiceDescription(offer as { invoice_description?: unknown }) ?? getInvoiceDescription(contractType, selectedServices, offer.client_name, offer.services),
     })
     if (signingBill.planIgnored) {
       // A refusal must NOT abort the signing — the client has already signed and the signature
