@@ -282,7 +282,8 @@ export function TalkMessages({
     return () => clearTimeout(t)
   }, [threadId, messages.length])
 
-  const groups = groupByDay(messages)
+  // a deleted message leaves no trace in the list (Antonio, 2 Nov 2026: no "This message was deleted" wording); the row itself stays in the database
+  const groups = groupByDay(messages.filter(m => !m.deleted_at))
   const byId = new Map(messages.map(m => [m.id, m]))
   // only the newest voice note of the chat is downloaded ahead of the tap; older ones wait until they are played
   const newestVoiceId = [...messages].reverse().find(m => (m.attachments ?? []).some(a => a && a.url && isAudio(a)))?.id ?? null
