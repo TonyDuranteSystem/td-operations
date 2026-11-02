@@ -16,6 +16,8 @@
 //  - Every automatic move is logged with a 24-hour undo; an UNDONE move stops that lead ever being moved
 //    automatically again (re-delivered webhooks re-run this code).
 
+import { resolveForLead, ensureOpenCheck } from '@/lib/leads/client-check-data'
+import type { ClientVerdict } from '@/lib/leads/client-context'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { updateLeadColumnGuarded, isGuardedFailure, type LeadDb } from '@/lib/leads/guarded-update'
 import { nyDate, daysBetween } from '@/lib/leads/ny-date'
@@ -91,6 +93,8 @@ export interface AutoMoveInput {
   recordingIso: string
   /** the automatic move made for THIS call was undone — a re-delivery of the same recording must not move it again */
   priorUndoneAutoMove: boolean
+  /** the CRM suggests this lead may already be a client and Antonio has not answered yet: the move waits */
+  clientQuestionOpen?: boolean
 }
 
 export interface AutoMoveDecision { move: boolean; reason: string }
@@ -98,6 +102,7 @@ export interface AutoMoveDecision { move: boolean; reason: string }
 export function decideAutoCallDone(i: AutoMoveInput): AutoMoveDecision {
   if (i.leadStatus !== 'Call Scheduled') return { move: false, reason: 'the lead is not on Call Scheduled' }
   if (i.existingClientTag) return { move: false, reason: 'the lead is an existing client' }
+  if (i.clientQuestionOpen) return { move: false, reason: 'waiting for your answer: is this person already a client?' }
   if (i.priorUndoneAutoMove) return { move: false, reason: 'the automatic move for this call was undone' }
   if (i.linkReview) return { move: false, reason: 'the recording is waiting for a link review' }
   if (i.durationSeconds !== null && i.durationSeconds < MIN_AUTO_SECONDS) return { move: false, reason: 'the recording is shorter than 3 minutes' }
@@ -209,8 +214,15 @@ export async function applyRecording(db: unknown, r: RecordingInput, opts: { now
   const autoMove = opts.autoMove ?? autoCallDoneEnabled()
   try {
     const sb = asDb(db)
-    const { data: lead } = await sb.from('leads').select('id, status, call_date, existing_client_contact_id').eq('id', r.leadId).maybeSingle()
+    const { data: lead } = await sb.from('leads').select('id, status, call_date, existing_client_contact_id, full_name, email, phone').eq('id', r.leadId).maybeSingle()
     if (!lead) return { ok: false, moved: false, reason: 'lead not found' }
+
+    // What the CRM says about this person (email, phone, name, recordings, chats), not only the booking-time mark.
+    // A failed lookup must never block or force a move: it falls back to the mark alone.
+    let clientVerdict: ClientVerdict | null = null
+    try {
+      clientVerdict = await resolveForLead(db, { id: r.leadId, full_name: lead.full_name as string | null, email: lead.email as string | null, phone: lead.phone as string | null, existing_client_contact_id: lead.existing_client_contact_id as string | null })
+    } catch { clientVerdict = null }
 
     const { data: callsData } = await sb.from('lead_calls').select('*').eq('lead_id', r.leadId)
     const calls = (callsData ?? []) as LeadCallRow[]
@@ -249,7 +261,8 @@ export async function applyRecording(db: unknown, r: RecordingInput, opts: { now
 
     const decision = decideAutoCallDone({
       leadStatus: (lead.status as string | null) ?? null,
-      existingClientTag: !!lead.existing_client_contact_id,
+      existingClientTag: !!lead.existing_client_contact_id || clientVerdict?.verdict === 'sure',
+      clientQuestionOpen: clientVerdict?.verdict === 'maybe',
       linkReview: r.linkReview,
       durationSeconds: r.durationSeconds,
       matchedCall: matched,
@@ -258,6 +271,7 @@ export async function applyRecording(db: unknown, r: RecordingInput, opts: { now
       recordingIso: r.recordingIso,
       priorUndoneAutoMove: (undone ?? []).length > 0,
     })
+    if (clientVerdict && clientVerdict.verdict === 'maybe' && (lead.status as string | null) === 'Call Scheduled') await ensureOpenCheck(db, r.leadId, clientVerdict)
     if (!decision.move) return { ok: true, moved: false, reason: decision.reason, callId }
 
     if (!autoMove) {

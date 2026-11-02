@@ -433,6 +433,8 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
             <button type="button" onClick={() => { setReading(null); setDrafting(true) }} className="shrink-0 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">Draft follow-up</button>
           </div>
 
+          {data.clientCheck && <ClientQuestion leadId={win.id} leadName={data.lead.name} check={data.clientCheck} onAnswered={load} />}
+
           {drafting ? (
             <DraftPanel leadId={win.id} leadName={data.lead.name} currentFollowUp={data.lead.followUpDate} onBack={() => setDrafting(false)} onSent={load} />
           ) : reading ? (
@@ -557,6 +559,61 @@ interface DraftInfo {
   notPromised: string[]
   language: string
   target: { to: string | null; canSend: boolean; conversationId: string | null; reason: string }
+}
+
+/** "Is this lead already a client, or a new lead?" — shown when the CRM suggests a client but is not sure (dev job 6fc63c52). */
+function ClientQuestion({ leadId, leadName, check, onAnswered }: { leadId: string; leadName: string; check: NonNullable<WindowData['clientCheck']>; onAnswered: () => void }) {
+  const [busy, setBusy] = useState<'' | 'client' | 'new_lead' | 'later'>('')
+  const [error, setError] = useState('')
+  const [done, setDone] = useState('')
+
+  async function answer(a: 'client' | 'new_lead' | 'later') {
+    if (busy) return
+    setBusy(a)
+    setError('')
+    try {
+      const res = await fetch(`/api/crm/leads/${leadId}/window/client-check`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contactId: check.contactId, answer: a }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error((d && d.error) || (d && d.message) || 'Could not save your answer — please try again.')
+      setDone((d && d.message) || 'Saved.')
+      onAnswered()
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not save your answer — please try again.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    <div className="m-4 space-y-3 rounded-xl border-2 border-amber-500 bg-amber-50 p-5 text-amber-950">
+      <div className="flex flex-wrap items-center gap-3 text-sm">
+        <span className="rounded bg-amber-400 px-2 py-0.5 text-xs font-extrabold tracking-wider text-amber-950">CLIENT OR LEAD?</span>
+        <span>{check.later ? 'You said decide later. The automatic move is still waiting.' : 'The system is not sure. It will not move this lead until you answer.'}</span>
+      </div>
+      <div className="text-xl font-bold">Is {leadName} already a client, or a new lead?</div>
+      <div className="text-sm">
+        He looks like an existing client for these reasons{check.companies.length > 0 ? ` (${check.contactName}: ${check.companies.map(c => c.name).join(', ')})` : ''}:
+      </div>
+      <ul className="space-y-2">
+        {check.reasons.map((r, i) => (
+          <li key={i} className="rounded-lg border border-amber-200 bg-white p-3 text-zinc-900">
+            <div className="text-[15px]">{r.text}</div>
+            <div className="text-xs text-zinc-600">Source: {r.source}</div>
+          </li>
+        ))}
+      </ul>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" disabled={!!busy} onClick={() => answer('client')} className="rounded-lg bg-emerald-700 px-5 py-2.5 text-[15px] font-bold text-white hover:bg-emerald-800 disabled:opacity-50">{busy === 'client' ? 'Saving…' : 'Yes, existing client'}</button>
+        <button type="button" disabled={!!busy} onClick={() => answer('new_lead')} className="rounded-lg border border-zinc-400 bg-white px-5 py-2.5 text-[15px] font-bold text-zinc-900 hover:bg-zinc-50 disabled:opacity-50">{busy === 'new_lead' ? 'Saving…' : 'No, new lead'}</button>
+        <button type="button" disabled={!!busy || check.later} onClick={() => answer('later')} className="rounded-lg border border-amber-600 px-5 py-2.5 text-[15px] font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50">{busy === 'later' ? 'Saving…' : 'Decide later'}</button>
+      </div>
+      <p className="text-xs">&ldquo;Yes&rdquo; links this lead to the contact and saves the new email and phone, so next time the system knows him without asking.</p>
+      {error && <p role="alert" className="text-sm font-semibold text-red-700">{error}</p>}
+      {done && <p className="text-sm font-semibold text-emerald-800">{done}</p>}
+    </div>
+  )
 }
 
 function DraftPanel({ leadId, leadName, currentFollowUp, onBack, onSent }: { leadId: string; leadName: string; currentFollowUp: string | null; onBack: () => void; onSent: () => void }) {

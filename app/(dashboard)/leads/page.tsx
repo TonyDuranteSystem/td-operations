@@ -11,6 +11,8 @@ import { findLeadIdsByPhone, leadSearchOrFilter } from '@/lib/leads/phone-search
 import { buildClientEmailSet, isLiveClient } from '@/lib/leads/client-match'
 import { LeadsFilterBar } from '@/components/leads/leads-filter-bar'
 import { LeadWindowProvider } from '@/components/leads/lead-window-host'
+import { supabaseAdmin } from '@/lib/supabase-admin'
+import { loadClientContacts, loadAnswers, resolveForLeads } from '@/lib/leads/client-check-data'
 import { parseLeadFilters, filterLeads, quickCounts, distinctValues, upcomingCallsFirst, todayInNewYork } from '@/lib/leads/list-filters'
 
 const NEW_CALL_WINDOW_DAYS = 14
@@ -107,6 +109,16 @@ export default async function LeadsPage({
     .range(0, 4999)
   const clientEmails = buildClientEmailSet(clientContacts ?? [])
 
+  // "Is this lead already a client?" from the CRM (email, phone, name) — the same resolver as the lead window, cheap
+  // signals only. Answers Antonio already gave are read with the service client (the table is not open to a login).
+  const allLeadIds = (leads ?? []).map(l => l.id)
+  const [clientContactsFull, clientAnswers] = await Promise.all([loadClientContacts(supabase), loadAnswers(supabaseAdmin, allLeadIds)])
+  const clientVerdicts = resolveForLeads(
+    (leads ?? []).map(l => ({ id: l.id, full_name: l.full_name, email: l.email, phone: l.phone, existing_client_contact_id: l.existing_client_contact_id })),
+    clientContactsFull,
+    clientAnswers,
+  )
+
   // "Follow-up sent" marks: a separate best-effort read so the page still opens if the follow-up-sent migration has not
   // been run yet (the columns would not exist) — the tag then simply does not show.
   const followUpMarks = new Map<string, { at: string | null; channel: string | null }>()
@@ -158,7 +170,8 @@ export default async function LeadsPage({
       has_call_recording: hasCallRecording,
       last_follow_up_sent_at: followUpMarks.get(l.id)?.at ?? null,
       last_follow_up_channel: followUpMarks.get(l.id)?.channel ?? null,
-      is_live_client: l.status !== 'Converted' && !l.existing_client_contact_id && isLiveClient(l.email, clientEmails),
+      is_live_client: l.status !== 'Converted' && !l.existing_client_contact_id && (isLiveClient(l.email, clientEmails) || clientVerdicts.get(l.id)?.verdict === 'sure'),
+      needs_client_check: l.status !== 'Converted' && !l.existing_client_contact_id && clientVerdicts.get(l.id)?.verdict === 'maybe',
     }
   })
 

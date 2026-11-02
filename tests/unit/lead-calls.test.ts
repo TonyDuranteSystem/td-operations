@@ -63,6 +63,12 @@ describe('decideAutoCallDone', () => {
   it('never moves an existing client', () => {
     expect(decideAutoCallDone(input({ existingClientTag: true })).move).toBe(false)
   })
+  it('waits while the question "already a client?" is open', () => {
+    const d = decideAutoCallDone(input({ clientQuestionOpen: true }))
+    expect(d.move).toBe(false)
+    expect(d.reason).toMatch(/already a client/)
+    expect(decideAutoCallDone(input({ clientQuestionOpen: false })).move).toBe(true)
+  })
   it('never moves again after an undone automatic move', () => {
     expect(decideAutoCallDone(input({ priorUndoneAutoMove: true })).move).toBe(false)
   })

@@ -6,6 +6,7 @@ import type { createClient } from "@/lib/supabase/server"
 import type { supabaseAdmin } from "@/lib/supabase-admin"
 import { buildLeadWindowData, type WindowCallRow, type WindowLeadRow, type WindowData } from "@/lib/leads/window-data"
 import { fetchLeadCallData } from "@/lib/leads/lead-calls"
+import { resolveForLead } from "@/lib/leads/client-check-data"
 import { digitsOnly } from "@/lib/messaging/phone"
 import {
   buildEmailEvents, buildWhatsAppEvents, mergeMessageEvents, type EmailRow, type ChatRow, type ChatMessageRow, type MessageEvent,
@@ -91,6 +92,9 @@ export async function loadLeadWindowData(supabase: UserDb, supabaseAdmin: AdminD
     isLiveClient = (match ?? []).length > 0
   }
 
+  // The CRM-wide answer to "is this person already a client?" (email, phone, name, recordings, chats) — dev job 6fc63c52.
+  const clientVerdict = await resolveForLead(supabaseAdmin, { id: lead.id, full_name: lead.full_name, email: lead.email, phone: lead.phone, existing_client_contact_id: lead.existing_client_contact_id })
+
   const data = buildLeadWindowData({
     lead,
     offers: offers ?? [],
@@ -102,6 +106,7 @@ export async function loadLeadWindowData(supabase: UserDb, supabaseAdmin: AdminD
     isLiveClient,
     leadCalls: callData.calls,
     moves: callData.moves,
+    clientVerdict,
   })
   return { status: 200, data }
 }

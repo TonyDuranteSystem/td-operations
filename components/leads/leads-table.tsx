@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useTransition } from 'react'
-import { ChevronRight, ChevronLeft, Phone, Mail, UserCheck, Send } from 'lucide-react'
+import { ChevronRight, ChevronLeft, Phone, Mail, UserCheck, Send, HelpCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { LeadListItem } from '@/lib/types'
 import { LeadRowActions } from '@/components/leads/lead-row-actions'
@@ -122,7 +122,7 @@ export function LeadsTable({ items, stats, currentPage, totalPages, totalCount }
                   {item.referrer_name && (
                     <p className="text-xs text-muted-foreground truncate">Ref: {item.referrer_name}</p>
                   )}
-                  {(item.existing_client_contact_id || item.is_live_client || item.has_call_recording || followUpTagText(item.last_follow_up_sent_at, item.last_follow_up_channel)) && (
+                  {(item.existing_client_contact_id || item.is_live_client || item.needs_client_check || item.has_call_recording || followUpTagText(item.last_follow_up_sent_at, item.last_follow_up_channel)) && (
                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                       {item.existing_client_contact_id && (
                         <span className="flex items-center gap-1 text-xs bg-zinc-100 text-zinc-600 px-1.5 py-0.5 rounded-md">
@@ -134,6 +134,12 @@ export function LeadsTable({ items, stats, currentPage, totalPages, totalCount }
                         <span className="flex items-center gap-1 text-xs bg-amber-50 text-amber-800 px-1.5 py-0.5 rounded-md">
                           <UserCheck className="h-3 w-3" />
                           Already a client
+                        </span>
+                      )}
+                      {item.needs_client_check && (
+                        <span className="flex items-center gap-1 whitespace-nowrap text-xs font-bold bg-amber-400 text-amber-950 px-1.5 py-0.5 rounded-md">
+                          <HelpCircle className="h-3 w-3" />
+                          Client? Check
                         </span>
                       )}
                       {item.has_call_recording && (

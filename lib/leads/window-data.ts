@@ -12,6 +12,7 @@
 import { assembleTimeline, type TimelineEvent } from '@/lib/lifecycle-timeline'
 import { todayInNewYork } from '@/lib/leads/list-filters'
 import { nyDate, daysBetween } from '@/lib/leads/ny-date'
+import type { ClientVerdict, ClientReason } from '@/lib/leads/client-context'
 import { undoOpen, undoHoursLeft, type LeadCallRow, type StatusMoveRow } from '@/lib/leads/lead-calls'
 
 export interface WindowLeadRow {
@@ -80,6 +81,8 @@ export interface WindowInput {
   leadCalls?: LeadCallRow[]
   /** automatic / staff status moves made from calls */
   moves?: StatusMoveRow[]
+  /** what the CRM says about whether this lead is already a client (all sources) */
+  clientVerdict?: ClientVerdict | null
   now?: Date
 }
 
@@ -146,6 +149,8 @@ export interface WindowData {
     lastFollowUp: { at: string; channel: string | null } | null
   }
   nextAction: string
+  /** set when the CRM suggests this lead may already be a client and the system is waiting for Antonio's answer */
+  clientCheck: { contactId: string; contactName: string; companies: { name: string; status: string | null }[]; reasons: ClientReason[]; later: boolean } | null
   calls: WindowCall[]
   offer: { line: string; sub: string | null } | null
   notes: string | null
@@ -489,7 +494,11 @@ export function buildLeadWindowData(input: WindowInput): WindowData {
   const offer = currentOffer(input.offers)
   const badges: string[] = []
   if (input.lead.existing_client_contact_id) badges.push('Existing client')
-  else if (input.isLiveClient && input.lead.status !== 'Converted') badges.push('Already a client')
+  else if ((input.isLiveClient || input.clientVerdict?.verdict === 'sure') && input.lead.status !== 'Converted') badges.push('Already a client')
+  const cv = input.clientVerdict
+  const clientCheck: WindowData['clientCheck'] = cv && cv.verdict === 'maybe' && cv.contactId && !input.lead.existing_client_contact_id && input.lead.status !== 'Converted'
+    ? { contactId: cv.contactId, contactName: cv.contactName ?? 'this contact', companies: cv.companies, reasons: cv.reasons, later: cv.answered === 'later' }
+    : null
 
   return {
     lead: {
@@ -508,7 +517,8 @@ export function buildLeadWindowData(input: WindowInput): WindowData {
       followUpDate: input.lead.follow_up_date ?? null,
       lastFollowUp: input.lead.last_follow_up_sent_at ? { at: input.lead.last_follow_up_sent_at, channel: input.lead.last_follow_up_channel ?? null } : null,
     },
-    nextAction: nextActionText({ status: input.lead.status, offer, calls, now: input.now }),
+    nextAction: clientCheck ? 'Answer the question below. The system waits before it moves this lead.' : nextActionText({ status: input.lead.status, offer, calls, now: input.now }),
+    clientCheck,
     calls,
     offer: offerSummary(offer),
     notes: input.lead.notes && input.lead.notes.trim() ? input.lead.notes.trim() : null,
