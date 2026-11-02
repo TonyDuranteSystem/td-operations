@@ -347,6 +347,7 @@ export const IT: Record<string, string> = {
   "Team": "Team",
   "Team activity": "Attività del team",
   "Team owner": "Responsabile del team",
+  "Owner": "Proprietario",
   "Terms not set": "Condizioni non impostate",
   "Terms not set for this kind of sale yet. The sale will be recorded and Antonio sets the split afterwards.": "Le condizioni per questo tipo di vendita non sono ancora impostate. La vendita sarà registrata e Antonio imposta la ripartizione dopo.",
   "That checklist item does not exist any more. Reload the page.": "Questa voce della checklist non esiste più. Ricarica la pagina.",
