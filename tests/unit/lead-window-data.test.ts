@@ -299,14 +299,14 @@ describe('window data with call records and moves', () => {
     expect(d.lead.followUpDate).toBe('2026-11-04')
   })
 
-  it('story: booked, recorded and moved events; the open undo is offered with hours left', () => {
+  it('story: booked, recorded and moved events; the open undo is offered', () => {
     const d = buildLeadWindowData(base)
     const titles = d.story.map(e => e.title)
     expect(titles).toContain('Call 1 booked')
     expect(titles).toContain('Call 1 recorded')
     const moved = d.story.find(e => e.type === 'status_moved')
     expect(moved?.title).toBe('Moved to Call Done automatically')
-    expect(moved?.undo).toEqual({ moveId: 'm1', hoursLeft: 5 })
+    expect(moved?.undo).toEqual({ moveId: 'm1' })
     expect(d.story.filter(e => e.type === 'call_completed')).toHaveLength(1)
   })
 
@@ -318,8 +318,14 @@ describe('window data with call records and moves', () => {
     expect(moves.map(e => e.title).some(t => t.startsWith('Undone'))).toBe(true)
   })
 
-  it('an expired undo window offers no undo', () => {
-    const d = buildLeadWindowData({ ...base, moves: [move({ undo_until: '2026-10-13T20:00:00Z' })] })
+  it('an old move still offers undo (no clock) while the lead is still on Call Done', () => {
+    const d = buildLeadWindowData({ ...base, moves: [move({ undo_until: '2026-10-13T20:00:00Z', reason_text: 'A real conversation took place. Pierre L and the team both spoke at length.' })] })
+    const ev = d.story.find(e => e.type === 'status_moved')
+    expect(ev?.undo).toEqual({ moveId: 'm1' })
+    expect(ev?.detail).toMatch(/A real conversation took place/)
+  })
+  it('no undo once the lead has moved on', () => {
+    const d = buildLeadWindowData({ ...base, lead: { ...base.lead, status: 'Offer Sent' } })
     expect(d.story.find(e => e.type === 'status_moved')?.undo).toBeNull()
   })
 

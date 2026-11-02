@@ -204,6 +204,8 @@ export async function POST(req: NextRequest) {
             recordingIso: (saved.created_at as string) || new Date().toISOString(),
             durationSeconds: record.duration_seconds,
             linkReview: finalReview,
+            transcript,
+            attendees,
           })
           if (!outcome.ok) console.error('Circleback webhook: lead call update failed:', outcome.error ?? outcome.reason)
         }

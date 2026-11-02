@@ -2,12 +2,12 @@ import { describe, it, expect } from 'vitest'
 import {
   decideAutoCallDone,
   pickCallForRecording,
-  undoOpen,
-  undoHoursLeft,
+  undoAvailable,
   oldEventUriFromInvitee,
   MIN_AUTO_SECONDS,
   type AutoMoveInput,
   type LeadCallRow,
+  type StatusMoveRow,
 } from '@/lib/leads/lead-calls'
 
 function call(over: Partial<LeadCallRow> = {}): LeadCallRow {
@@ -21,7 +21,8 @@ function call(over: Partial<LeadCallRow> = {}): LeadCallRow {
 function input(over: Partial<AutoMoveInput> = {}): AutoMoveInput {
   return {
     leadStatus: 'Call Scheduled', existingClientTag: false, linkReview: null, durationSeconds: 2400, matchedCall: call(),
-    leadCallCount: 1, leadCallDate: '2026-10-12', recordingIso: '2026-10-12T20:00:00Z', priorUndoneAutoMove: false, ...over,
+    leadCallCount: 1, leadCallDate: '2026-10-12', recordingIso: '2026-10-12T20:00:00Z', priorUndoneAutoMove: false,
+    substance: { enough: true, voices: [], reason: 'Pierre L and the team both spoke at length.' }, ...over,
   }
 }
 
@@ -80,6 +81,23 @@ describe('decideAutoCallDone', () => {
   it('an unknown duration does not block the move', () => {
     expect(decideAutoCallDone(input({ durationSeconds: null })).move).toBe(true)
   })
+  it('a recording with no real conversation does not move the lead, and says why', () => {
+    const d = decideAutoCallDone(input({ substance: { enough: false, voices: [], reason: 'Only one voice said anything substantial on this recording.' } }))
+    expect(d.move).toBe(false)
+    expect(d.reason).toMatch(/Only one voice/)
+  })
+  it('a recording that cannot be judged (no transcript) does not move the lead', () => {
+    expect(decideAutoCallDone(input({ substance: null })).move).toBe(false)
+  })
+  it('the length alone never moves a lead any more', () => {
+    expect(decideAutoCallDone(input({ durationSeconds: 5000, substance: { enough: false, voices: [], reason: 'x' } })).move).toBe(false)
+  })
+  it('a call a person already answered is not overruled by a later copy of the recording', () => {
+    expect(decideAutoCallDone(input({ staffAnswered: true })).move).toBe(false)
+  })
+  it('the move reason tells what happened in plain words', () => {
+    expect(decideAutoCallDone(input()).reason).toMatch(/A real conversation took place/)
+  })
   it('no matched call: only a lead with NO call rows may fall back to its call date', () => {
     expect(decideAutoCallDone(input({ matchedCall: null, leadCallCount: 0, leadCallDate: '2026-10-12' })).move).toBe(true)
     expect(decideAutoCallDone(input({ matchedCall: null, leadCallCount: 0, leadCallDate: '2026-11-04' })).move).toBe(false)
@@ -92,18 +110,30 @@ describe('decideAutoCallDone', () => {
   })
 })
 
-describe('undo window and reschedule helpers', () => {
-  const now = new Date('2026-11-01T12:00:00Z')
-  it('undo is open until undo_until, and only if not undone', () => {
-    expect(undoOpen({ undone_at: null, undo_until: '2026-11-01T16:00:00Z' }, now)).toBe(true)
-    expect(undoOpen({ undone_at: null, undo_until: '2026-11-01T11:59:00Z' }, now)).toBe(false)
-    expect(undoOpen({ undone_at: '2026-11-01T10:00:00Z', undo_until: '2026-11-01T16:00:00Z' }, now)).toBe(false)
-    expect(undoOpen({ undone_at: null, undo_until: null }, now)).toBe(false)
+describe('undo (no clock) and reschedule helpers', () => {
+  const mv = (over: Partial<StatusMoveRow> = {}): StatusMoveRow => ({
+    id: 'm1', lead_id: 'l1', from_status: 'Call Scheduled', to_status: 'Call Done', reason: 'auto_call_done', source: 'circleback', call_id: 'c1',
+    undo_until: null, undone_at: null, undone_by: null, created_at: '2026-10-12T20:05:00Z', ...over,
   })
-  it('hours left rounds up and is zero once closed', () => {
-    expect(undoHoursLeft({ undone_at: null, undo_until: '2026-11-01T15:10:00Z' }, now)).toBe(4)
-    expect(undoHoursLeft({ undone_at: null, undo_until: '2026-11-01T12:10:00Z' }, now)).toBe(1)
-    expect(undoHoursLeft({ undone_at: null, undo_until: '2026-11-01T11:00:00Z' }, now)).toBe(0)
+  it('undo is open while the lead is still where the system put it, however long ago', () => {
+    expect(undoAvailable(mv({ created_at: '2025-01-01T00:00:00Z' }), 'Call Done', [mv({ created_at: '2025-01-01T00:00:00Z' })])).toBe(true)
+  })
+  it('not once undone, not for a staff move, not when the lead is somewhere else', () => {
+    expect(undoAvailable(mv({ undone_at: '2026-10-13T00:00:00Z' }), 'Call Done', [])).toBe(false)
+    expect(undoAvailable(mv({ reason: 'staff_confirmed_call' }), 'Call Done', [])).toBe(false)
+    expect(undoAvailable(mv(), 'Offer Sent', [])).toBe(false)
+  })
+  it('a later move of any kind closes the older undo (hand-confirmed Call Done after a rebook)', () => {
+    const a = mv()
+    const later = mv({ id: 'm2', reason: 'staff_confirmed_call', created_at: '2026-10-20T10:00:00Z' })
+    expect(undoAvailable(a, 'Call Done', [a, later])).toBe(false)
+    expect(undoAvailable(later, 'Call Done', [a, later])).toBe(false) // staff move itself is never undoable here
+  })
+  it('a dry-run record or an undone later move does not close it', () => {
+    const a = mv()
+    const dry = mv({ id: 'd', reason: 'dry_run_auto_call_done', created_at: '2026-10-21T10:00:00Z' })
+    const undoneLater = mv({ id: 'u', created_at: '2026-10-22T10:00:00Z', undone_at: '2026-10-22T11:00:00Z' })
+    expect(undoAvailable(a, 'Call Done', [a, dry, undoneLater])).toBe(true)
   })
   it('finds the old event of a reschedule from the old invitee uri', () => {
     expect(oldEventUriFromInvitee('https://api.calendly.com/scheduled_events/AAA/invitees/BBB')).toBe('https://api.calendly.com/scheduled_events/AAA')

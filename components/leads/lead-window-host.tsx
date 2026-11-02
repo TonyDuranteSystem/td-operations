@@ -535,7 +535,7 @@ function LeadWindow({ win, z, onClose, onMinimize, onFocus, onMove }: {
                         {e.detail && <p className="mt-0.5 whitespace-pre-line text-sm leading-relaxed text-zinc-700">{e.detail}</p>}
                         {e.undo && (
                           <button type="button" disabled={busy} onClick={() => undoMove(e.undo!.moveId)} className="mt-1.5 rounded-lg border bg-white px-2.5 py-1 text-xs font-semibold hover:bg-zinc-50 disabled:opacity-50">
-                            Undo, {e.undo.hoursLeft} {e.undo.hoursLeft === 1 ? 'hour' : 'hours'} left
+                            Undo this move
                           </button>
                         )}
                       </li>
