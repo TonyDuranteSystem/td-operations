@@ -79,6 +79,8 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
   const [searchError, setSearchError] = useState('')
   const boxRef = useRef<HTMLDivElement>(null)
   const requestId = useRef(0)
+  // The text we put in the box ourselves after a pick: it must not pop the suggestions open again.
+  const pickedQ = useRef('')
 
   // Keep the box in step when the URL changes from outside (back button, link).
   // Only a value we did NOT just ask for counts as an outside change; our own
@@ -92,6 +94,7 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
 
   useEffect(() => {
     const q = search.trim()
+    if (q === pickedQ.current) { setSuggestions([]); return }
     if (q.length < 2) {
       setSuggestions([])
       setSearchError('')
@@ -134,8 +137,20 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
     setParams({ q: search.trim() })
   }
 
+  // Take Antonio to the person's row in the list (right tab, other filters cleared, row highlighted). Nothing opens:
+  // he decides whether to open the floating window or act from the row.
+  function showInList(s: Suggestion) {
+    const q = (s.email || s.full_name).trim()
+    const tab = s.status === 'Converted' ? 'converted' : s.existing_client_contact_id ? 'clients' : ''
+    pickedQ.current = q
+    setOpen(false)
+    setSearch(q)
+    setParams({ q, client: tab, focus: s.id, status: '', src: '', ref: '', offer: '', call: '', follow: '', quick: '' })
+  }
+
   function onSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
     const value = e.target.value
+    pickedQ.current = ''
     setSearch(value)
     // Clearing the box must reset the list straight away.
     if (value === '' && paramsRef.current.get('q')) setParams({ q: '' })
@@ -172,7 +187,7 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
                     <button
                       key={s.id}
                       type="button"
-                      onClick={() => { setOpen(false); router.push(`/leads/${s.id}`) }}
+                      onClick={() => showInList(s)}
                       className="w-full text-left px-3 py-2 hover:bg-zinc-50 border-b last:border-b-0 flex items-center justify-between gap-3"
                     >
                       <span className="min-w-0">

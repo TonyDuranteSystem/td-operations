@@ -2,7 +2,7 @@
 
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { useTransition } from 'react'
+import { useEffect, useTransition } from 'react'
 import { ChevronRight, ChevronLeft, Phone, Mail, UserCheck, Send, HelpCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { LeadListItem } from '@/lib/types'
@@ -60,6 +60,13 @@ export function LeadsTable({ items, stats, currentPage, totalPages, totalCount }
   const [isPending, startTransition] = useTransition()
   const openLead = useLeadWindowOpener()
 
+  // A search result clicked in the filter bar: scroll to that row (it is highlighted below).
+  const focusId = searchParams.get('focus')
+  useEffect(() => {
+    if (!focusId) return
+    document.getElementById(`lead-row-${focusId}`)?.scrollIntoView({ block: 'center' })
+  }, [focusId, items])
+
   function goToPage(page: number) {
     const params = new URLSearchParams(searchParams.toString())
     if (page > 1) params.set('page', String(page))
@@ -111,9 +118,10 @@ export function LeadsTable({ items, stats, currentPage, totalPages, totalCount }
             items.map(item => (
               <Link
                 key={item.id}
+                id={`lead-row-${item.id}`}
                 href={`/leads/${item.id}`}
                 onClick={openLead(item.id, item.full_name)}
-                className="grid grid-cols-1 md:grid-cols-[1fr,160px,100px,100px,120px,100px,32px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center cursor-pointer"
+                className={cn('grid grid-cols-1 md:grid-cols-[1fr,160px,100px,100px,120px,100px,32px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center cursor-pointer', focusId === item.id && 'bg-blue-50 ring-2 ring-inset ring-blue-400')}
               >
                 {/* Name — badges here (not a hidden md:* column) so they're
                     visible on the phone view, where every other column is hidden. */}
