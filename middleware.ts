@@ -122,6 +122,10 @@ const PUBLIC_PREFIXES = [
   '/marketing/reset',
   '/api/marketing/forgot',
   '/api/marketing/reset',
+  // TD Marketing booking link with the owner (dev job 0b916784, Antonio's OK 1 Nov 2026): a client with no login books, moves or cancels ONE call. The link's token is the key (hashed in the
+  // database, expires); the routes answer every failure with one generic message and show start times only.
+  '/marketing/book/',
+  '/api/marketing/book/',
   // Client-facing forms (email-gated, no Supabase auth)
   '/offer',
   '/tax-form',
