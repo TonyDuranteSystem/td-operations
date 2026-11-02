@@ -44,6 +44,11 @@ describe("a Google event in Marketing's shape", () => {
     expect(eventFromGoogle({ id: "b", start: { date: "2026-11-03" }, end: { date: "2026-11-04" } }, "primary")).toMatchObject({ allDay: true })
     const e = eventFromGoogle({ id: "c", summary: " Hi ", start: { dateTime: "2026-11-03T10:00:00Z" }, end: { dateTime: "2026-11-03T11:00:00Z" }, attendees: [{ email: "a@x.com" }, { email: "room@x.com", resource: true }], extendedProperties: { private: { td_marketing_call: "lead-9" } } }, "primary")
     expect(e).toMatchObject({ title: "Hi", guests: ["a@x.com"], marketingLeadId: "lead-9" })
+    // the calendar owner declined it: Google hides it, so the Calendar must too (somebody else declining does not hide it)
+    const when = { start: { dateTime: "2026-11-03T17:00:00Z" }, end: { dateTime: "2026-11-03T18:00:00Z" } }
+    expect(eventFromGoogle({ id: "x", ...when, attendees: [{ email: "me@x.com", self: true, responseStatus: "declined" }] }, "primary")).toBeNull()
+    expect(eventFromGoogle({ id: "y", ...when, attendees: [{ email: "me@x.com", self: true, responseStatus: "accepted" }, { email: "o@x.com", responseStatus: "declined" }] }, "primary")).not.toBeNull()
+    expect(eventFromGoogle({ id: "z", ...when, attendees: [{ email: "me@x.com", self: true, responseStatus: "tentative" }] }, "primary")).not.toBeNull()
     expect(eventFromGoogle({ id: "d", start: { dateTime: "2026-11-03T11:00:00Z" }, end: { dateTime: "2026-11-03T10:00:00Z" } }, "primary")).toBeNull()
   })
 })
