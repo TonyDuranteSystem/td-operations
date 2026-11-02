@@ -11,6 +11,9 @@ import { loadTeamEvents } from "@/lib/marketing/events-read"
 import { formatWhen } from "@/lib/marketing/lead-view"
 import { roleLabel } from "@/lib/marketing/permission-labels"
 import { TeamControls } from "./team-controls"
+import { PersonRow } from "./person-row"
+import { WorkspaceLink } from "./workspace-link"
+import { APP_BASE_URL } from "@/lib/config"
 import { ViewAsButtons } from "./view-as-buttons"
 import { viewAsOptions } from "@/lib/marketing/view-as"
 
@@ -56,14 +59,19 @@ export default async function MarketingTeamsPage() {
             {truncated && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">Some of this month&apos;s activity is not counted below: there is too much to read at once.</p>}
             <ViewAsButtons teamId={t.id} options={viewOptions} />
             <TeamControls teamId={t.id} status={t.status} hasOwner={members.some(m => m.member_role === "owner" && m.user_id !== user.id)} iAmMember={members.some(m => m.user_id === user.id && m.status === "active")} />
+            <WorkspaceLink url={`${APP_BASE_URL}/marketing`} />
 
             <div>
               <h3 className="text-sm font-semibold text-slate-600">People ({members.length})</h3>
               {members.length === 0 ? <p className="mt-1 text-sm text-slate-500">Nobody has joined yet.</p> : (
                 <div className="mt-2 overflow-x-auto"><table className="w-full text-left text-sm">
-                  <thead className="border-b text-xs text-slate-500"><tr><th className="py-2 pr-3">Person</th><th className="pr-3">Role</th><th className="pr-3">Status</th><th>Last seen</th></tr></thead>
+                  <thead className="border-b text-xs text-slate-500"><tr><th className="py-2 pr-3">Person</th><th className="pr-3">Role</th><th className="pr-3">Status</th><th className="pr-3">Last seen</th><th className="text-right">Password</th></tr></thead>
                   <tbody className="divide-y">{members.map(m => (
-                    <tr key={m.user_id}><td className="py-2 pr-3 font-medium">{m.email ?? "Unknown login"}</td><td className="pr-3">{m.member_role === "owner" ? "Team owner" : accessLabel(effectivePermissions({ memberRole: "member", bundle: m.bundle, bundles, extra: m.permissions }), bundles)}</td><td className="pr-3">{m.status === "paused" ? "Paused" : "Active"}</td><td className="text-slate-500">{m.last_sign_in_at ? `${ageText(Date.now() - new Date(m.last_sign_in_at).getTime())} ago` : "has not signed in yet"}</td></tr>
+                    <PersonRow key={m.user_id} teamId={t.id} userId={m.user_id} email={m.email ?? "Unknown login"}
+                      roleText={m.member_role === "owner" ? "Team owner" : accessLabel(effectivePermissions({ memberRole: "member", bundle: m.bundle, bundles, extra: m.permissions }), bundles)}
+                      statusText={m.status === "paused" ? "Paused" : "Active"}
+                      seenText={m.last_sign_in_at ? `${ageText(Date.now() - new Date(m.last_sign_in_at).getTime())} ago` : "has not signed in yet"}
+                      canReset={m.user_id !== user.id && m.status === "active"} />
                   ))}</tbody></table></div>
               )}
               {invites.length > 0 && <p className="mt-2 text-sm text-slate-600">Invitations waiting: {invites.map(i => `${i.email_lower} (expires ${formatWhen(i.expires_at)}${i.emailed_at ? `, emailed ${formatWhen(i.emailed_at)}` : ""})`).join(", ")}</p>}
