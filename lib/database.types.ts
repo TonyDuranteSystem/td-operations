@@ -9026,6 +9026,64 @@ export type Database = {
           },
         ]
       }
+      lead_client_checks: {
+        Row: {
+          answered_at: string | null
+          answered_by: string | null
+          contact_id: string
+          created_at: string
+          id: string
+          lead_id: string
+          reasons: Json
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          answered_at?: string | null
+          answered_by?: string | null
+          contact_id: string
+          created_at?: string
+          id?: string
+          lead_id: string
+          reasons?: Json
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          answered_at?: string | null
+          answered_by?: string | null
+          contact_id?: string
+          created_at?: string
+          id?: string
+          lead_id?: string
+          reasons?: Json
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_client_checks_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_client_checks_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+          {
+            foreignKeyName: "lead_client_checks_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_status_moves: {
         Row: {
           call_id: string | null
@@ -9673,6 +9731,105 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "marketing_invites_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      marketing_joint_links: {
+        Row: {
+          booked_at: string | null
+          cancelled_at: string | null
+          client_email: string | null
+          client_name: string | null
+          client_zone: string | null
+          created_at: string
+          created_by: string | null
+          ends_at: string | null
+          expires_at: string
+          gcal_act_as: string | null
+          gcal_event_id: string | null
+          held_at: string | null
+          id: string
+          lang: string
+          lead_id: string
+          lock_from: string | null
+          lock_to: string | null
+          revoked_at: string | null
+          seller_user_id: string
+          starts_at: string | null
+          status: string
+          team_id: string
+          token_hash: string
+          zoom_join_url: string | null
+          zoom_meeting_id: string | null
+        }
+        Insert: {
+          booked_at?: string | null
+          cancelled_at?: string | null
+          client_email?: string | null
+          client_name?: string | null
+          client_zone?: string | null
+          created_at?: string
+          created_by?: string | null
+          ends_at?: string | null
+          expires_at: string
+          gcal_act_as?: string | null
+          gcal_event_id?: string | null
+          held_at?: string | null
+          id?: string
+          lang?: string
+          lead_id: string
+          lock_from?: string | null
+          lock_to?: string | null
+          revoked_at?: string | null
+          seller_user_id: string
+          starts_at?: string | null
+          status?: string
+          team_id: string
+          token_hash: string
+          zoom_join_url?: string | null
+          zoom_meeting_id?: string | null
+        }
+        Update: {
+          booked_at?: string | null
+          cancelled_at?: string | null
+          client_email?: string | null
+          client_name?: string | null
+          client_zone?: string | null
+          created_at?: string
+          created_by?: string | null
+          ends_at?: string | null
+          expires_at?: string
+          gcal_act_as?: string | null
+          gcal_event_id?: string | null
+          held_at?: string | null
+          id?: string
+          lang?: string
+          lead_id?: string
+          lock_from?: string | null
+          lock_to?: string | null
+          revoked_at?: string | null
+          seller_user_id?: string
+          starts_at?: string | null
+          status?: string
+          team_id?: string
+          token_hash?: string
+          zoom_join_url?: string | null
+          zoom_meeting_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_joint_links_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "marketing_joint_links_team_id_fkey"
             columns: ["team_id"]
             isOneToOne: false
             referencedRelation: "marketing_teams"
