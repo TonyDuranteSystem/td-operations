@@ -11,10 +11,11 @@ import { TALK_BASE } from '@/lib/talk/paths'
 import { showUnreadBadge, talkSplit } from '@/lib/talk/layout'
 import { isImplementationChat } from '@/lib/talk/voice-alert'
 import { cn } from '@/lib/utils'
-import { uploadTeamAttachment } from '@/lib/team/attachment'
+import { withOutbox } from '@/lib/talk/outbox-rules'
+import { useChatOutbox } from '@/components/talk/use-chat-outbox'
 import {
   chatName, chatThreads, directMessages, groupMemberNames, initials, isGroupThread, matchMessages, membersWithoutChat, mergeSnapshot, messageSignature, otherUserId, parseTypingSignal, readStatus, tickState, tickStateAll, shouldAnnounceTyping, snippet, startThreadId, timeLabel, dayLabel, typingLabel, TYPING_EXPIRES_MS,
-  type TalkAttachment, type TalkMember, type TalkMessage, type TalkReaction, type TalkThread, type TypingKind,
+  type TalkMember, type TalkMessage, type TalkReaction, type TalkThread, type TypingKind,
 } from '@/lib/talk/chat-model'
 import { TalkMessages } from '@/components/talk/talk-messages'
 import { TalkComposer, type TalkComposerMode, type TalkSendInput } from '@/components/talk/talk-composer'
@@ -293,38 +294,27 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     void typingChannelRef.current?.send({ type: 'broadcast', event: 'typing', payload: { user_id: meIdRef.current, kind } })
   }, [])
 
+  // A message is kept on the phone and sent as soon as it can be (Antonio, 2 Nov 2026): the box empties at once, the message shows with a clock until the server has it.
+  const outbox = useChatOutbox({
+    scope: `talk:${selectedId ?? ''}`,
+    target: { kind: 'talk', threadId: selectedId ?? '' },
+    userId: meId,
+    onSent: (message, item) => {
+      if (item.target.kind !== 'talk' || selectedIdRef.current !== item.target.threadId) return
+      const withPreview: TalkMessage = item.replyPreview ? { ...message, reply_to_preview: item.replyPreview } : message
+      setMessages(prev => prev.some(x => x.id === message.id) ? prev : [...prev, withPreview])
+    },
+  })
+  const enqueueOutbox = outbox.enqueue
   const send = useCallback(async ({ text, files, replyToId }: TalkSendInput): Promise<boolean> => {
-    const threadId = selectedIdRef.current
-    if (!threadId) return false
-    const voiceOnly = !text && files.length === 1 && files[0].type.startsWith('audio/')
-    try {
-      const attachments: TalkAttachment[] = []
-      for (const f of files) attachments.push(await uploadTeamAttachment(f, threadId))
-      const r = await fetch(`/api/team/threads/${threadId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, reply_to_id: replyToId ?? null, attachments: attachments.length ? attachments : null }),
-      })
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}))
-        throw new Error(d.error || 'Could not send. Please try again.')
-      }
-      const d = await r.json().catch(() => null)
-      if (d?.message && selectedIdRef.current === threadId) {
-        // the server's answer has no preview of the quoted message — attach it so the quote shows at once
-        const quoted = replyToId ? messagesRef.current.find(x => x.id === replyToId) : null
-        const withPreview: TalkMessage = quoted
-          ? { ...d.message, reply_to_preview: { id: quoted.id, message: quoted.message, sender_name: quoted.sender_name, deleted_at: quoted.deleted_at ?? null } }
-          : d.message
-        setMessages(prev => prev.some(x => x.id === d.message.id) ? prev : [...prev, withPreview])
-      }
-      return true
-    } catch (e) {
-      const why = e instanceof Error && e.message ? e.message : 'Could not send. Please try again.'
-      toast.error(voiceOnly ? `${why} Please record the voice message again.` : why)
-      return false
-    }
-  }, [])
+    if (!selectedIdRef.current) return false
+    // the server's answer has no preview of the quoted message — keep it so the quote shows at once
+    const quoted = replyToId ? messagesRef.current.find(x => x.id === replyToId) : null
+    const replyPreview = quoted ? { id: quoted.id, message: quoted.message, sender_name: quoted.sender_name, deleted_at: quoted.deleted_at ?? null } : null
+    const ok = await enqueueOutbox({ text, files, replyToId, replyPreview })
+    if (!ok) toast.error('Could not keep the message on this device. Please try again.')
+    return ok
+  }, [enqueueOutbox])
 
   // ── message actions (the long-press menu) ──
   const applyToMessage = useCallback((id: string, patch: Partial<TalkMessage>) => {
@@ -639,7 +629,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
       )}
       {meId && !searchOpen && (
         <TalkMessages
-          threadId={selected.id} messages={messages} meId={meId} tickOf={tickOf} showSender={group} loading={loadingMsgs} readByOf={readByOf}
+          threadId={selected.id} messages={withOutbox(messages, outbox.waiting)} outbox={{ retry: outbox.retry, discard: outbox.discard }} meId={meId} tickOf={tickOf} showSender={group} loading={loadingMsgs} readByOf={readByOf}
           highlightId={highlightId}
           onMenu={setSheetMsg}
           onReply={m => { setMode({ kind: 'reply', message: m, who: m.sender_id === meId ? 'yourself' : m.sender_name }); setSheetMsg(null) }}

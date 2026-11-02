@@ -13,6 +13,14 @@
  * total wall-clock time is actually bounded as intended.
  */
 
+/** An error that sending again can never fix (a file too big, a refused file type, a server "no"). The outbox stops retrying it and shows it with Retry / Delete. */
+export class PermanentError extends Error {
+  readonly permanent = true as const
+}
+export function isPermanentError(e: unknown): boolean {
+  return !!e && typeof e === 'object' && (e as { permanent?: unknown }).permanent === true
+}
+
 export interface RetryOptions {
   /** Total attempts, including the first. */
   attempts?: number

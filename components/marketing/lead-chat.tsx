@@ -6,7 +6,8 @@ import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { isBeingViewed } from '@/lib/talk/window-front'
 import { isFrameHidden } from '@/lib/marketing/frame-visibility'
-import { uploadLeadAttachment } from '@/lib/marketing/lead-chat-upload'
+import { withOutbox } from '@/lib/talk/outbox-rules'
+import { useChatOutbox } from '@/components/talk/use-chat-outbox'
 import {
   dayLabel, matchMessages, mergeSnapshot, messageSignature, parseTypingSignal, shouldAnnounceTyping, snippet, tickStateAll, timeLabel, TYPING_EXPIRES_MS,
   type TalkMessage, type TalkReaction, type TypingKind,
@@ -173,24 +174,27 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
     void typingChannelRef.current?.send({ type: 'broadcast', event: 'typing', payload: { user_id: meIdRef.current, kind } })
   }, [])
 
-  const send = useCallback(async ({ text, files, replyToId }: TalkSendInput): Promise<boolean> => {
-    const voiceOnly = !text && files.length === 1 && files[0].type.startsWith('audio/')
-    try {
-      const attachments = []
-      for (const f of files) attachments.push(await uploadLeadAttachment(f, leadId, API))
-      const r = await fetch(`${API}/${leadId}/messages${laneQs}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text, reply_to_id: replyToId ?? null, attachments: attachments.length ? attachments : null }) })
-      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Could not send. Please try again.') }
-      const d = await r.json().catch(() => null)
-      if (d?.message) setMessages(prev => prev.some(x => x.id === d.message.id) ? prev : [...prev, d.message as TalkMessage])
+  // A message is kept on the phone and sent as soon as it can be (Antonio, 2 Nov 2026): the box empties at once, the message shows with a clock until the server has it.
+  const outbox = useChatOutbox({
+    scope: `lead:${API}:${leadId}:${lane ?? ''}`,
+    target: { kind: 'lead', api: API, id: leadId, laneQs },
+    userId: meId,
+    onSent: (message, item) => {
+      if (item.target.kind !== 'lead' || item.target.id !== leadId) return
+      const withPreview: TalkMessage = item.replyPreview ? { ...message, reply_to_preview: item.replyPreview } : message
+      setMessages(prev => prev.some(x => x.id === message.id) ? prev : [...prev, withPreview])
       // answering is dealing with the chat: the server reads it, so the hold lets go too
       heldUnreadRef.current = false
-      return true
-    } catch (e) {
-      const why = t(e instanceof Error && e.message ? e.message : 'Could not send. Please try again.')
-      toast.error(voiceOnly ? `${why} ${t('Please record the voice message again.')}` : why)
-      return false
-    }
-  }, [leadId, t, API, laneQs])
+    },
+  })
+  const enqueueOutbox = outbox.enqueue
+  const send = useCallback(async ({ text, files, replyToId }: TalkSendInput): Promise<boolean> => {
+    const quoted = replyToId ? messagesRef.current.find(x => x.id === replyToId) : null
+    const replyPreview = quoted ? { id: quoted.id, message: quoted.message, sender_name: quoted.sender_name, deleted_at: quoted.deleted_at ?? null } : null
+    const ok = await enqueueOutbox({ text, files, replyToId, replyPreview })
+    if (!ok) toast.error(t('Could not keep the message on this device. Please try again.'))
+    return ok
+  }, [enqueueOutbox, t])
 
   const applyToMessage = useCallback((id: string, patch: Partial<TalkMessage>) => {
     setMessages(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)))
@@ -330,7 +334,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
       )}
       {meId && !searchOpen && (
         <TalkMessages
-          threadId={leadId} messages={messages} meId={meId} tickOf={tickOf} showSender loading={loading} highlightId={highlightId} voiceApi={VOICE_API}
+          threadId={leadId} messages={withOutbox(messages, outbox.waiting)} outbox={{ retry: outbox.retry, discard: outbox.discard }} meId={meId} tickOf={tickOf} showSender loading={loading} highlightId={highlightId} voiceApi={VOICE_API}
           onMenu={setSheetMsg}
           onReply={m => { setMode({ kind: 'reply', message: m, who: m.sender_id === meId ? 'yourself' : m.sender_name }); setSheetMsg(null) }}
           onReact={(m, emoji) => void react(m, emoji)}
