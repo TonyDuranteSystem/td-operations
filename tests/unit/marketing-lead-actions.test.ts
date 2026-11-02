@@ -191,3 +191,21 @@ describe("filterLeads / eventText", () => {
     expect(eventText("something_new", {}, settings.stages, settings.reasons)).toBe("something_new")
   })
 })
+
+describe("the client booking link and a lead somebody picked", () => {
+  // Regression (production QA, 2 Nov 2026): the link recorded the call as a plain "member", so every picked lead was refused and no real booking could finish.
+  const picked = { claimed_by: "u-seller", status: "qualified" }
+  const asMember: Actor = { id: "client-booking-link", email: "client (booking link)", role: "member" }
+  const asTeam: Actor = { id: "client-booking-link", email: "client (booking link)", role: "owner" }
+  it("a member that did not pick the lead is refused, the team actor is not (set and cancel)", () => {
+    const set: LeadActionInput = { action: "appointment", at: "2026-10-27T14:00:00Z" }
+    const cancel: LeadActionInput = { action: "appointment", at: null }
+    expect(planLeadAction(set, picked, asMember, settings, NOW)).toMatchObject({ ok: false, status: 409 })
+    expect(planLeadAction(set, picked, asTeam, settings, NOW)).toMatchObject({ ok: true })
+    expect(planLeadAction(cancel, picked, asTeam, settings, NOW)).toMatchObject({ ok: true })
+  })
+  it("the live booking env uses the team actor", async () => {
+    const { readFileSync } = await import("node:fs")
+    expect(readFileSync("lib/marketing/joint-live.ts", "utf8")).toMatch(/JOINT_ACTOR = \{[^}]*role: "owner"/)
+  })
+})
