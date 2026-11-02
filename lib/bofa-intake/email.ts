@@ -7,6 +7,7 @@
  */
 
 import { BOFA_TEXT_FIELDS } from "./schema"
+import { BOFA_SHIPPING_FIELDS, BOFA_SHIPPING_KEYS } from "./shipping"
 
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string))
@@ -34,7 +35,7 @@ export function buildSubject(data: Record<string, string>): string {
 function rows(keys: string[], data: Record<string, string>): string {
   return keys
     .map((k) => {
-      const f = BOFA_TEXT_FIELDS.find((x) => x.key === k)
+      const f = BOFA_TEXT_FIELDS.find((x) => x.key === k) ?? BOFA_SHIPPING_FIELDS.find((x) => x.key === k)
       if (!f) return ""
       const v = data[k]
       if (!v) return ""
@@ -47,6 +48,8 @@ export function buildDeliveryHtml(data: Record<string, string>, files: DeliveryF
   const person = ["full_name", "email", "phone", "citizenship", "itin", "home_street", "home_city", "home_region", "home_zip", "home_country"]
   const company = ["company_name", "ein", "state_of_formation", "company_street", "company_city", "company_region", "company_zip", "company_country", "website"]
   const business = ["business_description", "customers", "revenue_model", "monthly_deposits", "first_deposit_source"]
+  // Applications saved before the shipping block existed have none of these keys: then the section is left out, not printed empty.
+  const hasShipping = BOFA_SHIPPING_KEYS.some((k) => data[k])
   const table = (keys: string[]) => `<table style="border-collapse:collapse;width:100%;margin:8px 0 18px;">${rows(keys, data)}</table>`
   const attached = files.filter((f) => f.content)
   const linked = files.filter((f) => f.url)
@@ -64,6 +67,7 @@ export function buildDeliveryHtml(data: Record<string, string>, files: DeliveryF
   <h3 style="color:#1e3a5f;margin-bottom:0;">Applicant</h3>${table(person)}
   <h3 style="color:#1e3a5f;margin-bottom:0;">Company</h3>${table(company)}
   <h3 style="color:#1e3a5f;margin-bottom:0;">The business</h3>${table(business)}
+  ${hasShipping ? `<h3 style="color:#1e3a5f;margin-bottom:0;">Shipping address</h3>${table(BOFA_SHIPPING_KEYS)}` : ""}
   <h3 style="color:#1e3a5f;margin-bottom:0;">Documents</h3>${docs}
 </div>`
 }

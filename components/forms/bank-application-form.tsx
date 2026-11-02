@@ -6,12 +6,15 @@
  *  - the staff "View form" screen (app/(dashboard)/forms/bank-application/preview) — `preview` true:
  *    the exact same screens, but it never calls the server and never submits.
  * The link works for ONE browser (the first to press Start) and dies on submit — see lib/bofa-intake/lock.ts.
+ * The shipping address is our own office, shown read-only and written by the SERVER at submit (lib/bofa-intake/shipping.ts).
+ * When staff send an application back, the new link opens this same blank form with their message on top.
  * Fields and the required/optional rules come from lib/bofa-intake/schema.ts, the same file the
  * server validates against.
  */
 
 import { useEffect, useRef, useState } from "react"
 import { BOFA_DOC_SLOTS, BOFA_MAX_FILE_BYTES, BOFA_MONTHLY_DEPOSITS, effectiveMime, isAllowedMime, validateSubmission } from "@/lib/bofa-intake/schema"
+import { shippingAddressFields } from "@/lib/bofa-intake/shipping"
 
 type PageState = "loading" | "start" | "form" | "used" | "missing" | "error" | "done"
 
@@ -39,6 +42,8 @@ export function BankApplicationForm({ token, preview = false }: { token: string;
   const [consent, setConsent] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+  // the message staff wrote when they sent an application back (only present on that kind of link, only for its owner)
+  const [staffNote, setStaffNote] = useState("")
   const topRef = useRef<HTMLDivElement>(null)
   const finished = useRef<Record<string, { sig: string; path: string }>>({})
 
@@ -46,8 +51,10 @@ export function BankApplicationForm({ token, preview = false }: { token: string;
   // visitor presses "Start application", so a link-preview bot or an in-app browser that merely loads
   // the page cannot burn the link. A ref keeps React's dev double-run of effects to one request.
   const loaded = useRef(false)
-  const toState = (d: { state?: string }): PageState =>
-    d.state === "form" ? "form" : d.state === "start" ? "start" : d.state === "missing" ? "missing" : d.state === "error" ? "error" : "used"
+  const toState = (d: { state?: string; note?: string | null }): PageState => {
+    if (d.state === "form" && typeof d.note === "string") setStaffNote(d.note)
+    return d.state === "form" ? "form" : d.state === "start" ? "start" : d.state === "missing" ? "missing" : d.state === "error" ? "error" : "used"
+  }
   useEffect(() => {
     if (preview || loaded.current) return
     loaded.current = true
@@ -225,6 +232,14 @@ export function BankApplicationForm({ token, preview = false }: { token: string;
         Who receives your information: your details and documents are shared only with the bank&apos;s account-opening team and Tony Durante LLC, and used only for this application.
       </div>
 
+      {staffNote && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 text-blue-900 text-sm p-3 mb-3">
+          <p className="font-medium mb-1">A message from Tony Durante LLC</p>
+          <p className="whitespace-pre-wrap">{staffNote}</p>
+          <p className="text-xs mt-2 text-blue-800">Please fill in the application again, with your documents. For your security the form does not show your earlier answers.</p>
+        </div>
+      )}
+
       {error && <div className="rounded-lg bg-red-50 text-red-700 text-sm p-3 mb-3" role="alert">{error}</div>}
 
       <div className={cardCls}>
@@ -268,6 +283,21 @@ export function BankApplicationForm({ token, preview = false }: { token: string;
         <div className="grid sm:grid-cols-2 gap-3">
           <Field label="Zip code">{text("company_zip", "78701")}</Field>
           <Field label="Country">{text("company_country", "United States")}</Field>
+        </div>
+        <p className="text-sm font-medium text-gray-600 mt-5">Shipping address</p>
+        <p className="text-xs text-gray-500 mt-0.5">Where the bank sends your cards and letters. This is Tony Durante LLC&apos;s office: it is filled in for you and cannot be changed.</p>
+        <div className="mt-3 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700 space-y-0.5" data-testid="shipping-address">
+          {(() => {
+            const a = shippingAddressFields()
+            return (
+              <>
+                <p className="font-medium">{a.shipping_name}</p>
+                <p>{a.shipping_street}</p>
+                <p>{a.shipping_city}, {a.shipping_region} {a.shipping_zip}</p>
+                <p>{a.shipping_country}</p>
+              </>
+            )
+          })()}
         </div>
         <Field label="Website or social page" optional>{text("website", "https://")}</Field>
       </div>
