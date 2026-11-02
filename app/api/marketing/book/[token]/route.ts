@@ -22,11 +22,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
 export async function POST(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   try {
     const { token } = await params
-    const body = (await req.json().catch(() => null)) as { action?: unknown; startIso?: unknown; name?: unknown; email?: unknown; zone?: unknown } | null
+    const body = (await req.json().catch(() => null)) as { action?: unknown; startIso?: unknown; name?: unknown; email?: unknown; zone?: unknown; lang?: unknown } | null
     if (!body || typeof body.action !== "string") return NextResponse.json({ error: GENERIC_LINK_ERROR }, { status: 400, headers: NO_STORE })
     const env = liveJointEnv()
     if (body.action === "book") {
-      const r = await bookJoint(env, token, { startIso: body.startIso, name: body.name, email: body.email, zone: body.zone })
+      const r = await bookJoint(env, token, { startIso: body.startIso, name: body.name, email: body.email, zone: body.zone, lang: body.lang })
       if (r.ok === false) return NextResponse.json({ error: r.error }, { status: r.status, headers: NO_STORE })
       return NextResponse.json({ ok: true, startIso: r.startIso, endIso: r.endIso, joinUrl: r.joinUrl, mailed: r.mailed }, { headers: NO_STORE })
     }

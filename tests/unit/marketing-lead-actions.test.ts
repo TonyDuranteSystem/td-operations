@@ -209,3 +209,42 @@ describe("the client booking link and a lead somebody picked", () => {
     expect(readFileSync("lib/marketing/joint-live.ts", "utf8")).toMatch(/JOINT_ACTOR = \{[^}]*role: "owner"/)
   })
 })
+
+describe("cancelling a booked call puts the lead back where it was", () => {
+  const withBooked: ActionSettings = { ...settings, stages: [...settings.stages, { key: "booked", label: "Booked" }, { key: "not_ready", label: "Not ready" }], sellerStages: { not_ready: "not_ready" } } as ActionSettings
+  const call = { action: "appointment", at: "2026-10-27T14:00:00Z" } as const
+  it("booking records the stage the lead came from; cancelling goes back to it", () => {
+    const set = planLeadAction(call, { claimed_by: "u-owner", status: "qualified" }, owner, withBooked, NOW)
+    expect(set.ok && set.change.patch).toMatchObject({ status: "booked" })
+    expect(set.ok && set.change.event.data).toMatchObject({ from_status: "qualified" })
+    const cancel = planLeadAction({ action: "appointment", at: null }, { claimed_by: "u-owner", status: "booked", booked_from: "qualified" }, owner, withBooked, NOW)
+    expect(cancel.ok && cancel.change.patch).toEqual({ status: "qualified" })
+    expect(cancel.ok && cancel.change.event.data).toMatchObject({ at: null, back_to: "qualified" })
+  })
+  it("leaves the stage alone when it is not booked any more, when the earlier stage is unknown, or when it was 'not ready'", () => {
+    const stay = (lead: Parameters<typeof planLeadAction>[1]) => { const p = planLeadAction({ action: "appointment", at: null }, lead, owner, withBooked, NOW); return p.ok && p.change.patch }
+    expect(stay({ claimed_by: "u-owner", status: "qualified", booked_from: "contacted" })).toEqual({})
+    expect(stay({ claimed_by: "u-owner", status: "booked" })).toEqual({})
+    expect(stay({ claimed_by: "u-owner", status: "booked", booked_from: "gone_stage" })).toEqual({})
+    expect(stay({ claimed_by: "u-owner", status: "booked", booked_from: "not_ready" })).toEqual({})
+  })
+  it("the server reads the earlier stage from the newest booking line, through a move, and stops at an earlier cancel", async () => {
+    const L = "33333333-3333-3333-3333-333333333333"
+    const db = new FakeDb()
+    db.rows("marketing_leads").push({ id: L, team_id: "T1", status: "booked", claimed_by: "u-owner" })
+    // the fake database does not sort: the lines are listed newest first, as the real query returns them
+    db.rows("marketing_lead_events").push({ lead_id: L, kind: "appointment", actor: "x", data: { at: "2026-10-28T14:00:00Z", from: "2026-10-27T14:00:00Z" } })
+    db.rows("marketing_lead_events").push({ lead_id: L, kind: "appointment", actor: "x", data: { at: "2026-10-27T14:00:00Z", from_status: "qualified" } })
+    const r = await applyLeadAction(db as never, "T1", L, { action: "appointment", at: null }, owner, withBooked, NOW)
+    expect(r).toEqual({ ok: true })
+    expect(db.rows("marketing_leads").find(x => x.id === L)?.status).toBe("qualified")
+    // a cancel line stops the look-back: a later booking that recorded nothing must not borrow an older stage
+    const M = "44444444-4444-4444-4444-444444444444"
+    db.rows("marketing_leads").push({ id: M, team_id: "T1", status: "booked", claimed_by: "u-owner" })
+    db.rows("marketing_lead_events").push({ lead_id: M, kind: "appointment", actor: "x", data: { at: "2026-10-29T14:00:00Z" } })
+    db.rows("marketing_lead_events").push({ lead_id: M, kind: "appointment", actor: "x", data: { at: null } })
+    db.rows("marketing_lead_events").push({ lead_id: M, kind: "appointment", actor: "x", data: { at: "2026-10-27T14:00:00Z", from_status: "qualified" } })
+    await applyLeadAction(db as never, "T1", M, { action: "appointment", at: null }, owner, withBooked, NOW)
+    expect(db.rows("marketing_leads").find(x => x.id === M)?.status).toBe("booked")
+  })
+})
