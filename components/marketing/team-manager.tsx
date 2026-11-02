@@ -10,16 +10,16 @@ import { roleLabel } from '@/lib/marketing/permission-labels'
 import { useLang, useT } from '@/components/marketing/lang-provider'
 import { localeFor, tAccessLabel } from '@/lib/marketing/i18n'
 
-interface Member { userId: string; email: string | null; role: 'owner' | 'member'; bundle: string | null; /** what the person holds now: the exact list of ticks */ permissions: string[]; status: 'active' | 'paused'; joinedAt: string | null; lastSignInAt: string | null }
+interface Member { userId: string; email: string | null; role: 'owner' | 'member'; bundle: string | null; /** what the person holds now: the exact list of ticks */ permissions: string[]; status: 'active' | 'paused'; joinedAt: string | null; lastSignInAt: string | null; /** Antonio (a CRM admin): the owner above the team, shown as "Owner", not as a team owner */ isAdmin?: boolean }
 interface Invite { id: string; email: string; role: 'owner' | 'member'; bundle: string | null; permissions: string[]; expiresAt: string; sentBy: string | null; emailedAt?: string | null }
 
-interface Props { me: string; iAmOwner: boolean; /** Antonio (a CRM admin) — the only one who may make a reset link for a team owner */ iAmAdmin: boolean; /** where the team signs in: the workspace's own address */ workspaceUrl: string; roles: PopupRole[]; grantable: string[]; members: Member[]; invites: Invite[] }
+interface Props { me: string; iAmOwner: boolean; /** where the team signs in: the workspace's own address */ workspaceUrl: string; roles: PopupRole[]; grantable: string[]; members: Member[]; invites: Invite[] }
 
 const btn = 'rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50'
 const bundlesOf = (roles: PopupRole[]): Bundles => Object.fromEntries(roles.map(r => [r.key, r.permissions]))
 
 /** The Team page's buttons. Every server answer, including each refusal, is shown as the server wrote it. */
-export function TeamManager({ me, iAmOwner, iAmAdmin, workspaceUrl, roles, grantable, members, invites }: Props) {
+export function TeamManager({ me, iAmOwner, workspaceUrl, roles, grantable, members, invites }: Props) {
   const router = useRouter()
   const t = useT()
   const loc = localeFor(useLang())
@@ -117,14 +117,14 @@ export function TeamManager({ me, iAmOwner, iAmAdmin, workspaceUrl, roles, grant
           {members.map(m => {
             const mine = m.userId === me
             const canAct = !mine && m.role !== 'owner'
-            // a reset link: for an active person other than yourself; for a team owner only Antonio (the server decides again)
-            const canReset = !mine && m.status === 'active' && (m.role !== 'owner' || iAmAdmin)
+            // a reset link: for an active person on the team other than yourself, never for a team owner (Rocco) or Antonio: Antonio makes his from the admin Teams page
+            const canReset = !mine && m.status === 'active' && m.role !== 'owner'
             return (
               <li key={m.userId} className="rounded-xl border bg-white p-4 text-sm">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-medium">{m.email ?? t('Unknown login')}{mine && <span className="ml-2 text-xs text-slate-400">{t('(you)')}</span>}</p>
-                    <p className="text-slate-500">{m.role === 'owner' ? t('Team owner') : tLabel(accessLabel(m.permissions, bundles))}</p>
+                    <p className="text-slate-500">{m.isAdmin ? t('Owner') : m.role === 'owner' ? t('Team owner') : tLabel(accessLabel(m.permissions, bundles))}</p>
                     <p className="text-xs text-slate-400">{m.lastSignInAt ? t('Last seen {when}', { when: fw(m.lastSignInAt) }) : m.joinedAt ? t('Has not signed in yet') : ''}</p>
                   </div>
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${m.status === 'paused' ? 'bg-amber-100 text-amber-900' : 'bg-slate-100'}`}>{m.status === 'paused' ? t('Paused') : t('Active')}</span>

@@ -47,14 +47,13 @@ export default async function MarketingTeam() {
       <TeamManager
         me={g.ctx.user.id}
         iAmOwner={g.ctx.role === 'owner'}
-        iAmAdmin={g.ctx.admin === true}
         workspaceUrl={`${APP_BASE_URL}/marketing`}
         roles={roles}
         grantable={grantable}
         members={members.filter(m => m.status !== 'removed').map(m => ({
           userId: m.user_id, email: m.email, role: m.member_role, bundle: m.bundle,
           permissions: effectivePermissions({ memberRole: m.member_role, bundle: m.bundle, bundles, extra: m.permissions }), status: m.status as 'active' | 'paused',
-          joinedAt: m.joined_at, lastSignInAt: m.last_sign_in_at,
+          joinedAt: m.joined_at, lastSignInAt: m.last_sign_in_at, isAdmin: m.is_admin === true,
         }))}
         invites={invites.map(i => ({ id: i.id, email: i.email_lower, role: i.member_role, bundle: i.bundle, permissions: i.permissions ?? [], expiresAt: i.expires_at, sentBy: i.created_by, emailedAt: i.emailed_at ?? null }))}
       />
