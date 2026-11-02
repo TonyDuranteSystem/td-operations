@@ -205,7 +205,7 @@ _Regenerated 2026-11-02. Every subsystem doc under `docs/systems/` (53 docs), wi
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-28)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-31)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-23)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-27)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-02)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-31)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-10-22)_
