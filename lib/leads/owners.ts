@@ -1,8 +1,9 @@
 // Who can own a lead, and the follow-up date rules (dev job 6fc63c52, phase D). Pure.
 // The owner list is deliberately short and lives here, in one place — the Leads window and its edit
-// route both read it. (Tasks use only Antonio / Luca; TD Marketing adds Rocco and Ale.)
+// route both read it. Antonio's word (2026-11-02): the owner of a lead is Antonio. Rocco and Ale belong to the
+// separate TD Marketing workspace, not to this Leads page. Add a name here only when he says so.
 
-export const LEAD_OWNERS = ['Antonio', 'Luca', 'Rocco', 'Ale'] as const
+export const LEAD_OWNERS = ['Antonio'] as const
 export type LeadOwner = (typeof LEAD_OWNERS)[number]
 
 /** One shape for both outcomes (this project's TypeScript does not narrow a union on `ok`). */

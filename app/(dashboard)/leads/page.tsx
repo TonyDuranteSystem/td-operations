@@ -11,7 +11,7 @@ import { findLeadIdsByPhone, leadSearchOrFilter } from '@/lib/leads/phone-search
 import { buildClientEmailSet, isLiveClient } from '@/lib/leads/client-match'
 import { LeadsFilterBar } from '@/components/leads/leads-filter-bar'
 import { LeadWindowProvider } from '@/components/leads/lead-window-host'
-import { parseLeadFilters, filterLeads, quickCounts, distinctValues } from '@/lib/leads/list-filters'
+import { parseLeadFilters, filterLeads, quickCounts, distinctValues, upcomingCallsFirst, todayInNewYork } from '@/lib/leads/list-filters'
 
 const NEW_CALL_WINDOW_DAYS = 14
 
@@ -107,6 +107,23 @@ export default async function LeadsPage({
     .range(0, 4999)
   const clientEmails = buildClientEmailSet(clientContacts ?? [])
 
+  // "Follow-up sent" marks: a separate best-effort read so the page still opens if the follow-up-sent migration has not
+  // been run yet (the columns would not exist) — the tag then simply does not show.
+  const followUpMarks = new Map<string, { at: string | null; channel: string | null }>()
+  const markIds = (leads ?? []).map(l => l.id)
+  if (markIds.length > 0) {
+    const { data: marks, error: marksError } = await supabase
+      .from('leads')
+      .select('id, last_follow_up_sent_at, last_follow_up_channel')
+      .in('id', markIds)
+      .not('last_follow_up_sent_at' as never, 'is', null)
+    if (!marksError) {
+      for (const m of (marks ?? []) as unknown as Array<{ id: string; last_follow_up_sent_at: string | null; last_follow_up_channel: string | null }>) {
+        followUpMarks.set(m.id, { at: m.last_follow_up_sent_at, channel: m.last_follow_up_channel })
+      }
+    }
+  }
+
   const allItems: LeadListItem[] = (leads ?? []).map(l => {
     // Live current-offer status from the offers table (authoritative). Pick the
     // non-superseded offer, else the most recent — same rule as the lead detail page.
@@ -139,6 +156,8 @@ export default async function LeadsPage({
       updated_at: l.updated_at,
       existing_client_contact_id: l.existing_client_contact_id,
       has_call_recording: hasCallRecording,
+      last_follow_up_sent_at: followUpMarks.get(l.id)?.at ?? null,
+      last_follow_up_channel: followUpMarks.get(l.id)?.channel ?? null,
       is_live_client: l.status !== 'Converted' && !l.existing_client_contact_id && isLiveClient(l.email, clientEmails),
     }
   })
@@ -151,9 +170,11 @@ export default async function LeadsPage({
   const totalCount = filtered.length
   const totalPages = Math.ceil(totalCount / PAGE_SIZE)
   // Kanban shows everything that matches (capped, as before); the table pages.
+  // The table puts the calls still to come on top (soonest first); the board keeps its own order.
+  const tableOrder = upcomingCallsFirst(filtered, todayInNewYork())
   const items = isKanban
     ? filtered.slice(0, KANBAN_LIMIT)
-    : filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+    : tableOrder.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
   const stats = {
     total: totalCount,

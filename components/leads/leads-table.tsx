@@ -3,12 +3,13 @@
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useTransition } from 'react'
-import { ChevronRight, ChevronLeft, Phone, Mail, UserCheck } from 'lucide-react'
+import { ChevronRight, ChevronLeft, Phone, Mail, UserCheck, Send } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { LeadListItem } from '@/lib/types'
 import { LeadRowActions } from '@/components/leads/lead-row-actions'
 import { useLeadWindowOpener } from '@/components/leads/lead-window-host'
 import { deriveLeadDisplayStatus } from '@/lib/leads/display-status'
+import { followUpTagText } from '@/lib/leads/follow-up-sent'
 
 const STATUS_COLORS: Record<string, string> = {
   'New': 'bg-blue-100 text-blue-700',
@@ -121,7 +122,7 @@ export function LeadsTable({ items, stats, currentPage, totalPages, totalCount }
                   {item.referrer_name && (
                     <p className="text-xs text-muted-foreground truncate">Ref: {item.referrer_name}</p>
                   )}
-                  {(item.existing_client_contact_id || item.is_live_client || item.has_call_recording) && (
+                  {(item.existing_client_contact_id || item.is_live_client || item.has_call_recording || followUpTagText(item.last_follow_up_sent_at, item.last_follow_up_channel)) && (
                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                       {item.existing_client_contact_id && (
                         <span className="flex items-center gap-1 text-xs bg-zinc-100 text-zinc-600 px-1.5 py-0.5 rounded-md">
@@ -139,6 +140,12 @@ export function LeadsTable({ items, stats, currentPage, totalPages, totalCount }
                         <span className="flex items-center gap-1 text-xs bg-violet-50 text-violet-700 px-1.5 py-0.5 rounded-md">
                           <Phone className="h-3 w-3" />
                           Call matched
+                        </span>
+                      )}
+                      {followUpTagText(item.last_follow_up_sent_at, item.last_follow_up_channel) && (
+                        <span className="flex items-center gap-1 whitespace-nowrap text-xs bg-emerald-50 text-emerald-800 px-1.5 py-0.5 rounded-md">
+                          <Send className="h-3 w-3" />
+                          {followUpTagText(item.last_follow_up_sent_at, item.last_follow_up_channel)}
                         </span>
                       )}
                     </div>

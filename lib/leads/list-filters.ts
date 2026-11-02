@@ -101,6 +101,16 @@ export function todayInNewYork(now: Date = new Date()): string {
   return now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
 }
 
+/**
+ * Table order (Antonio 2026-11-02): leads whose call is today or later come FIRST, soonest call on top; every other lead
+ * follows in the order it already had (newest first). Stable, never drops or duplicates a row.
+ */
+export function upcomingCallsFirst<T extends { call_date: string | null }>(items: T[], today: string): T[] {
+  const upcoming = (l: T) => !!l.call_date && l.call_date.slice(0, 10) >= today
+  const soon = items.filter(upcoming).sort((a, b) => (a.call_date as string).localeCompare(b.call_date as string))
+  return [...soon, ...items.filter(l => !upcoming(l))]
+}
+
 function callDatePassed(lead: FilterableLead, today: string): boolean {
   if (!lead.call_date) return false
   return lead.call_date.slice(0, 10) < today

@@ -8953,6 +8953,136 @@ export type Database = {
         }
         Relationships: []
       }
+      lead_calls: {
+        Row: {
+          booked_at: string | null
+          calendly_event_uri: string | null
+          call_summary_id: string | null
+          confirmed_by: string | null
+          created_at: string
+          happened_at: string | null
+          id: string
+          lead_id: string
+          moved_to: string | null
+          scheduled_date: string | null
+          scheduled_start: string | null
+          source: string
+          state: string
+          updated_at: string
+        }
+        Insert: {
+          booked_at?: string | null
+          calendly_event_uri?: string | null
+          call_summary_id?: string | null
+          confirmed_by?: string | null
+          created_at?: string
+          happened_at?: string | null
+          id?: string
+          lead_id: string
+          moved_to?: string | null
+          scheduled_date?: string | null
+          scheduled_start?: string | null
+          source?: string
+          state?: string
+          updated_at?: string
+        }
+        Update: {
+          booked_at?: string | null
+          calendly_event_uri?: string | null
+          call_summary_id?: string | null
+          confirmed_by?: string | null
+          created_at?: string
+          happened_at?: string | null
+          id?: string
+          lead_id?: string
+          moved_to?: string | null
+          scheduled_date?: string | null
+          scheduled_start?: string | null
+          source?: string
+          state?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_calls_call_summary_id_fkey"
+            columns: ["call_summary_id"]
+            isOneToOne: false
+            referencedRelation: "call_summaries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_calls_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_calls_moved_to_fkey"
+            columns: ["moved_to"]
+            isOneToOne: false
+            referencedRelation: "lead_calls"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lead_status_moves: {
+        Row: {
+          call_id: string | null
+          created_at: string
+          from_status: string | null
+          id: string
+          lead_id: string
+          reason: string
+          source: string | null
+          to_status: string
+          undo_until: string | null
+          undone_at: string | null
+          undone_by: string | null
+        }
+        Insert: {
+          call_id?: string | null
+          created_at?: string
+          from_status?: string | null
+          id?: string
+          lead_id: string
+          reason: string
+          source?: string | null
+          to_status: string
+          undo_until?: string | null
+          undone_at?: string | null
+          undone_by?: string | null
+        }
+        Update: {
+          call_id?: string | null
+          created_at?: string
+          from_status?: string | null
+          id?: string
+          lead_id?: string
+          reason?: string
+          source?: string | null
+          to_status?: string
+          undo_until?: string | null
+          undone_at?: string | null
+          undone_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_status_moves_call_id_fkey"
+            columns: ["call_id"]
+            isOneToOne: false
+            referencedRelation: "lead_calls"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_status_moves_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       leads: {
         Row: {
           airtable_id: string | null
@@ -8967,6 +9097,7 @@ export type Database = {
           email: string | null
           existing_client_contact_id: string | null
           first_name: string | null
+          follow_up_date: string | null
           full_name: string
           gdrive_folder_url: string | null
           hubspot_id: string | null
@@ -8987,6 +9118,7 @@ export type Database = {
           offer_status: Database["public"]["Enums"]["offer_status"] | null
           offer_year1_amount: number | null
           offer_year1_currency: Database["public"]["Enums"]["currency"] | null
+          owner: string | null
           phone: string | null
           reason: string | null
           referrer_account_id: string | null
@@ -9010,6 +9142,7 @@ export type Database = {
           email?: string | null
           existing_client_contact_id?: string | null
           first_name?: string | null
+          follow_up_date?: string | null
           full_name: string
           gdrive_folder_url?: string | null
           hubspot_id?: string | null
@@ -9030,6 +9163,7 @@ export type Database = {
           offer_status?: Database["public"]["Enums"]["offer_status"] | null
           offer_year1_amount?: number | null
           offer_year1_currency?: Database["public"]["Enums"]["currency"] | null
+          owner?: string | null
           phone?: string | null
           reason?: string | null
           referrer_account_id?: string | null
@@ -9053,6 +9187,7 @@ export type Database = {
           email?: string | null
           existing_client_contact_id?: string | null
           first_name?: string | null
+          follow_up_date?: string | null
           full_name?: string
           gdrive_folder_url?: string | null
           hubspot_id?: string | null
@@ -9073,6 +9208,7 @@ export type Database = {
           offer_status?: Database["public"]["Enums"]["offer_status"] | null
           offer_year1_amount?: number | null
           offer_year1_currency?: Database["public"]["Enums"]["currency"] | null
+          owner?: string | null
           phone?: string | null
           reason?: string | null
           referrer_account_id?: string | null
