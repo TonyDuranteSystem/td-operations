@@ -3,6 +3,7 @@
 import { RealtimeNotifications } from '@/components/dashboard/realtime-notifications'
 import { TalkSwRegister } from '@/components/talk/talk-sw-register'
 import { TalkPushBanner } from '@/components/talk/talk-push-banner'
+import { SupabaseIncidentBar } from '@/components/infra/supabase-incident-bar'
 
 /**
  * The frame around TD Talk (dev job c1e326dd): full-screen, nothing of the CRM's chrome.
@@ -24,6 +25,7 @@ export function TalkShell({ sandbox, children }: { sandbox: boolean; children: R
         className={sandbox ? 'flex flex-col h-[calc(100dvh-2.5rem)] mt-10' : 'flex flex-col h-dvh'}
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
+        <SupabaseIncidentBar audience="staff" />
         <TalkPushBanner />
         <main className="flex-1 min-h-0 overflow-hidden bg-zinc-50">{children}</main>
       </div>

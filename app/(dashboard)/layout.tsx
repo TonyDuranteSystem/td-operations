@@ -17,6 +17,7 @@ import { ClearAllToasts } from '@/components/dashboard/clear-all-toasts'
 import { UiEventListener } from '@/components/dashboard/ui-event-listener'
 import { MessageVoice } from '@/components/marketing/message-voice'
 import { ConnectionWatcher } from '@/components/dashboard/connection-watcher'
+import { SupabaseIncidentBar } from '@/components/infra/supabase-incident-bar'
 import { DashboardPullToRefresh } from '@/components/dashboard/pull-to-refresh'
 import StickyNotesLayer from '@/components/dashboard/sticky-notes-layer'
 import CaptureLayer from '@/components/captures/capture-layer'
@@ -225,6 +226,8 @@ export default async function DashboardLayout({
             (The padding itself now lives in ShellMain, unchanged in the normal CRM.) */}
         <ShellMain>
           <ChromeOnly><DashboardHeader /></ChromeOnly>
+          {/* Supabase (our database and file storage) has an open incident: say so, in its own words (docs/systems/supabase-status.md) */}
+          <ChromeOnly><SupabaseIncidentBar audience="staff" /></ChromeOnly>
           {children}
         </ShellMain>
         <ChromeOnly><CommandPalette /></ChromeOnly>

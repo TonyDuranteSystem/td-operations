@@ -9,6 +9,10 @@
       "schedule": "20 4 * * *"
     },
     {
+      "path": "/api/cron/supabase-status",
+      "schedule": "*/3 * * * *"
+    },
+    {
       "path": "/api/cron/payment-integrity-alarm",
       "schedule": "0 9 * * *"
     },
