@@ -8,7 +8,8 @@
  * the upload commits and materializes the company.
  *
  * Also returns `articles_name` — the company name printed on the Articles (null when it cannot be read with confidence) —
- * which only PREFILLS the window's "Company legal name" field; staff confirm it (job 80cce1cb).
+ * which only PREFILLS the window's "Company legal name" field; staff confirm it (job 80cce1cb), and `filing_id` — the state Filing ID
+ * printed on the Articles (null when the text carries none), which only PREFILLS the window's "State Filing ID" field (job 64d2be64).
  *
  * Never throws to the caller — on any failure it returns { formation_date: null }
  * and the UI falls back to manual entry. [id] = service_delivery_id (audit only).
@@ -20,7 +21,7 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { ocrRawContent } from '@/lib/docai'
-import { parseFormationDate, parseArticlesCompanyName } from '@/lib/articles-parse'
+import { parseFormationDate, parseArticlesCompanyName, parseFilingId } from '@/lib/articles-parse'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function GET(req: NextRequest, { params: _params }: { params: { id: string } }) {
@@ -49,8 +50,11 @@ export async function GET(req: NextRequest, { params: _params }: { params: { id:
     const formationDate = ocr?.fullText ? parseFormationDate(ocr.fullText) : null
     // The company name printed on the Articles — PREFILL only for the window's "Company legal name" field (staff confirm it).
     const articlesName = ocr?.fullText ? parseArticlesCompanyName(ocr.fullText) : null
+    // The state Filing ID printed on the Articles — PREFILL only for the window's "State Filing ID" field (staff confirm it). Null when
+    // the Articles' text carries none; the field is then left empty for staff to type (job 64d2be64).
+    const filingId = ocr?.fullText ? parseFilingId(ocr.fullText) : null
 
-    return NextResponse.json({ success: true, formation_date: formationDate, articles_name: articlesName })
+    return NextResponse.json({ success: true, formation_date: formationDate, articles_name: articlesName, filing_id: filingId })
   } catch (e) {
     // Best-effort: never block the workspace. UI falls back to manual entry.
     return NextResponse.json({ success: true, formation_date: null, reason: e instanceof Error ? e.message : 'ocr_failed' })

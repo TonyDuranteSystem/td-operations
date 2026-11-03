@@ -71,7 +71,7 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
       ? supabaseAdmin
           .from('accounts')
           .select(
-            'id, company_name, state_of_formation, annual_report_due_date, ra_renewal_date, ein_number, registered_agent_address, physical_address, suite_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)',
+            'id, company_name, filing_id, state_of_formation, annual_report_due_date, ra_renewal_date, ein_number, registered_agent_address, physical_address, suite_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)',
           )
           .eq('id', sd.account_id)
           .single()
@@ -86,6 +86,9 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
   if (companyCreatedName && (accountRow as { company_name?: string | null } | null)?.company_name) {
     companyCreatedName = (accountRow as { company_name: string }).company_name
   }
+  // The "Company Created" banner also says when the new company has NO state Filing ID. Derived from the company itself, so it stays on the
+  // page after the upload window is gone (the window's own warning disappears the moment the stage moves) — job 64d2be64.
+  const companyFilingIdMissing = !!companyCreatedName && !!accountRow && !((accountRow as { filing_id?: string | null }).filing_id ?? '').trim()
 
   // Cast via unknown: stage_layout was added by the S0 migration but the
   // generated DB types haven't been regenerated yet (gen:types pending).
@@ -342,6 +345,11 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
         <div className="mb-6 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
           <span className="text-lg leading-none">✅</span>
           <span className="text-sm font-semibold text-emerald-800">Company Created — {companyCreatedName}</span>
+        </div>
+      )}
+      {companyCreatedName && companyFilingIdMissing && (
+        <div className="-mt-3 mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800" data-testid="company-filing-id-missing">
+          ⚠️ This company has no State Filing ID yet. Add it on the company page (Company Info) — the number the state printed on the Articles.
         </div>
       )}
 

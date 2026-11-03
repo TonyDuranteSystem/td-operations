@@ -11,6 +11,8 @@ export interface ZoomApi {
   updateMeeting(id: string, i: Omit<ZoomInput, "topic">): Promise<void>
   /** A meeting that is already gone is not an error. */
   deleteMeeting(id: string): Promise<void>
+  /** Does the app have the right to read the host's cloud recordings? Throws Zoom's refusal when it does not. Used only by the owner's "Test Zoom" check. */
+  checkRecordings?(): Promise<void>
 }
 
 type Env = Record<string, string | undefined>
@@ -57,6 +59,7 @@ export function makeZoomApi(env: Env = process.env, fetchFn: FetchFn = fetch as 
     },
     async updateMeeting(id, i) { await call(`/meetings/${encodeURIComponent(id)}`, { method: "PATCH", body: body(i) }) },
     async deleteMeeting(id) { await call(`/meetings/${encodeURIComponent(id)}?schedule_for_reminder=false`, { method: "DELETE" }) },
+    async checkRecordings() { await call(`/users/${hostUser}/recordings?page_size=1`, { method: "GET" }) },
   }
 }
 

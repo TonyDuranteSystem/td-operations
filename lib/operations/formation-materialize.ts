@@ -98,6 +98,23 @@ export type MaterializeStep = {
   detail?: string
 }
 
+/**
+ * What staff must be told when the Filing ID they confirmed did NOT end up on an already-created company (the retry path):
+ * a failed save, or a company that already carries a different Filing ID (never overwritten). null = nothing to say
+ * (saved, no ID supplied, or a brand-new company, which takes the ID on insert). The upload window shows it amber (job 64d2be64).
+ */
+export function filingIdNoteFromSteps(steps: ReadonlyArray<MaterializeStep> | null | undefined): string | null {
+  const step = steps?.find((s) => s.step === "filing_id")
+  if (!step) return null
+  if (step.status === "error") {
+    return "The company already existed and its State Filing ID could NOT be saved. Add it on the company page."
+  }
+  if (step.status === "skipped") {
+    return "The company already has a State Filing ID, so the one you confirmed was not saved. Change it on the company page if it is wrong."
+  }
+  return null
+}
+
 export interface MaterializeFormationResult {
   success: boolean
   outcome:
@@ -571,6 +588,42 @@ export async function materializeFormationCompany(
           steps.push({ step: "suite", status: "ok", detail: suite ?? "no suite reserved for this formation (waived or not yet issued)" })
         } catch (e) {
           steps.push({ step: "suite", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        }
+        // A retry after a partial failure must not drop the Filing ID staff just confirmed in the Articles window (job 64d2be64):
+        // fill it on the existing company ONLY when that company has none — an ID already on the record is never overwritten.
+        if (params.filing_id) {
+          // eslint-disable-next-line no-restricted-syntax -- materialization writes to accounts directly; central path
+          const { data: filled, error: fillErr } = await supabaseAdmin
+            .from("accounts")
+            .update({ filing_id: params.filing_id, updated_at: new Date().toISOString() } as never)
+            .eq("id", acc.id)
+            .or("filing_id.is.null,filing_id.eq.")
+            .select("id")
+          if (fillErr) {
+            steps.push({ step: "filing_id", status: "error", detail: `Could not save the Filing ID on the existing company: ${fillErr.message}` })
+            // the retry path returns before the audit-log write that carries the steps, so a failed save is recorded here (never throws)
+            const { reportSystemError } = await import("@/lib/system-errors")
+            await reportSystemError({
+              source: "server",
+              route: "formation-materialize/filing-id-retry",
+              message: `Could not save the Filing ID on an already-created company: ${fillErr.message}`,
+              context: { account_id: acc.id, contact_id: params.contact_id, filing_id: params.filing_id },
+            })
+          } else if (filled && filled.length > 0) {
+            steps.push({ step: "filing_id", status: "ok", detail: `Filing ID ${params.filing_id} saved on the existing company` })
+            await logAction({
+              actor,
+              action_type: "update",
+              table_name: "accounts",
+              record_id: acc.id,
+              account_id: acc.id,
+              contact_id: params.contact_id,
+              summary: "filing_id updated",
+              details: { filing_id: params.filing_id, source: "formation Articles upload (retry on an already-created company)" },
+            })
+          } else {
+            steps.push({ step: "filing_id", status: "skipped", detail: "The existing company already has a Filing ID — left as it is" })
+          }
         }
         return { success: true, outcome: "already_materialized", account_id: acc.id, steps }
       }

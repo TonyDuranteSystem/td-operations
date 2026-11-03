@@ -38,6 +38,7 @@ import { isClientSafeFlowDoc } from '@/lib/flows/flow-doc-visibility'
 import { filedName, type NameCheck } from '@/lib/flows/name-checks'
 import { validateConfirmedLegalName } from '@/lib/flows/legal-name'
 import { formationReferenceName } from '@/lib/operations/formation-materialize'
+import { normalizeFilingId } from '@/lib/articles-parse'
 import { saveConfirmedLegalName } from '@/lib/operations/formation-name-checks'
 import { GENERIC_CLIENT_TYPE } from '@/lib/crm-store/save-for-account'
 import { resolveFlowUploadType, boxDefaultType } from '@/lib/flows/flow-upload-type'
@@ -103,6 +104,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         { success: false, detail: 'Missing storage_path or file_name' },
         { status: 400 },
       )
+    }
+
+    // The state Filing ID staff confirmed in the Articles window (optional — an Articles whose text carries none leaves it empty and
+    // staff add it on the company later). A value that is not a plausible ID is REFUSED with a plain sentence before anything is
+    // saved, never silently dropped: the staged upload stays and staff just correct the field and press Confirm again (job 64d2be64).
+    let confirmedFilingId: string | undefined
+    // absent / null / empty text = "no Filing ID"; anything else must be text that normalizes (a number or a list is refused, not ignored)
+    const filingIdSent = body.filing_id !== undefined && body.filing_id !== null && !(typeof body.filing_id === 'string' && body.filing_id.trim() === '')
+    if (filingIdSent) {
+      const normalized = normalizeFilingId(body.filing_id)
+      if (!normalized) {
+        const msg = 'The State Filing ID can only contain letters, numbers and dashes (4 to 30 characters), for example 2026-002103965. Correct it, or clear the field to leave it empty.'
+        return NextResponse.json({ success: false, detail: msg, error: msg }, { status: 400 })
+      }
+      confirmedFilingId = normalized
     }
 
     // 1. Resolve the SD → account/contact + current stage (fallback for flow_stage).
@@ -499,7 +515,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       to_stage?: string
       is_completed?: boolean
       error?: string
-      materialization?: { attempted: boolean; outcome: string; account_id?: string; error?: string }
+      materialization?: { attempted: boolean; outcome: string; account_id?: string; error?: string; filing_id_note?: string }
     } = {
       success: false,
     }
@@ -513,6 +529,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           entity_type: entityType,
           formation_state: formationState,
           legal_name: confirmedLegalName,
+          filing_id: confirmedFilingId,
           actor: 'flow-upload',
           notes: `Document uploaded: ${fileName}`,
         })
@@ -547,6 +564,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // transient materialization error both show up here AND in `advance`.
     if (advance.materialization?.error) {
       detail += ` — ⚠️ ${advance.materialization.error}`
+    } else if (advance.materialization?.filing_id_note) {
+      detail += ` — ⚠️ ${advance.materialization.filing_id_note}`
     } else if (autoAdvance && !isItinApprovalUpload && !advance.success && advance.error && flowStage === 'Filed with State') {
       detail += ` — ⚠️ The file is saved, but the flow did NOT advance: ${advance.error}`
     }
