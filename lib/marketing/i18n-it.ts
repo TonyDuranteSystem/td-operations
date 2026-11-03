@@ -1187,4 +1187,10 @@ export const IT: Record<string, string> = {
   "Make a new link": "Crea un nuovo link",
   "Email sent. It is written on the lead.": "Email inviata. È scritto sul lead.",
   "Recorded. It is written on the lead.": "Registrato. È scritto sul lead.",
+  "Test Zoom": "Prova Zoom",
+  "Makes one test meeting for this Zoom login, deletes it at once, and checks that recordings can be read.": "Crea una riunione di prova per questo login Zoom, la elimina subito e controlla che le registrazioni si possano leggere.",
+  "Zoom login email": "Email di accesso a Zoom",
+  "Testing…": "Provo…",
+  "The test could not run. Please try again.": "La prova non è partita. Riprova.",
+  "Only Antonio can test Zoom, on his own login.": "Solo Antonio può provare Zoom, con il suo accesso.",
 }
