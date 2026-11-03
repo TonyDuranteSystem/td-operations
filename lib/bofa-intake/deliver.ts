@@ -16,28 +16,15 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { BOFA_DOC_SLOTS } from "./schema"
-import { readSubmissionFile, signedUrlForSubmissionFile, type SubmissionFile } from "./files"
+import { describeSubmissionFile, readSubmissionFile, signedUrlForSubmissionFile, type SubmissionFile } from "./files"
 import { BOFA_MAX_ATTACH_BYTES, buildDeliveryHtml, buildMime, buildSubject, type DeliveryFile } from "./email"
+import { SEND_UNCONFIRMED_PREFIX, gmailRefusedTheSend } from "./review-state"
 import { loadBofaSettings, sameAddresses } from "./settings"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- new table not in the generated DB types
 const table = () => (supabaseAdmin as any).from("bofa_intake_requests")
 
 export type DeliverResult = { ok: true; sentTo: string[] } | { ok: false; error: string }
-
-const MIME_BY_EXT: Record<string, string> = {
-  pdf: "application/pdf",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  png: "image/png",
-  heic: "image/heic",
-  heif: "image/heif",
-  webp: "image/webp",
-}
-
-function mimeFor(name: string): string {
-  return MIME_BY_EXT[name.toLowerCase().split(".").pop() ?? ""] ?? "application/octet-stream"
-}
 
 /** Why a claim found nothing, in words for the person who pressed the button. */
 async function whyNotReady(id: string): Promise<string> {
@@ -94,30 +81,37 @@ export async function deliverSubmission(id: string, opts: { by: string; confirmT
     return { ok: false, error }
   }
 
+  // Set the moment the hand-off to Gmail begins. From then on a thrown error does not prove the email stayed here: Google may
+  // have accepted it before the connection dropped or the reply could not be read. See SEND_UNCONFIRMED_PREFIX.
+  let handedToGmail = false
+
   try {
-    // 2. load the documents, attach them when they fit, otherwise send 7-day links
-    const loaded: { label: string; file: SubmissionFile; content: Buffer }[] = []
+    // 2. load the documents, attach them when they fit, otherwise send 7-day links.
+    // Each file goes out under the name and type of the bytes actually in Storage (an iPhone photo is stored as a JPEG).
+    const loaded: { label: string; file: SubmissionFile; content: Buffer; name: string; contentType: string }[] = []
     let total = 0
     for (const f of row.files ?? []) {
       const content = await readSubmissionFile(f)
       if (!content) return fail(`Could not read the file "${f.name}" from storage.`)
       total += content.length
-      loaded.push({ label: BOFA_DOC_SLOTS.find((s) => s.key === f.key)?.label ?? f.key, file: f, content })
+      const described = await describeSubmissionFile(f)
+      loaded.push({ label: BOFA_DOC_SLOTS.find((s) => s.key === f.key)?.label ?? f.key, file: f, content, name: described.name, contentType: described.contentType })
     }
     let files: DeliveryFile[]
     if (total <= BOFA_MAX_ATTACH_BYTES) {
-      files = loaded.map((f) => ({ label: f.label, name: f.file.name, content: f.content, contentType: mimeFor(f.file.name) }))
+      files = loaded.map((f) => ({ label: f.label, name: f.name, content: f.content, contentType: f.contentType }))
     } else {
       files = []
       for (const f of loaded) {
         const url = await signedUrlForSubmissionFile(f.file, 60 * 60 * 24 * 7)
         if (!url) return fail(`Could not make a download link for "${f.file.name}".`)
-        files.push({ label: f.label, name: f.file.name, url })
+        files.push({ label: f.label, name: f.name, url })
       }
     }
 
     const raw = buildMime({ to: recipients, subject: buildSubject(row.form_data), html: buildDeliveryHtml(row.form_data, files), files })
     const { gmailPost } = await import("@/lib/gmail")
+    handedToGmail = true
     await gmailPost("/messages/send", { raw: Buffer.from(raw).toString("base64url") })
 
     // 3. record the outcome AFTER the send
@@ -135,6 +129,8 @@ export async function deliverSubmission(id: string, opts: { by: string; confirmT
     if (recordErr) console.error("[bofa-intake] the application WAS SENT to the bank contact but the record could not be saved:", id, recordErr.message)
     return { ok: true, sentTo: recipients }
   } catch (e) {
-    return fail(e instanceof Error ? e.message : "The email could not be sent.")
+    const message = e instanceof Error ? e.message : "The email could not be sent."
+    // after the hand-off, only a clear refusal from Gmail proves nothing went out; everything else is "not confirmed"
+    return fail(handedToGmail && !gmailRefusedTheSend(message) ? `${SEND_UNCONFIRMED_PREFIX}${message}` : message)
   }
 }

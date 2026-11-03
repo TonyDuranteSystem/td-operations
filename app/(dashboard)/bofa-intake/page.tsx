@@ -15,7 +15,7 @@ import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { BOFA_TEXT_FIELDS } from "@/lib/bofa-intake/schema"
 import { BOFA_SHIPPING_FIELDS } from "@/lib/bofa-intake/shipping"
-import { REVIEW_STATE_TEXT, canMarkReviewed, canSendBack, canSubmit, isStaleSending, reviewState } from "@/lib/bofa-intake/review-state"
+import { REVIEW_STATE_TEXT, canMarkReviewed, canSendBack, canSubmit, isStaleSending, reviewState, sendMayHaveGoneOut } from "@/lib/bofa-intake/review-state"
 
 type LinkStatus = "pending" | "opened" | "completed" | "revoked"
 interface LinkRow {
@@ -455,7 +455,11 @@ function BofaIntakeInner() {
               if (state === "needs_review") return "Waiting for review. Nothing has been sent to the bank contact."
               if (state === "ready") return `Reviewed by ${detail.reviewed_by ?? "staff"} on ${fmt(detail.reviewed_at)}. Not submitted yet.`
               if (state === "sending") return isStaleSending(detail) ? "The last submit has not finished for over 5 minutes. The email may already have reached the bank contact: check the Sent mailbox before submitting again." : "Being submitted right now…"
-              if (state === "send_failed") return `The last submit did NOT go through${detail.email_error ? `: ${detail.email_error}` : ""}.`
+              if (state === "send_failed") {
+                // Only say "did NOT go through" when that is known; a failure Gmail never confirmed may have gone out.
+                if (sendMayHaveGoneOut(detail)) return `The last submit ended with an error. ${detail.email_error}`
+                return `The last submit did NOT go through${detail.email_error ? `: ${detail.email_error}` : ""}.`
+              }
               if (state === "sent") return `Submitted to ${(detail.sent_to?.length ? detail.sent_to : (detail.recipients ?? [])).join(", ")} on ${fmt(detail.email_sent_at)}${detail.sent_by ? ` by ${detail.sent_by}` : ""}.`
               return `Sent back to the client on ${fmt(detail.returned_at)}${detail.returned_by ? ` by ${detail.returned_by}` : ""}${detail.return_note ? `: “${detail.return_note}”` : ""}.${detail.email_status === "sent" ? ` It had been submitted to ${(detail.sent_to?.length ? detail.sent_to : (detail.recipients ?? [])).join(", ")} on ${fmt(detail.email_sent_at)}.` : ""}`
             })()}
@@ -508,8 +512,10 @@ function BofaIntakeInner() {
             <div className="flex gap-2"><dt className="text-muted-foreground w-28 shrink-0">Documents</dt><dd>{submitFor.files.length} ({submitFor.files.map((f) => f.label).join(", ")})</dd></div>
             <div className="flex gap-2"><dt className="text-muted-foreground w-28 shrink-0">Shipping address</dt><dd>{[submitFor.form_data?.shipping_street, [submitFor.form_data?.shipping_city, submitFor.form_data?.shipping_region, submitFor.form_data?.shipping_zip].filter(Boolean).join(" "), submitFor.form_data?.shipping_country].filter(Boolean).join(", ") || "not on this older application"}</dd></div>
           </dl>
-          {isStaleSending(submitFor) && (
-            <p className="text-sm text-red-700 mb-2">The last attempt never finished, so the email may already have gone to the bank contact. Check the Sent mailbox before you submit again, or they may get it twice.</p>
+          {sendMayHaveGoneOut(submitFor) && (
+            <p className="text-sm text-red-700 mb-2">
+              {isStaleSending(submitFor) ? "The last attempt never finished" : "The last attempt ended with an error that Gmail never confirmed"}, so the email may already have gone to the bank contact. Check the Sent mailbox before you submit again, or they may get it twice.
+            </p>
           )}
           {settings.submit_to.length === 0 && <p className="text-sm text-red-700 mb-2">No address is set. Set it on the Forms page, in the Bank account application card.</p>}
           {dialogError && <p className="text-sm text-red-700 mb-2" role="alert">{dialogError}</p>}

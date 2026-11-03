@@ -27,7 +27,7 @@ import { archiveSubmission } from "@/lib/bofa-intake/archive"
 import { markReviewed } from "@/lib/bofa-intake/review"
 import { sendBackToClient } from "@/lib/bofa-intake/send-back"
 import { DETAIL_COLUMNS, readWithReviewColumns } from "@/lib/bofa-intake/columns"
-import { signedUrlForSubmissionFile, type SubmissionFile } from "@/lib/bofa-intake/files"
+import { describeSubmissionFile, signedUrlForSubmissionFile, type SubmissionFile } from "@/lib/bofa-intake/files"
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -68,7 +68,9 @@ export async function GET(_req: NextRequest, { params }: Params) {
     files.map(async (f) => {
       const url = await signedUrlForSubmissionFile(f, 3600)
       const slot = BOFA_DOC_SLOTS.find((s) => s.key === f.key)
-      return { key: f.key, label: slot?.label ?? f.key, name: f.name, url }
+      // the name staff see and download matches the bytes in Storage (an iPhone photo is stored as a JPEG)
+      const { name } = await describeSubmissionFile(f)
+      return { key: f.key, label: slot?.label ?? f.key, name, url }
     }),
   )
   return NextResponse.json({ review_ready: reviewReady, link: { ...row, files: withUrls } })

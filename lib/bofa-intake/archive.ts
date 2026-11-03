@@ -78,6 +78,8 @@ export async function archiveSubmission(id: string): Promise<ArchiveResult> {
         contentChanged: true,
         published: false,
         convertHeic: true,
+        // passports, IDs and tax letters of an outside applicant: never queued for the AI reader (File Understanding)
+        skipAnalysis: true,
         actor: null,
         documentType: null,
         bytes,
@@ -95,6 +97,7 @@ export async function archiveSubmission(id: string): Promise<ArchiveResult> {
       callerKey: `bofa:${id}:answers`,
       contentChanged: false,
       published: false,
+      skipAnalysis: true,
       actor: null,
       documentType: null,
       bytes: pdf,

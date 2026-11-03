@@ -57,6 +57,31 @@ export function mimeForName(name: string): string {
   return MIME_BY_EXT[extOf(name)] ?? "application/octet-stream"
 }
 
+const EXT_BY_MIME: Record<string, string> = {
+  "application/pdf": "pdf",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/heic": "heic",
+  "image/heif": "heif",
+  "image/webp": "webp",
+}
+
+/**
+ * The name a file should CARRY given what is really stored. The Storage writer turns an iPhone photo (HEIC) into a JPEG, but
+ * the application row keeps the name the phone gave it ("IMG_4521.HEIC"). Attaching JPEG bytes under a ".HEIC" name and an
+ * image/heic type can make the bank contact's mail viewer refuse to open a passport, so the ending is made to match the stored
+ * type. A stored type we do not know, or an ending that already matches, leaves the name exactly as it is. A name whose last
+ * "extension" is not one of ours ("passport.final") keeps it and gets the right ending added.
+ */
+export function nameForStoredType(name: string, storedMime: string | null | undefined): string {
+  const mime = (storedMime ?? "").split(";")[0].trim().toLowerCase()
+  const want = EXT_BY_MIME[mime]
+  if (!want || mimeForName(name) === mime) return name
+  const have = extOf(name)
+  const base = have in MIME_BY_EXT ? name.slice(0, name.length - have.length - 1) : name
+  return `${base}.${want}`
+}
+
 /** The file's name in Storage: the box it came from ("Passport photo page.pdf"), not the applicant's own file name. */
 export function storedFileName(slotKey: string, originalName: string): string {
   const label = BOFA_DOC_SLOTS.find((s) => s.key === slotKey)?.label ?? slotKey

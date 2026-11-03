@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { REVIEW_STATE_TEXT, STALE_SENDING_MS, WAITING_STATES, canMarkReviewed, canSendBack, canSubmit, isStaleSending, isWaitingForStaff, reviewState } from "@/lib/bofa-intake/review-state"
+import { REVIEW_STATE_TEXT, SEND_UNCONFIRMED_PREFIX, STALE_SENDING_MS, WAITING_STATES, canMarkReviewed, canSendBack, canSubmit, gmailRefusedTheSend, isStaleSending, isWaitingForStaff, reviewState, sendMayHaveGoneOut } from "@/lib/bofa-intake/review-state"
 
 const done = (over: Partial<Parameters<typeof reviewState>[0]> = {}) => ({ status: "completed", email_status: null, reviewed_at: null, returned_at: null, ...over })
 
@@ -90,5 +90,62 @@ describe("an application whose OLD automatic send failed before reviews existed"
     const reviewed = done({ email_status: "failed", reviewed_at: "x" })
     expect(canMarkReviewed(reviewed)).toBe(false)
     expect(canSubmit(reviewed)).toBe(true)
+  })
+})
+
+describe("gmailRefusedTheSend — only a clear refusal proves nothing went out", () => {
+  it("a 4xx answer from Gmail (too big, not authorised, bad address, rate limit) is a refusal", () => {
+    for (const m of ["Gmail API 400: Request payload size exceeds the limit", "Gmail API 401: Invalid Credentials", "Gmail API 403: Forbidden", "Gmail API 413: Too large", "Gmail API 429: Rate limit exceeded"]) {
+      expect(gmailRefusedTheSend(m)).toBe(true)
+    }
+  })
+
+  it("a timeout, a server error, a dropped connection, a token problem or anything unrecognised is NOT a refusal (it stays 'not confirmed')", () => {
+    for (const m of ["Gmail API 408: Request Timeout", "Gmail API 500: Backend Error", "Gmail API 503: Service Unavailable", "fetch failed", "Unexpected end of JSON input", "invalid_grant", "", "The email could not be sent."]) {
+      expect(gmailRefusedTheSend(m)).toBe(false)
+    }
+  })
+
+  it("only counts the Gmail wording at the START of the message", () => {
+    expect(gmailRefusedTheSend("x Gmail API 400: nope")).toBe(false)
+    expect(gmailRefusedTheSend("Gmail API 4000: nope")).toBe(false)
+  })
+})
+
+describe("sendMayHaveGoneOut — when Submit again could email the passports twice", () => {
+  const NOW = Date.parse("2026-11-03T12:00:00Z")
+  const failed = (email_error: string | null) => done({ reviewed_at: "x", email_status: "failed", email_error })
+
+  it("is true for a failure Gmail never confirmed (the error starts with the shared warning)", () => {
+    expect(sendMayHaveGoneOut(failed(`${SEND_UNCONFIRMED_PREFIX}fetch failed`), NOW)).toBe(true)
+  })
+
+  it("is false for a failure that definitely did not go out (a plain error, or none)", () => {
+    expect(sendMayHaveGoneOut(failed('Could not read the file "p.pdf" from storage.'), NOW)).toBe(false)
+    expect(sendMayHaveGoneOut(failed(null), NOW)).toBe(false)
+    expect(sendMayHaveGoneOut(failed(""), NOW)).toBe(false)
+  })
+
+  it("only matches the warning at the START of the error, not somewhere inside it", () => {
+    expect(sendMayHaveGoneOut(failed(`x ${SEND_UNCONFIRMED_PREFIX}`), NOW)).toBe(false)
+  })
+
+  it("is true for a send that stalled for over 5 minutes, false for one that just started", () => {
+    const stalled = done({ reviewed_at: "x", email_status: "sending", updated_at: new Date(NOW - STALE_SENDING_MS - 1000).toISOString() })
+    const fresh = done({ reviewed_at: "x", email_status: "sending", updated_at: new Date(NOW - 30_000).toISOString() })
+    expect(sendMayHaveGoneOut(stalled, NOW)).toBe(true)
+    expect(sendMayHaveGoneOut(fresh, NOW)).toBe(false)
+  })
+
+  it("is false for anything that is not a failed or stalled send (never cries wolf)", () => {
+    expect(sendMayHaveGoneOut(done(), NOW)).toBe(false)
+    expect(sendMayHaveGoneOut(done({ reviewed_at: "x" }), NOW)).toBe(false)
+    expect(sendMayHaveGoneOut(done({ reviewed_at: "x", email_status: "sent" }), NOW)).toBe(false)
+    // a stale error text left on a row that is no longer 'failed' (e.g. it was claimed again) does not count
+    expect(sendMayHaveGoneOut(done({ reviewed_at: "x", email_status: "sending", email_error: SEND_UNCONFIRMED_PREFIX, updated_at: new Date(NOW - 1000).toISOString() }), NOW)).toBe(false)
+  })
+
+  it("the Submit button stays available after an unconfirmed failure (the warning, not a block, is what protects it)", () => {
+    expect(canSubmit(failed(`${SEND_UNCONFIRMED_PREFIX}timeout`))).toBe(true)
   })
 })
