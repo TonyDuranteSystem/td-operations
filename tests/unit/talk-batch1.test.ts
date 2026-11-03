@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { draftKey, readDraft, writeDraft, MAX_DRAFT_CHARS, type DraftStorage } from '@/lib/talk/drafts'
 import { lastMessagePreview, previewLine, titleWithCount, unreadTotal } from '@/lib/talk/list-preview'
-import { leavingLosesRecording } from '@/lib/talk/recording-guard'
+import { leavingLosesRecording, stayAfterVoice } from '@/lib/talk/recording-guard'
 
 function memoryStorage(): DraftStorage & { data: Map<string, string> } {
   const data = new Map<string, string>()
@@ -102,5 +102,10 @@ describe('recording guard', () => {
   it('only a recording in progress is lost by leaving', () => {
     expect(leavingLosesRecording(true)).toBe(true)
     expect(leavingLosesRecording(false)).toBe(false)
+  })
+
+  it('only a note that was really kept lets the person leave after "Send it"', () => {
+    expect(stayAfterVoice('sent')).toBe(false)
+    expect(stayAfterVoice('failed')).toBe(true)
   })
 })
