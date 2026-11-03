@@ -85,6 +85,13 @@ export interface AdvanceStageParams {
    */
   legal_name?: string
   /**
+   * The state Filing ID staff confirmed in the Articles upload window (OCR-prefilled from the Articles; already normalized by
+   * the upload route). Passed straight to materializeFormationCompany so the new company's Filing ID is saved with it, instead
+   * of staff typing it afterwards (job 64d2be64). Optional — absent means the company is created with no Filing ID. Ignored for
+   * other transitions.
+   */
+  filing_id?: string
+  /**
    * The cycle year a renewal filing is FOR (Mark Filed dialog). Drives the
    * completion roll: the record moves to the anniversary in year+1
    * (computeRollForward). Absent → defaults to the current year. Ignored for
@@ -125,6 +132,8 @@ export interface AdvanceStageResult {
     outcome: string
     account_id?: string
     error?: string
+    /** Set when the company exists but the Filing ID staff confirmed was not saved on it (retry path) — shown amber, not green. */
+    filing_id_note?: string
   }
 }
 
@@ -1138,7 +1147,7 @@ export async function advanceServiceDelivery(
           console.error(`[flow-advance] formation_submissions state lookup failed for contact ${delivery.contact_id}:`, subErr.message)
         }
 
-        const { materializeFormationCompany } = await import("@/lib/operations/formation-materialize")
+        const { materializeFormationCompany, filingIdNoteFromSteps } = await import("@/lib/operations/formation-materialize")
         const mat = await materializeFormationCompany({
           contact_id: delivery.contact_id,
           chosen_name: confirmedName ?? undefined,
@@ -1161,12 +1170,21 @@ export async function advanceServiceDelivery(
           // Staff-supplied LLC-type override from the upload dialog — wins
           // over contract/form/wizard resolution (see AdvanceStageParams).
           entity_type: params.entity_type,
+          // The staff-confirmed state Filing ID from the Articles window (job 64d2be64) — saved on the new company.
+          filing_id: params.filing_id,
           actor: `flow-advance:${actor}`,
         })
         if (mat.success && mat.account_id) {
           delivery.account_id = mat.account_id
           autoTriggers.push(`Account materialized: ${confirmedName ?? "(name from wizard data)"} (${stateCode}, state from ${stateResolution.source}) → ${mat.account_id} [${mat.outcome}]`)
           materialization = { attempted: true, outcome: mat.outcome, account_id: mat.account_id }
+          // A retry on an already-created company can leave the confirmed Filing ID unsaved (failed save / a different one already there):
+          // hand that to the caller so staff are told, instead of a green "uploaded" (job 64d2be64).
+          const filingIdNote = filingIdNoteFromSteps(mat.steps)
+          if (filingIdNote) {
+            materialization.filing_id_note = filingIdNote
+            autoTriggers.push(`Filing ID not saved on the existing company: ${filingIdNote}`)
+          }
         } else {
           autoTriggers.push(`Account materialization failed (${mat.outcome}): ${mat.error ?? "unknown"}`)
           materialization = {
