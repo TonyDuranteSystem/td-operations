@@ -81,6 +81,8 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const olderRef = useRef<TalkMessage[]>([])
   const windowRef = useRef<TalkMessage[]>([])
+  // counts the changes that reached the server (a kept edit/delete/reaction confirmed or refused): a refresh that STARTED before one must not overwrite it with its older answer
+  const changeSeqRef = useRef(0)
   const hasMoreRef = useRef(false)
   const loadingEarlierRef = useRef(false)
   const [peerReadAt, setPeerReadAt] = useState<string | null>(null)
@@ -160,11 +162,13 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   // opens a conversation's messages. `markRead` follows the READ RULE (only while the app is on screen).
   const loadMessages = useCallback(async (threadId: string, opts: { silent?: boolean } = {}) => {
     if (!opts.silent) setLoadingMsgs(true)
+    const seq = changeSeqRef.current
     try {
       const r = await fetch(`/api/team/threads/${threadId}${isBeingViewed() ? '' : '?mark_read=0'}`)
       if (!r.ok) throw new Error('Could not load this chat.')
       const d = await r.json()
       if (selectedIdRef.current !== threadId) return // switched chats while loading
+      if (opts.silent && seq !== changeSeqRef.current) return // a kept change was confirmed while this refresh was on its way: its answer is older than what is on screen; the next refresh brings the truth
       const incoming = (d.messages ?? []) as TalkMessage[]
       // the live window slides forward when new messages arrive: what slid out must not fall into a gap between the older pages and the window
       if (olderRef.current.length > 0) {
@@ -439,6 +443,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
 
   // what the server answered for a kept change: it replaces the overlay with the real thing (only for the open chat; another chat reads the server when it is opened)
   actionDoneRef.current = (a, result) => {
+    changeSeqRef.current += 1
     if (selectedIdRef.current !== a.threadId) return
     const d = (result ?? {}) as { reactions?: TalkReaction[]; message?: { message: string; edited_at: string | null } }
     if (a.kind === 'react' && Array.isArray(d.reactions)) applyToMessage(a.messageId, { reactions: d.reactions })
@@ -446,6 +451,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     else if (a.kind === 'delete') applyToMessage(a.messageId, { deleted_at: new Date().toISOString() })
   }
   actionFailedRef.current = (a, error) => {
+    changeSeqRef.current += 1
     toast.error(`Could not ${actionVerb(a)}: ${error}`)
     if (selectedIdRef.current === a.threadId) void loadMessages(a.threadId, { silent: true })
   }

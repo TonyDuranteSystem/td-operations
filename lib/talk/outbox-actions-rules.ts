@@ -5,6 +5,7 @@
  * answers (or says no) the truth simply replaces the overlay.
  */
 import type { TalkMessage, TalkReaction } from '@/lib/talk/chat-model'
+import { isPermanentStatus } from '@/lib/talk/outbox-rules'
 
 interface ActionBase {
   /** Own id (a uuid): what the browser stores it under. */
@@ -16,6 +17,8 @@ interface ActionBase {
   createdAt: string
   /** Failed tries so far (drives the pause between tries). */
   attempts: number
+  /** How many times the SERVER itself answered with an error (5xx) for this change: after `SERVER_ERROR_LIMIT` the change is given up so one broken change cannot block the queue for ever. */
+  serverErrors?: number
 }
 
 export type ChatAction =
@@ -71,4 +74,28 @@ export function hasMyReaction(m: Pick<TalkMessage, 'reactions'>, emoji: string, 
 /** The words for a change the server refused, for the message shown to the person. */
 export function actionVerb(a: Pick<ChatAction, 'kind'>): string {
   return a.kind === 'edit' ? 'save your edit' : a.kind === 'delete' ? 'delete the message' : 'save your reaction'
+}
+
+/** After this many server errors (5xx) for ONE change it is dropped and the person is told (a lost connection never counts). */
+export const SERVER_ERROR_LIMIT = 5
+
+export type AnswerClass =
+  | { kind: 'done' }
+  | { kind: 'retry'; server: boolean; error: string }
+  | { kind: 'refused'; error: string }
+
+/**
+ * What the server's answer means for a kept change. Done = it is on the server. Retry = keep it and try again later (no connection, busy, slow, an expired sign-in — the change waits
+ * until the person is signed in again — or an answer that is not the server's JSON, such as a Wi-Fi sign-in page). Refused = a real "no" about this change (not your message, gone, too long): drop it.
+ * `body` is the parsed JSON, or null when the answer was not JSON.
+ */
+export function classifyAnswer(status: number, body: unknown): AnswerClass {
+  const obj = body && typeof body === 'object' ? (body as { error?: unknown; code?: unknown }) : null
+  const err = obj && typeof obj.error === 'string' ? obj.error : ''
+  if (status >= 200 && status < 300) {
+    return body === null || body === undefined ? { kind: 'retry', server: false, error: 'Unexpected answer.' } : { kind: 'done' }
+  }
+  if (status === 401 || obj?.code === 'SESSION_EXPIRED' || (status === 403 && err === 'Unauthorized')) return { kind: 'retry', server: false, error: err || 'Please sign in again.' }
+  if (isPermanentStatus(status)) return { kind: 'refused', error: err || 'Please try again.' }
+  return { kind: 'retry', server: status >= 500, error: err || 'Please try again.' }
 }

@@ -58,7 +58,7 @@ export function useChatActions({ threadId, userId, onDone, onFailed }: {
 
   // a new list only when the queue really changed (the screen's message list is rebuilt from it)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const waiting = useMemo(() => (threadId ? waitingActions(threadId) : NONE), [threadId, version])
+  const waiting = useMemo(() => (threadId && userId ? waitingActions(threadId, userId) : NONE), [threadId, userId, version])
 
   return { waiting, queue }
 }

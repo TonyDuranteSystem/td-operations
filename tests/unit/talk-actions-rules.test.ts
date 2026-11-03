@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { actionOrder, actionVerb, addAction, hasMyReaction, overlayActions, type ChatAction } from '@/lib/talk/outbox-actions-rules'
+import { actionOrder, actionVerb, addAction, classifyAnswer, hasMyReaction, overlayActions, type ChatAction } from '@/lib/talk/outbox-actions-rules'
 import type { TalkMessage } from '@/lib/talk/chat-model'
 
 const base = { threadId: 't1', senderId: 'me', attempts: 0 }
@@ -72,5 +72,29 @@ describe('queued changes: what the screen shows', () => {
     expect(actionVerb({ kind: 'edit' })).toBe('save your edit')
     expect(actionVerb({ kind: 'delete' })).toBe('delete the message')
     expect(actionVerb({ kind: 'react' })).toBe('save your reaction')
+  })
+})
+
+describe('what the server\'s answer means for a kept change', () => {
+  it('2xx with the server\'s JSON = done', () => {
+    expect(classifyAnswer(200, { ok: true })).toEqual({ kind: 'done' })
+  })
+  it('2xx that is not JSON (a sign-in page on the Wi-Fi) is not done: keep it', () => {
+    expect(classifyAnswer(200, null).kind).toBe('retry')
+  })
+  it('an expired sign-in is kept, not dropped (401, the session code, or the route\'s own "Unauthorized" 403)', () => {
+    expect(classifyAnswer(401, { error: 'Session expired' }).kind).toBe('retry')
+    expect(classifyAnswer(403, { error: 'Unauthorized' }).kind).toBe('retry')
+    expect(classifyAnswer(403, { error: 'x', code: 'SESSION_EXPIRED' }).kind).toBe('retry')
+  })
+  it('a real "no" about the change is refused with the reason', () => {
+    expect(classifyAnswer(403, { error: 'You can only edit your own messages.' })).toEqual({ kind: 'refused', error: 'You can only edit your own messages.' })
+    expect(classifyAnswer(404, { error: 'Message not found' }).kind).toBe('refused')
+    expect(classifyAnswer(400, {}).kind).toBe('refused')
+  })
+  it('busy / slow / server errors are kept; only 5xx counts as a server error', () => {
+    expect(classifyAnswer(429, {})).toMatchObject({ kind: 'retry', server: false })
+    expect(classifyAnswer(408, {})).toMatchObject({ kind: 'retry', server: false })
+    expect(classifyAnswer(503, { error: 'busy' })).toMatchObject({ kind: 'retry', server: true })
   })
 })
