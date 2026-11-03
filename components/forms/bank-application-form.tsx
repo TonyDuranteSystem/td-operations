@@ -285,13 +285,12 @@ export function BankApplicationForm({ token, preview = false }: { token: string;
           <Field label="Country">{text("company_country", "United States")}</Field>
         </div>
         <p className="text-sm font-medium text-gray-600 mt-5">Shipping address</p>
-        <p className="text-xs text-gray-500 mt-0.5">Where the bank sends your cards and letters. This is Tony Durante LLC&apos;s office: it is filled in for you and cannot be changed.</p>
+        <p className="text-xs text-gray-500 mt-0.5">Where the bank sends your cards and letters. It is filled in for you and cannot be changed.</p>
         <div className="mt-3 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700 space-y-0.5" data-testid="shipping-address">
           {(() => {
             const a = shippingAddressFields()
             return (
               <>
-                <p className="font-medium">{a.shipping_name}</p>
                 <p>{a.shipping_street}</p>
                 <p>{a.shipping_city}, {a.shipping_region} {a.shipping_zip}</p>
                 <p>{a.shipping_country}</p>

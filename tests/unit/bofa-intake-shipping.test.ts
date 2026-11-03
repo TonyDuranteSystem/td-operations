@@ -12,7 +12,7 @@ describe("the locked shipping address", () => {
     expect(a.shipping_city).toBe("Seminole")
     expect(a.shipping_region).toBe("FL")
     expect(a.shipping_zip).toBe("33772")
-    expect(a.shipping_name).toBe(TD_OFFICE.company)
+    expect(a).not.toHaveProperty("shipping_name") // the Seminole address goes WITHOUT "Tony Durante LLC" (Antonio 2026-11-03)
     // one source of truth: it must never drift from the portal's Shipping Address card
     const portal = shippingForClient()
     expect(a.shipping_street).toBe(`${portal.address_line1}, ${portal.address_line2}`)
@@ -45,8 +45,9 @@ describe("the locked shipping address", () => {
     if (r.ok) expect(r.data).not.toHaveProperty("shipping_city")
   })
 
-  it("prints as four plain lines", () => {
-    expect(shippingAddressLines()).toEqual([TD_OFFICE.company, TD_OFFICE.street, "Seminole, FL 33772", TD_OFFICE.country])
+  it("prints as three plain lines, with no company name", () => {
+    expect(shippingAddressLines()).toEqual([TD_OFFICE.street, "Seminole, FL 33772", TD_OFFICE.country])
+    expect(shippingAddressLines().join(" ")).not.toContain("Tony Durante")
   })
 })
 

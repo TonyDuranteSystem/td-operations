@@ -38,13 +38,23 @@ async function fileExists(path: string): Promise<boolean> {
   return data.some((o) => o.name === name)
 }
 
-async function notifyStaff(label: string, companyName: string, id: string): Promise<boolean> {
+/** Is this the client's corrected answer to an application staff sent back? Tolerant: a hiccup just means the ordinary notice. */
+async function isResubmission(id: string): Promise<boolean> {
+  try {
+    const { data, error } = await table().select("replaces_id").eq("id", id).maybeSingle()
+    return !error && !!data?.replaces_id
+  } catch {
+    return false
+  }
+}
+
+async function notifyStaff(label: string, companyName: string, id: string, resubmitted: boolean): Promise<boolean> {
   try {
     const settings = await loadBofaSettings()
-    const subject = `Bank application to review: ${label}`
+    const subject = resubmitted ? `Bank application RESUBMITTED: ${label}` : `Bank application to review: ${label}`
     const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-      <h2 style="color:#1e3a5f;">A bank application is waiting for your review</h2>
-      <p>The one-time application link <strong>${escapeHtml(label)}</strong> was submitted (company: <strong>${escapeHtml(companyName)}</strong>).</p>
+      <h2 style="color:#1e3a5f;">${resubmitted ? "A bank application was corrected and resubmitted" : "A bank application is waiting for your review"}</h2>
+      <p>${resubmitted ? "The client corrected the application you sent back" : "The one-time application link"} <strong>${escapeHtml(label)}</strong> ${resubmitted ? "and submitted it again" : "was submitted"} (company: <strong>${escapeHtml(companyName)}</strong>).</p>
       <p>Review the answers and documents, then press <b>Reviewed</b> and <b>Submit</b>: <a href="${CRM_BASE_URL}/bofa-intake?open=${id}">${CRM_BASE_URL}/bofa-intake</a></p>
       <p style="color:#666;font-size:12px;">Nothing has been sent to anyone outside Tony Durante LLC yet.</p></div>`
     await sendHtmlEmail({ to: settings.notifyTo, subject, html })
@@ -95,7 +105,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: message }, { status: 409 })
   }
 
-  const sent = await notifyStaff(updated.label, result.data.company_name, updated.id)
+  const sent = await notifyStaff(updated.label, result.data.company_name, updated.id, await isResubmission(updated.id))
   if (sent) await table().update({ notified_at: new Date().toISOString() }).eq("id", updated.id)
 
   // The application is safely stored. File it in CRM Storage (Business › BofA). A failure never fails the client's

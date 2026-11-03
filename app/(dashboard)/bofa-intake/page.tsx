@@ -503,7 +503,7 @@ function BofaIntakeInner() {
             <div className="flex gap-2"><dt className="text-muted-foreground w-28 shrink-0">Applicant</dt><dd>{submitFor.form_data?.full_name || "—"}</dd></div>
             <div className="flex gap-2"><dt className="text-muted-foreground w-28 shrink-0">Company</dt><dd>{submitFor.form_data?.company_name || "—"}</dd></div>
             <div className="flex gap-2"><dt className="text-muted-foreground w-28 shrink-0">Documents</dt><dd>{submitFor.files.length} ({submitFor.files.map((f) => f.label).join(", ")})</dd></div>
-            <div className="flex gap-2"><dt className="text-muted-foreground w-28 shrink-0">Shipping address</dt><dd>{[submitFor.form_data?.shipping_name, submitFor.form_data?.shipping_street, [submitFor.form_data?.shipping_city, submitFor.form_data?.shipping_region, submitFor.form_data?.shipping_zip].filter(Boolean).join(" "), submitFor.form_data?.shipping_country].filter(Boolean).join(", ") || "not on this older application"}</dd></div>
+            <div className="flex gap-2"><dt className="text-muted-foreground w-28 shrink-0">Shipping address</dt><dd>{[submitFor.form_data?.shipping_street, [submitFor.form_data?.shipping_city, submitFor.form_data?.shipping_region, submitFor.form_data?.shipping_zip].filter(Boolean).join(" "), submitFor.form_data?.shipping_country].filter(Boolean).join(", ") || "not on this older application"}</dd></div>
           </dl>
           {isStaleSending(submitFor) && (
             <p className="text-sm text-red-700 mb-2">The last attempt never finished, so the email may already have gone to the bank contact. Check the Sent mailbox before you submit again, or they may get it twice.</p>
