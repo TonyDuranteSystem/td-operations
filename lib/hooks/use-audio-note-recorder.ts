@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { fragmentedMp4ToFlat } from '@/lib/media/fmp4-to-flat'
 import { stopPlayingAudio } from '@/lib/media/stop-playing-audio'
 import { isSound, rmsOf } from '@/lib/media/sound-level'
+import { acquireMic, holdScreenAwake, micErrorMessage, releaseMicSoon, releaseScreen, setRecordingInProgress } from '@/lib/media/mic-session'
 
 /** Starts listening to a microphone stream; `stop()` releases it. Returns null when the browser cannot measure (the recording then goes out as before). */
 function listen(stream: MediaStream, onLevel: (level: number) => void): { stop: () => void } | null {
@@ -84,6 +85,7 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
   const preferMp4Ref = useRef(!!preferMp4)
   const cancelledRef = useRef(false)
   const startingRef = useRef(false)
+  const interruptedRef = useRef(false)
   const unmountedRef = useRef(false)
 
   useEffect(() => { onRecordedRef.current = onRecorded }, [onRecorded])
@@ -106,12 +108,11 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
     try {
       // a voice note that is playing must stop first: on an iPhone the microphone comes back empty while sound plays
       stopPlayingAudio()
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-      })
+      // One shared microphone (lib/media/mic-session.ts): the first note asks the phone, the next ones reuse it, so an iPhone Home Screen app stops asking again and again.
+      const stream = await acquireMic()
       if (unmountedRef.current) {
-        // the screen went away while the permission prompt was open — release the microphone, record nothing
-        stream.getTracks().forEach((t) => t.stop())
+        // the screen went away while the permission prompt was open — let the microphone go, record nothing
+        releaseMicSoon()
         return
       }
       streamRef.current = stream
@@ -139,8 +140,20 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
         : null
       listenerRef.current = meter
 
+      interruptedRef.current = false
+      // The phone ended the microphone under us (screen locked, a call, another app took it): finish with what was recorded so far instead of losing it.
+      const onTrackEnded = () => {
+        if (recorder.state === 'inactive') return
+        interruptedRef.current = true
+        recorder.stop()
+      }
+      stream.getAudioTracks().forEach((t) => t.addEventListener('ended', onTrackEnded))
+
       recorder.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop())
+        stream.getAudioTracks().forEach((t) => t.removeEventListener('ended', onTrackEnded))
+        releaseMicSoon()
+        releaseScreen()
+        setRecordingInProgress(false)
         streamRef.current = null
         meter?.stop()
         listenerRef.current = null
@@ -154,7 +167,11 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
           cancelledRef.current = false
           return
         }
+        const wasInterrupted = interruptedRef.current
+        interruptedRef.current = false
+        if (wasInterrupted) onErrorRef.current?.('The phone cut the recording short (the screen went dark or another app took the microphone). What was recorded so far is kept.')
         if (audioBlob.size < 1000) {
+          if (wasInterrupted) return
           onErrorRef.current?.('Recording too short — hold the mic button a bit longer.')
           return
         }
@@ -178,14 +195,15 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
       }
 
       mediaRecorderRef.current = recorder
+      setRecordingInProgress(true)
+      holdScreenAwake() // a dark screen stops a recording on iPhone
       recorder.start(250)
       setIsRecording(true)
     } catch (err) {
       console.error('[useAudioNoteRecorder] mic access failed:', err)
-      const msg = err instanceof Error && /denied|permission/i.test(err.message || err.name)
-        ? 'Microphone access denied. Check your browser permissions and try again.'
-        : 'Could not start recording. Check your microphone connection and browser permissions.'
-      onErrorRef.current?.(msg)
+      releaseScreen()
+      setRecordingInProgress(false)
+      onErrorRef.current?.(micErrorMessage(err).message)
     } finally {
       startingRef.current = false
     }
@@ -214,7 +232,8 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
       cancelledRef.current = true // an unmount (e.g. navigating away) must never fire onRecorded after the composer is gone
       const recorder = mediaRecorderRef.current
       if (recorder && recorder.state !== 'inactive') recorder.stop()
-      streamRef.current?.getTracks().forEach((t) => t.stop())
+      if (streamRef.current) { releaseMicSoon(); releaseScreen(); setRecordingInProgress(false) }
+      streamRef.current = null
       listenerRef.current?.stop()
     }
   }, [])
