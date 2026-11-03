@@ -58,6 +58,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
 
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier, request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
         if containerItemIdentifier == .workingSet { return WorkingSetEnumerator(api: api, catalog: catalog, domain: domain) }
+        // the trash of this location is kept in the CRM (restorable there), so Finder is shown nothing in it
+        if containerItemIdentifier == .trashContainer { return EmptyTrashEnumerator() }
         guard let id = FPItem.itemID(for: containerItemIdentifier) else { throw NSFileProviderError(.noSuchItem) }
         return ContainerEnumerator(container: id, catalog: catalog)
     }
