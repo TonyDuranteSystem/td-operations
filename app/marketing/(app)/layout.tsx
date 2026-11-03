@@ -1,3 +1,4 @@
+import { SupabaseIncidentBar } from '@/components/infra/supabase-incident-bar'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { isSecureAdmin } from '@/lib/auth'
@@ -104,6 +105,7 @@ export default async function MarketingAppLayout({ children }: { children: React
       </aside>
       <div className="min-w-0 flex-1">
         <LeadWindowsHost defaultRole={boardRole(ctx.permissions)} roles={availableBoardRoles(ctx.permissions)} chatOn={chatOn} pollOn={chatAny}>
+          <SupabaseIncidentBar audience="staff" />
           <ZoneReporter knownZone={layoutTime.selfZone} />
           {layoutTime.banner.length > 0 && <SellerBanner clocks={layoutTime.banner} nowIso={new Date().toISOString()} liveYou={!ctx.viewAs} />}
           {unreadNews.length > 0 && <NewsStrip title={newsText(unreadNews[0], lang).title} more={unreadNews.length - 1} t={t} />}

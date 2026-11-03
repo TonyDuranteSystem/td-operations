@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Check, CheckCheck, Clock, CornerUpLeft, FileText, Mic, MoreHorizontal, Pencil, Smile } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { incidentHintFor, useIncidentState } from '@/lib/infra/incident-client'
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import { useTalkI18n } from '@/components/talk/talk-i18n'
 import { TalkEmojiPopover } from '@/components/talk/talk-emoji'
@@ -107,6 +108,8 @@ function Bubble({
   const { t, ts } = useTalkI18n()
   // a message still in the phone's outbox: no menu, no reply swipe, no reactions — it has not reached anybody yet
   const local = m.local
+  // while Supabase (our file storage) has an open incident the waiting note says so — the person is told it is not their connection
+  const incidentHint = incidentHintFor(useIncidentState())
   const atts = (m.attachments ?? []).filter(a => a && a.url)
   const deleted = !!m.deleted_at
   const quote = quotedPreview(m, byId)
@@ -225,6 +228,7 @@ function Bubble({
             <p className={local.state === 'failed' ? 'font-medium text-red-700' : 'text-zinc-600'}>
               {local.state === 'failed' ? (local.error ? t(local.error) : t('Could not be sent.')) : t("Not sent yet — it will send by itself when you're back online.")}
             </p>
+            {incidentHint && local.files.length > 0 && <p className="text-zinc-600" data-testid="talk-local-incident">{incidentHint}</p>}
             {outbox && (
               <div className="flex gap-3">
                 <button type="button" onClick={() => outbox.retry(m.id)} className="font-semibold text-[#BE1E2D]" data-testid="talk-local-retry">{t('Send now')}</button>

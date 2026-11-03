@@ -1,3 +1,4 @@
+import { SupabaseIncidentBar } from '@/components/infra/supabase-incident-bar'
 import type { Metadata, Viewport } from 'next'
 import { SandboxBanner } from '@/components/sandbox-banner'
 import { createClient } from '@/lib/supabase/server'
@@ -366,6 +367,7 @@ export default async function PortalLayout({
               <NotificationBell accountId={selectedAccountId || undefined} contactId={contactId} />
             </div>
           )}
+          <SupabaseIncidentBar audience="client" />
           {contactId && <PendingDecisions locale={locale} />}
           {isSuspended && selectedAccount ? (
             <SuspendedGuard companyName={selectedAccount.company_name}>
