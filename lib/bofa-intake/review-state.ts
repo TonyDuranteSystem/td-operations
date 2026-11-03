@@ -23,6 +23,8 @@ export interface ReviewRow {
   returned_at?: string | null
   /** Only needed to tell a send that never finished (see isStaleSending). */
   updated_at?: string | null
+  /** Only needed to tell a failed send that Gmail never confirmed (see sendMayHaveGoneOut). */
+  email_error?: string | null
 }
 
 /** A Submit that has been "sending" for longer than this never finished: deliver.ts then lets Submit take it over. */
@@ -37,6 +39,36 @@ export function isStaleSending(r: ReviewRow, now: number = Date.now()): boolean 
   if (r.email_status !== "sending" || !r.updated_at) return false
   const t = Date.parse(r.updated_at)
   return Number.isFinite(t) && now - t > STALE_SENDING_MS
+}
+
+/**
+ * deliver.ts starts `email_error` with this when the send failed AFTER the hand-off to Gmail began (a dropped connection, a
+ * server error, an unreadable reply). Google may have accepted the message anyway, so "failed" does not prove nothing went out.
+ * A failure BEFORE the hand-off (a file could not be read, a bad address) never carries it: that one definitely did not go.
+ * It is plain text in the existing column on purpose: no database change, and the list and detail screens already show it.
+ */
+export const SEND_UNCONFIRMED_PREFIX = "Gmail did not confirm the send, so the email may already have reached the bank contact. Check the Sent mailbox before submitting again. "
+
+/**
+ * Gmail looked at the message and REFUSED it: an answer in the 400s ("too big", "not authorised", "bad address"), as lib/gmail.ts
+ * words it ("Gmail API 400: …"). Nothing went out, so that failure is a plain retry. Not a refusal: a timeout (408), a server
+ * error (5xx), a dropped connection, an unreadable reply, or anything we do not recognise — those are "not confirmed".
+ */
+export function gmailRefusedTheSend(message: string): boolean {
+  const m = /^Gmail API (\d{3})\b/.exec(message)
+  if (!m) return false
+  const status = Number(m[1])
+  return status >= 400 && status < 500 && status !== 408
+}
+
+/**
+ * The email MAY already be at the bank contact: either a send that never recorded its outcome (stale 'sending'), or a failure
+ * Gmail never confirmed. In both cases pressing Submit again could email every passport a second time, so the staff page asks
+ * the person to check the Sent mailbox first. A failure that definitely did not go out (no prefix) is a plain retry.
+ */
+export function sendMayHaveGoneOut(r: ReviewRow, now: number = Date.now()): boolean {
+  if (isStaleSending(r, now)) return true
+  return r.email_status === "failed" && (r.email_error ?? "").startsWith(SEND_UNCONFIRMED_PREFIX)
 }
 
 /** null = not a submitted application (not opened, being filled, revoked). */
