@@ -54,7 +54,9 @@ async function notifyStaff(label: string, companyName: string, id: string, resub
     const subject = resubmitted ? `Bank application RESUBMITTED: ${label}` : `Bank application to review: ${label}`
     const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
       <h2 style="color:#1e3a5f;">${resubmitted ? "A bank application was corrected and resubmitted" : "A bank application is waiting for your review"}</h2>
-      <p>${resubmitted ? "The client corrected the application you sent back" : "The one-time application link"} <strong>${escapeHtml(label)}</strong> ${resubmitted ? "and submitted it again" : "was submitted"} (company: <strong>${escapeHtml(companyName)}</strong>).</p>
+      <p>${resubmitted
+        ? `The client corrected the application you sent back and submitted it again: <strong>${escapeHtml(label)}</strong> (company: <strong>${escapeHtml(companyName)}</strong>).`
+        : `The one-time application link <strong>${escapeHtml(label)}</strong> was submitted (company: <strong>${escapeHtml(companyName)}</strong>).`}</p>
       <p>Review the answers and documents, then press <b>Reviewed</b> and <b>Submit</b>: <a href="${CRM_BASE_URL}/bofa-intake?open=${id}">${CRM_BASE_URL}/bofa-intake</a></p>
       <p style="color:#666;font-size:12px;">Nothing has been sent to anyone outside Tony Durante LLC yet.</p></div>`
     await sendHtmlEmail({ to: settings.notifyTo, subject, html })
