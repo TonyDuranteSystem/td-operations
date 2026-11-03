@@ -8,6 +8,10 @@ import { NextRequest, NextResponse } from 'next/server'
  * POST /api/team/messages/[id]/react  — toggle an emoji reaction.
  * Body: { emoji }. Uses the toggle_internal_message_reaction RPC (atomic
  * add/remove keyed on emoji + reactor). Staff-only. Reactor id = auth user id.
+ *
+ * Optional `on: boolean` = SET instead of toggle: "I want this reaction on / off". If it is already in that state nothing changes and the
+ * current reactions are returned. TD Talk's offline queue sends this, so a reaction that is sent twice (the first answer was lost) can
+ * never flip back. Without `on` the behaviour is exactly the old toggle.
  */
 export async function POST(
   request: NextRequest,
@@ -33,6 +37,16 @@ export async function POST(
       const access = await assertThreadAccess(target.thread_id, user.id)
       if (!access.allowed) return NextResponse.json({ error: THREAD_DENIED_MESSAGE }, { status: 403 })
     }
+  }
+
+  if (typeof body.on === 'boolean') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: row } = await (supabaseAdmin as any).from('internal_messages').select('reactions').eq('id', msgId).maybeSingle()
+    if (!row) return NextResponse.json({ error: 'Message not found' }, { status: 404 })
+    const current = Array.isArray(row.reactions) ? row.reactions : []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const has = current.some((r: any) => r?.emoji === emoji && r?.reactor_id === user.id)
+    if (has === body.on) return NextResponse.json({ added: has, reactions: current })
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

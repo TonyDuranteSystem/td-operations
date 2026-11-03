@@ -212,6 +212,7 @@ function Bubble({
         <div className="mt-0.5 flex items-center justify-end gap-1 text-[11px] text-zinc-500">
           {m.edited_at && !deleted && <span>{t('edited')}</span>}
           <span>{timeLabel(m.created_at)}</span>
+          {m.pending && !local && <Clock className="h-3.5 w-3.5 text-zinc-400" aria-label={t('Change not sent yet')} data-testid="talk-pending-change" />}
           {local && (
             <Clock className={cn('h-3.5 w-3.5', local.state === 'failed' ? 'text-red-600' : 'text-zinc-400')} aria-label={t('Not sent yet')} data-testid="talk-tick-waiting" />
           )}

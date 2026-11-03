@@ -678,6 +678,7 @@ export const IT: Record<string, string> = {
   "Sent": "Inviato",
   "Loading…": "Caricamento…",
   "Load earlier messages": "Carica messaggi precedenti",
+  "Change not sent yet": "Modifica non ancora inviata",
   "No messages yet. Say hello.": "Ancora nessun messaggio. Scrivi tu per primo.",
   "Can't attach: {names}": "Impossibile allegare: {names}",
   "Up to {n} files per message.": "Al massimo {n} file per messaggio.",
