@@ -292,6 +292,8 @@ export function TalkMessages({
   // "Load earlier messages" adds messages ABOVE the ones being read: the place on screen is kept (the distance from the bottom stays the same)
   const anchorRef = useRef<{ fromBottom: number; firstId: string | undefined } | null>(null)
   const prependedRef = useRef(false)
+  // only TD Talk passes `earlier`; the "messages were added above" handling is for it alone (TD Marketing's chats scroll exactly as before)
+  const hasEarlier = earlier !== undefined
   const lastFirstRef = useRef<string | undefined>(undefined)
   const askEarlier = () => {
     const el = boxRef.current
@@ -324,7 +326,7 @@ export function TalkMessages({
     }
     // older messages were added above (a jump to an old message loads pages without the button): never pull the person down to the bottom for them
     const firstNow = messages[0]?.id
-    if (lastFirstRef.current !== undefined && firstNow !== lastFirstRef.current && messages.length > lastCountRef.current) {
+    if (hasEarlier && lastFirstRef.current !== undefined && firstNow !== lastFirstRef.current && messages.length > lastCountRef.current) {
       lastFirstRef.current = firstNow
       lastCountRef.current = messages.length
       prependedRef.current = true
@@ -337,7 +339,7 @@ export function TalkMessages({
       if (nearBottom || newest?.sender_id === meId) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
     }
     lastCountRef.current = messages.length
-  }, [threadId, messages, meId, earlier?.loading])
+  }, [threadId, messages, meId, earlier?.loading, hasEarlier])
 
   // A late-loading photo grows the page after the first jump — keep pinned to the bottom for the first moments.
   useEffect(() => {

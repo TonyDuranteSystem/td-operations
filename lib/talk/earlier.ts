@@ -37,3 +37,15 @@ export function earlierCursor(shown: readonly TalkMessage[]): string | null {
   for (const m of shown) { if (m.local) continue; if (!oldest || at(m) < at(oldest)) oldest = m }
   return oldest ? oldest.created_at : null
 }
+
+/**
+ * Messages that were in the live window a moment ago and are not in the fresh snapshot because the window SLID forward (new messages pushed them out of the newest 500).
+ * When older pages are loaded these would fall into a gap — they are older than the window but newer than the last older page — so the screen moves them into the older list.
+ */
+export function slidOutOfWindow(prevWindow: readonly TalkMessage[], snapshot: readonly TalkMessage[]): TalkMessage[] {
+  if (snapshot.length === 0) return []
+  const have = new Set(snapshot.map(m => m.id))
+  let oldest = Infinity
+  for (const m of snapshot) oldest = Math.min(oldest, at(m))
+  return prevWindow.filter(m => !m.local && !have.has(m.id) && at(m) < oldest)
+}

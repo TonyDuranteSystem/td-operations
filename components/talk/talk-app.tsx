@@ -13,9 +13,9 @@ import { isImplementationChat } from '@/lib/talk/voice-alert'
 import { cn } from '@/lib/utils'
 import { withOutbox } from '@/lib/talk/outbox-rules'
 import { draftKey } from '@/lib/talk/drafts'
-import { combineHistory, earlierCursor, EARLIER_PAGE, MAX_JUMP_PAGES, mergeEarlier } from '@/lib/talk/earlier'
+import { combineHistory, earlierCursor, EARLIER_PAGE, MAX_JUMP_PAGES, mergeEarlier, slidOutOfWindow } from '@/lib/talk/earlier'
 import { applyUnreadIndicators, clearUnreadIndicators, previewLine, unreadTotal } from '@/lib/talk/list-preview'
-import { leavingLosesRecording, SEND_BEFORE_LEAVING_TIMEOUT_MS, type RecordingControl, type VoiceOutcome } from '@/lib/talk/recording-guard'
+import { leavingLosesRecording, SEND_BEFORE_LEAVING_TIMEOUT_MS, stayAfterVoice, type RecordingControl, type VoiceOutcome } from '@/lib/talk/recording-guard'
 import { useChatOutbox } from '@/components/talk/use-chat-outbox'
 import { useChatActions } from '@/components/talk/use-chat-actions'
 import { actionVerb, hasMyReaction, overlayActions, type ChatAction } from '@/lib/talk/outbox-actions-rules'
@@ -80,6 +80,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const [hasMore, setHasMore] = useState(false)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const olderRef = useRef<TalkMessage[]>([])
+  const windowRef = useRef<TalkMessage[]>([])
   const hasMoreRef = useRef(false)
   const loadingEarlierRef = useRef(false)
   const [peerReadAt, setPeerReadAt] = useState<string | null>(null)
@@ -110,6 +111,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const voiceDoneRef = useRef<((o: VoiceOutcome) => void) | null>(null)
   const [leaveAsk, setLeaveAsk] = useState<{ go: () => void } | null>(null)
   const [leaveBusy, setLeaveBusy] = useState(false)
+  const leaveBusyRef = useRef(false)
 
   const selectedIdRef = useRef<string | null>(null)
   const meIdRef = useRef<string | null>(null)
@@ -127,6 +129,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const shown = useMemo(() => overlayActions(combineHistory(older, messages), actions.waiting, meId ? { id: meId, name: meName } : null), [older, messages, actions.waiting, meId, meName])
   messagesRef.current = shown
   olderRef.current = older
+  windowRef.current = messages
   hasMoreRef.current = hasMore
 
   const chats = useMemo(() => chatThreads(threads), [threads])
@@ -163,6 +166,11 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
       const d = await r.json()
       if (selectedIdRef.current !== threadId) return // switched chats while loading
       const incoming = (d.messages ?? []) as TalkMessage[]
+      // the live window slides forward when new messages arrive: what slid out must not fall into a gap between the older pages and the window
+      if (olderRef.current.length > 0) {
+        const slid = slidOutOfWindow(windowRef.current, incoming)
+        if (slid.length > 0) { olderRef.current = mergeEarlier(olderRef.current, slid); setOlder(olderRef.current) }
+      }
       setMessages(prev => {
         // MERGE, never replace: a poll that started before a send (or a realtime message) and answers after it would
         // otherwise wipe that newer message until the next poll. Anything local that the snapshot does not have yet and
@@ -215,14 +223,24 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   }, [])
   const requestSelect = useCallback((id: string | null) => { guardLeave(() => select(id)) }, [guardLeave, select])
 
+  // "Send it": the voice note is stopped and queued in the chat it was recorded in; only a note that really was kept lets the person leave. A note that could not be kept, or one that is slow,
+  // keeps the person in the chat (leaving would lose it); a slow one is still saved here when it finishes.
   const leaveAfterSending = useCallback((go: () => void) => {
     setLeaveBusy(true)
+    leaveBusyRef.current = true
     let done = false
-    const finish = () => { if (done) return; done = true; voiceDoneRef.current = null; clearTimeout(timer); setLeaveBusy(false); setLeaveAsk(null); go() }
-    const timer = setTimeout(finish, SEND_BEFORE_LEAVING_TIMEOUT_MS)
-    voiceDoneRef.current = () => finish()
+    const finish = (stay: boolean, why?: string) => {
+      if (done) return
+      done = true; voiceDoneRef.current = null; clearTimeout(timer)
+      leaveBusyRef.current = false
+      setLeaveBusy(false); setLeaveAsk(null)
+      if (why) toast(why)
+      if (!stay) go()
+    }
+    const timer = setTimeout(() => finish(true, 'Still saving your voice note — staying in this chat until it is saved.'), SEND_BEFORE_LEAVING_TIMEOUT_MS)
+    voiceDoneRef.current = o => finish(stayAfterVoice(o), stayAfterVoice(o) ? 'The voice note could not be saved, so you are still in this chat.' : undefined)
     if (recordingControl.current) recordingControl.current.send()
-    else finish()
+    else finish(false)
   }, [])
   const leaveAfterThrowingAway = useCallback((go: () => void) => {
     voiceDoneRef.current = null
@@ -465,6 +483,10 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     let found = messagesRef.current.some(m => m.id === id)
     let loadedPages = 0
     for (; !found && hasMoreRef.current && loadedPages < MAX_JUMP_PAGES;) {
+      // a page the person asked for with the button is still loading: wait for it instead of giving up
+      for (let waits = 0; loadingEarlierRef.current && waits < 100; waits++) await new Promise(r => setTimeout(r, 150))
+      found = messagesRef.current.some(m => m.id === id) || olderRef.current.some(m => m.id === id)
+      if (found) break
       const page = await loadEarlier()
       if (!page) break
       loadedPages++
@@ -753,7 +775,8 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
         <TalkComposer
           key={selected.id} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping}
           draftKey={draftKey(meId, selected.id)}
-          onRecordingChange={on => { recordingRef.current = on }}
+          // the recording ended by itself (the 5-minute limit) while the question is open: the note was sent from this chat, so the question no longer applies
+          onRecordingChange={on => { recordingRef.current = on; if (!on) setLeaveAsk(cur => (cur && !leaveBusyRef.current ? null : cur)) }}
           recordingControl={recordingControl}
           onVoiceDone={o => voiceDoneRef.current?.(o)}
         />
