@@ -5,9 +5,19 @@ import { X, Loader2, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
 
+export interface LeadFromCall {
+  callId: string
+  /** shown at the top of the form so the person sees which call the lead is made from */
+  callTitle: string
+  full_name: string
+  email: string
+}
+
 interface CreateLeadDialogProps {
   open: boolean
   onClose: () => void
+  /** set when the lead is made from a recorded call: the call is attached on save and the lead starts as Call Done */
+  fromCall?: LeadFromCall | null
 }
 
 const SOURCES = ['Referral', 'Website', 'Social', 'Calendly', 'WhatsApp', 'Other']
@@ -15,17 +25,17 @@ const CHANNELS = ['WhatsApp', 'Email', 'Phone', 'Calendly', 'Telegram']
 const LANGUAGES = ['English', 'Italian']
 const STATUSES = ['New', 'Call Scheduled', 'Call Done']
 
-export function CreateLeadDialog({ open, onClose }: CreateLeadDialogProps) {
+export function CreateLeadDialog({ open, onClose, fromCall }: CreateLeadDialogProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
-  const [fullName, setFullName] = useState('')
-  const [email, setEmail] = useState('')
+  const [fullName, setFullName] = useState(fromCall?.full_name ?? '')
+  const [email, setEmail] = useState(fromCall?.email ?? '')
   const [phone, setPhone] = useState('')
   const [source, setSource] = useState('Referral')
   const [channel, setChannel] = useState('WhatsApp')
   const [language, setLanguage] = useState('Italian')
-  const [status, setStatus] = useState('New')
+  const [status, setStatus] = useState(fromCall ? 'Call Done' : 'New')
   const [reason, setReason] = useState('')
   const [referrerName, setReferrerName] = useState('')
   const [notes, setNotes] = useState('')
@@ -34,13 +44,13 @@ export function CreateLeadDialog({ open, onClose }: CreateLeadDialogProps) {
   if (!open) return null
 
   const resetForm = () => {
-    setFullName('')
-    setEmail('')
+    setFullName(fromCall?.full_name ?? '')
+    setEmail(fromCall?.email ?? '')
     setPhone('')
     setSource('Referral')
     setChannel('WhatsApp')
     setLanguage('Italian')
-    setStatus('New')
+    setStatus(fromCall ? 'Call Done' : 'New')
     setReason('')
     setReferrerName('')
     setNotes('')
@@ -74,6 +84,7 @@ export function CreateLeadDialog({ open, onClose }: CreateLeadDialogProps) {
             reason: reason.trim() || undefined,
             referrer_name: referrerName.trim() || undefined,
             notes: notes.trim() || undefined,
+            call_summary_id: fromCall?.callId,
           }),
         })
 
@@ -114,7 +125,7 @@ export function CreateLeadDialog({ open, onClose }: CreateLeadDialogProps) {
         >
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b">
-            <h2 className="text-lg font-semibold">New Lead</h2>
+            <h2 className="text-lg font-semibold">{fromCall ? 'New Lead from a call' : 'New Lead'}</h2>
             <button onClick={handleClose} className="p-1 rounded hover:bg-zinc-100">
               <X className="h-5 w-5" />
             </button>
@@ -122,6 +133,11 @@ export function CreateLeadDialog({ open, onClose }: CreateLeadDialogProps) {
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
+            {fromCall && (
+              <p className="text-xs rounded-md bg-zinc-50 border px-3 py-2 text-zinc-600">
+                The call <span className="font-medium text-zinc-900">{fromCall.callTitle}</span> will be attached to this lead.
+              </p>
+            )}
             {/* Full Name */}
             <div>
               <label className="block text-sm font-medium mb-1">Full Name *</label>
