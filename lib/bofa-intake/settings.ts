@@ -1,12 +1,12 @@
 /**
- * Bank application intake — the two address lists (Antonio 2026-11-02; 2026-11-03: NO email address is shown or edited on any
- * form card, so there is no screen for these — a developer changes the stored value):
+ * Bank application intake — the two address lists on the Forms page's Bank-application card (Antonio 2026-11-02:
+ * "the settings must be under Forms, in the BofA card"):
  *
  *   bofa_submit_to   where a REVIEWED application is submitted          (default sekureye22@gmail.com)
  *   bofa_notify_to   who is told that an application has arrived         (default support@tonydurante.us)
  *
- * Two ordinary app_settings rows, value = { emails, changed_by, changed_at }. Read-only from the CRM: nothing writes them
- * except a migration or a developer (the shipping address comes from lib/td-address.ts).
+ * Two ordinary app_settings rows, value = { emails, changed_by, changed_at } so the history of the last change travels
+ * with the value. Nothing else is configurable here on purpose (the shipping address comes from lib/td-address.ts).
  *
  * FAILS CLOSED for the one that matters: a missing, empty or unreadable submit-to list means Submit refuses to send
  * (an application is never emailed to an address nobody can see on screen). The notify list falls back to our own
@@ -71,5 +71,44 @@ export async function loadBofaSettings(): Promise<BofaSettings> {
     notifyTo: notifyToSetting ? notifyToSetting.emails : [...DEFAULT_NOTIFY_TO],
     notifyToSetting,
     readable: true,
+  }
+}
+
+export type SaveSettingsInput = { submitTo: unknown; notifyTo: unknown; by: string }
+export type SaveSettingsResult =
+  | { ok: true; submitTo: AddressSetting; notifyTo: AddressSetting; changed: { submitTo: boolean; notifyTo: boolean }; before: { submitTo: string[]; notifyTo: string[] } }
+  | { ok: false; error: string }
+
+/** Validate both lists, then store them with who/when. Both must name at least one address. */
+export async function saveBofaSettings(input: SaveSettingsInput): Promise<SaveSettingsResult> {
+  const submit = parseRecipients(input.submitTo)
+  if ("error" in submit) return { ok: false, error: submit.error }
+  if (submit.emails.length === 0) return { ok: false, error: "Type the address applications are submitted to." }
+  const notify = parseRecipients(input.notifyTo)
+  if ("error" in notify) return { ok: false, error: notify.error }
+  if (notify.emails.length === 0) return { ok: false, error: "Type who should be told when an application arrives." }
+
+  const before = await loadBofaSettings()
+  if (!before.readable) return { ok: false, error: "Could not read the current settings. Nothing was changed." }
+
+  const at = new Date().toISOString()
+  const value = (emails: string[]) => ({ emails, changed_by: input.by, changed_at: at })
+  const { error } = await settingsTable().upsert(
+    [
+      { key: SUBMIT_TO_KEY, value: value(submit.emails), updated_at: at },
+      { key: NOTIFY_TO_KEY, value: value(notify.emails), updated_at: at },
+    ],
+    { onConflict: "key" },
+  )
+  if (error) return { ok: false, error: "Could not save the settings. Please try again." }
+
+  const beforeSubmit = before.submitTo?.emails ?? []
+  const beforeNotify = before.notifyToSetting?.emails ?? []
+  return {
+    ok: true,
+    submitTo: { emails: submit.emails, changedBy: input.by, changedAt: at },
+    notifyTo: { emails: notify.emails, changedBy: input.by, changedAt: at },
+    changed: { submitTo: !sameAddresses(beforeSubmit, submit.emails), notifyTo: !sameAddresses(beforeNotify, notify.emails) },
+    before: { submitTo: beforeSubmit, notifyTo: beforeNotify },
   }
 }

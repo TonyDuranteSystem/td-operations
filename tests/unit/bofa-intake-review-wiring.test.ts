@@ -1,6 +1,6 @@
 /** Source checks that pin the promises of the review gate (the unit suite has no browser). */
 import { describe, it, expect } from "vitest"
-import { existsSync, readFileSync } from "fs"
+import { readFileSync } from "fs"
 import { join } from "path"
 
 const root = join(__dirname, "..", "..")
@@ -59,24 +59,29 @@ describe("the review rule lives inside the send", () => {
   })
 })
 
-describe("no email address on any form card (Antonio 2026-11-03)", () => {
-  it("the Forms page has no address boxes, no Save addresses button and no per-link recipients box", () => {
+describe("who may change where passports go", () => {
+  const settings = read("app/api/bofa-intake-admin/settings/route.ts")
+  it("only the owner can save; anyone with Forms can read", () => {
+    expect(settings).toContain("isOwnerOnly(user)")
+    expect(settings).toContain("Only the owner can change these addresses.")
+  })
+  it("the Forms card is the settings place: the two addresses live there, and there is no per-link address box", () => {
     const forms = read("app/(dashboard)/forms/page.tsx")
     expect(forms).not.toContain("Send the submitted form to")
-    expect(forms).not.toContain("BankApplicationSettings")
-    expect(forms).not.toMatch(/Save addresses|type="email"|aria-label="Applications are submitted to"/)
-    expect(existsSync(join(root, "components/forms/bank-application-settings.tsx"))).toBe(false)
-    expect(read("app/api/bofa-intake-admin/route.ts")).not.toContain("parseRecipients")
+    expect(forms).toContain("BankApplicationSettings")
+    const create = read("app/api/bofa-intake-admin/route.ts")
+    expect(create).not.toContain("parseRecipients")
   })
-  it("nothing in the CRM writes the stored addresses: the settings route is read-only", () => {
-    const route = read("app/api/bofa-intake-admin/settings/route.ts")
-    expect(route).toContain("export async function GET")
-    expect(route).not.toMatch(/export async function (PUT|POST|PATCH|DELETE)/)
-    expect(read("lib/bofa-intake/settings.ts")).not.toContain("saveBofaSettings")
-  })
-  it("the shipping address on the form has no company name line", () => {
-    expect(read("components/forms/bank-application-form.tsx")).not.toContain("shipping_name")
+})
+
+describe("the Seminole shipping address on the client form", () => {
+  const form = read("components/forms/bank-application-form.tsx")
+  it("has no company-name line and no explanatory wording, only the heading and the address", () => {
+    expect(form).not.toContain("shipping_name")
     expect(read("lib/bofa-intake/shipping.ts")).not.toMatch(/shipping_name:/)
+    expect(form).not.toContain("Where the bank sends your cards and letters")
+    expect(form).not.toContain("filled in for you and cannot be changed")
+    expect(form).toContain("Shipping address")
   })
 })
 
