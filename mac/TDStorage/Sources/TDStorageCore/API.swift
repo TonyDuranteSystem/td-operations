@@ -131,6 +131,11 @@ public final class StorageAPI: @unchecked Sendable {
             try await pause(round); round += 1
         }
     }
+    /// Making a NEW folder (a folder pasted or dragged into Finder). The CRM reuses a folder of that name that is already there, so a retry or a
+    /// second paste never makes a second one.
+    public func newFolder(ownerId: String, parentId: String, name: String) async throws -> NewFolder {
+        try await postAuthorized("api/storage-app/new-folder", ["ownerId": ownerId, "parentId": parentId, "name": name])
+    }
     public func item(kind: String, id: String) async throws -> ItemInfo {
         try await get("api/storage-app/item", query: [URLQueryItem(name: "kind", value: kind), URLQueryItem(name: "id", value: id)])
     }

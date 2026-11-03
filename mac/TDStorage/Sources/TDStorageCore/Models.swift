@@ -69,6 +69,9 @@ public struct UploadSlot: Codable, Equatable {
 public struct SaveReply: Codable, Equatable {
     public var fileId: String?; public var ownerId: String?; public var name: String?; public var size: Int?; public var pending: Bool?
 }
+/// POST /api/storage-app/new-folder — the folder as the CRM has it (`created` false = a folder of that name was already there and is reused).
+public struct NewFolder: Codable, Equatable { public var folderId: String; public var ownerId: String; public var name: String; public var created: Bool? }
+
 /// POST /api/storage-app/save — the file as the CRM stored it (the name may differ if the CRM had to change it).
 public struct SavedFile: Codable, Equatable { public var fileId: String; public var ownerId: String; public var name: String; public var size: Int? }
 

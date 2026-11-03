@@ -33,10 +33,10 @@ const refuse = (status: SaveStatus, code: string, message: string): SaveAnswer =
 const STATUS_OF: Record<string, SaveStatus> = { not_found: 404, not_allowed: 422, too_big: 413, bad_name: 400, ignored: 422, exists: 409 }
 const fromRefusal = (r: Extract<SaveRefusal, { ok: false }>): SaveAnswer => refuse(STATUS_OF[r.code] ?? 422, r.code, r.message)
 
-interface Target { ownerId: string; folderId: string }
+export interface Target { ownerId: string; folderId: string }
 
 /** The destination, from the database: live storage, live folder of THAT storage, allowed area, this login may open it. */
-async function checkTarget(t: Target, user: User, settings: StorageAppSettings): Promise<SaveRefusal & { ownerKind?: string }> {
+export async function checkTarget(t: Target, user: User, settings: StorageAppSettings): Promise<SaveRefusal & { ownerKind?: string }> {
   const { data: folder, error } = await db().from("store_folders").select("id, owner_id, kind, trashed_at").eq("id", t.folderId).maybeSingle()
   if (error) throw new Error(`Could not read the folder (${error.message}).`)
   if (!folder || folder.owner_id !== t.ownerId) return { ok: false, code: "not_found", message: "Folder not found." }
