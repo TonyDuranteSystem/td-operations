@@ -56,4 +56,10 @@ describe("makeZoomApi", () => {
     await makeZoomApi({ ...ENV, ZOOM_HOST_USER: undefined }, f.fn).createMeeting({ topic: "x", startIso: "2026-11-03T14:00:00Z", minutes: 30, timeZone: "UTC" })
     expect(f.calls[1].url).toBe("https://api.zoom.us/v2/users/me/meetings")
   })
+  it("checks the recordings of the host", async () => {
+    const f = fakeFetch([tokenAnswer, { status: 200, json: { meetings: [] } }])
+    await makeZoomApi(ENV, f.fn).checkRecordings?.()
+    expect(f.calls[1].url).toBe("https://api.zoom.us/v2/users/host%40example.test/recordings?page_size=1")
+    expect(f.calls[1].method).toBe("GET")
+  })
 })
