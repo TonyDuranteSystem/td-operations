@@ -66,9 +66,11 @@ vi.mock('@/lib/crm-store/formation-pilot', () => ({ pilotCompleteHandover: vi.fn
 vi.mock('@/lib/operations/suite', () => ({ claimCompanySuite: vi.fn(async () => null) }))
 vi.mock('@/lib/mcp/action-log', () => ({ logAction: vi.fn(async () => undefined) }))
 vi.mock('@/lib/team/reanchor-conversations', () => ({ reanchorLeadConversations: vi.fn() }))
+vi.mock('@/lib/system-errors', () => ({ reportSystemError: vi.fn(async () => ({ fingerprint: 'fp' })) }))
 
-import { materializeFormationCompany } from '@/lib/operations/formation-materialize'
+import { materializeFormationCompany, filingIdNoteFromSteps } from '@/lib/operations/formation-materialize'
 import { logAction } from '@/lib/mcp/action-log'
+import { reportSystemError } from '@/lib/system-errors'
 
 const EXISTING: Link[] = [{ account_id: 'a-1', accounts: { id: 'a-1', company_name: 'Acme Holdings LLC', status: 'Active' } }]
 const base = { contact_id: 'c-1', formation_state: 'NM' as const, chosen_name: 'Acme Holdings LLC' }
@@ -80,6 +82,7 @@ beforeEach(() => {
   state.filledRows = [{ id: 'a-1' }]
   state.updateError = null
   vi.mocked(logAction).mockClear()
+  vi.mocked(reportSystemError).mockClear()
 })
 
 describe('materializer — a NEW company is created with the confirmed Filing ID', () => {
@@ -128,6 +131,21 @@ describe('materializer — a RETRY on an already-created company', () => {
     expect(r.outcome).toBe('already_materialized')
     expect(r.steps.find((s) => s.step === 'filing_id')).toMatchObject({ status: 'error' })
     expect(r.steps.find((s) => s.step === 'filing_id')?.detail).toContain('boom')
+    // …and recorded: this path returns before the audit-log write that carries the steps, so the failure goes to the error log
+    expect(vi.mocked(reportSystemError)).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'server',
+      route: 'formation-materialize/filing-id-retry',
+      message: expect.stringContaining('boom'),
+      context: expect.objectContaining({ account_id: 'a-1', filing_id: '3190157' }),
+    }))
+  })
+
+  it('a save that works / a skipped save never reports a system error', async () => {
+    state.links = EXISTING
+    await materializeFormationCompany({ ...base, filing_id: '3190157' })
+    state.filledRows = []
+    await materializeFormationCompany({ ...base, filing_id: '3190157' })
+    expect(vi.mocked(reportSystemError)).not.toHaveBeenCalled()
   })
 
   it('no Filing ID supplied → the existing company is not touched at all', async () => {
@@ -139,6 +157,23 @@ describe('materializer — a RETRY on an already-created company', () => {
   })
 })
 
+describe('filingIdNoteFromSteps — what staff are told when the confirmed ID did not reach an existing company', () => {
+  it('a failed save → says it could NOT be saved and where to add it', () => {
+    const note = filingIdNoteFromSteps([{ step: 'suite', status: 'ok' }, { step: 'filing_id', status: 'error', detail: 'boom' }])
+    expect(note).toContain('could NOT be saved')
+    expect(note).toContain('company page')
+  })
+  it('skipped (the company already has a different ID, never overwritten) → says the confirmed one was not saved', () => {
+    expect(filingIdNoteFromSteps([{ step: 'filing_id', status: 'skipped' }])).toContain('already has a State Filing ID')
+  })
+  it('saved, no ID supplied, or no steps at all → nothing to say', () => {
+    expect(filingIdNoteFromSteps([{ step: 'filing_id', status: 'ok' }])).toBeNull()
+    expect(filingIdNoteFromSteps([{ step: 'suite', status: 'ok' }])).toBeNull()
+    expect(filingIdNoteFromSteps([])).toBeNull()
+    expect(filingIdNoteFromSteps(undefined)).toBeNull()
+  })
+})
+
 // The wiring between the layers (upload window → upload route → advance → materializer) is source-checked, the same way the
 // other flow-upload tests pin their routes: each hop must carry the Filing ID, or the field silently stops reaching the company.
 describe('the Filing ID travels every hop to the company', () => {
@@ -146,16 +181,28 @@ describe('the Filing ID travels every hop to the company', () => {
 
   it('the upload route refuses a junk ID with a plain sentence, then hands the cleaned one to the advance', () => {
     const route = read('app/api/flows/[id]/upload-document/route.ts')
-    expect(route).toContain("normalizeFilingId(body.filing_id)")
-    expect(route).toContain('can only contain letters, numbers and dashes')
-    expect(route).toContain('status: 400')
+    // the refusal itself is tested by calling the route (upload-document-filing-id.test.ts); this only pins the hand-off to the advance
     expect(route).toMatch(/advanceServiceDelivery\(\{[\s\S]*?filing_id: confirmedFilingId/)
   })
 
-  it('the advance passes the Filing ID into the company creation', () => {
+  it('the advance passes the Filing ID into the company creation and hands a "not saved" outcome back to the caller', () => {
     const sd = read('lib/service-delivery.ts')
     expect(sd).toMatch(/filing_id\?: string/)
     expect(sd).toMatch(/materializeFormationCompany\(\{[\s\S]*?filing_id: params\.filing_id/)
+    expect(sd).toContain('filingIdNoteFromSteps(mat.steps)')
+    expect(sd).toContain('materialization.filing_id_note = filingIdNote')
+  })
+
+  it('the flow page keeps a lasting "no State Filing ID yet" line under the Company Created banner (the window\'s own warning vanishes when the stage moves)', () => {
+    const page = read('app/(dashboard)/flows/[id]/page.tsx')
+    expect(page).toContain("'id, company_name, filing_id,")
+    expect(page).toContain('companyFilingIdMissing')
+    expect(page).toContain('data-testid="company-filing-id-missing"')
+  })
+
+  it('the upload route puts that outcome on the response staff see', () => {
+    const route = read('app/api/flows/[id]/upload-document/route.ts')
+    expect(route).toContain('advance.materialization?.filing_id_note')
   })
 
   it('the OCR prefill route returns the Filing ID read from the Articles', () => {

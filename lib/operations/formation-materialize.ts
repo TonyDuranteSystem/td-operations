@@ -98,6 +98,23 @@ export type MaterializeStep = {
   detail?: string
 }
 
+/**
+ * What staff must be told when the Filing ID they confirmed did NOT end up on an already-created company (the retry path):
+ * a failed save, or a company that already carries a different Filing ID (never overwritten). null = nothing to say
+ * (saved, no ID supplied, or a brand-new company, which takes the ID on insert). The upload window shows it amber (job 64d2be64).
+ */
+export function filingIdNoteFromSteps(steps: ReadonlyArray<MaterializeStep> | null | undefined): string | null {
+  const step = steps?.find((s) => s.step === "filing_id")
+  if (!step) return null
+  if (step.status === "error") {
+    return "The company already existed and its State Filing ID could NOT be saved. Add it on the company page."
+  }
+  if (step.status === "skipped") {
+    return "The company already has a State Filing ID, so the one you confirmed was not saved. Change it on the company page if it is wrong."
+  }
+  return null
+}
+
 export interface MaterializeFormationResult {
   success: boolean
   outcome:
@@ -584,6 +601,14 @@ export async function materializeFormationCompany(
             .select("id")
           if (fillErr) {
             steps.push({ step: "filing_id", status: "error", detail: `Could not save the Filing ID on the existing company: ${fillErr.message}` })
+            // the retry path returns before the audit-log write that carries the steps, so a failed save is recorded here (never throws)
+            const { reportSystemError } = await import("@/lib/system-errors")
+            await reportSystemError({
+              source: "server",
+              route: "formation-materialize/filing-id-retry",
+              message: `Could not save the Filing ID on an already-created company: ${fillErr.message}`,
+              context: { account_id: acc.id, contact_id: params.contact_id, filing_id: params.filing_id },
+            })
           } else if (filled && filled.length > 0) {
             steps.push({ step: "filing_id", status: "ok", detail: `Filing ID ${params.filing_id} saved on the existing company` })
             await logAction({

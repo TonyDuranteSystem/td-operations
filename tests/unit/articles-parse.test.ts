@@ -133,4 +133,18 @@ describe("normalizeFilingId — what staff typed, tidied for saving", () => {
     expect(normalizeFilingId(42 as unknown as string)).toBeNull()
     expect(normalizeFilingId(undefined)).toBeNull()
   })
+
+  it("an ID copied out of a PDF works: the dashes and invisible characters a PDF carries are cleaned, not refused", () => {
+    expect(normalizeFilingId("2026\u2013002103965")).toBe("2026-002103965") // en dash
+    expect(normalizeFilingId("2026\u2011002103965")).toBe("2026-002103965") // non-breaking hyphen
+    expect(normalizeFilingId("2026\u2212002103965")).toBe("2026-002103965") // minus sign
+    expect(normalizeFilingId("2026 \u2014 002103965")).toBe("2026-002103965") // em dash with spaces
+    expect(normalizeFilingId("2026-002103965\u200B")).toBe("2026-002103965") // zero-width space
+    expect(normalizeFilingId("\uFEFF3190157")).toBe("3190157") // byte-order mark
+  })
+
+  it("a non-ASCII letter is refused, not turned into a valid-looking ID by upper-casing (ß → SS)", () => {
+    expect(normalizeFilingId("\u00DF123")).toBeNull()
+    expect(normalizeFilingId("L2600000914\u00E9")).toBeNull()
+  })
 })

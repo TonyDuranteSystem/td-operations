@@ -7,6 +7,26 @@ import { uploadOutcome, clientWasTold } from '@/lib/flows/upload-outcome'
 
 const opts = { fileName: 'letter.pdf', needsFormationDate: false }
 
+describe('uploadOutcome — the confirmed State Filing ID did not reach an already-created company', () => {
+  const formation = { fileName: 'Articles.pdf', needsFormationDate: true }
+  const ok = { success: true }
+
+  it('AMBER, never green, when the company existed and its Filing ID was not saved', () => {
+    const r = uploadOutcome({ detail: 'Articles.pdf uploaded', advance: { ...ok, materialization: { filing_id_note: 'The company already has a State Filing ID, so the one you confirmed was not saved.' } } }, formation)
+    expect(r.done).toBeNull()
+    expect(r.warn).toBe('Articles.pdf uploaded and the flow advanced, but: The company already has a State Filing ID, so the one you confirmed was not saved.')
+  })
+
+  it('no note → green as before', () => {
+    expect(uploadOutcome({ detail: 'Articles.pdf uploaded', advance: { ...ok, materialization: {} } }, formation)).toEqual({ warn: null, done: 'Articles.pdf uploaded' })
+  })
+
+  it('the company NOT being created still wins over the Filing ID note', () => {
+    const r = uploadOutcome({ advance: { ...ok, materialization: { error: 'boom', filing_id_note: 'x' } } }, formation)
+    expect(r.warn).toContain('company record was NOT created: boom')
+  })
+})
+
 describe('uploadOutcome', () => {
   it('a clean upload -> green with the server summary, no warning', () => {
     expect(uploadOutcome({ detail: 'letter.pdf uploaded — ITIN 912-70-1234 saved…' }, opts)).toEqual({ warn: null, done: 'letter.pdf uploaded — ITIN 912-70-1234 saved…' })

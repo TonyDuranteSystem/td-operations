@@ -133,10 +133,17 @@ export function parseFilingId(text: string): string | null {
  */
 export function normalizeFilingId(raw: unknown): string | null {
   if (typeof raw !== "string") return null
-  const cleaned = raw.trim().toUpperCase().replace(/\s*-\s*/g, "-")
-  if (!/^[A-Z0-9-]{4,30}$/.test(cleaned)) return null
+  const cleaned = raw
+    // invisible characters that come along when an ID is copied out of a PDF
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, "")
+    // every kind of dash a PDF or a keyboard produces (hyphen, non-breaking hyphen, figure/en/em dash, minus sign) → "-"
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    .trim()
+    .replace(/\s*-\s*/g, "-")
+  // checked BEFORE upper-casing: "\u00DF".toUpperCase() is "SS", which would turn a non-ASCII letter into a valid-looking ID
+  if (!/^[A-Za-z0-9-]{4,30}$/.test(cleaned)) return null
   if (!/\d/.test(cleaned)) return null
-  return cleaned
+  return cleaned.toUpperCase()
 }
 
 export function parseArticlesText(text: string): ArticlesParsed {

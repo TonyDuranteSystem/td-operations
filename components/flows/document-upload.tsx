@@ -153,6 +153,9 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
   // the company is created either way; a blank only shows a note so it is never missed silently.
   const [filingId, setFilingId] = useState('')
   const [filingIdFromArticles, setFilingIdFromArticles] = useState<string | null>(null)
+  // False when the company already exists (the materialize preflight says "not applicable"): the advance then creates nothing, so a Filing ID
+  // typed here would be dropped while the window claims it is saved — the field is replaced by a note and nothing is sent.
+  const [filingIdApplicable, setFilingIdApplicable] = useState(true)
 
   function handlePick(e: React.ChangeEvent<HTMLInputElement>) {
     const picked = e.target.files?.[0] ?? null
@@ -274,6 +277,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         setLegalNameProblem(null)
         setFilingId('')
         setFilingIdFromArticles(null)
+        setFilingIdApplicable(true)
         setConfirming(true)
         setPrefilling(true)
         try {
@@ -289,6 +293,8 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
               .then((r) => r.json()).catch(() => ({})),
           ])
           if (dateRes?.formation_date) setFormationDate(dateRes.formation_date)
+          // Only an explicit "not applicable" hides the field (the company already exists); a failed lookup leaves it shown, as before.
+          setFilingIdApplicable(preRes?.applicable !== false)
           // The Filing ID the Articles print (when their text carries one) — only a prefill, staff confirm it below.
           const readFilingId = typeof dateRes?.filing_id === 'string' ? normalizeFilingId(dateRes.filing_id) : null
           if (readFilingId) {
@@ -373,8 +379,8 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
       }
     }
     // The Filing ID is optional, but a value that is typed must be a plausible ID — said here, before anything is sent.
-    const confirmedFilingId = filingId.trim() ? normalizeFilingId(filingId) : null
-    if (filingId.trim() && !confirmedFilingId) {
+    const confirmedFilingId = filingIdApplicable && filingId.trim() ? normalizeFilingId(filingId) : null
+    if (filingIdApplicable && filingId.trim() && !confirmedFilingId) {
       setError('The State Filing ID can only contain letters, numbers and dashes (4 to 30 characters), for example 2026-002103965. Correct it, or clear the field to leave it empty.')
       return
     }
@@ -570,6 +576,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
                 )}
               </div>
             )}
+            {filingIdApplicable ? (
             <div className="mt-4">
               <label className="block text-sm font-medium text-zinc-700">
                 State Filing ID
@@ -602,6 +609,13 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
                 </p>
               )}
             </div>
+            ) : (
+              !prefilling && (
+                <p className="mt-4 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600" data-testid="articles-filing-id-existing">
+                  This company already exists in the CRM, so a State Filing ID is not set from this upload. Add or change it on the company page.
+                </p>
+              )
+            )}
             {entityTypeNeeded && (
               <label className="mt-4 block text-sm font-medium text-zinc-700">
                 LLC type
