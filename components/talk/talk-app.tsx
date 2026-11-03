@@ -13,7 +13,7 @@ import { isImplementationChat } from '@/lib/talk/voice-alert'
 import { cn } from '@/lib/utils'
 import { withOutbox } from '@/lib/talk/outbox-rules'
 import { draftKey } from '@/lib/talk/drafts'
-import { combineHistory, earlierCursor, EARLIER_PAGE, MAX_JUMP_PAGES, mergeEarlier } from '@/lib/talk/earlier'
+import { combineHistory, earlierCursor, EARLIER_PAGE, MAX_JUMP_PAGES, mergeEarlier, slidOutOfWindow } from '@/lib/talk/earlier'
 import { applyUnreadIndicators, clearUnreadIndicators, previewLine, unreadTotal } from '@/lib/talk/list-preview'
 import { leavingLosesRecording, SEND_BEFORE_LEAVING_TIMEOUT_MS, stayAfterVoice, type RecordingControl, type VoiceOutcome } from '@/lib/talk/recording-guard'
 import { useChatOutbox } from '@/components/talk/use-chat-outbox'
@@ -78,6 +78,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const [hasMore, setHasMore] = useState(false)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const olderRef = useRef<TalkMessage[]>([])
+  const windowRef = useRef<TalkMessage[]>([])
   const hasMoreRef = useRef(false)
   const loadingEarlierRef = useRef(false)
   const [peerReadAt, setPeerReadAt] = useState<string | null>(null)
@@ -120,6 +121,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const shown = useMemo(() => combineHistory(older, messages), [older, messages])
   messagesRef.current = shown
   olderRef.current = older
+  windowRef.current = messages
   hasMoreRef.current = hasMore
 
   const chats = useMemo(() => chatThreads(threads), [threads])
@@ -156,6 +158,11 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
       const d = await r.json()
       if (selectedIdRef.current !== threadId) return // switched chats while loading
       const incoming = (d.messages ?? []) as TalkMessage[]
+      // the live window slides forward when new messages arrive: what slid out must not fall into a gap between the older pages and the window
+      if (olderRef.current.length > 0) {
+        const slid = slidOutOfWindow(windowRef.current, incoming)
+        if (slid.length > 0) { olderRef.current = mergeEarlier(olderRef.current, slid); setOlder(olderRef.current) }
+      }
       setMessages(prev => {
         // MERGE, never replace: a poll that started before a send (or a realtime message) and answers after it would
         // otherwise wipe that newer message until the next poll. Anything local that the snapshot does not have yet and
@@ -471,6 +478,10 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     let found = messagesRef.current.some(m => m.id === id)
     let loadedPages = 0
     for (; !found && hasMoreRef.current && loadedPages < MAX_JUMP_PAGES;) {
+      // a page the person asked for with the button is still loading: wait for it instead of giving up
+      for (let waits = 0; loadingEarlierRef.current && waits < 100; waits++) await new Promise(r => setTimeout(r, 150))
+      found = messagesRef.current.some(m => m.id === id) || olderRef.current.some(m => m.id === id)
+      if (found) break
       const page = await loadEarlier()
       if (!page) break
       loadedPages++

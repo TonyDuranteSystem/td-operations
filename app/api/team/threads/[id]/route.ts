@@ -88,7 +88,8 @@ export async function GET(
   // nothing else is returned or changed (no read pointer, no thread state). `?limit=` sets the page size (1..500, default 200).
   const beforeParam = request.nextUrl.searchParams.get('before')
   if (beforeParam) {
-    if (!Number.isFinite(Date.parse(beforeParam))) {
+    // a message time as the server writes it (2026-11-03T12:00:00.123456+00:00): anything else is refused here instead of reaching the database
+    if (!/^\d{4}-\d{2}-\d{2}T[\d:.]+(Z|[+-]\d{2}:?\d{2})?$/.test(beforeParam) || !Number.isFinite(Date.parse(beforeParam))) {
       return NextResponse.json({ error: 'before must be a message time' }, { status: 400 })
     }
     const asked = parseInt(request.nextUrl.searchParams.get('limit') ?? '', 10)
@@ -101,7 +102,10 @@ export async function GET(
       .lt('created_at', beforeParam)
       .order('created_at', { ascending: false })
       .limit(pageSize + 1)
-    if (olderErr) return NextResponse.json({ error: olderErr.message }, { status: 500 })
+    if (olderErr) {
+      console.error('team/threads/[id]: earlier messages lookup failed', olderErr)
+      return NextResponse.json({ error: 'Could not load earlier messages.' }, { status: 500 })
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const olderRows = (olderRaw ?? []) as any[]
     const hasMoreOlder = olderRows.length > pageSize
