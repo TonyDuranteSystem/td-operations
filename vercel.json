@@ -9,6 +9,10 @@
       "schedule": "20 4 * * *"
     },
     {
+      "path": "/api/cron/bofa-upload-sweep",
+      "schedule": "40 4 * * *"
+    },
+    {
       "path": "/api/cron/supabase-status",
       "schedule": "*/3 * * * *"
     },

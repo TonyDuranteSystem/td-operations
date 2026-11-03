@@ -102,3 +102,31 @@ describe("the Applications tab is only for people who may use Forms", () => {
     expect(page).toContain("requested.tab === 'applications' && !seesApplications")
   })
 })
+
+describe("undo send back and the upload sweeper are wired in", () => {
+  it("the staff route has an undo_send_back action that emails nobody", () => {
+    const admin = read("app/api/bofa-intake-admin/[id]/route.ts")
+    expect(admin).toContain('body.action === "undo_send_back"')
+    const lib = read("lib/bofa-intake/undo-send-back.ts")
+    for (const forbidden of ["gmailPost", "sendHtmlEmail", "deliverSubmission"]) expect(lib, forbidden).not.toContain(forbidden)
+  })
+  it("the staff page offers Undo send back through the same rule the server uses", () => {
+    const page = read("app/(dashboard)/bofa-intake/page.tsx")
+    expect(page).toContain("canUndoSendBack")
+    expect(page).toContain('"undo_send_back"')
+  })
+  it("the sweeper only ever removes from the intake's own bucket, never from CRM Storage", () => {
+    const sweep = read("lib/bofa-intake/upload-sweep.ts")
+    expect(sweep).toContain("storage.from(BOFA_BUCKET)")
+    for (const forbidden of ["store_files", "store_file_versions", "saveBytesToStore", "crm-store", "trashed_at"]) {
+      // mentions in the explaining comment are fine; code must not use them
+      const code = sweep.replace(/\/\*[\s\S]*?\*\//g, "")
+      expect(code, forbidden).not.toContain(forbidden)
+    }
+  })
+  it("the cron route fails closed without the secret and is scheduled daily", () => {
+    const cron = read("app/api/cron/bofa-upload-sweep/route.ts")
+    expect(cron).toContain("!process.env.CRON_SECRET")
+    expect(read("vercel.json")).toContain('"/api/cron/bofa-upload-sweep"')
+  })
+})

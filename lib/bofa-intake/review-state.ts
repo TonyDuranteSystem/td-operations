@@ -120,3 +120,23 @@ export function canSendBack(r: ReviewRow): boolean {
   const s = reviewState(r)
   return !!s && s !== "sent_back" && s !== "sending"
 }
+
+/**
+ * Why a send-back can NOT be undone yet, in words for staff — or null when it can. `replacements` are the applications made by
+ * sending this one back (rows whose replaces_id is this one). Undo is safe while nobody is working on the new link: it was never
+ * opened, or it was already revoked. Once the client has opened it (their uploads exist) or sent a corrected application, undoing
+ * would throw their work away or leave two applications for one person.
+ */
+export function undoSendBackBlock(replacements: { status: string }[]): string | null {
+  const live = replacements.filter((x) => x.status !== "revoked")
+  if (live.length === 0) return null
+  if (live.length > 1) return "More than one new link is waiting. Revoke the extra ones in the list first."
+  if (live[0].status === "pending") return null
+  if (live[0].status === "completed") return "The client already sent a corrected application. Open that one instead."
+  return "The client has already opened the new link and may be filling it in. To cancel it, press Revoke on the new link first (what they uploaded is deleted), then undo."
+}
+
+/** "Undo send back" is offered on a sent-back application while nobody is working on its new link. */
+export function canUndoSendBack(r: ReviewRow, replacements: { status: string }[]): boolean {
+  return reviewState(r) === "sent_back" && undoSendBackBlock(replacements) === null
+}

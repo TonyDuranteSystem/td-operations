@@ -6,6 +6,8 @@
  *                                        saved bank-contact address(es); confirm_to must be what the confirm box showed
  *                                      { action: "send_back", note, email? } — write a note, make a NEW one-time link, email the client
  *                                        (email:false = "Create link only": no email, the link is returned to share by hand)
+ *                                      { action: "undo_send_back" } — a send-back pressed by mistake: cancel the new link (only while the client has
+ *                                        not opened it) and put the application back exactly as it was; emails nobody
  *                                      { action: "revoke" }     — kill a link that has not been submitted
  *                                      { action: "archive" }      — (re)save a submitted application in CRM Storage
  *                                      { action: "reset_lock" } — hand an opened-but-unsubmitted link back
@@ -26,6 +28,7 @@ import { deliverSubmission } from "@/lib/bofa-intake/deliver"
 import { archiveSubmission } from "@/lib/bofa-intake/archive"
 import { markReviewed } from "@/lib/bofa-intake/review"
 import { sendBackToClient } from "@/lib/bofa-intake/send-back"
+import { undoSendBack } from "@/lib/bofa-intake/undo-send-back"
 import { DETAIL_COLUMNS, readWithReviewColumns } from "@/lib/bofa-intake/columns"
 import { describeSubmissionFile, signedUrlForSubmissionFile, type SubmissionFile } from "@/lib/bofa-intake/files"
 
@@ -105,6 +108,12 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     const r = await sendBackToClient(id, user.email ?? "staff", body.note, { email: body.email !== false })
     if ("error" in r) return NextResponse.json({ error: r.error }, { status: 409 })
     return NextResponse.json({ ok: true, new_id: r.newId, url: r.url, emailed: r.emailed, emailed_to: r.emailedTo, email_error: r.emailError ?? null, link_only: r.linkOnly === true })
+  }
+
+  if (body.action === "undo_send_back") {
+    const r = await undoSendBack(id)
+    if ("error" in r) return NextResponse.json({ error: r.error }, { status: 409 })
+    return NextResponse.json({ ok: true, cancelled_link: r.cancelledLink })
   }
 
   if (body.action === "reset_lock") {

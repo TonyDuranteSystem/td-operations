@@ -15,7 +15,7 @@ import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { BOFA_TEXT_FIELDS } from "@/lib/bofa-intake/schema"
 import { BOFA_SHIPPING_FIELDS } from "@/lib/bofa-intake/shipping"
-import { REVIEW_STATE_TEXT, canMarkReviewed, canSendBack, canSubmit, isStaleSending, reviewState, sendMayHaveGoneOut } from "@/lib/bofa-intake/review-state"
+import { REVIEW_STATE_TEXT, canMarkReviewed, canSendBack, canSubmit, canUndoSendBack, isStaleSending, reviewState, sendMayHaveGoneOut } from "@/lib/bofa-intake/review-state"
 
 type LinkStatus = "pending" | "opened" | "completed" | "revoked"
 interface LinkRow {
@@ -246,7 +246,7 @@ function BofaIntakeInner() {
     if (detail?.id === id) openDetail(id)
   }
 
-  async function act(id: string, action: "revoke" | "reset_lock" | "archive" | "review", confirmText?: string) {
+  async function act(id: string, action: "revoke" | "reset_lock" | "archive" | "review" | "undo_send_back", confirmText?: string) {
     if (acting.current) return
     if (confirmText && !window.confirm(confirmText)) return
     acting.current = true
@@ -257,6 +257,7 @@ function BofaIntakeInner() {
       if (!ok) setError(d.error || "That did not work. Please try again.")
       else if (action === "archive") setNotice("Saved in Storage: Business › BofA.")
       else if (action === "review") setNotice("Marked Reviewed. You can now submit it.")
+      else if (action === "undo_send_back") setNotice("Send back undone. The application is back where it was.")
       await refresh(id)
     } finally {
       acting.current = false
@@ -329,6 +330,17 @@ function BofaIntakeInner() {
 
   const off = !reviewReady
 
+  // "Undo send back": offered while nobody is working on the new link (never opened, or already revoked).
+  function undoSendBackButton(l: { id: string; status: string; email_status: string | null; reviewed_at?: string | null; returned_at?: string | null }, cls: string) {
+    const replacements = links.filter((x) => x.replaces_id === l.id)
+    if (!canUndoSendBack(l, replacements)) return null
+    const waiting = replacements.some((x) => x.status !== "revoked")
+    const text = waiting
+      ? "Undo this send back? The new link stops working, and the application goes back to where it was before. Nothing is emailed. If you already emailed the client, they keep that email, but its link will no longer work."
+      : "Undo this send back? The application goes back to where it was before. Nothing is emailed."
+    return <button className={cls} disabled={off} onClick={() => act(l.id, "undo_send_back", text)}>Undo send back</button>
+  }
+
   function reviewButtons(l: LinkRow) {
     if (l.status !== "completed") return null
     return (
@@ -349,6 +361,7 @@ function BofaIntakeInner() {
         })() && (
           <button className="text-xs underline" disabled={off} onClick={() => startSendBack(l.id, l.client_name || l.label)}>Send back again</button>
         )}
+        {undoSendBackButton(l, "text-xs underline")}
       </>
     )
   }
@@ -477,6 +490,7 @@ function BofaIntakeInner() {
               {canSendBack(detail) && (
                 <button className="h-8 px-3 rounded-md border text-sm" disabled={off} onClick={() => startSendBack(detail.id, detail.form_data?.full_name || detail.label)}>Send back to client</button>
               )}
+              {undoSendBackButton(detail, "h-8 px-3 rounded-md border text-sm")}
             </div>
           )}
           <table className="w-full text-sm mb-4">

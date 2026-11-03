@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { REVIEW_STATE_TEXT, SEND_UNCONFIRMED_PREFIX, STALE_SENDING_MS, WAITING_STATES, canMarkReviewed, canSendBack, canSubmit, gmailRefusedTheSend, isStaleSending, isWaitingForStaff, reviewState, sendMayHaveGoneOut } from "@/lib/bofa-intake/review-state"
+import { REVIEW_STATE_TEXT, SEND_UNCONFIRMED_PREFIX, STALE_SENDING_MS, WAITING_STATES, canMarkReviewed, canSendBack, canSubmit, gmailRefusedTheSend, isStaleSending, isWaitingForStaff, reviewState, sendMayHaveGoneOut, canUndoSendBack, undoSendBackBlock } from "@/lib/bofa-intake/review-state"
 
 const done = (over: Partial<Parameters<typeof reviewState>[0]> = {}) => ({ status: "completed", email_status: null, reviewed_at: null, returned_at: null, ...over })
 
@@ -147,5 +147,39 @@ describe("sendMayHaveGoneOut — when Submit again could email the passports twi
 
   it("the Submit button stays available after an unconfirmed failure (the warning, not a block, is what protects it)", () => {
     expect(canSubmit(failed(`${SEND_UNCONFIRMED_PREFIX}timeout`))).toBe(true)
+  })
+})
+
+describe("undo send back — when it is offered", () => {
+  const sentBack = { status: "completed", email_status: "sent", reviewed_at: "x", returned_at: "2026-11-03T10:00:00Z" }
+
+  it("is offered while the new link was never opened", () => {
+    expect(canUndoSendBack(sentBack, [{ status: "pending" }])).toBe(true)
+  })
+
+  it("is offered when the new link was already revoked, or there is none", () => {
+    expect(canUndoSendBack(sentBack, [{ status: "revoked" }])).toBe(true)
+    expect(canUndoSendBack(sentBack, [])).toBe(true)
+    expect(canUndoSendBack(sentBack, [{ status: "revoked" }, { status: "revoked" }])).toBe(true)
+  })
+
+  it("is NOT offered once the client opened the new link or sent a corrected application", () => {
+    expect(canUndoSendBack(sentBack, [{ status: "opened" }])).toBe(false)
+    expect(canUndoSendBack(sentBack, [{ status: "completed" }])).toBe(false)
+  })
+
+  it("is NOT offered when more than one link is waiting (should not happen; the database forbids it)", () => {
+    expect(canUndoSendBack(sentBack, [{ status: "pending" }, { status: "pending" }])).toBe(false)
+  })
+
+  it("is NOT offered on an application that is not sent back", () => {
+    expect(canUndoSendBack({ status: "completed", email_status: null, reviewed_at: "x", returned_at: null }, [])).toBe(false)
+    expect(canUndoSendBack({ status: "opened", email_status: null, returned_at: null }, [])).toBe(false)
+  })
+
+  it("explains in words why it cannot be undone", () => {
+    expect(undoSendBackBlock([{ status: "pending" }])).toBeNull()
+    expect(undoSendBackBlock([{ status: "opened" }])).toMatch(/Revoke/)
+    expect(undoSendBackBlock([{ status: "completed" }])).toMatch(/corrected application/)
   })
 })
