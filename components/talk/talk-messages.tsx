@@ -263,8 +263,10 @@ function Bubble({
  * and never yanks you down while you are reading older ones.
  */
 export function TalkMessages({
-  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo, voiceApi, tools, readByOf, outbox,
+  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo, voiceApi, tools, readByOf, outbox, earlier,
 }: {
+  /** TD Talk passes this when older messages exist than the ones loaded: a "Load earlier messages" button at the top (absent = nothing changes). */
+  earlier?: { has: boolean; loading: boolean; load: () => void }
   /** Retry / Delete for the messages still in the phone's outbox (they arrive in `messages` marked `local`). */
   outbox?: { retry: (id: string) => void; discard: (id: string) => void }
   /** The "New implementation" chat passes this: who has read a message (names) and who has not. Absent = no line (every other chat). */
@@ -286,30 +288,62 @@ export function TalkMessages({
   const boxRef = useRef<HTMLDivElement>(null)
   const openedRef = useRef<string | null>(null)
   const lastCountRef = useRef(0)
+  // "Load earlier messages" adds messages ABOVE the ones being read: the place on screen is kept (the distance from the bottom stays the same)
+  const anchorRef = useRef<{ fromBottom: number; firstId: string | undefined } | null>(null)
+  const prependedRef = useRef(false)
+  const lastFirstRef = useRef<string | undefined>(undefined)
+  const askEarlier = () => {
+    const el = boxRef.current
+    if (el) anchorRef.current = { fromBottom: el.scrollHeight - el.scrollTop, firstId: messages[0]?.id }
+    earlier?.load()
+  }
 
   useLayoutEffect(() => {
     const el = boxRef.current
     if (!el) return
+    const anchor = anchorRef.current
+    if (anchor) {
+      if (messages[0]?.id !== anchor.firstId) {
+        el.scrollTop = el.scrollHeight - anchor.fromBottom
+        anchorRef.current = null
+        prependedRef.current = true
+        lastCountRef.current = messages.length
+        return
+      }
+      if (!earlier?.loading) anchorRef.current = null // the request ended without adding anything
+    }
     if (openedRef.current !== threadId) {
       // first paint of this chat: jump to the newest, no animation
       if (messages.length === 0) return
       openedRef.current = threadId
       lastCountRef.current = messages.length
+      lastFirstRef.current = messages[0]?.id
       el.scrollTop = el.scrollHeight
       return
     }
+    // older messages were added above (a jump to an old message loads pages without the button): never pull the person down to the bottom for them
+    const firstNow = messages[0]?.id
+    if (lastFirstRef.current !== undefined && firstNow !== lastFirstRef.current && messages.length > lastCountRef.current) {
+      lastFirstRef.current = firstNow
+      lastCountRef.current = messages.length
+      prependedRef.current = true
+      return
+    }
+    lastFirstRef.current = firstNow
     if (messages.length > lastCountRef.current) {
       const newest = messages[messages.length - 1]
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160
       if (nearBottom || newest?.sender_id === meId) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
     }
     lastCountRef.current = messages.length
-  }, [threadId, messages, meId])
+  }, [threadId, messages, meId, earlier?.loading])
 
   // A late-loading photo grows the page after the first jump — keep pinned to the bottom for the first moments.
   useEffect(() => {
     const el = boxRef.current
     if (!el) return
+    // older messages were just added above: this is not the first moment of the chat, so never pull the person down to the bottom
+    if (prependedRef.current) { prependedRef.current = false; return }
     const t = setTimeout(() => {
       if (openedRef.current === threadId && el.scrollHeight - el.scrollTop - el.clientHeight < 400) el.scrollTop = el.scrollHeight
     }, 600)
@@ -324,6 +358,13 @@ export function TalkMessages({
 
   return (
     <div ref={boxRef} className={cn('flex-1 min-h-0 overflow-y-auto overscroll-contain bg-zinc-100 px-3 pb-3', tools ? 'pt-9' : 'pt-3')} data-testid="talk-messages">
+      {earlier?.has && (
+        <div className="flex justify-center pb-2">
+          <button type="button" onClick={askEarlier} disabled={earlier.loading} data-testid="talk-load-earlier" className="rounded-full bg-white px-4 py-1.5 text-xs font-semibold text-zinc-700 shadow-sm active:bg-zinc-50 disabled:opacity-60">
+            {earlier.loading ? t('Loading…') : t('Load earlier messages')}
+          </button>
+        </div>
+      )}
       {loading && messages.length === 0 ? (
         <p className="py-10 text-center text-sm text-zinc-400">{t('Loading…')}</p>
       ) : groups.length === 0 ? (

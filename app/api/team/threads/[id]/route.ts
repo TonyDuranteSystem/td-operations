@@ -7,6 +7,31 @@ import { isValidWorkStatus } from '@/lib/team/workspace'
 import { resolveThreadTitle, threadStateIsMeaningful } from '@/lib/team/thread-title'
 import { NextRequest, NextResponse } from 'next/server'
 
+/** How many of the newest messages a chat opens with, and how many an "earlier messages" page adds (TD Talk's Load earlier button). */
+const WINDOW = 500
+const EARLIER_PAGE_DEFAULT = 200
+
+/** Adds the quoted-message preview to each message that is a reply (one query for all of them). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function withReplyPreviews(messages: any[]): Promise<any[]> {
+  const replyIds = Array.from(new Set(messages.filter(m => m.reply_to_id).map(m => m.reply_to_id)))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const parentMap = new Map<string, any>()
+  if (replyIds.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: parents } = await (supabaseAdmin as any)
+      .from('internal_messages')
+      .select('id, message, sender_name, deleted_at')
+      .in('id', replyIds)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(parents ?? []).forEach((p: any) => parentMap.set(p.id, p))
+  }
+  return messages.map(m => ({
+    ...m,
+    reply_to_preview: m.reply_to_id ? (parentMap.get(m.reply_to_id) ?? null) : null,
+  }))
+}
+
 /**
  * GET /api/team/threads/[id]
  * Full message history for a thread (newest 500), reply previews enriched, and
@@ -59,37 +84,50 @@ export async function GET(
     return NextResponse.json({ error: THREAD_DENIED_MESSAGE }, { status: 403 })
   }
 
+  // `?before=<created_at>` = one page of OLDER messages (TD Talk's "Load earlier messages"): the same access checks as above already passed,
+  // nothing else is returned or changed (no read pointer, no thread state). `?limit=` sets the page size (1..500, default 200).
+  const beforeParam = request.nextUrl.searchParams.get('before')
+  if (beforeParam) {
+    if (!Number.isFinite(Date.parse(beforeParam))) {
+      return NextResponse.json({ error: 'before must be a message time' }, { status: 400 })
+    }
+    const asked = parseInt(request.nextUrl.searchParams.get('limit') ?? '', 10)
+    const pageSize = Number.isFinite(asked) ? Math.min(Math.max(asked, 1), WINDOW) : EARLIER_PAGE_DEFAULT
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: olderRaw, error: olderErr } = await (supabaseAdmin as any)
+      .from('internal_messages')
+      .select('*')
+      .eq('thread_id', threadId)
+      .lt('created_at', beforeParam)
+      .order('created_at', { ascending: false })
+      .limit(pageSize + 1)
+    if (olderErr) return NextResponse.json({ error: olderErr.message }, { status: 500 })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const olderRows = (olderRaw ?? []) as any[]
+    const hasMoreOlder = olderRows.length > pageSize
+    const page = olderRows.slice(0, pageSize).reverse()
+    return NextResponse.json({ messages: await withReplyPreviews(page), has_more: hasMoreOlder })
+  }
+
   // Load the NEWEST 500 (desc + limit), then flip to oldest→newest for display.
   // (The old code ordered ascending + limit, which returned the OLDEST 500 and
   // dropped the current conversation on long-lived channels.)
+  // One extra row is asked for only to know whether older messages exist (`has_more`).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: rawMessages } = await (supabaseAdmin as any)
     .from('internal_messages')
     .select('*')
     .eq('thread_id', threadId)
     .order('created_at', { ascending: false })
-    .limit(500)
+    .limit(WINDOW + 1)
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const messages = ((rawMessages ?? []) as any[]).reverse()
+  const newestFirst = (rawMessages ?? []) as any[]
+  const hasMore = newestFirst.length > WINDOW
+  const messages = newestFirst.slice(0, WINDOW).reverse()
 
   // Reply previews.
-  const replyIds = Array.from(new Set(messages.filter(m => m.reply_to_id).map(m => m.reply_to_id)))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const parentMap = new Map<string, any>()
-  if (replyIds.length > 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: parents } = await (supabaseAdmin as any)
-      .from('internal_messages')
-      .select('id, message, sender_name, deleted_at')
-      .in('id', replyIds)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(parents ?? []).forEach((p: any) => parentMap.set(p.id, p))
-  }
-  const enriched = messages.map(m => ({
-    ...m,
-    reply_to_preview: m.reply_to_id ? (parentMap.get(m.reply_to_id) ?? null) : null,
-  }))
+  const enriched = await withReplyPreviews(messages)
 
   // Per-root thread metadata (Slack threads): reply counts + last reply + this
   // caller's unread-replies signal. Computed over ALL replies in the thread
@@ -353,6 +391,7 @@ export async function GET(
     peer_delivered_at: peerDeliveredAt,
     member_delivered: memberDelivered,
     messages: enriched,
+    has_more: hasMore,
     thread_meta: threadMeta,
     threads,
     archived_roots: archivedRootIds,
