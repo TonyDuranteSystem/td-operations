@@ -223,7 +223,7 @@ _Regenerated 2026-11-03. Every subsystem doc under `docs/systems/` (54 docs), wi
 - [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-03)_
 - [storage.md](storage.md) — CRM Storage _(verified 2026-11-03)_
 - [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-02)_
-- [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-02)_
+- [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-03)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-19)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_
