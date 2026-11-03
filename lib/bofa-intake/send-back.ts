@@ -6,7 +6,8 @@
  *   1. staff write a NOTE (required);
  *   2. the old application is marked sent back (an atomic claim, so a double click makes one link, not two);
  *   3. a NEW one-time link is made for the same partner, carrying the note;
- *   4. the applicant is emailed the link (English, from support@, note HTML-escaped).
+ *   4. the applicant is emailed the link (English, from support@, note HTML-escaped) — OR, when staff choose "Create link only"
+ *      (Antonio 2026-11-03: to share it by WhatsApp or another way), no email is sent and the link is handed back to copy.
  *
  * The client gets a BLANK form with our note on top and uploads the documents again. Their old answers and documents are
  * never shown back to whoever holds a link (that would hand a passport to anyone with the link and a cookie), and the old
@@ -56,10 +57,11 @@ export function buildSendBackEmail(p: { name: string | null; note: string; url: 
 }
 
 export type SendBackResult =
-  | { ok: true; newId: string; url: string; emailed: boolean; emailedTo: string | null; emailError?: string }
+  | { ok: true; newId: string; url: string; emailed: boolean; emailedTo: string | null; emailError?: string; linkOnly?: boolean }
   | { ok: false; error: string }
 
-export async function sendBackToClient(id: string, by: string, rawNote: unknown): Promise<SendBackResult> {
+export async function sendBackToClient(id: string, by: string, rawNote: unknown, opts: { email?: boolean } = {}): Promise<SendBackResult> {
+  const emailIt = opts.email !== false
   const cleaned = cleanReturnNote(rawNote)
   if ("error" in cleaned) return { ok: false, error: cleaned.error }
 
@@ -82,7 +84,8 @@ export async function sendBackToClient(id: string, by: string, rawNote: unknown)
   }
 
   const to = String((row.form_data as Record<string, string> | null)?.email ?? "").trim()
-  if (!EMAIL_RE.test(to)) return { ok: false, error: "This application has no valid email address for the client, so it cannot be sent back from here." }
+  // The email address matters only when WE email the client; a link shared by hand needs none.
+  if (emailIt && !EMAIL_RE.test(to)) return { ok: false, error: "This application has no valid email address for the client, so it cannot be sent back from here." }
 
   // 1. claim: only one caller wins, and only against the state we just read
   const now = new Date().toISOString()
@@ -120,6 +123,9 @@ export async function sendBackToClient(id: string, by: string, rawNote: unknown)
     return { ok: false, error: "Could not make the new link. Nothing was changed." }
   }
   const url = bofaLinkUrl(created.token as string)
+
+  // "Create link only": nothing is emailed; staff copy the link and send it themselves.
+  if (!emailIt) return { ok: true, newId: created.id as string, url, emailed: false, emailedTo: null, linkOnly: true }
 
   // 3. email it to the applicant
   const mail = buildSendBackEmail({ name: (row.form_data as Record<string, string> | null)?.full_name ?? null, note: cleaned.note, url })

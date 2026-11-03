@@ -13,7 +13,6 @@ import { TD_OFFICE } from "@/lib/td-address"
 
 /** The saved-answer keys for the shipping block. Not part of BOFA_TEXT_FIELDS: the client never types or sends them. */
 export const BOFA_SHIPPING_FIELDS: { key: string; label: string }[] = [
-  { key: "shipping_name", label: "Shipping address: name" },
   { key: "shipping_street", label: "Shipping address: street" },
   { key: "shipping_city", label: "Shipping address: city" },
   { key: "shipping_region", label: "Shipping address: state" },
@@ -26,7 +25,6 @@ export const BOFA_SHIPPING_KEYS: string[] = BOFA_SHIPPING_FIELDS.map((f) => f.ke
 /** The locked shipping address, as saved answers. */
 export function shippingAddressFields(): Record<string, string> {
   return {
-    shipping_name: TD_OFFICE.company,
     shipping_street: TD_OFFICE.street,
     shipping_city: TD_OFFICE.city,
     shipping_region: TD_OFFICE.state,
@@ -40,7 +38,7 @@ export function withShippingAddress(data: Record<string, string>): Record<string
   return { ...data, ...shippingAddressFields() }
 }
 
-/** The address as printed lines, for the form, the email and the PDF. */
+/** The address as printed lines, for the form, the card, the email and the PDF. No name line: Antonio 2026-11-03, the Seminole address goes without "Tony Durante LLC". */
 export function shippingAddressLines(): string[] {
-  return [TD_OFFICE.company, TD_OFFICE.street, `${TD_OFFICE.city}, ${TD_OFFICE.state} ${TD_OFFICE.zip}`, TD_OFFICE.country]
+  return [TD_OFFICE.street, `${TD_OFFICE.city}, ${TD_OFFICE.state} ${TD_OFFICE.zip}`, TD_OFFICE.country]
 }

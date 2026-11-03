@@ -16,10 +16,18 @@ describe("the client's submit no longer sends anything outside", () => {
   it("stamps the shipping address on the server", () => {
     expect(submit).toContain("withShippingAddress(result.data)")
   })
-  it("touches none of the new review columns, so a client's submission cannot break while the database step is pending", () => {
-    for (const col of ["reviewed_at", "reviewed_by", "sent_by", "sent_to", "returned_at", "return_note", "replaces_id", "staff_note"]) {
+  it("writes none of the review columns, and its one read of the new replaces_id column is tolerant, so a client's submission can never break on it", () => {
+    for (const col of ["reviewed_at", "reviewed_by", "sent_by", "sent_to", "returned_at", "return_note", "staff_note"]) {
       expect(submit, col).not.toContain(col)
     }
+    const reader = submit.slice(submit.indexOf("async function isResubmission"), submit.indexOf("async function notifyStaff"))
+    expect(reader).toContain('select("replaces_id")')
+    expect(reader).toContain("catch")
+    expect(reader).not.toContain(".update(")
+  })
+  it("tells our people when a corrected application was resubmitted", () => {
+    expect(submit).toContain("Bank application RESUBMITTED")
+    expect(submit).toContain("await isResubmission(updated.id)")
   })
   it("tells the saved 'told when one arrives' list, with a link and no answers", () => {
     expect(submit).toContain("loadBofaSettings")
@@ -57,12 +65,33 @@ describe("who may change where passports go", () => {
     expect(settings).toContain("isOwnerOnly(user)")
     expect(settings).toContain("Only the owner can change these addresses.")
   })
-  it("the Forms card has no per-link address box any more", () => {
+  it("the Forms card is the settings place: the two addresses live there, and there is no per-link address box", () => {
     const forms = read("app/(dashboard)/forms/page.tsx")
     expect(forms).not.toContain("Send the submitted form to")
     expect(forms).toContain("BankApplicationSettings")
     const create = read("app/api/bofa-intake-admin/route.ts")
     expect(create).not.toContain("parseRecipients")
+  })
+})
+
+describe("Send back offers a link to share by hand", () => {
+  it("the dialog has Create link only, and it asks the server for no email", () => {
+    const page = read("app/(dashboard)/bofa-intake/page.tsx")
+    expect(page).toContain("Create link only")
+    expect(page).toContain("email: false")
+    expect(page).toContain("WhatsApp")
+    expect(read("app/api/bofa-intake-admin/[id]/route.ts")).toContain("email: body.email !== false")
+  })
+})
+
+describe("the Seminole shipping address on the client form", () => {
+  const form = read("components/forms/bank-application-form.tsx")
+  it("has no company-name line and no explanatory wording, only the heading and the address", () => {
+    expect(form).not.toContain("shipping_name")
+    expect(read("lib/bofa-intake/shipping.ts")).not.toMatch(/shipping_name:/)
+    expect(form).not.toContain("Where the bank sends your cards and letters")
+    expect(form).not.toContain("filled in for you and cannot be changed")
+    expect(form).toContain("Shipping address")
   })
 })
 

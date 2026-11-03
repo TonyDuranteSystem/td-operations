@@ -189,7 +189,7 @@ function BofaIntakeInner() {
   const [sendBackFor, setSendBackFor] = useState<{ id: string; who: string } | null>(null)
   const [note, setNote] = useState("")
   const [dialogError, setDialogError] = useState("")
-  const [newLink, setNewLink] = useState<{ url: string; error: string } | null>(null)
+  const [newLink, setNewLink] = useState<{ url: string; error: string; linkOnly?: boolean } | null>(null)
 
   const load = useCallback(async () => {
     const res = await fetch("/api/bofa-intake-admin", { cache: "no-store" })
@@ -296,15 +296,18 @@ function BofaIntakeInner() {
     setSendBackFor({ id, who })
   }
 
-  async function confirmSendBack() {
+  // emailIt=false is "Create link only": the new link is made but nothing is emailed, so staff can share it by WhatsApp or any other way.
+  async function confirmSendBack(emailIt = true) {
     if (!sendBackFor) return
     setBusy(true)
     setDialogError("")
-    const { ok, d } = await patch(sendBackFor.id, { action: "send_back", note })
+    const { ok, d } = await patch(sendBackFor.id, emailIt ? { action: "send_back", note } : { action: "send_back", note, email: false })
     setBusy(false)
     if (!ok) return setDialogError(d.error || "That did not work. Please try again.")
     const id = sendBackFor.id
-    if (d.emailed) {
+    if (d.link_only) {
+      setNewLink({ url: d.url, error: "", linkOnly: true })
+    } else if (d.emailed) {
       setSendBackFor(null)
       setNotice(`Sent back. A new link was emailed to ${d.emailed_to}.`)
     } else {
@@ -503,7 +506,7 @@ function BofaIntakeInner() {
             <div className="flex gap-2"><dt className="text-muted-foreground w-28 shrink-0">Applicant</dt><dd>{submitFor.form_data?.full_name || "—"}</dd></div>
             <div className="flex gap-2"><dt className="text-muted-foreground w-28 shrink-0">Company</dt><dd>{submitFor.form_data?.company_name || "—"}</dd></div>
             <div className="flex gap-2"><dt className="text-muted-foreground w-28 shrink-0">Documents</dt><dd>{submitFor.files.length} ({submitFor.files.map((f) => f.label).join(", ")})</dd></div>
-            <div className="flex gap-2"><dt className="text-muted-foreground w-28 shrink-0">Shipping address</dt><dd>{[submitFor.form_data?.shipping_name, submitFor.form_data?.shipping_street, [submitFor.form_data?.shipping_city, submitFor.form_data?.shipping_region, submitFor.form_data?.shipping_zip].filter(Boolean).join(" "), submitFor.form_data?.shipping_country].filter(Boolean).join(", ") || "not on this older application"}</dd></div>
+            <div className="flex gap-2"><dt className="text-muted-foreground w-28 shrink-0">Shipping address</dt><dd>{[submitFor.form_data?.shipping_street, [submitFor.form_data?.shipping_city, submitFor.form_data?.shipping_region, submitFor.form_data?.shipping_zip].filter(Boolean).join(" "), submitFor.form_data?.shipping_country].filter(Boolean).join(", ") || "not on this older application"}</dd></div>
           </dl>
           {isStaleSending(submitFor) && (
             <p className="text-sm text-red-700 mb-2">The last attempt never finished, so the email may already have gone to the bank contact. Check the Sent mailbox before you submit again, or they may get it twice.</p>
@@ -523,22 +526,33 @@ function BofaIntakeInner() {
         <Modal title={`Send back to ${sendBackFor.who}`} onClose={() => setSendBackFor(null)}>
           {newLink ? (
             <>
-              <p className="text-sm text-red-700 mb-2">The new link was made, but the email to the client could not be sent: {newLink.error}</p>
-              <p className="text-sm mb-2">Copy this link and send it to the client yourself:</p>
+              {newLink.linkOnly ? (
+                <p className="text-sm text-green-800 mb-2">The new link is ready. <b>No email was sent.</b> Your message shows at the top of the form the client opens.</p>
+              ) : (
+                <p className="text-sm text-red-700 mb-2">The new link was made, but the email to the client could not be sent: {newLink.error}</p>
+              )}
+              <p className="text-sm mb-2">Copy this link and send it to the client yourself (WhatsApp or any other way):</p>
               <p className="break-all text-xs bg-gray-50 border rounded p-2 mb-2">{newLink.url}</p>
-              <button className="h-8 px-3 rounded-md border text-sm" onClick={() => copy(newLink.url)}>Copy link</button>
+              <div className="flex gap-2">
+                <button className="h-8 px-3 rounded-md border text-sm" onClick={() => copy(newLink.url)}>Copy link</button>
+                <button className="h-8 px-3 rounded-md border text-sm" onClick={() => { setSendBackFor(null); setNewLink(null) }}>Close</button>
+              </div>
             </>
           ) : (
             <>
               <p className="text-sm mb-2">
                 The client gets an email with a <b>new one-time link</b> and your message, and fills the form again with their documents. This application stays on record as sent back.
+                To share the link yourself (WhatsApp or any other way), press <b>Create link only</b>: nothing is emailed.
               </p>
               <label className="text-sm font-medium block mb-1">What does the client need to fix? <span className="text-xs font-normal text-red-600">Required</span></label>
               <textarea className="w-full rounded-md border px-3 py-2 text-sm mb-2" rows={5} value={note} onChange={(e) => { setNote(e.target.value); setDialogError("") }} placeholder="Example: the passport photo is cut off on the right. Please upload a full-page photo." />
               {dialogError && <p className="text-sm text-red-700 mb-2" role="alert">{dialogError}</p>}
               <div className="flex gap-2">
-                <button className="h-9 px-4 rounded-md bg-gray-900 text-white text-sm disabled:opacity-60" disabled={busy || !note.trim()} onClick={confirmSendBack}>
+                <button className="h-9 px-4 rounded-md bg-gray-900 text-white text-sm disabled:opacity-60" disabled={busy || !note.trim()} onClick={() => confirmSendBack(true)}>
                   {busy ? "Sending…" : "Send back and email the client"}
+                </button>
+                <button className="h-9 px-4 rounded-md border text-sm disabled:opacity-60" disabled={busy || !note.trim()} onClick={() => confirmSendBack(false)}>
+                  Create link only
                 </button>
                 <button className="h-9 px-4 rounded-md border text-sm" onClick={() => setSendBackFor(null)} disabled={busy}>Cancel</button>
               </div>
