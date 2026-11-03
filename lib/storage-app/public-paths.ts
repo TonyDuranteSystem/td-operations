@@ -14,6 +14,7 @@ export const STORAGE_APP_PUBLIC_PATHS: readonly string[] = [
   "/api/storage-app/file",
   "/api/storage-app/upload-slot",
   "/api/storage-app/save",
+  "/api/storage-app/new-folder",
 ]
 
 /**

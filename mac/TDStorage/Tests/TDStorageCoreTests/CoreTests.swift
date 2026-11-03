@@ -410,6 +410,25 @@ final class SaveNewFileTests: XCTestCase {
         XCTAssertEqual(req.httpMethod, "POST"); XCTAssertEqual(req.url!.path, "/api/storage-app/upload-slot")
         XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer a")
     }
+    func testMakingANewFolderSendsTheRightBodyAndReadsTheAnswer() async throws {
+        StubProtocol.handler = { _ in (200, #"{"folderId":"f9","ownerId":"o1","name":"Zoom Calls","created":true}"#) }
+        let made = try await api().newFolder(ownerId: "o1", parentId: "f1", name: "Zoom Calls")
+        XCTAssertEqual(made.folderId, "f9"); XCTAssertEqual(made.created, true)
+        let req = StubProtocol.seen.last!
+        XCTAssertEqual(req.httpMethod, "POST"); XCTAssertEqual(req.url!.path, "/api/storage-app/new-folder")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer a")
+    }
+    func testAFolderThatWasAlreadyThereIsReusedNotRefused() async throws {
+        StubProtocol.handler = { _ in (200, #"{"folderId":"f9","ownerId":"o1","name":"Zoom Calls","created":false}"#) }
+        let made = try await api().newFolder(ownerId: "o1", parentId: "f1", name: "Zoom Calls")
+        XCTAssertEqual(made.folderId, "f9"); XCTAssertEqual(made.created, false)
+    }
+    func testAFolderTheCRMRefusesIsAPlainRefusal() async {
+        StubProtocol.handler = { _ in (422, #"{"error":"not_allowed","message":"People's documents are added in the CRM, not from the Mac."}"#) }
+        do { _ = try await api().newFolder(ownerId: "o1", parentId: "f1", name: "x"); XCTFail("should throw") }
+        catch StorageAPIError.refused(let m) { XCTAssertTrue(m.contains("added in the CRM")) }
+        catch { XCTFail("\(error)") }
+    }
     func testAnAlreadySavedFileComesBackWithItsId() async throws {
         StubProtocol.handler = { _ in (200, #"{"alreadySaved":true,"fileId":"x1","ownerId":"o1","name":"a.pdf"}"#) }
         let slot = try await api().uploadSlot(ownerId: "o1", folderId: "f1", name: "a.pdf", size: 10, mimeType: nil, itemKey: "k")
