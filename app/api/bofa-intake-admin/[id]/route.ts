@@ -4,7 +4,8 @@
  *   PATCH /api/bofa-intake-admin/[id] { action: "review" }     — mark a submitted application Reviewed (enables Submit)
  *                                      { action: "submit", confirm_to: [...] } — email the reviewed application to the
  *                                        saved bank-contact address(es); confirm_to must be what the confirm box showed
- *                                      { action: "send_back", note }  — write a note, make a NEW one-time link, email the client
+ *                                      { action: "send_back", note, email? } — write a note, make a NEW one-time link, email the client
+ *                                        (email:false = "Create link only": no email, the link is returned to share by hand)
  *                                      { action: "revoke" }     — kill a link that has not been submitted
  *                                      { action: "archive" }      — (re)save a submitted application in CRM Storage
  *                                      { action: "reset_lock" } — hand an opened-but-unsubmitted link back
@@ -99,9 +100,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
 
   if (body.action === "send_back") {
-    const r = await sendBackToClient(id, user.email ?? "staff", body.note)
+    const r = await sendBackToClient(id, user.email ?? "staff", body.note, { email: body.email !== false })
     if ("error" in r) return NextResponse.json({ error: r.error }, { status: 409 })
-    return NextResponse.json({ ok: true, new_id: r.newId, url: r.url, emailed: r.emailed, emailed_to: r.emailedTo, email_error: r.emailError ?? null })
+    return NextResponse.json({ ok: true, new_id: r.newId, url: r.url, emailed: r.emailed, emailed_to: r.emailedTo, email_error: r.emailError ?? null, link_only: r.linkOnly === true })
   }
 
   if (body.action === "reset_lock") {

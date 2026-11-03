@@ -74,6 +74,16 @@ describe("who may change where passports go", () => {
   })
 })
 
+describe("Send back offers a link to share by hand", () => {
+  it("the dialog has Create link only, and it asks the server for no email", () => {
+    const page = read("app/(dashboard)/bofa-intake/page.tsx")
+    expect(page).toContain("Create link only")
+    expect(page).toContain("email: false")
+    expect(page).toContain("WhatsApp")
+    expect(read("app/api/bofa-intake-admin/[id]/route.ts")).toContain("email: body.email !== false")
+  })
+})
+
 describe("the Seminole shipping address on the client form", () => {
   const form = read("components/forms/bank-application-form.tsx")
   it("has no company-name line and no explanatory wording, only the heading and the address", () => {

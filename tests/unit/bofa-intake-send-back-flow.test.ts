@@ -134,6 +134,31 @@ describe("Send back to the client", () => {
     expect(undo?.payload).toMatchObject({ returned_at: "2026-11-02T10:00:00Z", returned_by: "first@x.co", return_note: "first note" })
   })
 
+  it("\"Create link only\": makes the new link and marks the old one sent back, but sends NO email, even without a usable email address", async () => {
+    h.row = { ...ROW, form_data: { full_name: "Jordan Smith" } } // no email on file
+    const r = await sendBackToClient("old", "luca@x.co", "Please upload a full-page passport photo", { email: false })
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.linkOnly).toBe(true)
+      expect(r.emailed).toBe(false)
+      expect(r.url).toContain("tok_new")
+    }
+    expect(h.gmail).not.toHaveBeenCalled()
+    expect(h.ops.find((o) => o.kind === "update")?.payload?.return_note).toBe("Please upload a full-page passport photo")
+    expect(h.ops.find((o) => o.kind === "insert")?.payload).toMatchObject({ replaces_id: "old", staff_note: "Please upload a full-page passport photo" })
+  })
+
+  it("\"Create link only\" still needs the note (the client reads it on the form)", async () => {
+    const r = await sendBackToClient("old", "l", "  ", { email: false })
+    expect(r.ok).toBe(false)
+    expect(h.ops).toHaveLength(0)
+  })
+
+  it("the ordinary send-back still refuses an application with no usable email address", async () => {
+    h.row = { ...ROW, form_data: { full_name: "J", email: "nope" } }
+    expect((await sendBackToClient("old", "l", "x")).ok).toBe(false)
+  })
+
   it("if only the email fails, the link still exists and is handed back so staff can send it by hand", async () => {
     h.gmail.mockRejectedValue(new Error("gmail down"))
     const r = await sendBackToClient("old", "l", "x")
