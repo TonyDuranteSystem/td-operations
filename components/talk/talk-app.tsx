@@ -12,6 +12,9 @@ import { showUnreadBadge, talkSplit } from '@/lib/talk/layout'
 import { isImplementationChat } from '@/lib/talk/voice-alert'
 import { cn } from '@/lib/utils'
 import { withOutbox } from '@/lib/talk/outbox-rules'
+import { draftKey } from '@/lib/talk/drafts'
+import { applyUnreadIndicators, clearUnreadIndicators, previewLine, unreadTotal } from '@/lib/talk/list-preview'
+import { leavingLosesRecording, SEND_BEFORE_LEAVING_TIMEOUT_MS, type RecordingControl, type VoiceOutcome } from '@/lib/talk/recording-guard'
 import { useChatOutbox } from '@/components/talk/use-chat-outbox'
 import {
   chatName, chatThreads, directMessages, groupMemberNames, initials, isGroupThread, matchMessages, membersWithoutChat, mergeSnapshot, messageSignature, otherUserId, parseTypingSignal, readStatus, tickState, tickStateAll, shouldAnnounceTyping, snippet, startThreadId, timeLabel, dayLabel, typingLabel, TYPING_EXPIRES_MS,
@@ -91,6 +94,12 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const [groupBusy, setGroupBusy] = useState(false)
   const typingChannelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
   const typingSentAtRef = useRef<number | null>(null)
+  // a voice note being recorded: leaving the chat (another chat, the list, search, New group) asks first instead of losing it
+  const recordingRef = useRef(false)
+  const recordingControl = useRef<RecordingControl | null>(null)
+  const voiceDoneRef = useRef<((o: VoiceOutcome) => void) | null>(null)
+  const [leaveAsk, setLeaveAsk] = useState<{ go: () => void } | null>(null)
+  const [leaveBusy, setLeaveBusy] = useState(false)
 
   const selectedIdRef = useRef<string | null>(null)
   const meIdRef = useRef<string | null>(null)
@@ -103,6 +112,11 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
 
   const chats = useMemo(() => chatThreads(threads), [threads])
   const dms = useMemo(() => directMessages(threads), [threads])
+
+  // the unread count on the app icon and in the tab title — the standalone app only (the CRM tab has its own red dot in the menu)
+  const unreadAll = unreadTotal(chats, selectedId, isBeingViewed())
+  useEffect(() => { if (base === TALK_BASE) applyUnreadIndicators(unreadAll) }, [unreadAll, base])
+  useEffect(() => () => { if (base === TALK_BASE) clearUnreadIndicators() }, [base])
 
   const loadThreads = useCallback(async (): Promise<TalkThread[] | null> => {
     try {
@@ -172,6 +186,29 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     } catch { /* ignore */ }
   }, [base])
 
+  // Every way out of the open chat goes through here: with a recording in progress the person is asked first (Send it / Throw it away / Keep recording).
+  const guardLeave = useCallback((go: () => void) => {
+    if (leavingLosesRecording(recordingRef.current)) { setLeaveAsk({ go }); return }
+    go()
+  }, [])
+  const requestSelect = useCallback((id: string | null) => { guardLeave(() => select(id)) }, [guardLeave, select])
+
+  const leaveAfterSending = useCallback((go: () => void) => {
+    setLeaveBusy(true)
+    let done = false
+    const finish = () => { if (done) return; done = true; voiceDoneRef.current = null; clearTimeout(timer); setLeaveBusy(false); setLeaveAsk(null); go() }
+    const timer = setTimeout(finish, SEND_BEFORE_LEAVING_TIMEOUT_MS)
+    voiceDoneRef.current = () => finish()
+    if (recordingControl.current) recordingControl.current.send()
+    else finish()
+  }, [])
+  const leaveAfterThrowingAway = useCallback((go: () => void) => {
+    voiceDoneRef.current = null
+    recordingControl.current?.discard()
+    setLeaveAsk(null)
+    go()
+  }, [])
+
   // first load: threads, then straight into a conversation
   useEffect(() => {
     let cancelled = false
@@ -190,11 +227,11 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   // a tapped notification (or any link) while the app is open: go to that chat
   useEffect(() => {
     if (!initialisedRef.current || !urlThread || urlThread === selectedIdRef.current) return
-    if (chatThreads(threadsRef.current).some(t => t.id === urlThread)) { select(urlThread); return }
+    if (chatThreads(threadsRef.current).some(t => t.id === urlThread)) { requestSelect(urlThread); return }
     void loadThreads().then(list => {
-      if (list && chatThreads(list).some(t => t.id === urlThread)) select(urlThread)
+      if (list && chatThreads(list).some(t => t.id === urlThread)) requestSelect(urlThread)
     })
-  }, [urlThread, loadThreads, select])
+  }, [urlThread, loadThreads, requestSelect])
 
   // open conversation: load now
   useEffect(() => {
@@ -467,13 +504,13 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
       const d = await r.json().catch(() => ({}))
       if (!r.ok || !d.thread?.id) throw new Error(d.error || 'Could not start the chat.')
       await loadThreads()
-      select(d.thread.id)
+      requestSelect(d.thread.id)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not start the chat.')
     } finally {
       setStartingWith(null)
     }
-  }, [loadThreads, select])
+  }, [loadThreads, requestSelect])
 
   const selected = chats.find(t => t.id === selectedId) ?? null
   const strangers = useMemo(() => membersWithoutChat(dms, meId, members), [dms, meId, members])
@@ -507,7 +544,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
           <TalkVoiceWakeBar />
           <div className="flex items-center gap-2">
             <TalkVoiceSwitch />
-            <button type="button" onClick={() => setNewGroupOpen(true)} data-testid="talk-new-group" className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-800 active:bg-zinc-100">
+            <button type="button" onClick={() => guardLeave(() => setNewGroupOpen(true))} data-testid="talk-new-group" className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-800 active:bg-zinc-100">
               <Users className="h-4 w-4" /> New group
             </button>
           </div>
@@ -518,15 +555,24 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
             const name = chatName(t, meId, members)
             const other = group ? t.id : (otherUserId(t.dm_key, meId) ?? t.id)
             return (
-              <button key={t.id} type="button" onClick={() => { if (t.id !== selectedId) select(t.id) }} aria-current={t.id === selectedId ? 'true' : undefined} className={cn('flex w-full items-center gap-3 border-b border-zinc-100 px-4 py-3 text-left active:bg-zinc-50', t.id === selectedId && 'bg-zinc-100')} data-testid={group ? 'talk-group-row' : 'talk-person'}>
+              <button key={t.id} type="button" onClick={() => { if (t.id !== selectedId) requestSelect(t.id) }} aria-current={t.id === selectedId ? 'true' : undefined} className={cn('flex w-full items-center gap-3 border-b border-zinc-100 px-4 py-3 text-left active:bg-zinc-50', t.id === selectedId && 'bg-zinc-100')} data-testid={group ? 'talk-group-row' : 'talk-person'}>
                 <Avatar name={name} id={other} size="h-12 w-12 text-base" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[16px] font-medium text-zinc-900">{name}</span>
-                  <span className="block truncate text-xs text-zinc-400">
-                    {group ? `${(t.members ?? []).length} people` : null}
-                    {group && t.last_activity_at ? ' · ' : null}
-                    {t.last_activity_at ? (dayLabel(t.last_activity_at) === 'Today' ? timeLabel(t.last_activity_at) : dayLabel(t.last_activity_at)) : null}
+                  <span className="flex items-baseline justify-between gap-2">
+                    <span className="truncate text-[16px] font-medium text-zinc-900">{name}</span>
+                    <span className="shrink-0 text-xs text-zinc-400">
+                      {t.last_activity_at ? (dayLabel(t.last_activity_at) === 'Today' ? timeLabel(t.last_activity_at) : dayLabel(t.last_activity_at)) : null}
+                    </span>
                   </span>
+                  {(() => {
+                    const line = previewLine(t, meId, members)
+                    const unread = (t.unread_count ?? 0) > 0 && t.id !== selectedId
+                    return (
+                      <span className={cn('block truncate text-sm', unread ? 'font-semibold text-zinc-900' : 'text-zinc-500')} data-testid="talk-preview">
+                        {line || (group ? `${(t.members ?? []).length} people` : ' ')}
+                      </span>
+                    )
+                  })()}
                 </span>
                 {showUnreadBadge(t.unread_count, t.id === selectedId, isBeingViewed()) && (
                   <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-[#BE1E2D] px-1.5 text-xs font-semibold text-white">{t.unread_count}</span>
@@ -585,7 +631,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     <div className="flex h-full w-full min-w-0 flex-col bg-white" data-testid="talk-chat">
       <div className="flex shrink-0 items-center gap-2 border-b border-zinc-200 bg-white px-2 py-2">
         {canGoBack ? (
-          <button type="button" onClick={() => select(null)} aria-label="Back to your chats" className={cn('relative flex h-10 w-10 items-center justify-center rounded-full text-zinc-700 active:bg-zinc-100', split.back)} data-testid="talk-back">
+          <button type="button" onClick={() => requestSelect(null)} aria-label="Back to your chats" className={cn('relative flex h-10 w-10 items-center justify-center rounded-full text-zinc-700 active:bg-zinc-100', split.back)} data-testid="talk-back">
             <ChevronLeft className="h-6 w-6" />
             {otherUnread > 0 && <span className="absolute right-0 top-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#BE1E2D] px-1 text-[10px] font-semibold text-white">{otherUnread}</span>}
           </button>
@@ -599,7 +645,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
               : group && <span className="block truncate text-xs text-zinc-400" data-testid="talk-members">{groupMemberNames(memberIdsNow, meId, members)}</span>}
           </span>
         </button>
-        <button type="button" onClick={() => { setSearchOpen(o => !o); setSearchQ('') }} aria-label="Search this chat" data-testid="talk-search-toggle" className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-600 active:bg-zinc-100">
+        <button type="button" onClick={() => guardLeave(() => { setSearchOpen(o => !o); setSearchQ('') })} aria-label="Search this chat" data-testid="talk-search-toggle" className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-600 active:bg-zinc-100">
           {searchOpen ? <X className="h-5 w-5" /> : <Search className="h-5 w-5" />}
         </button>
       </div>
@@ -637,7 +683,30 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
           onJumpTo={jumpTo}
         />
       )}
-      {!searchOpen && <TalkComposer key={selected.id} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping} />}
+      {!searchOpen && (
+        <TalkComposer
+          key={selected.id} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping}
+          draftKey={draftKey(meId, selected.id)}
+          onRecordingChange={on => { recordingRef.current = on }}
+          recordingControl={recordingControl}
+          onVoiceDone={o => voiceDoneRef.current?.(o)}
+        />
+      )}
+      {leaveAsk && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="You are recording a voice message" data-testid="talk-leave-recording">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
+            <p className="text-[17px] font-semibold text-zinc-900">You are recording a voice message</p>
+            <p className="mt-1 text-sm text-zinc-500">Leaving this chat now would lose it. What do you want to do?</p>
+            <div className="mt-4 flex flex-col gap-2">
+              <button type="button" disabled={leaveBusy} onClick={() => leaveAfterSending(leaveAsk.go)} data-testid="talk-leave-send" className="flex h-11 items-center justify-center gap-2 rounded-full bg-[#BE1E2D] text-sm font-semibold text-white active:opacity-80 disabled:opacity-60">
+                {leaveBusy ? <><Loader2 className="h-4 w-4 animate-spin" /> Sending…</> : 'Send it'}
+              </button>
+              <button type="button" disabled={leaveBusy} onClick={() => leaveAfterThrowingAway(leaveAsk.go)} data-testid="talk-leave-discard" className="h-11 rounded-full border border-zinc-200 text-sm font-semibold text-zinc-800 active:bg-zinc-100 disabled:opacity-60">Throw it away</button>
+              <button type="button" disabled={leaveBusy} onClick={() => setLeaveAsk(null)} data-testid="talk-leave-keep" className="h-11 rounded-full text-sm font-medium text-zinc-600 active:bg-zinc-100 disabled:opacity-60">Keep recording</button>
+            </div>
+          </div>
+        </div>
+      )}
       {groupInfoOpen && group && meId && (
         <TalkGroupInfo
           name={name} memberIds={memberIdsNow} members={members} meId={meId} busy={groupBusy}

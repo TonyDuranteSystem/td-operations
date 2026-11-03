@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
 import { listTeamMembers } from '@/lib/team/directory'
 import { everMentionedThreadIds } from '@/lib/team/chat-window-threads'
+import { lastMessagePreview } from '@/lib/talk/list-preview'
 import { NextResponse } from 'next/server'
 
 /**
@@ -166,6 +167,34 @@ export async function GET() {
       for (const t of enriched as any[]) if (t.thread_type === 'group') t.members = byGroup[t.id] ?? []
     } catch (e) {
       console.error('team/threads: group members lookup failed', e)
+    }
+  }
+
+  // Chat-list preview (TD Talk): the newest message that is still there, for each direct message and group (a handful of chats, one small query each).
+  // Best-effort like the lookups above: a failure only leaves the preview line empty.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const chatIds = (enriched as any[]).filter(t => t.thread_type === 'dm' || t.thread_type === 'group').map(t => t.id as string)
+  if (chatIds.length > 0) {
+    try {
+      const latest = await Promise.all(chatIds.map(async id => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data } = await (supabaseAdmin as any)
+          .from('internal_messages')
+          .select('message, attachments, sender_id')
+          .eq('thread_id', id)
+          .is('deleted_at', null)
+          .order('created_at', { ascending: false })
+          .limit(1)
+        return [id, data?.[0] ?? null] as const
+      }))
+      const byChat = new Map(latest)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const t of enriched as any[]) {
+        const row = byChat.get(t.id)
+        if (row) { t.last_message_preview = lastMessagePreview(row); t.last_message_sender_id = row.sender_id ?? null }
+      }
+    } catch (e) {
+      console.error('team/threads: chat preview lookup failed', e)
     }
   }
 
