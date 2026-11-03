@@ -15,6 +15,7 @@ import {
   type LeadListFilters,
   type QuickKey,
 } from '@/lib/leads/list-filters'
+import { TAB_LABEL, decideLiveTarget, paramOfTab, tabFromParam, type LeadTab } from '@/lib/leads/search-tab'
 
 interface Suggestion {
   id: string
@@ -53,7 +54,9 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
 
   const askedQ = useRef(query)
 
-  function setParams(changes: Record<string, string>) {
+  // `replace`: typing-driven changes replace the current page address instead of adding a history entry per pause,
+  // so the Back button does not step through every half-typed word.
+  function setParams(changes: Record<string, string>, replace = false) {
     if ('q' in changes) askedQ.current = changes.q
     const next = new URLSearchParams(paramsRef.current.toString())
     for (const [k, v] of Object.entries(changes)) {
@@ -62,7 +65,8 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
     }
     next.delete('page') // a different list can have fewer pages
     paramsRef.current = next
-    startTransition(() => router.push(`/leads?${next.toString()}`))
+    const url = `/leads?${next.toString()}`
+    startTransition(() => { if (replace) router.replace(url); else router.push(url) })
   }
 
   function clearAll() {
@@ -77,6 +81,8 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [open, setOpen] = useState(false)
   const [searchError, setSearchError] = useState('')
+  // Other tabs that also match the typed text (small "also in ..." buttons under the box).
+  const [others, setOthers] = useState<{ tab: LeadTab; count: number }[]>([])
   const boxRef = useRef<HTMLDivElement>(null)
   const requestId = useRef(0)
   // The text we put in the box ourselves after a pick: it must not pop the suggestions open again.
@@ -94,9 +100,10 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
 
   useEffect(() => {
     const q = search.trim()
-    if (q === pickedQ.current) { setSuggestions([]); return }
+    if (q === pickedQ.current) { setSuggestions([]); setOthers([]); return }
     if (q.length < 2) {
       setSuggestions([])
+      setOthers([])
       setSearchError('')
       return
     }
@@ -110,9 +117,15 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
         }
         const d = await res.json()
         if (id !== requestId.current) return // a newer keystroke already replaced this
-        setSuggestions(d.results ?? [])
+        const results: Suggestion[] = d.results ?? []
+        setSuggestions(results)
         setSearchError('')
         setOpen(true)
+        // The list underneath follows what is typed: it shows the matches, and moves to the tab that has them
+        // when the current tab does not (a person who is already a client lives in Existing Clients).
+        const target = decideLiveTarget(results, tabFromParam(paramsRef.current.get('client')))
+        setOthers(target.others)
+        setParams({ q, client: paramOfTab(target.tab), focus: '' }, true)
       } catch (err) {
         if (id !== requestId.current) return
         setSuggestions([])
@@ -121,6 +134,8 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
       }
     }, 200)
     return () => clearTimeout(timer)
+    // Runs only when the typed text changes. setParams is recreated every render but always reads the latest address from paramsRef.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search])
 
   useEffect(() => {
@@ -153,7 +168,8 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
     pickedQ.current = ''
     setSearch(value)
     // Clearing the box must reset the list straight away.
-    if (value === '' && paramsRef.current.get('q')) setParams({ q: '' })
+    if (value === '') setOthers([])
+    if (value === '' && paramsRef.current.get('q')) setParams({ q: '' }, true)
   }
 
   const active = hasActiveFilters(filters) || !!query
@@ -219,6 +235,21 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
             </div>
           )}
         </div>
+        {others.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>Also matches in</span>
+            {others.map(o => (
+              <button
+                key={o.tab}
+                type="button"
+                onClick={() => setParams({ client: paramOfTab(o.tab), focus: '' }, true)}
+                className="rounded-full border bg-white px-2.5 py-1 text-zinc-700 hover:bg-zinc-50"
+              >
+                {TAB_LABEL[o.tab]} ({o.count})
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2">
           {!isKanban && (
