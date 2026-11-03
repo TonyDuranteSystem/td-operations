@@ -21,3 +21,8 @@ export function leavingLosesRecording(isRecording: boolean): boolean {
 
 /** How long the screen waits for a "Send it" to finish before it moves on anyway. */
 export const SEND_BEFORE_LEAVING_TIMEOUT_MS = 10_000
+
+/** After "Send it": does the person stay in the chat? Yes unless the note was really kept (a failed save would lose the recording; a thrown-away note is not "Send it"). */
+export function stayAfterVoice(outcome: VoiceOutcome): boolean {
+  return outcome === 'failed'
+}
