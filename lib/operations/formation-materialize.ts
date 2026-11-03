@@ -572,6 +572,34 @@ export async function materializeFormationCompany(
         } catch (e) {
           steps.push({ step: "suite", status: "error", detail: e instanceof Error ? e.message : String(e) })
         }
+        // A retry after a partial failure must not drop the Filing ID staff just confirmed in the Articles window (job 64d2be64):
+        // fill it on the existing company ONLY when that company has none — an ID already on the record is never overwritten.
+        if (params.filing_id) {
+          // eslint-disable-next-line no-restricted-syntax -- materialization writes to accounts directly; central path
+          const { data: filled, error: fillErr } = await supabaseAdmin
+            .from("accounts")
+            .update({ filing_id: params.filing_id, updated_at: new Date().toISOString() } as never)
+            .eq("id", acc.id)
+            .or("filing_id.is.null,filing_id.eq.")
+            .select("id")
+          if (fillErr) {
+            steps.push({ step: "filing_id", status: "error", detail: `Could not save the Filing ID on the existing company: ${fillErr.message}` })
+          } else if (filled && filled.length > 0) {
+            steps.push({ step: "filing_id", status: "ok", detail: `Filing ID ${params.filing_id} saved on the existing company` })
+            await logAction({
+              actor,
+              action_type: "update",
+              table_name: "accounts",
+              record_id: acc.id,
+              account_id: acc.id,
+              contact_id: params.contact_id,
+              summary: "filing_id updated",
+              details: { filing_id: params.filing_id, source: "formation Articles upload (retry on an already-created company)" },
+            })
+          } else {
+            steps.push({ step: "filing_id", status: "skipped", detail: "The existing company already has a Filing ID — left as it is" })
+          }
+        }
         return { success: true, outcome: "already_materialized", account_id: acc.id, steps }
       }
       steps.push({

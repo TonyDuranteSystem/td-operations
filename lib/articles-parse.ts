@@ -91,6 +91,54 @@ export function parseFormationDate(text: string): string | null {
   return null
 }
 
+// ─── The state's Filing ID printed on the Articles (prefill for the upload window's "State Filing ID" field) ──────────────────────
+
+/**
+ * The state Filing ID as printed on the Articles, or null when the text does not carry one with confidence. PREFILL ONLY — staff
+ * confirm it in the upload window — so this favours PRECISION over recall: every pattern is anchored on a label or on a shape that
+ * only a Filing ID has, and there is deliberately NO "any long number" fallback (a New Mexico Articles also prints the registered
+ * agent's own 7-digit id, which such a fallback would pick). Checked against 100 real stored Articles (job 64d2be64): every ID the
+ * Articles print is read right; the ones it misses are Articles whose OCR text carries no readable ID (the field is then left empty
+ * for staff to type).
+ *   Wyoming   "Original ID: 2025-001586941"            Florida  "L26000009149" (the document-number stamp)
+ *   New Mexico "File #: 3190157" / "Filing Number: 0002313166", or the stamp number when OCR drops its label
+ *   Delaware  "File Number 6462038"
+ */
+export function parseFilingId(text: string): string | null {
+  if (typeof text !== "string" || !text) return null
+  const t = text.replace(/ /g, " ")
+  const tries: Array<() => string | null> = [
+    // 1. A labelled ID, in each state's wording.
+    () => { const m = t.match(/(?:original|filing)\s+id\s*[:;]?\s*(\d{4})\s*-\s*(\d{9})\b/i); return m ? `${m[1]}-${m[2]}` : null },
+    () => { const m = t.match(/\bfil(?:e|ing)\s*(?:number|no\.?|num\.?|#)\s*[:;]?\s*(\d{6,10})\b/i); return m ? m[1] : null },
+    () => { const m = t.match(/\bdocument\s+(?:number|no\.?|#)\s*[:;]?\s*(L\d{11})\b/i); return m ? m[1] : null },
+    // 2. A shape only a Filing ID has: Florida "L" + 11 digits; Wyoming year + "-" + 9 digits.
+    () => { const m = t.match(/\b(L\d{11})\b/); return m ? m[1] : null },
+    () => { const m = t.match(/(?<![\d-])(20\d{2})\s*-\s*(\d{9})(?!\d)/); return m ? `${m[1]}-${m[2]}` : null },
+    // 3. The New Mexico stamp number when the OCR printed it without its "File #" label (two real layouts).
+    () => { const m = t.match(/filed\s+by\s+the\s+secretary\s+of\s+state\.\s+(\d{7})\s+-{3}\s*page\s+break/i); return m ? m[1] : null },
+    () => { const m = t.match(/certificate\s+of\s+organization\s+of\s+[^\n]{2,80}?\b(?:llc|l\.l\.c\.)\s+(\d{7})\s+new\s+mexico/i); return m ? m[1] : null },
+  ]
+  for (const attempt of tries) {
+    const found = attempt()
+    if (found) return found
+  }
+  return null
+}
+
+/**
+ * A Filing ID as staff typed or confirmed it, tidied for saving: trimmed, upper-cased, and the spaces OCR / typing leaves around
+ * the dash removed ("2025 - 001586941" → "2025-001586941"). Letters, digits and dashes only, 4–30 characters, at least one digit.
+ * Anything else → null (the caller refuses it with a plain message instead of saving a half-typed value).
+ */
+export function normalizeFilingId(raw: unknown): string | null {
+  if (typeof raw !== "string") return null
+  const cleaned = raw.trim().toUpperCase().replace(/\s*-\s*/g, "-")
+  if (!/^[A-Z0-9-]{4,30}$/.test(cleaned)) return null
+  if (!/\d/.test(cleaned)) return null
+  return cleaned
+}
+
 export function parseArticlesText(text: string): ArticlesParsed {
   const result: ArticlesParsed = {
     company_name: null,
@@ -160,16 +208,7 @@ export function parseArticlesText(text: string): ArticlesParsed {
   result.formation_date = parseFormationDate(text)
 
   // ── Filing ID ──
-  const filingPatterns = [
-    /(?:filing\s+(?:number|id|no\.?|#))\s*[:;]?\s*([A-Z0-9-]+)/i,
-    /(?:file\s+(?:number|no\.?|#))\s*[:;]?\s*([A-Z0-9-]+)/i,
-    /(?:nmbr|number)\s*[:;]?\s*(\d{5,})/i,
-    /(?:entity\s+(?:number|id))\s*[:;]?\s*([A-Z0-9-]+)/i,
-  ]
-  for (const pat of filingPatterns) {
-    const match = text.match(pat)
-    if (match) { result.filing_id = match[1].trim(); break }
-  }
+  result.filing_id = parseFilingId(text)
 
   // ── Registered Agent ──
   const raPatterns = [

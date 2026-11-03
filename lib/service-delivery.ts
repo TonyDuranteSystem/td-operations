@@ -85,6 +85,13 @@ export interface AdvanceStageParams {
    */
   legal_name?: string
   /**
+   * The state Filing ID staff confirmed in the Articles upload window (OCR-prefilled from the Articles; already normalized by
+   * the upload route). Passed straight to materializeFormationCompany so the new company's Filing ID is saved with it, instead
+   * of staff typing it afterwards (job 64d2be64). Optional — absent means the company is created with no Filing ID. Ignored for
+   * other transitions.
+   */
+  filing_id?: string
+  /**
    * The cycle year a renewal filing is FOR (Mark Filed dialog). Drives the
    * completion roll: the record moves to the anniversary in year+1
    * (computeRollForward). Absent → defaults to the current year. Ignored for
@@ -1161,6 +1168,8 @@ export async function advanceServiceDelivery(
           // Staff-supplied LLC-type override from the upload dialog — wins
           // over contract/form/wizard resolution (see AdvanceStageParams).
           entity_type: params.entity_type,
+          // The staff-confirmed state Filing ID from the Articles window (job 64d2be64) — saved on the new company.
+          filing_id: params.filing_id,
           actor: `flow-advance:${actor}`,
         })
         if (mat.success && mat.account_id) {
