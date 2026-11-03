@@ -7969,6 +7969,33 @@ export type Database = {
           },
         ]
       }
+      infra_incident_notices: {
+        Row: {
+          created_at: string
+          incident_id: string
+          opened_notified_at: string | null
+          resolved_notified_at: string | null
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          incident_id: string
+          opened_notified_at?: string | null
+          resolved_notified_at?: string | null
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          incident_id?: string
+          opened_notified_at?: string | null
+          resolved_notified_at?: string | null
+          title?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       internal_messages: {
         Row: {
           attachment_name: string | null

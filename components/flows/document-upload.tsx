@@ -1,5 +1,6 @@
 'use client'
 
+import { explainUploadFailure } from '@/lib/infra/incident-client'
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Upload, Loader2, CheckCircle2, FileUp, X } from 'lucide-react'
@@ -317,7 +318,8 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
 
       await commitUpload(storagePath, file.name, file.type)
     } catch (err) {
-      setError(err instanceof Error && err.message ? err.message : 'Upload failed — please try again.')
+      // when Supabase (our file storage) has an open incident the message says so, in its own words, instead of blaming the connection
+      setError(await explainUploadFailure(err instanceof Error && err.message ? err.message : 'Upload failed — please try again.'))
       // Always release the button on failure — the formation path skips the
       // finally reset (it normally hands off to the confirm modal), which left
       // a failed staging stuck on "Uploading…" forever (bug-hunter 2026-07-28).
