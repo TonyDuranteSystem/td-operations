@@ -136,6 +136,14 @@ public final class StorageAPI: @unchecked Sendable {
     public func newFolder(ownerId: String, parentId: String, name: String) async throws -> NewFolder {
         try await postAuthorized("api/storage-app/new-folder", ["ownerId": ownerId, "parentId": parentId, "name": name])
     }
+    /// Renaming, moving or trashing something that already exists (Business and My files). The CRM applies the Storage page's own rules and answers a plain
+    /// refusal when it may not; a trash goes to the CRM trash (restorable), never an erase.
+    public func edit(kind: String, id: String, action: String, name: String? = nil, toParentId: String? = nil) async throws -> EditReply {
+        var body: [String: Any] = ["kind": kind, "id": id, "action": action]
+        if let name { body["name"] = name }
+        if let toParentId { body["toParentId"] = toParentId }
+        return try await postAuthorized("api/storage-app/edit", body)
+    }
     public func item(kind: String, id: String) async throws -> ItemInfo {
         try await get("api/storage-app/item", query: [URLQueryItem(name: "kind", value: kind), URLQueryItem(name: "id", value: id)])
     }

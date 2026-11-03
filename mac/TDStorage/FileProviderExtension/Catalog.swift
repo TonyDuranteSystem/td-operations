@@ -1,9 +1,9 @@
 import FileProvider
 import UniformTypeIdentifiers
 
-/// What Finder is told about each item. Files can be read. A NEW file can be added only into a folder the CRM says may take one
-/// (`canSave`: Business and My files for now); nothing existing can be renamed, moved, replaced or deleted from Finder (the capabilities
-/// below say so, so Finder never even offers it).
+/// What Finder is told about each item. Files can be read. A NEW file or folder can be added only into a folder the CRM says may take one
+/// (`canSave`: Business and My files for now). Since 0.2.9 an item the CRM marks `canEdit` (Business and My files, never a fixed folder) can also be
+/// renamed, moved and trashed from Finder (the CRM checks every change again; a trash goes to the CRM trash, restorable). Nothing else can be replaced or erased.
 final class FPItem: NSObject, NSFileProviderItem {
     let itemIdentifier: NSFileProviderItemIdentifier
     let parentItemIdentifier: NSFileProviderItemIdentifier
@@ -16,10 +16,12 @@ final class FPItem: NSObject, NSFileProviderItem {
     let canSave: Bool
     /// a file THIS Mac saved: macOS may send its changed content back and the CRM keeps it as a new version
     let canUpdate: Bool
+    /// may Finder offer rename / move / trash on this item? The CRM decides (a hint for the menu: the CRM checks every change)
+    let canEdit: Bool
 
-    init(id: ItemID, parent: ItemID, filename: String, isFolder: Bool, size: Int? = nil, modified: Date? = nil, versionTag: String = "", canSave: Bool = false, canUpdate: Bool = false) {
+    init(id: ItemID, parent: ItemID, filename: String, isFolder: Bool, size: Int? = nil, modified: Date? = nil, versionTag: String = "", canSave: Bool = false, canUpdate: Bool = false, canEdit: Bool = false, inTrash: Bool = false) {
         self.itemIdentifier = FPItem.identifier(for: id)
-        self.parentItemIdentifier = FPItem.identifier(for: parent)
+        self.parentItemIdentifier = inTrash ? .trashContainer : FPItem.identifier(for: parent)
         self.filename = filename
         self.isFolder = isFolder
         self.size = size
@@ -27,26 +29,33 @@ final class FPItem: NSObject, NSFileProviderItem {
         self.contentVersionTag = versionTag
         self.canSave = canSave
         self.canUpdate = canUpdate
+        self.canEdit = canEdit
     }
 
     /// The same item with the modification date of the LOCAL file: when a Mac saves a file, the item handed back must carry the file's own date, or
     /// macOS rewrites the file's date and an app that saved it (TextEdit) says "the file has been changed by another application".
     func replacingModified(_ date: Date?) -> FPItem {
         guard let date, let id = FPItem.itemID(for: itemIdentifier), let parent = FPItem.itemID(for: parentItemIdentifier) else { return self }
-        return FPItem(id: id, parent: parent, filename: filename, isFolder: isFolder, size: size, modified: date, versionTag: contentVersionTag, canSave: canSave, canUpdate: canUpdate)
+        return FPItem(id: id, parent: parent, filename: filename, isFolder: isFolder, size: size, modified: date, versionTag: contentVersionTag, canSave: canSave, canUpdate: canUpdate, canEdit: canEdit)
     }
 
     /// the same item under another id / parent (the same person's storage shown under a company's "2. Contacts")
     func rewrapped(id: ItemID, parent: ItemID) -> FPItem {
-        FPItem(id: id, parent: parent, filename: filename, isFolder: isFolder, size: size, modified: modified, versionTag: contentVersionTag, canSave: canSave, canUpdate: canUpdate)
+        FPItem(id: id, parent: parent, filename: filename, isFolder: isFolder, size: size, modified: modified, versionTag: contentVersionTag, canSave: canSave, canUpdate: canUpdate, canEdit: canEdit)
     }
 
     static func identifier(for id: ItemID) -> NSFileProviderItemIdentifier { id == .root ? .rootContainer : NSFileProviderItemIdentifier(id.raw) }
     static func itemID(for identifier: NSFileProviderItemIdentifier) -> ItemID? { identifier == .rootContainer ? .root : ItemID(raw: identifier.rawValue) }
 
     var capabilities: NSFileProviderItemCapabilities {
-        guard isFolder else { return canUpdate ? [.allowsReading, .allowsWriting] : [.allowsReading] }
-        return canSave ? [.allowsReading, .allowsContentEnumerating, .allowsAddingSubItems] : [.allowsReading, .allowsContentEnumerating]
+        // rename / move / trash only where the CRM says so (Business and My files); everything else is read-only here as before
+        let edit: NSFileProviderItemCapabilities = canEdit ? [.allowsRenaming, .allowsReparenting, .allowsTrashing, .allowsDeleting] : []
+        var caps: NSFileProviderItemCapabilities = [.allowsReading]
+        if isFolder {
+            caps.insert(.allowsContentEnumerating)
+            if canSave { caps.insert(.allowsAddingSubItems) }
+        } else if canUpdate { caps.insert(.allowsWriting) }
+        return caps.union(edit)
     }
     var contentType: UTType {
         if isFolder { return .folder }
@@ -72,7 +81,7 @@ actor Catalog {
     private func date(_ s: String?) -> Date? { s.flatMap { iso.date(from: $0) ?? isoPlain.date(from: $0) } }
 
     private func fileItem(_ f: FileRef, owner: String, parent: ItemID, name: String) -> FPItem {
-        FPItem(id: .file(owner: owner, file: f.id), parent: parent, filename: name, isFolder: false, size: f.size, modified: date(f.updatedAt), versionTag: "\(f.size ?? 0)-\(f.updatedAt)", canUpdate: f.mine ?? false)
+        FPItem(id: .file(owner: owner, file: f.id), parent: parent, filename: name, isFolder: false, size: f.size, modified: date(f.updatedAt), versionTag: "\(f.size ?? 0)-\(f.updatedAt)", canUpdate: f.mine ?? false, canEdit: f.canEdit ?? false)
     }
 
     // MARK: listing a container
@@ -132,7 +141,7 @@ actor Catalog {
             + l.files.map { (id: $0.id, name: NameMapper.finderName(fromServer: $0.name)) }
             + people.map { (id: "p:" + $0.contactId, name: NameMapper.finderName(fromServer: $0.name)) }
         let names = Disambiguator.unique(entries)
-        var out: [FPItem] = l.folders.map { FPItem(id: ItemID.folder(owner: owner, folder: $0.id).shown(via: via), parent: parent, filename: names[$0.id] ?? $0.name, isFolder: true, canSave: $0.canSave ?? false) }
+        var out: [FPItem] = l.folders.map { FPItem(id: ItemID.folder(owner: owner, folder: $0.id).shown(via: via), parent: parent, filename: names[$0.id] ?? $0.name, isFolder: true, canSave: $0.canSave ?? false, canEdit: $0.canEdit ?? false) }
         out += people.map { pp in
             let target = pp.ownerId ?? "c-\(pp.contactId)"
             return FPItem(id: .link(company: owner, folder: folder ?? "", target: target), parent: parent, filename: names["p:" + pp.contactId] ?? pp.name, isFolder: true)
@@ -194,11 +203,11 @@ actor Catalog {
             throw StorageAPIError.notFound
         case .folder(let owner, let folder):
             let it = try await api.item(kind: "folder", id: folder)
-            return FPItem(id: id, parent: await finderParent(owner: owner, serverParent: it.parentId), filename: NameMapper.finderName(fromServer: it.name), isFolder: true, canSave: it.canSave ?? false)
+            return FPItem(id: id, parent: await finderParent(owner: owner, serverParent: it.parentId), filename: NameMapper.finderName(fromServer: it.name), isFolder: true, canSave: it.canSave ?? false, canEdit: it.canEdit ?? false)
         case .file(let owner, let file):
             let it = try await api.item(kind: "file", id: file)
             let parent = await finderParent(owner: owner, serverParent: it.parentId)
-            return FPItem(id: id, parent: parent, filename: NameMapper.finderName(fromServer: it.name), isFolder: false, size: it.size, modified: date(it.updatedAt), versionTag: "\(it.size ?? 0)-\(it.updatedAt ?? "")", canUpdate: it.mine ?? false)
+            return FPItem(id: id, parent: parent, filename: NameMapper.finderName(fromServer: it.name), isFolder: false, size: it.size, modified: date(it.updatedAt), versionTag: "\(it.size ?? 0)-\(it.updatedAt ?? "")", canUpdate: it.mine ?? false, canEdit: it.canEdit ?? false)
         case .link(let company, let folder, let target):
             let l = try await api.folder(owner: company, folder: folder)
             guard let pp = (l.people ?? []).first(where: { ($0.ownerId ?? "c-\($0.contactId)") == target }) else { throw StorageAPIError.notFound }
