@@ -8,6 +8,7 @@ import { grantablePermissions } from '@/lib/marketing/permission-labels'
 import { TeamManager } from '@/components/marketing/team-manager'
 import { APP_BASE_URL } from '@/lib/config'
 import { TeamTimes } from '@/components/marketing/team-times'
+import { ZoomTestBox } from '@/components/marketing/zoom-test-box'
 import { loadPrefsAndTakers } from '@/lib/marketing/time-prefs-server'
 import { checkShare, googleApi, isWorkMailbox, withDeadline } from '@/lib/marketing/gcal'
 import { personName } from '@/lib/marketing/setter-note'
@@ -63,6 +64,11 @@ export default async function MarketingTeam() {
             teamId={teamId} adminEmail={g.ctx.user.email ?? null} adminLabel={personName(g.ctx.user.email ?? '')} prefs={times.prefs} share={share}
             members={members.filter(m => m.status !== 'removed').map(m => ({ userId: m.user_id, email: m.email, role: m.member_role, status: m.status, isAdmin: m.is_admin === true, setterOnly: isSetterOnly(effectivePermissions({ memberRole: m.member_role, bundle: m.bundle, bundles, extra: m.permissions }) as string[]), workMailbox: isWorkMailbox(m.email) }))}
           />
+        </div>
+      )}
+      {times && (
+        <div className="mt-6">
+          <ZoomTestBox emails={members.filter(m => m.status !== 'removed' && m.email).map(m => m.email as string)} />
         </div>
       )}
       <TourPreviewBox />
