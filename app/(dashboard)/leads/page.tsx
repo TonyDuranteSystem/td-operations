@@ -5,6 +5,7 @@ import { LeadsKanban } from './components/leads-kanban'
 import { LeadsViewToggle } from './components/leads-view-toggle'
 import { LeadsClientFilterToggle } from './components/leads-client-filter-toggle'
 import { CreateLeadButton } from './components/create-lead-button'
+import { NewLeadFromCallButton } from './components/new-lead-from-call'
 import type { LeadListItem } from '@/lib/types'
 import { findExistingClientNewCalls } from '@/lib/leads/existing-client-new-calls'
 import { findLeadIdsByPhone, leadSearchOrFilter } from '@/lib/leads/phone-search'
@@ -240,6 +241,7 @@ export default async function LeadsPage({
         </div>
         <div className="flex items-center gap-3">
           <CreateLeadButton />
+          <NewLeadFromCallButton />
           <LeadsViewToggle currentView={viewMode} />
         </div>
       </div>
