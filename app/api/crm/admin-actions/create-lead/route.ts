@@ -10,6 +10,7 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
+import { isCallFreeForNewLead } from "@/lib/leads/lead-from-call"
 
 export async function POST(request: Request) {
   const supabase = createClient()
@@ -21,10 +22,25 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json()
-    const { full_name, email, phone, source, channel, language, status, reason, referrer_name, notes } = body
+    const { full_name, email, phone, source, channel, language, status, reason, referrer_name, notes, call_summary_id } = body
 
     if (!full_name?.trim()) {
       return NextResponse.json({ error: "Full name is required" }, { status: 400 })
+    }
+
+    // A lead made from a call: the call must still be free (nobody attached) before anything is created.
+    if (call_summary_id) {
+      const { data: call } = await supabaseAdmin
+        .from("call_summaries")
+        .select("id, lead_id, contact_id, account_id")
+        .eq("id", call_summary_id)
+        .maybeSingle()
+      if (!call) {
+        return NextResponse.json({ error: "That call was not found." }, { status: 404 })
+      }
+      if (!isCallFreeForNewLead(call)) {
+        return NextResponse.json({ error: "Someone is already attached to that call — pick another call or open the lead it belongs to." }, { status: 409 })
+      }
     }
 
     // Check for duplicate email
@@ -85,13 +101,33 @@ export async function POST(request: Request) {
       )
     }
 
+    // Attach the call to the new lead, the same way "Find call" does on the lead page.
+    if (call_summary_id) {
+      const now = new Date().toISOString()
+      const { error: leadErr } = await supabaseAdmin
+        .from("leads")
+        .update({ circleback_call_id: call_summary_id, updated_at: now })
+        .eq("id", lead.id)
+      const { error: callErr } = await supabaseAdmin
+        .from("call_summaries")
+        .update({ lead_id: lead.id, link_review: null, updated_at: now })
+        .eq("id", call_summary_id)
+        .is("lead_id", null)
+      if (leadErr || callErr) {
+        return NextResponse.json(
+          { error: `The lead was created but the call could not be attached: ${(leadErr || callErr)?.message}. Open the lead and use Find call.`, lead_id: lead.id },
+          { status: 500 }
+        )
+      }
+    }
+
     logAction({
       actor: "crm-admin",
       action_type: "create",
       table_name: "leads",
       record_id: lead.id,
       summary: `Lead "${full_name}" created by admin via CRM`,
-      details: { lead_id: lead.id, source, channel, reason, admin_email: user?.email },
+      details: { lead_id: lead.id, source, channel, reason, call_summary_id: call_summary_id || null, admin_email: user?.email },
     })
 
     return NextResponse.json({
