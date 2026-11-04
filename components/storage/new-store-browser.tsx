@@ -18,7 +18,7 @@ import { toast } from 'sonner'
 import { useQuery } from '@tanstack/react-query'
 import {
   Building2, User, Hammer, Folder, FolderOpen, FolderPlus, FileText, FileImage, FileSpreadsheet, ChevronRight, ChevronDown, Eye, EyeOff,
-  Lock, Trash2, Layers, X, Upload, Download, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, AlertTriangle, Check, Search, Tag, HardDriveDownload,
+  Lock, Trash2, Layers, X, Upload, Download, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, CalendarRange, AlertTriangle, Check, Search, Tag, HardDriveDownload,
 } from 'lucide-react'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { useAiMarks, AiMarkChip, AiCheckFilesButton, AiReviewPanel } from './ai-check'
@@ -37,6 +37,8 @@ import { NewVersionDialog, type EditTarget } from './new-version-dialog'
 import { lockText } from '@/lib/crm-store/new-version-rules'
 import { MergedPreviewModal } from './merged-preview-modal'
 import { baseName } from '@/lib/crm-store/merge-parts'
+import { orderFolders } from '@/lib/crm-store/date-sort-rules'
+import { DateSortDialog } from './date-sort-dialog'
 import { mergeBlockReason } from '@/lib/crm-store/merge-rules'
 import { onReconnected } from '@/lib/hooks/use-connection-state'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
@@ -77,7 +79,7 @@ interface File_ {
 }
 interface OwnerInfo { kind: string; label: string; accountStatus: string | null; closed: boolean }
 interface Person { contactId: string; name: string; ownerId: string | null; companies: string[] }
-interface Contents { folder: Fold | null; path: Fold[]; folders: Fold[]; files: File_[]; people?: Person[]; owner: OwnerInfo }
+interface Contents { folder: Fold | null; path: Fold[]; folders: Fold[]; sortOrder?: 'newest' | 'oldest'; files: File_[]; people?: Person[]; owner: OwnerInfo }
 interface DocType { slug: string; name: string; staffOnly: boolean; personal: boolean; defaultFolderKind: string | null; draftNeverVisible: boolean }
 
 /**
@@ -209,6 +211,8 @@ const fmtDate = (d: string) => { try { return new Date(d).toLocaleDateString('en
 /** "Oct 4" — or "Oct 4, 2025" when it is not this year: the narrow column on each file row */
 const fmtShort = (d: string) => { try { const x = new Date(d); return x.toLocaleDateString('en-US', x.getFullYear() === new Date().getFullYear() ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: '2-digit' }) } catch { return '' } }
 const isYear = (n: string) => /^\d{4}$/.test(n)
+/** A folder's sub-folders: in the order its "Sort by date" choice says (newest / oldest first), else by name (years newest first). */
+const sortKids = (c: { folders: Fold[]; sortOrder?: 'newest' | 'oldest' }): Fold[] => (c.sortOrder ? orderFolders(c.folders, c.sortOrder) : [...c.folders].sort(sortFolders))
 /** year folders newest first, as today; everything else by name */
 const sortFolders = (a: Fold, b: Fold) => (isYear(a.name) && isYear(b.name) ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name))
 
@@ -351,6 +355,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const { data: docTypes } = useStoreDocTypes()
   const typeNameOf = (slug: string | null) => (slug ? docTypes?.find((t) => t.slug === slug)?.name ?? slug : null)
   const [renaming, setRenaming] = useState<{ id: string; value: string; folder?: boolean; left?: boolean } | null>(null)
+  const [dateSortFor, setDateSortFor] = useState<{ id: string; name: string } | null>(null)   // the "Sort by date" pop-up
   const [newFolder, setNewFolder] = useState<NewFolder | null>(null)
   const [dragFile, setDragFile] = useState<{ id: string; from: string | null } | null>(null)
   const [dropOn, setDropOn] = useState<string | null>(null)
@@ -528,7 +533,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setTreeLoading((l) => new Set(l).add(key))
     try {
       const c = await fetchInto(oid, key.startsWith('own:') ? null : key)
-      const folders = [...c.folders].sort(sortFolders)
+      const folders = sortKids(c)
       setTree((t) => ({ ...t, [key]: { root: key.startsWith('own:') ? c.folder : undefined, folders } }))
       return folders
     } catch (e) {
@@ -1703,11 +1708,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           // each person's own folders opened through the company (the ones the company page may show)
           for (const p of c?.people ?? []) {
             const pc = loaded[personKey(p.contactId)]
-            if (pc) walk([...pc.folders].sort(sortFolders), depth + 1, `${p.name} › `)
+            if (pc) walk(sortKids(pc), depth + 1, `${p.name} › `)
           }
           continue
         }
-        if (c) walk([...c.folders].sort(sortFolders), depth + 1, prefix)
+        if (c) walk(sortKids(c), depth + 1, prefix)
       }
     }
     if (root?.folder && root.folder.kind !== 'root') out.push({ f: root.folder, depth: 0, owner: ownerId ?? '', label: root.folder.name })
@@ -2122,6 +2127,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       {extras && f.kind !== 'root' && <MenuItem icon={Upload} label="Upload here" onClick={() => { setMenuFor(null); void openUpload(f.id) }} />}
       <MenuItem icon={FolderPlus} label="New folder inside" onClick={() => startNewFolder(f.id)} />
       {folderEditItems(f, parentId, false)}
+      {f.kind === 'custom' && !f.locked && <MenuItem icon={CalendarRange} label="Sort by date…" onClick={() => { setMenuFor(null); setDateSortFor({ id: f.id, name: f.name }) }} />}
       {extras && f.kind !== 'contacts' && <MenuItem icon={Download} label="Download as zip" onClick={() => { setMenuFor(null); void downloadZip(f) }} />}
       {extras && (f.kind === 'tax' || f.kind === 'person_tax') && <MenuItem icon={CalendarPlus} label="New tax year" onClick={() => { setMenuFor(null); startNewFolder(f.id, true) }} />}
     </>
@@ -2292,7 +2298,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     const c = loaded[f.id]
     const busy = loadingFolders.has(f.id)
     const canDrop = !!dragFile && f.kind !== 'contacts' && f.kind !== 'root' && dragFile.from !== f.id
-    const subs = c ? [...c.folders].sort(sortFolders) : []
+    const subs = c ? sortKids(c) : []
     const shown = c ? c.files.filter((x) => x.clientVisible).length : 0
     const isTax = f.kind === 'tax' || f.kind === 'person_tax'
     const where = [...trail, f.name].join(' › ')
@@ -2411,7 +2417,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         {isOpen && c && (
           <ul>
             {c.folder && newFolderBox(c.folder.id, depth + 1)}
-            {[...c.folders].sort(sortFolders).map((sf) => folderNode(sf, depth + 1, c.folder?.id ?? null, [...trail, p.name]))}
+            {sortKids(c).map((sf) => folderNode(sf, depth + 1, c.folder?.id ?? null, [...trail, p.name]))}
             {sortFiles(c.files).map((file) => fileRow(file, c.folder, depth + 1))}
           </ul>
         )}
@@ -2517,7 +2523,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // the right side shows the storage's top, or the ONE folder picked on the left / in the path
   const view: Contents | null = focus && loaded[focus] && !loaded[focus].folder?.trashed ? loaded[focus] : root
   const viewFolder = view?.folder ?? null
-  const topFolders = view && viewFolder?.kind !== 'contacts' ? [...view.folders].sort(sortFolders) : []
+  const topFolders = view && viewFolder?.kind !== 'contacts' ? sortKids(view) : []
   const allOpen = topFolders.length > 0 && topFolders.every((f) => expanded.has(f.id))
   const groupOf = (groups ?? []).find((g) => g.owners.some((o) => o.id === ownerId))
   const pathKey = focus ?? selected
@@ -2534,10 +2540,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   if (chipsOn && root) {
     // the bar follows the folder being shown (never a folder that was just deleted)
     const barPath = focus && loaded[focus] && !loaded[focus].folder?.trashed ? selPath : []
-    const l0 = [...root.folders].filter((x) => !x.trashed).sort(sortFolders)
+    const l0 = sortKids(root).filter((x) => !x.trashed)
     if (l0.length) chipLevels.push({ items: l0, selectedId: barPath[0]?.id ?? null, trail: [] })
     barPath.forEach((el, i) => {
-      const kids = [...(loaded[el.id]?.folders ?? [])].filter((x) => !x.trashed).sort(sortFolders)
+      const kids = (loaded[el.id] ? sortKids(loaded[el.id]) : []).filter((x) => !x.trashed)
       if (kids.length) chipLevels.push({ items: kids, selectedId: barPath[i + 1]?.id ?? null, trail: barPath.slice(0, i + 1).map((x) => x.name) })
     })
   }
@@ -2661,6 +2667,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
               <FolderPlus className="h-3.5 w-3.5" />New folder
             </button>}
+            {browseOn && viewFolder && viewFolder.kind === 'custom' && !viewFolder.locked && (
+              <FastTooltip label="Put the items that start with a date into year and month folders (you see a preview first)">
+                <button type="button" onClick={(e) => { e.stopPropagation(); setDateSortFor({ id: viewFolder.id, name: viewFolder.name }) }}
+                  className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
+                  <CalendarRange className="h-3.5 w-3.5" />Sort by date
+                </button>
+              </FastTooltip>
+            )}
             {inFolderView && viewFolder && (viewFolder.kind === 'tax' || viewFolder.kind === 'person_tax') && (
               <button type="button" onClick={(e) => { e.stopPropagation(); startNewFolder(viewFolder.id, true) }}
                 className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
@@ -2948,6 +2962,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
       {shareDialog}
       {mergedFile && mergedPreviewOpen && <MergedPreviewModal file={mergedFile.file} pages={mergedFile.pages} onClose={() => setMergedPreviewOpen(false)} />}
+      {dateSortFor && <DateSortDialog folderId={dateSortFor.id} folderName={dateSortFor.name} onClose={() => setDateSortFor(null)} onDone={() => refreshAll([dateSortFor.id])} />}
       {mergeList && <MergeFilesDialog files={mergeList} onCancel={() => setMergeList(null)} onMerged={finishMerge} />}
       {ctx && (
         <div ref={ctxMenuRef} role="menu" data-testid="ctx-menu" className="fixed z-[70] w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg"
@@ -3207,7 +3222,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     try {
       const c = await fetchInto(oid, null)
       if (!c.folder) return
-      const folders = [...c.folders].sort(sortFolders)
+      const folders = sortKids(c)
       setTree((t) => ({ ...t, [key]: { root: c.folder, folders } }))
       setOpenTree((x) => new Set(x).add(key))
       setNewFolder({ parentId: c.folder.id, siblings: folders.map((x) => x.name), left: true, value: '' })

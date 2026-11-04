@@ -220,8 +220,8 @@ _Regenerated 2026-11-04. Every subsystem doc under `docs/systems/` (54 docs), wi
 - [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-04)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-10-13)_
-- [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-03)_
-- [storage.md](storage.md) — CRM Storage _(verified 2026-11-03)_
+- [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-04)_
+- [storage.md](storage.md) — CRM Storage _(verified 2026-11-04)_
 - [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-02)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-03)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-19)_
