@@ -31,6 +31,7 @@ import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { applyOnboardingReview, confirmPortalWizardOnboarding, type FilingIdChoice, type SuiteConfirmChoice } from '@/lib/operations/onboarding-review'
 import { normalizeFilingId } from '@/lib/articles-parse'
+import { articlesUploads, ownedUploadPaths } from '@/lib/flows/onboarding-articles'
 
 async function currentUserEmail(): Promise<string> {
   const supabase = createClient()
@@ -60,7 +61,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     // The State Filing ID staff checked against the real Articles on the review screen (job 64d2be64): a number (confirmed or corrected),
-    // or null = "this document has no Filing ID". The key is absent when the screen had no Articles to check.
+    // or null = "this document has no Filing ID". The key is absent only from a review tab opened before the check card existed (or another
+    // caller): then NOTHING is saved on the portal-wizard path — an unchecked number is never saved.
     let filingId: FilingIdChoice | undefined
     if (body.filing_id === null) {
       filingId = { value: null }
@@ -77,11 +79,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const { data: sub, error: subErr } = await supabaseAdmin
       .from('onboarding_submissions')
-      .select('source')
+      .select('source, token, account_id, lead_id, offer_id, contact_id, upload_paths')
       .eq('id', params.id)
       .maybeSingle()
     if (subErr || !sub) {
       return NextResponse.json({ success: false, error: subErr?.message || 'Submission not found' }, { status: 404 })
+    }
+
+    // Was there an uploaded Articles document for staff to open? When not, the card only asked them to confirm the client's own number,
+    // and the record must not claim it was checked on the Articles.
+    if (filingId?.value) {
+      const owned = ownedUploadPaths(sub, (sub.upload_paths as string[] | null) || []).owned
+      filingId = { ...filingId, documentChecked: articlesUploads(owned).length > 0 }
     }
 
     // the 4th argument is passed only when staff checked a number, so every other call keeps its exact shape

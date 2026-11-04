@@ -11,13 +11,14 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: () => ({ auth: { getUser: async () => ({ data: { user: { email: 'luca@tonydurante.us' } } }) } }),
 }))
 let source: string | null = 'portal_wizard'
+let extraRow: Record<string, unknown> = {}
 vi.mock('@/lib/supabase-admin', () => ({
   supabaseAdmin: {
     from: () => {
       const chain: Record<string, unknown> = {}
       chain.select = () => chain
       chain.eq = () => chain
-      chain.maybeSingle = async () => ({ data: { source }, error: null })
+      chain.maybeSingle = async () => ({ data: { source, token: null, account_id: null, lead_id: null, offer_id: null, contact_id: null, upload_paths: [], ...extraRow }, error: null })
       return chain
     },
   },
@@ -44,6 +45,7 @@ const okResult = { ok: true, alreadyApplied: false, lines: [], contact_id: 'c1',
 beforeEach(() => {
   vi.clearAllMocks()
   source = 'portal_wizard'
+  extraRow = {}
   confirmPortalWizardOnboarding.mockResolvedValue(okResult)
   applyOnboardingReview.mockResolvedValue(okResult)
 })
@@ -52,7 +54,7 @@ describe('onboarding Confirm — the checked State Filing ID', () => {
   it('passes a checked number on, tidied', async () => {
     const res = await POST(req({ suite_choice: 'issue', filing_id: ' 2026 - 002103965 ' }), { params: { id: 'sub-1' } })
     expect(res.status).toBe(200)
-    expect(confirmPortalWizardOnboarding).toHaveBeenCalledWith('sub-1', 'luca@tonydurante.us', { choice: 'issue' }, { value: '2026-002103965' })
+    expect(confirmPortalWizardOnboarding).toHaveBeenCalledWith('sub-1', 'luca@tonydurante.us', { choice: 'issue' }, { value: '2026-002103965', documentChecked: false })
   })
 
   it('passes null on as "this document has no Filing ID" (save nothing)', async () => {
@@ -65,6 +67,23 @@ describe('onboarding Confirm — the checked State Filing ID', () => {
     await POST(req({ suite_choice: 'issue' }), { params: { id: 'sub-1' } })
     expect(confirmPortalWizardOnboarding).toHaveBeenCalledTimes(1)
     expect(confirmPortalWizardOnboarding.mock.calls[0]).toHaveLength(3)
+  })
+
+  it('says the number was checked on a document only when the submission has Articles of its own to open', async () => {
+    extraRow = { lead_id: 'lead-1', upload_paths: ['onboarding/lead-1/articles_of_organization_ab12_Articles.pdf'] }
+    await POST(req({ suite_choice: 'issue', filing_id: '2026-002103965' }), { params: { id: 'sub-1' } })
+    expect(confirmPortalWizardOnboarding).toHaveBeenCalledWith('sub-1', 'luca@tonydurante.us', { choice: 'issue' }, { value: '2026-002103965', documentChecked: true })
+  })
+
+  it('Articles that belong to another folder do not count as a document that was opened', async () => {
+    extraRow = { lead_id: 'lead-1', upload_paths: ['onboarding/someone-else/articles_of_organization_ab12_Articles.pdf', 'onboarding/lead-1/../../x/articles_of_organization_z.pdf'] }
+    await POST(req({ suite_choice: 'issue', filing_id: '2026-002103965' }), { params: { id: 'sub-1' } })
+    expect(confirmPortalWizardOnboarding).toHaveBeenCalledWith('sub-1', 'luca@tonydurante.us', { choice: 'issue' }, { value: '2026-002103965', documentChecked: false })
+  })
+
+  it('"none on the document" carries no document flag (nothing is saved either way)', async () => {
+    await POST(req({ suite_choice: 'issue', filing_id: null }), { params: { id: 'sub-1' } })
+    expect(confirmPortalWizardOnboarding.mock.calls[0][3]).toEqual({ value: null })
   })
 
   it('refuses a number that cannot be a Filing ID, in plain words, and confirms nothing', async () => {
@@ -80,7 +99,7 @@ describe('onboarding Confirm — the checked State Filing ID', () => {
   it('the manual token-link path gets the checked number too', async () => {
     source = null
     await POST(req({ suite_choice: 'issue', filing_id: '3190157' }), { params: { id: 'sub-1' } })
-    expect(applyOnboardingReview).toHaveBeenCalledWith('sub-1', 'luca@tonydurante.us', { choice: 'issue' }, { value: '3190157' })
+    expect(applyOnboardingReview).toHaveBeenCalledWith('sub-1', 'luca@tonydurante.us', { choice: 'issue' }, { value: '3190157', documentChecked: false })
     expect(confirmPortalWizardOnboarding).not.toHaveBeenCalled()
   })
 
