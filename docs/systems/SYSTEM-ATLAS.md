@@ -205,7 +205,7 @@ _Regenerated 2026-11-04. Every subsystem doc under `docs/systems/` (54 docs), wi
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-28)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-31)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-02)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-03)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-04)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-31)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-10-22)_
@@ -217,7 +217,7 @@ _Regenerated 2026-11-04. Every subsystem doc under `docs/systems/` (54 docs), wi
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-10-23)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-11-01)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
-- [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-03)_
+- [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-04)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-10-13)_
 - [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-03)_

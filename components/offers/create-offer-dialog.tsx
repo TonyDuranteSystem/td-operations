@@ -14,6 +14,7 @@ import { formatOptionLabel } from '@/lib/offers/package-option-label'
 import { canGroundFormationState, canGroundEntityType } from '@/lib/offers/narrative-business-rules'
 import { offerPreviewHref } from '@/lib/offers/offer-preview-href'
 import { parseServiceCatalogReply, decideNewService, selectedServicesDrift } from '@/lib/offers/catalog-refresh'
+import { ADD_SERVICE_KEY, parseAddServiceSwitch } from '@/lib/offers/add-service-switch'
 import {
   validatePaymentPlan,
   clientFacingPartLabel,
@@ -270,13 +271,35 @@ export function CreateOfferDialog({
     }
   }, [])
 
+  // The "add a new service" switch (Dev Tools → Maintenance). OFF until staff turn it on: while it is off the dialog
+  // is what it always was — the list is read once, no button, no re-read before saving. Anything but a stored
+  // true means off. See lib/offers/add-service-switch.ts.
+  const [addServiceOn, setAddServiceOn] = useState(false)
+  const addServiceOnRef = useRef(false)
   useEffect(() => {
     if (!open) return
+    let cancelled = false
+    const apply = (on: boolean) => {
+      if (cancelled) return
+      addServiceOnRef.current = on
+      setAddServiceOn(on)
+    }
+    fetch(`/api/app-settings?key=${ADD_SERVICE_KEY}`, { cache: 'no-store' })
+      .then(async r => parseAddServiceSwitch(r.ok, await r.json().catch(() => null)))
+      .then(apply)
+      .catch(() => apply(false))
+    return () => { cancelled = true }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    // switch off = the list is read once, as before; on = read again every time the dialog opens
+    if (!addServiceOnRef.current && hasCatalog.current) return
     void loadCatalog({ silent: hasCatalog.current })
   }, [open, loadCatalog])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || !addServiceOn) return
     const onBack = () => {
       if (document.visibilityState !== 'visible') return
       if (Date.now() - lastCatalogReadAt.current < 2000) return
@@ -288,7 +311,7 @@ export function CreateOfferDialog({
       window.removeEventListener('focus', onBack)
       document.removeEventListener('visibilitychange', onBack)
     }
-  }, [open, loadCatalog])
+  }, [open, addServiceOn, loadCatalog])
 
   const [language, setLanguage] = useState(
     clientLanguage === 'Italian' || clientLanguage === 'it' ? 'it' : 'en'
@@ -1120,7 +1143,8 @@ export function CreateOfferDialog({
       try {
         // Read the catalog again before saving. A draft is saved with each service's job and contract type, so a
         // list that went stale (a contract finished or a service switched off in another tab) would save the wrong ones.
-        const fresh = await loadCatalog({ silent: true })
+        // Only while the "add a new service" switch is on; off = saved from the list on screen, as it always was.
+        const fresh = addServiceOn ? await loadCatalog({ silent: true }) : null
         if (fresh) {
           const drift = selectedServicesDrift(selected.map(s => s.id), catalog, fresh)
           const nameOf = (id: string) => (fresh.find(c => c.id === id) ?? catalog.find(c => c.id === id))?.name ?? id
@@ -1719,20 +1743,23 @@ export function CreateOfferDialog({
             </div>
           </div>
 
-          {/* The service is not in the list: add it in the full service editor (new tab), then come back. */}
-          <div className="flex items-center justify-between gap-3 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2">
-            <p className="text-xs text-zinc-600">
-              Is the service you need missing from this list? The service editor opens in a new tab. When you come back, the new service appears here and is ticked.
-            </p>
-            <button
-              type="button"
-              onClick={openNewServiceTab}
-              className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-white px-3 py-1.5 text-xs font-medium hover:bg-zinc-100"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Add a new service
-            </button>
-          </div>
+          {/* The service is not in the list: add it in the full service editor (new tab), then come back.
+              Drawn only while the "add a new service" switch is on (Dev Tools → Maintenance). */}
+          {addServiceOn && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2">
+              <p className="text-xs text-zinc-600">
+                Is the service you need missing from this list? The service editor opens in a new tab. When you come back, the new service appears here and is ticked.
+              </p>
+              <button
+                type="button"
+                onClick={openNewServiceTab}
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-white px-3 py-1.5 text-xs font-medium hover:bg-zinc-100"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Add a new service
+              </button>
+            </div>
+          )}
 
           {/* Total */}
           {totalAmount > 0 && (
