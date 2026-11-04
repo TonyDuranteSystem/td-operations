@@ -6,6 +6,9 @@ const state = vi.hoisted(() => ({
   isStaff: true,
   tables: {} as Record<string, unknown>,
   messagesRows: [] as unknown[],
+  messagesCount: null as number | null,
+  mediaRows: [] as unknown[],
+  mediaThrows: false,
   agentRows: [] as unknown[],
   insertError: null as null | { code: string },
   calls: [] as Array<{ table: string; op: string; args: unknown[] }>,
@@ -29,11 +32,14 @@ vi.mock("@/lib/supabase-admin", () => {
       return c
     }
     const c: Record<string, unknown> = {}
-    for (const op of ["select", "eq", "order", "limit", "lt", "update", "insert"]) c[op] = record(op)
+    for (const op of ["select", "eq", "is", "in", "order", "limit", "lt", "update", "insert"]) c[op] = record(op)
     c.maybeSingle = async () => ({ data: state.tables[table] ?? null })
     c.single = async () => ({ data: state.insertError ? null : { id: "row-1" }, error: state.insertError })
-    c.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-      Promise.resolve({ data: table === "messages" ? state.messagesRows : table === "agent_messages" ? state.agentRows : [], error: null }).then(resolve, reject)
+    c.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
+      if (table === "message_media" && state.mediaThrows) return Promise.reject(new Error("media down")).then(resolve, reject)
+      const data = table === "messages" ? state.messagesRows : table === "message_media" ? state.mediaRows : table === "agent_messages" ? state.agentRows : []
+      return Promise.resolve({ data, error: null, ...(table === "messages" && state.messagesCount !== null ? { count: state.messagesCount } : {}) }).then(resolve, reject)
+    }
     return c
   }
   return { supabaseAdmin: { from: (table: string) => chain(table) } }
@@ -77,6 +83,9 @@ beforeEach(() => {
     { direction: "inbound", content_text: "Buongiorno, ho visto l'offerta", content_type: "text", sender_name: "Stefano", sender_phone: "+393339980702", created_at: "2026-09-21T10:23:00Z" },
     { direction: "outbound", content_text: "Ciao Stefano!", content_type: "text", sender_name: null, sender_phone: null, created_at: "2026-09-21T10:30:00Z" },
   ]
+  state.messagesCount = null
+  state.mediaRows = []
+  state.mediaThrows = false
   state.agentRows = []
   state.insertError = null
   state.calls = []
@@ -312,6 +321,89 @@ describe("approved replies for other clients ground the Worker (Antonio, 2026-10
     expect(opts.enableWebSearch).toBe(true)
     for (const forbidden of ["enableEmailSend", "enableSlackSend", "enableDbRead", "enableCrmNotes", "enableFullToolReach"]) {
       expect(opts).not.toHaveProperty(forbidden)
+    }
+  })
+})
+
+describe("the whole chat is reachable and the times match the screen (Antonio, 2026-11-04)", () => {
+  const opts = () => state.workerCalls[0].opts
+  const system = () => String(opts().systemPromptOverride)
+
+  it("pins the OPEN chat for search_this_chat — the id from the verified conversation, the zone from the browser", async () => {
+    await post({ groupId: GROUP_ID, message: "find the price", timeZone: "Europe/Rome" })
+    expect(opts().pinnedWhatsAppChat).toEqual({ groupId: GROUP_ID, isGroup: false, timeZone: "Europe/Rome" })
+  })
+
+  it.each([[undefined], ["Mars/Phobos"], ["../../etc/passwd"], [42]])("a missing or odd zone (%j) falls back to New York", async (tz) => {
+    await post({ groupId: GROUP_ID, message: "q", timeZone: tz })
+    expect((opts().pinnedWhatsAppChat as { timeZone: string }).timeZone).toBe("America/New_York")
+  })
+
+  it("nothing in the request body can name a different chat to search", async () => {
+    await post({ groupId: GROUP_ID, message: "q", pinnedWhatsAppChat: { groupId: "00000000-0000-4000-8000-00000000beef", isGroup: false, timeZone: "UTC" }, groupID: "x" })
+    expect(opts().pinnedWhatsAppChat).toEqual({ groupId: GROUP_ID, isGroup: false, timeZone: "America/New_York" })
+  })
+
+  it("a group chat is pinned as a group", async () => {
+    state.tables.messaging_groups = { id: GROUP_ID, group_name: "Support", external_group_id: "120363000000000000@g.us", group_type: "support_group", lead_id: null, contact_id: null, account_id: null, channel_id: "ch-1" }
+    await post({ groupId: GROUP_ID, message: "q" })
+    expect((opts().pinnedWhatsAppChat as { isGroup: boolean }).isGroup).toBe(true)
+  })
+
+  it("shows the Worker message times on the staff member's clock, not UTC", async () => {
+    await post({ groupId: GROUP_ID, message: "q", timeZone: "America/New_York" })
+    expect(system()).toContain("[2026-09-21 06:23 EDT] Them: Buongiorno, ho visto l'offerta")
+    expect(system()).not.toContain("UTC]")
+  })
+
+  it("tells the Worker how many messages the whole chat holds when the latest slice is not all of it", async () => {
+    state.messagesCount = 122
+    state.messagesRows = Array.from({ length: 30 }, (_, i) => ({ id: `m${i}`, direction: "inbound", content_text: `m${i}`, content_type: "text", sender_name: null, sender_phone: "+1", created_at: `2026-10-07T10:${String(i).padStart(2, "0")}:00Z`, metadata: null }))
+    await post({ groupId: GROUP_ID, message: "q" })
+    expect(system()).toContain("This chat holds 122 messages in all")
+    expect(system()).toContain("search_this_chat reads the whole chat")
+  })
+
+  it("a short chat says nothing about older messages, even when the count is known", async () => {
+    state.messagesCount = 2
+    await post({ groupId: GROUP_ID, message: "q" })
+    expect(system()).not.toContain("older messages exist")
+    expect(system()).not.toContain("holds")
+  })
+
+  it("counts the chat exactly and leaves out messages staff hid from their own screen", async () => {
+    await post({ groupId: GROUP_ID, message: "q" })
+    const select = state.calls.find((c) => c.table === "messages" && c.op === "select")
+    expect(String(select?.args[0])).toContain("metadata")
+    expect(select?.args[1]).toEqual({ count: "exact" })
+    expect(state.calls.some((c) => c.table === "messages" && c.op === "is" && c.args[0] === "deleted_at" && c.args[1] === null)).toBe(true)
+  })
+
+  it("shows a voice note's transcript and a reply's quoted text in the latest messages", async () => {
+    state.messagesRows = [
+      { id: "v1", direction: "inbound", content_text: "[Voice note]", content_type: "voice", sender_name: null, sender_phone: "+393339980702", created_at: "2026-09-21T10:00:00Z", metadata: null },
+      { id: "t1", direction: "outbound", content_text: "Ti ho già risposto", content_type: "text", sender_name: null, sender_phone: null, created_at: "2026-09-21T10:05:00Z", metadata: { quoted_body: "quanto costa?" } },
+    ]
+    state.mediaRows = [{ message_id: "v1", status: "ready", transcript: "il prezzo è cinquecento", duration_seconds: 5 }]
+    await post({ groupId: GROUP_ID, message: "q" })
+    expect(system()).toContain('Them: Voice note (machine transcript, may contain mistakes): "il prezzo è cinquecento"')
+    expect(system()).toContain('Ti ho già risposto (replying to: "quanto costa?")')
+    // the stranger's words stay out of the stored row, as before
+    expect(JSON.stringify(inserted()[0])).not.toContain("cinquecento")
+  })
+
+  it("a failing transcript lookup never blocks the Worker", async () => {
+    state.messagesRows = [{ id: "v1", direction: "inbound", content_text: "[Voice note]", content_type: "voice", sender_name: null, sender_phone: "+1", created_at: "2026-09-21T10:00:00Z", metadata: null }]
+    state.mediaThrows = true
+    const res = await post({ groupId: GROUP_ID, message: "q" })
+    expect(res.status).toBe(200)
+    expect(system()).toContain("[voice note — no transcript available, so its content cannot be read]")
+  })
+
+  it("adds ONLY the pin to the reviewed options — no send, write, SQL or full-reach flag", async () => {
+    await post({ groupId: GROUP_ID, message: "q" })
+    for (const forbidden of ["enableSlackSend", "enableEmailSend", "enableTeamChatSend", "enableDbRead", "enableCrmNotes", "enableFullToolReach", "enableCodeTasks", "enableThreadRecall"]) {
+      expect(opts()).not.toHaveProperty(forbidden)
     }
   })
 })
