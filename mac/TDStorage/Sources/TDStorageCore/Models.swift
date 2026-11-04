@@ -27,11 +27,13 @@ public struct NavGroup: Codable, Equatable {
 }
 public struct NavigationResponse: Codable, Equatable { public var groups: [NavGroup] }
 
-public struct FolderRef: Codable, Equatable, Hashable { public var id: String; public var name: String; public var kind: String; public var locked: Bool; public var canSave: Bool? }
+public struct FolderRef: Codable, Equatable, Hashable { public var id: String; public var name: String; public var kind: String; public var locked: Bool; public var canSave: Bool?; public var canEdit: Bool? }
 public struct FileRef: Codable, Equatable, Hashable {
     public var id: String; public var name: String; public var size: Int?; public var mimeType: String?; public var updatedAt: String; public var downloadable: Bool
     /// true when THIS Mac saved the file: only such files can be updated from this Mac (as a new version)
     public var mine: Bool?
+    /// the CRM says rename / move / trash may be offered on this file (Business and My files); only a hint for Finder's menu, the CRM checks every change
+    public var canEdit: Bool?
 }
 public struct OwnerInfo: Codable, Equatable { public var kind: String; public var label: String; public var accountStatus: String?; public var closed: Bool }
 /// a person listed in a company's "2. Contacts": `ownerId` is that person's own storage (nil = none to open)
@@ -55,7 +57,7 @@ public struct APIErrorBody: Codable { public var error: String?; public var erro
 /// One file or folder by id with its parent (GET /api/storage-app/item). `parentId` nil = a storage's top folder.
 public struct ItemInfo: Codable, Equatable {
     public var kind: String; public var id: String; public var ownerId: String; public var parentId: String?; public var name: String
-    public var locked: Bool?; public var canSave: Bool?; public var mine: Bool?; public var size: Int?; public var mimeType: String?; public var updatedAt: String?; public var downloadable: Bool?
+    public var locked: Bool?; public var canSave: Bool?; public var canEdit: Bool?; public var mine: Bool?; public var size: Int?; public var mimeType: String?; public var updatedAt: String?; public var downloadable: Bool?
 }
 
 /// POST /api/storage-app/upload-slot — where to put the bytes (or: this very file was already saved).
@@ -69,6 +71,9 @@ public struct UploadSlot: Codable, Equatable {
 public struct SaveReply: Codable, Equatable {
     public var fileId: String?; public var ownerId: String?; public var name: String?; public var size: Int?; public var pending: Bool?
 }
+/// POST /api/storage-app/edit — what the CRM did (rename: the name it really has; move: the new parent; trash: `trashed` true).
+public struct EditReply: Codable, Equatable { public var id: String; public var kind: String; public var name: String; public var parentId: String?; public var trashed: Bool? }
+
 /// POST /api/storage-app/new-folder — the folder as the CRM has it (`created` false = a folder of that name was already there and is reused).
 public struct NewFolder: Codable, Equatable { public var folderId: String; public var ownerId: String; public var name: String; public var created: Bool? }
 

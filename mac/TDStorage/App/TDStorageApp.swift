@@ -274,6 +274,8 @@ final class AppModel: ObservableObject {
         let layout = (info["TDLayoutVersion"] as? String) ?? "0"
         let key = "td.layoutRegistered"
         if let seen = UserDefaults.standard.string(forKey: key), seen != layout { try? await NSFileProviderManager.remove(domain) }
+        // "Move to Trash" in Finder is sent to the CRM (its trash, restorable) instead of being tried on the Mac's own Trash, which fails for a cloud folder (0.2.9)
+        domain.supportsSyncingTrash = true
         try await NSFileProviderManager.add(domain)
         UserDefaults.standard.set(layout, forKey: key)
     }
