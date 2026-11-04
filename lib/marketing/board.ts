@@ -46,12 +46,11 @@ const SETTER_COLUMNS: readonly BoardColumn[] = [
   { key: "in_target", label: "In target", stages: ["qualified"] },
   { key: "out", label: "Out of target", stages: ["not_in_target"] },
 ]
-// Rocco's board (the flow of 3 Nov 2026): booking the free call IS the hand-over, so a lead appears in "Calls prenotate" the moment the setter books it and leaves the setter's board (she keeps the chat). When the call time has
-// passed (or the lead has no call time) it moves to "After the call", where Rocco says whether the call happened and chooses a result. There is no "Interested lead" and no "Contacted" step any more. A new chat message does NOT
+// Rocco's board (the flow of 3 Nov 2026): booking the free call IS the hand-over, so a lead appears in "Calls prenotate" the moment the setter books it and leaves the setter's board (she keeps the chat). It stays in that one column
+// until Rocco chooses a result; when the call time has passed (or there is none) the card carries a red "Call time passed" tag and sits at the top. There is no "After the call" step, no "Interested lead" and no "Contacted" step. A new chat message does NOT
 // move a card (Antonio, 28 Oct 2026): the card stays in its stage, blinks for a few seconds and carries a "New message" tag until the chat is read.
 const SELLER_COLUMNS: readonly BoardColumn[] = [
   { key: "booked", label: "Calls prenotate", stages: ["booked", "showed"] },
-  { key: "after_call", label: "After the call", stages: [] },
   { key: "closed", label: "Link sent", stages: ["closed"] },
   { key: "out", label: "Not in target", stages: ["not_in_target"] },
   { key: "not_ready", label: "Not ready now", stages: ["not_ready"] },
@@ -69,20 +68,19 @@ export function columnOf(role: BoardRole, stage: string): string | null {
   return columnsFor(role).find(c => c.stages.includes(stage))?.key ?? null
 }
 
-/** The column a CARD sits in. For the seller a booked lead whose call time has passed (or that has no call time) sits in "After the call" instead of "Calls prenotate". A lead the setter turned down before it ever reached Rocco
+/** The column a CARD sits in. A lead the setter turned down before it ever reached Rocco
  *  (no call booked) is not on his board; an in-target lead with no call is still the setter's. An unread chat message never changes the column (it is shown on the card itself). */
-export function columnOfCard(role: BoardRole, card: Pick<BoardCard, "stage" | "callCheck"> & { apptAt?: string | null }): string | null {
+export function columnOfCard(role: BoardRole, card: Pick<BoardCard, "stage"> & { apptAt?: string | null }): string | null {
   const key = columnOf(role, card.stage)
   if (role !== "seller") return key
-  if (key === "booked" && card.callCheck) return "after_call"
   if (card.stage === "not_in_target" && !card.apptAt) return null
   return key
 }
 
 /** How long after its start a free call counts as over (the call is about 15 minutes; this leaves room for it to run a little long). */
 export const CALL_OVER_GRACE_MS = 30 * 60 * 1000
-/** A booked lead needs the seller's answer about its call when the call time is past, or when no call time is recorded. */
-export function needsCallAnswer(stage: string, apptAt: string | null, now: Date): boolean {
+/** A booked lead's call time has passed when it started more than the grace period ago, or when no call time is recorded (the card then carries the red "Call time passed" tag). */
+export function callTimePassed(stage: string, apptAt: string | null, now: Date): boolean {
   if (stage !== "booked" && stage !== "showed") return false
   if (!apptAt) return true
   const t = Date.parse(apptAt)
@@ -113,10 +111,8 @@ export interface BoardCard {
   unread: number
   /** who wrote the newest message I have not read: the setter (green on the card) or Antonio / anyone else (red); null when nothing is unread */
   incomingFrom?: "setter" | "owner" | null
-  /** a booked lead whose free call is over (its time has passed) or that has no call time: the seller says whether it happened */
-  callCheck: boolean
-  /** what the seller answered about the call: it happened, it did not, or nothing yet */
-  callAnswer: "happened" | "missed" | null
+  /** a booked lead whose free call time has passed (or that has no call time): shown with a red tag, at the top of its column */
+  callPassed: boolean
 }
 
 /** The cards of one column in the order people work them: calls by their time (soonest first), everything else newest first. */
@@ -124,8 +120,8 @@ export function cardsInColumn(role: BoardRole, columnKey: string, cards: readonl
   const col = columnsFor(role).find(c => c.key === columnKey)
   if (!col) return []
   const mine = cards.filter(c => columnOfCard(role, c) === columnKey)
-  if (columnKey === "booked") return mine.sort((a, b) => (a.apptAt ?? "9").localeCompare(b.apptAt ?? "9") || b.arrivedMs - a.arrivedMs)
-  if (columnKey === "after_call") return mine.sort((a, b) => (a.apptAt ?? "").localeCompare(b.apptAt ?? "") || b.arrivedMs - a.arrivedMs) // the longest-waiting call first
+  // calls whose time has passed come first (the longest-waiting one on top), then the calls still to come, soonest first
+  if (columnKey === "booked") return mine.sort((a, b) => Number(b.callPassed) - Number(a.callPassed) || (a.callPassed ? (a.apptAt ?? "").localeCompare(b.apptAt ?? "") : (a.apptAt ?? "9").localeCompare(b.apptAt ?? "9")) || b.arrivedMs - a.arrivedMs)
   return mine.sort((a, b) => b.arrivedMs - a.arrivedMs)
 }
 

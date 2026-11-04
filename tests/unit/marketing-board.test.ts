@@ -3,7 +3,7 @@ import { BOARD_VIEWS, boardCards, boardRole, cardsInColumn, columnOf, columnsFor
 import { MAX_WINDOWS, EMPTY_WINDOWS, closeWindow, clampPosition, focusWindow, frontWindowId, minimizeWindow, moveWindow, openWindow, windowSrc, WINDOW_W, laneOfTab, isChatTab } from "@/lib/marketing/lead-windows"
 import { MARKETING_SETTING_DEFS } from "@/lib/marketing/settings-schema"
 
-const card = (id: string, stage: string, over: Partial<BoardCard> = {}): BoardCard => ({ id, name: id, stage, stageLabel: stage, phone: null, filledIn: "", apptAt: null, arrivedMs: 0, chips: [], withText: "", note: null, ad: null, existingClient: false, callCheck: false, callAnswer: null, unread: 0, ...over })
+const card = (id: string, stage: string, over: Partial<BoardCard> = {}): BoardCard => ({ id, name: id, stage, stageLabel: stage, phone: null, filledIn: "", apptAt: null, arrivedMs: 0, chips: [], withText: "", note: null, ad: null, existingClient: false, callPassed: false, unread: 0, ...over })
 const vp = { w: 1440, h: 900 }
 
 describe("the lead board: who sees which columns", () => {
@@ -14,7 +14,7 @@ describe("the lead board: who sees which columns", () => {
   })
   it("the setter has four columns (no Paid, no booked calls) and Rocco ten, with no Incoming-messages column (removed by Antonio on 28 Oct 2026) and no Contacted", () => {
     expect(columnsFor("setter").map(c => c.key)).toEqual(["to_contact", "tried", "in_target", "out"])
-    expect(columnsFor("seller").map(c => c.key)).toEqual(["booked", "after_call", "closed", "out", "not_ready", "paid", "booking_link", "upsell", "waiting", "archived"])
+    expect(columnsFor("seller").map(c => c.key)).toEqual(["booked", "closed", "out", "not_ready", "paid", "booking_link", "upsell", "waiting", "archived"])
   })
   it("every column stage is a real pipeline stage (a renamed stage must not silently empty a column)", () => {
     const real = new Set(MARKETING_SETTING_DEFS.pipeline_stages.fallback.map(s => s.key))
