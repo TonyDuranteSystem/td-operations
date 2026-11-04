@@ -5,19 +5,20 @@
  * CSP that forbids every script. Plain helpers are exported for the tests; the two converters are the only async parts.
  */
 
-export type ViewKind = "docx" | "xlsx" | "text"
+export type ViewKind = "docx" | "xlsx" | "text" | "zip"
 
-export const VIEW_MAX_BYTES = { docx: 25 * 1024 * 1024, xlsx: 15 * 1024 * 1024, text: 2 * 1024 * 1024 } as const
+export const VIEW_MAX_BYTES = { docx: 25 * 1024 * 1024, xlsx: 15 * 1024 * 1024, text: 2 * 1024 * 1024, zip: 60 * 1024 * 1024 } as const
 export const VIEW_MAX_ROWS = 500
 export const VIEW_MAX_COLS = 40
 
-const TEXT_EXT = /\.(md|markdown|txt|csv|tsv|json|log|xml|yml|yaml|ini|sql|html?)$/i
+const TEXT_EXT = /\.(md|markdown|txt|csv|tsv|json|log|xml|yml|yaml|ini|sql|html?|conf|cfg|config|zoom|tag|properties|toml)$/i
 
 /** What the simplified view can show, or null (PDF / pictures open the normal way; PowerPoint and old .doc/.xls are download-only). */
 export function viewKindFor(name: string, mimeType: string | null | undefined): ViewKind | null {
   const mime = (mimeType ?? "").split(";")[0].trim().toLowerCase()
   if (/\.docx$/i.test(name) || mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx"
   if (/\.xlsx$/i.test(name) || mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") return "xlsx"
+  if (/\.zip$/i.test(name) || mime === "application/zip" || mime === "application/x-zip-compressed") return "zip"
   if (TEXT_EXT.test(name) || mime === "text/markdown" || mime === "text/csv" || mime === "application/json" || (mime.startsWith("text/") && mime !== "text/plain")) return "text"
   return null
 }
@@ -109,4 +110,50 @@ export async function xlsxToViewHtml(title: string, bytes: Buffer): Promise<stri
     sheets.push({ name: ws.name, rows, totalRows, totalCols })
   })
   return renderSheetsView(title, sheets)
+}
+
+/**
+ * Does this look like readable text (no NUL byte, hardly any control characters in the first 8 KB)? Used for a file whose name says
+ * nothing: a settings file with no ending, a log … It is shown ESCAPED as text, so a wrong guess can only look odd, never run anything.
+ */
+export function looksLikeText(bytes: Uint8Array): boolean {
+  const n = Math.min(bytes.length, 8192)
+  if (n === 0) return true
+  let odd = 0
+  for (let i = 0; i < n; i++) {
+    const b = bytes[i]
+    if (b === 0) return false
+    if (b < 9 || (b > 13 && b < 32)) odd++
+  }
+  return odd / n < 0.02
+}
+
+export const ZIP_MAX_LISTED = 500
+
+export interface ZipEntryRow { name: string; dir: boolean; size: number | null }
+
+/** The inside of a .zip as a plain page: names and sizes only — nothing is unpacked or run. */
+export function renderZipView(title: string, entries: ZipEntryRow[], total: number): string {
+  if (!entries.length) return wrapPage(title, "<p>This zip file is empty.</p>", "Zip contents — download the file to open what is inside.")
+  const rows = entries.map((e) => `<tr><td>${escapeHtml(e.name)}</td><td>${e.dir ? "folder" : e.size == null ? "" : escapeHtml(formatBytes(e.size))}</td></tr>`).join("")
+  const cut = total > entries.length ? `<p class="cut">Showing the first ${entries.length} of ${total} items.</p>` : ""
+  return wrapPage(title, `<table><tr><th>Name</th><th>Size</th></tr>${rows}</table>${cut}`, "Zip contents — download the file to open what is inside.")
+}
+
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1048576) return `${Math.round(n / 1024)} KB`
+  return `${(n / 1048576).toFixed(1)} MB`
+}
+
+export async function zipToViewHtml(title: string, bytes: Buffer): Promise<string> {
+  const JSZip = (await import("jszip")).default
+  const zip = await JSZip.loadAsync(bytes)
+  const all = Object.values(zip.files)
+  const rows: ZipEntryRow[] = all.slice(0, ZIP_MAX_LISTED).map((f) => ({
+    name: f.name,
+    dir: f.dir,
+    size: (f as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? null,
+  }))
+  return renderZipView(title, rows, all.length)
 }

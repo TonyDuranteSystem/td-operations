@@ -25,6 +25,7 @@ import { useAiMarks, AiMarkChip, AiCheckFilesButton, AiReviewPanel } from './ai-
 import { MyDriveDialog } from '@/components/storage/my-drive-dialog'
 import { PlainDropPanel, type PlainOutcome } from './plain-drop-panel'
 import { viewKindFor } from '@/lib/crm-store/view-html'
+import { mediaKindFor, BIG_DOWNLOAD_BYTES, type MediaKind } from '@/lib/crm-store/media'
 import { allFolderPaths, filterPlainDrop, itemsFromFileList, type PlainItem, type PlainSkipped } from '@/lib/crm-store/plain-drop'
 import { isInternalOwnerKind, isPersonalAreaKind } from '@/lib/crm-store/owner-kinds'
 import { typesForTarget } from '@/lib/crm-store/types-for-target'
@@ -152,6 +153,60 @@ function Badge({ tone, children }: { tone: 'green' | 'gray' | 'amber' | 'red' | 
   return <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${t}`}>{children}</span>
 }
 
+/** A short-lived signed link to the file's current copy (the server never loads a big file) — to play it or save it straight from storage. */
+interface FileLink { url: string; downloadUrl: string; kind: MediaKind | null }
+const linkUrl = (fileId: string) => `/api/crm-store/browse/file/${fileId}/link`
+
+/** A video / audio file: the browser's own player streams it from the signed link (and can jump around in it). */
+function MediaPlayer({ file, kind }: { file: File_; kind: MediaKind }) {
+  const [link, setLink] = useState<FileLink | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [cantPlay, setCantPlay] = useState(false)
+  useEffect(() => {
+    let off = false
+    getJson<FileLink>(linkUrl(file.id)).then((l) => { if (!off) setLink(l) }).catch((e) => { if (!off) setErr(errMsg(e, 'The file could not be opened — please try again.')) })
+    return () => { off = true }
+  }, [file.id])
+  if (err) return <div className="flex h-full items-center justify-center p-6 text-sm text-red-600">{err}</div>
+  if (!link) return <div className="flex h-full items-center justify-center text-sm text-zinc-500">Getting the file ready…</div>
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-black p-3">
+      {cantPlay ? (
+        <div className="flex flex-col items-center gap-3 text-sm text-zinc-200">
+          <p>This browser cannot play this kind of recording here.</p>
+          <a href={link.downloadUrl} className="rounded-md border border-zinc-500 px-3 py-1.5 text-blue-300 hover:bg-zinc-800">Download it</a>
+        </div>
+      ) : kind === 'video' ? (
+        <video src={link.url} controls preload="metadata" onError={() => setCantPlay(true)} className="max-h-full max-w-full" data-testid="media-video" />
+      ) : (
+        <audio src={link.url} controls preload="metadata" onError={() => setCantPlay(true)} className="w-full max-w-xl" data-testid="media-audio" />
+      )}
+      {!cantPlay && <a href={link.downloadUrl} className="text-xs text-blue-300 hover:underline">Download the original</a>}
+    </div>
+  )
+}
+
+/** A file nothing here can show: a clear message and a download. A big file downloads straight from storage (never loaded by the server). */
+function NoPreview({ file, src, canLink }: { file: File_; src: string; canLink: boolean }) {
+  const big = canLink && (file.size ?? 0) > BIG_DOWNLOAD_BYTES
+  const [url, setUrl] = useState<string | null>(big ? null : src)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    if (!big) return
+    let off = false
+    getJson<FileLink>(linkUrl(file.id)).then((l) => { if (!off) setUrl(l.downloadUrl) }).catch((e) => { if (!off) setErr(errMsg(e, 'The download could not be prepared — please try again.')) })
+    return () => { off = true }
+  }, [big, file.id])
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-zinc-600">
+      <p>This kind of file cannot be shown inside the CRM.</p>
+      {err ? <p className="text-red-600">{err}</p>
+        : url ? <a href={url} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-blue-700 hover:bg-zinc-50">Download it</a>
+        : <span className="text-zinc-500">Getting the download ready…</span>}
+    </div>
+  )
+}
+
 function PreviewPanel({ file, onClose, src: srcOverride, title, viewSrc }: { file: File_; onClose: () => void; src?: string; title?: string; viewSrc?: string }) {
   const src = srcOverride ?? `/api/crm-store/browse/file/${file.id}`
   const mime = (file.mimeType ?? '').split(';')[0].trim().toLowerCase()
@@ -162,6 +217,17 @@ function PreviewPanel({ file, onClose, src: srcOverride, title, viewSrc }: { fil
   const simple = !inline && (!srcOverride || !!viewSrc) && viewKindFor(file.name, file.mimeType) !== null
   // an iPhone photo (HEIC/HEIF) is shown through the picture route, which converts it to a JPEG for the screen
   const heic = !inline && !srcOverride && (/\.(heic|heif)$/i.test(file.name) || /^image\/hei[cf]/i.test(mime))
+  // a video / audio recording plays from a signed link (only the current copy has one)
+  const media = !inline && !srcOverride ? mediaKindFor(file.name, file.mimeType) : null
+  // a file whose name and type say nothing, up to 2 MB: the server tries to read it as text (it can refuse → the download screen)
+  const probe = !inline && !simple && !heic && !media && !srcOverride && (file.size == null || file.size <= 2 * 1024 * 1024)
+  const [probed, setProbed] = useState<string | 'no' | null>(null)
+  useEffect(() => {
+    if (!probe) return
+    let off = false
+    fetch(`${src}/view`).then(async (r) => { const t = r.ok ? await r.text() : null; if (!off) setProbed(t ?? 'no') }).catch(() => { if (!off) setProbed('no') })
+    return () => { off = true }
+  }, [probe, src])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
@@ -184,11 +250,14 @@ function PreviewPanel({ file, onClose, src: srcOverride, title, viewSrc }: { fil
             <img src={`${src}/picture`} alt={file.name} className="mx-auto block h-auto max-w-full" data-testid="heic-view" />
           ) : simple ? (
             <iframe src={viewSrc ?? `${src}/view`} title={file.name} sandbox="" className="h-full w-full border-0 bg-white" data-testid="simple-view" />
+          ) : media ? (
+            <MediaPlayer file={file} kind={media} />
+          ) : probe && probed === null ? (
+            <div className="flex h-full items-center justify-center text-sm text-zinc-500">Opening…</div>
+          ) : probe && probed !== null && probed !== 'no' ? (
+            <iframe srcDoc={probed} title={file.name} sandbox="" className="h-full w-full border-0 bg-white" data-testid="text-probe-view" />
           ) : !inline ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-zinc-600">
-              <p>This kind of file cannot be shown inside the CRM.</p>
-              <a href={src} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-blue-700 hover:bg-zinc-50">Download it</a>
-            </div>
+            <NoPreview file={file} src={src} canLink={!srcOverride} />
           ) : isImage ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={src} alt={file.name} className="mx-auto block h-auto max-w-full" />

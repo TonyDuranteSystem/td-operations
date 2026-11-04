@@ -1,7 +1,8 @@
 /**
  * GET /api/crm-store/browse/file/<id>/view — a "simplified view" of the file's current version (or, with ?version=<id>, one OLDER saved copy of it) for the storage screen (2026-10-02):
  * Word → readable page, Excel → tables, Markdown / CSV / JSON … → text. One self-contained HTML page, served with a CSP that forbids
- * every script and a sandbox, so a hostile document cannot run anything. Same staff + storage-access checks as the plain file route;
+ * every script and a sandbox, so a hostile document cannot run anything. A .zip shows what is inside (names and sizes only); a file whose
+ * content reads as plain text is shown as text even when its name says nothing. Same staff + storage-access checks as the plain file route;
  * nothing is written anywhere. Anything else (PDF and pictures have their own viewer; PowerPoint, old .doc/.xls) is a 415 → download.
  */
 export const dynamic = "force-dynamic"
@@ -30,11 +31,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     // an older saved copy: the same checks as the file itself (area access above), and the version must belong to THIS file
     if (versionId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(versionId)) return NextResponse.json({ error: "Bad version." }, { status: 400 })
     const f = versionId ? await readVersionForStaff(params.id, versionId) : await readFileForStaff(params.id)
-    const kind = v.viewKindFor(f.name, f.mimeType)
+    // a name that says nothing (no ending, an unknown ending): if the content reads as plain text, show it as text (escaped)
+    const kind = v.viewKindFor(f.name, f.mimeType) ?? (f.bytes.length <= v.VIEW_MAX_BYTES.text && v.looksLikeText(f.bytes) ? "text" : null)
     if (!kind) return NextResponse.json({ error: "This kind of file cannot be shown here — download it instead." }, { status: 415 })
     if (f.bytes.length > v.VIEW_MAX_BYTES[kind]) return NextResponse.json({ error: `This file is too large to show here (${Math.round(f.bytes.length / 1048576)} MB) — download it instead.` }, { status: 413 })
     const html = kind === "docx" ? await v.docxToViewHtml(f.name, f.bytes)
       : kind === "xlsx" ? await v.xlsxToViewHtml(f.name, f.bytes)
+      : kind === "zip" ? await v.zipToViewHtml(f.name, f.bytes)
       : v.renderTextView(f.name, f.bytes.toString("utf-8"))
     return new NextResponse(html, { headers: HEADERS })
   } catch (e) {

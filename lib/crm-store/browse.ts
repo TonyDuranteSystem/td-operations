@@ -303,6 +303,27 @@ export async function readFileForStaff(fileId: string): Promise<{ bytes: Buffer;
   return { bytes: Buffer.from(await data.arrayBuffer()), mimeType: v.mime_type ?? data.type ?? null, name: f.name }
 }
 
+/**
+ * A short-lived signed link to the file's CURRENT copy, for the browser to stream or download straight from storage — the server never
+ * loads the bytes (a Zoom recording can be 600 MB). `url` plays / shows it in the page, `downloadUrl` saves it under its own name.
+ */
+export async function signedLinkForStaff(fileId: string): Promise<{ url: string; downloadUrl: string; name: string; mimeType: string | null; kind: import("./media").MediaKind | null }> {
+  const { data: f, error } = await db().from("store_files")
+    .select("name, state, store_file_versions!store_files_current_version_fk(storage_bucket, storage_path, mime_type)")
+    .eq("id", fileId).maybeSingle()
+  if (error || !f || f.state === "purged") throw new Error("store browse: file not available")
+  const v = f.store_file_versions as { storage_bucket: string; storage_path: string; mime_type: string | null } | null
+  if (!v) throw new Error("store browse: file has no content")
+  const { MEDIA_LINK_SECONDS, mediaKindFor } = await import("./media")
+  const bucket = db().storage.from(v.storage_bucket)
+  const [shown, saved] = await Promise.all([
+    bucket.createSignedUrl(v.storage_path, MEDIA_LINK_SECONDS),
+    bucket.createSignedUrl(v.storage_path, MEDIA_LINK_SECONDS, { download: f.name }),
+  ])
+  if (shown.error || !shown.data?.signedUrl || saved.error || !saved.data?.signedUrl) throw new Error("store browse: could not make a link to the file")
+  return { url: shown.data.signedUrl, downloadUrl: saved.data.signedUrl, name: f.name, mimeType: v.mime_type, kind: mediaKindFor(f.name, v.mime_type) }
+}
+
 /** The company's owner in the NEW store (a live, not study-only storage; anything else → null). */
 export async function storeOwnerForAccount(accountId: string): Promise<string | null> {
   try {
