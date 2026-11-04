@@ -69,7 +69,7 @@ export default async function MarketingBoard() {
       apptAt: contact.appointmentAt,
       arrivedMs: new Date(l.meta_created_time ?? l.received_at).getTime(),
       chips: [...contactChips(contact, iso => fw(iso), t), ...(l.status === sellerStages.not_ready && l.callback_at ? [{ key: 'come-back', text: t('Come back {when}', { when: fw(l.callback_at) }), tone: 'info' as const }] : [])],
-      pickedText: l.claimed_by === null ? t('Not picked') : l.claimed_by === userId ? t('Picked by you') : t('Picked by {name}', { name: l.claimed_by_label ?? t('a team member') }),
+      withText: l.claimed_by === null ? t('With the setter') : l.claimed_by === userId ? t('With you') : t('With {name}', { name: l.claimed_by_label ?? t('a team member') }),
       note: seesNotes ? activity?.notes.get(l.id)?.text ?? null : null,
       ad: l.ad_name,
       existingClient: clientFlagText(l.existing_client) !== null,

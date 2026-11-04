@@ -113,7 +113,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
           {lead.email && <p><span className="text-slate-500">{t('Email: ')}</span><a className="underline" href={`mailto:${lead.email}`}>{lead.email}</a></p>}
           {(lead.city || lead.country) && <p><span className="text-slate-500">{t('Place: ')}</span>{[lead.city, lead.country].filter(Boolean).join(', ')}</p>}
           <p><span className="text-slate-500">{t('Filled in: ')}</span>{fw(lead.meta_created_time ?? lead.received_at)}</p>
-          <p><span className="text-slate-500">{t('Picked by: ')}</span>{lead.claimed_by === null ? t('nobody') : claim === 'me' ? t('you') : lead.claimed_by_label ?? t('a team member')}</p>
+          <p><span className="text-slate-500">{t('With: ')}</span>{lead.claimed_by === null ? t('the setter') : claim === 'me' ? t('you') : lead.claimed_by_label ?? t('a team member')}</p>
           {lead.callback_at && <p><span className="text-slate-500">{t('Call back: ')}</span><b>{fw(lead.callback_at)}</b></p>}
           {lead.not_in_target_reason && <p><span className="text-slate-500">{t('Not in target: ')}</span>{t(reasons.find(r => r.key === lead.not_in_target_reason)?.label ?? lead.not_in_target_reason)}</p>}
         </div>
@@ -136,7 +136,6 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
 
       <LeadActionPanel
         leadId={lead.id}
-        canPick={hasPermission(permissions, 'leads.pick')}
         canMark={hasPermission(permissions, 'leads.mark')}
         claim={claim}
         isOwner={isOwner}

@@ -45,7 +45,7 @@ export function telHref(phone: string | null | undefined): string | null {
 
 export type LeadShow = "all" | "free" | "mine" | "callbacks"
 export const LEAD_SHOW_OPTIONS: ReadonlyArray<{ key: LeadShow; label: string }> = [
-  { key: "all", label: "All" }, { key: "free", label: "Not picked yet" }, { key: "mine", label: "Picked by me" }, { key: "callbacks", label: "Call backs" },
+  { key: "all", label: "All" }, { key: "free", label: "With the setter" }, { key: "mine", label: "With me" }, { key: "callbacks", label: "Call backs" },
 ]
 export function parseLeadShow(v: string | string[] | undefined): LeadShow {
   const s = Array.isArray(v) ? v[0] : v
@@ -79,7 +79,7 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
     case "assigned": return t("Assigned to {team}", { team: typeof data.team_name === "string" ? data.team_name : t("a team") })
     case "details_filled": return t("Name, email and phone filled in from the form answers")
     case "given": return t("Given to {name} by Antonio", { name: typeof data.to_name === "string" ? data.to_name : t("a person") })
-    case "claimed": return t("Picked")
+    case "claimed": return t("Handed to the seller")
     case "released": return t("Given back")
     case "note": return t("Note: {text}", { text: typeof data.text === "string" ? data.text : "" })
     case "whatsapp": return `${data.state === "no_wa" ? t("No WhatsApp on this number") : data.state === "opened" ? t("WhatsApp Web opened") : t("WhatsApp sent")}${note}`

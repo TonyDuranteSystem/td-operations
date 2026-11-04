@@ -79,7 +79,7 @@ describe("booking the free call IS the hand-over (3 Nov 2026)", () => {
 })
 
 describe("the boards after the hand-over", () => {
-  const card = (id: string, stage: string, over: Partial<BoardCard> = {}): BoardCard => ({ id, name: id, stage, stageLabel: stage, phone: null, filledIn: "", apptAt: null, arrivedMs: 1, chips: [], pickedText: "", note: null, ad: null, existingClient: false, callCheck: false, callAnswer: null, unread: 0, ...over })
+  const card = (id: string, stage: string, over: Partial<BoardCard> = {}): BoardCard => ({ id, name: id, stage, stageLabel: stage, phone: null, filledIn: "", apptAt: null, arrivedMs: 1, chips: [], withText: "", note: null, ad: null, existingClient: false, callCheck: false, callAnswer: null, unread: 0, ...over })
   it("an in-target lead with no call is the setter's only; it is not on Rocco's board", () => {
     const cards = [card("mine", "qualified")]
     expect(columnOfCard("seller", cards[0])).toBeNull()

@@ -92,7 +92,7 @@ export function LeadBoard({ cards, truncated }: { cards: BoardCard[]; truncated:
       {view === 'list' && (
         <div className="overflow-x-auto rounded-xl border bg-white" data-testid="list">
           <table className="w-full text-left text-sm">
-            <thead className="border-b text-xs text-slate-500"><tr><th className="px-3 py-2">{t('Lead')}</th><th className="px-3">{t('Stage')}</th><th className="px-3">{t('What happened')}</th><th className="px-3">{t('Filled in')}</th><th className="px-3">{t('Picked by')}</th></tr></thead>
+            <thead className="border-b text-xs text-slate-500"><tr><th className="px-3 py-2">{t('Lead')}</th><th className="px-3">{t('Stage')}</th><th className="px-3">{t('What happened')}</th><th className="px-3">{t('Filled in')}</th><th className="px-3">{t('With')}</th></tr></thead>
             <tbody className="divide-y">
               {[...cards].sort((a, b) => b.arrivedMs - a.arrivedMs).map(c => (
                 <tr key={c.id} className="cursor-pointer hover:bg-slate-50" onClick={() => open(c)} data-lead={c.id}>
@@ -100,7 +100,7 @@ export function LeadBoard({ cards, truncated }: { cards: BoardCard[]; truncated:
                   <td className="px-3"><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">{t(c.stageLabel)}</span></td>
                   <td className="px-3"><span className="flex flex-wrap gap-1">{c.chips.map(ch => <span key={ch.key} className={`rounded-full border px-2 py-0.5 text-[11px] ${TONE[ch.tone]}`}>{ch.text}</span>)}</span></td>
                   <td className="px-3 text-xs text-slate-500">{c.filledIn}</td>
-                  <td className="px-3 text-xs text-slate-500">{c.pickedText}</td>
+                  <td className="px-3 text-xs text-slate-500">{c.withText}</td>
                 </tr>
               ))}
             </tbody>

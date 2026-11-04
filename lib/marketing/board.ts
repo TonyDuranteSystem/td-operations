@@ -103,8 +103,8 @@ export interface BoardCard {
   arrivedMs: number
   /** short facts: WhatsApp ✓, No answer ×2, Call 27 Oct 11:00 */
   chips: Array<{ key: string; text: string; tone: "ok" | "warn" | "info" }>
-  /** who picked the lead, as a word ("Not picked", "Picked by you", …) */
-  pickedText: string
+  /** who has the lead, as a word ("With the setter", "With you", …) */
+  withText: string
   /** the setter's last written line; only given to people who may read notes */
   note: string | null
   ad: string | null

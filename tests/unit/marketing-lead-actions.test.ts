@@ -185,7 +185,7 @@ describe("filterLeads / eventText", () => {
     expect(parseLeadShow("mine")).toBe("mine")
   })
   it("history lines are plain English", () => {
-    expect(eventText("claimed", {}, settings.stages, settings.reasons)).toBe("Picked")
+    expect(eventText("claimed", {}, settings.stages, settings.reasons)).toBe("Handed to the seller")
     expect(eventText("status_changed", { outcome: "not_in_target", reason: "wrong_profile", note: "n" }, settings.stages, settings.reasons)).toBe("Not in target (Wrong profile) — n")
     expect(eventText("status_changed", { outcome: "good", to: "qualified" }, settings.stages, settings.reasons)).toBe("Good — moved to Qualified")
     expect(eventText("something_new", {}, settings.stages, settings.reasons)).toBe("something_new")

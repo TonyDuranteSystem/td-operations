@@ -12,7 +12,6 @@ type Mode = null | 'good' | 'not_in_target' | 'call_back' | 'not_ready' | 'close
 
 interface Props {
   leadId: string
-  canPick: boolean
   canMark: boolean
   /** 'free' nobody picked it · 'me' I picked it · 'other' someone else did */
   claim: 'free' | 'me' | 'other'
@@ -32,7 +31,7 @@ interface Props {
 }
 
 /** The buttons a setter or the owner uses on one lead. Every server answer (including the refusals) is shown as the server wrote it. */
-export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, checklist, reasons, afterHref, role = 'setter', afterPay = false, archived = false, zone = { viewer: ROME, client: null, clientName: '', seller: null, owner: null } }: Props) {
+export function LeadActionPanel({ leadId, canMark, claim, isOwner, checklist, reasons, afterHref, role = 'setter', afterPay = false, archived = false, zone = { viewer: ROME, client: null, clientName: '', seller: null, owner: null } }: Props) {
   const router = useRouter()
   const t = useT()
   const [mode, setMode] = useState<Mode>(null)
@@ -69,10 +68,9 @@ export function LeadActionPanel({ leadId, canPick, canMark, claim, isOwner, chec
   return (
     <section className="mt-5 rounded-xl border bg-white p-4">
       <h2 className="text-sm font-semibold text-slate-600">{t('What to do with this lead')}</h2>
-      {claim === 'other' && !isOwner && <p className="mt-2 text-sm text-amber-800">{t('Someone else picked this lead, so only they (or the team owner) can change it.')}</p>}
+      {claim === 'other' && !isOwner && <p className="mt-2 text-sm text-amber-800">{t('This lead is with someone else, so only they (or the team owner) can change it.')}</p>}
 
       <div className="mt-3 flex flex-wrap gap-2" data-testid="lead-result">
-        {canPick && (claim === 'me' || (claim === 'other' && isOwner)) && <button className={btn} disabled={busy} onClick={() => send({ action: 'release' })}>{t('Give it back')}</button>}
         {markOk && role === 'setter' && <button className={`${btn} ${mode === 'good' ? 'border-emerald-600 bg-emerald-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'good' ? null : 'good')}>{t('Good')}</button>}
         {markOk && <button className={`${btn} ${mode === 'not_in_target' ? 'border-rose-600 bg-rose-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'not_in_target' ? null : 'not_in_target')}>{t('Not in target')}</button>}
         {markOk && role === 'setter' && <button className={`${btn} ${mode === 'call_back' ? 'border-sky-600 bg-sky-50' : ''}`} disabled={busy} onClick={() => setMode(mode === 'call_back' ? null : 'call_back')}>{t('Call back later')}</button>}
