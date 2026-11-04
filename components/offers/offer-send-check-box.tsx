@@ -2,33 +2,26 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Info, Loader2, RefreshCw } from 'lucide-react'
-import { SEND_CHECK_BOX_KEY, parseSendCheckBoxSwitch } from '@/lib/offers/send-check-box-switch'
 import { boxModel, parseSendCheckReply, type SendCheckReply } from '@/lib/offers/send-check-view'
+import { useOfferBuilderFeatures } from './use-offer-builder-features'
 
 /**
  * "Before this offer can be sent" — what the real Send will say about a DRAFT offer, shown before staff press it
  * (offer builder Part 1, dev job d2971d11). It asks the read-only route (nothing is written, nothing is sent) and draws the
  * answer from lib/offers/send-check-view.ts. The server stays the only real gate: Send is never locked by this box.
  *
- * Drawn only while its switch is on (Dev Tools → Maintenance → "Check box beside Send"); while it is off nothing is drawn and
- * no request is made. Mount it only for a DRAFT offer. Amber with an icon and words, never colour alone.
+ * Drawn only where the rollout allows it for this offer's record (off / test accounts only / on — Claude sets it on Antonio's
+ * word, no screen); while it is not allowed nothing is drawn and the check route is never called. Mount it only for a DRAFT
+ * offer. Amber with an icon and words, never colour alone.
  */
 export function OfferSendCheckBox({ token }: { token: string }) {
-  const [on, setOn] = useState(false)
+  // Off unless the server says this piece may be shown for THIS offer's record (off / test accounts only / on — Claude sets it
+  // on Antonio's word; there is no screen for it). See lib/offers/rollout.ts.
+  const { sendCheckBox: on } = useOfferBuilderFeatures({ token })
   const [reply, setReply] = useState<SendCheckReply | null>(null)
   const [loading, setLoading] = useState(false)
   const [couldNot, setCouldNot] = useState(false)
   const seq = useRef(0)
-
-  // The switch: OFF unless a stored `true` comes back.
-  useEffect(() => {
-    let cancelled = false
-    fetch(`/api/app-settings?key=${SEND_CHECK_BOX_KEY}`, { cache: 'no-store' })
-      .then(async (r) => parseSendCheckBoxSwitch(r.ok, await r.json().catch(() => null)))
-      .then((v) => { if (!cancelled) setOn(v) })
-      .catch(() => { if (!cancelled) setOn(false) })
-    return () => { cancelled = true }
-  }, [])
 
   const run = useCallback(async () => {
     const mine = ++seq.current
