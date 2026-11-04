@@ -60,7 +60,7 @@ export function permissionFor(a: LeadActionInput["action"]): MarketingPermission
 const SELLER_ONLY_ACTIONS: ReadonlySet<string> = new Set(["not_ready", "closed", "not_closed", "booking_link", "upsell", "waiting", "archive"])
 
 /** `callback_at` and `appointment_at` (the booked call that still stands) are only given when moving a call needs them. `seller` is the person whose calendar takes a call on this lead (only given when a call is being booked): booking the call makes the lead his. */
-export interface LeadFacts { claimed_by: string | null; status: string; seller?: { id: string; label: string | null } | null; callback_at?: string | null; appointment_at?: string | null; /** the stage the lead was in when its current call was booked (only read when the call is cancelled) */ booked_from?: string | null; /** the come-back day that lead had before the call was booked (only read when the call is cancelled) */ booked_from_callback?: string | null; /** who that booking handed the lead to (only read when the call is cancelled) */ booked_handed_to?: string | null }
+export interface LeadFacts { claimed_by: string | null; status: string; seller?: { id: string; label: string | null } | null; callback_at?: string | null; appointment_at?: string | null; /** the stage the lead was in when its current call was booked (only read when the call is cancelled) */ booked_from?: string | null; /** the come-back day that lead had before the call was booked (only read when the call is cancelled) */ booked_from_callback?: string | null; /** who that booking handed the lead to (only read when the call is cancelled) */ booked_handed_to?: string | null; /** another lead already has a call at that time with the same seller (only read when a call is booked or moved from a person's page) */ slot_taken?: boolean }
 export interface Actor { id: string; email: string | null; role: "owner" | "member" }
 
 export interface PlannedChange {
@@ -68,6 +68,8 @@ export interface PlannedChange {
   patch: Record<string, unknown>
   /** the history row to write */
   event: { kind: string; data: Record<string, unknown> }
+  /** a result that ends the sale also takes the call that still stands off the books (the time it was booked for): the server writes the cancel line after the result line */
+  cancelsCall?: { at: string }
 }
 export type Plan = { ok: true; change: PlannedChange } | { ok: false; status: 400 | 409; error: string }
 
@@ -113,7 +115,16 @@ function sellerResultGuard(action: "closed" | "not_closed" | "not_ready", lead: 
   return null
 }
 
+/** The seller's results that put a lead aside or out (not in target, archived, not ready now, not closed): a call still ahead on such a lead is cancelled with it, or the Calendar, the seller's Google calendar and the client's link would go on showing a call nobody will take. A call whose time has passed stays as it was (it happened or was missed). "Link sent" is left alone: that follows a call that took place. */
+export const ENDS_CALL: ReadonlySet<string> = new Set(["not_in_target", "archive", "not_ready", "not_closed"])
+
 export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: Actor, s: ActionSettings, now: Date): Plan {
+  const p = planOne(input, lead, actor, s, now)
+  if (p.ok && ENDS_CALL.has(input.action) && lead.appointment_at && Date.parse(lead.appointment_at) > now.getTime()) p.change.cancelsCall = { at: lead.appointment_at }
+  return p
+}
+
+function planOne(input: LeadActionInput, lead: LeadFacts, actor: Actor, s: ActionSettings, now: Date): Plan {
   const mine = lead.claimed_by === actor.id
   const someoneElse = lead.claimed_by !== null && !mine
   const stageExists = (k: string) => s.stages.some(x => x.key === k)
@@ -199,6 +210,7 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
         // a call cannot be booked from a person's page on a lead that is out of target: the booking would hand it to the seller but leave it where no board shows it (an archived lead is reopened by the booking). The client's booking link has no page to go stale, so it is not held to this.
         if (input.at !== null) {
           if (lead.status === s.outcomeStages.not_in_target) return fail(409, "This lead is marked not in target. Put it back in target first, then book the call.")
+          if (lead.slot_taken) return fail(409, "Another lead already has a call at that time. Pick a different time.")
         }
       }
       if (input.at === null) {
@@ -243,6 +255,7 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
         if (!lead.appointment_at) return fail(409, "This call is no longer booked. Reload the calendar.")
         if (Date.parse(lead.appointment_at) < now.getTime() - GRACE_MS) return fail(409, "This call has already taken place. Book a new one from the lead.")
         if (differs(lead.appointment_at)) return fail(409, stale)
+        if (lead.slot_taken) return fail(409, "Another lead already has a call at that time. Pick a different time.")
         return { ok: true, change: { patch: movedToBooked(lead, s), event: { kind: "appointment", data: { at: at.toISOString(), from, ...moved } } } }
       }
       // a call back still stands only while the lead is at the call back stage with its time set; the stage itself is never touched

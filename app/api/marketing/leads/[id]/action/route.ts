@@ -33,13 +33,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const notified = parsed.value.action === "reschedule" && g.ctx.viewAs === undefined ? await notifyMoved(g.ctx.team.id, g.ctx.user.id, g.ctx.user.email, id, parsed.value) : 0
   // a call booked, moved or cancelled is also written into the seller's work Google calendar (only while that switch is on; never while Antonio is "viewing as" somebody). The call is already saved: the answer only tells the screen what happened.
   const a = parsed.value
-  const calendar = g.ctx.viewAs === undefined && (a.action === "appointment" || (a.action === "reschedule" && a.target === "appointment"))
-    ? await syncAfterAppointment({ db: leadDb(), teamId: g.ctx.team.id, leadId: id, actor: g.ctx.user.email ?? g.ctx.user.id, action: a.action === "appointment" && a.at === null ? { kind: "cancel" } : { kind: "set", at: new Date(a.at as string).toISOString() } })
+  // a call booked, moved or cancelled by the person, or cancelled because a result (Not in target, Archive, Not ready, Not closed) put the lead aside
+  const callChange: { kind: "cancel" } | { kind: "set"; at: string } | null =
+    r.cancelledCall ? { kind: "cancel" }
+    : a.action === "appointment" ? (a.at === null ? { kind: "cancel" } : { kind: "set", at: new Date(a.at).toISOString() })
+    : a.action === "reschedule" && a.target === "appointment" ? { kind: "set", at: new Date(a.at).toISOString() }
     : null
+  const calendar = g.ctx.viewAs === undefined && callChange ? await syncAfterAppointment({ db: leadDb(), teamId: g.ctx.team.id, leadId: id, actor: g.ctx.user.email ?? g.ctx.user.id, action: callChange }) : null
   // a call that came from a booking link: the link, the Zoom meeting and the client follow the staff change (never fails the change; a problem is written on the lead)
-  if (g.ctx.viewAs === undefined && (a.action === "appointment" || (a.action === "reschedule" && a.target === "appointment"))) {
+  if (g.ctx.viewAs === undefined && callChange) {
     try {
-      const note = await followStaffChange(liveJointEnv(), { teamId: g.ctx.team.id, leadId: id, change: a.action === "appointment" && a.at === null ? { kind: "cancel" } : { kind: "set", at: new Date(a.at as string).toISOString() } })
+      const note = await followStaffChange(liveJointEnv(), { teamId: g.ctx.team.id, leadId: id, change: callChange })
       if (note) await leadDb().from("marketing_lead_events").insert({ lead_id: id, kind: "calendar_sync_failed", actor: g.ctx.user.email ?? g.ctx.user.id, data: { message: note, joint: true } })
     } catch { /* the staff change is already saved */ }
   }

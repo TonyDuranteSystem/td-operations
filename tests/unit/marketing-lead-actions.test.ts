@@ -1,4 +1,7 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
+
+// the seller's hours come from the database: the unit tests use the built-in slot length and nobody taking calls
+vi.mock("@/lib/marketing/time-prefs-server", () => ({ loadPrefsAndTakers: async () => ({ prefs: { callHours: {} }, takers: [] }) }))
 import { planLeadAction, leadActionSchema, permissionFor, type ActionSettings, type Actor, type LeadActionInput } from "@/lib/marketing/lead-actions"
 import { applyLeadAction, parseLeadAction } from "@/lib/marketing/lead-actions-server"
 import { eventText, filterLeads, parseLeadShow } from "@/lib/marketing/lead-view"
@@ -301,5 +304,72 @@ describe("cancelling a booked call puts the lead back where it was", () => {
     db.rows("marketing_lead_events").push({ lead_id: M, kind: "appointment", actor: "x", data: { at: "2026-10-27T14:00:00Z", from_status: "qualified" } })
     await applyLeadAction(db as never, "T1", M, { action: "appointment", at: null }, owner, withBooked, NOW)
     expect(db.rows("marketing_leads").find(x => x.id === M)?.status).toBe("booked")
+  })
+})
+
+describe("a result that ends the sale cancels a call still ahead; two leads never share a slot (4 Nov 2026)", () => {
+  const A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+  const full: ActionSettings = { ...settings, stages: [...settings.stages, { key: "booked", label: "Booked" }, { key: "archived", label: "Archived" }, { key: "not_ready", label: "Not ready" }, { key: "not_closed", label: "Not closed" }, { key: "closed", label: "Link sent" }], sellerStages: { not_ready: "not_ready", archived: "archived", not_closed: "not_closed", closed: "closed" } } as ActionSettings
+  const FUTURE = "2026-10-25T14:00:00.000Z", PAST = "2026-10-18T14:00:00.000Z"
+  const lead = (over: object = {}) => ({ claimed_by: "u-owner", status: "booked", appointment_at: FUTURE, ...over })
+  it("Not in target, Archive, Not ready now and Not closed cancel a call that is still ahead", () => {
+    for (const input of [{ action: "not_in_target", reason: "other" }, { action: "archive" }, { action: "not_ready", callbackAt: "2026-12-01T09:00:00Z" }, { action: "not_closed" }] as LeadActionInput[]) {
+      const p = planLeadAction(input, lead(), owner, full, NOW)
+      expect(p.ok && p.change.cancelsCall).toEqual({ at: FUTURE })
+    }
+  })
+  it("a call that has already passed, or none, is left alone; Link sent never cancels", () => {
+    expect((planLeadAction({ action: "archive" }, lead({ appointment_at: PAST }), owner, full, NOW) as { change: { cancelsCall?: unknown } }).change.cancelsCall).toBeUndefined()
+    expect((planLeadAction({ action: "archive" }, lead({ appointment_at: null }), owner, full, NOW) as { change: { cancelsCall?: unknown } }).change.cancelsCall).toBeUndefined()
+    expect((planLeadAction({ action: "closed" }, lead(), owner, full, NOW) as { change: { cancelsCall?: unknown } }).change.cancelsCall).toBeUndefined()
+  })
+  it("the server writes the result, then a cancel line, and says the call was cancelled", async () => {
+    const db = new FakeDb()
+    db.rows("marketing_leads").push({ id: A, team_id: "T1", status: "booked", claimed_by: "u-owner" })
+    db.rows("marketing_lead_events").push({ lead_id: A, kind: "appointment", actor: "x", created_at: "2026-10-19T10:00:00Z", data: { at: FUTURE } })
+    expect(await applyLeadAction(db as never, "T1", A, { action: "archive" }, owner, full, NOW)).toEqual({ ok: true, cancelledCall: true })
+    const evs = db.rows("marketing_lead_events")
+    expect(evs.map(e => e.kind)).toEqual(["appointment", "status_changed", "appointment"])
+    expect(evs[2].data).toMatchObject({ at: null, was_at: FUTURE, automatic: true })
+    expect(db.rows("marketing_leads")[0]).toMatchObject({ status: "archived" })
+  })
+  it("a lead with no call ahead gets no cancel line", async () => {
+    const db = new FakeDb()
+    db.rows("marketing_leads").push({ id: A, team_id: "T1", status: "booked", claimed_by: "u-owner" })
+    expect(await applyLeadAction(db as never, "T1", A, { action: "archive" }, owner, full, NOW)).toEqual({ ok: true })
+    expect(db.rows("marketing_lead_events").map(e => e.kind)).toEqual(["status_changed"])
+  })
+  describe("one slot, one lead", () => {
+    const mk = (otherAt: string | null, otherClaim: string | null = "u-owner") => {
+      const db = new FakeDb()
+      db.rows("marketing_leads").push({ id: A, team_id: "T1", status: "qualified", claimed_by: "u-owner" })
+      db.rows("marketing_leads").push({ id: B, team_id: "T1", status: "booked", claimed_by: otherClaim })
+      db.rows("marketing_lead_events").push({ lead_id: B, kind: "appointment", actor: "x", created_at: "2026-10-19T10:00:00Z", data: { at: FUTURE } })
+      if (otherAt === null) db.rows("marketing_lead_events").push({ lead_id: B, kind: "appointment", actor: "x", created_at: "2026-10-19T11:00:00Z", data: { at: null } })
+      return db
+    }
+    const book = (db: FakeDb, at: string) => applyLeadAction(db as never, "T1", A, { action: "appointment", at, replaces: null }, owner, full, NOW)
+    it("the same time is refused and nothing is written", async () => {
+      const db = mk(FUTURE)
+      expect(await book(db, FUTURE)).toMatchObject({ ok: false, status: 409 })
+      expect(db.rows("marketing_lead_events").length).toBe(1)
+    })
+    it("a time inside the same slot is refused; a different time, a cancelled call, another seller and another team are free", async () => {
+      expect(await book(mk(FUTURE), "2026-10-25T14:10:00.000Z")).toMatchObject({ ok: false, status: 409 })
+      expect(await book(mk(FUTURE), "2026-10-25T16:00:00.000Z")).toEqual({ ok: true })
+      expect(await book(mk(null), FUTURE)).toEqual({ ok: true })
+      expect(await book(mk(FUTURE, "u-other-seller"), FUTURE)).toEqual({ ok: true })
+    })
+    it("moving a call onto a taken slot from the calendar is refused too", async () => {
+      const db = mk(FUTURE)
+      db.rows("marketing_lead_events").push({ lead_id: A, kind: "appointment", actor: "x", created_at: "2026-10-19T12:00:00Z", data: { at: "2026-10-26T14:00:00.000Z" } })
+      db.rows("marketing_leads")[0].status = "booked"
+      const r = await applyLeadAction(db as never, "T1", A, { action: "reschedule", target: "appointment", at: FUTURE, from: "2026-10-26T14:00:00.000Z", reason: "Other", note: "x" } as LeadActionInput, owner, full, NOW)
+      expect(r).toMatchObject({ ok: false, status: 409 })
+    })
+    it("the client's booking link (no page to go stale) is not held to this check", async () => {
+      const db = mk(FUTURE)
+      expect(await applyLeadAction(db as never, "T1", A, { action: "appointment", at: FUTURE }, owner, full, NOW)).toEqual({ ok: true })
+    })
   })
 })
