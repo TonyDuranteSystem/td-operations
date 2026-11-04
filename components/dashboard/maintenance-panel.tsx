@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Wrench, Loader2, AlertTriangle, Banknote, EyeOff, Mail, MessageSquare, AppWindow, PlusCircle } from 'lucide-react'
+import { Wrench, Loader2, AlertTriangle, Banknote, EyeOff, Mail, MessageSquare, AppWindow, PlusCircle, CheckCircle2 } from 'lucide-react'
 
 type Result =
   | { kind: 'ok'; message: string }
@@ -48,6 +48,54 @@ export function MaintenancePanel() {
   const [multiLoaded, setMultiLoaded] = useState(false)
   const [multiSaving, setMultiSaving] = useState(false)
   const [multiResult, setMultiResult] = useState<Result | null>(null)
+
+  // Check box beside Send (app_settings.offer_send_check_box_enabled) — offer builder Part 1.
+  // OFF by default: while off, no box is drawn and the check route is never called.
+  const BOX_KEY = 'offer_send_check_box_enabled'
+  const [boxOn, setBoxOn] = useState(false)
+  const [boxLoaded, setBoxLoaded] = useState(false)
+  const [boxSaving, setBoxSaving] = useState(false)
+  const [boxResult, setBoxResult] = useState<Result | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/app-settings?key=${BOX_KEY}`)
+      .then(r => r.json())
+      // default OFF: only on when explicitly stored true
+      .then(d => { if (!cancelled) setBoxOn(d.value === true) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setBoxLoaded(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  const handleToggleBox = async () => {
+    const next = !boxOn
+    setBoxSaving(true)
+    setBoxResult(null)
+    try {
+      const res = await fetch('/api/app-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: BOX_KEY, value: next }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setBoxResult({ kind: 'error', message: data.error || 'Save failed' })
+        return
+      }
+      setBoxOn(next)
+      setBoxResult({
+        kind: 'ok',
+        message: next
+          ? 'The check box is ON. A draft offer now shows "Before this offer can be sent" beside its Send button.'
+          : 'The check box is OFF. The offer screens are as they were before.',
+      })
+    } catch {
+      setBoxResult({ kind: 'error', message: 'Save failed' })
+    } finally {
+      setBoxSaving(false)
+    }
+  }
 
   // Add a new service from the offer (app_settings.offer_add_service_enabled) — flexible-offer part 4.
   // OFF by default: while off, the Create Offer dialog is exactly what it always was.
@@ -592,6 +640,46 @@ export function MaintenancePanel() {
                 : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
             }`}>
               {addSvcResult.message}
+            </div>
+          )}
+        </div>
+        <div className="border-t border-blue-100 pt-3 mt-2">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <CheckCircle2 className="h-3.5 w-3.5 text-blue-600" />
+            <span className="text-xs font-medium text-blue-900">Check box beside Send</span>
+          </div>
+          <p className="text-xs text-muted-foreground mb-2">
+            When on, a DRAFT offer shows the box &quot;Before this offer can be sent&quot; beside its Send button: it lists what the real
+            Send will refuse, what only needs a look, and what could not be checked. It changes nothing and sends nothing, and the real
+            Send checks everything by itself whether this is on or off. When off, no box is drawn and the offer screens are exactly as
+            they were. Off by default. Takes effect the next time an offer screen is opened. It only affects staff screens, never
+            anything a client sees.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleToggleBox}
+              aria-pressed={boxOn}
+              disabled={!boxLoaded || boxSaving}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-colors disabled:opacity-50 ${
+                boxOn
+                  ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
+                  : 'bg-zinc-100 text-zinc-600 border-zinc-300 hover:bg-zinc-200'
+              }`}
+            >
+              {boxSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {boxOn ? 'On' : 'Off'}
+            </button>
+            <span className="text-xs text-muted-foreground">
+              {boxLoaded ? (boxOn ? 'The check box is on' : 'The check box is off') : 'Loading…'}
+            </span>
+          </div>
+          {boxResult && (
+            <div className={`mt-2 text-xs p-2.5 rounded-md ${
+              boxResult.kind === 'error'
+                ? 'bg-red-50 text-red-700 border border-red-200'
+                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+            }`}>
+              {boxResult.message}
             </div>
           )}
         </div>
