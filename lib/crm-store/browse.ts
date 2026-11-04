@@ -132,7 +132,7 @@ export const CLOSED_ACCOUNT_STATUSES = ["Closed", "Cancelled", "Offboarding"]
 type FolderRowLite = { id: string; name: string; kind: string; trashed_at: string | null; template_slug: string | null; parent_id: string | null }
 const toFolder = (d: FolderRowLite): BrowseFolder => ({ id: d.id, name: d.name, kind: d.kind, trashed: !!d.trashed_at, locked: isLockedFolderRule(d) })
 
-export async function folderContents(ownerId: string, folderId: string | null, opts: { throughCompany?: boolean } = {}): Promise<{ folder: BrowseFolder | null; path: BrowseFolder[]; folders: BrowseFolder[]; files: BrowseFile[]; people?: BrowsePerson[]; owner: BrowseOwnerInfo }> {
+export async function folderContents(ownerId: string, folderId: string | null, opts: { throughCompany?: boolean } = {}): Promise<{ folder: BrowseFolder | null; path: BrowseFolder[]; folders: BrowseFolder[]; sortOrder?: "newest" | "oldest"; files: BrowseFile[]; people?: BrowsePerson[]; owner: BrowseOwnerInfo }> {
   const { data: own, error: oErr } = await db().from("store_owners").select("kind, account_id, lifecycle_override, accounts(company_name, status), contacts(full_name)").eq("id", ownerId).maybeSingle()
   if (oErr) throw new Error(`store browse: ${oErr.message}`)
   if (!own) throw new Error("store browse: owner not found")
@@ -276,10 +276,15 @@ export async function folderContents(ownerId: string, folderId: string | null, o
       filingStatus: (f.filing_status as string | null) ?? null,
     })
   }
+  // a folder the person sorted by date lists its year / month folders in the chosen order (the Storage page and Finder both read this)
+  const { savedOrder } = await import("./date-sort")
+  const sortOrder = await savedOrder(current.id)
+  const listed = ((subs ?? []) as FolderRowLite[]).filter((sf) => !kinds || shownThroughCompany(sf.kind, kinds)).map(toFolder)
   return {
     folder: current,
     path,
-    folders: ((subs ?? []) as FolderRowLite[]).filter((sf) => !kinds || shownThroughCompany(sf.kind, kinds)).map(toFolder),
+    folders: sortOrder ? (await import("./date-sort-rules")).orderFolders(listed, sortOrder) : listed,
+    ...(sortOrder ? { sortOrder } : {}),
     files,
     owner,
     ...(current.kind === "contacts" ? { people } : {}),
