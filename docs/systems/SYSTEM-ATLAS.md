@@ -178,8 +178,8 @@ _Regenerated 2026-11-04 from the R-rule list in CLAUDE.md — **42 rules**, high
 <!-- GENERATED:deep-docs -->
 _Regenerated 2026-11-04. Every subsystem doc under `docs/systems/` (54 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
-- [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-10-30)_
-- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-10-30)_
+- [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-04)_
+- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-04)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-02)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-10-30)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-28)_
@@ -198,12 +198,12 @@ _Regenerated 2026-11-04. Every subsystem doc under `docs/systems/` (54 docs), wi
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-03)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-11-03)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-02)_
-- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-31)_
+- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-04)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-28)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-27)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-04)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-28)_
-- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-31)_
+- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-04)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-02)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-04)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-31)_

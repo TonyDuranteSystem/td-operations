@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 
 const st = vi.hoisted(() => ({
   staffDenied: false,
+  user: { app_metadata: { role: "admin" } } as unknown,
+  media: [] as Array<Record<string, unknown>>,
   messages: [] as Array<Record<string, unknown>>,
   provider: "wabridge" as string | null,
   outbox: [] as Array<Record<string, unknown>>,
@@ -13,17 +15,22 @@ const st = vi.hoisted(() => ({
 vi.mock("@/lib/auth/require-staff-route", () => ({
   requireStaffRoute: async () => (st.staffDenied ? new Response(JSON.stringify({ error: "Not authorized" }), { status: 403 }) : null),
 }))
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: () => ({ auth: { getUser: async () => ({ data: { user: st.user } }) } }),
+}))
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
+    storage: { from: () => ({ createSignedUrl: async (path: string) => ({ data: { signedUrl: `https://signed.example/${path}` }, error: null }) }) },
     from: (table: string) => {
       const c: Record<string, unknown> = {}
-      for (const op of ["select", "eq", "order", "is"]) c[op] = () => c
+      for (const op of ["select", "eq", "order", "is", "in"]) c[op] = () => c
       c.neq = (_col: string, val: string) => {
         st.outboxStatusFilter = val
         return c
       }
       const rows = () => {
         if (table === "messages") return { data: st.messages, error: null }
+        if (table === "message_media") return { data: st.media, error: null }
         if (table === "wa_outbox") {
           if (st.outboxThrows) throw new Error("outbox exploded")
           return { data: st.outbox, error: null }
@@ -52,6 +59,8 @@ const inbound = { id: "m1", content_text: "Ciao", direction: "inbound", sender_n
 
 beforeEach(() => {
   st.staffDenied = false
+  st.user = { app_metadata: { role: "admin" } }
+  st.media = []
   st.messages = [inbound]
   st.provider = "wabridge"
   st.outbox = []
@@ -122,5 +131,44 @@ describe("GET /api/inbox/whatsapp/messages/[groupId]", () => {
     const r = await get()
     expect(r.status).toBe(200)
     expect(r.body.messages.map((m: { id: string }) => m.id)).toEqual(["m1"])
+  })
+})
+
+describe("voice notes are open to anyone who can use the Inbox; photos and documents are not (Antonio, 2026-11-04)", () => {
+  const voiceRow = { ...inbound, id: "v1", content_type: "voice", content_text: "[Voice note]" }
+  const photoRow = { ...inbound, id: "p1", content_type: "image", content_text: "[Photo]" }
+  const readyVoice = { message_id: "v1", status: "ready", transcript: "ciao stefano", duration_seconds: 5, audio_deleted_at: null, storage_path: "voice/v1" }
+  const readyPhoto = { message_id: "p1", status: "ready", transcript: null, duration_seconds: null, audio_deleted_at: null, storage_path: "photos/p1" }
+
+  it.each([["admin"], ["team"], ["partner"], ["marketing"]])("a %s login gets the voice note's transcript and state", async (role) => {
+    st.user = { app_metadata: { role } }
+    st.messages = [voiceRow]
+    st.media = [readyVoice]
+    const r = await get()
+    expect(r.status).toBe(200)
+    expect(r.body.messages[0].voice).toMatchObject({ status: "ready", transcript: "ciao stefano", duration_seconds: 5, audio_deleted: false })
+  })
+
+  it("a note the Mac has not picked up yet shows as waiting for everyone", async () => {
+    st.user = { app_metadata: { role: "partner" } }
+    st.messages = [voiceRow]
+    st.media = []
+    expect((await get()).body.messages[0].voice).toMatchObject({ status: "waiting", transcript: null })
+  })
+
+  it("a portal CLIENT is still refused outright (the route gate is unchanged)", async () => {
+    st.staffDenied = true
+    st.messages = [voiceRow]
+    st.media = [readyVoice]
+    expect((await get()).status).toBe(403)
+  })
+
+  it("photos and documents keep the staff-only rule: a partner gets no view link, staff does", async () => {
+    st.messages = [photoRow]
+    st.media = [readyPhoto]
+    st.user = { app_metadata: { role: "partner" } }
+    expect((await get()).body.messages[0].media_url ?? null).toBeNull()
+    st.user = { app_metadata: { role: "admin" } }
+    expect((await get()).body.messages[0].media_url).toBe("https://signed.example/photos/p1")
   })
 })
