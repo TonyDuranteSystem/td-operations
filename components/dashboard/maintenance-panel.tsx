@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Wrench, Loader2, AlertTriangle, Banknote, EyeOff, Mail, MessageSquare, AppWindow } from 'lucide-react'
+import { Wrench, Loader2, AlertTriangle, Banknote, EyeOff, Mail, MessageSquare, AppWindow, PlusCircle } from 'lucide-react'
 
 type Result =
   | { kind: 'ok'; message: string }
@@ -48,6 +48,54 @@ export function MaintenancePanel() {
   const [multiLoaded, setMultiLoaded] = useState(false)
   const [multiSaving, setMultiSaving] = useState(false)
   const [multiResult, setMultiResult] = useState<Result | null>(null)
+
+  // Add a new service from the offer (app_settings.offer_add_service_enabled) — flexible-offer part 4.
+  // OFF by default: while off, the Create Offer dialog is exactly what it always was.
+  const ADDSVC_KEY = 'offer_add_service_enabled'
+  const [addSvcOn, setAddSvcOn] = useState(false)
+  const [addSvcLoaded, setAddSvcLoaded] = useState(false)
+  const [addSvcSaving, setAddSvcSaving] = useState(false)
+  const [addSvcResult, setAddSvcResult] = useState<Result | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/app-settings?key=${ADDSVC_KEY}`)
+      .then(r => r.json())
+      // default OFF: only on when explicitly stored true
+      .then(d => { if (!cancelled) setAddSvcOn(d.value === true) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setAddSvcLoaded(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  const handleToggleAddSvc = async () => {
+    const next = !addSvcOn
+    setAddSvcSaving(true)
+    setAddSvcResult(null)
+    try {
+      const res = await fetch('/api/app-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: ADDSVC_KEY, value: next }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setAddSvcResult({ kind: 'error', message: data.error || 'Save failed' })
+        return
+      }
+      setAddSvcOn(next)
+      setAddSvcResult({
+        kind: 'ok',
+        message: next
+          ? 'Add a new service is ON. The next time staff open Create Offer they see the "Add a new service" button, and the service list stays current.'
+          : 'Add a new service is OFF. The Create Offer dialog is as it was before.',
+      })
+    } catch {
+      setAddSvcResult({ kind: 'error', message: 'Save failed' })
+    } finally {
+      setAddSvcSaving(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -502,6 +550,48 @@ export function MaintenancePanel() {
                 : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
             }`}>
               {multiResult.message}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-blue-100 pt-3 mt-2">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <PlusCircle className="h-3.5 w-3.5 text-blue-600" />
+            <span className="text-xs font-medium text-blue-900">Add a new service from the offer</span>
+          </div>
+          <p className="text-xs text-muted-foreground mb-2">
+            When on, the Create Offer window shows an &quot;Add a new service&quot; button. It opens the service editor in a
+            new tab; when staff come back, the new service is in the list and ticked. The window also reads the service
+            list again every time it opens and when you come back to it, and checks the ticked services once more right
+            before the draft is saved. When off, the Create Offer window is exactly as it was: the list is read once, no
+            button, no extra check. Off by default. Takes effect the next time someone opens Create Offer. It only
+            affects staff screens, never anything a client sees.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleToggleAddSvc}
+              aria-pressed={addSvcOn}
+              disabled={!addSvcLoaded || addSvcSaving}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-colors disabled:opacity-50 ${
+                addSvcOn
+                  ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
+                  : 'bg-zinc-100 text-zinc-600 border-zinc-300 hover:bg-zinc-200'
+              }`}
+            >
+              {addSvcSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {addSvcOn ? 'On' : 'Off'}
+            </button>
+            <span className="text-xs text-muted-foreground">
+              {addSvcLoaded ? (addSvcOn ? 'Add a new service is on' : 'Add a new service is off') : 'Loading…'}
+            </span>
+          </div>
+          {addSvcResult && (
+            <div className={`mt-2 text-xs p-2.5 rounded-md ${
+              addSvcResult.kind === 'error'
+                ? 'bg-red-50 text-red-700 border border-red-200'
+                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+            }`}>
+              {addSvcResult.message}
             </div>
           )}
         </div>

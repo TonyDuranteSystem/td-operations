@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useTransition, useMemo } from 'react'
+import { useState, useEffect, useTransition, useMemo, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote, ExternalLink, CheckCircle2, BookOpen, Phone, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
@@ -13,6 +13,8 @@ import { buildAnnualCostRows } from '@/lib/offers/annual-maintenance-wording'
 import { formatOptionLabel } from '@/lib/offers/package-option-label'
 import { canGroundFormationState, canGroundEntityType } from '@/lib/offers/narrative-business-rules'
 import { offerPreviewHref } from '@/lib/offers/offer-preview-href'
+import { parseServiceCatalogReply, decideNewService, selectedServicesDrift } from '@/lib/offers/catalog-refresh'
+import { ADD_SERVICE_KEY, parseAddServiceSwitch } from '@/lib/offers/add-service-switch'
 import {
   validatePaymentPlan,
   clientFacingPartLabel,
@@ -168,6 +170,28 @@ function isSessionExpired(status: number, parsed: { code?: string }): boolean {
   return status === 401 || parsed.code === 'SESSION_EXPIRED'
 }
 
+/** The rows of /api/service-catalog as the dialog uses them. */
+function mapCatalogServices(services: Array<Record<string, unknown>>): CatalogService[] {
+  return services.map(s => {
+    const ctx = s.default_service_context as string | null | undefined
+    return {
+      id: (s.slug as string) || (s.id as string),
+      slug: (s.slug as string) || '',
+      name: s.name as string,
+      description: (s.description as string | null) ?? null,
+      pipeline: (s.pipeline as string | null) ?? null,
+      contract_type: (s.contract_type as string | null) ?? null,
+      has_annual: (s.has_annual as boolean) ?? false,
+      category: (s.category as string) || 'addon',
+      default_price: s.default_price != null ? Number(s.default_price) : null,
+      default_currency: (s.default_currency as string | null) ?? null,
+      supports_quantity: (s.supports_quantity as boolean) ?? false,
+      default_service_context:
+        ctx === 'individual' || ctx === 'business' || ctx === 'ask' ? ctx : null,
+    }
+  })
+}
+
 export function CreateOfferDialog({
   open,
   onClose,
@@ -213,36 +237,81 @@ export function CreateOfferDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, referrerName, referrerType])
 
-  // Fetch service catalog from DB when dialog opens
+  // Service list: read from the catalog every time the dialog opens and whenever this window is used again, so a
+  // service added or changed in another tab shows up here. A reply that cannot be trusted (expired login, error
+  // page) keeps the list already on screen; an older answer never overwrites a newer one. See lib/offers/catalog-refresh.ts.
+  const catalogSeq = useRef(0)
+  const lastCatalogReadAt = useRef(0)
+  const hasCatalog = useRef(false)
+  // The service ids on the list when "Add a new service" was pressed; null = not waiting for one.
+  const pendingNewService = useRef<string[] | null>(null)
+
+  const loadCatalog = useCallback(async (opts: { silent: boolean }): Promise<CatalogService[] | null> => {
+    const seq = ++catalogSeq.current
+    if (!opts.silent) setCatalogLoading(true)
+    try {
+      const res = await fetch('/api/service-catalog', { cache: 'no-store' })
+      const rows = parseServiceCatalogReply(res.ok, await res.json().catch(() => null))
+      if (!rows) {
+        if (!opts.silent) toast.error('Failed to load service catalog')
+        return null
+      }
+      const next = mapCatalogServices(rows)
+      lastCatalogReadAt.current = Date.now()
+      if (seq === catalogSeq.current) {
+        hasCatalog.current = true
+        setCatalog(next)
+      }
+      return next
+    } catch {
+      if (!opts.silent) toast.error('Failed to load service catalog')
+      return null
+    } finally {
+      if (!opts.silent) setCatalogLoading(false)
+    }
+  }, [])
+
+  // The "add a new service" switch (Dev Tools → Maintenance). OFF until staff turn it on: while it is off the dialog
+  // is what it always was — the list is read once, no button, no re-read before saving. Anything but a stored
+  // true means off. See lib/offers/add-service-switch.ts.
+  const [addServiceOn, setAddServiceOn] = useState(false)
+  const addServiceOnRef = useRef(false)
   useEffect(() => {
-    if (!open || catalog.length > 0) return
-    setCatalogLoading(true)
-    fetch('/api/service-catalog')
-      .then(r => r.json())
-      .then(d => {
-        const services = (d.services ?? []) as Array<Record<string, unknown>>
-        setCatalog(services.map(s => {
-          const ctx = s.default_service_context as string | null | undefined
-          return {
-            id: (s.slug as string) || (s.id as string),
-            slug: (s.slug as string) || '',
-            name: s.name as string,
-            description: (s.description as string | null) ?? null,
-            pipeline: (s.pipeline as string | null) ?? null,
-            contract_type: (s.contract_type as string | null) ?? null,
-            has_annual: (s.has_annual as boolean) ?? false,
-            category: (s.category as string) || 'addon',
-            default_price: s.default_price != null ? Number(s.default_price) : null,
-            default_currency: (s.default_currency as string | null) ?? null,
-            supports_quantity: (s.supports_quantity as boolean) ?? false,
-            default_service_context:
-              ctx === 'individual' || ctx === 'business' || ctx === 'ask' ? ctx : null,
-          }
-        }))
-      })
-      .catch(() => toast.error('Failed to load service catalog'))
-      .finally(() => setCatalogLoading(false))
-  }, [open, catalog.length])
+    if (!open) return
+    let cancelled = false
+    const apply = (on: boolean) => {
+      if (cancelled) return
+      addServiceOnRef.current = on
+      setAddServiceOn(on)
+    }
+    fetch(`/api/app-settings?key=${ADD_SERVICE_KEY}`, { cache: 'no-store' })
+      .then(async r => parseAddServiceSwitch(r.ok, await r.json().catch(() => null)))
+      .then(apply)
+      .catch(() => apply(false))
+    return () => { cancelled = true }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    // switch off = the list is read once, as before; on = read again every time the dialog opens
+    if (!addServiceOnRef.current && hasCatalog.current) return
+    void loadCatalog({ silent: hasCatalog.current })
+  }, [open, loadCatalog])
+
+  useEffect(() => {
+    if (!open || !addServiceOn) return
+    const onBack = () => {
+      if (document.visibilityState !== 'visible') return
+      if (Date.now() - lastCatalogReadAt.current < 2000) return
+      void loadCatalog({ silent: true })
+    }
+    window.addEventListener('focus', onBack)
+    document.addEventListener('visibilitychange', onBack)
+    return () => {
+      window.removeEventListener('focus', onBack)
+      document.removeEventListener('visibilitychange', onBack)
+    }
+  }, [open, addServiceOn, loadCatalog])
 
   const [language, setLanguage] = useState(
     clientLanguage === 'Italian' || clientLanguage === 'it' ? 'it' : 'en'
@@ -304,6 +373,29 @@ export function CreateOfferDialog({
 
   // Selected services with prices
   const [selected, setSelected] = useState<SelectedService[]>([])
+
+  // "Add a new service" opened the editor in another tab. When the fresh list holds exactly one service that was not
+  // there before, tick it. Decided by what is new, never by matching a name (lib/offers/catalog-refresh.ts).
+  useEffect(() => {
+    const before = pendingNewService.current
+    if (!before || catalog.length === 0) return
+    const decision = decideNewService(before, catalog.map(c => c.id))
+    if (decision.kind === 'waiting') return
+    pendingNewService.current = null
+    if (decision.kind === 'several') {
+      toast.info('More than one new service appeared. Tick the one you want in the list below.')
+      return
+    }
+    const svc = catalog.find(c => c.id === decision.id)
+    if (!svc) return
+    setSelected(prev => prev.some(s => s.id === svc.id) ? prev : [...prev, {
+      id: svc.id,
+      price: svc.default_price != null ? String(svc.default_price) : '',
+      quantity: 1,
+      service_context: svc.default_service_context ?? 'ask',
+    }])
+    toast.success(`“${svc.name}” was added to this offer. If it still needs steps or a contract, finish them in the other tab, then come back before you create the draft.`, { duration: 15000 })
+  }, [catalog])
 
   // Recurring costs (year 2+)
   const [installment1, setInstallment1] = useState('')
@@ -458,7 +550,15 @@ export function CreateOfferDialog({
   const closeDialog = () => {
     setPostCreateWarnings([])
     setCreatedToken(null)
+    pendingNewService.current = null
     onClose()
+  }
+
+  // "Add a new service": the full Service Catalog editor in a new tab. The list is remembered as it is now, so the
+  // new service can be told apart when the list is read again (the tick effect above).
+  const openNewServiceTab = () => {
+    pendingNewService.current = catalog.map(c => c.id)
+    window.open('/service-catalog/new', '_blank', 'noopener')
   }
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set())
   const [notesExpanded, setNotesExpanded] = useState(true)
@@ -1041,6 +1141,23 @@ export function CreateOfferDialog({
 
     startTransition(async () => {
       try {
+        // Read the catalog again before saving. A draft is saved with each service's job and contract type, so a
+        // list that went stale (a contract finished or a service switched off in another tab) would save the wrong ones.
+        // Only while the "add a new service" switch is on; off = saved from the list on screen, as it always was.
+        const fresh = addServiceOn ? await loadCatalog({ silent: true }) : null
+        if (fresh) {
+          const drift = selectedServicesDrift(selected.map(s => s.id), catalog, fresh)
+          const nameOf = (id: string) => (fresh.find(c => c.id === id) ?? catalog.find(c => c.id === id))?.name ?? id
+          if (drift.missing.length > 0) {
+            toast.error(`${drift.missing.map(nameOf).join(', ')} is no longer in the service list (switched off or removed). Untick it, then create the draft again.`, { duration: 15000 })
+            return
+          }
+          if (drift.changed.length > 0) {
+            toast.warning(`${drift.changed.map(nameOf).join(', ')} changed while you were working. The list has been refreshed. Check the offer, then create the draft again.`, { duration: 15000 })
+            return
+          }
+        }
+
         // Every ticked service is sold. No price = free / gift (Antonio 2026-09-27):
         // it stays on the offer as a €0 line, so the client sees it as included and
         // the service is created at payment like any other.
@@ -1625,6 +1742,24 @@ export function CreateOfferDialog({
               ))}
             </div>
           </div>
+
+          {/* The service is not in the list: add it in the full service editor (new tab), then come back.
+              Drawn only while the "add a new service" switch is on (Dev Tools → Maintenance). */}
+          {addServiceOn && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2">
+              <p className="text-xs text-zinc-600">
+                Is the service you need missing from this list? The service editor opens in a new tab. When you come back, the new service appears here and is ticked.
+              </p>
+              <button
+                type="button"
+                onClick={openNewServiceTab}
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-white px-3 py-1.5 text-xs font-medium hover:bg-zinc-100"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Add a new service
+              </button>
+            </div>
+          )}
 
           {/* Total */}
           {totalAmount > 0 && (
