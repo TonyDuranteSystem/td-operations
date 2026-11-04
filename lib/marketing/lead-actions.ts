@@ -46,7 +46,6 @@ export const leadActionSchema = z.discriminatedUnion("action", [
   // move a booked call or a call back to another day or time: the reason is REQUIRED (it goes in the history and in the notification); `from` is the old time, for the history line only
   z.object({ action: z.literal("reschedule"), target: z.enum(["appointment", "callback"]), at: z.string().min(10).max(40), reason: z.string().trim().min(1).max(200), note: note.optional(), from: z.string().max(40).nullable().optional() }),
   // the seller says whether the booked free call took place (3 Nov 2026): "it happened" (he then chooses a result) or "it did not happen" (he follows the lead up, or books the call again)
-  z.object({ action: z.literal("call_outcome"), happened: z.boolean() }),
   // a person sets the lead's time zone by hand (the phone number gave a wrong or no guess): kept in the history, the newest one wins (Addendum K)
   z.object({ action: z.literal("zone"), zone: z.string().max(64).refine(isValidZone, "Pick a real time zone.") }),
 ])
@@ -57,7 +56,7 @@ export function permissionFor(a: LeadActionInput["action"]): MarketingPermission
   // the seller's own buttons need the seller's right to pick leads (a setter has leads.mark but not leads.pick): the screen hides them from her, and the server refuses them too
   return a === "claim" || a === "release" || SELLER_ONLY_ACTIONS.has(a) ? "leads.pick" : "leads.mark"
 }
-const SELLER_ONLY_ACTIONS: ReadonlySet<string> = new Set(["not_ready", "closed", "not_closed", "call_outcome", "booking_link", "upsell", "waiting", "archive"])
+const SELLER_ONLY_ACTIONS: ReadonlySet<string> = new Set(["not_ready", "closed", "not_closed", "booking_link", "upsell", "waiting", "archive"])
 
 /** `callback_at` and `appointment_at` (the booked call that still stands) are only given when moving a call needs them. `seller` is the person whose calendar takes a call on this lead (only given when a call is being booked): booking the call makes the lead his. */
 export interface LeadFacts { claimed_by: string | null; status: string; seller?: { id: string; label: string | null } | null; callback_at?: string | null; appointment_at?: string | null; /** the stage the lead was in when its current call was booked (only read when the call is cancelled) */ booked_from?: string | null; /** who that booking handed the lead to (only read when the call is cancelled) */ booked_handed_to?: string | null }
@@ -232,12 +231,6 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
       if (!lead.callback_at || (lead.status !== s.outcomeStages.call_back && lead.status !== sellerOf(s).not_ready)) return fail(409, "This call back is no longer on this lead. Reload the calendar.")
       if (differs(lead.callback_at)) return fail(409, stale)
       return { ok: true, change: { patch: { callback_at: at.toISOString() }, event: { kind: "callback_moved", data: { callback_at: at.toISOString(), from, ...moved } } } }
-    }
-
-    case "call_outcome": {
-      // only a lead whose free call is still waiting for its answer (booked, or already shown): the answer is written in the history, the stage does not change
-      if (!["booked", "showed"].includes(lead.status)) return fail(409, "This lead is not waiting for the answer about its call any more. Reload the page.")
-      return { ok: true, change: { patch: {}, event: { kind: "call_outcome", data: { happened: input.happened } } } }
     }
 
     case "closed":

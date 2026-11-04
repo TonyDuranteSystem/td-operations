@@ -12,7 +12,7 @@ import { loadLeadActivity } from '@/lib/marketing/note-read'
 import { isSetterOnly } from '@/lib/marketing/lead-chat'
 import { setterActorsOf } from '@/lib/marketing/setter-view'
 import { contactChips, EMPTY_CONTACT } from '@/lib/marketing/contact-state'
-import { needsCallAnswer, type BoardCard } from '@/lib/marketing/board'
+import { callTimePassed, type BoardCard } from '@/lib/marketing/board'
 import type { SellerResultStages } from '@/lib/marketing/settings-schema'
 import { sellerOf } from '@/lib/marketing/lead-actions'
 import { LeadBoard } from '@/components/marketing/lead-board'
@@ -73,8 +73,7 @@ export default async function MarketingBoard() {
       note: seesNotes ? activity?.notes.get(l.id)?.text ?? null : null,
       ad: l.ad_name,
       existingClient: clientFlagText(l.existing_client) !== null,
-      callCheck: needsCallAnswer(l.status, contact.appointmentAt, now),
-      callAnswer: contact.callAnswer,
+      callPassed: callTimePassed(l.status, contact.appointmentAt, now),
       unread: unread.get(l.id)?.n ?? 0,
       incomingFrom: unread.get(l.id)?.from ?? null,
     }

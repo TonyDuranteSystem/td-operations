@@ -20,7 +20,7 @@ const btn = 'rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50
  * With the calendar switch on (Addendum K, B5) a call is booked from the seller's FREE SLOTS, shown in the lead's own time; the slot list carries start times only. If the seller's calendar cannot be
  * trusted no slot is offered and a plain message says so, and a time can still be typed. Every answer from the server is shown as the server wrote it.
  */
-export function HandoverPanel({ leadId, role, canAct, contact, zone, offer = null, callCheck = false }: { leadId: string; role: BoardRole; canAct: boolean; contact: ContactState; zone: ZoneInfo; /** the seller's free slots (null: the calendar switch is off, or there is no seller) */ offer?: SlotOffer | null; /** the call time has passed (or there is none) and the lead is still waiting for the seller's answer about the call */ callCheck?: boolean }) {
+export function HandoverPanel({ leadId, role, canAct, contact, zone, offer = null, callPassed = false }: { leadId: string; role: BoardRole; canAct: boolean; contact: ContactState; zone: ZoneInfo; /** the seller's free slots (null: the calendar switch is off, or there is no seller) */ offer?: SlotOffer | null; /** the call time has passed (or there is none) and the lead is still waiting for the seller's result */ callPassed?: boolean }) {
   const router = useRouter()
   const t = useT()
   const loc = localeFor(useLang())
@@ -71,19 +71,7 @@ export function HandoverPanel({ leadId, role, canAct, contact, zone, offer = nul
           ? <p className="mt-2 rounded-lg bg-sky-50 px-3 py-2 text-sky-900" data-testid="passed-no-date">{seller ? t('Passed to you, no call booked yet.') : t('Passed to Rocco, no call booked yet.')}</p>
           : <p className="mt-2 text-slate-500">{seller ? t('No call booked yet.') : t('Not passed to Rocco yet.')}</p>}
       {!seller && !contact.appointmentAt && !contact.handedOverAt && <p className="mt-1 text-xs text-slate-500">{t('Booking the call passes the lead to Rocco. It leaves your board and appears on his.')}</p>}
-      {seller && callCheck && canAct && (
-        <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-3" data-testid="call-check">
-          <p className="font-medium text-amber-900">{t('Did this call happen?')}</p>
-          {contact.callAnswer === 'happened' && <p className="mt-1 text-amber-900" data-testid="call-answer-happened">{t('You said the call happened. Choose a result below.')}</p>}
-          {contact.callAnswer === 'missed' && <p className="mt-1 text-amber-900" data-testid="call-answer-missed">{t('You said the call did not happen. Follow the lead up, or book the call again.')}</p>}
-          {contact.callAnswer === null && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button type="button" className={`${btn} bg-white`} disabled={busy} data-testid="call-happened" onClick={() => send({ action: 'call_outcome', happened: true })}>{t('It happened')}</button>
-              <button type="button" className={`${btn} bg-white`} disabled={busy} data-testid="call-not-happened" onClick={() => send({ action: 'call_outcome', happened: false })}>{t('It did not happen')}</button>
-            </div>
-          )}
-        </div>
-      )}
+      {seller && callPassed && canAct && <p className="mt-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-red-900" data-testid="call-passed">{t('The call time has passed. Choose a result below, or follow the lead up.')}</p>}
       {(contact.appointmentNote ?? contact.handoverNote) && <p className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-slate-50 px-3 py-2 text-slate-800" data-testid="handover-note"><span className="text-xs text-slate-500">{t('Note from the setter')}</span><br />{contact.appointmentNote ?? contact.handoverNote}</p>}
       {warn && <p role="status" className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-900" data-testid="calendar-warning">{warn}</p>}
 

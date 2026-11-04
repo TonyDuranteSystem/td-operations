@@ -11,7 +11,7 @@ import { SetterNoteBlock } from '@/components/marketing/setter-note-block'
 import { ContactPanel } from '@/components/marketing/contact-panel'
 import { contactState } from '@/lib/marketing/contact-state'
 import { messageSigner, templatesFor, type TeamTemplates } from '@/lib/marketing/templates'
-import { boardRole, needsCallAnswer, type BoardRole } from '@/lib/marketing/board'
+import { boardRole, callTimePassed, type BoardRole } from '@/lib/marketing/board'
 import { HandoverPanel } from '@/components/marketing/handover-panel'
 import { getLang } from '@/lib/marketing/lang'
 import { localeFor, makeT } from '@/lib/marketing/i18n'
@@ -132,7 +132,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
 
       {role === 'setter' && <ContactPanel leadId={lead.id} canAct={canAct} contact={contact} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} setterName={signer} templates={templates} canEditTemplates={isOwner} canWhatsApp={hasPermission(permissions, 'whatsapp')} />}
 
-      <HandoverPanel leadId={lead.id} role={role} canAct={canBook} contact={contact} zone={zoneInfo} offer={offer} callCheck={needsCallAnswer(lead.status, contact.appointmentAt, new Date())} />
+      <HandoverPanel leadId={lead.id} role={role} canAct={canBook} contact={contact} zone={zoneInfo} offer={offer} callPassed={callTimePassed(lead.status, contact.appointmentAt, new Date())} />
 
       <LeadActionPanel
         leadId={lead.id}
