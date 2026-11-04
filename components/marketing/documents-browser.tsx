@@ -1,6 +1,5 @@
 'use client'
 
-import { viewKindFor } from '@/lib/crm-store/view-html'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useT, useLang } from '@/components/marketing/lang-provider'
 import { uploadDocument } from '@/components/marketing/documents-upload'
@@ -27,8 +26,8 @@ const post = <T,>(url: string, body: unknown, fallback: string, method = 'POST')
  * TD Marketing — Documents (dev job 9aec66fa): the team's documents, kept in the firm's Business storage in a folder called Marketing. Open a folder, upload (button or drag), download, rename, put a new
  * version of a document in place of the old one (the old one is kept), delete (to the storage's trash). A person who may only read sees no change buttons.
  */
-/** What can be opened in the page: what the browser shows by itself (PDF, pictures, plain text) plus what the CRM storage's simplified view can turn into a page (Word, Excel, text-like files). Everything else downloads. */
-const canView = (name: string, mime: string | null) => ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'text/plain'].includes((mime ?? '').split(';')[0].trim().toLowerCase()) || viewKindFor(name, mime) !== null
+/** Every document opens in the page: what the browser shows by itself (PDF, pictures, plain text) or the CRM storage's simplified view (Word, Excel, PowerPoint, text, zip …, and a details page for anything it cannot draw). */
+const canView = (_name: string, _mime: string | null) => true
 
 export function DocumentsBrowser({ canManage }: { canManage: boolean }) {
   const t = useT()
