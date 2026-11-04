@@ -17,6 +17,8 @@ import { combineHistory, earlierCursor, EARLIER_PAGE, MAX_JUMP_PAGES, mergeEarli
 import { applyUnreadIndicators, clearUnreadIndicators, previewLine, unreadTotal } from '@/lib/talk/list-preview'
 import { leavingLosesRecording, SEND_BEFORE_LEAVING_TIMEOUT_MS, stayAfterVoice, type RecordingControl, type VoiceOutcome } from '@/lib/talk/recording-guard'
 import { useChatOutbox } from '@/components/talk/use-chat-outbox'
+import { useChatActions } from '@/components/talk/use-chat-actions'
+import { actionVerb, hasMyReaction, overlayActions, type ChatAction } from '@/lib/talk/outbox-actions-rules'
 import {
   chatName, chatThreads, directMessages, groupMemberNames, initials, isGroupThread, matchMessages, membersWithoutChat, mergeSnapshot, messageSignature, otherUserId, parseTypingSignal, readStatus, tickState, tickStateAll, shouldAnnounceTyping, snippet, startThreadId, timeLabel, dayLabel, typingLabel, TYPING_EXPIRES_MS,
   type TalkMember, type TalkMessage, type TalkReaction, type TalkThread, type TypingKind,
@@ -79,6 +81,8 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const olderRef = useRef<TalkMessage[]>([])
   const windowRef = useRef<TalkMessage[]>([])
+  // counts the changes that reached the server (a kept edit/delete/reaction confirmed or refused): a refresh that STARTED before one must not overwrite it with its older answer
+  const changeSeqRef = useRef(0)
   const hasMoreRef = useRef(false)
   const loadingEarlierRef = useRef(false)
   const [peerReadAt, setPeerReadAt] = useState<string | null>(null)
@@ -118,7 +122,13 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   selectedIdRef.current = selectedId
   meIdRef.current = meId
   threadsRef.current = threads
-  const shown = useMemo(() => combineHistory(older, messages), [older, messages])
+  // changes to messages already sent (edit / delete / react) are kept on the phone until the server has them; the screen lays them over the real messages
+  const actionDoneRef = useRef<(a: ChatAction, result: unknown) => void>(() => {})
+  const actionFailedRef = useRef<(a: ChatAction, error: string) => void>(() => {})
+  const actions = useChatActions({ threadId: selectedId, userId: meId, onDone: (a, r) => actionDoneRef.current(a, r), onFailed: (a, e) => actionFailedRef.current(a, e) })
+  const queueAction = actions.queue
+  const meName = members.find(m => m.id === meId)?.name ?? 'You'
+  const shown = useMemo(() => overlayActions(combineHistory(older, messages), actions.waiting, meId ? { id: meId, name: meName } : null), [older, messages, actions.waiting, meId, meName])
   messagesRef.current = shown
   olderRef.current = older
   windowRef.current = messages
@@ -152,11 +162,13 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   // opens a conversation's messages. `markRead` follows the READ RULE (only while the app is on screen).
   const loadMessages = useCallback(async (threadId: string, opts: { silent?: boolean } = {}) => {
     if (!opts.silent) setLoadingMsgs(true)
+    const seq = changeSeqRef.current
     try {
       const r = await fetch(`/api/team/threads/${threadId}${isBeingViewed() ? '' : '?mark_read=0'}`)
       if (!r.ok) throw new Error('Could not load this chat.')
       const d = await r.json()
       if (selectedIdRef.current !== threadId) return // switched chats while loading
+      if (opts.silent && seq !== changeSeqRef.current) return // a kept change was confirmed while this refresh was on its way: its answer is older than what is on screen; the next refresh brings the truth
       const incoming = (d.messages ?? []) as TalkMessage[]
       // the live window slides forward when new messages arrive: what slid out must not fall into a gap between the older pages and the window
       if (olderRef.current.length > 0) {
@@ -394,17 +406,13 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     setOlder(prev => prev.some(m => m.id === id) ? prev.map(m => m.id === id ? { ...m, ...patch } : m) : prev)
   }, [])
 
+  // A reaction is kept on the phone and sent as soon as it can be (Batch 3): the wish ("on" / "off") is worked out from what is drawn right now, so a reaction sent twice can never flip back.
   const react = useCallback(async (m: TalkMessage, emoji: string) => {
     setSheetMsg(null)
-    try {
-      const r = await fetch(`/api/team/messages/${m.id}/react`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emoji }) })
-      const d = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(d.error || 'Could not react.')
-      if (Array.isArray(d.reactions)) applyToMessage(m.id, { reactions: d.reactions as TalkReaction[] })
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not react.')
-    }
-  }, [applyToMessage])
+    const current = messagesRef.current.find(x => x.id === m.id) ?? m
+    const ok = await queueAction({ kind: 'react', messageId: m.id, emoji, on: !hasMyReaction(current, emoji, meIdRef.current ?? '') })
+    if (!ok) toast.error('Could not keep your reaction on this device. Please try again.')
+  }, [queueAction])
 
   const copyText = useCallback(async (m: TalkMessage) => {
     setSheetMsg(null)
@@ -418,32 +426,35 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     try { await navigator.clipboard.writeText(url); toast.success('Link copied.') } catch { toast.error('Could not copy.') }
   }, [base])
 
+  // Edit and delete are kept on the phone too: they show at once and reach the server as soon as the connection allows (a refusal is told to the person and the chat is reloaded).
   const edit = useCallback(async (id: string, text: string): Promise<boolean> => {
     if (!text.trim()) { toast.error('A message cannot be empty. Delete it instead.'); return false }
-    try {
-      const r = await fetch(`/api/team/messages/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text }) })
-      const d = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(d.error || 'Could not edit the message.')
-      if (d.message) applyToMessage(id, { message: d.message.message, edited_at: d.message.edited_at })
-      return true
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not edit the message.')
-      return false
-    }
-  }, [applyToMessage])
+    const ok = await queueAction({ kind: 'edit', messageId: id, text })
+    if (!ok) toast.error('Could not keep your edit on this device. Please try again.')
+    return ok
+  }, [queueAction])
 
   const remove = useCallback(async (m: TalkMessage) => {
     setSheetMsg(null)
-    try {
-      const r = await fetch(`/api/team/messages/${m.id}`, { method: 'DELETE' })
-      const d = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(d.error || 'Could not delete the message.')
-      applyToMessage(m.id, { deleted_at: new Date().toISOString() })
-      setMode(cur => cur && cur.message.id === m.id ? null : cur)
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not delete the message.')
-    }
-  }, [applyToMessage])
+    const ok = await queueAction({ kind: 'delete', messageId: m.id })
+    if (!ok) { toast.error('Could not keep the delete on this device. Please try again.'); return }
+    setMode(cur => cur && cur.message.id === m.id ? null : cur)
+  }, [queueAction])
+
+  // what the server answered for a kept change: it replaces the overlay with the real thing (only for the open chat; another chat reads the server when it is opened)
+  actionDoneRef.current = (a, result) => {
+    changeSeqRef.current += 1
+    if (selectedIdRef.current !== a.threadId) return
+    const d = (result ?? {}) as { reactions?: TalkReaction[]; message?: { message: string; edited_at: string | null } }
+    if (a.kind === 'react' && Array.isArray(d.reactions)) applyToMessage(a.messageId, { reactions: d.reactions })
+    else if (a.kind === 'edit' && d.message) applyToMessage(a.messageId, { message: d.message.message, edited_at: d.message.edited_at })
+    else if (a.kind === 'delete') applyToMessage(a.messageId, { deleted_at: new Date().toISOString() })
+  }
+  actionFailedRef.current = (a, error) => {
+    changeSeqRef.current += 1
+    toast.error(`Could not ${actionVerb(a)}: ${error}`)
+    if (selectedIdRef.current === a.threadId) void loadMessages(a.threadId, { silent: true })
+  }
 
   // One page of OLDER messages ("Load earlier messages"). Resolves with the page that was added (an empty list when there is nothing older), or null when it failed or was not needed.
   const loadEarlier = useCallback(async (): Promise<TalkMessage[] | null> => {

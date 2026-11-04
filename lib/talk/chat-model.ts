@@ -75,6 +75,8 @@ export interface TalkMessage {
   on_behalf_of_user_id?: string | null
   /** Only on a message still in the phone's outbox (never sent by the server): `sending` = on its way, `waiting` = no connection, will send by itself, `failed` = refused, needs Retry / Delete. */
   local?: { state: 'sending' | 'waiting' | 'failed'; error?: string; files: { name: string; voice: boolean }[] }
+  /** Set only on screen (`overlayActions`): a change to this message (edit, delete, reaction) is kept on the phone and not on the server yet. */
+  pending?: boolean
 }
 
 export function isGroupThread(t: Pick<TalkThread, 'thread_type'>): boolean {
