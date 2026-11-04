@@ -186,6 +186,9 @@ function slugify(input: string): string {
  * Replaces all pipeline_stages for the service's pipeline name.
  */
 export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResult> {
+  // Set the moment a NEW service row exists. A failure after that point still reports the service, so the editor
+  // can open it for editing instead of trying to create it a second time (lib/services/save-outcome.ts).
+  let created: { id: string; slug: string } | null = null
   try {
     const admin = await requireAdmin()
     const who = settingsActor(admin.email, "app:service-editor")
@@ -356,6 +359,7 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
       }
       serviceId = data.id
       serviceSlug = data.slug
+      created = { id: data.id, slug: data.slug }
     }
 
     // Stages — only persist when a pipeline name is set. Services without a
@@ -379,7 +383,7 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
       })
       if (!result.ok && result.issues) workflowIssues = result.issues
       if (!result.ok && !result.issues) {
-        return { ok: false, error: result.error ?? "Workflow save failed" }
+        return { ok: false, error: result.error ?? "Workflow save failed", service: created ?? undefined }
       }
     }
 
@@ -396,7 +400,7 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
       warnings: warnings.length > 0 ? warnings : undefined,
     }
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    return { ok: false, error: err instanceof Error ? err.message : String(err), service: created ?? undefined }
   }
 }
 
