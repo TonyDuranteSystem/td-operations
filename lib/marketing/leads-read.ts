@@ -46,7 +46,7 @@ export interface LeadFilters {
   /** "free" = nobody picked it; "mine" = picked by this user; "callbacks" = has a call back date */
   show?: "all" | "free" | "mine" | "callbacks"
   userId?: string
-  /** "oldest" = the lead waiting longest first (the "Not picked yet" view: the overdue ones must never fall off a 500 cap) */
+  /** "oldest" = the lead waiting longest first (the "With the setter" view: the overdue ones must never fall off a 500 cap) */
   order?: "newest" | "oldest" | "callback"
 }
 export const NO_AD = "__none__"

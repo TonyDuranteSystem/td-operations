@@ -4,7 +4,8 @@
  *   whatsapp  { state: "sent" | "no_wa", template?: string }     the opening message went out / the number has no WhatsApp
  *   attempt   { result: "no_answer", via: "whatsapp" | "call" }   one try that got no answer (each one counts once)
  *   appointment { at: ISO | null }                               a call booked with the seller; at = null cancels it
- *   handover  { note?: string }                                  the setter passed an in-target lead to the seller, with no call booked yet
+ *   handover  { note?: string }                                  (old) the setter passed an in-target lead to the seller, with no call booked; no longer made since 3 Nov 2026 but old rows still read
+ *   call_outcome { happened: boolean }                            the seller's answer about the booked free call; an answer older than the newest booking does not count
  * "Contacted" has ONE definition: a WhatsApp was sent, or somebody tried (an attempt), or an outcome was recorded.
  */
 import { makeT, type TFn } from "@/lib/marketing/i18n"
@@ -23,6 +24,10 @@ export interface ContactState {
   handedOverAt: string | null
   /** what the setter wrote with the pass (only present for people who may read notes) */
   handoverNote: string | null
+  /** what the setter wrote when she booked the call that still stands: the seller reads it before he calls (only present for people who may read notes) */
+  appointmentNote: string | null
+  /** the seller's answer about the booked call (3 Nov 2026), or null when nobody answered yet, or a new call was booked after the answer */
+  callAnswer: "happened" | "missed" | null
   /** somebody has reached out in some way */
   contacted: boolean
 }
@@ -30,7 +35,7 @@ export interface ContactState {
 const real = (e: ContactEvent) => e.data?.via_view_as !== true
 const isOutcome = (e: ContactEvent) => e.kind === "status_changed" && typeof e.data?.outcome === "string"
 
-export const EMPTY_CONTACT: ContactState = { whatsapp: null, whatsappAt: null, attempts: 0, lastAttemptAt: null, appointmentAt: null, handedOverAt: null, handoverNote: null, contacted: false }
+export const EMPTY_CONTACT: ContactState = { whatsapp: null, whatsappAt: null, attempts: 0, lastAttemptAt: null, appointmentAt: null, handedOverAt: null, handoverNote: null, appointmentNote: null, callAnswer: null, contacted: false }
 
 /** The contact state of ONE lead from its history rows, in any order. */
 export function contactState(events: readonly ContactEvent[]): ContactState {
@@ -47,7 +52,11 @@ export function contactState(events: readonly ContactEvent[]): ContactState {
     } else if (e.kind === "appointment") {
       const at = e.data?.at
       out.appointmentAt = typeof at === "string" && !Number.isNaN(Date.parse(at)) ? at : null
+      out.callAnswer = null // a new booking (or a cancel) starts the question again
+      out.appointmentNote = out.appointmentAt && typeof e.data?.note === "string" && e.data.note.trim() ? e.data.note.trim() : null
       if (out.appointmentAt) out.contacted = true
+    } else if (e.kind === "call_outcome") {
+      out.callAnswer = e.data?.happened === true ? "happened" : e.data?.happened === false ? "missed" : null
     } else if (e.kind === "handover") {
       out.handedOverAt = e.created_at
       out.handoverNote = typeof e.data?.note === "string" && e.data.note.trim() ? e.data.note.trim() : null
@@ -74,5 +83,6 @@ export function contactChips(s: ContactState, fmtWhen: (iso: string) => string, 
   if (s.attempts > 0) chips.push({ key: "nr", text: t("No answer ×{n}", { n: s.attempts }), tone: "warn" })
   if (s.appointmentAt) chips.push({ key: "appt", text: t("Call {when}", { when: fmtWhen(s.appointmentAt) }), tone: "info" })
   else if (s.handedOverAt) chips.push({ key: "handover", text: t("Passed to Rocco"), tone: "info" })
+  if (s.callAnswer === "missed") chips.push({ key: "call-missed", text: t("Call did not happen"), tone: "warn" })
   return chips
 }

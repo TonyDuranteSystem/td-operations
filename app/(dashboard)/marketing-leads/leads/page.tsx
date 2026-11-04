@@ -95,7 +95,7 @@ export default async function AllLeadsPage({ searchParams }: { searchParams: Pro
                   {selected.email && <p><span className="text-slate-500">Email: </span><a className="underline" href={`mailto:${selected.email}`}>{selected.email}</a></p>}
                   {(selected.city || selected.country) && <p><span className="text-slate-500">Place: </span>{[selected.city, selected.country].filter(Boolean).join(", ")}</p>}
                   <p><span className="text-slate-500">Team: </span>{selected.team_id ? teamName.get(selected.team_id) ?? "Unknown team" : "none yet"}</p>
-                  <p><span className="text-slate-500">Picked by: </span>{selected.claimed_by_label ?? "nobody"}{selected.claimed_at && ` (${formatWhen(selected.claimed_at)})`}</p>
+                  <p><span className="text-slate-500">With: </span>{selected.claimed_by_label ?? "the setter"}{selected.claimed_at && ` (${formatWhen(selected.claimed_at)})`}</p>
                   {selected.callback_at && <p><span className="text-slate-500">Call back: </span><b>{formatWhen(selected.callback_at)}</b></p>}
                   {selected.not_in_target_reason && <p><span className="text-slate-500">Not in target because: </span>{reasons.find(r => r.key === selected.not_in_target_reason)?.label ?? selected.not_in_target_reason}</p>}
                 </div>

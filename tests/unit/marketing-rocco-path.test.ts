@@ -5,7 +5,7 @@ import { isSetterOnly, visibleToSetter, pushRecipients } from "@/lib/marketing/l
 import { MARKETING_SETTING_DEFS } from "@/lib/marketing/settings-schema"
 import { eventText } from "@/lib/marketing/lead-view"
 
-// The call of 27 Oct 2026 (Rocco and Antonio): Interested lead -> Contacted -> Link sent -> Paid -> Booking link sent -> Upsell / Waiting -> Archived; Not in target and Not ready now are the ways out.
+// The call of 27 Oct 2026 (Rocco and Antonio): Calls prenotate (3 Nov 2026: booking the free call is the hand-over; no Contacted step) -> Link sent -> Paid -> Booking link sent -> Upsell / Waiting -> Archived; Not in target and Not ready now are the ways out.
 const stages = MARKETING_SETTING_DEFS.pipeline_stages.fallback
 const settings: ActionSettings = {
   stages,
@@ -41,28 +41,15 @@ describe("Rocco's path: the stages exist and are in the order of the path", () =
     for (const k of ["new", "contacted", "qualified", "booked", "showed", "not_in_target"]) expect(onSellerSide(k, settings), k).toBe(false)
   })
   it("the seller's buttons need the seller's right (leads.pick), the setter's keep leads.mark", () => {
-    for (const a of ["contacted", "booking_link", "upsell", "waiting", "archive", "not_ready", "closed", "not_closed"] as const) expect(permissionFor(a), a).toBe("leads.pick")
-    for (const a of ["good", "call_back", "not_in_target", "note", "whatsapp", "appointment", "handover"] as const) expect(permissionFor(a), a).toBe("leads.mark")
+    for (const a of ["call_outcome", "booking_link", "upsell", "waiting", "archive", "not_ready", "closed", "not_closed"] as const) expect(permissionFor(a), a).toBe("leads.pick")
+    for (const a of ["good", "call_back", "not_in_target", "note", "whatsapp", "appointment"] as const) expect(permissionFor(a), a).toBe("leads.mark")
   })
 })
 
-describe("Contacted", () => {
-  it("moves an interested lead to Contacted and writes it in the history", () => {
-    const p = plan({ action: "contacted", note: "spoke on the phone" }, "booked")
-    expect(p.ok && p.change.patch).toMatchObject({ status: "seller_contacted" })
-    expect(p.ok && p.change.event).toMatchObject({ kind: "status_changed", data: { from: "booked", to: "seller_contacted", outcome: "contacted", note: "spoke on the phone" } })
-  })
-  it("refuses twice in a row, a lead already paid and a lead marked Not in target", () => {
-    expect(plan({ action: "contacted" }, "seller_contacted")).toMatchObject({ ok: false, status: 409 })
-    expect(plan({ action: "contacted" }, "paid_call")).toMatchObject({ ok: false, status: 409 })
-    expect(plan({ action: "contacted" }, "booking_link")).toMatchObject({ ok: false, status: 409 })
-    expect(plan({ action: "contacted" }, "not_in_target")).toMatchObject({ ok: false, status: 409 })
-  })
-  it("a lead archived without paying can be worked again (it is not a dead end)", () => {
-    expect(plan({ action: "contacted" }, "archived")).toMatchObject({ ok: true, change: { patch: { status: "seller_contacted" } } })
-  })
-  it("a lead that was Not ready now can be contacted again", () => {
-    expect(plan({ action: "contacted" }, "not_ready")).toMatchObject({ ok: true, change: { patch: { status: "seller_contacted", callback_at: null } } })
+describe("the seller's Contacted step is gone (3 Nov 2026)", () => {
+  it("the action no longer exists: booking the free call is what makes the lead his", () => {
+    expect(leadActionSchema.safeParse({ action: "contacted" }).success).toBe(false)
+    expect(leadActionSchema.safeParse({ action: "handover" }).success).toBe(false)
   })
 })
 
@@ -113,7 +100,11 @@ describe("Upsell, Waiting, Archive", () => {
       expect(plan({ action: "call_back", callbackAt: "2026-10-28T10:00:00Z" }, status), status).toMatchObject({ ok: false, status: 409 })
     }
     expect(plan({ action: "good", ticked: [] }, "contacted")).toMatchObject({ ok: true })
-    expect(plan({ action: "call_back", callbackAt: "2026-10-28T10:00:00Z" }, "booked")).toMatchObject({ ok: true })
+    // a lead whose free call is booked is already Rocco's: the setter's Good / Call back later no longer pull it back to her
+    for (const status of ["booked", "showed"]) {
+      expect(plan({ action: "good", ticked: [] }, status), status).toMatchObject({ ok: false, status: 409 })
+      expect(plan({ action: "call_back", callbackAt: "2026-10-28T10:00:00Z" }, status), status).toMatchObject({ ok: false, status: 409 })
+    }
   })
   it("after the consultation Not in target is still possible", () => {
     expect(plan({ action: "not_in_target", reason: "other" }, "booking_link")).toMatchObject({ ok: true, change: { patch: { status: "not_in_target" } } })
@@ -121,7 +112,7 @@ describe("Upsell, Waiting, Archive", () => {
 })
 
 describe("the board: a new message never moves a card, and the setter's columns", () => {
-  const card = (stage: string, o: Partial<BoardCard> = {}): Pick<BoardCard, "stage" | "handedOver"> & { unread?: number } => ({ stage, handedOver: true, ...o })
+  const card = (stage: string, o: Partial<BoardCard> = {}): Pick<BoardCard, "stage" | "callCheck"> & { unread?: number } => ({ stage, callCheck: false, ...o })
   it("an unread message never changes the column of a card (Antonio, 28 Oct 2026: the card keeps its stage and blinks)", () => {
     expect(columnOfCard("seller", card("booked"))).toBe("booked")
     expect(columnOfCard("seller", card("closed"))).toBe("closed")
@@ -129,14 +120,14 @@ describe("the board: a new message never moves a card, and the setter's columns"
     expect(columnOfCard("seller", card("paid_call"))).toBe("paid")
   })
   it("a lead that is not on his board stays off it, unread or not", () => {
-    expect(columnOfCard("seller", card("qualified", { handedOver: false }))).toBeNull()
+    expect(columnOfCard("seller", card("qualified"))).toBeNull() // in target but no call booked: still the setter's
     expect(columnOfCard("seller", card("new"))).toBeNull()
   })
-  it("the setter's board has no Incoming column and no Paid; her last column is Interested lead", () => {
+  it("the setter's board has no Incoming column, no Paid and no Interested lead (a booked lead leaves her board)", () => {
     expect(columnsFor("setter").map(c => c.key)).not.toContain("incoming")
     expect(columnsFor("setter").map(c => c.key)).not.toContain("paid")
-    expect(columnsFor("setter").find(c => c.key === "booked")?.label).toBe("Interested lead")
-    expect(columnOfCard("setter", card("booked", { unread: 4 }))).toBe("booked")
+    expect(columnsFor("setter").map(c => c.key)).not.toContain("booked")
+    expect(columnOfCard("setter", card("booked", { unread: 4 }))).toBeNull()
   })
 })
 

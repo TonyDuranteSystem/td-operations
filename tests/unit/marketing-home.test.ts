@@ -16,7 +16,7 @@ describe("owner Home — the four numbers", () => {
       leads: [lead("a", "new", { received_at: hoursAgo(2) }), lead("b", "new", { received_at: hoursAgo(30) }), lead("c", "booked"), lead("d", "seller_contacted"), lead("e", "closed"), lead("f", "paid_call"), lead("g", "qualified")],
       events: [ev("e", "payment_link_created", hoursAgo(1), { sale_id: "s1" }), ev("e", "payment_link_created", hoursAgo(1), { sale_id: "s1" }), ev("f", "payment_received", hoursAgo(2), { sale_id: "s2" }), ev("f", "payment_received", hoursAgo(40), { sale_id: "s0" })],
     })
-    expect(m.numbers).toEqual({ newToday: 1, withSeller: 3, linksToday: 1, paidToday: 1 })
+    expect(m.numbers).toEqual({ newToday: 1, withSeller: 2, linksToday: 1, paidToday: 1 }) // booked + link sent; "seller_contacted" is no longer a column of his
   })
   it("never counts a lead the setter has not passed on (qualified) as with Rocco", () => {
     expect(homeModel({ ...base, leads: [lead("g", "qualified")] }).numbers.withSeller).toBe(0)

@@ -150,7 +150,7 @@ export default async function MarketingLeads({ searchParams }: { searchParams: P
                       <p className="mt-1 text-xs text-slate-500">
                         {fw(l.meta_created_time ?? l.received_at)}
                         {f.waiting && <span className={f.waiting.late ? 'font-medium text-red-700' : 'text-slate-600'} data-testid="waiting" data-late={f.waiting.late ? '1' : '0'}>{t(' · waiting {text}', { text: lang === 'it' ? f.waiting.text.replace(/ d$/, ' g') : f.waiting.text })}{f.waiting.late ? t(' (late)') : ''}</span>}
-                        {' · '}{l.claimed_by === null ? t('Not picked') : l.claimed_by === g.ctx.user.id ? t('Picked by you') : t('Picked by {name}', { name: l.claimed_by_label ?? t('a team member') })}
+                        {' · '}{l.claimed_by === null ? t('With the setter') : l.claimed_by === g.ctx.user.id ? t('With you') : t('With {name}', { name: l.claimed_by_label ?? t('a team member') })}
                         {l.callback_at && <span className="text-sky-700">{t(' · Call back {when}', { when: fw(l.callback_at) })}</span>}
                       </p>
                       {(f.ad || mark) && <p className="mt-0.5 truncate text-xs text-slate-500">{f.ad}{mark && <span data-testid="row-mark">{f.ad ? ' · ' : ''}{t('Marked {mark} by {by}', { mark: t(markWords(mark.outcome)).toLowerCase(), by: mark.by })}</span>}</p>}

@@ -12,7 +12,7 @@ import { loadLeadActivity } from '@/lib/marketing/note-read'
 import { isSetterOnly } from '@/lib/marketing/lead-chat'
 import { setterActorsOf } from '@/lib/marketing/setter-view'
 import { contactChips, EMPTY_CONTACT } from '@/lib/marketing/contact-state'
-import type { BoardCard } from '@/lib/marketing/board'
+import { needsCallAnswer, type BoardCard } from '@/lib/marketing/board'
 import type { SellerResultStages } from '@/lib/marketing/settings-schema'
 import { sellerOf } from '@/lib/marketing/lead-actions'
 import { LeadBoard } from '@/components/marketing/lead-board'
@@ -56,6 +56,7 @@ export default async function MarketingBoard() {
   const activity = leads.length > 0 ? await loadLeadActivity(db, leads.map(l => l.id), onlyBy) : null
   const zone = await loadViewerZone(g.ctx)
   const fw = (iso: string | null | undefined) => formatWhen(iso, zone, localeFor(lang))
+  const now = new Date()
   const cards: BoardCard[] = leads.map(l => {
     const contact = activity?.contact.get(l.id) ?? EMPTY_CONTACT
     return {
@@ -68,11 +69,12 @@ export default async function MarketingBoard() {
       apptAt: contact.appointmentAt,
       arrivedMs: new Date(l.meta_created_time ?? l.received_at).getTime(),
       chips: [...contactChips(contact, iso => fw(iso), t), ...(l.status === sellerStages.not_ready && l.callback_at ? [{ key: 'come-back', text: t('Come back {when}', { when: fw(l.callback_at) }), tone: 'info' as const }] : [])],
-      pickedText: l.claimed_by === null ? t('Not picked') : l.claimed_by === userId ? t('Picked by you') : t('Picked by {name}', { name: l.claimed_by_label ?? t('a team member') }),
+      withText: l.claimed_by === null ? t('With the setter') : l.claimed_by === userId ? t('With you') : t('With {name}', { name: l.claimed_by_label ?? t('a team member') }),
       note: seesNotes ? activity?.notes.get(l.id)?.text ?? null : null,
       ad: l.ad_name,
       existingClient: clientFlagText(l.existing_client) !== null,
-      handedOver: contact.handedOverAt !== null,
+      callCheck: needsCallAnswer(l.status, contact.appointmentAt, now),
+      callAnswer: contact.callAnswer,
       unread: unread.get(l.id)?.n ?? 0,
       incomingFrom: unread.get(l.id)?.from ?? null,
     }

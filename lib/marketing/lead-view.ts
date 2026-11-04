@@ -45,7 +45,7 @@ export function telHref(phone: string | null | undefined): string | null {
 
 export type LeadShow = "all" | "free" | "mine" | "callbacks"
 export const LEAD_SHOW_OPTIONS: ReadonlyArray<{ key: LeadShow; label: string }> = [
-  { key: "all", label: "All" }, { key: "free", label: "Not picked yet" }, { key: "mine", label: "Picked by me" }, { key: "callbacks", label: "Call backs" },
+  { key: "all", label: "All" }, { key: "free", label: "With the setter" }, { key: "mine", label: "With me" }, { key: "callbacks", label: "Call backs" },
 ]
 export function parseLeadShow(v: string | string[] | undefined): LeadShow {
   const s = Array.isArray(v) ? v[0] : v
@@ -79,7 +79,7 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
     case "assigned": return t("Assigned to {team}", { team: typeof data.team_name === "string" ? data.team_name : t("a team") })
     case "details_filled": return t("Name, email and phone filled in from the form answers")
     case "given": return t("Given to {name} by Antonio", { name: typeof data.to_name === "string" ? data.to_name : t("a person") })
-    case "claimed": return t("Picked")
+    case "claimed": return t("Handed to the seller")
     case "released": return t("Given back")
     case "note": return t("Note: {text}", { text: typeof data.text === "string" ? data.text : "" })
     case "whatsapp": return `${data.state === "no_wa" ? t("No WhatsApp on this number") : data.state === "opened" ? t("WhatsApp Web opened") : t("WhatsApp sent")}${note}`
@@ -88,6 +88,7 @@ export function eventText(kind: string, data: Record<string, unknown>, stages: r
       return data.at ? `${t("Call booked for {when}", { when: fw(typeof data.at === "string" ? data.at : null) })}${note}` : `${t("Booked call cancelled")}${note}`
     case "callback_moved": return `${t("Call back moved to {when}. Reason: {reason}", { when: fw(typeof data.callback_at === "string" ? data.callback_at : null), reason: t(String(data.reason ?? "")) })}${note}`
     case "handover": return `${t("Passed to Rocco, no call booked yet")}${note}`
+    case "call_outcome": return data.happened === true ? t("The call happened") : t("The call did not happen")
     case "calendar_synced": return data.removed === true ? t("The call was taken off the seller's calendar") : t("The call was written into the seller's calendar")
     case "calendar_sync_failed": return t("The call is saved, but the seller's calendar was not updated: {message}", { message: typeof data.message === "string" ? data.message : "—" })
     case "zone_set": return t("Time zone set to {zone}", { zone: typeof data.zone === "string" ? zoneName(data.zone) : "—" })

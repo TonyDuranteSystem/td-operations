@@ -11,7 +11,7 @@ import { SetterNoteBlock } from '@/components/marketing/setter-note-block'
 import { ContactPanel } from '@/components/marketing/contact-panel'
 import { contactState } from '@/lib/marketing/contact-state'
 import { messageSigner, templatesFor, type TeamTemplates } from '@/lib/marketing/templates'
-import { boardRole, type BoardRole } from '@/lib/marketing/board'
+import { boardRole, needsCallAnswer, type BoardRole } from '@/lib/marketing/board'
 import { HandoverPanel } from '@/components/marketing/handover-panel'
 import { getLang } from '@/lib/marketing/lang'
 import { localeFor, makeT } from '@/lib/marketing/i18n'
@@ -78,6 +78,8 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
   const custom = lead.team_id ? ((await getMarketingSetting('team_templates', lead.team_id)) as TeamTemplates) : {}
   const templates = templatesFor(lang, overrides, custom)
   const canAct = hasPermission(permissions, 'leads.mark') && !(claim === 'other' && !isOwner)
+  // booking, moving or cancelling the free call stays open to everybody who may mark leads, picked or not (3 Nov 2026: booking the call picks the lead for the seller, and the setter must still be able to fix her own booking)
+  const canBook = hasPermission(permissions, 'leads.mark')
   // the seller (Rocco) and the setter see different lead pages: the setter's reaching-out box is the setter's work, not his
   const role = roleIn ?? boardRole(permissions)
   const signer = messageSigner({ claimedLabel: lead.claimed_by_label, events, viewerName: myName ?? '', viewingAs: viewingAs === true, nameOf: personName })
@@ -98,7 +100,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
   const zoneInfo = zoneInfoFor({ viewerZone: time.zone, clientZone: leadZone.zone, clientName: firstName, seller, owner: time.prefs.ownerClock, hideOwner: time.hideOwner })
   const clocks = leadClocks({ leadName: firstName, clientZone: leadZone.zone, seller, owner: time.prefs.ownerClock, youZone: time.zone, hideOwner: time.hideOwner })
   // with the calendar switch on, a call is booked from the seller's free slots (start times only); off, or no seller: the typed time as before
-  const offer = canAct && sellerTaker && lead.team_id ? await withDeadline(loadSlotOffer({ db: leadDb(), teamId: lead.team_id, prefs: time.prefs, seller: sellerTaker, excludeLeadId: lead.id }), 9000, { state: 'hidden', sellerLabel: sellerTaker.label, reason: 'error' } as SlotOffer) : null
+  const offer = canBook && sellerTaker && lead.team_id ? await withDeadline(loadSlotOffer({ db: leadDb(), teamId: lead.team_id, prefs: time.prefs, seller: sellerTaker, excludeLeadId: lead.id }), 9000, { state: 'hidden', sellerLabel: sellerTaker.label, reason: 'error' } as SlotOffer) : null
   return (
     <div className="space-y-4">
       <div className="rounded-xl border bg-white p-5">
@@ -111,7 +113,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
           {lead.email && <p><span className="text-slate-500">{t('Email: ')}</span><a className="underline" href={`mailto:${lead.email}`}>{lead.email}</a></p>}
           {(lead.city || lead.country) && <p><span className="text-slate-500">{t('Place: ')}</span>{[lead.city, lead.country].filter(Boolean).join(', ')}</p>}
           <p><span className="text-slate-500">{t('Filled in: ')}</span>{fw(lead.meta_created_time ?? lead.received_at)}</p>
-          <p><span className="text-slate-500">{t('Picked by: ')}</span>{lead.claimed_by === null ? t('nobody') : claim === 'me' ? t('you') : lead.claimed_by_label ?? t('a team member')}</p>
+          <p><span className="text-slate-500">{t('With: ')}</span>{lead.claimed_by === null ? t('the setter') : claim === 'me' ? t('you') : lead.claimed_by_label ?? t('a team member')}</p>
           {lead.callback_at && <p><span className="text-slate-500">{t('Call back: ')}</span><b>{fw(lead.callback_at)}</b></p>}
           {lead.not_in_target_reason && <p><span className="text-slate-500">{t('Not in target: ')}</span>{t(reasons.find(r => r.key === lead.not_in_target_reason)?.label ?? lead.not_in_target_reason)}</p>}
         </div>
@@ -130,11 +132,10 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
 
       {role === 'setter' && <ContactPanel leadId={lead.id} canAct={canAct} contact={contact} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} setterName={signer} templates={templates} canEditTemplates={isOwner} canWhatsApp={hasPermission(permissions, 'whatsapp')} />}
 
-      <HandoverPanel leadId={lead.id} role={role} canAct={canAct} contact={contact} zone={zoneInfo} offer={offer} />
+      <HandoverPanel leadId={lead.id} role={role} canAct={canBook} contact={contact} zone={zoneInfo} offer={offer} callCheck={needsCallAnswer(lead.status, contact.appointmentAt, new Date())} />
 
       <LeadActionPanel
         leadId={lead.id}
-        canPick={hasPermission(permissions, 'leads.pick')}
         canMark={hasPermission(permissions, 'leads.mark')}
         claim={claim}
         isOwner={isOwner}
@@ -143,7 +144,6 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
         afterHref={afterHref}
         role={role}
         afterPay={afterPay}
-        atContacted={lead.status === sellerKeys.contacted}
         archived={lead.status === sellerKeys.archived}
         zone={zoneInfo}
       />

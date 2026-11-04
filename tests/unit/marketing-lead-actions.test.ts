@@ -185,7 +185,7 @@ describe("filterLeads / eventText", () => {
     expect(parseLeadShow("mine")).toBe("mine")
   })
   it("history lines are plain English", () => {
-    expect(eventText("claimed", {}, settings.stages, settings.reasons)).toBe("Picked")
+    expect(eventText("claimed", {}, settings.stages, settings.reasons)).toBe("Handed to the seller")
     expect(eventText("status_changed", { outcome: "not_in_target", reason: "wrong_profile", note: "n" }, settings.stages, settings.reasons)).toBe("Not in target (Wrong profile) — n")
     expect(eventText("status_changed", { outcome: "good", to: "qualified" }, settings.stages, settings.reasons)).toBe("Good — moved to Qualified")
     expect(eventText("something_new", {}, settings.stages, settings.reasons)).toBe("something_new")
@@ -197,10 +197,10 @@ describe("the client booking link and a lead somebody picked", () => {
   const picked = { claimed_by: "u-seller", status: "qualified" }
   const asMember: Actor = { id: "client-booking-link", email: "client (booking link)", role: "member" }
   const asTeam: Actor = { id: "client-booking-link", email: "client (booking link)", role: "owner" }
-  it("a member that did not pick the lead is refused, the team actor is not (set and cancel)", () => {
+  it("booking or cancelling a call is open to a member who did not pick the lead (3 Nov 2026: the setter's booking hands the lead over, she must still be able to fix it); the team actor too", () => {
     const set: LeadActionInput = { action: "appointment", at: "2026-10-27T14:00:00Z" }
     const cancel: LeadActionInput = { action: "appointment", at: null }
-    expect(planLeadAction(set, picked, asMember, settings, NOW)).toMatchObject({ ok: false, status: 409 })
+    expect(planLeadAction(set, picked, asMember, settings, NOW)).toMatchObject({ ok: true })
     expect(planLeadAction(set, picked, asTeam, settings, NOW)).toMatchObject({ ok: true })
     expect(planLeadAction(cancel, picked, asTeam, settings, NOW)).toMatchObject({ ok: true })
   })
