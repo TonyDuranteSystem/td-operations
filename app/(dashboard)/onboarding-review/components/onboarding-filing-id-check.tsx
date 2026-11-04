@@ -17,6 +17,8 @@ import { FILING_ID_UNRESOLVED, type FilingIdCheckResult } from '@/lib/flows/fili
 interface ArticlesCheckData {
   has_articles: boolean
   documents: Array<{ path: string; file_name: string; url: string | null; mime_type: string | null }>
+  /** Uploaded Articles files that do not belong to this submission: never opened, only counted. */
+  unmatched_articles?: number
   read_number: string | null
   read_from: string | null
   read_note: string | null
@@ -32,7 +34,7 @@ export interface FilingIdGate {
 
 type Load = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; data: ArticlesCheckData }
 
-export function OnboardingFilingIdCheck({ entryId, clientTyped, onGate }: { entryId: string; clientTyped: string | null; onGate: (gate: FilingIdGate) => void }) {
+export function OnboardingFilingIdCheck({ entryId, clientTyped, einHint, onGate }: { entryId: string; clientTyped: string | null; einHint?: string | null; onGate: (gate: FilingIdGate) => void }) {
   const [load, setLoad] = useState<Load>({ status: 'loading' })
   const [attempt, setAttempt] = useState(0)
   const [result, setResult] = useState<FilingIdCheckResult>(FILING_ID_UNRESOLVED)
@@ -94,12 +96,18 @@ export function OnboardingFilingIdCheck({ entryId, clientTyped, onGate }: { entr
         readNumber={data.read_number}
         readerNote={data.read_note}
         clientTyped={clientTyped}
+        einHint={einHint}
         document={shown && shown.url ? { url: shown.url, name: shown.file_name, mimeType: shown.mime_type } : null}
         documentNote={data.has_articles ? null : 'The client uploaded no Articles of Organization, so there is no document to open. Confirm the number the client typed, or say there is none.'}
         onResult={setResult}
       />
       {data.documents.length > 1 && (
         <p className="text-xs text-zinc-500">{data.documents.length} files were uploaded as the Articles; the window opens {shown?.file_name ?? 'the first one'}.</p>
+      )}
+      {!!data.unmatched_articles && data.unmatched_articles > 0 && (
+        <p className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800" data-testid="filing-id-unmatched-articles">
+          {data.unmatched_articles} more uploaded Articles file{data.unmatched_articles === 1 ? '' : 's'} could not be matched to this submission and {data.unmatched_articles === 1 ? 'is' : 'are'} not shown here.
+        </p>
       )}
     </div>
   )

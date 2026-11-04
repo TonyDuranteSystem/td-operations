@@ -52,6 +52,20 @@ export function sameFilingId(a: string | null | undefined, b: string | null | un
 }
 
 /**
+ * True when what is in the box looks like a TAX number rather than a State Filing ID: an EIN (12-3456789), an SSN / ITIN (123-45-6789),
+ * or the very EIN the client gave (compared digits only). Clients mix these up. An advisory for the card, never a block — the state
+ * formats we serve (WY 2026-002103965, FL L…, DE and NM plain 7 digits) never take these shapes.
+ */
+export function looksLikeTaxId(raw: string, knownEin?: string | null): boolean {
+  const v = normalizeFilingId(raw)
+  if (!v) return false
+  if (/^\d{2}-\d{7}$/.test(v) || /^\d{3}-\d{2}-\d{4}$/.test(v)) return true
+  const digits = v.replace(/-/g, "")
+  const ein = (knownEin ?? "").replace(/\D/g, "")
+  return ein.length === 9 && /^\d{9}$/.test(digits) && digits === ein
+}
+
+/**
  * What the onboarding setup saves as the company's State Filing ID. When staff checked the number on the review screen the job carries
  * it as `confirmed_filing_id` — a tidied number, or null for "this document has no Filing ID" (then nothing is saved, not even what the
  * client typed). A job queued without that key (an older one, or a submission with no Articles to check) falls back to the number the

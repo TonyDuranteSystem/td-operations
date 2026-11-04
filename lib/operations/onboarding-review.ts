@@ -20,6 +20,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { normalizeFilingId } from "@/lib/articles-parse"
 
 /**
  * Staff's required choice on the Confirm screen (Antonio 2026-09-30): issue the company's suite, or explicitly
@@ -32,9 +33,37 @@ export type SuiteConfirmChoice = { choice: "issue" } | { choice: "waive"; reason
 /**
  * Staff's call on the State Filing ID, made on the review screen's check card against the real Articles (dev job 64d2be64):
  * `value` is the tidied number they confirmed or corrected, or null for "this document has no Filing ID" (nothing is saved).
- * Absent = the screen had nothing to check (no Articles uploaded) — the client's own number is used as before.
+ * Absent = nobody checked (an old screen, or the MCP chat command). The portal-wizard Confirm then saves NOTHING; the standard path
+ * keeps what the client typed, tidied, and says it was not checked.
  */
-export interface FilingIdChoice { value: string | null }
+export interface FilingIdChoice {
+  value: string | null
+  /** False = no uploaded Articles could be opened (the card asked staff to confirm the client's own number), so the record must not
+   *  say the number was checked on the Articles. Default true. */
+  documentChecked?: boolean
+  /** True = nobody checked (the key was absent): nothing is saved and the record says so. */
+  unchecked?: boolean
+}
+
+/** What the client typed as the Filing ID, shortened for a record line — or null when nothing was typed. */
+function typedFilingIdForLine(submitted: Record<string, unknown>): string | null {
+  const typed = typeof submitted.filing_id === "string" ? submitted.filing_id.trim() : ""
+  return typed ? typed.slice(0, 60) : null
+}
+
+/** The record line for staff's Filing ID call on a Confirm (portal-wizard path: the setup job does the saving). */
+export function filingIdConfirmLine(choice: FilingIdChoice, actor: string, submitted: Record<string, unknown>): string {
+  if (choice.unchecked) {
+    const typed = typedFilingIdForLine(submitted)
+    return `🔎 No State Filing ID was checked on this Confirm, so none is saved — add it on the company page${typed ? ` (the client typed "${typed}")` : ""}`
+  }
+  if (choice.value) {
+    return choice.documentChecked === false
+      ? `🔎 State Filing ID ${choice.value} confirmed by ${actor} — no uploaded Articles could be opened to check it against (the setup job saves it on the company when it runs)`
+      : `🔎 State Filing ID checked on the Articles by ${actor}: ${choice.value} (the setup job saves it on the company when it runs)`
+  }
+  return `🔎 No Filing ID will be saved from this Confirm (${actor}: none on the document, or the Articles could not be checked)`
+}
 
 export interface ApplyOnboardingReviewResult {
   ok: boolean
@@ -213,9 +242,15 @@ export async function applyOnboardingReview(
     if (submitted.ein) acctFields.ein_number = submitted.ein
     if (stateOfFormation) acctFields.state_of_formation = stateOfFormation
     if (submitted.formation_date) acctFields.formation_date = submitted.formation_date
-    // staff's checked number wins; "no Filing ID on the document" saves nothing; no check at all keeps the client's own number
-    const filingToSave = filingId ? filingId.value : (submitted.filing_id ? String(submitted.filing_id) : null)
+    // staff's checked number wins; "no Filing ID on the document" saves nothing; no check at all (the MCP chat command) keeps the
+    // number the client typed — TIDIED, so "N/A" / "pending" / stray spaces never reach the company — and the record says it was not checked
+    const filingToSave = filingId ? filingId.value : normalizeFilingId(submitted.filing_id)
     if (filingToSave) acctFields.filing_id = filingToSave
+    if (!filingId) {
+      const typed = typedFilingIdForLine(submitted)
+      if (filingToSave) lines.push(`🔎 State Filing ID ${filingToSave} taken from what the client typed — NOT checked against the Articles`)
+      else if (typed) lines.push(`🔎 The client typed "${typed}" as the State Filing ID, which is not a Filing ID — nothing saved`)
+    }
     acctFields.entity_type = entityTypeMapped
     // Client Since = the staff-confirm moment (Antonio, 2026-09-20, dev job
     // bc2a8f7f) — this is when TD actually starts being responsible for the
@@ -649,6 +684,10 @@ export async function confirmPortalWizardOnboarding(
 
   const stateOfFormation = String(submitted.state_of_formation || sub.state || "").trim()
 
+  // Bug-hunt fix (job 64d2be64, 2026-11-04): a Confirm that arrives with NO Filing ID call (a review tab opened before the check card
+  // existed, or any other caller) must save nothing — never the number the client typed, which nobody checked.
+  const filingCall: FilingIdChoice = filingId ?? { value: null, unchecked: true }
+
   try {
     const { enqueueJob } = await import("@/lib/jobs/queue")
     const { id: jobId } = await enqueueJob({
@@ -666,8 +705,9 @@ export async function confirmPortalWizardOnboarding(
         submitted_data: submitted,
         upload_paths: sub.upload_paths,
         ...(suite ? { suite_choice: suite.choice, suite_waive_reason: suite.choice === "waive" ? suite.reason : null } : {}),
-        // the number staff checked against the real Articles (null = none on the document); the key is left out when nothing was checked
-        ...(filingId ? { confirmed_filing_id: filingId.value } : {}),
+        // the number staff checked against the real Articles (null = none on the document, or nobody checked): ALWAYS present on this
+        // path, so the job never falls back to the number the client typed
+        confirmed_filing_id: filingCall.value,
         // source intentionally omitted — this run must pass the staff
         // review gate now that reviewed_at is set above.
       },
@@ -679,7 +719,7 @@ export async function confirmPortalWizardOnboarding(
     })
 
     lines.push(`🚀 Setup job enqueued: ${jobId}`)
-    if (filingId) lines.push(filingId.value ? `🔎 State Filing ID checked on the Articles by ${actor}: ${filingId.value} (the setup job saves it on the company when it runs)` : `🔎 No Filing ID will be saved from this Confirm (${actor}: none on the document, or the Articles could not be checked)`)
+    lines.push(filingIdConfirmLine(filingCall, actor, submitted))
     lines.push(`   Will create: ${sub.account_id ? "(account already exists)" : "Account"}, Drive folder, follow-up tasks, tax return (if applicable)`)
     lines.push(`   Lease and Operating Agreement stay manual — not created automatically.`)
   } catch (e) {

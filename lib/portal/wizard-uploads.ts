@@ -14,6 +14,8 @@
  * robust as new wizard types are added.
  */
 
+import { isTraversalSafePath } from '@/lib/storage/safe-path'
+
 /** Maximum size for any wizard-uploaded file. Matches the onboarding-uploads
  *  bucket's own Supabase-enforced limit and the ceiling already used
  *  elsewhere in this codebase for direct-to-storage uploads (assets,
@@ -78,7 +80,8 @@ export function collectUploadPaths(
   const paths: string[] = []
   for (const val of Object.values(data)) {
     for (const s of normalizeUploadValue(val)) {
-      if (prefixes.some(p => s.startsWith(p))) paths.push(s)
+      // a crafted path that walks out of its folder ("../") is not an upload (bug-hunt, job 64d2be64): every later read trusts this list
+      if (isTraversalSafePath(s) && prefixes.some(p => s.startsWith(p))) paths.push(s)
     }
   }
   return paths

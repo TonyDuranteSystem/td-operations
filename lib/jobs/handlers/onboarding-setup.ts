@@ -111,7 +111,8 @@ export async function saveCheckedFilingId(accountId: string, filingId: string, r
     const { data: acct, error } = await supabaseAdmin.from("accounts").select("filing_id").eq("id", accountId).maybeSingle()
     if (error) throw new Error(error.message)
     if (!acct) throw new Error(`company ${accountId} not found — the State Filing ID was not saved`)
-    const current = (acct.filing_id ?? "").trim()
+    const rawCurrent = (acct.filing_id as string | null) ?? ""
+    const current = rawCurrent.trim()
     if (current) {
       if (normalizeFilingId(current) !== filingId) {
         result.steps.push(step("filing_id", "skipped", `The company already has Filing ID ${current}; the checked number ${filingId} was NOT saved — change it on the company page if it is the right one`))
@@ -119,8 +120,10 @@ export async function saveCheckedFilingId(accountId: string, filingId: string, r
       return
     }
     // only while it is still empty: a Filing ID written between the read above and this write is never overwritten
+    // (a value of only spaces counts as empty but is not matched by "is null or empty", so it is matched by its exact text instead)
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { data: written, error: upErr } = await supabaseAdmin.from("accounts").update({ filing_id: filingId, updated_at: now }).eq("id", accountId).or("filing_id.is.null,filing_id.eq.").select("id")
+    const base = supabaseAdmin.from("accounts").update({ filing_id: filingId, updated_at: now }).eq("id", accountId)
+    const { data: written, error: upErr } = await (rawCurrent ? base.eq("filing_id", rawCurrent) : base.or("filing_id.is.null,filing_id.eq.")).select("id")
     if (upErr) throw new Error(upErr.message)
     if (!written || written.length === 0) {
       result.steps.push(step("filing_id", "skipped", `The company's Filing ID was filled by someone else first; the checked number ${filingId} was NOT saved`))

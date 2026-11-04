@@ -141,10 +141,54 @@ describe('onboarding review — Articles check', () => {
 
   it('never signs or reads a path that is not this submission\'s own', async () => {
     submission = { ...submission!, upload_paths: ['onboarding/someone-else/articles_of_organization_x_Other Client.pdf'] }
-    const data = await (await call()).json()
-    expect(data.has_articles).toBe(false)
+    const res = await call()
+    // uploaded Articles that this submission does not own are NOT "no Articles": that would unlock Confirm with nothing to look at
+    expect(res.status).toBe(422)
+    expect((await res.json()).error).toMatch(/1 uploaded Articles file could not be matched to this submission/)
     expect(signedFor).toHaveLength(0)
     expect(downloaded).toHaveLength(0)
+  })
+
+  it('a submission with no Articles uploaded at all is still plainly "no Articles"', async () => {
+    submission = { ...submission!, upload_paths: ['onboarding/lead-1/passport_owner_1_Passport.pdf'] }
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect((await res.json()).has_articles).toBe(false)
+  })
+
+  it('crafted paths that walk out of the folder are never signed or read, and count as unmatched', async () => {
+    submission = { ...submission!, upload_paths: [
+      'onboarding/lead-1/../../../rest/v1/x?q=/articles_of_organization.pdf',
+      'onboarding/lead-1/../someone-else/articles_of_organization_z.pdf',
+      'onboarding/lead-1\\..\\articles_of_organization_y.pdf',
+    ] }
+    const res = await call()
+    expect(res.status).toBe(422)
+    // the backslash path has no Articles-looking last segment, so it is not counted — but it is still never signed or read
+    expect((await res.json()).error).toMatch(/2 uploaded Articles files could not be matched/)
+    expect(signedFor).toHaveLength(0)
+    expect(downloaded).toHaveLength(0)
+  })
+
+  it('a good file next to unmatched ones is shown, and the unmatched ones are counted', async () => {
+    submission = { ...submission!, upload_paths: [ARTICLES_A, 'onboarding/someone-else/articles_of_organization_x_Other.pdf'] }
+    textByFile = { [NAME_A]: 'Original ID: 2026-002103965' }
+    const data = await (await call()).json()
+    expect(data.has_articles).toBe(true)
+    expect(data.documents).toHaveLength(1)
+    expect(data.unmatched_articles).toBe(1)
+    expect(data.read_number).toBe('2026-002103965')
+  })
+
+  it('a file whose name has ? # or % is still shown to staff but is not fetched by path', async () => {
+    const odd = 'onboarding/lead-1/articles_of_organization_ab12_Articles #2.pdf'
+    submission = { ...submission!, upload_paths: [odd] }
+    const data = await (await call()).json()
+    expect(data.has_articles).toBe(true)
+    expect(data.documents).toHaveLength(1)
+    expect(downloaded).toHaveLength(0)
+    expect(data.read_number).toBeNull()
+    expect(data.read_note).toMatch(/could not read this file/)
   })
 
   it('reads at most three files', async () => {
