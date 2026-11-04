@@ -97,11 +97,13 @@ describe("wording matches the real screens", () => {
   })
   it("names the buttons the screens really have", () => {
     const setter = resolveTour("setter", bundles.setter, "en").map(s => s.body).join(" ")
-    expect(setter).toContain("Pass to Rocco")
+    expect(setter).toContain("Book Rocco's call")
+    expect(setter).not.toContain("Pass to Rocco")
     expect(setter).not.toContain("**Hand over**")
     const seller = resolveTour("seller", bundles.seller, "en")[0].body
-    expect(seller).toContain("Pick this lead")
-    expect(resolveTour("seller", bundles.seller, "it")[0].body).toContain("Prendi questo lead")
+    expect(seller).not.toContain("Pick this lead")
+    expect(seller).toContain("becomes yours the moment the setter books")
+    expect(resolveTour("seller", bundles.seller, "it")[0].body).not.toContain("Prendi questo lead")
   })
 })
 

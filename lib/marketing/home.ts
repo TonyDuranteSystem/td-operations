@@ -31,8 +31,8 @@ const HOUR_MS = 3600_000
 const arrival = (l: Pick<HomeLead, "meta_created_time" | "received_at">) => new Date(l.meta_created_time ?? l.received_at).getTime()
 const nameOf = (l: { full_name: string | null; email: string | null }, fallback: string) => l.full_name || l.email || fallback
 
-/** The seller board's columns that count as "with Rocco": Interested lead, Contacted, Link sent (a lead the setter has not passed on is still the setter's). */
-const WITH_SELLER = ["booked", "contacted", "closed"]
+/** The seller board's columns that count as "with Rocco": Calls prenotate (a booked call, upcoming or past) and Link sent (a lead whose call is not booked is still the setter's). */
+const WITH_SELLER = ["booked", "closed"]
 
 export function homeModel(i: {
   leads: readonly HomeLead[]

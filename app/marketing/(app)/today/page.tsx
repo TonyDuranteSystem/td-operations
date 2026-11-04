@@ -16,7 +16,6 @@ import { clientFlagText, formatWhen, stageLabel } from '@/lib/marketing/lead-vie
 import { canSeeNotes, withoutPhone } from '@/lib/marketing/lead-privacy'
 import { personName, type LatestNote } from '@/lib/marketing/setter-note'
 import { paidStagesFrom, todayModel, type OutcomeStages } from '@/lib/marketing/workspace'
-import { PickButton } from './pick-button'
 import { getLang } from '@/lib/marketing/lang'
 import { localeFor, makeT } from '@/lib/marketing/i18n'
 import { loadViewerZone } from '@/lib/marketing/time-prefs-server'
@@ -62,7 +61,7 @@ export default async function MarketingToday() {
   const reasonLabel = (k: string | null) => (k ? reasons.find(r => r.key === k)?.label ?? k : null)
   const late = m.callBacks.filter(c => c.late).length
   const parts = [
-    t(m.goodWaiting.length === 1 ? '{n} Good lead waiting for you' : '{n} Good leads waiting for you', { n: m.goodWaiting.length }),
+    t(m.goodWaiting.length === 1 ? '{n} Good lead waiting for a call to be booked' : '{n} Good leads waiting for a call to be booked', { n: m.goodWaiting.length }),
     t(m.callBacks.length === 1 ? '{n} call back today' : '{n} call backs today', { n: m.callBacks.length }) + (late ? t(' ({n} late)', { n: late }) : ''),
     t(m.waitingOver24h.length === 1 ? '{n} new lead untouched for over a day' : '{n} new leads untouched for over a day', { n: m.waitingOver24h.length }),
     ...(seesTeam ? [t('{n} rejected today', { n: m.rejectedToday.length })] : []),
@@ -88,13 +87,12 @@ export default async function MarketingToday() {
         </section>
 
         <section className={card} aria-label={t('Good leads waiting')}>
-          <h2 className="text-sm font-semibold text-slate-600">{t('Good leads waiting for a pick ({n})', { n: m.goodWaiting.length })}</h2>
-          {m.goodWaiting.length === 0 ? <p className="mt-3 text-sm text-slate-500">{t('No Good lead is waiting. When a setter marks one Good, it appears here.')}</p> : (
+          <h2 className="text-sm font-semibold text-slate-600">{t('Good leads waiting for a call to be booked ({n})', { n: m.goodWaiting.length })}</h2>
+          {m.goodWaiting.length === 0 ? <p className="mt-3 text-sm text-slate-500">{t('No Good lead is waiting for a call. When a setter marks one Good, it appears here until she books the call.')}</p> : (
             <ul className="mt-3 divide-y">
               {m.goodWaiting.map(l => (
                 <li key={l.id} className="flex items-center justify-between gap-3 py-3">
                   <LeadLink leadId={l.id} name={who(l)} className="min-w-0"><span className="block truncate font-medium">{who(l)}</span><span className="block text-xs text-slate-500">{t('{phone} · waiting {age}', { phone: l.phone ?? t('No phone'), age: age(now.getTime() - new Date(l.meta_created_time ?? l.received_at).getTime()) })}</span>{clientFlagText(l.existing_client, t) && <span className="block text-xs text-amber-800">{t('Existing TD client? Check first.')}</span>}{notes.get(l.id) && <span className="mt-1 line-clamp-2 block break-words text-xs text-slate-700" data-testid="good-note"><b>{notes.get(l.id)?.by}:</b> {notes.get(l.id)?.text}</span>}</LeadLink>
-                  <PickButton leadId={l.id} />
                 </li>
               ))}
             </ul>
@@ -104,7 +102,7 @@ export default async function MarketingToday() {
 
       <section className={card} aria-label={t('My leads')}>
         <h2 className="text-sm font-semibold text-slate-600">{t('Your leads ({n})', { n: m.mine.length })}</h2>
-        {m.mine.length === 0 ? <p className="mt-3 text-sm text-slate-500">{t('You have not picked a lead yet. Pick one from the Good leads above.')}</p> : (
+        {m.mine.length === 0 ? <p className="mt-3 text-sm text-slate-500">{t('You have no lead yet. A lead becomes yours when the setter books your call.')}</p> : (
           <ul className="mt-3 divide-y">
             {m.mine.map(l => (
               <li key={l.id}><LeadLink leadId={l.id} name={who(l)} className="flex items-center justify-between gap-3 py-2"><span className="min-w-0"><span className="block truncate font-medium">{who(l)}</span><span className="block text-xs text-slate-500">{l.phone ?? t('No phone')}</span></span><span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs">{t(stageLabel(stages, l.status))}</span></LeadLink></li>

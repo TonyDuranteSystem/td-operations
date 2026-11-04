@@ -197,10 +197,10 @@ describe("the client booking link and a lead somebody picked", () => {
   const picked = { claimed_by: "u-seller", status: "qualified" }
   const asMember: Actor = { id: "client-booking-link", email: "client (booking link)", role: "member" }
   const asTeam: Actor = { id: "client-booking-link", email: "client (booking link)", role: "owner" }
-  it("a member that did not pick the lead is refused, the team actor is not (set and cancel)", () => {
+  it("booking or cancelling a call is open to a member who did not pick the lead (3 Nov 2026: the setter's booking hands the lead over, she must still be able to fix it); the team actor too", () => {
     const set: LeadActionInput = { action: "appointment", at: "2026-10-27T14:00:00Z" }
     const cancel: LeadActionInput = { action: "appointment", at: null }
-    expect(planLeadAction(set, picked, asMember, settings, NOW)).toMatchObject({ ok: false, status: 409 })
+    expect(planLeadAction(set, picked, asMember, settings, NOW)).toMatchObject({ ok: true })
     expect(planLeadAction(set, picked, asTeam, settings, NOW)).toMatchObject({ ok: true })
     expect(planLeadAction(cancel, picked, asTeam, settings, NOW)).toMatchObject({ ok: true })
   })

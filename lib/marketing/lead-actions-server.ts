@@ -6,6 +6,8 @@
 import type { Db } from "@/lib/marketing/meta-leads/ingest"
 import { getMarketingSetting } from "@/lib/marketing/settings"
 import { getTeamLead } from "@/lib/marketing/leads-read"
+import { loadPrefsAndTakers } from "@/lib/marketing/time-prefs-server"
+import { sellerForLead } from "@/lib/marketing/time-prefs"
 import { leadActionSchema, planLeadAction, type ActionSettings, type Actor, type LeadActionInput, type LeadFacts } from "@/lib/marketing/lead-actions"
 
 export type ActionResult = { ok: true } | { ok: false; status: 400 | 404 | 409 | 500; error: string }
@@ -38,13 +40,21 @@ export async function applyLeadAction(
     const at = (ap as Array<{ data?: { at?: unknown } }> | null)?.[0]?.data?.at
     facts.appointment_at = typeof at === "string" ? at : null
   }
+  if (input.action === "appointment" && input.at !== null && facts.claimed_by === null) {
+    // booking the free call hands the lead to the seller whose calendar takes it (the person booking it when he is a seller himself, else the team's seller): the same person the calendar write uses
+    try {
+      const { takers } = await loadPrefsAndTakers(teamId)
+      const seller = sellerForLead(takers, actor.id)
+      facts.seller = seller ? { id: seller.userId, label: seller.email } : null
+    } catch { facts.seller = null /* the call is still saved; the lead just stays unpicked */ }
+  }
   if (input.action === "appointment" && input.at === null && lead.status === "booked") {
     // the stage the lead came from when this call was booked: the newest booking line that recorded it, looking back until an earlier cancel
     const { data: evs, error: evsErr } = await db.from("marketing_lead_events").select("data").eq("lead_id", lead.id).eq("kind", "appointment").order("created_at", { ascending: false }).order("id", { ascending: false }).limit(30)
     if (evsErr) return { ok: false, status: 500, error: "Could not check the call. Please try again." }
-    for (const e of (evs ?? []) as Array<{ data?: { at?: unknown; from_status?: unknown } }>) {
+    for (const e of (evs ?? []) as Array<{ data?: { at?: unknown; from_status?: unknown; handed_to?: unknown } }>) {
       if (e.data?.at === null) break
-      if (typeof e.data?.from_status === "string") { facts.booked_from = e.data.from_status; break }
+      if (typeof e.data?.from_status === "string") { facts.booked_from = e.data.from_status; facts.booked_handed_to = typeof e.data.handed_to === "string" ? e.data.handed_to : null; break }
     }
   }
   const plan = planLeadAction(input, facts, actor, settings, now)
