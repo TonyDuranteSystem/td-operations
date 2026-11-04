@@ -58,6 +58,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
 
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier, request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
         if containerItemIdentifier == .workingSet { return WorkingSetEnumerator(api: api, catalog: catalog, domain: domain) }
+        // the trash of this location is kept in the CRM (restorable there), so Finder is shown nothing in it
+        if containerItemIdentifier == .trashContainer { return EmptyTrashEnumerator() }
         guard let id = FPItem.itemID(for: containerItemIdentifier) else { throw NSFileProviderError(.noSuchItem) }
         return ContainerEnumerator(container: id, catalog: catalog)
     }
@@ -171,10 +173,35 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         Task {
             defer { progress.completedUnitCount = 1 }
             Trace.log("modifyItem", ["id": item.itemIdentifier.rawValue, "name": item.filename, "parent": item.parentItemIdentifier.rawValue, "fields": changedFields.rawValue, "hasContents": newContents != nil, "size": newContents.flatMap { FileStability.snapshot(of: $0)?.size } ?? -1])
-            // harmless bookkeeping (dates, tags, extended attributes) is accepted and ignored; a change of NAME or PLACE is always refused
+            // harmless bookkeeping (dates, tags, extended attributes) is accepted and ignored. A change of NAME or PLACE (and "Move to Trash") is sent to the CRM,
+            // which applies the Storage page's own rules and says no in plain words where it may not (0.2.9, Antonio 2026-11-03: "I can't rename a folder").
             guard let id = FPItem.itemID(for: item.itemIdentifier) else { completionHandler(nil, [], false, noPermission(Self.changeInCRM)); return }
-            guard changedFields.intersection([.filename, .parentItemIdentifier]).isEmpty else { completionHandler(nil, [], false, noPermission(Self.changeInCRM)); return }
             do {
+                if !changedFields.intersection([.filename, .parentItemIdentifier]).isEmpty {
+                    let (kind, itemId): (String, String)
+                    switch id.underlying {
+                    case .file(_, let f): (kind, itemId) = ("file", f)
+                    case .folder(_, let f): (kind, itemId) = ("folder", f)
+                    default: throw noPermission(Self.changeInCRM)
+                    }
+                    // "Move to Trash": the CRM's trash (restorable), never an erase
+                    if changedFields.contains(.parentItemIdentifier), item.parentItemIdentifier == .trashContainer {
+                        _ = try await api.edit(kind: kind, id: itemId, action: "trash")
+                        Trace.log("modifyItem.trashed", ["id": itemId, "kind": kind])
+                        completionHandler(FPItem(id: id, parent: .root, filename: item.filename, isFolder: kind == "folder", inTrash: true), [], false, nil)
+                        return
+                    }
+                    if changedFields.contains(.parentItemIdentifier) {
+                        guard case .folder(_, let toFolder)? = FPItem.itemID(for: item.parentItemIdentifier)?.underlying else { throw noPermission("Open one of the folders first — files and folders go inside a folder.") }
+                        _ = try await api.edit(kind: kind, id: itemId, action: "move", toParentId: toFolder)
+                        Trace.log("modifyItem.moved", ["id": itemId, "kind": kind, "to": toFolder])
+                    }
+                    if changedFields.contains(.filename) {
+                        _ = try await api.edit(kind: kind, id: itemId, action: "rename", name: NameMapper.serverName(fromFinder: item.filename))
+                        Trace.log("modifyItem.renamed", ["id": itemId, "kind": kind, "name": item.filename])
+                    }
+                    if !changedFields.contains(.contents) { completionHandler(try await catalog.item(for: id), [], false, nil); return }
+                }
                 // changed CONTENT: allowed only for a file THIS Mac saved (the CRM checks again) — it becomes a new version of that file
                 if changedFields.contains(.contents), let newContents {
                     guard case .file(let owner, let fileId) = id.underlying else { throw noPermission(Self.changeInCRM) }
@@ -201,7 +228,21 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
 
     func deleteItem(identifier: NSFileProviderItemIdentifier, baseVersion version: NSFileProviderItemVersion, options: NSFileProviderDeleteItemOptions = [], request: NSFileProviderRequest, completionHandler: @escaping (Error?) -> Void) -> Progress {
         Trace.log("deleteItem", ["id": identifier.rawValue])
-        completionHandler(noPermission(Self.changeInCRM))
-        return Progress()
+        // "Delete" from Finder never erases anything: the item goes to the CRM trash, where it can be restored (0.2.9)
+        let progress = Progress(totalUnitCount: 1)
+        Task {
+            defer { progress.completedUnitCount = 1 }
+            do {
+                guard let id = FPItem.itemID(for: identifier) else { throw noPermission(Self.changeInCRM) }
+                switch id.underlying {
+                case .file(_, let f): _ = try await api.edit(kind: "file", id: f, action: "trash")
+                case .folder(_, let f): _ = try await api.edit(kind: "folder", id: f, action: "trash")
+                default: throw noPermission(Self.changeInCRM)
+                }
+                Trace.log("deleteItem.trashed", ["id": identifier.rawValue])
+                completionHandler(nil)
+            } catch { Trace.log("deleteItem.error", ["error": String(describing: error)]); completionHandler(fileProviderError(error)) }
+        }
+        return progress
     }
 }

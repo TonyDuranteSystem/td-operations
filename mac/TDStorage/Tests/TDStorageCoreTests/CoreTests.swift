@@ -429,6 +429,33 @@ final class SaveNewFileTests: XCTestCase {
         catch StorageAPIError.refused(let m) { XCTAssertTrue(m.contains("added in the CRM")) }
         catch { XCTFail("\(error)") }
     }
+    func testRenameMoveAndTrashSendTheRightBodies() async throws {
+        StubProtocol.handler = { _ in (200, #"{"id":"x1","kind":"folder","name":"New name","parentId":"p1"}"#) }
+        let r = try await api().edit(kind: "folder", id: "x1", action: "rename", name: "New name")
+        XCTAssertEqual(r.name, "New name")
+        var req = StubProtocol.seen.last!
+        XCTAssertEqual(req.httpMethod, "POST"); XCTAssertEqual(req.url!.path, "/api/storage-app/edit")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer a")
+        _ = try await api().edit(kind: "file", id: "x2", action: "move", toParentId: "p2")
+        req = StubProtocol.seen.last!
+        XCTAssertEqual(req.httpMethod, "POST"); XCTAssertEqual(req.url!.path, "/api/storage-app/edit")
+        StubProtocol.handler = { _ in (200, #"{"id":"x3","kind":"file","name":"a.pdf","parentId":"p1","trashed":true}"#) }
+        let t = try await api().edit(kind: "file", id: "x3", action: "trash")
+        XCTAssertEqual(t.trashed, true)
+    }
+    func testAnEditTheCRMRefusesIsAPlainRefusal() async {
+        StubProtocol.handler = { _ in (422, #"{"error":"not_allowed","message":"This can only be changed in the CRM."}"#) }
+        do { _ = try await api().edit(kind: "file", id: "x", action: "trash"); XCTFail("should throw") }
+        catch StorageAPIError.refused(let m) { XCTAssertTrue(m.contains("changed in the CRM")) }
+        catch { XCTFail("\(error)") }
+    }
+    func testTheEditHintIsReadFromTheListingAndOlderServersStillRead() throws {
+        let withHint = #"{"owner":{"kind":"business","label":"B","closed":false},"folder":null,"folders":[{"id":"f1","name":"A","kind":"custom","locked":false,"canSave":true,"canEdit":true}],"files":[{"id":"x","name":"a.pdf","updatedAt":"2026","downloadable":true,"canEdit":true}]}"#
+        let l = try JSONDecoder().decode(FolderListing.self, from: Data(withHint.utf8))
+        XCTAssertEqual(l.folders[0].canEdit, true); XCTAssertEqual(l.files[0].canEdit, true)
+        let old = #"{"owner":{"kind":"business","label":"B","closed":false},"folder":null,"folders":[{"id":"f1","name":"A","kind":"custom","locked":false}],"files":[]}"#
+        XCTAssertNil(try JSONDecoder().decode(FolderListing.self, from: Data(old.utf8)).folders[0].canEdit)
+    }
     func testAnAlreadySavedFileComesBackWithItsId() async throws {
         StubProtocol.handler = { _ in (200, #"{"alreadySaved":true,"fileId":"x1","ownerId":"o1","name":"a.pdf"}"#) }
         let slot = try await api().uploadSlot(ownerId: "o1", folderId: "f1", name: "a.pdf", size: 10, mimeType: nil, itemKey: "k")
