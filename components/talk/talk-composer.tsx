@@ -8,6 +8,8 @@ import { useAudioNoteRecorder } from '@/lib/hooks/use-audio-note-recorder'
 import { meterFill, SILENT_WARN_AFTER_SECONDS } from '@/lib/media/sound-level'
 import { prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } from '@/lib/team/attachment'
 import { clock, snippet, type TalkMessage, type TypingKind } from '@/lib/talk/chat-model'
+import { readDraft, writeDraft } from '@/lib/talk/drafts'
+import type { RecordingControl, VoiceOutcome } from '@/lib/talk/recording-guard'
 
 /** A voice note longer than this is stopped and sent by itself. */
 const MAX_VOICE_SECONDS = 5 * 60
@@ -31,7 +33,7 @@ export type TalkComposerMode =
  * message went out, so a failed send keeps what was typed.
  */
 export function TalkComposer({
-  onSend, onEdit, mode, onCancelMode, onTyping, disabled, mentionPeople, soundCheck,
+  onSend, onEdit, mode, onCancelMode, onTyping, disabled, mentionPeople, soundCheck, draftKey, onRecordingChange, recordingControl, onVoiceDone,
 }: {
   onSend: (input: TalkSendInput) => Promise<boolean>
   onEdit: (id: string, text: string) => Promise<boolean>
@@ -44,9 +46,18 @@ export function TalkComposer({
   mentionPeople?: ReadonlyArray<{ id: string; name: string }>
   /** TD Marketing sets this: a live sound bar while recording, a warning when the microphone hears nothing, and a silent recording is not sent. Off for TD Talk. */
   soundCheck?: boolean
+  /** TD Talk sets this (per person and chat, `lib/talk/drafts.ts`): what is typed is kept on this device and comes back when the chat is opened again. Off for TD Marketing. */
+  draftKey?: string | null
+  /** TD Talk: told when a voice note starts / ends being recorded, so the screen can ask before leaving the chat mid-recording. */
+  onRecordingChange?: (recording: boolean) => void
+  /** TD Talk: filled with "send it" / "throw it away" for the recording in progress (null when nothing is recording). */
+  recordingControl?: React.MutableRefObject<RecordingControl | null>
+  /** TD Talk: how a voice note ended (sent to the server's outbox, failed, or thrown away). */
+  onVoiceDone?: (outcome: VoiceOutcome) => void
 }) {
   const { t, ts } = useTalkI18n()
-  const [text, setText] = useState('')
+  // the draft of this chat comes back (the composer is created again for every chat)
+  const [text, setText] = useState(() => readDraft(draftKey ?? null))
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
   const [seconds, setSeconds] = useState(0)
@@ -62,7 +73,13 @@ export function TalkComposer({
   onCancelModeRef.current = onCancelMode
   const onTypingRef = useRef(onTyping)
   onTypingRef.current = onTyping
+  const onRecordingChangeRef = useRef(onRecordingChange)
+  onRecordingChangeRef.current = onRecordingChange
+  const onVoiceDoneRef = useRef(onVoiceDone)
+  onVoiceDoneRef.current = onVoiceDone
   textRef.current = text
+  // keep what is typed (not while an existing message is being edited: that text is not a draft)
+  useEffect(() => { if (!draftKey || mode?.kind === 'edit') return; writeDraft(draftKey, text) }, [draftKey, text, mode?.kind])
   const mentionMatches = mention && mentionPeople ? mentionPeople.filter(p => p.name.toLowerCase().startsWith(mention.q.toLowerCase())).slice(0, 6) : []
   const readMention = (value: string, caret: number) => {
     if (!mentionPeople || mentionPeople.length === 0) return
@@ -121,10 +138,31 @@ export function TalkComposer({
     onRecorded: file => {
       const replyToId = modeRef.current?.kind === 'reply' ? modeRef.current.message.id : null
       // a voice note answering a message ends the reply, exactly like a typed answer (else the NEXT text would quote it too)
-      void send({ text: '', files: [file], replyToId }).then(ok => { if (ok && replyToId) onCancelModeRef.current() })
+      void send({ text: '', files: [file], replyToId }).then(ok => { if (ok && replyToId) onCancelModeRef.current(); onVoiceDoneRef.current?.(ok ? 'sent' : 'failed') })
     },
-    onError: msg => toast.error(t(msg)),
+    onError: msg => { toast.error(t(msg)); onVoiceDoneRef.current?.('failed') },
   })
+
+  const discardRecording = useCallback(() => { cancelRecording(); onVoiceDoneRef.current?.('cancelled') }, [cancelRecording])
+
+  // TD Talk's "you are recording" guard: the screen is told when a recording starts / ends and can send or throw it away on the person's answer;
+  // closing the page while recording also asks the browser to confirm.
+  useEffect(() => {
+    if (!recordingControl) return
+    recordingControl.current = isRecording ? { send: () => stopRecording(), discard: discardRecording } : null
+    return () => { recordingControl.current = null }
+  }, [isRecording, recordingControl, stopRecording, discardRecording])
+  useEffect(() => {
+    if (!onRecordingChangeRef.current) return
+    onRecordingChangeRef.current(isRecording)
+    return () => { if (isRecording) onRecordingChangeRef.current?.(false) }
+  }, [isRecording])
+  useEffect(() => {
+    if (!isRecording || !recordingControl) return
+    const ask = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', ask)
+    return () => window.removeEventListener('beforeunload', ask)
+  }, [isRecording, recordingControl])
 
   // recording clock + the 5-minute ceiling
   useEffect(() => {
@@ -184,7 +222,7 @@ export function TalkComposer({
   if (isRecording) {
     return (
       <div className="flex shrink-0 items-center gap-3 border-t border-zinc-200 bg-white px-3 py-2.5" data-testid="talk-recording">
-        <button type="button" onClick={cancelRecording} aria-label={t('Throw away the recording')} className="flex h-11 w-11 items-center justify-center rounded-full text-zinc-500 active:bg-zinc-100">
+        <button type="button" onClick={discardRecording} aria-label={t('Throw away the recording')} className="flex h-11 w-11 items-center justify-center rounded-full text-zinc-500 active:bg-zinc-100">
           <Trash2 className="h-5 w-5" />
         </button>
         <div className="flex flex-1 items-center gap-2">

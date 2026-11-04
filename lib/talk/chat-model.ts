@@ -16,6 +16,9 @@ export interface TalkThread {
   members?: string[] | null
   archived_at: string | null
   last_activity_at: string | null
+  /** The newest message's words ("Ok", "🎤 Voice message", …) and who wrote it — the chat list's second line (`lib/talk/list-preview.ts`). Only direct messages and groups carry it. */
+  last_message_preview?: string | null
+  last_message_sender_id?: string | null
   /** Time of the newest message (the chat list returns it). */
   last_message_at?: string | null
   unread_count?: number
