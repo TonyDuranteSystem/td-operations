@@ -19,9 +19,11 @@ describe('the old manual onboarding path passes staff\'s Filing ID decision to t
     expect(applyFn).toContain('...(filingId ? { confirmed_filing_id: filingId.value } : {})')
   })
 
-  it('confirmPortalWizardOnboarding does the same', () => {
-    expect(ops).toContain('...(filingId ? { confirmed_filing_id: filingId.value } : {}),')
-    expect(count(ops, 'confirmed_filing_id: filingId.value')).toBe(2)
+  it('confirmPortalWizardOnboarding ALWAYS carries confirmed_filing_id (null when nobody checked), so the job never falls back to the number the client typed', () => {
+    const portalFn = ops.slice(ops.indexOf('export async function confirmPortalWizardOnboarding'))
+    expect(portalFn).toContain('const filingCall: FilingIdChoice = filingId ?? { value: null, unchecked: true }')
+    expect(portalFn).toContain('confirmed_filing_id: filingCall.value,')
+    expect(portalFn).not.toContain('...(filingId ? { confirmed_filing_id')
   })
 })
 

@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, FileSearch, Loader2 } from 'lucide-react'
 import { FloatingDocumentWindow } from '@/components/ui/floating-document-window'
 import { normalizeFilingId } from '@/lib/articles-parse'
-import { confirmLockReason, filingIdCheckResult, sameFilingId, type FilingIdCheckResult, type FilingIdDecision } from '@/lib/flows/filing-id-check'
+import { confirmLockReason, filingIdCheckResult, looksLikeTaxId, sameFilingId, type FilingIdCheckResult, type FilingIdDecision } from '@/lib/flows/filing-id-check'
 
 export interface FilingIdCheckDocument {
   url: string
@@ -32,6 +32,8 @@ export interface FilingIdCheckCardProps {
   noReader?: boolean
   /** Onboarding only: the number the CLIENT typed in the wizard. A usable one prefills the box; a different or unusable one is flagged. */
   clientTyped?: string | null
+  /** Onboarding only: the EIN the client gave, so a Filing ID box holding that very number is flagged as a tax number. */
+  einHint?: string | null
   /** The real document to open. Null = nothing to open (the note below says why). */
   document: FilingIdCheckDocument | null
   documentNote?: string | null
@@ -40,7 +42,7 @@ export interface FilingIdCheckCardProps {
   onResult: (result: FilingIdCheckResult) => void
 }
 
-export function FilingIdCheckCard({ reading, readNumber, readerNote, noReader, clientTyped, document, documentNote, disabled, onResult }: FilingIdCheckCardProps) {
+export function FilingIdCheckCard({ reading, readNumber, readerNote, noReader, clientTyped, einHint, document, documentNote, disabled, onResult }: FilingIdCheckCardProps) {
   const clientText = clientTyped?.trim() ?? ''
   const clientUsable = !!normalizeFilingId(clientText)
   const [typed, setTyped] = useState(clientUsable ? clientText : '')
@@ -62,6 +64,7 @@ export function FilingIdCheckCard({ reading, readNumber, readerNote, noReader, c
 
   const lock = confirmLockReason({ typed, viewed, hasDocument: !!document, opened })
   const clientDiffers = !!clientText && (!clientUsable || (!!readNumber && !sameFilingId(clientText, readNumber)))
+  const taxIdLook = looksLikeTaxId(typed, einHint)
 
   function choose(value: string) {
     touched.current = true
@@ -112,6 +115,11 @@ export function FilingIdCheckCard({ reading, readNumber, readerNote, noReader, c
           className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 font-mono text-base disabled:bg-zinc-100 disabled:text-zinc-400"
         />
       </label>
+      {taxIdLook && (
+        <p className="mt-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800" data-testid="filing-id-looks-like-tax-id">
+          This looks like a tax number (an EIN, SSN or ITIN), not a State Filing ID. The Filing ID is the number the <strong>state</strong> prints on the Articles — check the real document again before you confirm.
+        </p>
+      )}
       <p className="mt-1 text-xs text-zinc-500">
         Wyoming: &ldquo;Original ID&rdquo; · New Mexico: &ldquo;File #&rdquo; · Florida: the L… document number · Delaware: &ldquo;File Number&rdquo;.
         It is saved on the company.

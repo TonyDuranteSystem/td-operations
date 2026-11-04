@@ -12,6 +12,8 @@ let updateError: { message: string } | null = null
 // the rows the guarded update reports as written; empty = someone filled the Filing ID between the read and the write
 let writtenRows: Array<{ id: string }> = [{ id: 'acct-1' }]
 const updates: Array<Record<string, unknown>> = []
+// which "only while empty" filter the write used: "or:…" (null / empty) or "eq:…" (a value of only spaces, matched by its exact text)
+const guards: string[] = []
 
 vi.mock('@/lib/supabase-admin', () => ({
   supabaseAdmin: {
@@ -19,7 +21,8 @@ vi.mock('@/lib/supabase-admin', () => ({
       select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: selectError || !companyExists ? null : { filing_id: currentFilingId }, error: selectError }) }) }),
       update: (patch: Record<string, unknown>) => {
         updates.push(patch)
-        return { eq: () => ({ or: () => ({ select: async () => ({ data: updateError ? null : writtenRows, error: updateError }) }) }) }
+        const done = { select: async () => ({ data: updateError ? null : writtenRows, error: updateError }) }
+        return { eq: () => ({ or: (f: string) => { guards.push(`or:${f}`); return done }, eq: (col: string, val: string) => { guards.push(`eq:${col}=${val}`); return done } }) }
       },
     }),
   },
@@ -41,6 +44,7 @@ beforeEach(() => {
   updateError = null
   writtenRows = [{ id: 'acct-1' }]
   updates.length = 0
+  guards.length = 0
   result = { steps: [] }
 })
 
@@ -52,10 +56,18 @@ describe('saveCheckedFilingId', () => {
     expect(result.steps[0]).toMatchObject({ name: 'filing_id', status: 'ok' })
   })
 
-  it('treats a blank value as empty', async () => {
+  it('an empty Filing ID is filled through the "null or empty" guard', async () => {
+    currentFilingId = ''
+    await saveCheckedFilingId('acct-1', '3190157', result, NOW)
+    expect(guards).toEqual(['or:filing_id.is.null,filing_id.eq.'])
+  })
+
+  it('a value of only spaces counts as empty AND is really replaced — matched by its exact text (the "null or empty" filter would miss it and report a false "filled by someone else")', async () => {
     currentFilingId = '   '
     await saveCheckedFilingId('acct-1', '3190157', result, NOW)
     expect(updates).toHaveLength(1)
+    expect(guards).toEqual(['eq:filing_id=   '])
+    expect(result.steps[0]).toMatchObject({ name: 'filing_id', status: 'ok' })
   })
 
   it('leaves an equal Filing ID alone, even when it is written differently, without noise', async () => {

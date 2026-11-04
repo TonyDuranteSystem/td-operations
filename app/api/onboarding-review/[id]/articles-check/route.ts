@@ -6,8 +6,10 @@
  * short-lived links to the real document so the card can open it in a floating window. The reader only PREFILLS — staff confirm or
  * correct the number against the document before the review can be confirmed.
  *
- * GET → { success, has_articles, documents: [{ path, file_name, url, mime_type }], read_number, read_from, read_note }
+ * GET → { success, has_articles, documents: [{ path, file_name, url, mime_type }], unmatched_articles, read_number, read_from, read_note }
  *   has_articles false  → the client uploaded nothing in the Articles slot (nothing to check against)
+ *   unmatched_articles  → uploaded Articles files that do not belong to this submission (never opened); when ALL of them are unmatched
+ *                         the answer is a 422 error — "no Articles" would be a lie and would unlock Confirm with nothing to look at
  *   read_number         → the Filing ID the reader found, or null (it found none, or could not read the file)
  *   read_from           → the path of the file the number was read from (the card opens that one first)
  *   read_note           → when nothing was read: WHY, in plain words, if it is known (ran out of time, file too large, unreadable)
@@ -25,6 +27,7 @@ import { createSignedUrlMap } from '@/lib/storage/signed-urls'
 import { DOCAI_INLINE_MAX_BYTES, ocrRawContent } from '@/lib/docai'
 import { parseFilingId } from '@/lib/articles-parse'
 import { articlesUploads, mimeTypeFromFileName, ownedUploadPaths, pickOcrMimeType } from '@/lib/flows/onboarding-articles'
+import { isDirectReadSafePath } from '@/lib/storage/safe-path'
 
 const UPLOAD_BUCKET = 'onboarding-uploads'
 // A client can upload several files into the Articles slot; the reader looks at the first few, in upload order, until one gives a number.
@@ -65,9 +68,20 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ success: false, error: 'Submission not found' }, { status: 404 })
     }
 
-    const { owned } = ownedUploadPaths(sub, (sub.upload_paths as string[] | null) || [])
+    const allPaths = (sub.upload_paths as string[] | null) || []
+    const { owned } = ownedUploadPaths(sub, allPaths)
     const articles = articlesUploads(owned)
+    // Articles files the client DID upload that this submission does not own (a different upload folder than the submission records, or a
+    // crafted path): they are never opened, and they must never be reported as "the client uploaded no Articles" — that would let staff
+    // confirm the client's number with nothing to look at.
+    const unmatched = articlesUploads(allPaths).length - articles.length
     if (articles.length === 0) {
+      if (unmatched > 0) {
+        return NextResponse.json(
+          { success: false, error: `${unmatched} uploaded Articles file${unmatched === 1 ? '' : 's'} could not be matched to this submission, so there is no document to check the number against` },
+          { status: 422 },
+        )
+      }
       return NextResponse.json({ success: true, has_articles: false, documents: [], read_number: null, read_from: null, read_note: null })
     }
 
@@ -91,6 +105,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     for (const doc of documents.slice(0, MAX_FILES_READ)) {
       const remaining = READ_BUDGET_MS - (Date.now() - startedAt)
       if (remaining <= 1000) { note(NOTE_TIMEOUT); break }
+      // a name with ? # or % cannot be fetched by path (the read URL is not encoded): staff still open it through its link
+      if (!isDirectReadSafePath(doc.path)) { note(NOTE_UNREADABLE); continue }
       try {
         const { data, error: dlErr } = await withTimeout(supabaseAdmin.storage.from(UPLOAD_BUCKET).download(doc.path), Math.min(PER_FILE_MS, remaining))
         if (dlErr || !data) { note(NOTE_UNREADABLE); continue }
@@ -119,7 +135,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     }
 
     return NextResponse.json(
-      { success: true, has_articles: true, documents, read_number: readNumber, read_from: readFrom, read_note: readNumber ? null : readNote },
+      { success: true, has_articles: true, documents, unmatched_articles: unmatched, read_number: readNumber, read_from: readFrom, read_note: readNumber ? null : readNote },
       { headers: { 'Cache-Control': 'no-store, max-age=0' } },
     )
   } catch (e) {
