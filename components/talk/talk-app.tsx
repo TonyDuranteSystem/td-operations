@@ -13,6 +13,7 @@ import { isImplementationChat } from '@/lib/talk/voice-alert'
 import { cn } from '@/lib/utils'
 import { withOutbox } from '@/lib/talk/outbox-rules'
 import { draftKey } from '@/lib/talk/drafts'
+import { combineHistory, earlierCursor, EARLIER_PAGE, MAX_JUMP_PAGES, mergeEarlier, slidOutOfWindow } from '@/lib/talk/earlier'
 import { applyUnreadIndicators, clearUnreadIndicators, previewLine, unreadTotal } from '@/lib/talk/list-preview'
 import { leavingLosesRecording, SEND_BEFORE_LEAVING_TIMEOUT_MS, stayAfterVoice, type RecordingControl, type VoiceOutcome } from '@/lib/talk/recording-guard'
 import { useChatOutbox } from '@/components/talk/use-chat-outbox'
@@ -72,6 +73,14 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const [bootError, setBootError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messages, setMessages] = useState<TalkMessage[]>([])
+  // older pages the person asked for ("Load earlier messages"): kept apart from the live window so the 10-second refresh can never drop them
+  const [older, setOlder] = useState<TalkMessage[]>([])
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const olderRef = useRef<TalkMessage[]>([])
+  const windowRef = useRef<TalkMessage[]>([])
+  const hasMoreRef = useRef(false)
+  const loadingEarlierRef = useRef(false)
   const [peerReadAt, setPeerReadAt] = useState<string | null>(null)
   const [peerDeliveredAt, setPeerDeliveredAt] = useState<string | null>(null)
   const [loadingMsgs, setLoadingMsgs] = useState(false)
@@ -109,7 +118,11 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   selectedIdRef.current = selectedId
   meIdRef.current = meId
   threadsRef.current = threads
-  messagesRef.current = messages
+  const shown = useMemo(() => combineHistory(older, messages), [older, messages])
+  messagesRef.current = shown
+  olderRef.current = older
+  windowRef.current = messages
+  hasMoreRef.current = hasMore
 
   const chats = useMemo(() => chatThreads(threads), [threads])
   const dms = useMemo(() => directMessages(threads), [threads])
@@ -145,6 +158,11 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
       const d = await r.json()
       if (selectedIdRef.current !== threadId) return // switched chats while loading
       const incoming = (d.messages ?? []) as TalkMessage[]
+      // the live window slides forward when new messages arrive: what slid out must not fall into a gap between the older pages and the window
+      if (olderRef.current.length > 0) {
+        const slid = slidOutOfWindow(windowRef.current, incoming)
+        if (slid.length > 0) { olderRef.current = mergeEarlier(olderRef.current, slid); setOlder(olderRef.current) }
+      }
       setMessages(prev => {
         // MERGE, never replace: a poll that started before a send (or a realtime message) and answers after it would
         // otherwise wipe that newer message until the next poll. Anything local that the snapshot does not have yet and
@@ -153,6 +171,8 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
         if (opts.silent && messageSignature(merged) === messageSignature(prev)) return prev
         return merged
       })
+      // does the chat have messages older than the live window? (once older pages are loaded, their own answer rules)
+      if (olderRef.current.length === 0) setHasMore(d.has_more === true)
       setPeerReadAt(d.peer_read_at ?? null)
       setPeerDeliveredAt(d.peer_delivered_at ?? null)
       if (Array.isArray(d.members)) setGroupMemberIds(d.members as string[])
@@ -176,6 +196,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const select = useCallback((id: string | null) => {
     setSelectedId(id)
     setMessages([])
+    setOlder([]); setHasMore(false); setLoadingEarlier(false); olderRef.current = []; hasMoreRef.current = false; loadingEarlierRef.current = false
     setPeerReadAt(null)
     setSheetMsg(null); setMode(null); setSearchOpen(false); setSearchQ(''); setHighlightId(null)
     setGroupInfoOpen(false); setNewGroupOpen(false); setGroupMemberIds([]); setMemberReads({})
@@ -270,7 +291,10 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'internal_messages' }, payload => {
         const m = payload.new as TalkMessage & { thread_id: string }
-        if (m.thread_id === selectedIdRef.current) setMessages(prev => prev.map(x => x.id === m.id ? { ...x, ...m } : x))
+        if (m.thread_id === selectedIdRef.current) {
+          setMessages(prev => prev.map(x => x.id === m.id ? { ...x, ...m } : x))
+          if (olderRef.current.some(x => x.id === m.id)) setOlder(prev => prev.map(x => x.id === m.id ? { ...x, ...m } : x))
+        }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_thread_reads' }, payload => {
         const row = payload.new as { thread_id?: string; user_id?: string; last_read_at?: string } | undefined
@@ -367,6 +391,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   // ── message actions (the long-press menu) ──
   const applyToMessage = useCallback((id: string, patch: Partial<TalkMessage>) => {
     setMessages(prev => prev.map(m => m.id === id ? { ...m, ...patch } : m))
+    setOlder(prev => prev.some(m => m.id === id) ? prev.map(m => m.id === id ? { ...m, ...patch } : m) : prev)
   }, [])
 
   const react = useCallback(async (m: TalkMessage, emoji: string) => {
@@ -420,23 +445,65 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     }
   }, [applyToMessage])
 
-  const jumpTo = useCallback((id: string) => {
-    if (!messagesRef.current.some(m => m.id === id)) { toast('That message is older than the latest 500 in this chat.'); return }
+  // One page of OLDER messages ("Load earlier messages"). Resolves with the page that was added (an empty list when there is nothing older), or null when it failed or was not needed.
+  const loadEarlier = useCallback(async (): Promise<TalkMessage[] | null> => {
+    const threadId = selectedIdRef.current
+    // the oldest message known right now: pages fetched a moment ago (not drawn yet) are in olderRef, so a jump that loads several pages in a row keeps moving back
+    const cursor = earlierCursor([...olderRef.current, ...messagesRef.current])
+    if (!threadId || !cursor || loadingEarlierRef.current) return null
+    loadingEarlierRef.current = true
+    setLoadingEarlier(true)
+    try {
+      const r = await fetch(`/api/team/threads/${threadId}?before=${encodeURIComponent(cursor)}&limit=${EARLIER_PAGE}`)
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d.error || 'Could not load earlier messages.')
+      if (selectedIdRef.current !== threadId) return null // switched chats while loading
+      const page = (d.messages ?? []) as TalkMessage[]
+      olderRef.current = mergeEarlier(olderRef.current, page)
+      setOlder(olderRef.current)
+      setHasMore(d.has_more === true)
+      hasMoreRef.current = d.has_more === true
+      return page
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not load earlier messages.')
+      return null
+    } finally {
+      loadingEarlierRef.current = false
+      setLoadingEarlier(false)
+    }
+  }, [])
+
+  const jumpTo = useCallback(async (id: string) => {
+    // a message older than what is loaded (a copied link, a quote, a search hit): load earlier pages until it turns up (up to MAX_JUMP_PAGES)
+    let found = messagesRef.current.some(m => m.id === id)
+    let loadedPages = 0
+    for (; !found && hasMoreRef.current && loadedPages < MAX_JUMP_PAGES;) {
+      // a page the person asked for with the button is still loading: wait for it instead of giving up
+      for (let waits = 0; loadingEarlierRef.current && waits < 100; waits++) await new Promise(r => setTimeout(r, 150))
+      found = messagesRef.current.some(m => m.id === id) || olderRef.current.some(m => m.id === id)
+      if (found) break
+      const page = await loadEarlier()
+      if (!page) break
+      loadedPages++
+      found = page.some(m => m.id === id)
+    }
+    if (!found) { toast('That message could not be found in this chat.'); return }
     setSearchOpen(false)
-    // the message list is not on screen while searching — give it a moment to come back, then scroll and flash the message
+    // the message list is not on screen while searching, and older messages need a moment to draw — then scroll and flash the message
+    // (a message that had to be fetched is far away: go there at once instead of gliding past thousands of messages)
     setTimeout(() => {
-      document.querySelector(`[data-mid="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      document.querySelector(`[data-mid="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center', behavior: loadedPages > 0 ? 'auto' : 'smooth' })
       setHighlightId(id)
       setTimeout(() => setHighlightId(cur => cur === id ? null : cur), 1800)
-    }, 120)
-  }, [])
+    }, 250)
+  }, [loadEarlier])
 
   useEffect(() => {
     const id = pendingJumpRef.current
     if (!id || loadingMsgs || messages.length === 0) return
     pendingJumpRef.current = null
-    // a chat shows only its newest 500: a link to an older message (or into a chat this person is not in) opens the chat and says so
-    jumpTo(id)
+    // a link to an older message: the chat opens, earlier pages load until the message turns up (jumpTo says so when it cannot be found)
+    void jumpTo(id)
   }, [messages, loadingMsgs, jumpTo])
 
   // ── groups ──
@@ -671,22 +738,27 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
               className="h-10 w-full rounded-full border border-zinc-200 bg-zinc-50 px-4 text-[16px] outline-none"
               data-testid="talk-search-input"
             />
-            <p className="mt-1 px-2 text-[11px] text-zinc-400">Searches the latest 500 messages in this chat.</p>
+            <p className="mt-1 px-2 text-[11px] text-zinc-400">
+              Searches the {shown.length} messages loaded in this chat.
+              {hasMore && (
+                <> <button type="button" onClick={() => void loadEarlier()} disabled={loadingEarlier} data-testid="talk-search-load-earlier" className="font-semibold text-[#BE1E2D] disabled:opacity-60">{loadingEarlier ? 'Loading…' : 'Load earlier messages'}</button> to search further back.</>
+              )}
+            </p>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {matchMessages(messages, searchQ).map(m => (
+            {matchMessages(shown, searchQ).map(m => (
               <button key={m.id} type="button" onClick={() => jumpTo(m.id)} className="block w-full border-b border-zinc-100 px-4 py-3 text-left active:bg-zinc-50" data-testid="talk-search-hit">
                 <span className="flex justify-between text-xs text-zinc-400"><span>{m.sender_id === meId ? 'You' : m.sender_name}</span><span>{dayLabel(m.created_at)} · {timeLabel(m.created_at)}</span></span>
                 <span className="block truncate text-[15px] text-zinc-800">{snippet(m, 120)}</span>
               </button>
             ))}
-            {searchQ.trim().length >= 2 && matchMessages(messages, searchQ).length === 0 && <p className="px-4 py-8 text-center text-sm text-zinc-400">Nothing found.</p>}
+            {searchQ.trim().length >= 2 && matchMessages(shown, searchQ).length === 0 && <p className="px-4 py-8 text-center text-sm text-zinc-400">Nothing found.</p>}
           </div>
         </div>
       )}
       {meId && !searchOpen && (
         <TalkMessages
-          threadId={selected.id} messages={withOutbox(messages, outbox.waiting)} outbox={{ retry: outbox.retry, discard: outbox.discard }} meId={meId} tickOf={tickOf} showSender={group} loading={loadingMsgs} readByOf={readByOf}
+          threadId={selected.id} messages={withOutbox(shown, outbox.waiting)} outbox={{ retry: outbox.retry, discard: outbox.discard }} earlier={{ has: hasMore, loading: loadingEarlier, load: () => void loadEarlier() }} meId={meId} tickOf={tickOf} showSender={group} loading={loadingMsgs} readByOf={readByOf}
           highlightId={highlightId}
           onMenu={setSheetMsg}
           onReply={m => { setMode({ kind: 'reply', message: m, who: m.sender_id === meId ? 'yourself' : m.sender_name }); setSheetMsg(null) }}
@@ -730,7 +802,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
       )}
       {sheetMsg && meId && (
         <TalkMessageSheet
-          message={messages.find(x => x.id === sheetMsg.id) ?? sheetMsg}
+          message={shown.find(x => x.id === sheetMsg.id) ?? sheetMsg}
           meId={meId}
           onClose={() => setSheetMsg(null)}
           onReact={emoji => void react(sheetMsg, emoji)}
