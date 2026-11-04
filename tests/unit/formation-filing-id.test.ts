@@ -211,10 +211,18 @@ describe('the Filing ID travels every hop to the company', () => {
     expect(route).toContain('filing_id: filingId')
   })
 
-  it('the upload window shows a State Filing ID field and sends the confirmed value', () => {
+  it('the upload window shows the Filing ID CHECK card, waits for it, and sends the checked value', () => {
     const ui = read('components/flows/document-upload.tsx')
-    expect(ui).toContain('data-testid="articles-filing-id"')
+    expect(ui).toContain('<FilingIdCheckCard')
     expect(ui).toContain('filing_id: confirmedFilingId')
+    // Confirm & Upload stays locked until staff have checked the number on the real document (job 64d2be64, Antonio 2026-11-04)
+    expect(ui).toContain('filingIdApplicable && !filingCheck.resolved')
+    // the card carries the number box, the "View the real document" button and the confirm / "no Filing ID" choices
+    const card = read('components/flows/filing-id-check-card.tsx')
+    expect(card).toContain('data-testid="articles-filing-id"')
+    expect(card).toContain('View the real document')
+    expect(card).toContain('The number is correct')
+    expect(card).toContain('There is no Filing ID on this document')
   })
 
   it('the old audit OCR route uses the ONE shared parser (no second copy)', () => {

@@ -41,6 +41,8 @@ import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
 import { companyCmraAddressLine } from "@/lib/operations/suite"
 import { memberPassportPathFor } from "@/lib/crm-store/account-uploads"
 import { applyFilingOutcome } from "@/lib/jobs/handlers/onboarding-filing-outcome"
+import { resolveFilingIdToSave, unusableClientFilingId } from "@/lib/flows/filing-id-check"
+import { normalizeFilingId } from "@/lib/articles-parse"
 
 interface OnboardingPayload {
   token: string
@@ -58,6 +60,9 @@ interface OnboardingPayload {
   /** Staff's required choice on the Confirm screen: issue the company's suite, or "No suite for this client". */
   suite_choice?: "issue" | "waive"
   suite_waive_reason?: string | null
+  /** The State Filing ID staff checked against the real Articles on the Confirm screen (dev job 64d2be64): a tidied number, or null =
+   *  "this document has no Filing ID". The key is absent when nothing was checked — then the number the client typed is used. */
+  confirmed_filing_id?: string | null
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -94,6 +99,37 @@ async function resolveOnboardingOfferId(p: { offer_id?: string | null; lead_id?:
     .order("created_at", { ascending: false }).limit(10)
   const pick = (data ?? []).find((o) => !o.account_id || !accountId || o.account_id === accountId)
   return (pick?.id as string | undefined) ?? null
+}
+
+/**
+ * Save the State Filing ID on the company (dev job 64d2be64). Until now the number the client typed in the wizard stayed on the
+ * submission and never reached the company on this path. It only FILLS an empty Filing ID: a company that already has a different one
+ * keeps it and the step says so — staff change it on the company page if the checked number is the right one.
+ */
+export async function saveCheckedFilingId(accountId: string, filingId: string, result: JobResult, now: string) {
+  try {
+    const { data: acct, error } = await supabaseAdmin.from("accounts").select("filing_id").eq("id", accountId).maybeSingle()
+    if (error) throw new Error(error.message)
+    if (!acct) throw new Error(`company ${accountId} not found — the State Filing ID was not saved`)
+    const current = (acct.filing_id ?? "").trim()
+    if (current) {
+      if (normalizeFilingId(current) !== filingId) {
+        result.steps.push(step("filing_id", "skipped", `The company already has Filing ID ${current}; the checked number ${filingId} was NOT saved — change it on the company page if it is the right one`))
+      }
+      return
+    }
+    // only while it is still empty: a Filing ID written between the read above and this write is never overwritten
+    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+    const { data: written, error: upErr } = await supabaseAdmin.from("accounts").update({ filing_id: filingId, updated_at: now }).eq("id", accountId).or("filing_id.is.null,filing_id.eq.").select("id")
+    if (upErr) throw new Error(upErr.message)
+    if (!written || written.length === 0) {
+      result.steps.push(step("filing_id", "skipped", `The company's Filing ID was filled by someone else first; the checked number ${filingId} was NOT saved`))
+      return
+    }
+    result.steps.push(step("filing_id", "ok", `State Filing ID ${filingId} saved on the company`))
+  } catch (e) {
+    result.steps.push(step("filing_id", "error", e instanceof Error ? e.message : String(e)))
+  }
 }
 
 export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
@@ -412,6 +448,20 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       result.steps.push(step("account_update", "error", e instanceof Error ? e.message : String(e)))
     }
     await updateJobProgress(job.id, result)
+  }
+
+  // ─── 0c-bis. STATE FILING ID (checked by staff against the real Articles on the Confirm screen, else what the client typed) ───
+  const filingIdToSave = resolveFilingIdToSave(p, submitted)
+  if (account_id && filingIdToSave) {
+    await saveCheckedFilingId(account_id, filingIdToSave, result, now)
+    await updateJobProgress(job.id, result)
+  } else {
+    // nothing was checked by staff and the number the client typed is not a Filing ID ("N/A", "pending"…): say so instead of dropping it silently
+    const unusable = unusableClientFilingId(p, submitted)
+    if (unusable) {
+      result.steps.push(step("filing_id", "skipped", `The client typed "${unusable}" as the State Filing ID, which is not a Filing ID — nothing saved`))
+      await updateJobProgress(job.id, result)
+    }
   }
 
   // ─── 0d. SUITE DECISION (staff's required choice on the Confirm screen) ───

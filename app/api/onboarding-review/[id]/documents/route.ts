@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { createSignedUrlMap } from '@/lib/storage/signed-urls'
+import { ownedUploadPaths } from '@/lib/flows/onboarding-articles'
 
 const UPLOAD_BUCKET = 'onboarding-uploads'
 
@@ -62,15 +63,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     // documents uploaded but none could be shown" — lead_id was never in this
     // list at all and is added here from the same audit, before it could bite
     // the far more common first-time-onboarding path the same way).
-    const ownedPrefixes = [
-      `${sub.token}/`,
-      sub.account_id ? `onboarding/${sub.account_id}/` : null,
-      sub.lead_id ? `onboarding/${sub.lead_id}/` : null,
-      sub.offer_id ? `onboarding/${sub.offer_id}/` : null,
-      sub.contact_id ? `onboarding/${sub.contact_id}/` : null,
-    ].filter((p): p is string => !!p)
-    const uploadPaths = allPaths.filter((p) => ownedPrefixes.some((prefix) => p.startsWith(prefix)))
-    const rejectedCount = allPaths.length - uploadPaths.length
+    // The ownership rule itself lives in lib/flows/onboarding-articles.ts (shared with the Filing ID check route).
+    const { owned: uploadPaths, rejected: rejectedCount } = ownedUploadPaths(sub, allPaths)
 
     const signedMap = await createSignedUrlMap(UPLOAD_BUCKET, uploadPaths)
 
