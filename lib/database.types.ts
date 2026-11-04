@@ -11074,6 +11074,68 @@ export type Database = {
           },
         ]
       }
+      marketing_zoom_recordings: {
+        Row: {
+          claimed_at: string
+          created_at: string
+          file_type: string | null
+          host: string
+          meeting_id: string | null
+          meeting_uuid: string | null
+          recording_type: string | null
+          saved_at: string | null
+          size_bytes: number | null
+          started_at: string | null
+          status: string
+          store_file_id: string | null
+          team_id: string
+          topic: string | null
+          zoom_file_id: string
+        }
+        Insert: {
+          claimed_at?: string
+          created_at?: string
+          file_type?: string | null
+          host: string
+          meeting_id?: string | null
+          meeting_uuid?: string | null
+          recording_type?: string | null
+          saved_at?: string | null
+          size_bytes?: number | null
+          started_at?: string | null
+          status?: string
+          store_file_id?: string | null
+          team_id: string
+          topic?: string | null
+          zoom_file_id: string
+        }
+        Update: {
+          claimed_at?: string
+          created_at?: string
+          file_type?: string | null
+          host?: string
+          meeting_id?: string | null
+          meeting_uuid?: string | null
+          recording_type?: string | null
+          saved_at?: string | null
+          size_bytes?: number | null
+          started_at?: string | null
+          status?: string
+          store_file_id?: string | null
+          team_id?: string
+          topic?: string | null
+          zoom_file_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketing_zoom_recordings_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       mcp_tool_counter: {
         Row: {
           calls_since_checkpoint: number
