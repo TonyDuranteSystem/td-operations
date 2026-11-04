@@ -1,5 +1,5 @@
 # Supabase status (the "it is Supabase, not you" message)
-_Last verified against code: 2026-11-04 — Claude (dev job `2072bc3e`, SANDBOX, Step 1b of the TD Social plan; not committed, not shipped): inside the TD Social phone app the red notice (`components/infra/supabase-incident-bar.tsx`) takes ONE line (tap to read it all, 44 px close button) and stays visible on the CRM screens, TD Talk and Marketing Chat; elsewhere it is unchanged. Details: `docs/systems/social-app.md`._
+_Last verified against code: 2026-11-04 — Claude (dev job `2072bc3e`, SANDBOX, Step 1b of the TD Social plan; sandbox build in a pull request, not in production): inside the TD Social phone app the red notice (`components/infra/supabase-incident-bar.tsx`) takes ONE line (tap to read it all, 44 px close button) and stays visible on the CRM screens, TD Talk and Marketing Chat; elsewhere it is unchanged. Details: `docs/systems/social-app.md`._
 _Last verified against code: 2026-11-02 — Claude (dev job `dd1c6a6d`, SANDBOX). Antonio, after a Supabase storage outage (21:34-22:48 UTC) that looked like a problem on Luca's side for an hour and a half: "I don't want just a general message or warning. I want the message to say that the issue is in Supabase, so we know."_
 
 ## What it does
