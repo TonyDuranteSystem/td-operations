@@ -36,6 +36,15 @@ interface WhatsAppWorkerPanelProps {
   onUseDraft: (text: string) => boolean
 }
 
+/** The browser's own clock zone (e.g. "America/New_York"), so the Worker sees the same message times as this screen. */
+function browserTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
+  } catch {
+    return undefined
+  }
+}
+
 function linkLabel(chat: ChatSummary | null, failed: boolean): string {
   if (failed) return 'Could not load who this chat is — the Worker still works'
   if (!chat) return 'Checking who this chat is…'
@@ -112,7 +121,7 @@ export function WhatsAppWorkerPanel({ groupId, onClose, onUseDraft }: WhatsAppWo
       const res = await fetch('/api/inbox/whatsapp-worker', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupId, message: text }),
+        body: JSON.stringify({ groupId, message: text, timeZone: browserTimeZone() }),
       })
       const raw = await res.text()
       let data: { reply?: string; error?: string } = {}
@@ -172,9 +181,9 @@ export function WhatsAppWorkerPanel({ groupId, onClose, onUseDraft }: WhatsAppWo
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
         {messages.length === 0 && !pending && (
           <div className="text-xs text-zinc-400 px-2 py-4 text-center space-y-1">
-            <p>It reads this chat and looks in the CRM, KB and call notes. It cannot send anything.</p>
+            <p>It reads this whole chat, voice-note transcripts included, and looks in the CRM, KB and call notes. It cannot send anything.</p>
             <p>Try: &quot;who is this and where are we with them?&quot; or &quot;draft a reply saying we&apos;ll follow up tomorrow&quot;.</p>
-            <p>Photos, voice notes and documents in the chat are not read.</p>
+            <p>Photos and documents in the chat are not read.</p>
           </div>
         )}
         {messages.map((m, i) => (

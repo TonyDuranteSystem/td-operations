@@ -94,6 +94,7 @@ import { buildRelatedThreadsSuffix, embedThreadSummary } from "./thread-recall"
 import { isTransientStatus, retryDelayMs, canRetryWithin, MAX_TRANSIENT_RETRIES } from "./transient-errors"
 import { buildPortalChatLink } from "@/lib/portal/chat-link"
 import { searchBankFeeds } from "@/lib/finance/feed-search-tool"
+import { SEARCH_THIS_CHAT_TOOL, searchThisChatForWorker, type PinnedWhatsAppChat } from "@/lib/inbox/whatsapp-chat-search"
 
 /**
  * The complete read-only allow-list. Adding a tool here is a deliberate
@@ -3136,6 +3137,15 @@ export async function executeWorkerTool(
     }
     return readUploadedFileForWorker(params, sendContext?.pinnedUploads)
   }
+  // search_this_chat — WhatsApp Worker only. Doubly gated like the two above: offered only with the
+  // server's pin, and the executor re-checks the name AND reads the chat from that same pin, never from
+  // `params`.
+  if (name === "search_this_chat") {
+    if (!availableNames?.has(name)) {
+      return `❌ Tool "${name}" is not permitted in this worker call (chat search not enabled).`
+    }
+    return searchThisChatForWorker(params, sendContext?.pinnedWhatsAppChat)
+  }
   // recall_thread — on-demand FULL/searched recall of THIS conversation's permanent
   // transcript (Slack-only, gated via enableThreadRecall). The thread_id is injected
   // server-side (currentThreadId) — the model can't address another conversation.
@@ -3767,6 +3777,11 @@ export interface CallWorkerOptions {
    */
   pinnedUploads?: PinnedUpload[] | null
   /**
+   * The WhatsApp chat open on screen (WhatsApp Worker only). search_this_chat reads THIS chat and takes no
+   * chat id, so the model can never name another person's conversation — the server put the id here.
+   */
+  pinnedWhatsAppChat?: PinnedWhatsAppChat | null
+  /**
    * Read-to-the-end seeds for files that arrived ALREADY ATTACHED to this turn
    * (dev job 5e87b099), one per file in `pinnedUploads` that came back windowed.
    * Built by attachment-reader.ts's readAttachments (its `shortRefs` param) from
@@ -3961,6 +3976,11 @@ export interface WorkerSendContext {
    * window of an uploaded file. See WorkerSendContext.pinnedUploads.
    */
   pinnedUploads?: PinnedUpload[] | null
+  /**
+   * The open WhatsApp chat (WhatsApp Worker). Set it and search_this_chat is offered; leave it and the tool
+   * does not exist for this call. See WorkerSendContext.pinnedWhatsAppChat.
+   */
+  pinnedWhatsAppChat?: PinnedWhatsAppChat | null
   /** Read-to-the-end seeds for door-attached files. See CallWorkerOptions.doorAttachmentSeeds. */
   doorAttachmentSeeds?: DoorAttachmentSeed[] | null
 
@@ -4016,6 +4036,7 @@ export function buildWorkerSendContext(
     pinnedPortalRecipient?: { account_id?: string | null; contact_id?: string | null } | null
     pinnedEmailAttachments?: PinnedEmailAttachment[] | null
     pinnedUploads?: PinnedUpload[] | null
+    pinnedWhatsAppChat?: PinnedWhatsAppChat | null
     doorAttachmentSeeds?: DoorAttachmentSeed[] | null
     emailConfirmExempt?: string[]
     forceMailbox?: "support" | "antonio"
@@ -4034,6 +4055,7 @@ export function buildWorkerSendContext(
     opts.pinnedPortalRecipient ||
     opts.pinnedEmailAttachments?.length ||
     opts.pinnedUploads?.length ||
+    opts.pinnedWhatsAppChat ||
     opts.emailConfirmExempt !== undefined ||
     opts.forceMailbox ||
     opts.emailSendPrep ||
@@ -4051,6 +4073,7 @@ export function buildWorkerSendContext(
     pinnedPortalRecipient: opts.pinnedPortalRecipient ?? null,
     pinnedEmailAttachments: opts.pinnedEmailAttachments ?? null,
     pinnedUploads: opts.pinnedUploads ?? null,
+    pinnedWhatsAppChat: opts.pinnedWhatsAppChat ?? null,
     doorAttachmentSeeds: opts.doorAttachmentSeeds ?? null,
     capturedOffThreadAttempts,
     memoryClientKey: opts.clientKey ?? null,
@@ -4169,6 +4192,8 @@ const UNTRUSTED_RESULT_PREFIXES = ["gmail_", "drive_", "doc_", "portal_chat_", "
 const UNTRUSTED_RESULT_NAMES = new Set([
   "search_conversations", "search_portal_messages", "msg_read_group", "recall_conversation",
   "use_tool", "search_templates", "get_client_paperwork",
+  // Everything in it was written by people in the chat (messages, voice transcripts, quoted replies).
+  "search_this_chat",
 ])
 
 /** True when this tool's result may contain third-party-authored text. Pure/exported for tests. */
@@ -5087,6 +5112,12 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   // marker it has no way to act on (td-bug 2026-08-03).
   if (opts.pinnedUploads?.length && !tools.some((t) => t.name === READ_UPLOADED_FILE_TOOL.name)) {
     tools = [...tools, READ_UPLOADED_FILE_TOOL]
+  }
+
+  // search_this_chat — WhatsApp Worker only; same rule again: the server's pin of the OPEN chat IS the
+  // gate, so the tool can never be offered without it, and it takes no chat id for the model to misuse.
+  if (opts.pinnedWhatsAppChat?.groupId && !tools.some((t) => t.name === SEARCH_THIS_CHAT_TOOL.name)) {
+    tools = [...tools, SEARCH_THIS_CHAT_TOOL]
   }
 
   // Slack-only: append the READ-ONLY Calendly tools (cal_list_bookings /

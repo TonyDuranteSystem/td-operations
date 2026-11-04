@@ -18,13 +18,13 @@ import { toast } from 'sonner'
 import { useQuery } from '@tanstack/react-query'
 import {
   Building2, User, Hammer, Folder, FolderOpen, FolderPlus, FileText, FileImage, FileSpreadsheet, ChevronRight, ChevronDown, Eye, EyeOff,
-  Lock, Trash2, Layers, X, Upload, Download, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, AlertTriangle, Check, Search, Tag, HardDriveDownload,
+  Lock, Trash2, Layers, X, Upload, Download, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, CalendarRange, AlertTriangle, Check, Search, Tag, HardDriveDownload,
 } from 'lucide-react'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { useAiMarks, AiMarkChip, AiCheckFilesButton, AiReviewPanel } from './ai-check'
 import { MyDriveDialog } from '@/components/storage/my-drive-dialog'
 import { PlainDropPanel, type PlainOutcome } from './plain-drop-panel'
-import { viewKindFor } from '@/lib/crm-store/view-html'
+import { mediaKindFor, isHtmlFile, BIG_DOWNLOAD_BYTES, type MediaKind } from '@/lib/crm-store/media'
 import { allFolderPaths, filterPlainDrop, itemsFromFileList, type PlainItem, type PlainSkipped } from '@/lib/crm-store/plain-drop'
 import { isInternalOwnerKind, isPersonalAreaKind } from '@/lib/crm-store/owner-kinds'
 import { typesForTarget } from '@/lib/crm-store/types-for-target'
@@ -37,6 +37,8 @@ import { NewVersionDialog, type EditTarget } from './new-version-dialog'
 import { lockText } from '@/lib/crm-store/new-version-rules'
 import { MergedPreviewModal } from './merged-preview-modal'
 import { baseName } from '@/lib/crm-store/merge-parts'
+import { orderFolders } from '@/lib/crm-store/date-sort-rules'
+import { DateSortDialog } from './date-sort-dialog'
 import { mergeBlockReason } from '@/lib/crm-store/merge-rules'
 import { onReconnected } from '@/lib/hooks/use-connection-state'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
@@ -77,7 +79,7 @@ interface File_ {
 }
 interface OwnerInfo { kind: string; label: string; accountStatus: string | null; closed: boolean }
 interface Person { contactId: string; name: string; ownerId: string | null; companies: string[] }
-interface Contents { folder: Fold | null; path: Fold[]; folders: Fold[]; files: File_[]; people?: Person[]; owner: OwnerInfo }
+interface Contents { folder: Fold | null; path: Fold[]; folders: Fold[]; sortOrder?: 'newest' | 'oldest'; files: File_[]; people?: Person[]; owner: OwnerInfo }
 interface DocType { slug: string; name: string; staffOnly: boolean; personal: boolean; defaultFolderKind: string | null; draftNeverVisible: boolean }
 
 /**
@@ -150,16 +152,88 @@ function Badge({ tone, children }: { tone: 'green' | 'gray' | 'amber' | 'red' | 
   return <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${t}`}>{children}</span>
 }
 
+/** A short-lived signed link to the file's current copy (the server never loads a big file) — to play it or save it straight from storage. */
+interface FileLink { url: string; downloadUrl: string; kind: MediaKind | null }
+const linkUrl = (fileId: string) => `/api/crm-store/browse/file/${fileId}/link`
+
+/** A video / audio file: the browser's own player streams it from the signed link (and can jump around in it). */
+function MediaPlayer({ file, kind }: { file: File_; kind: MediaKind }) {
+  const [link, setLink] = useState<FileLink | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [cantPlay, setCantPlay] = useState(false)
+  useEffect(() => {
+    let off = false
+    getJson<FileLink>(linkUrl(file.id)).then((l) => { if (!off) setLink(l) }).catch((e) => { if (!off) setErr(errMsg(e, 'The file could not be opened — please try again.')) })
+    return () => { off = true }
+  }, [file.id])
+  if (err) return <div className="flex h-full items-center justify-center p-6 text-sm text-red-600">{err}</div>
+  if (!link) return <div className="flex h-full items-center justify-center text-sm text-zinc-500">Getting the file ready…</div>
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-black p-3">
+      {cantPlay ? (
+        <div className="flex flex-col items-center gap-3 text-sm text-zinc-200">
+          <p>This browser cannot play this kind of recording here.</p>
+          <a href={link.downloadUrl} className="rounded-md border border-zinc-500 px-3 py-1.5 text-blue-300 hover:bg-zinc-800">Download it</a>
+        </div>
+      ) : kind === 'video' ? (
+        <video src={link.url} controls preload="metadata" onError={() => setCantPlay(true)} className="max-h-full max-w-full" data-testid="media-video" />
+      ) : (
+        <audio src={link.url} controls preload="metadata" onError={() => setCantPlay(true)} className="w-full max-w-xl" data-testid="media-audio" />
+      )}
+      {!cantPlay && <a href={link.downloadUrl} className="text-xs text-blue-300 hover:underline">Download the original</a>}
+    </div>
+  )
+}
+
+/** The header's "Download the original": a big file goes straight from storage through a signed link (the server never loads it). */
+function DownloadOriginal({ file, src, canLink }: { file: File_; src: string; canLink: boolean }) {
+  const big = canLink && (file.size ?? 0) > BIG_DOWNLOAD_BYTES
+  const [url, setUrl] = useState<string>(src)
+  useEffect(() => {
+    if (!big) return
+    let off = false
+    getJson<FileLink>(linkUrl(file.id)).then((l) => { if (!off) setUrl(l.downloadUrl) }).catch(() => undefined)
+    return () => { off = true }
+  }, [big, file.id])
+  return <a href={url} download className="text-xs text-blue-700 hover:underline">Download the original</a>
+}
+
+/** A file nothing here can show: a clear message and a download. A big file downloads straight from storage (never loaded by the server). */
+function NoPreview({ file, src, canLink }: { file: File_; src: string; canLink: boolean }) {
+  const big = canLink && (file.size ?? 0) > BIG_DOWNLOAD_BYTES
+  const [url, setUrl] = useState<string | null>(big ? null : src)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    if (!big) return
+    let off = false
+    getJson<FileLink>(linkUrl(file.id)).then((l) => { if (!off) setUrl(l.downloadUrl) }).catch((e) => { if (!off) setErr(errMsg(e, 'The download could not be prepared — please try again.')) })
+    return () => { off = true }
+  }, [big, file.id])
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-zinc-600">
+      <p>This kind of file cannot be shown inside the CRM.</p>
+      {err ? <p className="text-red-600">{err}</p>
+        : url ? <a href={url} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-blue-700 hover:bg-zinc-50">Download it</a>
+        : <span className="text-zinc-500">Getting the download ready…</span>}
+    </div>
+  )
+}
+
 function PreviewPanel({ file, onClose, src: srcOverride, title, viewSrc }: { file: File_; onClose: () => void; src?: string; title?: string; viewSrc?: string }) {
   const src = srcOverride ?? `/api/crm-store/browse/file/${file.id}`
   const mime = (file.mimeType ?? '').split(';')[0].trim().toLowerCase()
   const inline = INLINE_TYPES.has(mime)
   const isImage = inline && mime.startsWith('image/')
-  // Word / Excel / Markdown / CSV … open as a simplified, script-free page made by the server (the current version only)
-  // (an older saved copy is shown the same way through its own view address)
-  const simple = !inline && (!srcOverride || !!viewSrc) && viewKindFor(file.name, file.mimeType) !== null
+  // EVERY other file opens as a simplified page made by the server (Word, Excel, PowerPoint, OpenOffice, Apple files, RTF, text, zip, SVG / TIFF …) —
+  // and anything it cannot draw gets a details page, never "cannot be shown" (an older saved copy is shown the same way through its own view address)
+  const simple = !inline && (!srcOverride || !!viewSrc)
   // an iPhone photo (HEIC/HEIF) is shown through the picture route, which converts it to a JPEG for the screen
   const heic = !inline && !srcOverride && (/\.(heic|heif)$/i.test(file.name) || /^image\/hei[cf]/i.test(mime))
+  // a video / audio recording plays from a signed link (only the current copy has one)
+  const media = !inline && !srcOverride ? mediaKindFor(file.name, file.mimeType) : null
+  // an HTML file (a saved mockup) can be shown as the real page, in a locked box; "View source" switches back to the code
+  const html = !inline && !srcOverride && isHtmlFile(file.name, file.mimeType)
+  const [asPage, setAsPage] = useState(true)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
@@ -171,7 +245,8 @@ function PreviewPanel({ file, onClose, src: srcOverride, title, viewSrc }: { fil
         <div className="flex items-center gap-2 border-b border-zinc-200 px-4 py-2">
           <FileText className="h-4 w-4 text-zinc-400" />
           <span className="min-w-0 flex-1 truncate text-sm font-medium">{title ?? file.name}</span>
-          {(simple || heic) && <a href={src} download className="text-xs text-blue-700 hover:underline">Download the original</a>}
+          {html && <button type="button" onClick={() => setAsPage((v) => !v)} className="rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-700 hover:bg-zinc-50" data-testid="html-toggle">{asPage ? 'View source' : 'View as page'}</button>}
+          {(simple || heic) && !media && <DownloadOriginal file={file} src={src} canLink={!srcOverride} />}
           <button type="button" onClick={onClose} aria-label="Close preview" className="rounded p-1 text-zinc-500 hover:bg-zinc-100">
             <X className="h-4 w-4" />
           </button>
@@ -180,13 +255,15 @@ function PreviewPanel({ file, onClose, src: srcOverride, title, viewSrc }: { fil
           {heic ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={`${src}/picture`} alt={file.name} className="mx-auto block h-auto max-w-full" data-testid="heic-view" />
+          ) : media ? (
+            <MediaPlayer file={file} kind={media} />
+          ) : html && asPage ? (
+            // the real page in a locked box: scripts may run, but with NO same-origin it cannot touch the CRM, a login or any client data
+            <iframe src={`${src}/view?mode=html`} title={file.name} sandbox="allow-scripts allow-forms allow-modals" className="h-full w-full border-0 bg-white" data-testid="html-page" />
           ) : simple ? (
             <iframe src={viewSrc ?? `${src}/view`} title={file.name} sandbox="" className="h-full w-full border-0 bg-white" data-testid="simple-view" />
           ) : !inline ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-zinc-600">
-              <p>This kind of file cannot be shown inside the CRM.</p>
-              <a href={src} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-blue-700 hover:bg-zinc-50">Download it</a>
-            </div>
+            <NoPreview file={file} src={src} canLink={!srcOverride} />
           ) : isImage ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={src} alt={file.name} className="mx-auto block h-auto max-w-full" />
@@ -209,6 +286,8 @@ const fmtDate = (d: string) => { try { return new Date(d).toLocaleDateString('en
 /** "Oct 4" — or "Oct 4, 2025" when it is not this year: the narrow column on each file row */
 const fmtShort = (d: string) => { try { const x = new Date(d); return x.toLocaleDateString('en-US', x.getFullYear() === new Date().getFullYear() ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: '2-digit' }) } catch { return '' } }
 const isYear = (n: string) => /^\d{4}$/.test(n)
+/** A folder's sub-folders: in the order its "Sort by date" choice says (newest / oldest first), else by name (years newest first). */
+const sortKids = (c: { folders: Fold[]; sortOrder?: 'newest' | 'oldest' }): Fold[] => (c.sortOrder ? orderFolders(c.folders, c.sortOrder) : [...c.folders].sort(sortFolders))
 /** year folders newest first, as today; everything else by name */
 const sortFolders = (a: Fold, b: Fold) => (isYear(a.name) && isYear(b.name) ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name))
 
@@ -351,6 +430,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const { data: docTypes } = useStoreDocTypes()
   const typeNameOf = (slug: string | null) => (slug ? docTypes?.find((t) => t.slug === slug)?.name ?? slug : null)
   const [renaming, setRenaming] = useState<{ id: string; value: string; folder?: boolean; left?: boolean } | null>(null)
+  const [dateSortFor, setDateSortFor] = useState<{ id: string; name: string } | null>(null)   // the "Sort by date" pop-up
   const [newFolder, setNewFolder] = useState<NewFolder | null>(null)
   const [dragFile, setDragFile] = useState<{ id: string; from: string | null } | null>(null)
   const [dropOn, setDropOn] = useState<string | null>(null)
@@ -528,7 +608,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setTreeLoading((l) => new Set(l).add(key))
     try {
       const c = await fetchInto(oid, key.startsWith('own:') ? null : key)
-      const folders = [...c.folders].sort(sortFolders)
+      const folders = sortKids(c)
       setTree((t) => ({ ...t, [key]: { root: key.startsWith('own:') ? c.folder : undefined, folders } }))
       return folders
     } catch (e) {
@@ -1703,11 +1783,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           // each person's own folders opened through the company (the ones the company page may show)
           for (const p of c?.people ?? []) {
             const pc = loaded[personKey(p.contactId)]
-            if (pc) walk([...pc.folders].sort(sortFolders), depth + 1, `${p.name} › `)
+            if (pc) walk(sortKids(pc), depth + 1, `${p.name} › `)
           }
           continue
         }
-        if (c) walk([...c.folders].sort(sortFolders), depth + 1, prefix)
+        if (c) walk(sortKids(c), depth + 1, prefix)
       }
     }
     if (root?.folder && root.folder.kind !== 'root') out.push({ f: root.folder, depth: 0, owner: ownerId ?? '', label: root.folder.name })
@@ -2122,6 +2202,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       {extras && f.kind !== 'root' && <MenuItem icon={Upload} label="Upload here" onClick={() => { setMenuFor(null); void openUpload(f.id) }} />}
       <MenuItem icon={FolderPlus} label="New folder inside" onClick={() => startNewFolder(f.id)} />
       {folderEditItems(f, parentId, false)}
+      {f.kind === 'custom' && !f.locked && <MenuItem icon={CalendarRange} label="Sort by date…" onClick={() => { setMenuFor(null); setDateSortFor({ id: f.id, name: f.name }) }} />}
       {extras && f.kind !== 'contacts' && <MenuItem icon={Download} label="Download as zip" onClick={() => { setMenuFor(null); void downloadZip(f) }} />}
       {extras && (f.kind === 'tax' || f.kind === 'person_tax') && <MenuItem icon={CalendarPlus} label="New tax year" onClick={() => { setMenuFor(null); startNewFolder(f.id, true) }} />}
     </>
@@ -2292,7 +2373,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     const c = loaded[f.id]
     const busy = loadingFolders.has(f.id)
     const canDrop = !!dragFile && f.kind !== 'contacts' && f.kind !== 'root' && dragFile.from !== f.id
-    const subs = c ? [...c.folders].sort(sortFolders) : []
+    const subs = c ? sortKids(c) : []
     const shown = c ? c.files.filter((x) => x.clientVisible).length : 0
     const isTax = f.kind === 'tax' || f.kind === 'person_tax'
     const where = [...trail, f.name].join(' › ')
@@ -2411,7 +2492,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         {isOpen && c && (
           <ul>
             {c.folder && newFolderBox(c.folder.id, depth + 1)}
-            {[...c.folders].sort(sortFolders).map((sf) => folderNode(sf, depth + 1, c.folder?.id ?? null, [...trail, p.name]))}
+            {sortKids(c).map((sf) => folderNode(sf, depth + 1, c.folder?.id ?? null, [...trail, p.name]))}
             {sortFiles(c.files).map((file) => fileRow(file, c.folder, depth + 1))}
           </ul>
         )}
@@ -2517,7 +2598,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // the right side shows the storage's top, or the ONE folder picked on the left / in the path
   const view: Contents | null = focus && loaded[focus] && !loaded[focus].folder?.trashed ? loaded[focus] : root
   const viewFolder = view?.folder ?? null
-  const topFolders = view && viewFolder?.kind !== 'contacts' ? [...view.folders].sort(sortFolders) : []
+  const topFolders = view && viewFolder?.kind !== 'contacts' ? sortKids(view) : []
   const allOpen = topFolders.length > 0 && topFolders.every((f) => expanded.has(f.id))
   const groupOf = (groups ?? []).find((g) => g.owners.some((o) => o.id === ownerId))
   const pathKey = focus ?? selected
@@ -2534,10 +2615,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   if (chipsOn && root) {
     // the bar follows the folder being shown (never a folder that was just deleted)
     const barPath = focus && loaded[focus] && !loaded[focus].folder?.trashed ? selPath : []
-    const l0 = [...root.folders].filter((x) => !x.trashed).sort(sortFolders)
+    const l0 = sortKids(root).filter((x) => !x.trashed)
     if (l0.length) chipLevels.push({ items: l0, selectedId: barPath[0]?.id ?? null, trail: [] })
     barPath.forEach((el, i) => {
-      const kids = [...(loaded[el.id]?.folders ?? [])].filter((x) => !x.trashed).sort(sortFolders)
+      const kids = (loaded[el.id] ? sortKids(loaded[el.id]) : []).filter((x) => !x.trashed)
       if (kids.length) chipLevels.push({ items: kids, selectedId: barPath[i + 1]?.id ?? null, trail: barPath.slice(0, i + 1).map((x) => x.name) })
     })
   }
@@ -2661,6 +2742,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
               <FolderPlus className="h-3.5 w-3.5" />New folder
             </button>}
+            {browseOn && viewFolder && viewFolder.kind === 'custom' && !viewFolder.locked && (
+              <FastTooltip label="Put the items that start with a date into year and month folders (you see a preview first)">
+                <button type="button" onClick={(e) => { e.stopPropagation(); setDateSortFor({ id: viewFolder.id, name: viewFolder.name }) }}
+                  className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
+                  <CalendarRange className="h-3.5 w-3.5" />Sort by date
+                </button>
+              </FastTooltip>
+            )}
             {inFolderView && viewFolder && (viewFolder.kind === 'tax' || viewFolder.kind === 'person_tax') && (
               <button type="button" onClick={(e) => { e.stopPropagation(); startNewFolder(viewFolder.id, true) }}
                 className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
@@ -2948,6 +3037,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
       {shareDialog}
       {mergedFile && mergedPreviewOpen && <MergedPreviewModal file={mergedFile.file} pages={mergedFile.pages} onClose={() => setMergedPreviewOpen(false)} />}
+      {dateSortFor && <DateSortDialog folderId={dateSortFor.id} folderName={dateSortFor.name} onClose={() => setDateSortFor(null)} onDone={() => refreshAll([dateSortFor.id])} />}
       {mergeList && <MergeFilesDialog files={mergeList} onCancel={() => setMergeList(null)} onMerged={finishMerge} />}
       {ctx && (
         <div ref={ctxMenuRef} role="menu" data-testid="ctx-menu" className="fixed z-[70] w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg"
@@ -3207,7 +3297,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     try {
       const c = await fetchInto(oid, null)
       if (!c.folder) return
-      const folders = [...c.folders].sort(sortFolders)
+      const folders = sortKids(c)
       setTree((t) => ({ ...t, [key]: { root: c.folder, folders } }))
       setOpenTree((x) => new Set(x).add(key))
       setNewFolder({ parentId: c.folder.id, siblings: folders.map((x) => x.name), left: true, value: '' })

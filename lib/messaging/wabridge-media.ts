@@ -2,7 +2,8 @@
  * Voice notes on the self-hosted WhatsApp link — pure helpers (no I/O, unit-tested).
  *
  * The rules live in the database (wabridge_media_claim / wabridge_media_finish); this file parses the Mac's signed events, builds the
- * server-owned storage path, and words the screen states. Antonio 2026-09-26: keep the audio 180 days, transcript forever, only staff listen.
+ * server-owned storage path, and words the screen states. Antonio 2026-09-26: keep the audio 180 days, transcript forever.
+ * (He first said "only staff listen"; on 2026-11-04 he made voice notes open to anyone who can use the Inbox — clients still cannot.)
  */
 
 import { HEARTBEAT_MAX_SKEW_MS } from "./wabridge-health"

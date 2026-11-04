@@ -132,7 +132,7 @@ export const CLOSED_ACCOUNT_STATUSES = ["Closed", "Cancelled", "Offboarding"]
 type FolderRowLite = { id: string; name: string; kind: string; trashed_at: string | null; template_slug: string | null; parent_id: string | null }
 const toFolder = (d: FolderRowLite): BrowseFolder => ({ id: d.id, name: d.name, kind: d.kind, trashed: !!d.trashed_at, locked: isLockedFolderRule(d) })
 
-export async function folderContents(ownerId: string, folderId: string | null, opts: { throughCompany?: boolean } = {}): Promise<{ folder: BrowseFolder | null; path: BrowseFolder[]; folders: BrowseFolder[]; files: BrowseFile[]; people?: BrowsePerson[]; owner: BrowseOwnerInfo }> {
+export async function folderContents(ownerId: string, folderId: string | null, opts: { throughCompany?: boolean } = {}): Promise<{ folder: BrowseFolder | null; path: BrowseFolder[]; folders: BrowseFolder[]; sortOrder?: "newest" | "oldest"; files: BrowseFile[]; people?: BrowsePerson[]; owner: BrowseOwnerInfo }> {
   const { data: own, error: oErr } = await db().from("store_owners").select("kind, account_id, lifecycle_override, accounts(company_name, status), contacts(full_name)").eq("id", ownerId).maybeSingle()
   if (oErr) throw new Error(`store browse: ${oErr.message}`)
   if (!own) throw new Error("store browse: owner not found")
@@ -276,10 +276,15 @@ export async function folderContents(ownerId: string, folderId: string | null, o
       filingStatus: (f.filing_status as string | null) ?? null,
     })
   }
+  // a folder the person sorted by date lists its year / month folders in the chosen order (the Storage page and Finder both read this)
+  const { savedOrder } = await import("./date-sort")
+  const sortOrder = await savedOrder(current.id)
+  const listed = ((subs ?? []) as FolderRowLite[]).filter((sf) => !kinds || shownThroughCompany(sf.kind, kinds)).map(toFolder)
   return {
     folder: current,
     path,
-    folders: ((subs ?? []) as FolderRowLite[]).filter((sf) => !kinds || shownThroughCompany(sf.kind, kinds)).map(toFolder),
+    folders: sortOrder ? (await import("./date-sort-rules")).orderFolders(listed, sortOrder) : listed,
+    ...(sortOrder ? { sortOrder } : {}),
     files,
     owner,
     ...(current.kind === "contacts" ? { people } : {}),
@@ -296,6 +301,60 @@ export async function readFileForStaff(fileId: string): Promise<{ bytes: Buffer;
   const { data, error: dl } = await db().storage.from(v.storage_bucket).download(v.storage_path)
   if (dl || !data) throw new Error("store browse: content could not be read")
   return { bytes: Buffer.from(await data.arrayBuffer()), mimeType: v.mime_type ?? data.type ?? null, name: f.name }
+}
+
+/**
+ * The first bytes of the file's CURRENT copy plus its total size, read with a Range request through a signed link — so the viewer can
+ * decide what a file is without loading a 600 MB recording into memory.
+ */
+export async function readHeadForStaff(fileId: string, maxBytes = 65536): Promise<{ head: Buffer; size: number | null; mimeType: string | null; name: string }> {
+  const { data: f, error } = await db().from("store_files")
+    .select("name, state, store_file_versions!store_files_current_version_fk(storage_bucket, storage_path, mime_type)")
+    .eq("id", fileId).maybeSingle()
+  if (error || !f || f.state === "purged") throw new Error("store browse: file not available")
+  const v = f.store_file_versions as { storage_bucket: string; storage_path: string; mime_type: string | null } | null
+  if (!v) throw new Error("store browse: file has no content")
+  const { data, error: se } = await db().storage.from(v.storage_bucket).createSignedUrl(v.storage_path, 300)
+  if (se || !data?.signedUrl) throw new Error("store browse: could not read the file")
+  // no-store: the app's own fetch wrapper otherwise keeps a copy of the body for its cache (a split stream), and then stopping early waits forever
+  const res = await fetch(data.signedUrl, { headers: { Range: `bytes=0-${maxBytes - 1}` }, cache: "no-store" })
+  if (!res.ok) throw new Error(`store browse: could not read the file (HTTP ${res.status})`)
+  // read only the first bytes even if the server ignored the Range and sends the whole file, then drop the rest
+  const chunks: Uint8Array[] = []
+  let got = 0
+  const reader = res.body?.getReader()
+  while (reader && got < maxBytes) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value); got += value.length
+  }
+  void reader?.cancel().catch(() => undefined) // never wait on the rest of the body — it is simply dropped
+  const head = Buffer.concat(chunks).subarray(0, maxBytes)
+  const range = /\/(\d+)\s*$/.exec(res.headers.get("content-range") ?? "")
+  const length = Number(res.headers.get("content-length"))
+  const size = range ? Number(range[1]) : res.status === 200 && Number.isFinite(length) && length > 0 ? length : res.status === 200 ? head.length : null
+  return { head, size, mimeType: v.mime_type, name: f.name }
+}
+
+/**
+ * A short-lived signed link to the file's CURRENT copy, for the browser to stream or download straight from storage — the server never
+ * loads the bytes (a Zoom recording can be 600 MB). `url` plays / shows it in the page, `downloadUrl` saves it under its own name.
+ */
+export async function signedLinkForStaff(fileId: string): Promise<{ url: string; downloadUrl: string; name: string; mimeType: string | null; kind: import("./media").MediaKind | null }> {
+  const { data: f, error } = await db().from("store_files")
+    .select("name, state, store_file_versions!store_files_current_version_fk(storage_bucket, storage_path, mime_type)")
+    .eq("id", fileId).maybeSingle()
+  if (error || !f || f.state === "purged") throw new Error("store browse: file not available")
+  const v = f.store_file_versions as { storage_bucket: string; storage_path: string; mime_type: string | null } | null
+  if (!v) throw new Error("store browse: file has no content")
+  const { MEDIA_LINK_SECONDS, mediaKindFor } = await import("./media")
+  const bucket = db().storage.from(v.storage_bucket)
+  const [shown, saved] = await Promise.all([
+    bucket.createSignedUrl(v.storage_path, MEDIA_LINK_SECONDS),
+    bucket.createSignedUrl(v.storage_path, MEDIA_LINK_SECONDS, { download: f.name }),
+  ])
+  if (shown.error || !shown.data?.signedUrl || saved.error || !saved.data?.signedUrl) throw new Error("store browse: could not make a link to the file")
+  return { url: shown.data.signedUrl, downloadUrl: saved.data.signedUrl, name: f.name, mimeType: v.mime_type, kind: mediaKindFor(f.name, v.mime_type) }
 }
 
 /** The company's owner in the NEW store (a live, not study-only storage; anything else → null). */

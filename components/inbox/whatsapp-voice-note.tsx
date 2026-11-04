@@ -20,7 +20,7 @@ function formatDuration(seconds: number | null): string {
 
 /**
  * One WhatsApp voice note: a player (a fresh short-lived link is fetched only when staff press Play) and its machine transcript.
- * The server only sends this to staff; for anyone else the note stays the plain "[Voice note]" text.
+ * The server sends this to everyone who can use the Inbox (Antonio 2026-11-04: voice notes are no longer staff-only).
  */
 export function WhatsAppVoiceNote({ messageId, voice }: { messageId: string; voice: VoiceInfo }) {
   const [url, setUrl] = useState<string | null>(null)
