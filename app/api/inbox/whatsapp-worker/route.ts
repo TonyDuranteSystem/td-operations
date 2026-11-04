@@ -7,6 +7,8 @@ import { SLACK_WORKER_SYSTEM_PROMPT } from "@/lib/ai-agent/slack-claude"
 import { deterministicThreadUuid } from "@/lib/ai-agent/inbox-worker-prompt"
 import { explainWorkerFailure } from "@/lib/ai-agent/transient-errors"
 import { jidToE164 } from "@/lib/messaging/phone"
+import { resolveStaffTimeZone } from "@/lib/inbox/staff-time-zone"
+import { loadVoiceTranscripts, toChatRow, type VoiceInfo } from "@/lib/inbox/whatsapp-chat-search"
 import { loadRelevantTemplates, formatTemplatesForPrompt } from "@/lib/ai-agent/templates"
 import {
   WHATSAPP_WORKER_SURFACE,
@@ -130,7 +132,7 @@ export async function POST(req: NextRequest) {
   const denied = await requireStaffRoute()
   if (denied) return denied
 
-  let body: { groupId?: string; message?: string }
+  let body: { groupId?: string; message?: string; timeZone?: string }
   try {
     body = await req.json()
   } catch {
@@ -138,6 +140,9 @@ export async function POST(req: NextRequest) {
   }
   const groupId = body.groupId?.trim() ?? ""
   const message = body.message?.trim() ?? ""
+  // The browser's own clock zone, so the Worker sees the same message times the staff member sees. Only a
+  // display preference (never identity): anything missing or odd falls back to New York.
+  const tz = resolveStaffTimeZone(body.timeZone)
   if (!UUID.test(groupId) || !message) {
     return NextResponse.json({ error: "groupId and message are required" }, { status: 400 })
   }
@@ -152,8 +157,10 @@ export async function POST(req: NextRequest) {
 
   const history = await db
     .from("messages")
-    .select("direction, content_text, content_type, sender_name, sender_phone, created_at")
+    .select("id, direction, content_text, content_type, sender_name, sender_phone, created_at, metadata", { count: "exact" })
     .eq("group_id", groupId)
+    // A message staff hid from their own screen stays hidden from the Worker too (the chat screen does the same).
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(HISTORY_ROWS)
 
@@ -166,8 +173,30 @@ export async function POST(req: NextRequest) {
     accountName: chat.accountName,
     languageOnFile: chat.languageOnFile,
   })
-  const historyRows = (history?.data ?? []) as WhatsAppMessageRow[]
-  const transcript = formatTranscript(historyRows, { isGroup, moreExist: historyRows.length >= HISTORY_ROWS })
+  const dbRows = (history?.data ?? []) as Array<{
+    id: string
+    direction: string | null
+    sender_name: string | null
+    sender_phone: string | null
+    content_type: string | null
+    content_text: string | null
+    created_at: string | null
+    metadata: unknown
+  }>
+  // A voice note's message row only says "[Voice note]"; its words are the machine transcript in
+  // message_media. Best-effort: if that read fails the note shows as "no transcript available" and
+  // search_this_chat (which reads it again) still works.
+  let voice = new Map<string, VoiceInfo>()
+  try {
+    voice = await loadVoiceTranscripts(dbRows.filter((r) => (r.content_type ?? "").toLowerCase() === "voice").map((r) => r.id))
+  } catch (err) {
+    console.warn("[whatsapp-worker] voice transcript lookup failed (non-fatal):", err)
+  }
+  const historyRows: WhatsAppMessageRow[] = dbRows.map((r) => toChatRow(r, voice.get(r.id)))
+  // How many messages the whole chat holds (exact count of the same query); unknown → fall back to "the window came back full".
+  const total: number | null = typeof history?.count === "number" ? history.count : null
+  const moreExist = total !== null ? total > historyRows.length : historyRows.length >= HISTORY_ROWS
+  const transcript = formatTranscript(historyRows, { isGroup, moreExist, total, tz })
 
   // The approved-reply library (verbatim replies TD already approved for other clients): the closest
   // matches go in the prompt so the Worker words answers the way TD does. Best-effort — "" on no match
@@ -240,7 +269,8 @@ export async function POST(req: NextRequest) {
       threadId,
       ...(rowId ? { messageId: rowId } : {}),
       systemPromptOverride,
-      ...buildWhatsAppWorkerOptions(),
+      // The open chat comes from the verified conversation id above — never from the model or the request body.
+      ...buildWhatsAppWorkerOptions({ groupId, isGroup, timeZone: tz }),
     })
 
     // The loop's own give-up text must never be offered as a draftable answer.

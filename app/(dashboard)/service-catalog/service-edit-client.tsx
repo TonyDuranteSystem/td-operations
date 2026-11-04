@@ -7,6 +7,7 @@ import { ArrowLeft, ArrowUp, ArrowDown, Trash2, Loader2, CheckCircle2, AlertCirc
 import { toast } from "sonner"
 import type { StageRow } from "@/lib/services/stages"
 import { onlyChangedStepFields } from "@/lib/services/step-settings"
+import { saveOutcome } from "@/lib/services/save-outcome"
 import { waitingOnOptions } from "@/lib/open-services/wait-kinds"
 import type { WaitKind } from "@/lib/open-services/types"
 import {
@@ -335,6 +336,13 @@ export function ServiceEditClient({ mode, initial, waitKinds }: Props) {
         knownStageIds: loadedStageIds,
       }
       const result = await saveServiceComplete(draft)
+      const outcome = saveOutcome(result, mode)
+      if (outcome.kind === "half_saved") {
+        // The service row was written but a later part failed. Open it for editing: a second "create" would be refused.
+        toast.error(outcome.message, { id: "service-save-error", duration: 15000 })
+        router.replace(`/service-catalog/${outcome.slug}/edit`)
+        return
+      }
       if (!result.ok) {
         if (result.workflowIssues && result.workflowIssues.length > 0) {
           setIssues(result.workflowIssues)

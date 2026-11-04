@@ -96,6 +96,24 @@ describe("buildWorkerSendContext — the controls survive the handoff", () => {
     ])
   })
 
+  it("REGRESSION: forwards pinnedWhatsAppChat — without it search_this_chat is offered and then has no chat to read", () => {
+    // search_this_chat takes NO chat id: the open chat reaches the executor only through this field.
+    // Drop it from the builder and everything still typechecks — the WhatsApp Worker is simply offered a
+    // search that answers "not available" for the chat Antonio is looking at.
+    const pin = { groupId: "5528e731-abc1-4e6e-bc17-6fe18f67efea", isGroup: false, timeZone: "America/New_York" }
+    const ctx = buildWorkerSendContext({ pinnedWhatsAppChat: pin })
+    expect(ctx).toBeDefined()
+    expect(ctx!.pinnedWhatsAppChat).toEqual(pin)
+    expect(buildWorkerSendContext({})).toBeUndefined()
+  })
+
+  it("search_this_chat is refused through the real executor unless the server offered it, and unusable without a pin", async () => {
+    const notOffered = await executeWorkerTool("search_this_chat", { text: "price" }, new Set(["search_leads"]), null, null, undefined)
+    expect(notOffered).toContain("not permitted in this worker call")
+    const noPin = await executeWorkerTool("search_this_chat", { text: "price", groupId: "5528e731-abc1-4e6e-bc17-6fe18f67efea" }, new Set(["search_this_chat"]), null, null, undefined)
+    expect(noPin).toContain("not available here")
+  })
+
   it("forwards forceMailbox — the antonio@-impersonation control", () => {
     // MANDATED by buildWorkerSendContext's own docblock: every new control field must
     // be asserted here. Without this, dropping forceMailbox from the builder would

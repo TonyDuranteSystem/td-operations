@@ -107,7 +107,7 @@ _Regenerated 2026-11-04 by directory scan._
 - Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
 - API route groups (102)
 - Code modules (89): `accounts` `ai-agent` `archive` `audit` `auth` `billing` `bofa-intake` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `closure` `code-tasks` `contacts` `contracts` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `embed` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `forms-hub` `harbor-compliance` `hooks` `inbox` `incoming-payments` `infra` `internal` `itin` `job-notes` `jobs` `leads` `lease` `marketing` `mcp` `media` `members` `messaging` `nav` `new-calendar` `notes` `notifications` `oa` `offers` `open-services` `operations` `partners` `payments` `pdf` `per-record-activity` `portal` `portal-chats` `public-forms` `push` `research` `schemas` `security` `services` `ss4` `storage` `storage-app` `supabase` `system-health` `talk` `tasks` `tax` `td-communication` `team` `theme` `todo-board` `types` `ui` `utils` `windows`
-- Database tables: 314 _(ground truth: `lib/database.types.ts`)_
+- Database tables: 315 _(ground truth: `lib/database.types.ts`)_
 <!-- /GENERATED:surface -->
 
 ## Seed priority — write these deep docs first
@@ -178,8 +178,8 @@ _Regenerated 2026-11-04 from the R-rule list in CLAUDE.md — **42 rules**, high
 <!-- GENERATED:deep-docs -->
 _Regenerated 2026-11-04. Every subsystem doc under `docs/systems/` (54 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
-- [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-10-30)_
-- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-10-30)_
+- [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-04)_
+- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-04)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-02)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-10-30)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-28)_
@@ -195,18 +195,18 @@ _Regenerated 2026-11-04. Every subsystem doc under `docs/systems/` (54 docs), wi
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-21)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-28)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-03)_
-- [formation.md](formation.md) — Company Formation _(verified 2026-11-03)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-04)_
+- [formation.md](formation.md) — Company Formation _(verified 2026-11-04)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-02)_
-- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-31)_
+- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-04)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-28)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-27)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-04)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-28)_
-- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-31)_
+- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-04)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-02)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-02)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-31)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-04)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-04)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-10-22)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
@@ -217,11 +217,11 @@ _Regenerated 2026-11-04. Every subsystem doc under `docs/systems/` (54 docs), wi
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-10-23)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-11-01)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
-- [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-10-26)_
+- [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-04)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-10-13)_
-- [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-03)_
-- [storage.md](storage.md) — CRM Storage _(verified 2026-11-03)_
+- [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-04)_
+- [storage.md](storage.md) — CRM Storage _(verified 2026-11-04)_
 - [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-02)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-03)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-19)_

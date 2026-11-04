@@ -120,30 +120,28 @@ export async function GET(
       console.warn("WhatsApp outbox overlay failed (chat still loads):", outboxErr instanceof Error ? outboxErr.message : String(outboxErr))
     }
 
-    // Voice notes (self-hosted line): audio state + machine transcript. STAFF ONLY — a partner login passes requireStaffRoute but must not
-    // hear or read a lead's voice note (Antonio 2026-09-26). Best-effort like the outbox: a failure never hides the chat.
+    // Voice notes (self-hosted line): audio state + machine transcript. OPEN to anyone who can use the Inbox (the requireStaffRoute
+    // above still keeps portal clients out) — Antonio 2026-11-04 reversed his 2026-09-26 "staff only" rule for voice notes.
+    // Photos/documents below keep the staff-only rule. Best-effort like the outbox: a failure never hides the chat.
     const voiceIds = (data ?? []).filter((m) => m.content_type === "voice").map((m) => m.id)
     const voiceByMessage = new Map<string, Record<string, unknown>>()
     if (voiceIds.length > 0) {
       try {
-        const { data: { user } } = await createClient().auth.getUser()
-        if (isStaffUser(user)) {
-          const { data: media } = await supabaseAdmin
-            .from("message_media")
-            .select("message_id, status, transcript, duration_seconds, audio_deleted_at")
-            .in("message_id", voiceIds)
-          for (const x of media ?? []) {
-            voiceByMessage.set(x.message_id, {
-              status: x.status,
-              transcript: x.transcript,
-              duration_seconds: x.duration_seconds,
-              audio_deleted: x.audio_deleted_at !== null,
-            })
-          }
-          // a note the Mac has not picked up yet has no row: staff still see it as "preparing" (and the chat refreshes faster)
-          for (const id of voiceIds) {
-            if (!voiceByMessage.has(id)) voiceByMessage.set(id, { status: "waiting", transcript: null, duration_seconds: null, audio_deleted: false })
-          }
+        const { data: media } = await supabaseAdmin
+          .from("message_media")
+          .select("message_id, status, transcript, duration_seconds, audio_deleted_at")
+          .in("message_id", voiceIds)
+        for (const x of media ?? []) {
+          voiceByMessage.set(x.message_id, {
+            status: x.status,
+            transcript: x.transcript,
+            duration_seconds: x.duration_seconds,
+            audio_deleted: x.audio_deleted_at !== null,
+          })
+        }
+        // a note the Mac has not picked up yet has no row: it shows as "preparing" (and the chat refreshes faster)
+        for (const id of voiceIds) {
+          if (!voiceByMessage.has(id)) voiceByMessage.set(id, { status: "waiting", transcript: null, duration_seconds: null, audio_deleted: false })
         }
       } catch (voiceErr) {
         console.warn("WhatsApp voice overlay failed (chat still loads):", voiceErr instanceof Error ? voiceErr.message : String(voiceErr))
@@ -152,7 +150,8 @@ export async function GET(
     const withVoice = (data ?? []).map((m) => (m.content_type === "voice" && voiceByMessage.has(m.id) ? { ...m, voice: voiceByMessage.get(m.id) } : m))
 
     // Inbound photos/videos/documents (2026-09-28): a fresh signed view link, minted per load, never stored —
-    // same staff-only rule as voice (Antonio 2026-09-26: only Antonio and Luca see WhatsApp media). A message
+    // STAFF ONLY (Antonio 2026-09-26: only Antonio and Luca see WhatsApp media; they can hold passports and IDs).
+    // Voice notes used to share this rule and no longer do (Antonio 2026-11-04) — only photos/documents keep it. A message
     // whose file has not been downloaded yet, or is expired/failed, keeps media_url null — the existing
     // isImage/isOtherMedia rendering already handles "no media_url" as a plain placeholder, so nothing else
     // in the UI needs to change for that state.

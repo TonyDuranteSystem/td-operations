@@ -15,7 +15,18 @@ export const dynamic = "force-dynamic"
 export default async function NewServicePage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) redirect("/")
+  if (!user) redirect("/")
+  if (!isAdmin(user)) {
+    // The offer builder links here ("Add a new service"). Someone who cannot add services gets a plain answer, not the home screen.
+    return (
+      <div className="p-6 max-w-xl mx-auto">
+        <h1 className="text-lg font-semibold">Only an administrator can add a service</h1>
+        <p className="mt-2 text-sm text-zinc-600">
+          Ask Antonio or Jodi to add it, then go back to your offer. The offer you were building is still open in the other tab.
+        </p>
+      </div>
+    )
+  }
   const { kinds } = await loadWaitKinds()
 
   return (

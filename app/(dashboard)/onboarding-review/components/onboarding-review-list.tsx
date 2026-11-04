@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { ChevronDown, ChevronRight, FileText, ExternalLink, Loader2, CheckCircle2 } from 'lucide-react'
 import type { OnboardingReviewEntry } from '../page'
 import { isStoragePathValue } from '@/lib/flows/onboarding-field-categories'
+import { OnboardingFilingIdCheck, type FilingIdGate } from './onboarding-filing-id-check'
 
 interface OnboardingReviewListProps {
   entries: OnboardingReviewEntry[]
@@ -219,6 +220,9 @@ export function ConfirmPanel({ entry }: { entry: OnboardingReviewEntry }) {
   const [suiteChoice, setSuiteChoice] = useState<'issue' | 'waive' | null>(null)
   const [suiteReason, setSuiteReason] = useState('')
   const [confirming, setConfirming] = useState(false)
+  // The State Filing ID check (job 64d2be64): Confirm waits until staff have opened the real Articles and confirmed or corrected the number.
+  const [filingGate, setFilingGate] = useState<FilingIdGate>({ blocked: true })
+  const clientTypedFilingId = typeof entry.submitted_data.filing_id === 'string' && entry.submitted_data.filing_id.trim() ? entry.submitted_data.filing_id.trim() : null
   const [error, setError] = useState<string | null>(null)
   const [errorLines, setErrorLines] = useState<string[] | null>(null)
   const [result, setResult] = useState<{ account_id: string | null; contact_id: string | null; company_name: string | null; lines: string[]; pending: boolean } | null>(null)
@@ -244,7 +248,12 @@ export function ConfirmPanel({ entry }: { entry: OnboardingReviewEntry }) {
       const res = await fetch(`/api/onboarding-review/${entry.id}/confirm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ suite_choice: suiteChoice, suite_reason: suiteChoice === 'waive' ? suiteReason : undefined }),
+        body: JSON.stringify({
+          suite_choice: suiteChoice,
+          suite_reason: suiteChoice === 'waive' ? suiteReason : undefined,
+          // the number staff checked on the card (null = none on the document); absent when there was nothing to check
+          ...(filingGate.choice ? { filing_id: filingGate.choice.value } : {}),
+        }),
       })
       const data = await res.json()
       if (!res.ok || !data.success) {
@@ -312,6 +321,7 @@ export function ConfirmPanel({ entry }: { entry: OnboardingReviewEntry }) {
           )}
         </div>
       )}
+      <OnboardingFilingIdCheck entryId={entry.id} clientTyped={clientTypedFilingId} onGate={setFilingGate} />
       <label className="flex items-start gap-2 text-sm">
         <input
           type="checkbox"
@@ -344,12 +354,17 @@ export function ConfirmPanel({ entry }: { entry: OnboardingReviewEntry }) {
       <button
         type="button"
         onClick={handleConfirm}
-        disabled={!acknowledged || confirming || !suiteChoice || (suiteChoice === 'waive' && suiteReason.trim() === '')}
+        disabled={!acknowledged || confirming || filingGate.blocked || !suiteChoice || (suiteChoice === 'waive' && suiteReason.trim() === '')}
         className="inline-flex items-center gap-2 bg-zinc-900 text-white text-sm px-3 py-1.5 rounded disabled:opacity-40 disabled:cursor-not-allowed hover:bg-zinc-800"
       >
         {confirming && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
         Confirm — create account
       </button>
+      {filingGate.blocked && (
+        <p className="text-xs text-zinc-500" data-testid="filing-id-confirm-gate-hint">
+          Confirm unlocks once the State Filing ID has been checked on the real document.
+        </p>
+      )}
     </div>
   )
 }

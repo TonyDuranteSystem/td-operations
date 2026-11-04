@@ -10,6 +10,9 @@ import { pickersFromPreflight } from '@/lib/flows/materialize-preflight-response
 import { hasValidLlcEnding } from '@/lib/flows/legal-name'
 import { suggestLegalName, legalNameNeedsDifferTick } from '@/lib/flows/legal-name-prefill'
 import { normalizeFilingId } from '@/lib/articles-parse'
+import { FilingIdCheckCard } from '@/components/flows/filing-id-check-card'
+import { FILING_ID_UNRESOLVED, type FilingIdCheckResult } from '@/lib/flows/filing-id-check'
+import { mimeTypeFromFileName } from '@/lib/flows/onboarding-articles'
 import { typesForTarget } from '@/lib/crm-store/types-for-target'
 import { uploadOutcome } from '@/lib/flows/upload-outcome'
 
@@ -119,6 +122,15 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
   const [formationDate, setFormationDate] = useState('')
   const [prefilling, setPrefilling] = useState(false)
   const stagedPathRef = useRef<string | null>(null)
+  // The file just picked is already in this browser, so the "View the real document" window reads it straight from here — nothing is
+  // sent anywhere to look at it. The link is dropped when the window closes.
+  const [stagedDocUrl, setStagedDocUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (!confirming || !file) { setStagedDocUrl(null); return }
+    const url = URL.createObjectURL(new Blob([file], { type: file.type || mimeTypeFromFileName(file.name) || 'application/pdf' }))
+    setStagedDocUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [confirming, file])
 
   // Post-upload staff warning (file saved but the flow/company step failed) —
   // rendered amber, never as a green success (Covelli silent-failure fix).
@@ -149,9 +161,10 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
   const [differTick, setDifferTick] = useState(false)
   const [legalNameProblem, setLegalNameProblem] = useState<string | null>(null)
   const legalNeedsTick = legalNameShown && legalNameNeedsDifferTick(legalName, legalReference)
-  // State Filing ID: prefilled from the Articles when their text carries one; staff confirm or type it (job 64d2be64). Optional —
-  // the company is created either way; a blank only shows a note so it is never missed silently.
-  const [filingId, setFilingId] = useState('')
+  // State Filing ID (job 64d2be64): the reader's number only PREFILLS the card (components/flows/filing-id-check-card.tsx), which holds the
+  // number in its own box; what staff decided there comes up here. The company is not created until they have opened the real document and
+  // confirmed or corrected the number, or said it carries none (Antonio 2026-11-04).
+  const [filingCheck, setFilingCheck] = useState<FilingIdCheckResult>(FILING_ID_UNRESOLVED)
   const [filingIdFromArticles, setFilingIdFromArticles] = useState<string | null>(null)
   // False when the company already exists (the materialize preflight says "not applicable"): the advance then creates nothing, so a Filing ID
   // typed here would be dropped while the window claims it is saved — the field is replaced by a note and nothing is sent.
@@ -275,7 +288,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         setArticlesDiffers(false)
         setDifferTick(false)
         setLegalNameProblem(null)
-        setFilingId('')
+        setFilingCheck(FILING_ID_UNRESOLVED)
         setFilingIdFromArticles(null)
         setFilingIdApplicable(true)
         setConfirming(true)
@@ -297,10 +310,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
           setFilingIdApplicable(preRes?.applicable !== false)
           // The Filing ID the Articles print (when their text carries one) — only a prefill, staff confirm it below.
           const readFilingId = typeof dateRes?.filing_id === 'string' ? normalizeFilingId(dateRes.filing_id) : null
-          if (readFilingId) {
-            setFilingId(readFilingId)
-            setFilingIdFromArticles(readFilingId)
-          }
+          if (readFilingId) setFilingIdFromArticles(readFilingId)
           // needs_state and needs_entity_type are independent — a formation can
           // need both at once, and both fields must show together so fixing one
           // doesn't just reveal the other on the next attempt. pickersFromPreflight
@@ -378,12 +388,12 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         return
       }
     }
-    // The Filing ID is optional, but a value that is typed must be a plausible ID — said here, before anything is sent.
-    const confirmedFilingId = filingIdApplicable && filingId.trim() ? normalizeFilingId(filingId) : null
-    if (filingIdApplicable && filingId.trim() && !confirmedFilingId) {
-      setError('The State Filing ID can only contain letters, numbers and dashes (4 to 30 characters), for example 2026-002103965. Correct it, or clear the field to leave it empty.')
+    // The Filing ID must have been checked on the real document: a confirmed number, or "this document has no Filing ID".
+    if (filingIdApplicable && !filingCheck.resolved) {
+      setError('Check the State Filing ID against the real document first: open it, then press "The number is correct" (or "There is no Filing ID on this document").')
       return
     }
+    const confirmedFilingId = filingIdApplicable ? filingCheck.filingId : null
     setUploading(true)
     setError(null)
     setWarn(null)
@@ -512,7 +522,8 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
 
       {confirming && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-5 shadow-xl">
+          {/* data-floating-anchor: the floating document window opens BESIDE this panel, not on top of the number being checked */}
+          <div data-floating-anchor className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-5 shadow-xl">
             <h3 className="text-base font-semibold text-zinc-900">Confirm the formation date</h3>
             <p className="mt-1 text-sm text-zinc-600">
               The date the state formed the company — the filing date on the Articles
@@ -577,38 +588,16 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
               </div>
             )}
             {filingIdApplicable ? (
-            <div className="mt-4">
-              <label className="block text-sm font-medium text-zinc-700">
-                State Filing ID
-                <input
-                  type="text"
-                  value={filingId}
-                  maxLength={40}
-                  onChange={(e) => {
-                    setFilingId(e.target.value)
-                    // the "not a plausible ID" refusal belongs to the value just edited — drop it as soon as staff touch the field
-                    setError((cur) => (cur && cur.startsWith('The State Filing ID') ? null : cur))
-                  }}
+              <div className="mt-4">
+                <FilingIdCheckCard
+                  reading={prefilling}
+                  readNumber={filingIdFromArticles}
+                  document={stagedDocUrl && file ? { url: stagedDocUrl, name: file.name, mimeType: file.type || mimeTypeFromFileName(file.name) } : null}
+                  documentNote="The file could not be prepared for viewing here — open it from your computer to check the number."
                   disabled={uploading}
-                  placeholder="e.g. 2026-002103965"
-                  className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
-                  data-testid="articles-filing-id"
+                  onResult={setFilingCheck}
                 />
-              </label>
-              <p className="mt-1 text-xs text-zinc-500">
-                The number the state printed on the Articles (Wyoming: &ldquo;Original ID&rdquo;; New Mexico: &ldquo;File #&rdquo;; Florida: the L… document number). It is saved on the company.
-              </p>
-              {!prefilling && filingIdFromArticles && normalizeFilingId(filingId) === filingIdFromArticles && (
-                <p className="mt-1 text-xs text-emerald-700">Read from the Articles: <strong>{filingIdFromArticles}</strong> — confirm it&apos;s correct.</p>
-              )}
-              {!prefilling && !filingId.trim() && (
-                <p className="mt-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  {filingIdFromArticles
-                    ? 'The Filing ID field is empty, so the company will be created without one. Add it on the company page afterwards if you need it.'
-                    : 'No Filing ID could be read from these Articles. Type it if the Articles show one — or leave it empty and add it on the company page afterwards.'}
-                </p>
-              )}
-            </div>
+              </div>
             ) : (
               !prefilling && (
                 <p className="mt-4 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600" data-testid="articles-filing-id-existing">
@@ -663,6 +652,11 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
               </p>
             )}
             {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+            {filingIdApplicable && !prefilling && !filingCheck.resolved && (
+              <p className="mt-3 text-xs text-zinc-500" data-testid="filing-id-gate-hint">
+                Confirm &amp; Upload unlocks once the State Filing ID has been checked on the real document.
+              </p>
+            )}
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
@@ -675,7 +669,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
               <button
                 type="button"
                 onClick={confirmFormationDate}
-                disabled={uploading || prefilling || !!preflightBlocked}
+                disabled={uploading || prefilling || !!preflightBlocked || (filingIdApplicable && !filingCheck.resolved)}
                 className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:text-zinc-400"
               >
                 {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}

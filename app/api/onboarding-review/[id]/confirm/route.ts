@@ -29,7 +29,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { applyOnboardingReview, confirmPortalWizardOnboarding, type SuiteConfirmChoice } from '@/lib/operations/onboarding-review'
+import { applyOnboardingReview, confirmPortalWizardOnboarding, type FilingIdChoice, type SuiteConfirmChoice } from '@/lib/operations/onboarding-review'
+import { normalizeFilingId } from '@/lib/articles-parse'
 
 async function currentUserEmail(): Promise<string> {
   const supabase = createClient()
@@ -45,7 +46,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     // The suite decision is REQUIRED (Antonio 2026-09-30): issue the company's suite, or explicitly "No suite for this
     // client" with a reason. Refuse a Confirm that carries neither — no silent default either way.
-    const body = (await req.json().catch(() => ({}))) as { suite_choice?: string; suite_reason?: string }
+    const body = (await req.json().catch(() => ({}))) as { suite_choice?: string; suite_reason?: string; filing_id?: unknown }
     let suite: SuiteConfirmChoice
     if (body.suite_choice === 'issue') {
       suite = { choice: 'issue' }
@@ -58,6 +59,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       )
     }
 
+    // The State Filing ID staff checked against the real Articles on the review screen (job 64d2be64): a number (confirmed or corrected),
+    // or null = "this document has no Filing ID". The key is absent when the screen had no Articles to check.
+    let filingId: FilingIdChoice | undefined
+    if (body.filing_id === null) {
+      filingId = { value: null }
+    } else if (body.filing_id !== undefined) {
+      const checked = normalizeFilingId(body.filing_id)
+      if (!checked) {
+        return NextResponse.json(
+          { success: false, error: 'The State Filing ID can only contain letters, numbers and dashes (4 to 30 characters), for example 2026-002103965. Correct it on the card and confirm again.' },
+          { status: 400 },
+        )
+      }
+      filingId = { value: checked }
+    }
+
     const { data: sub, error: subErr } = await supabaseAdmin
       .from('onboarding_submissions')
       .select('source')
@@ -67,9 +84,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ success: false, error: subErr?.message || 'Submission not found' }, { status: 404 })
     }
 
+    // the 4th argument is passed only when staff checked a number, so every other call keeps its exact shape
+    const filingArgs = filingId ? [filingId] as const : ([] as const)
     const result = sub.source === 'portal_wizard'
-      ? await confirmPortalWizardOnboarding(params.id, actor, suite)
-      : await applyOnboardingReview(params.id, actor, suite)
+      ? await confirmPortalWizardOnboarding(params.id, actor, suite, ...filingArgs)
+      : await applyOnboardingReview(params.id, actor, suite, ...filingArgs)
 
     if (!result.ok) {
       return NextResponse.json({ success: false, error: result.error, lines: result.lines }, { status: 400 })
