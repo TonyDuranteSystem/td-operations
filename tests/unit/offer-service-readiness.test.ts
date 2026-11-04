@@ -220,38 +220,50 @@ describe("offerReadinessProblemForToken (Activate Lead)", () => {
 describe("wiring", () => {
   const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8")
 
+  // Offer builder Part 1: the checks moved out of publishOffer / the Activate Lead route into ONE function (lib/offers/send-check.ts).
+  // The promises these tests pin are the same; they are now pinned where the code lives.
   it("publishOffer checks the offer's services after the draft test and before any portal user or email", () => {
-    const src = read("lib/offers/publish.ts")
-    const statusGate = src.indexOf(`offer.status !== "draft"`)
-    const gate = src.indexOf("offerServicesReadiness({")
-    const firstSideEffect = src.indexOf("autoCreatePortalUser({")
+    const check = read("lib/offers/send-check.ts")
+    const statusGate = check.indexOf(`offer.status !== "draft"`)
+    const gate = check.indexOf("offerServicesReadiness({")
     expect(statusGate).toBeGreaterThan(0)
     expect(gate).toBeGreaterThan(statusGate)
-    expect(firstSideEffect).toBeGreaterThan(gate)
-    expect(src).toMatch(/Cannot publish: \$\{readiness\.problem\}/)
-    expect(src).toMatch(/blockers: readiness\.blockers/)
-    expect(src).toContain("bundledPipelines: offer.bundled_pipelines")
+    expect(check).toContain("bundledPipelines: offer.bundled_pipelines")
+    // the real send calls that function, in the real-send mode, before its first side effect, and refuses with the engine's list
+    const src = read("lib/offers/publish.ts")
+    const call = src.indexOf(`offerSendCheck({ offer, door: "send", mode: "send" })`)
+    const firstSideEffect = src.indexOf("autoCreatePortalUser({")
+    expect(call).toBeGreaterThan(0)
+    expect(firstSideEffect).toBeGreaterThan(call)
+    expect(src).toMatch(/Cannot publish: \$\{first\.message\}/)
+    expect(src).toMatch(/blockers: first\.readiness/)
   })
 
   it("Activate Lead runs the same check before it creates a login or changes any status", () => {
     const src = read("app/api/crm/admin-actions/activate-lead/route.ts")
-    const gate = src.indexOf("offerReadinessForToken(offer.token)")
+    const gate = src.indexOf("offerSendCheck({")
     expect(gate).toBeGreaterThan(0)
+    expect(src).toContain("door: 'activate_lead', mode: 'send'")
     expect(src.indexOf("createUser({")).toBeGreaterThan(gate)
     expect(src.indexOf(".update({ status: 'sent' })")).toBeGreaterThan(gate)
-    expect(src).toMatch(/Cannot activate: \$\{readiness\.problem\}/)
-    expect(src).toMatch(/blockers: readiness\.blockers/)
+    expect(src).toMatch(/Cannot activate: \$\{first\.message\}/)
+    expect(src).toMatch(/blockers: first\.readiness/)
+    // and the shared function gives that door the readiness check on the stored offer
+    expect(read("lib/offers/send-check.ts")).toContain("offerReadinessForToken(offer.token)")
   })
 })
 
 describe("wiring — when the wording is frozen (bug-hunter findings, 2026-10-26)", () => {
   const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8")
   it("Activate Lead takes a FRESH copy only for a draft; an offer already out keeps the wording it carries", () => {
-    const src = read("app/api/crm/admin-actions/activate-lead/route.ts")
-    expect(src).toMatch(/ensureOfferContractTexts\(offer\.token, offer\.status === 'draft' \? \{ refresh: true \} : \{\}\)/)
+    const src = read("lib/offers/send-check.ts")
+    expect(src).toMatch(/door === "send" \|\| offer\.status === "draft" \? \{ refresh: true \} : \{\}/)
+    // the Activate Lead route hands over the offer's own status, so the rule above sees it
+    expect(read("app/api/crm/admin-actions/activate-lead/route.ts")).toMatch(/offer: \{ token: offer\.token, status: offer\.status,/)
   })
   it("publishOffer takes a fresh copy at the real send", () => {
-    expect(read("lib/offers/publish.ts")).toMatch(/ensureOfferContractTexts\(token, \{ refresh: true \}\)/)
+    expect(read("lib/offers/send-check.ts")).toMatch(/preview \? \{ refresh: true, persist: false \} : door === "send"/)
+    expect(read("lib/offers/publish.ts")).toContain(`mode: "send"`)
   })
   it("the formation and onboarding pages: a new service's add-on agreement uses the shared body (approved phrases) and blocks signing when its wording is missing", () => {
     for (const f of ["app/offer/[token]/contract/page.tsx", "app/offer/[token]/contract/service-agreement.tsx"]) {
