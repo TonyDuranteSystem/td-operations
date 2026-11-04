@@ -18,6 +18,7 @@ import { ConvertLeadDialog } from './convert-lead-dialog'
 import { CreateOfferDialog } from './create-offer-dialog'
 import { ActivateLeadDialog } from './activate-lead-dialog'
 import { OfferBlockedDialog } from '@/components/offers/offer-blocked-dialog'
+import { OfferSendCheckBox } from '@/components/offers/offer-send-check-box'
 import type { ReadinessBlocker } from '@/lib/offers/service-readiness'
 import {
   DeleteLeadDialog,
@@ -294,6 +295,13 @@ export function LeadActions({
     <>
       <div className="bg-white rounded-lg border p-5">
         <h2 className="text-sm font-semibold text-zinc-900 mb-4">Actions</h2>
+
+        {/* What the real Send will say about this draft, before anyone presses it (drawn only while its switch is on) */}
+        {isOfferDraft && offer?.token && (
+          <div className="mb-4">
+            <OfferSendCheckBox token={offer.token} />
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2">
           <ComposeEmailButton

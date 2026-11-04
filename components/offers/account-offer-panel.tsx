@@ -12,6 +12,7 @@ import { WelcomeLinkButton, type WelcomeLinkButtonHandle } from './welcome-link-
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { OfferBlockedDialog } from './offer-blocked-dialog'
+import { OfferSendCheckBox } from './offer-send-check-box'
 import type { ReadinessBlocker } from '@/lib/offers/service-readiness'
 import { canResetPackagePick } from '@/lib/offers/package-pick-status'
 import type { OfferPackageOption } from '@/lib/types/offer'
@@ -421,6 +422,9 @@ function OfferCard({
         )}
 
         {/* Action buttons */}
+        {/* What the real Send will say about this draft, before anyone presses it (drawn only while its switch is on) */}
+        {isOfferDraft && <OfferSendCheckBox token={offer.token} />}
+
         <div className="flex flex-wrap gap-2 pt-1">
           {/* View Offer */}
           <a

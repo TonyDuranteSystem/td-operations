@@ -15,6 +15,7 @@ import { canGroundFormationState, canGroundEntityType } from '@/lib/offers/narra
 import { offerPreviewHref } from '@/lib/offers/offer-preview-href'
 import { parseServiceCatalogReply, decideNewService, selectedServicesDrift } from '@/lib/offers/catalog-refresh'
 import { ADD_SERVICE_KEY, parseAddServiceSwitch } from '@/lib/offers/add-service-switch'
+import { OfferSendCheckBox } from './offer-send-check-box'
 import {
   validatePaymentPlan,
   clientFacingPartLabel,
@@ -2652,6 +2653,13 @@ export function CreateOfferDialog({
             </div>
           )}
         </div>
+
+        {/* The draft was just saved: what the real Send will say about it (drawn only while its switch is on) */}
+        {createdToken && (
+          <div className="px-5 pb-4">
+            <OfferSendCheckBox token={createdToken} />
+          </div>
+        )}
 
         {/* Footer */}
         <div className="flex flex-wrap justify-end gap-3 p-5 border-t">
