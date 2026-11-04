@@ -125,6 +125,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/zoom-recordings",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron/wa-bridge-watch",
       "schedule": "*/5 * * * *"
     },
