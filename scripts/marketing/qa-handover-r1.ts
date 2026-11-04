@@ -87,7 +87,7 @@ async function main() {
   await p.waitForSelector('[data-testid="call-booked"]', { timeout: 60000 })
   await p.screenshot({ path: `${SHOTS}/r1-setter-after-booking.png`, fullPage: true })
   const a = await lead(L("Qualified A (setter will book)"))
-  ck("booking: the lead is now booked AND picked by the seller", a.status === "booked" && a.claimed_by === S.sellerId, a)
+  ck("booking: the lead is now booked AND with the seller", a.status === "booked" && a.claimed_by === S.sellerId, a)
   await p.close()
 
   p = await open(setter, "/marketing/board")
@@ -123,7 +123,7 @@ async function main() {
 
   p = await open(seller, `/marketing/window/${L("Qualified A (setter will book)")}`)
   t = await text(p)
-  ck("seller window on the new booking: picked by you, the setter's note sits in the call box, no Pick button", /Picked by:\s*you|Preso da:\s*te/.test(t) && await p.getByTestId("handover-note").count() === 1 && /wants the costs/.test(await p.getByTestId("handover-note").innerText()) && !/Pick this lead|Prendi questo lead/.test(t), t.slice(0, 500))
+  ck("seller window on the new booking: picked by you, the setter's note sits in the call box, no Pick button", /With:\s*you|Con:\s*te/.test(t) && await p.getByTestId("handover-note").count() === 1 && /wants the costs/.test(await p.getByTestId("handover-note").innerText()) && !/Pick this lead|Prendi questo lead/.test(t), t.slice(0, 500))
   await p.screenshot({ path: `${SHOTS}/r1-seller-window-new.png`, fullPage: true })
   await p.close()
 
