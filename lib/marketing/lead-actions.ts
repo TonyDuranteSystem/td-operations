@@ -42,7 +42,8 @@ export const leadActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("whatsapp"), state: z.enum(["sent", "no_wa", "opened"]), template: z.string().trim().max(60).optional(), note: note.optional() }),
   z.object({ action: z.literal("no_answer"), via: z.enum(["whatsapp", "call"]).default("call"), note: note.optional() }),
   // at = a day and time; null cancels the booked call
-  z.object({ action: z.literal("appointment"), at: z.string().min(10).max(40).nullable(), note: note.optional() }),
+  // `replaces` is the call time the person's page was showing (null = no call): a page that went stale (another tab booked, moved or cancelled meanwhile) is refused instead of overwriting or repeating the other change
+  z.object({ action: z.literal("appointment"), at: z.string().min(10).max(40).nullable(), note: note.optional(), replaces: z.string().max(40).nullable().optional() }),
   // move a booked call or a call back to another day or time: the reason is REQUIRED (it goes in the history and in the notification); `from` is the old time, for the history line only
   z.object({ action: z.literal("reschedule"), target: z.enum(["appointment", "callback"]), at: z.string().min(10).max(40), reason: z.string().trim().min(1).max(200), note: note.optional(), from: z.string().max(40).nullable().optional() }),
   // the seller says whether the booked free call took place (3 Nov 2026): "it happened" (he then chooses a result) or "it did not happen" (he follows the lead up, or books the call again)
@@ -59,7 +60,7 @@ export function permissionFor(a: LeadActionInput["action"]): MarketingPermission
 const SELLER_ONLY_ACTIONS: ReadonlySet<string> = new Set(["not_ready", "closed", "not_closed", "booking_link", "upsell", "waiting", "archive"])
 
 /** `callback_at` and `appointment_at` (the booked call that still stands) are only given when moving a call needs them. `seller` is the person whose calendar takes a call on this lead (only given when a call is being booked): booking the call makes the lead his. */
-export interface LeadFacts { claimed_by: string | null; status: string; seller?: { id: string; label: string | null } | null; callback_at?: string | null; appointment_at?: string | null; /** the stage the lead was in when its current call was booked (only read when the call is cancelled) */ booked_from?: string | null; /** who that booking handed the lead to (only read when the call is cancelled) */ booked_handed_to?: string | null }
+export interface LeadFacts { claimed_by: string | null; status: string; seller?: { id: string; label: string | null } | null; callback_at?: string | null; appointment_at?: string | null; /** the stage the lead was in when its current call was booked (only read when the call is cancelled) */ booked_from?: string | null; /** the come-back day that lead had before the call was booked (only read when the call is cancelled) */ booked_from_callback?: string | null; /** who that booking handed the lead to (only read when the call is cancelled) */ booked_handed_to?: string | null }
 export interface Actor { id: string; email: string | null; role: "owner" | "member" }
 
 export interface PlannedChange {
@@ -95,12 +96,12 @@ function movedToContacted(lead: LeadFacts, s: ActionSettings): Record<string, un
   return first && lead.status === first && target && target !== first && keyIndex(s.stages, target) >= 0 ? { status: target } : {}
 }
 
-/** A booked call moves the lead to the "booked" stage when the team has one and the lead is not already there, past it, or out of target. A lead the seller put aside ("not ready now", "not closed") comes back to the booked calls when a new call is booked. */
+/** A booked call moves the lead to the "booked" stage when the team has one and the lead is not already there, past it, or out of target. A lead the seller put aside ("not ready now", "not closed", archived) comes back to the booked calls when a new call is booked. */
 function movedToBooked(lead: LeadFacts, s: ActionSettings): Record<string, unknown> {
   const booked = keyIndex(s.stages, "booked")
   const cur = keyIndex(s.stages, lead.status)
   if (booked < 0 || lead.status === s.outcomeStages.not_in_target) return {}
-  if (lead.status === sellerOf(s).not_ready || lead.status === sellerOf(s).not_closed) return { status: "booked", callback_at: null }
+  if (lead.status === sellerOf(s).not_ready || lead.status === sellerOf(s).not_closed || lead.status === sellerOf(s).archived) return { status: "booked", callback_at: null }
   if (cur >= 0 && cur >= booked) return {}
   return { status: "booked" }
 }
@@ -162,6 +163,8 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
 
     case "not_in_target": {
       if (!s.reasons.some(r => r.key === input.reason)) return fail(400, "Pick one of the reasons in the list.")
+      // a payment link is out ("Link sent") or the lead is in a Paid stage: it is not "not in target" any more, and the live link must not be left behind on such a lead. (After the consultation, in the booking-link / upsell / waiting stages, Not in target stays possible: Antonio's earlier rule.)
+      if (lead.status === sellerOf(s).closed || (s.paidStages ?? ["paid_call", "upsell_won"]).includes(lead.status)) return fail(409, "A payment link is already out for this lead (or it has paid), so it cannot be marked not in target.")
       const target = s.outcomeStages.not_in_target
       if (!stageExists(target)) return fail(400, "The stage for \"Not in target\" is not set up. Ask Antonio.")
       return { ok: true, change: {
@@ -185,13 +188,28 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
     }
 
     case "appointment": {
+      // the page must have seen the call that stands NOW (another tab may have booked, moved or cancelled it meanwhile)
+      if (input.replaces !== undefined) {
+        const standing = lead.appointment_at ?? null
+        const seen = input.replaces
+        const same = standing === null ? seen === null : seen !== null && !Number.isNaN(Date.parse(seen)) && Math.abs(Date.parse(standing) - Date.parse(seen)) <= 60_000
+        if (!same) return fail(409, "This call was changed by someone else. Reload the page and try again.")
+        // nothing to cancel: a second cancel must not write another history line (a lead stuck at "booked" without a call can still be cancelled, to put it back)
+        if (input.at === null && standing === null && lead.status !== "booked") return fail(409, "There is no booked call to cancel. Reload the page.")
+        // a call cannot be booked from a person's page on a lead that is out of target: the booking would hand it to the seller but leave it where no board shows it (an archived lead is reopened by the booking). The client's booking link has no page to go stale, so it is not held to this.
+        if (input.at !== null) {
+          if (lead.status === s.outcomeStages.not_in_target) return fail(409, "This lead is marked not in target. Put it back in target first, then book the call.")
+        }
+      }
       if (input.at === null) {
-        // cancelling the call puts a lead that is still in "booked" back where it was before it was booked (never a "not ready now" / "not closed" one: those lost their call-back day when the call was booked)
+        // cancelling the call puts a lead that is still in "booked" back where it was before it was booked
         const back = lead.booked_from
-        const goBack = lead.status === "booked" && !!back && back !== "booked" && stageExists(back) && back !== sellerOf(s).not_ready && back !== sellerOf(s).not_closed
+        const asideStage = back === sellerOf(s).not_ready || back === sellerOf(s).not_closed // the seller had put it aside: booking wiped its come-back day, so cancelling brings both back
+        const goBack = lead.status === "booked" && !!back && back !== "booked" && stageExists(back)
         // a lead the booking itself handed to the seller goes back to the setter with the stage: the automatic pick is undone too (a pick somebody made by hand is left alone)
-        const unpick = goBack && lead.claimed_by !== null && lead.claimed_by === (lead.booked_handed_to ?? null)
-        return { ok: true, change: { patch: goBack ? { status: back as string, ...(unpick ? { claimed_by: null, claimed_by_label: null, claimed_at: null } : {}) } : {}, event: { kind: "appointment", data: { at: null, note: input.note ?? null, ...(goBack ? { back_to: back } : {}) } } } }
+        const unpick = goBack && !asideStage && lead.claimed_by !== null && lead.claimed_by === (lead.booked_handed_to ?? null)
+        const callback = asideStage ? (lead.booked_from_callback ?? (back === sellerOf(s).not_ready ? nowIso : null)) : undefined
+        return { ok: true, change: { patch: goBack ? { status: back as string, ...(asideStage ? { callback_at: callback } : {}), ...(unpick ? { claimed_by: null, claimed_by_label: null, claimed_at: null } : {}) } : {}, event: { kind: "appointment", data: { at: null, note: input.note ?? null, ...(goBack ? { back_to: back } : {}) } } } }
       }
       const at = new Date(input.at)
       if (Number.isNaN(at.getTime())) return fail(400, "Pick a valid day and time.")
@@ -203,7 +221,7 @@ export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: A
       if (picksFor) Object.assign(patch, { claimed_by: picksFor.id, claimed_by_label: picksFor.label, claimed_at: nowIso })
       return { ok: true, change: {
         patch,
-        event: { kind: "appointment", data: { at: at.toISOString(), note: input.note ?? null, ...(typeof patch.status === "string" ? { from_status: lead.status } : {}), ...(picksFor ? { handed_to: picksFor.id } : {}) } },
+        event: { kind: "appointment", data: { at: at.toISOString(), note: input.note ?? null, ...(typeof patch.status === "string" ? { from_status: lead.status } : {}), ...(typeof patch.status === "string" && lead.callback_at ? { from_callback_at: lead.callback_at } : {}), ...(picksFor ? { handed_to: picksFor.id } : {}) } },
       } }
     }
 

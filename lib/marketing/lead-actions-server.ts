@@ -32,7 +32,7 @@ export async function applyLeadAction(
   const lead = await getTeamLead(db, teamId, leadId)
   if (!lead) return { ok: false, status: 404, error: "Lead not found." }
   const facts: LeadFacts = { claimed_by: (lead as { claimed_by?: string | null }).claimed_by ?? null, status: lead.status }
-  if (input.action === "reschedule") {
+  if (input.action === "reschedule" || input.action === "appointment") {
     // what stands NOW: the call back time on the lead, and the newest booking row (a cancelled booking has no time)
     facts.callback_at = (lead as { callback_at?: string | null }).callback_at ?? null
     const { data: ap, error: apErr } = await db.from("marketing_lead_events").select("data").eq("lead_id", lead.id).eq("kind", "appointment").order("created_at", { ascending: false }).order("id", { ascending: false }).limit(1)
@@ -52,9 +52,9 @@ export async function applyLeadAction(
     // the stage the lead came from when this call was booked: the newest booking line that recorded it, looking back until an earlier cancel
     const { data: evs, error: evsErr } = await db.from("marketing_lead_events").select("data").eq("lead_id", lead.id).eq("kind", "appointment").order("created_at", { ascending: false }).order("id", { ascending: false }).limit(30)
     if (evsErr) return { ok: false, status: 500, error: "Could not check the call. Please try again." }
-    for (const e of (evs ?? []) as Array<{ data?: { at?: unknown; from_status?: unknown; handed_to?: unknown } }>) {
+    for (const e of (evs ?? []) as Array<{ data?: { at?: unknown; from_status?: unknown; from_callback_at?: unknown; handed_to?: unknown } }>) {
       if (e.data?.at === null) break
-      if (typeof e.data?.from_status === "string") { facts.booked_from = e.data.from_status; facts.booked_handed_to = typeof e.data.handed_to === "string" ? e.data.handed_to : null; break }
+      if (typeof e.data?.from_status === "string") { facts.booked_from = e.data.from_status; facts.booked_from_callback = typeof e.data.from_callback_at === "string" ? e.data.from_callback_at : null; facts.booked_handed_to = typeof e.data.handed_to === "string" ? e.data.handed_to : null; break }
     }
   }
   const plan = planLeadAction(input, facts, actor, settings, now)

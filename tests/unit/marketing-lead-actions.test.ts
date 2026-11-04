@@ -210,6 +210,28 @@ describe("the client booking link and a lead somebody picked", () => {
   })
 })
 
+describe("the server holds a stale call page back (QA 4 Nov 2026)", () => {
+  const L = "55555555-5555-5555-5555-555555555555"
+  const mk = () => {
+    const db = new FakeDb()
+    db.rows("marketing_leads").push({ id: L, team_id: "T1", status: "booked", claimed_by: "u-owner" })
+    db.rows("marketing_lead_events").push({ lead_id: L, kind: "appointment", actor: "x", data: { at: "2026-10-27T14:00:00Z", from_status: "qualified" } })
+    return db
+  }
+  const withBooked: ActionSettings = { ...settings, stages: [...settings.stages, { key: "booked", label: "Booked" }] } as ActionSettings
+  it("a second booking from a page that saw no call is refused and writes nothing", async () => {
+    const db = mk()
+    const before = db.rows("marketing_lead_events").length
+    const r = await applyLeadAction(db as never, "T1", L, { action: "appointment", at: "2026-10-28T14:00:00Z", replaces: null }, owner, withBooked, NOW)
+    expect(r).toMatchObject({ ok: false, status: 409 })
+    expect(db.rows("marketing_lead_events").length).toBe(before)
+  })
+  it("the page that saw the standing call may move it, and a repeated cancel is refused", async () => {
+    const db = mk()
+    expect(await applyLeadAction(db as never, "T1", L, { action: "appointment", at: "2026-10-28T14:00:00Z", replaces: "2026-10-27T14:00:00Z" }, owner, withBooked, NOW)).toEqual({ ok: true })
+  })
+})
+
 describe("cancelling a booked call puts the lead back where it was", () => {
   const withBooked: ActionSettings = { ...settings, stages: [...settings.stages, { key: "booked", label: "Booked" }, { key: "not_ready", label: "Not ready" }], sellerStages: { not_ready: "not_ready" } } as ActionSettings
   const call = { action: "appointment", at: "2026-10-27T14:00:00Z" } as const
@@ -221,12 +243,45 @@ describe("cancelling a booked call puts the lead back where it was", () => {
     expect(cancel.ok && cancel.change.patch).toEqual({ status: "qualified" })
     expect(cancel.ok && cancel.change.event.data).toMatchObject({ at: null, back_to: "qualified" })
   })
-  it("leaves the stage alone when it is not booked any more, when the earlier stage is unknown, or when it was 'not ready'", () => {
+  it("leaves the stage alone when the earlier stage is unknown, and refuses a cancel when nothing is booked and the lead is not booked", () => {
     const stay = (lead: Parameters<typeof planLeadAction>[1]) => { const p = planLeadAction({ action: "appointment", at: null }, lead, owner, withBooked, NOW); return p.ok && p.change.patch }
-    expect(stay({ claimed_by: "u-owner", status: "qualified", booked_from: "contacted" })).toEqual({})
     expect(stay({ claimed_by: "u-owner", status: "booked" })).toEqual({})
     expect(stay({ claimed_by: "u-owner", status: "booked", booked_from: "gone_stage" })).toEqual({})
-    expect(stay({ claimed_by: "u-owner", status: "booked", booked_from: "not_ready" })).toEqual({})
+    // a second cancel (the lead is no longer booked, no call stands) is refused, so no second history line is written
+    expect(planLeadAction({ action: "appointment", at: null, replaces: null }, { claimed_by: "u-owner", status: "qualified", booked_from: "contacted" }, owner, withBooked, NOW)).toMatchObject({ ok: false, status: 409 })
+  })
+  it("a lead the seller had put aside ('not ready now') comes back to it, with its come-back day, when the call is cancelled (QA 4 Nov 2026: it used to stay booked with no call)", () => {
+    const book = planLeadAction(call, { claimed_by: "u-owner", status: "not_ready", callback_at: "2026-10-25T09:00:00.000Z" }, owner, withBooked, NOW)
+    expect(book.ok && book.change.event.data).toMatchObject({ from_status: "not_ready", from_callback_at: "2026-10-25T09:00:00.000Z" })
+    const cancel = planLeadAction({ action: "appointment", at: null }, { claimed_by: "u-owner", status: "booked", appointment_at: "2026-10-27T14:00:00Z", booked_from: "not_ready", booked_from_callback: "2026-10-25T09:00:00.000Z" }, owner, withBooked, NOW)
+    expect(cancel.ok && cancel.change.patch).toEqual({ status: "not_ready", callback_at: "2026-10-25T09:00:00.000Z" })
+    // an older booking line has no saved day: the lead comes back due now, never lost
+    const legacy = planLeadAction({ action: "appointment", at: null }, { claimed_by: "u-owner", status: "booked", appointment_at: "2026-10-27T14:00:00Z", booked_from: "not_ready" }, owner, withBooked, NOW)
+    expect(legacy.ok && legacy.change.patch).toEqual({ status: "not_ready", callback_at: NOW.toISOString() })
+  })
+  it("a page that went stale is refused: a second booking, a cancel after a re-book, a repeated cancel", () => {
+    const standing = { claimed_by: "u-owner", status: "booked", appointment_at: "2026-10-27T14:00:00Z" }
+    expect(planLeadAction({ action: "appointment", at: "2026-10-28T14:00:00Z", replaces: null }, standing, owner, withBooked, NOW)).toMatchObject({ ok: false, status: 409 })
+    expect(planLeadAction({ action: "appointment", at: null, replaces: "2026-10-26T14:00:00Z" }, standing, owner, withBooked, NOW)).toMatchObject({ ok: false, status: 409 })
+    expect(planLeadAction({ action: "appointment", at: null, replaces: "2026-10-27T14:00:00Z" }, { ...standing, appointment_at: null }, owner, withBooked, NOW)).toMatchObject({ ok: false, status: 409 })
+    // the page that saw the standing call may move or cancel it; a page that saw none may book
+    expect(planLeadAction({ action: "appointment", at: "2026-10-28T14:00:00Z", replaces: "2026-10-27T14:00:00Z" }, standing, owner, withBooked, NOW)).toMatchObject({ ok: true })
+    expect(planLeadAction({ action: "appointment", at: "2026-10-28T14:00:00Z", replaces: null }, { claimed_by: null, status: "qualified", appointment_at: null }, owner, withBooked, NOW)).toMatchObject({ ok: true })
+  })
+  it("a call cannot be booked from a page on a lead that is out of target; an archived lead is reopened by the booking", () => {
+    const at = "2026-10-28T14:00:00Z"
+    expect(planLeadAction({ action: "appointment", at, replaces: null }, { claimed_by: null, status: "not_in_target" }, owner, withBooked, NOW)).toMatchObject({ ok: false, status: 409 })
+    // the client's booking link (no page, so no `replaces`) is not held to this
+    expect(planLeadAction({ action: "appointment", at }, { claimed_by: null, status: "not_in_target" }, owner, withBooked, NOW)).toMatchObject({ ok: true })
+    const arch = planLeadAction({ action: "appointment", at, replaces: null }, { claimed_by: "u-owner", status: "archived" }, owner, withBooked, NOW)
+    expect(arch.ok && arch.change.patch).toMatchObject({ status: "booked" })
+  })
+  it("'not in target' is refused once a payment link is out or the lead has paid", () => {
+    const sell = { ...withBooked, sellerStages: { not_ready: "not_ready", closed: "closed" }, paidStages: ["paid_call"] } as unknown as ActionSettings
+    const nit: LeadActionInput = { action: "not_in_target", reason: "other" }
+    expect(planLeadAction(nit, { claimed_by: "u-owner", status: "closed" }, owner, sell, NOW)).toMatchObject({ ok: false, status: 409 })
+    expect(planLeadAction(nit, { claimed_by: "u-owner", status: "paid_call" }, owner, sell, NOW)).toMatchObject({ ok: false, status: 409 })
+    expect(planLeadAction(nit, { claimed_by: "u-owner", status: "booked" }, owner, sell, NOW)).toMatchObject({ ok: true })
   })
   it("the server reads the earlier stage from the newest booking line, through a move, and stops at an earlier cancel", async () => {
     const L = "33333333-3333-3333-3333-333333333333"
