@@ -24,7 +24,8 @@ export function TourRing({ selector, stepKey, onCovered }: { selector: string | 
     let last = ''
     let lastCovered = false
     const tick = () => {
-      const target = document.querySelector(selector)
+      // A selector may list several targets in order of preference, separated by " || " (the first one on the page wins).
+      const target = selector.split(' || ').reduce<Element | null>((found, one) => found ?? document.querySelector(one), null)
       if (!target) {
         if (last !== 'none') {
           el.style.display = 'none'

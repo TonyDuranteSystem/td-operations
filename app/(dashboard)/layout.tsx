@@ -4,6 +4,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { redirect } from 'next/navigation'
 import { headers } from 'next/headers'
 import { Sidebar } from '@/components/dashboard/sidebar'
+import { getWhatsappUnread } from '@/lib/inbox/whatsapp-unread'
+import { getStaffMenuLayout } from '@/lib/nav/menu-layout-server'
 import { CommandPalette } from '@/components/dashboard/command-palette'
 import { DashboardHeader } from '@/components/dashboard/dashboard-header'
 import { AiAgentPanel } from '@/components/dashboard/ai-agent-panel'
@@ -84,16 +86,9 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>, userId:
       talk = countTalkNotifications((teamThreadsResult.value.data ?? []) as TeamThreadCountRow[])
     }
 
-    // Inbox unread count — WhatsApp/Telegram from Supabase view
-    let inboxUnread = 0
-    try {
-      const { data: viewData } = await supabaseAdmin
-        .from('v_messaging_inbox')
-        .select('unread_count')
-      if (viewData) {
-        inboxUnread = viewData.reduce((sum, row) => sum + (row.unread_count || 0), 0)
-      }
-    } catch { /* ignore */ }
+    // WhatsApp unread (its own menu row; WhatsApp only, never Telegram). The Inbox row is email only: its number comes from the
+    // Gmail poll a moment after the page opens (the poll needs the Gmail API, which the page render does not wait for).
+    const whatsappUnread = await getWhatsappUnread()
 
     // Overdue invoices count for Finance badge
     let overdueInvoices = 0
@@ -125,9 +120,9 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>, userId:
       commUnread = count ?? 0
     } catch { /* ignore */ }
 
-    return { inbox: inboxUnread, tasks: taskCount, portalChats: portalChatsCount, teamChat, talk, overdueInvoices, reconciliationReview, commUnread }
+    return { inbox: 0, whatsapp: whatsappUnread, tasks: taskCount, portalChats: portalChatsCount, teamChat, talk, overdueInvoices, reconciliationReview, commUnread }
   } catch {
-    return { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, talk: 0, reconciliationReview: 0, commUnread: 0 }
+    return { inbox: 0, whatsapp: 0, tasks: 0, portalChats: 0, teamChat: 0, talk: 0, reconciliationReview: 0, commUnread: 0 }
   }
 }
 
@@ -162,11 +157,16 @@ export default async function DashboardLayout({
   // Started with the other independent lookups so the "New Calendar" menu check below adds no serial round trip.
   const openServicesAudiencePromise = getOpenServicesAudience()
   const badgeCountsPromise = framed ? null : getBadgeCounts(supabase, user.id)
+  // The left-menu layout saved on this login (groups + order). One small read by id, started with the others. Three answers: a layout,
+  // nothing saved (or no table yet), or "could not read" — in which case editing is switched off so nothing is saved over the real
+  // layout (lib/nav/menu-layout-server.ts).
+  const menuLayoutPromise = framed ? null : getStaffMenuLayout(user.id)
   const windowsEnabled = await windowsEnabledPromise
   const embedded = framed && windowsEnabled
   const badgeCounts = embedded
-    ? { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, talk: 0, reconciliationReview: 0, commUnread: 0 }
+    ? { inbox: 0, whatsapp: 0, tasks: 0, portalChats: 0, teamChat: 0, talk: 0, reconciliationReview: 0, commUnread: 0 }
     : await (badgeCountsPromise ?? getBadgeCounts(supabase, user.id))
+  const menuRead = embedded ? { status: 'none' as const } : await (menuLayoutPromise ?? getStaffMenuLayout(user.id))
 
   // Check if AI agent is enabled for this user
   let showAiAgent = dashboardUser
@@ -212,6 +212,9 @@ export default async function DashboardLayout({
         <ChromeOnly>
           <Sidebar
             user={user}
+            userId={user.id}
+            initialMenuLayout={menuRead.layout ?? null}
+            menuLayoutStatus={menuRead.status}
             isAdmin={admin}
             isOwner={owner}
             extraNavIds={extraNavIds}
