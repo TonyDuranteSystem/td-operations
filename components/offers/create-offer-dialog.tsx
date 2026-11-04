@@ -14,7 +14,7 @@ import { formatOptionLabel } from '@/lib/offers/package-option-label'
 import { canGroundFormationState, canGroundEntityType } from '@/lib/offers/narrative-business-rules'
 import { offerPreviewHref } from '@/lib/offers/offer-preview-href'
 import { parseServiceCatalogReply, decideNewService, selectedServicesDrift } from '@/lib/offers/catalog-refresh'
-import { ADD_SERVICE_KEY, parseAddServiceSwitch } from '@/lib/offers/add-service-switch'
+import { useOfferBuilderFeatures } from './use-offer-builder-features'
 import { OfferSendCheckBox } from './offer-send-check-box'
 import {
   validatePaymentPlan,
@@ -272,25 +272,14 @@ export function CreateOfferDialog({
     }
   }, [])
 
-  // The "add a new service" switch (Dev Tools → Maintenance). OFF until staff turn it on: while it is off the dialog
-  // is what it always was — the list is read once, no button, no re-read before saving. Anything but a stored
-  // true means off. See lib/offers/add-service-switch.ts.
-  const [addServiceOn, setAddServiceOn] = useState(false)
+  // The "add a new service" piece. OFF unless the server says it may be shown for THIS record (off / test accounts only /
+  // on — Claude sets it on Antonio's word; there is no screen for it): while it is off the dialog is what it always was —
+  // the list is read once, no button, no re-read before saving. Anything but a clean "yes" means off. See lib/offers/rollout.ts.
+  const { addService: addServiceOn } = useOfferBuilderFeatures({ leadId, accountId, contactId }, open)
   const addServiceOnRef = useRef(false)
   useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    const apply = (on: boolean) => {
-      if (cancelled) return
-      addServiceOnRef.current = on
-      setAddServiceOn(on)
-    }
-    fetch(`/api/app-settings?key=${ADD_SERVICE_KEY}`, { cache: 'no-store' })
-      .then(async r => parseAddServiceSwitch(r.ok, await r.json().catch(() => null)))
-      .then(apply)
-      .catch(() => apply(false))
-    return () => { cancelled = true }
-  }, [open])
+    addServiceOnRef.current = addServiceOn
+  }, [addServiceOn])
 
   useEffect(() => {
     if (!open) return

@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { SEND_CHECK_BOX_KEY, parseSendCheckBoxSwitch } from "@/lib/offers/send-check-box-switch"
+import { SEND_CHECK_BOX_KEY, parseFeaturesReply } from "@/lib/offers/rollout"
 import { BLOCKED_HEADLINE, OK_HEADLINE, boxModel, parseSendCheckReply, type SendCheckReply } from "@/lib/offers/send-check-view"
 
 const reply = (over: Partial<SendCheckReply> = {}): SendCheckReply => ({
@@ -18,24 +18,15 @@ const reply = (over: Partial<SendCheckReply> = {}): SendCheckReply => ({
   ...over,
 })
 
-describe("the box's own switch — on only when a stored true came back", () => {
-  it("has its own key", () => {
+describe("the box's own setting — rolled out per record (off / test accounts only / on), see offer-rollout*.test.ts", () => {
+  it("keeps its own key", () => {
     expect(SEND_CHECK_BOX_KEY).toBe("offer_send_check_box_enabled")
   })
-  it("on for a successful reply carrying the boolean true", () => {
-    expect(parseSendCheckBoxSwitch(true, { value: true })).toBe(true)
-  })
-  it("off when never saved, saved false, or anything that merely looks true", () => {
-    expect(parseSendCheckBoxSwitch(true, { value: null })).toBe(false)
-    expect(parseSendCheckBoxSwitch(true, { value: false })).toBe(false)
-    expect(parseSendCheckBoxSwitch(true, { value: "true" })).toBe(false)
-    expect(parseSendCheckBoxSwitch(true, { value: 1 })).toBe(false)
-    expect(parseSendCheckBoxSwitch(true, {})).toBe(false)
-  })
-  it("off when the reply failed or is not JSON (expired login, error page)", () => {
-    expect(parseSendCheckBoxSwitch(false, { value: true })).toBe(false)
-    expect(parseSendCheckBoxSwitch(true, null)).toBe(false)
-    expect(parseSendCheckBoxSwitch(true, "<html>Sign in</html>")).toBe(false)
+  it("is decided by the server answer: shown only for a clean `true`", () => {
+    expect(parseFeaturesReply(true, { addService: false, sendCheckBox: true }).sendCheckBox).toBe(true)
+    expect(parseFeaturesReply(true, { sendCheckBox: "true" }).sendCheckBox).toBe(false)
+    expect(parseFeaturesReply(false, { sendCheckBox: true }).sendCheckBox).toBe(false)
+    expect(parseFeaturesReply(true, null).sendCheckBox).toBe(false)
   })
 })
 
@@ -123,9 +114,8 @@ describe("the screens keep their promises (source checks)", () => {
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1")
   const box = strip(read("components/offers/offer-send-check-box.tsx"))
 
-  it("the box is off until its switch comes back true, and then draws nothing and asks nothing", () => {
-    expect(box).toContain("const [on, setOn] = useState(false)")
-    expect(box).toContain("parseSendCheckBoxSwitch(")
+  it("the box is off until the server says yes for its offer, and then draws nothing and asks nothing", () => {
+    expect(box).toContain("const { sendCheckBox: on } = useOfferBuilderFeatures({ token })")
     expect(box).toContain("if (!on) return null")
     expect(box).toMatch(/if \(on\) void run\(\)/)
   })
@@ -167,8 +157,8 @@ describe("the screens keep their promises (source checks)", () => {
     expect(dialog).toMatch(/createdToken && \(\s*<div className="px-5 pb-4">\s*<OfferSendCheckBox token=\{createdToken\}/)
   })
 
-  it("the setting is a known app setting and has a toggle in Maintenance", () => {
+  it("the setting is a known app setting, and there is NO toggle for it anywhere on screen (Claude sets it)", () => {
     expect(read("lib/settings.ts")).toContain('"offer_send_check_box_enabled"')
-    expect(read("components/dashboard/maintenance-panel.tsx")).toContain("offer_send_check_box_enabled")
+    expect(read("components/dashboard/maintenance-panel.tsx")).not.toContain("offer_send_check_box_enabled")
   })
 })
