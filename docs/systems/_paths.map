@@ -65,3 +65,4 @@ docs/systems/storage-app.md|lib/storage-app/,app/api/storage-app/,app/api/store-
 docs/systems/incoming-payments.md|lib/incoming-payments/,components/incoming-payments/,app/api/crm/admin-actions/incoming-payments/,app/api/webhooks/stripe/
 docs/systems/service-contracts.md|lib/contracts/,components/service-contracts/,components/contracts/,app/api/service-contracts/,components/offers/offer-blocked-dialog.tsx,lib/offers/contract-texts-snapshot.ts,lib/offers/contract-wording-alert.ts,lib/offers/standalone-contract-types.ts,scripts/migrations/20261026-1000-service-contract-texts.sql
 docs/systems/supabase-status.md|lib/infra/,components/infra/,app/api/infra/,app/api/cron/supabase-status/,app/api/portal/supabase-status/,app/api/marketing/supabase-status/
+docs/systems/social-app.md|lib/app-mode/,components/app-mode/,lib/inbox/app-thread-actions.ts,lib/inbox/fit-scale.ts,components/inbox/app-thread-actions.tsx

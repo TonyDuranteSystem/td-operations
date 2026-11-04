@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useT } from '@/components/marketing/lang-provider'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import type { BoardRole } from '@/lib/marketing/board'
 import {
   DOCK_H, EMPTY_WINDOWS, FRAME_CHANGED, FRAME_FOCUS, OPEN_TAB_MESSAGE, WINDOW_STATE_MESSAGE, isLeadId, TITLEBAR_H, WINDOW_H, WINDOW_W, closeWindow, focusWindow, frontWindowId, minimizeWindow, moveWindow, openWindow, windowSrc,
@@ -39,6 +40,7 @@ export function useLeadWindows(): Api {
  */
 export function LeadWindowsHost({ defaultRole, roles, chatOn, pollOn, children }: { defaultRole: BoardRole; roles: BoardRole[]; chatOn: boolean; /** read the screens again every so often (new chat messages, the red numbers); default = same as chatOn */ pollOn?: boolean; children: React.ReactNode }) {
   const t = useT()
+  const appMode = useAppMode()
   const router = useRouter()
   const params = useSearchParams()
   const [role, setRoleState] = useState<BoardRole>(defaultRole)
@@ -146,7 +148,7 @@ export function LeadWindowsHost({ defaultRole, roles, chatOn, pollOn, children }
   return (
     <Ctx.Provider value={api}>
       {/* room under the page for the bar at the bottom, so the last row is never behind it */}
-      <div style={{ paddingBottom: wins.list.length > 0 ? DOCK_H : 0 }}>{children}</div>
+      <div className={appMode ? 'h-full' : undefined} style={{ paddingBottom: wins.list.length > 0 && !appMode ? DOCK_H : 0 }}>{children}</div>
       {wins.list.map(w => {
         // a minimized window is only hidden, not removed: what was typed in it, and an upload in flight, are still there when it comes back
         if (!frameRoles.current.has(w.id)) frameRoles.current.set(w.id, role)
@@ -155,13 +157,15 @@ export function LeadWindowsHost({ defaultRole, roles, chatOn, pollOn, children }
         const rank = wins.list.filter(o => o.z < w.z).length
         return (
           <div key={w.id} role="dialog" aria-label={title} data-testid="lead-window" data-lead={w.id}
-            className={`fixed flex flex-col overflow-hidden rounded-xl border bg-white shadow-2xl ${front === w.id ? 'border-slate-500' : 'border-slate-300'}`}
-            style={{ display: w.minimized ? 'none' : undefined, left: w.x, top: w.y, zIndex: 40 + rank, width: WINDOW_W, height: Math.min(WINDOW_H, Math.max(320, vpRef.current.h - w.y - DOCK_H - 8)) }}
+            // Inside the TD Social phone app a lead is a full-screen page, one at a time (the front one), with a back arrow; the others stay mounted but hidden.
+            className={appMode ? 'fixed inset-0 flex flex-col overflow-hidden bg-white' : `fixed flex flex-col overflow-hidden rounded-xl border bg-white shadow-2xl ${front === w.id ? 'border-slate-500' : 'border-slate-300'}`}
+            style={appMode ? { display: w.minimized || front !== w.id ? 'none' : undefined, zIndex: 100 } : { display: w.minimized ? 'none' : undefined, left: w.x, top: w.y, zIndex: 40 + rank, width: WINDOW_W, height: Math.min(WINDOW_H, Math.max(320, vpRef.current.h - w.y - DOCK_H - 8)) }}
             onPointerDownCapture={() => { if (front !== w.id) setWins(s => focusWindow(s, w.id)) }}>
-            <div className="flex shrink-0 cursor-move select-none items-center justify-between gap-2 border-b bg-slate-100 px-3 text-sm font-medium" style={{ height: TITLEBAR_H, touchAction: 'none' }}
-              onPointerDown={e => onDown(e, w.id, w.x, w.y)}>
-              <span className="min-w-0 truncate">{title}</span>
-              <span className="flex shrink-0 gap-1">
+            <div className={`flex shrink-0 select-none items-center justify-between gap-2 border-b bg-slate-100 px-3 text-sm font-medium ${appMode ? '' : 'cursor-move'}`} style={{ height: appMode ? 52 : TITLEBAR_H, touchAction: 'none' }}
+              onPointerDown={appMode ? undefined : e => onDown(e, w.id, w.x, w.y)}>
+              {appMode && <button type="button" aria-label={t('Close')} data-testid="win-back" onClick={() => setWins(s => closeWindow(s, w.id))} className="-ml-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-2xl text-slate-600 hover:bg-slate-200">&#8249;</button>}
+              <span className="min-w-0 flex-1 truncate">{title}</span>
+              <span className={`${appMode ? 'hidden' : 'flex'} shrink-0 gap-1`}>
                 <button type="button" aria-label={t('Minimize')} data-testid="win-min" onClick={() => setWins(s => minimizeWindow(s, w.id))} className="rounded px-2 py-0.5 text-lg leading-none hover:bg-slate-200">−</button>
                 <button type="button" aria-label={t('Close')} data-testid="win-close" onClick={() => setWins(s => closeWindow(s, w.id))} className="rounded px-2 py-0.5 text-lg leading-none hover:bg-slate-200">×</button>
               </span>
@@ -171,7 +175,7 @@ export function LeadWindowsHost({ defaultRole, roles, chatOn, pollOn, children }
         )
       })}
 
-      {wins.list.length > 0 && (
+      {wins.list.length > 0 && !appMode && (
         <div className="fixed bottom-0 left-60 right-0 z-[200] flex items-center gap-2 border-t bg-white/95 px-4 text-xs shadow-[0_-2px_8px_rgba(0,0,0,.06)]" style={{ height: DOCK_H }} data-testid="window-dock">
           <span className="text-slate-400">{t('Windows')}</span>
           {wins.list.map(w => (

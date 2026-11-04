@@ -30,9 +30,13 @@ import { canViewOpenServices } from '@/lib/open-services/access'
 import {
   EmbeddedProvider,
   ChromeOnly,
+  HiddenInWindows,
   ShellFrame,
   ShellMain,
+  ShellBody,
 } from '@/components/dashboard/embedded-shell'
+import { getAppMode } from '@/lib/app-mode/server'
+import { AppModeProvider } from '@/components/app-mode/app-mode-provider'
 import { WindowManager, WindowsAvailableProvider } from '@/components/windows/window-manager'
 import type { Metadata } from 'next'
 
@@ -158,19 +162,24 @@ export default async function DashboardLayout({
   // counts (the two slowest independent lookups), so it adds no serial round trip. Inside a window the
   // chrome's data is never shown, so its queries are skipped.
   const framed = isFramedNavigation(headers().get('sec-fetch-dest'))
+  // App mode (dev job 2072bc3e, Step 1b): the page is shown inside the TD Social iPhone app. Same idea as a window —
+  // no CRM frame, no frame data — but it is NOT a frame, so the window bridge and the window manager stay out of it.
+  // A layout hint only (the browser name); every login and permission check above and below runs exactly as before.
+  const appMode = getAppMode()
   const windowsEnabledPromise = isFloatingWindowsEnabled()
   // Started with the other independent lookups so the "New Calendar" menu check below adds no serial round trip.
   const openServicesAudiencePromise = getOpenServicesAudience()
-  const badgeCountsPromise = framed ? null : getBadgeCounts(supabase, user.id)
+  const badgeCountsPromise = framed || appMode ? null : getBadgeCounts(supabase, user.id)
   const windowsEnabled = await windowsEnabledPromise
   const embedded = framed && windowsEnabled
-  const badgeCounts = embedded
+  const bare = embedded || appMode
+  const badgeCounts = bare
     ? { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, talk: 0, reconciliationReview: 0, commUnread: 0 }
     : await (badgeCountsPromise ?? getBadgeCounts(supabase, user.id))
 
   // Check if AI agent is enabled for this user
   let showAiAgent = dashboardUser
-  if (!admin && !embedded) {
+  if (!admin && !bare) {
     const { data: aiSetting } = await supabaseAdmin
       .from('app_settings')
       .select('value')
@@ -181,19 +190,21 @@ export default async function DashboardLayout({
 
   // Kill switch for the floating chat window (Dev Tools → Maintenance).
   // Defaults on and fails open — see isFloatingChatEnabled.
-  const floatingChatEnabled = embedded ? false : await isFloatingChatEnabled()
+  const floatingChatEnabled = bare ? false : await isFloatingChatEnabled()
 
   const isSandbox = process.env.SANDBOX_MODE === '1'
 
   // The "New Calendar" menu item shows only to people the page itself would let in (same switch, same rule), so it can never be a
   // dead link. One cheap setting read on top of the user we already have; it fails closed (no item) on any problem.
-  const showNewCalendar = embedded ? false : canViewOpenServices(user, await openServicesAudiencePromise)
+  const showNewCalendar = bare ? false : canViewOpenServices(user, await openServicesAudiencePromise)
 
   return (
     <Providers>
-      {/* Dark mode: pre-paint script + sync, outside ChromeOnly so floating-window frames get it too. */}
-      <ThemeScript />
-      <ThemeSync />
+      <AppModeProvider initial={appMode}>
+      {/* Dark mode: pre-paint script + sync, outside ChromeOnly so floating-window frames get it too. The app is light
+          only in its first release (Antonio's approved choice), so inside the app neither runs and the screens stay light. */}
+      {!appMode && <ThemeScript />}
+      {!appMode && <ThemeSync />}
       {/* Window mode (see EmbeddedProvider): every piece of chrome is still rendered in
           its place so the tree keeps the SAME shape, but renders nothing inside a window.
           UiEventListener stays (it keeps a window's data fresh); the main scrolling area
@@ -227,8 +238,9 @@ export default async function DashboardLayout({
         <ShellMain>
           <ChromeOnly><DashboardHeader /></ChromeOnly>
           {/* Supabase (our database and file storage) has an open incident: say so, in its own words (docs/systems/supabase-status.md) */}
-          <ChromeOnly><SupabaseIncidentBar audience="staff" /></ChromeOnly>
-          {children}
+          {/* Stays in the TD Social app (as a one-line notice): staff must still be told "it is Supabase, not you". */}
+          <HiddenInWindows><SupabaseIncidentBar audience="staff" /></HiddenInWindows>
+          <ShellBody>{children}</ShellBody>
         </ShellMain>
         <ChromeOnly><CommandPalette /></ChromeOnly>
         <ChromeOnly><AiAgentPanel enabled={showAiAgent} /></ChromeOnly>
@@ -263,6 +275,7 @@ export default async function DashboardLayout({
       </ShellFrame>
       </WindowsAvailableProvider>
       </EmbeddedProvider>
+      </AppModeProvider>
     </Providers>
   )
 }

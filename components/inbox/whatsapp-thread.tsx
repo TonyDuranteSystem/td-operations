@@ -769,7 +769,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
           No messages in this conversation
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto p-4 space-y-2 bg-zinc-50">
+        <div className="app-compact-taps flex-1 overflow-y-auto p-4 space-y-2 bg-zinc-50">
           {messages.map((msg) => {
             const isOutbound = msg.direction === 'outbound'
             const isImage = msg.content_type === 'image'

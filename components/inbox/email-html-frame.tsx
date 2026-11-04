@@ -1,6 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
+import { fitScale } from '@/lib/inbox/fit-scale'
 
 /**
  * Renders untrusted email HTML inside a sandboxed iframe.
@@ -20,13 +22,34 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 export function EmailHtmlFrame({ html }: { html: string }) {
   const ref = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(60)
+  const appMode = useAppMode()
 
   const measure = useCallback(() => {
     const doc = ref.current?.contentDocument
-    if (doc?.documentElement) {
-      setHeight(Math.max(24, doc.documentElement.scrollHeight + 8))
+    if (!doc?.documentElement) return
+    // Inside the TD Social phone app an email wider than the phone is SHRUNK to fit (Step 1b, fix-list item 4) instead of
+    // being cut off at the right edge. Everywhere else the email is shown exactly as before.
+    const fit = appMode ? doc.getElementById('td-fit') : null
+    if (fit) {
+      fit.style.transform = ''
+      fit.style.width = ''
+      doc.documentElement.style.overflowY = ''
+      const available = doc.documentElement.clientWidth
+      const natural = fit.scrollWidth
+      const k = fitScale(natural, available)
+      if (k < 1) {
+        fit.style.width = `${natural}px`
+        fit.style.transformOrigin = '0 0'
+        fit.style.transform = `scale(${k})`
+        // A transform shrinks what you SEE, not the room the email takes up: the document stays as tall as the full-size email while
+        // the frame is only as tall as the shrunk one. Without this the frame scrolls through a blank white band below the email.
+        doc.documentElement.style.overflowY = 'hidden'
+        setHeight(Math.max(24, Math.ceil(fit.getBoundingClientRect().height) + 12))
+        return
+      }
     }
-  }, [])
+    setHeight(Math.max(24, doc.documentElement.scrollHeight + 8))
+  }, [appMode])
 
   // Images load after the document's load event — re-measure a few times.
   useEffect(() => {
@@ -39,7 +62,8 @@ export function EmailHtmlFrame({ html }: { html: string }) {
       img { max-width: 100%; height: auto; }
       a { color: #2563eb; }
       table { max-width: 100%; }
-    </style></head><body>${html}</body></html>`
+      ${appMode ? 'html, body { overflow-x: hidden; }' : ''}
+    </style></head><body>${appMode ? `<div id="td-fit">${html}</div>` : html}</body></html>`
 
   return (
     <iframe

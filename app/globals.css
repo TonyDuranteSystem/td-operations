@@ -110,3 +110,52 @@
   color: #a1a1aa;
   pointer-events: none;
 }
+
+/* TD Social phone app (dev job 2072bc3e, Step 1b): anything that carries the class `app-hide` is a web-only part the
+   native app replaces (notification strips and bells, "Sound is on" bars, sound switches, tours...). The layouts mark
+   their wrapper `data-app-mode="true"` on the SERVER (components/app-mode/app-mode-provider.tsx), so there is no
+   flash of the web-only part before the page wakes up; once the page wakes up the same marker is also put on the page's own
+   root element, so anything a screen pops up outside its wrapper (the Reply window, menus, search, toasts) follows the same
+   rules. In a normal browser the attribute is absent and nothing changes. EVERY app-only rule below must start with
+   [data-app-mode="true"] (tests/unit/app-mode-css.test.ts checks it). */
+[data-app-mode="true"] .app-hide { display: none !important; }
+
+/* A page that was sized "the whole screen minus the CRM's 4rem top bar" (Portal chats) has no top bar above it in the app, so it takes
+   the whole height it is given instead of leaving a dead strip at the bottom. */
+[data-app-mode="true"] .app-fill { height: 100%; }
+
+/* TD Social phone app, Portal chats (dev job 2072bc3e, Step 1b, fix-list item 6): the row of six tabs (Messages, What's New,
+   Idea request, To Do, Email, Worker) does not fit 390 px, so inside the app it scrolls sideways and each tab keeps its own
+   width instead of being squeezed until the labels overlap their icons. Outside the app nothing changes. */
+[data-app-mode="true"] .app-tabs-scroll { overflow-x: auto; scrollbar-width: none; }
+[data-app-mode="true"] .app-tabs-scroll::-webkit-scrollbar { display: none; }
+[data-app-mode="true"] .app-tabs-scroll > * { flex: none; white-space: nowrap; padding-left: 0.875rem; padding-right: 0.875rem; }
+
+/* TD Social phone app, sizes (dev job 2072bc3e, Step 1b, fix-list items 7 and 8): Apple's minimum for something you tap is
+   44 px, and text under 12 px is hard to read. Inside the app only:
+   - a button or link that is just an icon gets a 44 px tap area (the icon itself stays the same size);
+   - boxes you type in are at least 44 px tall;
+   - the tiny text sizes the web screens use (10 px, 10.5 px, 11 px) are raised to 12 px.
+   Outside the app nothing changes. */
+[data-app-mode="true"] button:has(> svg:only-child),
+[data-app-mode="true"] [role="button"]:has(> svg:only-child),
+[data-app-mode="true"] a:has(> svg:only-child) {
+  min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center;
+}
+[data-app-mode="true"] select,
+[data-app-mode="true"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]) { min-height: 44px; }
+[data-app-mode="true"] .text-\[10px\],
+[data-app-mode="true"] .text-\[10\.5px\],
+[data-app-mode="true"] .text-\[11px\] { font-size: 12px !important; line-height: 1.25 !important; }
+/* ...and a button with text on it (the filter chips All / Unread / Read, small pills) is at least 44 px tall in the app; switches and
+   check boxes keep their own shape. Links inside a sentence keep their size. */
+[data-app-mode="true"] button:not(:has(> svg:only-child)):not([role="switch"]):not([role="checkbox"]):not([role="radio"]) { min-height: 44px; }
+
+/* TD Social phone app, Portal chats conversation header (Step 1b, fix-list item 6): "← Back" sits on the same line as the client's
+   name instead of on a line of its own, and the header is less padded, so the messages get the room. Outside the app: unchanged. */
+[data-app-mode="true"] .app-conv-header { display: flex; flex-wrap: wrap; align-items: center; column-gap: 0.25rem; padding-top: 0.25rem; padding-bottom: 0.25rem; }
+[data-app-mode="true"] .app-conv-header > button { margin-bottom: 0; }
+[data-app-mode="true"] .app-conv-header > div { flex: 1 1 14rem; min-width: 0; }
+/* ...except inside a chat's message list: the small reaction and menu buttons beside a message keep their size, so a message bubble is
+   not padded out by 44 px buttons (the message's own tap and long-press stay the main way to act on it). */
+[data-app-mode="true"] .app-compact-taps button { min-height: 0 !important; min-width: 0 !important; }

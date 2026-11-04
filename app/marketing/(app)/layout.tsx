@@ -33,6 +33,7 @@ import { loadLayoutTime } from '@/lib/marketing/time-prefs-server'
 import { SellerBanner } from '@/components/marketing/lead-clocks'
 import { ZoneReporter } from '@/components/marketing/zone-reporter'
 import { makeT, tAccessLabel } from '@/lib/marketing/i18n'
+import { getAppMode } from '@/lib/app-mode/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -71,6 +72,39 @@ export default async function MarketingAppLayout({ children }: { children: React
   const previews: Partial<Record<TourKey, ResolvedStep[]>> | null = ctx.role === 'owner' && hasPermission(ctx.permissions, 'team.manage')
     ? Object.fromEntries(PREVIEW_TOURS.map(k => [k, resolveTour(k, MARKETING_PERMISSIONS, lang)])) : null
   const nav = modulesFor(ctx.permissions).map(m => (m.key === 'chat' ? { ...m, badge: chatUnread } : m.key === 'news' ? { ...m, badge: ownerLogin ? drafts : unreadNews.length } : m))
+  // Inside the TD Social phone app (dev job 2072bc3e, Step 1b) Marketing is the Chat and nothing else: no side menu (the app has its
+  // own tabs), a slim top bar with the language switch, the Supabase notice as one line, and the page takes the whole screen. The tour,
+  // the sound switch, the notification strip, the news strip and the lead search stay out (the app owns alerts). The leads' own
+  // windows open full screen (components/marketing/lead-windows-host.tsx). The "Viewing as" notice stays (one line, with its way out). The app-mode
+  // marker itself is put on by app/marketing/layout.tsx (it must also cover the lead page, which sits outside this layout). The computer layout below is unchanged.
+  if (getAppMode()) {
+    return (
+      <LangProvider lang={lang}>
+        <TourProvider own={{ key: tourKey, steps: ownSteps }} previews={null} autoStart={false} recordable={false}>
+          <div className="flex h-screen flex-col bg-white">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2">
+              <p className="min-w-0 truncate text-base font-semibold" data-testid="app-marketing-title">TD Marketing</p>
+              <LangSwitch />
+            </div>
+            {/* "View as" is a safety notice, not decoration: Antonio sees the team's Marketing as its owner, and what he does is recorded under his own email. It stays in the app, as one line with the way out. */}
+            {ctx.viewAs && (
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-1 text-sm text-amber-900" role="status" data-testid="app-view-as">
+                <span className="min-w-0 truncate font-semibold">{t('Viewing as')}: {ctx.viewAs.label.charAt(0).toUpperCase() + ctx.viewAs.label.slice(1)}</span>
+                <ExitViewButton />
+              </div>
+            )}
+            <SupabaseIncidentBar audience="staff" />
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <LeadWindowsHost defaultRole={boardRole(ctx.permissions)} roles={availableBoardRoles(ctx.permissions)} chatOn={chatOn} pollOn={chatAny}>
+                <ZoneReporter knownZone={layoutTime.selfZone} />
+                {children}
+              </LeadWindowsHost>
+            </div>
+          </div>
+        </TourProvider>
+      </LangProvider>
+    )
+  }
   return (
     <LangProvider lang={lang}>
     <TourProvider own={{ key: tourKey, steps: ownSteps }} previews={previews} autoStart={autoStart} recordable={!ctx.viewAs}>

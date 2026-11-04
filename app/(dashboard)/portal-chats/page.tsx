@@ -2494,7 +2494,8 @@ export default function PortalChatsPage() {
   const totalUnread = threads?.reduce((sum, t) => sum + t.unread_count, 0) ?? 0
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
+    // app-fill: inside the TD Social app there is no 4rem CRM top bar above this page, so it takes the whole height under the notice (app/globals.css)
+    <div className="app-fill flex h-[calc(100vh-4rem)] overflow-hidden">
       {/* Thread list */}
       <div className={cn(
         'w-full lg:w-[350px] lg:shrink-0 border-r flex flex-col',
@@ -2526,7 +2527,7 @@ export default function PortalChatsPage() {
                 <button
                   onClick={enableNotifications}
                   className={cn(
-                    "p-2 rounded-lg transition-colors",
+                    "app-hide p-2 rounded-lg transition-colors",
                     notificationsEnabled ? "text-blue-600 bg-blue-50" : "text-zinc-400 hover:bg-zinc-100"
                   )}
                   aria-label={notificationsEnabled ? 'Notifications enabled' : 'Enable browser notifications'}
@@ -3283,7 +3284,7 @@ export default function PortalChatsPage() {
         ) : (
           <>
             {/* Header */}
-            <div className="px-4 py-3 border-b bg-white shrink-0">
+            <div className="app-conv-header px-4 py-3 border-b bg-white shrink-0">
               <button
                 onClick={() => { setSelectedAccountId(null); setSelectedContactId(null); setSelectedCompanyId(null); setSelectedThreadCompanies([]); setSelectedThreadMembers([]); setSelectedAddressedToMemberId(null); setSelectedAddressedToCompany(false) }}
                 className="lg:hidden text-sm text-blue-600 mb-1"
@@ -3396,7 +3397,7 @@ export default function PortalChatsPage() {
 
             {/* Sub-tabs: Messages | Tasks (shown when a client thread is selected) */}
             {(selectedAccountId || selectedContactId) && (
-              <div className="flex border-b bg-white shrink-0">
+              <div className="app-tabs-scroll flex border-b bg-white shrink-0">
                 <button
                   onClick={() => setChatViewMode('messages')}
                   className={cn(
