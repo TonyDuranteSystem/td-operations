@@ -320,15 +320,24 @@ describe("publishOffer — the approved wording is frozen onto the offer (this s
   })
 })
 
-describe("publishOffer — reads that fail OPEN today (DELIBERATE CHANGE in step 1.2: a failed read becomes a refusal)", () => {
-  it("TODAY: if the list of yearly-fee services cannot be read, the yearly-fee check is silently skipped", async () => {
+describe("publishOffer — reads that used to fail OPEN (DELIBERATE CHANGE in step 1.2: a failed read is now a refusal)", () => {
+  // Before step 1.2 both of these let the offer go on: the yearly-fee check was silently skipped, and the packages were treated
+  // as 'no packages' (so new services inside a package option went unchecked). A send must not rest on a check that did not run.
+  it("if the list of yearly-fee services cannot be read, the send is refused and says to try again", async () => {
     h.annual = { data: null, error: { message: "db down" } }
     h.offer = { data: offerRow({ services: [{ name: "Formation", pipeline_type: "Company Formation" }], recurring_costs: null }), error: null }
-    expect((await publish()).error).toBe(PASSED)
+    const r = await publish()
+    expect(r.error).toBe("Cannot publish: could not check whether this offer needs a yearly fee (db down) — try again.")
+    expect(r.blockers).toBeUndefined()
+    expect(h.portal).not.toHaveBeenCalled()
+    expect(h.ensure).not.toHaveBeenCalled()
   })
 
-  it("TODAY: if the packages cannot be read, they are treated as 'no packages' and the offer goes on", async () => {
+  it("if the packages cannot be read, the send is refused and says to try again", async () => {
     h.packages = { data: null, error: { message: "db down" } }
-    expect((await publish()).error).toBe(PASSED)
+    const r = await publish()
+    expect(r.error).toBe("Cannot publish: could not read the offer's packages (db down) — try again.")
+    expect(h.portal).not.toHaveBeenCalled()
+    expect(h.ensure).not.toHaveBeenCalled()
   })
 })

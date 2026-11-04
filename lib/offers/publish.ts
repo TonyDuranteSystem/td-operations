@@ -19,9 +19,8 @@
  *   - Allow publication from any status other than 'draft'
  */
 
-import { yearlyFeeMissingReason } from "@/lib/offers/annual-maintenance-wording"
-import { offerServicesReadiness, type ReadinessBlocker } from "@/lib/offers/service-readiness"
-import { ensureOfferContractTexts } from "@/lib/offers/contract-texts-snapshot"
+import type { ReadinessBlocker } from "@/lib/offers/service-readiness"
+import { offerSendCheck } from "@/lib/offers/send-check"
 import { openPixelImg } from '@/lib/email/open-pixel'
 import crypto from "node:crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -67,65 +66,14 @@ export async function publishOffer(
     return fail(`Offer not found: ${token}`)
   }
 
-  if (!offer.client_email) {
-    return fail("Cannot publish: client_email is not set on this offer. Update it first.")
-  }
-
-  // A formation/onboarding offer must carry its yearly fee, or the client signs
-  // an offer + contract with no yearly fee written anywhere. Checked here because
-  // every send path (CRM button, MCP offer_send) goes through publishOffer.
-  // Which services carry a yearly fee comes from the service catalog (has_annual), not a list here.
-  const { data: annualRows } = await supabaseAdmin
-    .from("service_catalog")
-    .select("pipeline")
-    .eq("has_annual", true)
-  const annualPipelines = (annualRows ?? []).map((r) => r.pipeline).filter((x): x is string => !!x)
-  const { data: pk } = await supabaseAdmin
-    .from("offers")
-    // eslint-disable-next-line no-restricted-syntax -- packages postdates generated types (migration 20260826-1800)
-    .select("packages" as never)
-    .eq("token", token)
-    .maybeSingle()
-  const yearlyFeeReason = yearlyFeeMissingReason({
-    services: offer.services,
-    annualPipelines,
-    recurringCosts: offer.recurring_costs,
-    packages: (pk as unknown as { packages?: unknown } | null)?.packages ?? null,
-    currency: offer.installment_currency,
-  })
-  if (yearlyFeeReason) {
-    return fail(`Cannot publish: ${yearlyFeeReason}`)
-  }
-
-  // Strict status gate: only 'draft' can be published
-  if (offer.status !== "draft") {
-    return fail(`Cannot publish: offer is in '${offer.status}' status. Only 'draft' offers can be published.`)
-  }
-
-  // A service created in the Service Catalog screen can be put on an offer before it has any steps,
-  // or after it was switched off — the client would pay and nothing could start. Only services the
-  // old hard-coded list does not know are checked (flexible-offer track, Step 0). Placed after the
-  // draft test so re-sending an already-sent offer still gets the "only drafts" answer.
-  const readiness = await offerServicesReadiness({
-    services: offer.services,
-    bundledPipelines: offer.bundled_pipelines,
-    packages: (pk as unknown as { packages?: unknown } | null)?.packages ?? null,
-    contractType: offer.contract_type ?? null,
-  })
-  if (readiness.problem) {
-    return { ...fail(`Cannot publish: ${readiness.problem}`), blockers: readiness.blockers }
-  }
-
-  // Freeze the approved wording of every NEW service's contract onto the offer (offers.contract_texts): the
-  // client's contract page renders from this copy, so a later version can never change what was shown or signed.
-  // An offer with no new service never touches the contract store.
-  try {
-    const frozen = await ensureOfferContractTexts(token, { refresh: true })
-    if (frozen.missing.length > 0) {
-      return fail(`Cannot publish: no approved contract wording for ${frozen.missing.join(", ")} — approve the service's contract in the Service Catalog first.`)
-    }
-  } catch (e) {
-    return fail(`Cannot publish: could not save the contract wording on the offer (${e instanceof Error ? e.message : String(e)}) — try again.`)
+  // Every check that can refuse a send lives in ONE function (lib/offers/send-check.ts), shared with the read-only box
+  // beside the Send buttons and with Activate Lead, so they can never disagree. In this real-send mode the FIRST problem
+  // stops the rest, in the same order and with the same words as before: client email, yearly fee, still a draft, new
+  // services ready, approved wording frozen (that last step writes, so it never runs after an earlier failure).
+  const check = await offerSendCheck({ offer, door: "send", mode: "send" })
+  if (check.blockers.length > 0) {
+    const first = check.blockers[0]
+    return { ...fail(`Cannot publish: ${first.message}`), ...(first.readiness ? { blockers: first.readiness } : {}) }
   }
 
   // ─── 2. Create or find portal user ───
