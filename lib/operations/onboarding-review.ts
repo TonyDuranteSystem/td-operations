@@ -29,6 +29,13 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
  */
 export type SuiteConfirmChoice = { choice: "issue" } | { choice: "waive"; reason: string }
 
+/**
+ * Staff's call on the State Filing ID, made on the review screen's check card against the real Articles (dev job 64d2be64):
+ * `value` is the tidied number they confirmed or corrected, or null for "this document has no Filing ID" (nothing is saved).
+ * Absent = the screen had nothing to check (no Articles uploaded) — the client's own number is used as before.
+ */
+export interface FilingIdChoice { value: string | null }
+
 export interface ApplyOnboardingReviewResult {
   ok: boolean
   alreadyApplied: boolean
@@ -47,6 +54,7 @@ export async function applyOnboardingReview(
   submission_id: string,
   actor: string,
   suite?: SuiteConfirmChoice,
+  filingId?: FilingIdChoice,
 ): Promise<ApplyOnboardingReviewResult> {
   const lines: string[] = []
 
@@ -205,7 +213,9 @@ export async function applyOnboardingReview(
     if (submitted.ein) acctFields.ein_number = submitted.ein
     if (stateOfFormation) acctFields.state_of_formation = stateOfFormation
     if (submitted.formation_date) acctFields.formation_date = submitted.formation_date
-    if (submitted.filing_id) acctFields.filing_id = submitted.filing_id
+    // staff's checked number wins; "no Filing ID on the document" saves nothing; no check at all keeps the client's own number
+    const filingToSave = filingId ? filingId.value : (submitted.filing_id ? String(submitted.filing_id) : null)
+    if (filingToSave) acctFields.filing_id = filingToSave
     acctFields.entity_type = entityTypeMapped
     // Client Since = the staff-confirm moment (Antonio, 2026-09-20, dev job
     // bc2a8f7f) — this is when TD actually starts being responsible for the
@@ -477,6 +487,9 @@ export async function applyOnboardingReview(
           submitted_data: submitted,
           upload_paths: sub.upload_paths,
           ...(suite ? { suite_choice: suite.choice, suite_waive_reason: suite.choice === "waive" ? suite.reason : null } : {}),
+          // staff's checked Filing ID (null = none on the document): without it the job would fall back to the number the client typed and
+          // save a number staff just rejected; the key is left out when nothing was checked
+          ...(filingId ? { confirmed_filing_id: filingId.value } : {}),
         },
         priority: 1,  // Highest priority
         account_id: accountId,
@@ -574,6 +587,7 @@ export async function confirmPortalWizardOnboarding(
   submission_id: string,
   actor: string,
   suite?: SuiteConfirmChoice,
+  filingId?: FilingIdChoice,
 ): Promise<ApplyOnboardingReviewResult> {
   const lines: string[] = []
 
@@ -652,6 +666,8 @@ export async function confirmPortalWizardOnboarding(
         submitted_data: submitted,
         upload_paths: sub.upload_paths,
         ...(suite ? { suite_choice: suite.choice, suite_waive_reason: suite.choice === "waive" ? suite.reason : null } : {}),
+        // the number staff checked against the real Articles (null = none on the document); the key is left out when nothing was checked
+        ...(filingId ? { confirmed_filing_id: filingId.value } : {}),
         // source intentionally omitted — this run must pass the staff
         // review gate now that reviewed_at is set above.
       },
@@ -663,6 +679,7 @@ export async function confirmPortalWizardOnboarding(
     })
 
     lines.push(`🚀 Setup job enqueued: ${jobId}`)
+    if (filingId) lines.push(filingId.value ? `🔎 State Filing ID checked on the Articles by ${actor}: ${filingId.value} (the setup job saves it on the company when it runs)` : `🔎 No Filing ID will be saved from this Confirm (${actor}: none on the document, or the Articles could not be checked)`)
     lines.push(`   Will create: ${sub.account_id ? "(account already exists)" : "Account"}, Drive folder, follow-up tasks, tax return (if applicable)`)
     lines.push(`   Lease and Operating Agreement stay manual — not created automatically.`)
   } catch (e) {
