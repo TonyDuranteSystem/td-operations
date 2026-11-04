@@ -86,9 +86,9 @@ describe("the seller's tour explains every column", () => {
   it("names every column and result of Rocco's path in English and in Italian (27 Oct 2026)", () => {
     const en = resolveTour("seller", perms, "en").find(s => s.screen === "board")
     const it_ = resolveTour("seller", perms, "it").find(s => s.screen === "board")
-    for (const w of ["Calls prenotate", "After the call", "It happened", "It did not happen", "Link sent", "Not in target", "Not ready now", "Paid", "Booking link sent", "Upsell", "Waiting", "Archive", "New message"]) expect(en?.body, w).toContain(w)
+    for (const w of ["Calls prenotate", "Call time passed", "Link sent", "Not in target", "Not ready now", "Paid", "Booking link sent", "Upsell", "Waiting", "Archive", "New message"]) expect(en?.body, w).toContain(w)
     expect(en?.body).not.toContain("Incoming messages")
-    for (const w of ["Calls prenotate", "Dopo la call", "C'è stata", "Non c'è stata", "Link inviato", "Fuori target", "Non pronto ora", "Pagato", "Link prenotazione inviato", "Upsell", "In attesa", "Archivia", "Nuovo messaggio"]) expect(it_?.body, w).toContain(w)
+    for (const w of ["Calls prenotate", "Orario della call passato", "Link inviato", "Fuori target", "Non pronto ora", "Pagato", "Link prenotazione inviato", "Upsell", "In attesa", "Archivia", "Nuovo messaggio"]) expect(it_?.body, w).toContain(w)
     expect(it_?.body).not.toContain("Messaggi in arrivo")
   })
 })
@@ -126,7 +126,7 @@ describe("bug hunt on PR 854 (fixes)", () => {
   })
   it("a lead the setter turned down before it reached Rocco is not on his Not in target column; one he had a call with is", async () => {
     const { columnOfCard } = await import("@/lib/marketing/board")
-    expect(columnOfCard("seller", { stage: "not_in_target", callCheck: false, apptAt: null })).toBeNull()
-    expect(columnOfCard("seller", { stage: "not_in_target", callCheck: false, apptAt: "2026-10-27T10:00:00Z" })).toBe("out")
+    expect(columnOfCard("seller", { stage: "not_in_target", apptAt: null })).toBeNull()
+    expect(columnOfCard("seller", { stage: "not_in_target", apptAt: "2026-10-27T10:00:00Z" })).toBe("out")
   })
 })

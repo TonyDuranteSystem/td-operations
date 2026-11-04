@@ -1,7 +1,7 @@
 /* eslint-disable no-console */
 /* SANDBOX + a local dev server (TD Marketing, dev job 9aec66fa, Release 1 of the 3 Nov 2026 hand-over). Through the REAL login page and the REAL database it proves: the setter's board has no "Interested lead";
    booking the free call makes the lead the seller's at once (pick set, leaves her board, appears under "Calls prenotate"); cancelling takes it back; the old leftovers show under "After the call"; and the seller
-   answers "Did this call happen?". Needs the seed (`qa-handover-r1-seed.ts`) and the one-off applied on its team, and `PORT=3060 npm run dev`.
+   sees the old past calls first, with a red "Call time passed" tag, in the one column Calls prenotate. Needs the seed (`qa-handover-r1-seed.ts`) and the one-off applied on its team, and `PORT=3060 npm run dev`.
    Run: npx tsx scripts/marketing/qa-handover-r1.ts   (screenshots go to $QA_SHOTS or /tmp) */
 import { config } from "dotenv"
 config({ path: ".env.local" })
@@ -114,9 +114,10 @@ async function main() {
   const seller = await login(S.seller)
   p = await open(seller, "/marketing/board")
   await p.screenshot({ path: `${SHOTS}/r1-seller-board.png`, fullPage: true })
-  const calls = await colText(p, "Calls prenotate"), after = await colText(p, "After the call", "Dopo la call")
-  ck("seller board: Calls prenotate holds the new booking and the old future call", /Qualified A/.test(calls) && /Old booked future/.test(calls) && !/Old booked past/.test(calls), calls.slice(0, 300))
-  ck("seller board: After the call holds the old past call and the old Contacted lead", /Old booked past/.test(after) && /Old seller contacted/.test(after) && !/Old booked future/.test(after), after.slice(0, 300))
+  const calls = await colText(p, "Calls prenotate")
+  ck("seller board: Calls prenotate holds the new booking, the old future call, the old past call and the old Contacted lead", /Qualified A/.test(calls) && /Old booked future/.test(calls) && /Old booked past/.test(calls) && /Old seller contacted/.test(calls), calls.slice(0, 400))
+  ck("seller board: the past calls are tagged 'Call time passed' and come before the future one", (await p.getByTestId("card-call-passed").count()) === 2 && calls.indexOf("Old booked past") < calls.indexOf("Old booked future"), calls.slice(0, 400))
+  ck("seller board: there is no After the call column", !/After the call ·|Dopo la call ·/.test(await text(p)))
   t = await text(p)
   ck("seller board: no Interested lead and no Contacted column", !/Interested lead ·|Lead interessato ·/.test(t) && !/Contacted ·|Contattato ·/.test(t), t.slice(0, 300))
   await p.close()
@@ -128,22 +129,8 @@ async function main() {
   await p.close()
 
   p = await open(seller, `/marketing/window/${L("Old booked past")}`)
-  ck("seller window on an old past call: asked 'Did this call happen?'", await p.getByTestId("call-check").count() === 1)
-  await p.screenshot({ path: `${SHOTS}/r1-seller-call-check.png`, fullPage: true })
-  await p.getByTestId("call-not-happened").click()
-  await p.waitForSelector('[data-testid="call-answer-missed"]', { timeout: 60000 })
-  ck("answer 'It did not happen' is shown and the buttons are gone", (await p.getByTestId("call-not-happened").count()) === 0)
-  await p.close()
-  p = await open(seller, "/marketing/board")
-  const after2 = await colText(p, "After the call", "Dopo la call")
-  ck("board chip says 'Call did not happen' on that card", /Call did not happen|Chiamata non avvenuta/.test(after2), after2.slice(0, 300))
-  await p.close()
-
-  p = await open(seller, `/marketing/window/${L("Old seller contacted")}`)
-  await p.getByTestId("call-happened").click()
-  await p.waitForSelector('[data-testid="call-answer-happened"]', { timeout: 60000 })
-  ck("answer 'It happened' is shown", true)
-  await p.screenshot({ path: `${SHOTS}/r1-seller-happened.png`, fullPage: true })
+  ck("seller window on an old past call: says the call time has passed, no yes/no question", await p.getByTestId("call-passed").count() === 1 && await p.getByTestId("call-check").count() === 0)
+  await p.screenshot({ path: `${SHOTS}/r1-seller-call-passed.png`, fullPage: true })
   await p.close()
 
   console.log(`\n${pass} passed, ${fail} failed`)

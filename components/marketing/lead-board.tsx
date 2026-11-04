@@ -39,6 +39,7 @@ export function LeadBoard({ cards, truncated }: { cards: BoardCard[]; truncated:
       className={`block w-full rounded-lg border p-3 text-left text-sm shadow-sm hover:border-slate-400 ${c.unread > 0 ? `motion-safe:[animation:pulse_1.2s_cubic-bezier(0.4,0,0.6,1)_12] ${c.incomingFrom === 'setter' ? 'border-emerald-500 bg-emerald-50' : 'border-red-500 bg-red-50'}` : 'bg-white'}`}
       data-incoming={c.unread > 0 ? c.incomingFrom ?? 'owner' : undefined}>
       {c.unread > 0 && <span className={`mb-1.5 inline-block rounded-full px-2 text-[11px] font-semibold text-white ${c.incomingFrom === 'setter' ? 'bg-emerald-600' : 'bg-red-600'}`} data-testid="card-unread">{c.unread > 1 ? `${t('New message')} · ${c.unread}` : t('New message')}</span>}
+      {c.callPassed && <span className="mb-1.5 inline-block rounded-full border border-red-300 bg-red-50 px-2 text-[11px] font-semibold text-red-900" data-testid="card-call-passed">{t('Call time passed')}</span>}
       <span className="block min-w-0 truncate"><b className="font-medium">{c.name}</b></span>
       {c.phone && <span className="mt-0.5 block truncate text-xs text-slate-500">{c.phone}</span>}
       {c.note && <span className="mt-1 block text-xs text-slate-700 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden">{c.note}</span>}

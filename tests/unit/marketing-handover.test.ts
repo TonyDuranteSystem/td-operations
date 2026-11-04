@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest"
 import { contactChips, contactState, type ContactEvent } from "@/lib/marketing/contact-state"
-import { leadActionSchema, permissionFor, planLeadAction, type ActionSettings, type Actor } from "@/lib/marketing/lead-actions"
+import { leadActionSchema, planLeadAction, type ActionSettings, type Actor } from "@/lib/marketing/lead-actions"
 import { eventText } from "@/lib/marketing/lead-view"
 import { redactTimeline } from "@/lib/marketing/lead-privacy"
 import { messageSigner } from "@/lib/marketing/templates"
 import { personName } from "@/lib/marketing/setter-note"
-import { cardsInColumn, columnOfCard, hiddenCount, needsCallAnswer, type BoardCard } from "@/lib/marketing/board"
+import { cardsInColumn, columnOfCard, columnsFor, hiddenCount, callTimePassed, type BoardCard } from "@/lib/marketing/board"
 import { MARKETING_SETTING_DEFS } from "@/lib/marketing/settings-schema"
 
 const ev = (kind: string, at: string, data: Record<string, unknown> = {}): ContactEvent => ({ kind, created_at: at, data })
@@ -44,14 +44,6 @@ describe("booking the free call IS the hand-over (3 Nov 2026)", () => {
     const byHand = planLeadAction({ action: "appointment", at: null }, { ...facts, booked_handed_to: null }, setter, settings, NOW)
     expect(byHand.ok && byHand.change.patch).toEqual({ status: "qualified" })
   })
-  it("the seller says whether the call happened: a seller action, only while the lead waits for that answer", () => {
-    expect(permissionFor("call_outcome")).toBe("leads.pick")
-    expect(leadActionSchema.safeParse({ action: "call_outcome", happened: true }).success).toBe(true)
-    expect(leadActionSchema.safeParse({ action: "call_outcome" }).success).toBe(false)
-    const seller: Actor = { id: "u-rocco", email: "rocco@x.com", role: "member" }
-    expect(planLeadAction({ action: "call_outcome", happened: false }, { claimed_by: "u-rocco", status: "booked" }, seller, settings, NOW)).toMatchObject({ ok: true, change: { patch: {}, event: { kind: "call_outcome", data: { happened: false } } } })
-    expect(planLeadAction({ action: "call_outcome", happened: true }, { claimed_by: "u-rocco", status: "qualified" }, seller, settings, NOW)).toMatchObject({ ok: false, status: 409 })
-  })
   it("the contact state keeps the seller's answer; a new booking asks the question again; old pass rows still read", () => {
     const answered = contactState([ev("appointment", "2026-10-21T10:00:00Z", { at: "2026-10-22T09:00:00.000Z" }), ev("call_outcome", "2026-10-22T10:00:00Z", { happened: false })])
     expect(answered.callAnswer).toBe("missed")
@@ -79,7 +71,7 @@ describe("booking the free call IS the hand-over (3 Nov 2026)", () => {
 })
 
 describe("the boards after the hand-over", () => {
-  const card = (id: string, stage: string, over: Partial<BoardCard> = {}): BoardCard => ({ id, name: id, stage, stageLabel: stage, phone: null, filledIn: "", apptAt: null, arrivedMs: 1, chips: [], withText: "", note: null, ad: null, existingClient: false, callCheck: false, callAnswer: null, unread: 0, ...over })
+  const card = (id: string, stage: string, over: Partial<BoardCard> = {}): BoardCard => ({ id, name: id, stage, stageLabel: stage, phone: null, filledIn: "", apptAt: null, arrivedMs: 1, chips: [], withText: "", note: null, ad: null, existingClient: false, callPassed: false, unread: 0, ...over })
   it("an in-target lead with no call is the setter's only; it is not on Rocco's board", () => {
     const cards = [card("mine", "qualified")]
     expect(columnOfCard("seller", cards[0])).toBeNull()
@@ -95,19 +87,19 @@ describe("the boards after the hand-over", () => {
     expect(columnOfCard("seller", b)).toBe("booked")
     expect(columnOfCard("setter", b)).toBeNull()
   })
-  it("once the call time has passed it moves to After the call, oldest first; the upcoming ones stay under Calls prenotate", () => {
-    const cards = [card("up", "booked", { apptAt: "2026-10-30T09:00:00Z" }), card("old", "booked", { apptAt: "2026-10-01T09:00:00Z", callCheck: true }), card("older", "booked", { apptAt: "2026-09-20T09:00:00Z", callCheck: true }), card("none", "booked", { callCheck: true })]
-    expect(cardsInColumn("seller", "booked", cards).map(c => c.id)).toEqual(["up"])
-    expect(cardsInColumn("seller", "after_call", cards).map(c => c.id)).toEqual(["none", "older", "old"])
+  it("every booked call stays in the ONE column Calls prenotate; the ones whose time has passed come first (longest waiting on top), then the upcoming ones soonest first", () => {
+    const cards = [card("up", "booked", { apptAt: "2026-10-30T09:00:00Z" }), card("later", "booked", { apptAt: "2026-11-02T09:00:00Z" }), card("old", "booked", { apptAt: "2026-10-01T09:00:00Z", callPassed: true }), card("older", "booked", { apptAt: "2026-09-20T09:00:00Z", callPassed: true }), card("none", "booked", { callPassed: true })]
+    expect(cardsInColumn("seller", "booked", cards).map(c => c.id)).toEqual(["none", "older", "old", "up", "later"])
+    expect(columnsFor("seller").map(c => c.key)).not.toContain("after_call")
   })
-  it("the call is over 30 minutes after it starts; a lead with no call time, or a bad one, needs the answer; other stages never do", () => {
+  it("the call is over 30 minutes after it starts; a lead with no call time, or a bad one, counts as passed; other stages never do", () => {
     const now = new Date("2026-11-03T12:00:00Z")
-    expect(needsCallAnswer("booked", "2026-11-03T11:29:00Z", now)).toBe(true)
-    expect(needsCallAnswer("booked", "2026-11-03T11:31:00Z", now)).toBe(false)
-    expect(needsCallAnswer("booked", "2026-11-04T09:00:00Z", now)).toBe(false)
-    expect(needsCallAnswer("booked", null, now)).toBe(true)
-    expect(needsCallAnswer("showed", "not a date", now)).toBe(true)
-    for (const stage of ["new", "qualified", "closed", "paid_call", "not_in_target"]) expect(needsCallAnswer(stage, null, now), stage).toBe(false)
+    expect(callTimePassed("booked", "2026-11-03T11:29:00Z", now)).toBe(true)
+    expect(callTimePassed("booked", "2026-11-03T11:31:00Z", now)).toBe(false)
+    expect(callTimePassed("booked", "2026-11-04T09:00:00Z", now)).toBe(false)
+    expect(callTimePassed("booked", null, now)).toBe(true)
+    expect(callTimePassed("showed", "not a date", now)).toBe(true)
+    for (const stage of ["new", "qualified", "closed", "paid_call", "not_in_target"]) expect(callTimePassed(stage, null, now), stage).toBe(false)
   })
 })
 

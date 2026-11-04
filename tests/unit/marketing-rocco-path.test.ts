@@ -41,7 +41,7 @@ describe("Rocco's path: the stages exist and are in the order of the path", () =
     for (const k of ["new", "contacted", "qualified", "booked", "showed", "not_in_target"]) expect(onSellerSide(k, settings), k).toBe(false)
   })
   it("the seller's buttons need the seller's right (leads.pick), the setter's keep leads.mark", () => {
-    for (const a of ["call_outcome", "booking_link", "upsell", "waiting", "archive", "not_ready", "closed", "not_closed"] as const) expect(permissionFor(a), a).toBe("leads.pick")
+    for (const a of ["booking_link", "upsell", "waiting", "archive", "not_ready", "closed", "not_closed"] as const) expect(permissionFor(a), a).toBe("leads.pick")
     for (const a of ["good", "call_back", "not_in_target", "note", "whatsapp", "appointment"] as const) expect(permissionFor(a), a).toBe("leads.mark")
   })
 })
@@ -112,7 +112,7 @@ describe("Upsell, Waiting, Archive", () => {
 })
 
 describe("the board: a new message never moves a card, and the setter's columns", () => {
-  const card = (stage: string, o: Partial<BoardCard> = {}): Pick<BoardCard, "stage" | "callCheck"> & { unread?: number } => ({ stage, callCheck: false, ...o })
+  const card = (stage: string, o: Partial<BoardCard> = {}): Pick<BoardCard, "stage"> & { unread?: number } => ({ stage, ...o })
   it("an unread message never changes the column of a card (Antonio, 28 Oct 2026: the card keeps its stage and blinks)", () => {
     expect(columnOfCard("seller", card("booked"))).toBe("booked")
     expect(columnOfCard("seller", card("closed"))).toBe("closed")
