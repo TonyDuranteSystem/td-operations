@@ -23,3 +23,8 @@ export function mediaKindFor(name: string, mimeType: string | null | undefined):
 
 /** Files above this size are downloaded straight from storage (the server never loads them into memory). */
 export const BIG_DOWNLOAD_BYTES = 8 * 1024 * 1024
+
+export const HTML_RE = /\.(html?|xhtml)$/i
+export const HTML_PAGE_MAX_BYTES = 10 * 1024 * 1024
+/** An HTML file (a saved mockup): can be shown as the real page inside a locked box. */
+export const isHtmlFile = (name: string, mimeType: string | null | undefined): boolean => HTML_RE.test(name) || (mimeType ?? "").split(";")[0].trim().toLowerCase() === "text/html"

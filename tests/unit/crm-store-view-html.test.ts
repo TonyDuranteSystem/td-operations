@@ -9,10 +9,11 @@ describe("viewKindFor", () => {
     expect(viewKindFor("notes.md", "application/octet-stream")).toBe("text")
     expect(viewKindFor("data.csv", "text/csv")).toBe("text")
   })
-  it("leaves PDFs, pictures, PowerPoint and old Office files to the other paths", () => {
+  it("leaves PDFs, pictures and old binary Office files to the other paths", () => {
     expect(viewKindFor("a.pdf", "application/pdf")).toBeNull()
     expect(viewKindFor("a.png", "image/png")).toBeNull()
-    expect(viewKindFor("deck.pptx", null)).toBeNull()
+    expect(viewKindFor("deck.ppt", "application/vnd.ms-powerpoint")).toBeNull() // old binary PowerPoint: the details page
+    expect(viewKindFor("deck.pptx", null)).toBe("pptx") // new PowerPoint: slide text
     expect(viewKindFor("old.doc", "application/msword")).toBeNull()
     expect(viewKindFor("old.xls", "application/vnd.ms-excel")).toBeNull()
   })

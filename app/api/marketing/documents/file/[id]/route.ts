@@ -24,13 +24,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         // shown inside the browser, locked down: a PDF needs Chromium's own viewer (no sandbox header there); images and text stay sandboxed
         return new NextResponse(new Uint8Array(f.bytes), { headers: h["Content-Type"] === "application/pdf" ? h : { ...h, "Content-Security-Policy": "sandbox" } })
       }
-      // Word / Excel / text-like files: the CRM storage's own "simplified view" (one script-free page; the same reader and the same limits as the Storage screen)
-      const v = await import("@/lib/crm-store/view-html")
-      const kind = v.viewKindFor(f.name, f.mimeType)
-      if (kind && f.bytes.length <= v.VIEW_MAX_BYTES[kind]) {
-        const html = kind === "docx" ? await v.docxToViewHtml(f.name, f.bytes) : kind === "xlsx" ? await v.xlsxToViewHtml(f.name, f.bytes) : v.renderTextView(f.name, f.bytes.toString("utf-8"))
-        return new NextResponse(html, { headers: SIMPLE_VIEW_HEADERS })
-      }
+      // every other file: the CRM storage's own "simplified view" — ONE decision in viewPageFor (Word, Excel, PowerPoint, OpenOffice, Apple files, RTF, text, zip,
+      // SVG / TIFF …, and a details page for anything it cannot draw), one script-free page, the same reader and limits as the Storage screen
+      const { viewPageFor, VIEW_HEAD_BYTES } = await import("@/lib/crm-store/view-any")
+      const { html } = await viewPageFor({ name: f.name, mimeType: f.mimeType, size: f.bytes.length, head: f.bytes.subarray(0, VIEW_HEAD_BYTES), full: async () => f.bytes })
+      return new NextResponse(html, { headers: SIMPLE_VIEW_HEADERS })
     }
     return new NextResponse(new Uint8Array(f.bytes), { headers: { ...h, "Content-Disposition": h["Content-Disposition"].replace(/^inline/, "attachment") } })
   } catch (e) { return docsError(e, "That document could not be downloaded. Please try again.") }

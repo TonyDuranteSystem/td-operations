@@ -24,8 +24,7 @@ import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { useAiMarks, AiMarkChip, AiCheckFilesButton, AiReviewPanel } from './ai-check'
 import { MyDriveDialog } from '@/components/storage/my-drive-dialog'
 import { PlainDropPanel, type PlainOutcome } from './plain-drop-panel'
-import { viewKindFor } from '@/lib/crm-store/view-html'
-import { mediaKindFor, BIG_DOWNLOAD_BYTES, type MediaKind } from '@/lib/crm-store/media'
+import { mediaKindFor, isHtmlFile, BIG_DOWNLOAD_BYTES, type MediaKind } from '@/lib/crm-store/media'
 import { allFolderPaths, filterPlainDrop, itemsFromFileList, type PlainItem, type PlainSkipped } from '@/lib/crm-store/plain-drop'
 import { isInternalOwnerKind, isPersonalAreaKind } from '@/lib/crm-store/owner-kinds'
 import { typesForTarget } from '@/lib/crm-store/types-for-target'
@@ -186,6 +185,19 @@ function MediaPlayer({ file, kind }: { file: File_; kind: MediaKind }) {
   )
 }
 
+/** The header's "Download the original": a big file goes straight from storage through a signed link (the server never loads it). */
+function DownloadOriginal({ file, src, canLink }: { file: File_; src: string; canLink: boolean }) {
+  const big = canLink && (file.size ?? 0) > BIG_DOWNLOAD_BYTES
+  const [url, setUrl] = useState<string>(src)
+  useEffect(() => {
+    if (!big) return
+    let off = false
+    getJson<FileLink>(linkUrl(file.id)).then((l) => { if (!off) setUrl(l.downloadUrl) }).catch(() => undefined)
+    return () => { off = true }
+  }, [big, file.id])
+  return <a href={url} download className="text-xs text-blue-700 hover:underline">Download the original</a>
+}
+
 /** A file nothing here can show: a clear message and a download. A big file downloads straight from storage (never loaded by the server). */
 function NoPreview({ file, src, canLink }: { file: File_; src: string; canLink: boolean }) {
   const big = canLink && (file.size ?? 0) > BIG_DOWNLOAD_BYTES
@@ -212,22 +224,16 @@ function PreviewPanel({ file, onClose, src: srcOverride, title, viewSrc }: { fil
   const mime = (file.mimeType ?? '').split(';')[0].trim().toLowerCase()
   const inline = INLINE_TYPES.has(mime)
   const isImage = inline && mime.startsWith('image/')
-  // Word / Excel / Markdown / CSV … open as a simplified, script-free page made by the server (the current version only)
-  // (an older saved copy is shown the same way through its own view address)
-  const simple = !inline && (!srcOverride || !!viewSrc) && viewKindFor(file.name, file.mimeType) !== null
+  // EVERY other file opens as a simplified page made by the server (Word, Excel, PowerPoint, OpenOffice, Apple files, RTF, text, zip, SVG / TIFF …) —
+  // and anything it cannot draw gets a details page, never "cannot be shown" (an older saved copy is shown the same way through its own view address)
+  const simple = !inline && (!srcOverride || !!viewSrc)
   // an iPhone photo (HEIC/HEIF) is shown through the picture route, which converts it to a JPEG for the screen
   const heic = !inline && !srcOverride && (/\.(heic|heif)$/i.test(file.name) || /^image\/hei[cf]/i.test(mime))
   // a video / audio recording plays from a signed link (only the current copy has one)
   const media = !inline && !srcOverride ? mediaKindFor(file.name, file.mimeType) : null
-  // a file whose name and type say nothing, up to 2 MB: the server tries to read it as text (it can refuse → the download screen)
-  const probe = !inline && !simple && !heic && !media && !srcOverride && (file.size == null || file.size <= 2 * 1024 * 1024)
-  const [probed, setProbed] = useState<string | 'no' | null>(null)
-  useEffect(() => {
-    if (!probe) return
-    let off = false
-    fetch(`${src}/view`).then(async (r) => { const t = r.ok ? await r.text() : null; if (!off) setProbed(t ?? 'no') }).catch(() => { if (!off) setProbed('no') })
-    return () => { off = true }
-  }, [probe, src])
+  // an HTML file (a saved mockup) can be shown as the real page, in a locked box; "View source" switches back to the code
+  const html = !inline && !srcOverride && isHtmlFile(file.name, file.mimeType)
+  const [asPage, setAsPage] = useState(true)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
@@ -239,7 +245,8 @@ function PreviewPanel({ file, onClose, src: srcOverride, title, viewSrc }: { fil
         <div className="flex items-center gap-2 border-b border-zinc-200 px-4 py-2">
           <FileText className="h-4 w-4 text-zinc-400" />
           <span className="min-w-0 flex-1 truncate text-sm font-medium">{title ?? file.name}</span>
-          {(simple || heic) && <a href={src} download className="text-xs text-blue-700 hover:underline">Download the original</a>}
+          {html && <button type="button" onClick={() => setAsPage((v) => !v)} className="rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-700 hover:bg-zinc-50" data-testid="html-toggle">{asPage ? 'View source' : 'View as page'}</button>}
+          {(simple || heic) && !media && <DownloadOriginal file={file} src={src} canLink={!srcOverride} />}
           <button type="button" onClick={onClose} aria-label="Close preview" className="rounded p-1 text-zinc-500 hover:bg-zinc-100">
             <X className="h-4 w-4" />
           </button>
@@ -248,14 +255,13 @@ function PreviewPanel({ file, onClose, src: srcOverride, title, viewSrc }: { fil
           {heic ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={`${src}/picture`} alt={file.name} className="mx-auto block h-auto max-w-full" data-testid="heic-view" />
-          ) : simple ? (
-            <iframe src={viewSrc ?? `${src}/view`} title={file.name} sandbox="" className="h-full w-full border-0 bg-white" data-testid="simple-view" />
           ) : media ? (
             <MediaPlayer file={file} kind={media} />
-          ) : probe && probed === null ? (
-            <div className="flex h-full items-center justify-center text-sm text-zinc-500">Opening…</div>
-          ) : probe && probed !== null && probed !== 'no' ? (
-            <iframe srcDoc={probed} title={file.name} sandbox="" className="h-full w-full border-0 bg-white" data-testid="text-probe-view" />
+          ) : html && asPage ? (
+            // the real page in a locked box: scripts may run, but with NO same-origin it cannot touch the CRM, a login or any client data
+            <iframe src={`${src}/view?mode=html`} title={file.name} sandbox="allow-scripts allow-forms allow-modals" className="h-full w-full border-0 bg-white" data-testid="html-page" />
+          ) : simple ? (
+            <iframe src={viewSrc ?? `${src}/view`} title={file.name} sandbox="" className="h-full w-full border-0 bg-white" data-testid="simple-view" />
           ) : !inline ? (
             <NoPreview file={file} src={src} canLink={!srcOverride} />
           ) : isImage ? (
