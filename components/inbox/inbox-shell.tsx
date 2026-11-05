@@ -1370,7 +1370,17 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
     setWorkerOpen(true)
   }
 
+  // TD Social phone app: "Reply" on an EMAIL opens the reply as its own full screen (the approved mockup's reply screen) instead of a box that
+  // eats a quarter of the reading screen. The composer stays mounted the whole time (only its frame changes), so a draft is never lost.
+  const [appReplyFor, setAppReplyFor] = useState<string | null>(null)
+  const appReplyOpen = !!selected && appReplyFor === selected.id
+
   const handleReply = () => {
+    if (appMode && selected && selected.channel !== 'whatsapp') {
+      setAppReplyFor(selected.id)
+      window.setTimeout(() => (document.querySelector('.compose-reply-textarea') as HTMLElement | null)?.focus(), 250)
+      return
+    }
     const textarea = document.querySelector('.compose-reply-textarea') as HTMLTextAreaElement
     if (textarea) {
       textarea.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -1851,7 +1861,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
               {/* Thread header with actions. flex-wrap + basis on the title:
                   on narrow windows/mobile the button cluster wraps to its own
                   row instead of crushing the subject to one word per line. */}
-              <div className="flex items-center gap-x-3 gap-y-1.5 px-4 py-2.5 border-b bg-white shrink-0 flex-wrap">
+              <div className="app-thread-head flex items-center gap-x-3 gap-y-1.5 px-4 py-2.5 border-b bg-white shrink-0 flex-wrap">
                 <FastTooltip label="Back to the email list" align="left">
                   <button
                     onClick={handleBack}
@@ -1865,7 +1875,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
                 {(() => {
                   const Icon = channelIcons[selected.channel]
                   const iconClass = selected.channel === 'whatsapp' ? 'text-green-500' : 'text-zinc-400'
-                  return <Icon className={`h-4 w-4 shrink-0 ${iconClass}`} />
+                  return <Icon className={`app-hide h-4 w-4 shrink-0 ${iconClass}`} />
                 })()}
 
                 <div className="min-w-0 flex-1 basis-44">
@@ -2253,14 +2263,32 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
                         of the key — they're reset separately above so an
                         explicit pick still updates a composer instance that
                         is already mounted and (possibly) mid-draft. */}
-                    <ComposeReply
-                      key={selected.id}
-                      conversation={selected}
-                      mailbox={activeMailbox}
-                      explicitReplyTarget={explicitReplyTarget}
-                      getDefaultReplyTarget={() => defaultReplyTargetRef.current?.() ?? null}
-                      onTargetConsumed={() => setExplicitReplyTarget(null)}
-                    />
+                    {(() => {
+                      const replyBox = (
+                        <ComposeReply
+                          key={selected.id}
+                          conversation={selected}
+                          mailbox={activeMailbox}
+                          explicitReplyTarget={explicitReplyTarget}
+                          getDefaultReplyTarget={() => defaultReplyTargetRef.current?.() ?? null}
+                          onTargetConsumed={() => { setExplicitReplyTarget(null); setAppReplyFor(null) }}
+                        />
+                      )
+                      if (!appMode) return replyBox
+                      // phone app: hidden until "Reply", then its own full screen (Close keeps the draft; sending or saving a draft closes it)
+                      return (
+                        <div className={appReplyOpen ? 'fixed inset-0 z-[100] flex flex-col bg-white' : 'hidden'} data-testid="app-reply-screen">
+                          {appReplyOpen && (
+                            <div className="flex h-12 shrink-0 items-center gap-2 border-b px-2">
+                              <button type="button" onClick={() => setAppReplyFor(null)} className="flex h-11 items-center px-2 text-base font-medium text-blue-600">Close</button>
+                              <p className="min-w-0 flex-1 truncate text-center text-[15px] font-semibold text-zinc-900">Reply to {selected.name}</p>
+                              <span className="w-14" aria-hidden="true" />
+                            </div>
+                          )}
+                          <div className="min-h-0 flex-1 overflow-y-auto">{replyBox}</div>
+                        </div>
+                      )
+                    })()}
                   </div>
                   {/* WorkerChatPanel is KEYED PER CONVERSATION, like ComposeReply above.
                       Without the key it keeps the previous email's state across a thread

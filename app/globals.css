@@ -159,3 +159,17 @@
 /* ...except inside a chat's message list: the small reaction and menu buttons beside a message keep their size, so a message bubble is
    not padded out by 44 px buttons (the message's own tap and long-press stay the main way to act on it). */
 [data-app-mode="true"] .app-compact-taps button { min-height: 0 !important; min-width: 0 !important; }
+
+/* TD Social phone app, a conversation (approved mockup "A client's chat", 5 Nov 2026): the topic chips are ONE slim row (the 44 px rule above made
+   them a 61 px band) and the message box has less padding around it. Everything else of the phone layout is drawn by app-mode-only components. */
+[data-app-mode="true"] .app-chip-row { padding-top: 4px; padding-bottom: 4px; }
+[data-app-mode="true"] .app-chip-row button { min-height: 34px !important; }
+[data-app-mode="true"] .app-composer { padding: 6px 8px; }
+/* a one-line row that is tapped as a whole (the "Reply to" line) is 36 px tall, not the 44 px a single button gets */
+[data-app-mode="true"] .app-slim-line { min-height: 36px !important; }
+
+/* TD Social phone app, an open email or chat (approved mockup: one slim top bar + one action row). The header uses less padding, and the row
+   under the subject (Note, Copy link, Expand all) is ONE short line, not two rows of 44 px buttons plus a subject pill. */
+[data-app-mode="true"] .app-thread-head { padding: 2px 6px; row-gap: 0; column-gap: 4px; }
+[data-app-mode="true"] .app-note-row { justify-content: flex-start; gap: 6px; padding-top: 0; padding-bottom: 0; }
+[data-app-mode="true"] .app-note-row button { min-height: 36px !important; }

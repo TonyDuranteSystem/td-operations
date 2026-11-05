@@ -19,6 +19,10 @@ final class WebHost: NSObject, ObservableObject, WKNavigationDelegate, WKUIDeleg
         cfg.applicationNameForUserAgent = "\(ServerRules.userAgentToken)\(AppConfig.version)"   // the one thing that switches the web screens into app mode
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
+        #if DEBUG
+        // simulator tests only: production has no orange test-server bar, so hide it to see (and measure) the real layout
+        cfg.userContentController.addUserScript(WKUserScript(source: "var s=document.createElement('style');s.textContent='.fixed.top-0.bg-orange-500{display:none!important}';document.documentElement.appendChild(s);", injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+        #endif
         webView = WKWebView(frame: .zero, configuration: cfg)
         super.init()
         webView.navigationDelegate = self

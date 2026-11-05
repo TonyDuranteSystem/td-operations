@@ -35,6 +35,8 @@ import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type Qu
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuickCreateModal } from '@/components/dashboard/quick-create-modal'
 import { HelpDot } from '@/components/help/help-dot'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
+import { PhoneConvNav, PhoneViewStrip, PhoneMoreSheet, PhoneReplyToLine, PhoneReplyToSheet, PhonePlusButton, PhonePlusSheet } from '@/components/portal-chats/app-phone-chrome'
 import {
   filterForSurfaceAndContext as filterTopicsForSurfaceAndContext,
   validateMetadata as validateTopicMetadata,
@@ -415,6 +417,9 @@ export default function PortalChatsPage() {
   const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'ideas' | 'todo' | 'email' | 'worker'>(parseStaffChatTab(urlParams.get('tab')) ?? 'messages')
   // "Select" mode: tick several messages of the open conversation and delete them together (Luca 2026-10-23: six messages, one by one).
   const [selectMode, setSelectMode] = useState(false)
+  // TD Social phone app: a conversation gets the slim phone layout (components/portal-chats/app-phone-chrome.tsx). The computer layout never reads this.
+  const appMode = useAppMode()
+  const [appSheet, setAppSheet] = useState<'more' | 'replyTo' | 'plus' | null>(null)
   const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(new Set())
   // Chat-list filter chip: all / unread / whatsnew / issues.
   const [listFilter, setListFilter] = useState<'all' | 'unread' | 'whatsnew'>('all')
@@ -2235,6 +2240,20 @@ export default function PortalChatsPage() {
     ? (currentThreadForGuard?.company_name ?? 'This company')
     : (selectedClosedCompany?.name ?? 'This company')
 
+  // Leaving a conversation clears everything that belonged to it (shared by the computer "← Back" and the phone's back arrow)
+  const leaveConversation = () => {
+    setSelectedAccountId(null); setSelectedContactId(null); setSelectedCompanyId(null); setSelectedThreadCompanies([]); setSelectedThreadMembers([])
+    setSelectedAddressedToMemberId(null); setSelectedAddressedToCompany(false)
+  }
+  // Phone layout only: the numbers under the "⋯" menu, and who a reply goes to (read from the SAME state the send uses)
+  const phoneThreadNew = (counts?: { by_account?: Record<string, number>; by_contact?: Record<string, number> } | null) => (
+    selectedAccountId ? (counts?.by_account?.[selectedAccountId] ?? 0) : selectedContactId ? (counts?.by_contact?.[selectedContactId] ?? 0) : 0
+  )
+  const phoneCounts = { whatsnew: phoneThreadNew(whatsNewCounts), ideas: phoneThreadNew(ideaCounts), email: phoneThreadNew(emailUnreadCounts) }
+  const phoneReplyTarget = selectedAccountId
+    ? (currentThreadForGuard?.company_name ?? selectedName?.company ?? 'this company')
+    : (selectedCompanyId ? (selectedThreadCompanies.find(c => c.id === selectedCompanyId)?.name ?? 'Company') : 'Personal')
+
   // Opens the pre-send confirmation pop-up (Antonio, 2026-09-04) instead of
   // sending directly. Every guard that used to gate the send itself still
   // gates opening the pop-up — an empty message, a closed account, or an
@@ -3284,9 +3303,27 @@ export default function PortalChatsPage() {
         ) : (
           <>
             {/* Header */}
-            <div className="app-conv-header px-4 py-3 border-b bg-white shrink-0">
+            {/* Phone app: ONE slim bar instead of the header below (hidden there by app-hide); the rest lives under "⋯" */}
+            {appMode && (() => {
+              const currentThread = threads?.find(t => selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId)
+              const displayName = selectedName?.company || currentThread?.contact_name || currentThread?.company_name || 'Chat'
+              const companies = selectedThreadCompanies.length > 0 ? selectedThreadCompanies : (currentThread?.companies ?? [])
+              const subtitle = companies.length > 0 ? companies.map(c => (c.closed ? `${c.name} (closed)` : c.name)).join(' · ') : 'Portal chat'
+              return (
+                <PhoneConvNav
+                  title={displayName}
+                  titleHref={selectedContactId ? `/contacts/${selectedContactId}` : selectedAccountId ? `/accounts/${selectedAccountId}` : undefined}
+                  subtitle={subtitle}
+                  titleExtra={currentThread?.overdue ? <OverdueBadge summary={currentThread.overdue} /> : undefined}
+                  badge={phoneCounts.whatsnew}
+                  onBack={leaveConversation}
+                  onMore={() => setAppSheet('more')}
+                />
+              )
+            })()}
+            <div className="app-conv-header app-hide px-4 py-3 border-b bg-white shrink-0">
               <button
-                onClick={() => { setSelectedAccountId(null); setSelectedContactId(null); setSelectedCompanyId(null); setSelectedThreadCompanies([]); setSelectedThreadMembers([]); setSelectedAddressedToMemberId(null); setSelectedAddressedToCompany(false) }}
+                onClick={leaveConversation}
                 className="lg:hidden text-sm text-blue-600 mb-1"
               >
                 &larr; Back
@@ -3397,7 +3434,7 @@ export default function PortalChatsPage() {
 
             {/* Sub-tabs: Messages | Tasks (shown when a client thread is selected) */}
             {(selectedAccountId || selectedContactId) && (
-              <div className="app-tabs-scroll flex border-b bg-white shrink-0">
+              <div className="app-tabs-scroll app-hide flex border-b bg-white shrink-0">
                 <button
                   onClick={() => setChatViewMode('messages')}
                   className={cn(
@@ -3535,10 +3572,54 @@ export default function PortalChatsPage() {
               </div>
             )}
 
+            {/* Phone app: which view is open (the old tab row's underline) + the menus. Nothing here exists on the computer layout. */}
+            {appMode && (selectedAccountId || selectedContactId) && (
+              <>
+                <PhoneViewStrip view={chatViewMode} onMessages={() => setChatViewMode('messages')} />
+                <PhoneMoreSheet
+                  open={appSheet === 'more'}
+                  onClose={() => setAppSheet(null)}
+                  view={chatViewMode}
+                  counts={phoneCounts}
+                  onView={setChatViewMode}
+                  canMarkUnread
+                  onMarkUnread={async () => {
+                    await markAsUnread({ account_id: selectedAccountId, contact_id: selectedContactId })
+                    toast.success('Marked as unread')
+                  }}
+                  onRefresh={handleRefresh}
+                  onCopyLink={threadLinkScope ? () => copyDeepLink() : undefined}
+                  onAi={() => setAiPanelOpen(v => !v)}
+                  onSelect={chatViewMode === 'messages' ? () => { setEditingMessageId(null); setEditDraft(''); setSelectMode(true) } : undefined}
+                  language={(selectedContactId || selectedThreadContactId) ? <ContactLanguageField contactId={(selectedContactId || selectedThreadContactId)!} /> : undefined}
+                />
+                <PhoneReplyToSheet
+                  open={appSheet === 'replyTo'}
+                  onClose={() => setAppSheet(null)}
+                  companies={selectedThreadCompanies.length > 0 && !selectedAccountId ? selectedThreadCompanies.map(c => ({ id: c.id, name: c.name, closed: c.closed })) : null}
+                  selectedCompanyId={selectedCompanyId}
+                  onCompany={setSelectedCompanyId}
+                  topics={adminTopicOrder.map(key => ({ key, label: key === '' ? 'General' : key, unread: adminUnreadByTopic[key] ?? 0 }))}
+                  activeTopic={adminActiveTopic ?? ''}
+                  onTopic={key => setAdminActiveTopic(key === '' ? null : key)}
+                  onCreateTopic={() => setAdminCreatingTopic(true)}
+                />
+                <PhonePlusSheet
+                  open={appSheet === 'plus'}
+                  onClose={() => setAppSheet(null)}
+                  onEmoji={() => setShowEmojiPicker(true)}
+                  onAttach={() => adminFileRef.current?.click()}
+                  onAi={handleSuggest}
+                  aiBusy={aiLoading || (!selectedAccountId && !selectedContactId)}
+                  attachBusy={uploadingAdminFile}
+                />
+              </>
+            )}
+
             {/* Topic tabs — always visible when a thread is selected and we're in messages view */}
             {chatViewMode === 'messages' && (selectedAccountId || selectedContactId) && (
-              <div className="px-3 py-1.5 border-b bg-white flex items-center gap-1.5 overflow-x-auto shrink-0">
-                <HelpDot helpKey="chat.topics" className="shrink-0" />
+              <div className="app-chip-row px-3 py-1.5 border-b bg-white flex items-center gap-1.5 overflow-x-auto shrink-0">
+                <HelpDot helpKey="chat.topics" className="app-hide shrink-0" />
                 {adminTopicOrder.map(key => {
                   const isGeneral = key === ''
                   const isActive = isGeneral ? adminActiveTopic === null : adminActiveTopic === key
@@ -4520,7 +4601,7 @@ export default function PortalChatsPage() {
             )}
 
             {/* Company picker — shown when the thread has multiple companies so admin can tag which company the reply is about */}
-            {selectedThreadCompanies.length > 0 && !selectedAccountId && (
+            {selectedThreadCompanies.length > 0 && !selectedAccountId && !appMode && (
               <div className="px-3 py-2 border-t bg-zinc-50/60 flex items-center gap-2 flex-wrap shrink-0">
                 <span className="text-[10px] uppercase tracking-wide text-zinc-400 font-medium shrink-0">Send as</span>
                 <div className="flex gap-1 flex-wrap">
@@ -4703,7 +4784,7 @@ export default function PortalChatsPage() {
                   can&apos;t see messages sent here.{' '}
                   {selectedAccountId
                     ? 'This conversation is archived.'
-                    : 'Pick an active company above, or “Personal”, to reach the client.'}
+                    : (appMode ? 'Tap Change to pick an active company, or “Personal”, to reach the client.' : 'Pick an active company above, or “Personal”, to reach the client.')}
                 </p>
               </div>
             )}
@@ -4713,7 +4794,7 @@ export default function PortalChatsPage() {
                 topic's unread, staff must always see which topic they're
                 about to post into, or a reply meant to answer a named topic
                 can land in General (or vice versa) without anyone noticing. */}
-            {chatViewMode === 'messages' && (selectedAccountId || selectedContactId) && !sendingToClosedAccount && (
+            {chatViewMode === 'messages' && (selectedAccountId || selectedContactId) && !sendingToClosedAccount && (!appMode || selectMode) && (
               <div className={cn(
                 'px-3 py-1 border-t text-[11px] font-medium flex items-center gap-1.5 shrink-0',
                 adminActiveTopic ? 'bg-blue-50 text-blue-700' : 'bg-zinc-50 text-zinc-500'
@@ -4764,20 +4845,27 @@ export default function PortalChatsPage() {
               </div>
             )}
 
+            {/* Phone app: "Send as" + "Replying in" as ONE line (tap to change); what it says is what will be sent */}
+            {appMode && chatViewMode === 'messages' && (selectedAccountId || selectedContactId) && !selectMode && (
+              <PhoneReplyToLine target={phoneReplyTarget} topic={adminActiveTopic || 'General'} closed={sendingToClosedAccount} onChange={() => setAppSheet('replyTo')} />
+            )}
+
             {/* Reply input — WhatsApp-style pill + action button */}
-            <div className={cn('p-2 sm:p-3 border-t bg-white shrink-0', (replyToMsg || pendingAdminFiles.length > 0) && 'border-t-0')}>
+            <div className={cn('app-composer p-2 sm:p-3 border-t bg-white shrink-0', (replyToMsg || pendingAdminFiles.length > 0) && 'border-t-0')}>
               <div className="flex gap-2 items-end">
                 {/* Pill container */}
                 <div className={cn(
                   'flex items-end flex-1 min-w-0 bg-white border border-zinc-200 rounded-[24px] px-1 sm:px-2 py-1 gap-0.5 min-h-[48px] transition-colors',
                   isRecording && 'border-red-300 bg-red-50/30'
                 )}>
+                  {/* Phone app: emoji, attach and AI suggest sit under one "＋" (the three buttons below are hidden there) */}
+                  {appMode && <PhonePlusButton onClick={() => setAppSheet('plus')} />}
                   {/* Emoji */}
                   <div className="relative shrink-0" ref={emojiPickerRef}>
                     <FastTooltip label="Emoji">
                       <button
                         onClick={() => setShowEmojiPicker(v => !v)}
-                        className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+                        className="app-hide p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
                         aria-label="Emoji"
                       >
                         <Smile className="h-5 w-5" />
@@ -4815,7 +4903,7 @@ export default function PortalChatsPage() {
                       onClick={() => adminFileRef.current?.click()}
                       disabled={uploadingAdminFile}
                       className={cn(
-                        'p-2 rounded-full transition-colors shrink-0',
+                        'app-hide p-2 rounded-full transition-colors shrink-0',
                         pendingAdminFiles.length > 0
                           ? 'text-blue-600 bg-blue-100 hover:bg-blue-200'
                           : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-50'
@@ -4837,7 +4925,7 @@ export default function PortalChatsPage() {
                     <button
                       onClick={handleSuggest}
                       disabled={aiLoading || (!selectedAccountId && !selectedContactId)}
-                      className="p-2 rounded-full text-violet-500 hover:text-violet-600 hover:bg-violet-100 disabled:opacity-50 transition-colors shrink-0"
+                      className="app-hide p-2 rounded-full text-violet-500 hover:text-violet-600 hover:bg-violet-100 disabled:opacity-50 transition-colors shrink-0"
                       aria-label="AI Suggest"
                     >
                       {aiLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
