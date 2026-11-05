@@ -36,7 +36,8 @@ describe("the CRM menu: no extra tab, one red number on the Marketing item", () 
     expect(sidebar).not.toMatch(/name: 'Marketing team'/)
   })
   it("puts the waiting-for-him number on the existing Marketing item, fed by the badges endpoint", () => {
-    expect(sidebar).toMatch(/item\.id === 'marketing' && liveMarketing > 0/)
+    // the Marketing row and the Marketing Chat page are two doors to the same chat: both carry its number
+    expect(sidebar).toMatch(/\(item\.id === 'marketing' \|\| item\.id === 'marketing-chat'\) && liveMarketing > 0/)
     expect(sidebar).toMatch(/data\.marketing === 'number'/)
     const route = readFileSync("app/api/dashboard/badges/route.ts", "utf8")
     expect(route).toMatch(/adminMemberContext/)

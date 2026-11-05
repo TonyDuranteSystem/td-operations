@@ -294,13 +294,13 @@ async function dropFolderId(area: Area): Promise<string> {
  * area, inside the drop folder (any depth), of a type allowed on a public chat link, and within the size cap. The audit row is written first
  * like every other call here. The bytes go to `attachMyFilesToChat`, never back to the model.
  */
-export async function readMyFileForChat(input: { file_id?: unknown }, caller: AccessCaller): Promise<AccessResult<{ name: string; folder: string; size: number; mime_type: string | null; bytes: Buffer }>> {
+export async function readMyFileForChat(input: { file_id?: unknown }, caller: AccessCaller): Promise<AccessResult<{ file_id: string; name: string; folder: string; size: number; mime_type: string | null; bytes: Buffer }>> {
   return guarded({ caller, tool: "team_chat_attach", kind: "read", summary: "read a file to attach to a chat post", detail: { file_id: clip(input.file_id) }, recordId: isUuid(input.file_id) ? input.file_id : null }, async (note) => {
     const area = await resolveArea()
     const f = await areaFile(area, input.file_id)
     const drop = await dropFolderId(area)
     if (!inDropFolder(await folderChain(f.folder_id), drop)) {
-      throw new Refuse(`"${f.name}" is not inside the "${DROP_FOLDER_NAME}" folder. Only files in "${DROP_FOLDER_NAME}" can be attached to a chat post — move it there first (my_files_move).`)
+      throw new Refuse(`"${f.name}" is not inside the "${DROP_FOLDER_NAME}" folder. Only files in "${DROP_FOLDER_NAME}" can be attached to a chat post.`)
     }
     const { data: cur, error: sErr } = await db().from("store_files").select("store_file_versions!store_files_current_version_fk(size_bytes, mime_type)").eq("id", f.id).maybeSingle()
     if (sErr) throw new Error(`size lookup: ${sErr.message}`)
@@ -313,8 +313,12 @@ export async function readMyFileForChat(input: { file_id?: unknown }, caller: Ac
     if (got.bytes.length > MY_FILES_CHAT_MAX_BYTES) {
       throw new Refuse(`"${f.name}" is ${(got.bytes.length / 1048576).toFixed(1)} MB — too big to attach from here (limit ${MY_FILES_CHAT_MAX_MB} MB). Attach it by hand with the paperclip.`)
     }
+    // the type that will actually be STORED (the object's own type when none is recorded) is held to the same block-list as the recorded one
+    const servedType = got.mimeType ?? ver?.mime_type ?? null
+    const served = checkMyFileForChat({ name: f.name, size: got.bytes.length, mimeType: servedType })
+    if (served) throw new Refuse(served)
     note({ file_name: f.name, size: got.bytes.length })
-    return { name: f.name, folder: await relPath(f.folder_id), size: got.bytes.length, mime_type: got.mimeType ?? ver?.mime_type ?? null, bytes: got.bytes }
+    return { file_id: f.id, name: f.name, folder: await relPath(f.folder_id), size: got.bytes.length, mime_type: servedType, bytes: got.bytes }
   })
 }
 

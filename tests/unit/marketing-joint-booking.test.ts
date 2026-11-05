@@ -46,7 +46,7 @@ function fakeStore() {
   return { store, rows }
 }
 
-function makeEnv(o: { sellerBusy?: Array<{ start: number; end: number }>; ownerBusy?: Array<{ start: number; end: number }>; googleDown?: boolean; zoomFails?: boolean; eventFails?: boolean; recordFails?: boolean; removeFails?: boolean; zoomReady?: boolean; ownerEmail?: string | null; busyOff?: boolean; leadThrows?: boolean } = {}) {
+function makeEnv(o: { sellerBusy?: Array<{ start: number; end: number }>; ownerBusy?: Array<{ start: number; end: number }>; googleDown?: boolean; zoomFails?: boolean; eventFails?: boolean; recordFails?: boolean; removeFails?: boolean; dropFails?: boolean; zoomReady?: boolean; ownerEmail?: string | null; busyOff?: boolean; leadThrows?: boolean } = {}) {
   const { store, rows } = fakeStore()
   const calls: string[] = []
   const events = new Map<string, { actAs: string; start: string; attendees: string[]; location: string | undefined }>()
@@ -80,6 +80,8 @@ function makeEnv(o: { sellerBusy?: Array<{ start: number; end: number }>; ownerB
     async recordSynced(_l, kind, data) { synced.push({ kind, data }) },
     async sendMail(to, mail) { mails.push({ to, subject: mail.subject, text: mail.text }) },
     async tellSeller() { calls.push("tell") },
+    // the person's earlier calendar entry goes first: when it runs the client's own entry does not exist yet
+    async dropStaffCalendarEvent() { calls.push(`drop-staff(events:${events.size})`); if (o.dropFails) throw new Error("google blip") },
   }
   return { env, rows, calls, events, meetings, ops, mails, synced }
 }
@@ -155,6 +157,22 @@ describe("bookJoint", () => {
     expect(m.mails[0].to).toBe("marco@example.com")
     expect(m.synced[0]).toMatchObject({ kind: "calendar_synced", data: { act_as: SELLER_MAIL, removed: false } })
     expect(((await viewJointLink(m.env, m.token)) as { state: string }).state).toBe("booked")
+  })
+  it("takes the person's earlier calendar entry off before the client's own is written (a leftover entry stayed on the seller's calendar for good, 5 Nov 2026)", async () => {
+    const m = await linked()
+    expect((await bookJoint(m.env, m.token, { startIso: iso(T1), ...who })).ok).toBe(true)
+    expect(m.calls.filter(c => c.startsWith("drop-staff"))).toEqual(["drop-staff(events:0)"])
+    expect(m.events.size).toBe(1)
+  })
+  it("a failed removal of the earlier entry never stops the client's booking", async () => {
+    const m = await linked({ dropFails: true })
+    expect((await bookJoint(m.env, m.token, { startIso: iso(T1), ...who })).ok).toBe(true)
+    expect([...m.rows.values()][0].status).toBe("booked")
+  })
+  it("a booking that cannot be saved does not touch the earlier entry", async () => {
+    const m = await linked({ recordFails: true })
+    expect((await bookJoint(m.env, m.token, { startIso: iso(T1), ...who })).ok).toBe(false)
+    expect(m.calls.filter(c => c.startsWith("drop-staff"))).toEqual([])
   })
   it("refuses a time that is not on the offered list", async () => {
     const m = await linked()

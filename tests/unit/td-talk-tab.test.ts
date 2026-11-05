@@ -9,6 +9,7 @@ import { join } from 'path'
 const read = (p: string) => readFileSync(join(__dirname, '../../', p), 'utf8')
 
 import { countTalkNotifications, countTeamNotifications } from '@/lib/team/workspace'
+import { standardLayout } from '@/lib/nav/menu-layout'
 
 describe('countTalkNotifications — only what the TD Talk screen shows', () => {
   const rows = [
@@ -31,17 +32,20 @@ describe('countTalkNotifications — only what the TD Talk screen shows', () => 
 
 describe('TD Talk tab wiring', () => {
   const sidebar = read('components/dashboard/sidebar.tsx')
-  it('the menu item is FIRST — above Home — for new and returning users', () => {
+  it('the menu item is FIRST in the first row of the menu: TD Talk heads the TD Social group, which stands at the top (Antonio 2026-11-04 moved it into the group)', () => {
     const items = sidebar.slice(sidebar.indexOf('const defaultNavigation'))
     expect(items.indexOf("id: 'td-talk'")).toBeGreaterThan(-1)
     expect(items.indexOf("id: 'td-talk'")).toBeLessThan(items.indexOf("id: 'home'"))
-    expect(sidebar).toContain("const baseOrder = talkIdx === -1 ? withResearch : ['td-talk', ...withResearch]")
+    const std = standardLayout(['td-talk', 'home', 'inbox'])
+    expect(std.rows[0]).toMatchObject({ type: 'group', id: 'g-social' })
+    expect((std.rows[0] as { children: string[] }).children[0]).toBe('td-talk')
   })
   it('lights its OWN dot (DMs + groups only), listing only those, linking into the tab; held back on neither chat page', () => {
     expect(sidebar).toContain("item.id === 'td-talk' && liveTalk > 0 && pathname !== '/td-talk'")
-    expect(sidebar).toContain("only={item.id === 'td-talk' ? 'talk' : undefined}")
-    expect(sidebar).toContain("all.filter(i => i.kind === 'dm' || i.kind === 'group')")
-    expect(sidebar).toContain("i.url.replace('/team-chat', '/td-talk')")
+    const row = read('components/dashboard/nav-item-row.tsx')
+    expect(row).toContain("only={item.id === 'td-talk' ? 'talk' : undefined}")
+    expect(row).toContain("all.filter(i => i.kind === 'dm' || i.kind === 'group')")
+    expect(row).toContain("i.url.replace('/team-chat', '/td-talk')")
     expect(sidebar).toContain("pathname === '/team-chat' || pathname === '/td-talk'")
     expect(sidebar).not.toContain("pathnameRef.current !== '/team-chat'")
   })

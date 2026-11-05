@@ -7,14 +7,27 @@ import type { InboxStats, InboxChannel } from '@/lib/types'
 interface InboxHeaderProps {
   activeChannel: InboxChannel | null
   onChannelChange: (channel: InboxChannel | null) => void
+  /** This screen shows ONE channel (email, or WhatsApp — two pages of the left menu): a title replaces the tabs. */
+  onlyChannel?: InboxChannel
 }
 
-export function InboxHeader({ activeChannel, onChannelChange }: InboxHeaderProps) {
+export function InboxHeader({ activeChannel, onChannelChange, onlyChannel }: InboxHeaderProps) {
   const { data: stats } = useQuery<InboxStats>({
     queryKey: ['inbox-stats'],
     queryFn: () => fetch('/api/inbox/stats').then((r) => r.json()),
     refetchInterval: 30_000,
+    enabled: !onlyChannel,
   })
+
+  if (onlyChannel) {
+    return (
+      <div className="px-4 py-2 bg-white">
+        <h1 data-tour={onlyChannel === 'whatsapp' ? 'wa-title' : undefined} className="py-1.5 text-sm font-semibold text-zinc-900">
+          {onlyChannel === 'whatsapp' ? 'WhatsApp' : 'Inbox'}
+        </h1>
+      </div>
+    )
+  }
 
   const channels: { key: InboxChannel | null; label: string; icon: React.ElementType; count: number; iconClass?: string }[] = [
     { key: 'gmail', label: 'Gmail', icon: Mail, count: stats?.gmail || 0 },

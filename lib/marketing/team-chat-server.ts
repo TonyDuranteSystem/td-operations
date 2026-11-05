@@ -16,6 +16,7 @@ import {
   BUCKET, checkEdit, checkEmoji, checkSend, isUuid, mayDelete, mayEdit, newObjectPath, previewLine, unreadCount,
   type ChatMessageRow, type ChatReaction, type StoredAttachment,
 } from "@/lib/marketing/lead-chat"
+import type { MarketingAlertKind } from "@/lib/push/alert-kinds"
 import { checkGroup, dmKey, MAX_GROUP_MEMBERS, GROUP_TITLE_MAX, parseMentions, sortThreads, threadPush, threadRecipients, threadTitle, threadUrlFor, type GroupAction, type ThreadRow } from "@/lib/marketing/team-chat"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- newer tables than the generated types
@@ -234,7 +235,7 @@ export async function createGroup(ctx: MarketingContext, body: { title?: unknown
   if (error || !t) return fail("Could not create the group. Please try again.", 500)
   const { error: mErr } = await d.from("marketing_chat_thread_members").insert(c.memberIds.map(id => ({ thread_id: t.id, user_id: id, added_by: ctx.user.id })))
   if (mErr) { await d.from("marketing_chat_threads").delete().eq("id", t.id); return fail("Could not create the group. Please try again.", 500) }
-  await tell(ctx.team.id, c.memberIds.filter(id => id !== ctx.user.id), { title: `${personName(ctx.user.email ?? "")} added you to a group`, body: c.title, url: threadUrlFor(t.id), tag: `team-${t.id}` })
+  await tell(ctx.team.id, c.memberIds.filter(id => id !== ctx.user.id), { title: `${personName(ctx.user.email ?? "")} added you to a group`, body: c.title, url: threadUrlFor(t.id), tag: `team-${t.id}`, alertKind: "marketing_team_chat" })
   return { ok: true, threadId: t.id }
 }
 
@@ -258,7 +259,7 @@ export async function groupAction(ctx: MarketingContext, t: { thread: Thread; me
     if (t.memberIds.length + wanted.length > MAX_GROUP_MEMBERS) return fail(`A group can have at most ${MAX_GROUP_MEMBERS} people.`, 400)
     const { error } = await d.from("marketing_chat_thread_members").upsert(wanted.map(id => ({ thread_id: t.thread.id, user_id: id, added_by: ctx.user.id })), { onConflict: "thread_id,user_id", ignoreDuplicates: true })
     if (error) return fail("Could not add them.", 500)
-    await tell(ctx.team.id, wanted, { title: `${personName(ctx.user.email ?? "")} added you to a group`, body: t.thread.title ?? "", url: threadUrlFor(t.thread.id), tag: `team-${t.thread.id}` })
+    await tell(ctx.team.id, wanted, { title: `${personName(ctx.user.email ?? "")} added you to a group`, body: t.thread.title ?? "", url: threadUrlFor(t.thread.id), tag: `team-${t.thread.id}`, alertKind: "marketing_team_chat" })
     return { ok: true }
   }
   const { error } = await d.from("marketing_chat_thread_members").delete().eq("thread_id", t.thread.id).eq("user_id", ctx.user.id)
@@ -333,7 +334,7 @@ export async function markThreadsDelivered(ctx: MarketingContext, threadIds: rea
 }
 
 /** Tell people by push, waiting at most a few seconds (a slow phone service must not hold up the sender). Never throws. */
-async function tell(teamId: string, userIds: readonly string[], p: { title: string; body: string; url: string; tag: string }): Promise<number> {
+async function tell(teamId: string, userIds: readonly string[], p: { title: string; body: string; url: string; tag: string; alertKind: MarketingAlertKind }): Promise<number> {
   if (userIds.length === 0) return 0
   try {
     const r = await Promise.race([sendMarketingPush(teamId, userIds, p), new Promise<null>(resolve => setTimeout(() => resolve(null), 4000))])
@@ -388,8 +389,8 @@ export async function sendThreadMessage(ctx: MarketingContext, t: { thread: Thre
     // a direct message is titled by the sender (the person already knows it is a chat with them); a group by "sender · group". A mention has its OWN notification tag, so the next ordinary message does not replace it.
     const where = t.thread.kind === "group" ? t.thread.title ?? "" : ""
     await Promise.all([
-      tell(ctx.team.id, named, { ...threadPush({ senderName, threadTitle: where, kind: t.thread.kind, mentioned: true, preview }), url: threadUrlFor(t.thread.id), tag: `team-${t.thread.id}-at` }),
-      tell(ctx.team.id, rest, { ...threadPush({ senderName, threadTitle: where, kind: t.thread.kind, mentioned: false, preview }), url: threadUrlFor(t.thread.id), tag: `team-${t.thread.id}` }),
+      tell(ctx.team.id, named, { ...threadPush({ senderName, threadTitle: where, kind: t.thread.kind, mentioned: true, preview }), url: threadUrlFor(t.thread.id), tag: `team-${t.thread.id}-at`, alertKind: "marketing_team_chat" }),
+      tell(ctx.team.id, rest, { ...threadPush({ senderName, threadTitle: where, kind: t.thread.kind, mentioned: false, preview }), url: threadUrlFor(t.thread.id), tag: `team-${t.thread.id}`, alertKind: "marketing_team_chat" }),
     ])
   } catch { /* the message is already saved */ }
   return { ok: true, message }
@@ -440,7 +441,7 @@ async function remention(ctx: MarketingContext, m: ChatMessageRow & { thread_id:
     const fresh = now.filter(id => !was.includes(id) && inChat.some(p => p.id === id && p.status !== "removed" && p.status !== "paused"))
     if (fresh.length === 0) return
     const senderName = personName(ctx.user.email ?? "")
-    await tell(ctx.team.id, fresh, { ...threadPush({ senderName, threadTitle: t.thread.kind === "group" ? t.thread.title ?? "" : "", kind: t.thread.kind, mentioned: true, preview: previewLine({ message: text, attachments: m.attachments, deleted_at: null }) }), url: threadUrlFor(t.thread.id), tag: `team-${t.thread.id}-at` })
+    await tell(ctx.team.id, fresh, { ...threadPush({ senderName, threadTitle: t.thread.kind === "group" ? t.thread.title ?? "" : "", kind: t.thread.kind, mentioned: true, preview: previewLine({ message: text, attachments: m.attachments, deleted_at: null }) }), url: threadUrlFor(t.thread.id), tag: `team-${t.thread.id}-at`, alertKind: "marketing_team_chat" })
   } catch { /* the edit is already saved */ }
 }
 

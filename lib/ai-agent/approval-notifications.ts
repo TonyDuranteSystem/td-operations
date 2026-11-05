@@ -99,7 +99,7 @@ async function pushToAdmins(title: string, body: string, tag: string): Promise<v
     const { data: subs } = await db.from("admin_push_subscriptions").select("id").limit(1)
     if (!subs?.length) return
     const { sendPushToStaff } = await import("@/lib/team/notify")
-    await sendPushToStaff({ title, body, url: "/portal-chats?view=internal", tag })
+    await sendPushToStaff({ title, body, url: "/portal-chats?view=internal", tag, alertKind: "approval" })
   } catch {
     /* push is non-critical */
   }

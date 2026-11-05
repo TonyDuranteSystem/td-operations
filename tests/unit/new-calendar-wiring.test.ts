@@ -208,9 +208,11 @@ describe("the menu item and the old Calendar", () => {
     // the id stays 'calendar' so everyone's saved menu order holds; the href only changes behind the flag
     expect(code).toContain("item.id === 'calendar' && enabledFeatures.includes('new-calendar')")
     expect(code).toContain("href: '/new-calendar'")
-    // lit on both calendar pages
-    expect(code).toContain("item.id === 'calendar' && (pathname === '/calendar'")
-    expect(code).toContain("pathname === '/new-calendar'")
+    // lit on both calendar pages (the rule is the pure nav-active helper the menu calls)
+    const active = stripComments(readFileSync(join(root, "lib/nav/nav-active.ts"), "utf8"))
+    expect(active).toContain("item.id === 'calendar'")
+    expect(active).toContain("pathname === '/calendar'")
+    expect(active).toContain("pathname === '/new-calendar'")
   })
 
   it("the layout shows the item only to people the page itself would let in (same switch, same rule), never inside a floating window", () => {

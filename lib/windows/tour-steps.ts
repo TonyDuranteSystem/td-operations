@@ -127,9 +127,9 @@ export const STEPS: TourStep[] = [
     kind: 'act',
     title: 'A faster way to open one',
     body: 'Hold {OPT} and click any page in the left menu. It opens in a window instead of replacing your page.',
-    example: 'You are in Portal Chats and want Leads next to it. Hold {OPT} and click Leads.',
-    tryIt: 'Hold {OPT} and click Leads in the left menu.',
-    waiting: 'Waiting: hold {OPT} and click Leads in the left menu.',
+    example: 'You are in Portal Chats and want Leads next to it. Point at Network in the left menu, hold {OPT} and click Leads.',
+    tryIt: 'Point at Network in the left menu, then hold {OPT} and click Leads.',
+    waiting: 'Waiting: hold {OPT} and click Leads (it is inside Network in the left menu).',
     done: 'Done. Leads is open in a window.',
     more: [
       'Other ways: point at a menu item and click the three dots, then "Open in a window". In search ({CMD}+K), press {CMD}+Enter on a result to open it in a window; plain Enter opens it here.',
@@ -341,7 +341,9 @@ export function ringSelector(step: TourStep, p: TourProgress, snap: WindowsSnaps
         : `${win} [data-win-part="minimize"]`
     }
     case 'fast-way':
-      return 'aside a[href="/leads"]'
+      // Leads sits inside the Network group in the standard menu: ring the Leads link when its panel is open (or when it has been
+      // moved to the main list), otherwise the Network row to point at. In order of preference; the ring takes the first that exists.
+      return '[data-flyout] a[href="/leads"] || aside a[href="/leads"] || [data-testid="menu-group-g-network"]'
     case 'close': {
       const target = [...p.opened].reverse().find(id => snap.ids.includes(id))
       return target ? `[data-win-id="${target}"] [data-win-part="close"]` : null

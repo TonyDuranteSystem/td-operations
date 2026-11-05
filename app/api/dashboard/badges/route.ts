@@ -2,9 +2,10 @@ import { createClient } from '@supabase/supabase-js'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { countTeamNotifications, countTalkNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
 import { gmailGet } from '@/lib/gmail'
-import { isSecureAdmin } from '@/lib/auth'
+import { isDashboardUser, isSecureAdmin } from '@/lib/auth'
 import { adminMemberContext } from '@/lib/marketing/guard'
 import { marketingChatUnread } from '@/lib/marketing/menu-unread'
+import { getWhatsappUnread } from '@/lib/inbox/whatsapp-unread'
 import { NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
@@ -22,9 +23,22 @@ function getDb() {
  * GET /api/dashboard/badges
  * Returns unread counts for sidebar badges.
  * Portal Chats = unread client messages in portal_messages.
- * Inbox = Gmail unread from BOTH support@ and antonio@ accounts.
+ * Inbox = Gmail unread from BOTH support@ and antonio@ accounts (email only).
+ * WhatsApp = unread WhatsApp conversations, its own menu row (never Telegram).
  */
-export async function GET() {
+export async function GET(request: Request) {
+  // The LIGHT question — `?only=whatsapp`: just the WhatsApp number (one cheap lookup; no Gmail, no other counts). The menu asks this
+  // when a chat message arrives, so a burst of messages never costs a full badge check per message per open tab.
+  if (new URL(request.url).searchParams.get('only') === 'whatsapp') {
+    try {
+      const { data: { user } } = await createServerClient().auth.getUser()
+      if (!user || !isDashboardUser(user)) return NextResponse.json({ error: 'Not authorized' }, { status: 403 })
+    } catch {
+      return NextResponse.json({ error: 'Not authorized' }, { status: 403 })
+    }
+    return NextResponse.json({ whatsapp: await getWhatsappUnread() })
+  }
+
   try {
     // Who is asking — team-chat unread is PER-USER (a DM/share is "unread" only
     // for its recipient), so we need the caller's id to compute it correctly.
@@ -35,6 +49,9 @@ export async function GET() {
       userId = user?.id ?? null
       if (user && isSecureAdmin(user)) adminUser = { id: user.id, email: user.email }
     } catch { /* unauthenticated → teamChat stays 0 */ }
+
+    // WhatsApp's own number — started now, read below.
+    const whatsappPromise = getWhatsappUnread()
 
     // Run all queries in parallel
     const [portalResult, teamThreadsResult, gmailSupportResult, gmailAntonioResult, tasksResult, overdueResult, reconReviewResult] = await Promise.allSettled([
@@ -107,6 +124,7 @@ export async function GET() {
       ? (gmailAntonioResult.value.messagesUnread ?? 0)
       : 0
     const inbox = supportUnread + antonioUnread
+    const whatsapp = await whatsappPromise
 
     // Tasks count
     let tasks = 0
@@ -157,7 +175,7 @@ export async function GET() {
       } catch (e) { console.error('[badges] marketing unread failed:', e instanceof Error ? e.message : e) }
     }
 
-    return NextResponse.json({ portalChats, teamChat, talk, inbox, tasks, overdueInvoices, reconciliationReview, devBoard, marketing, _debug: { supportUnread, antonioUnread } })
+    return NextResponse.json({ portalChats, teamChat, talk, inbox, whatsapp, tasks, overdueInvoices, reconciliationReview, devBoard, marketing, _debug: { supportUnread, antonioUnread } })
   } catch (err) {
     console.error('[dashboard/badges] Error:', err)
     return NextResponse.json({ portalChats: 0, inbox: 0, tasks: 0, overdueInvoices: 0, reconciliationReview: 0 })

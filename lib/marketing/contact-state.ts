@@ -33,13 +33,15 @@ export interface ContactState {
 }
 
 const real = (e: ContactEvent) => e.data?.via_view_as !== true
+/** A call booked or cancelled in "View as" still counts for the CALL (and only for it): the server decides every later booking, cancel and result from that same newest booking line, so the screens must read it too (4 Nov 2026: a booking made in View as showed "no call booked" and a false "call time passed" while the server held the call). Notes, WhatsApp, attempts and results from View as stay out. */
+const counts = (e: ContactEvent) => real(e) || e.kind === "appointment"
 const isOutcome = (e: ContactEvent) => e.kind === "status_changed" && typeof e.data?.outcome === "string"
 
 export const EMPTY_CONTACT: ContactState = { whatsapp: null, whatsappAt: null, attempts: 0, lastAttemptAt: null, appointmentAt: null, handedOverAt: null, handoverNote: null, appointmentNote: null, callAnswer: null, contacted: false }
 
 /** The contact state of ONE lead from its history rows, in any order. */
 export function contactState(events: readonly ContactEvent[]): ContactState {
-  const list = events.filter(real).slice().sort((a, b) => a.created_at.localeCompare(b.created_at))
+  const list = events.filter(counts).slice().sort((a, b) => a.created_at.localeCompare(b.created_at))
   const out: ContactState = { ...EMPTY_CONTACT }
   for (const e of list) {
     if (e.kind === "whatsapp") {

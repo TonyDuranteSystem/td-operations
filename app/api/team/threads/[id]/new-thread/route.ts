@@ -111,6 +111,7 @@ export async function POST(
         body: title.slice(0, 120),
         url: `/team-chat?thread=${threadId}&root=${msg.id}`,
         tag: `team-thread-${msg.id}`,
+        alertKind: 'talk_room_message', // new threads are only made in channels (checked above)
       })
     } else if (mentions.userIds.length > 0) {
       await sendPushToAdminUsers(mentions.userIds, {
@@ -118,6 +119,7 @@ export async function POST(
         body: title.slice(0, 120),
         url: `/team-chat?thread=${threadId}&root=${msg.id}`,
         tag: `team-thread-${msg.id}`,
+        alertKind: 'talk_room_message', // new threads are only made in channels (checked above)
       })
     }
   } catch { /* non-critical */ }

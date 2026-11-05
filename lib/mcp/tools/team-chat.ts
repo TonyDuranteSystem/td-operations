@@ -66,23 +66,27 @@ In the draft you show Antonio, list each file by name — attaching one is part 
       // files copied from My files for THIS post: removed again if the post does not happen
       let copiedPaths: string[] = []
       try {
-        // Sort the attachment slots first: ready links stay as they are, My files ids are checked and copied (owner session only).
-        let finalAttachments: ChatAttachment[] | undefined
+        // Sort the attachment slots first: ready links stay as they are; My files ids are only NAMED here (owner session only) and are
+        // copied by postTeamMessage once the target, message and links have all been checked — so a typo never leaves a public copy behind.
+        let links: ChatAttachment[] | undefined
+        let lateCopies: (() => Promise<ChatAttachment[]>) | undefined
         if (attachments && attachments.length > 0) {
           const split = splitAttachmentRefs(attachments)
           if (split.ok === false) return { content: [{ type: "text" as const, text: `❌ Could not post to team chat: ${split.error}` }] }
-          let copied: ChatAttachment[] = []
+          links = split.links
           if (split.fileIds.length > 0) {
             if (!callerIsOwner()) {
               return { content: [{ type: "text" as const, text: "❌ Could not post to team chat: attaching a My files file only works for a session signed in as the owner." }] }
             }
             const ctx = getMcpAuthContext()
-            const made = await attachMyFilesToChat(split.fileIds, { method: ctx?.method ?? "unknown", email: ctx?.email ?? "" })
-            if (made.ok === false) return { content: [{ type: "text" as const, text: `❌ Could not post to team chat: ${made.error}` }] }
-            copied = made.attachments
-            copiedPaths = made.paths
+            const fileIds = split.fileIds
+            lateCopies = async () => {
+              const made = await attachMyFilesToChat(fileIds, { method: ctx?.method ?? "unknown", email: ctx?.email ?? "" })
+              if (made.ok === false) throw new Error(made.error)
+              copiedPaths = made.paths
+              return made.attachments
+            }
           }
-          finalAttachments = [...split.links, ...copied]
         }
         // Who is dictating this send: the static Claude Code key maps to the
         // configured operator (Antonio); an OAuth connector session maps to its
@@ -90,7 +94,7 @@ In the draft you show Antonio, list each file by name — attaching one is part 
         // see lib/mcp/auth-context.ts). The stamp silences ONLY that person's
         // push/toast/unread for their own dictated message.
         const { actingEmailForTeamChat } = await import("@/lib/mcp/auth-context")
-        const result = await postTeamMessage({ channel, thread_id, dm_user_id, root_id, message, attachments: finalAttachments, on_behalf_of: actingEmailForTeamChat() })
+        const result = await postTeamMessage({ channel, thread_id, dm_user_id, root_id, message, attachments: links, late_attachments: lateCopies, on_behalf_of: actingEmailForTeamChat() })
         const who = result.mentioned_user_ids.length
           ? ` (pushed ${result.mentioned_user_ids.length} mentioned teammate${result.mentioned_user_ids.length > 1 ? "s" : ""})`
           : ""
@@ -104,9 +108,12 @@ In the draft you show Antonio, list each file by name — attaching one is part 
         }
       } catch (e) {
         // the post did not happen, so the copies made for it are not needed
-        await removeChatCopies(copiedPaths)
+        const stuck = await removeChatCopies(copiedPaths)
+        const leftover = stuck.length > 0
+          ? ` A temporary copy could not be removed from chat storage (${stuck.join(", ")}) — tell Antonio so it can be deleted.`
+          : ""
         return {
-          content: [{ type: "text" as const, text: `❌ Could not post to team chat: ${e instanceof Error ? e.message : String(e)}` }],
+          content: [{ type: "text" as const, text: `❌ Could not post to team chat: ${e instanceof Error ? e.message : String(e)}${leftover}` }],
         }
       }
     },

@@ -689,6 +689,7 @@ export async function processClaudeReply(params: {
       body: reply.slice(0, 120),
       url: `/team-chat?thread=${threadId}`,
       tag: `team-claude-${threadId}`,
+      alertKind: 'claude_reply' as const,
     }
     const isWorkChannel = (thread?.thread_type === 'channel' || thread?.thread_type === 'general')
       && channelNotifiesStaff(thread?.channel_slug ?? thread?.channel_name ?? null)

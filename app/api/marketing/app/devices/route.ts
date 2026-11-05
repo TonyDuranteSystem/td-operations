@@ -1,9 +1,8 @@
 import { NextRequest } from "next/server"
 import { allowedBundleId, currentAppServerEnv } from "@/lib/app/environment"
-import { isSocialAppEnabled, SOCIAL_APP_NOT_ENABLED } from "@/lib/app/enabled"
 import { parseRegistration, parseRemoval, registerDevice, removeDevice } from "@/lib/app/devices"
+import { appGate } from "@/lib/app/gate"
 import { appJson } from "@/lib/app/http"
-import { resolveAppIdentity } from "@/lib/app/identity"
 import { tabsFor } from "@/lib/app/tabs"
 
 /**
@@ -19,17 +18,10 @@ import { tabsFor } from "@/lib/app/tabs"
  * Removing does NOT require a tab: a person whose tabs were taken away can still remove their own phone.
  */
 
-async function gate() {
-  if (!(await isSocialAppEnabled())) return { res: appJson(SOCIAL_APP_NOT_ENABLED, 503) } as const
-  const who = await resolveAppIdentity()
-  if (!who) return { res: appJson({ error: "Please sign in.", code: "NOT_SIGNED_IN" }, 401) } as const
-  return { who } as const
-}
-
 const UNKNOWN_SERVER = { error: "TD Social cannot tell which server this is.", code: "APP_ENV_UNKNOWN" } as const
 
 export async function PUT(request: NextRequest) {
-  const g = await gate()
+  const g = await appGate()
   if (g.res) return g.res
   if (tabsFor(g.who.identity).length === 0) return appJson({ error: "Your account is not set up for TD Social.", code: "NO_TABS" }, 403)
   const bundle = allowedBundleId(currentAppServerEnv())
@@ -46,7 +38,7 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const g = await gate()
+  const g = await appGate()
   if (g.res) return g.res
   const bundle = allowedBundleId(currentAppServerEnv())
   if (!bundle) return appJson(UNKNOWN_SERVER, 503)

@@ -2801,6 +2801,7 @@ async function sendTeamMessageTool(p: any): Promise<string> {
     await sendPushToStaffExcept(senderId, {
       title: `Team: ${contextName}`, body: message.slice(0, 100),
       url: '/portal-chats?view=internal', tag: `internal-thread-${threadId}`,
+      alertKind: 'client_thread_message',
     })
   } catch { /* non-critical */ }
 
