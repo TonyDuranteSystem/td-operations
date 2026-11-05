@@ -6,6 +6,22 @@ import { sanitizeInvoiceMessage } from '@/lib/portal/pay-token'
 // and callWithMockedDeps must never doMock/doUnmock next/cache, or the first call strips this mock for later tests.
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 
+// The three modules createUnifiedInvoiceDraft pulls in are mocked at FILE level for the same reason. The per-call doMock this file used before
+// could lose the race when the suite was under load; the real createTDInvoice then ran and reached the real database client, which fails with
+// "Cannot read properties of undefined (reading 'includes')" (seen intermittently in CI and in the push gate, 5 Nov 2026).
+const mocks = vi.hoisted(() => ({ createTDInvoice: vi.fn() }))
+vi.mock('@/lib/portal/td-invoice', () => ({ createTDInvoice: mocks.createTDInvoice }))
+vi.mock('@/lib/invoice-auto-send', () => ({
+  fetchSettingsBanks: vi.fn(async () => []),
+  selectSettingsBank: vi.fn(() => null),
+}))
+vi.mock('@/lib/server-action', () => ({
+  safeAction: vi.fn(async (fn: () => Promise<unknown>) => {
+    const data = await fn()
+    return { success: true, data }
+  }),
+}))
+
 describe('sanitizeInvoiceMessage', () => {
   // Real production shape: a message built by the old, now-deleted
   // buildPaymentInstructions() — a staff note followed by a machine-generated
@@ -100,34 +116,19 @@ describe('createUnifiedInvoiceDraft — no longer bakes payment instructions int
   // + sanitizeInvoiceMessage, gated by resolveInvoiceAudience); this wrapper
   // must now store ONLY what staff actually typed.
   async function callWithMockedDeps(input: Parameters<typeof import('@/app/(dashboard)/finance/actions').createUnifiedInvoiceDraft>[0]) {
-    vi.resetModules()
-    const mockCreateTDInvoice = vi.fn(async () => ({
+    mocks.createTDInvoice.mockReset()
+    mocks.createTDInvoice.mockImplementation(async () => ({
       paymentId: 'pay-1',
       expenseId: 'exp-1',
       invoiceNumber: 'INV-000001',
       total: 1000,
       status: 'Draft',
     }))
-    vi.doMock('@/lib/portal/td-invoice', () => ({ createTDInvoice: mockCreateTDInvoice }))
-    vi.doMock('@/lib/invoice-auto-send', () => ({
-      fetchSettingsBanks: vi.fn(async () => []),
-      selectSettingsBank: vi.fn(() => null),
-    }))
-    vi.doMock('@/lib/server-action', () => ({
-      safeAction: vi.fn(async (fn: () => Promise<unknown>) => {
-        const data = await fn()
-        return { success: true, data }
-      }),
-    }))
 
     const { createUnifiedInvoiceDraft } = await import('@/app/(dashboard)/finance/actions')
     await createUnifiedInvoiceDraft(input)
 
-    vi.doUnmock('@/lib/portal/td-invoice')
-    vi.doUnmock('@/lib/invoice-auto-send')
-    vi.doUnmock('@/lib/server-action')
-
-    return mockCreateTDInvoice
+    return mocks.createTDInvoice
   }
 
   it('sends only the staff-typed message, even with bank_transfer selected and a specific bank chosen', async () => {
