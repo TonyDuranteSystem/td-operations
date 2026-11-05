@@ -29,7 +29,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params
   const settings = await loadActionSettings(g.ctx.team.id)
   const r = await applyLeadAction(leadDb(), g.ctx.team.id, id, parsed.value, { id: g.ctx.user.id, email: g.ctx.user.email, role: g.ctx.role }, settings, new Date(), g.ctx.viewAs !== undefined)
-  if (r.ok === false) return NextResponse.json({ error: r.error }, { status: r.status, headers: NO_STORE })
+  if (r.ok === false) return NextResponse.json({ error: r.error, ...(r.code ? { code: r.code, callAt: r.callAt } : {}) }, { status: r.status, headers: NO_STORE })
   const notified = parsed.value.action === "reschedule" && g.ctx.viewAs === undefined ? await notifyMoved(g.ctx.team.id, g.ctx.user.id, g.ctx.user.email, id, parsed.value) : 0
   // a call booked, moved or cancelled is also written into the seller's work Google calendar (only while that switch is on; never while Antonio is "viewing as" somebody). The call is already saved: the answer only tells the screen what happened.
   const a = parsed.value

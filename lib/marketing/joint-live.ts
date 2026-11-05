@@ -62,7 +62,7 @@ export function liveJointEnv(): JointEnv {
       const input = op.kind === "set" ? { action: "appointment" as const, at: op.at, note: op.note }
         : op.kind === "move" ? { action: "reschedule" as const, target: "appointment" as const, at: op.at, reason: "Moved by the client", note: op.note, from: op.from }
           : { action: "appointment" as const, at: null, note: op.note }
-      const r = await applyLeadAction(db, teamId, leadId, input, ACTOR, settings, new Date())
+      const r = await applyLeadAction(db, teamId, leadId, input, ACTOR, settings, new Date(), false, { fromClientLink: true })
       return r.ok === false ? { ok: false, error: r.error } : { ok: true }
     },
     async recordSynced(leadId, kind, data) {
