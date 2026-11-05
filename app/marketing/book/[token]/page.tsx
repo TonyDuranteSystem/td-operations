@@ -15,7 +15,7 @@ interface View {
 
 const TXT = {
   it: {
-    call: 'Chiamata con Antonio Durante', zoom: 'Videochiamata Zoom', tz: 'Orari nel tuo fuso orario', pickDay: 'Scegli un giorno', pickTime: 'Scegli un orario', next: 'Continua', none: 'Non ci sono orari liberi in questo periodo. Chiedi un nuovo link.',
+    call: 'Chiamata con Antonio Durante', zoom: 'Videochiamata Zoom', tz: 'Orari nel tuo fuso orario', pickDay: 'Scegli un giorno', pickTime: 'Scegli un orario', next: 'Continua', none: 'Non ci sono orari liberi in questo periodo. Chiedi un nuovo link.', loadingTimes: 'Carico gli orari…',
     name: 'Il tuo nome', email: 'La tua email', confirm: 'Conferma prenotazione', change: 'Cambia orario', zoomLink: 'Il link Zoom arriva per email dopo la conferma.', saving: 'Un momento…',
     booked: 'Prenotazione confermata.', yours: 'La tua chiamata con Antonio Durante', join: 'Entra su Zoom', resched: 'Cambia orario', cancel: 'Annulla chiamata', save: 'Sposta la chiamata', keep: 'Mantieni l’orario attuale',
     sure: 'Annullare questa chiamata?', sureMsg: 'Antonio e Rocco vengono avvisati e l’orario viene liberato.', yes: 'Sì, annulla', no: 'No, mantieni', moved: 'La chiamata è stata spostata.',
@@ -23,7 +23,7 @@ const TXT = {
     unavailable: 'Gli orari non sono disponibili in questo momento. Riprova tra qualche minuto.', emailSent: 'Ti abbiamo inviato una email di conferma con il link Zoom.', emailNot: 'Non siamo riusciti a inviare la email: salva questa pagina, contiene il link Zoom.',
   },
   en: {
-    call: 'Call with Antonio Durante', zoom: 'Zoom video call', tz: 'Times shown in your time zone', pickDay: 'Choose a day', pickTime: 'Choose a time', next: 'Continue', none: 'There are no free times in this period. Ask for a new link.',
+    call: 'Call with Antonio Durante', zoom: 'Zoom video call', tz: 'Times shown in your time zone', pickDay: 'Choose a day', pickTime: 'Choose a time', next: 'Continue', none: 'There are no free times in this period. Ask for a new link.', loadingTimes: 'Loading times…',
     name: 'Your name', email: 'Your email', confirm: 'Confirm booking', change: 'Change time', zoomLink: 'The Zoom link arrives by email after you confirm.', saving: 'One moment…',
     booked: 'You are booked.', yours: 'Your call with Antonio Durante', join: 'Join on Zoom', resched: 'Change time', cancel: 'Cancel call', save: 'Move my call', keep: 'Keep current time',
     sure: 'Cancel this call?', sureMsg: 'Antonio and Rocco are told, and the time is released.', yes: 'Yes, cancel', no: 'No, keep it', moved: 'Your call was moved.',
@@ -165,7 +165,7 @@ export default function BookPage() {
               {step === 'pick' && <div className="flex flex-wrap gap-2"><button type="button" className={btn} onClick={async () => { setPicked(null); setStep('move'); await load(true) }} data-testid="book-resched">{t.resched}</button><button type="button" className={`${btn} border-[#b32236] text-[#b32236]`} onClick={() => setStep('ask')} data-testid="book-cancel">{t.cancel}</button></div>}
               {step === 'move' && (
                 <div className="space-y-3">
-                  <Picker starts={view.starts ?? []} zone={zone} lang={lang} picked={picked} onPick={setPicked} />
+                  {view.starts === undefined ? <p className="text-sm text-slate-500" data-testid="book-loading">{t.loadingTimes}</p> : <Picker starts={view.starts} zone={zone} lang={lang} picked={picked} onPick={setPicked} />}
                   <div className="flex flex-wrap gap-2"><button type="button" className={primary} disabled={!picked || busy} onClick={move} data-testid="book-save">{t.save}</button><button type="button" className={btn} onClick={() => { setPicked(null); setStep('pick') }}>{t.keep}</button></div>
                 </div>
               )}
