@@ -33,10 +33,17 @@ beforeEach(() => {
 describe("markOfferSent", () => {
   it("flips ONLY a draft: the update is filtered on the token AND on status = draft", async () => {
     await markOfferSent("t1")
-    expect(h.calls).toContainEqual(["update", { status: "sent" }])
+    expect(h.calls).toContainEqual(["update", { status: "sent", send_started_at: null }])
     expect(h.calls).toContainEqual(["eq", "token", "t1"])
     expect(h.calls).toContainEqual(["eq", "status", "draft"])
     expect(h.calls).toContainEqual(["from", "offers"])
+  })
+
+  it("clears the send claim in the same write (the offer is not left \"being sent\")", async () => {
+    await markOfferSent("t1")
+    const updates = h.calls.filter((c) => c[0] === "update")
+    expect(updates).toHaveLength(1)
+    expect(updates[0][1]).toMatchObject({ send_started_at: null })
   })
 
   it("asks for the changed rows back, so a skipped write can be seen", async () => {

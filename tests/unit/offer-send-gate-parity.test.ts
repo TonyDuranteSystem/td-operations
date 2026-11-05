@@ -65,6 +65,7 @@ vi.mock("@/lib/portal/welcome-token", () => ({ createWelcomeToken: vi.fn(), find
 vi.mock("@/lib/auth-admin-helpers", () => ({ findAuthUserByEmail: vi.fn() }))
 vi.mock("@/lib/email/open-pixel", () => ({ openPixelImg: vi.fn() }))
 vi.mock("@/lib/config", () => ({ APP_BASE_URL: "https://app.example", PORTAL_BASE_URL: "https://portal.example" }))
+vi.mock("@/lib/offers/send-claim", () => ({ claimOfferSend: vi.fn(async () => ({ ok: true, claimedAt: "2026-01-01T00:00:00.000Z" })), releaseOfferSend: vi.fn(async () => {}) }))
 vi.mock("@/lib/offers/contract-texts-snapshot", () => ({ ensureOfferContractTexts: (...a: unknown[]) => h.ensure(...a) }))
 
 import { publishOffer } from "@/lib/offers/publish"
