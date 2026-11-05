@@ -2,8 +2,8 @@
 -- SANDBOX first (R105). UNDO: 20261105-0200-social-app-devices.UNDO.sql
 --
 -- One row per phone (bundle id + Apple alert token). The row says WHO the phone belongs to; the server (never the phone) decides
--- what that person may see. RLS on, no policies: only the service role, behind routes that check the signed-in person, can reach it
--- (same pattern as storage_app_devices). Anon and signed-in browser tokens get nothing.
+-- what that person may see. RLS on and access revoked from anon / signed-in browser tokens, plus the marketing database lock (the last line):
+-- only the service role, behind routes that check the signed-in person, can reach it (same pattern as storage_app_devices).
 --
 -- DESIGN RULES (Council review, 5 Nov 2026):
 --   * NO CHECK value lists (a new list on the shared sandbox turned every session's CI red once): the token shape, the bundle id and
@@ -34,3 +34,7 @@ CREATE INDEX IF NOT EXISTS social_app_devices_user_idx ON public.social_app_devi
 
 ALTER TABLE public.social_app_devices ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.social_app_devices FROM anon, authenticated;
+
+-- The standing rule for EVERY new table (tests/unit/migrations-marketing-lock.test.ts): run the marketing database lock again so a
+-- marketing login's own database token can never read this table. (The routes reach it only with the service key.)
+SELECT public.marketing_lock_all_tables();
