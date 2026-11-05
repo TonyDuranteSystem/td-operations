@@ -1,7 +1,7 @@
 /**
  * confirmPortalWizardOnboarding — the State Filing ID staff checked reaches the setup job (job 64d2be64). The number goes into the job
- * payload as `confirmed_filing_id` (null = "no Filing ID on the document"); with nothing checked the key is left out, so the job falls back
- * to the number the client typed. The setup job is what saves it on the company.
+ * payload as `confirmed_filing_id` (null = "no Filing ID on the document"); with NOTHING checked (a stale review tab, another caller) the key is
+ * still sent, as null, so the job saves nothing — an unchecked number is never saved. The setup job is what saves it on the company.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -52,8 +52,19 @@ describe('confirmPortalWizardOnboarding — the checked State Filing ID', () => 
     expect(result.lines.join('\n')).toMatch(/No Filing ID will be saved from this Confirm/)
   })
 
-  it('with nothing checked the key is left out of the payload', async () => {
-    await confirmPortalWizardOnboarding('sub-1', 'luca@tonydurante.us', { choice: 'issue' })
-    expect('confirmed_filing_id' in payloadOfLastJob()).toBe(false)
+  it('with nothing checked the key is still sent, as null — the job never falls back to the number the client typed', async () => {
+    const result = await confirmPortalWizardOnboarding('sub-1', 'luca@tonydurante.us', { choice: 'issue' })
+    expect('confirmed_filing_id' in payloadOfLastJob()).toBe(true)
+    expect(payloadOfLastJob().confirmed_filing_id).toBeNull()
+    // and the record says nobody checked, and what the client typed, so staff can add it on the company page
+    expect(result.lines.join('\n')).toMatch(/No State Filing ID was checked on this Confirm, so none is saved/)
+    expect(result.lines.join('\n')).toMatch(/the client typed "9999999"/)
+  })
+
+  it('a number confirmed with no uploaded Articles to open is not described as checked on the Articles', async () => {
+    const result = await confirmPortalWizardOnboarding('sub-1', 'luca@tonydurante.us', { choice: 'issue' }, { value: '2026-002103965', documentChecked: false })
+    const text = result.lines.join('\n')
+    expect(text).toMatch(/confirmed by luca@tonydurante.us — no uploaded Articles could be opened/)
+    expect(text).not.toMatch(/checked on the Articles/)
   })
 })

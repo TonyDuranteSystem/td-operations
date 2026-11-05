@@ -14,7 +14,9 @@ type Link = { account_id: string; accounts: { id: string; company_name: string; 
 const state = vi.hoisted(() => ({
   links: [] as Array<{ account_id: string; accounts: { id: string; company_name: string; status: string } }>,
   inserts: [] as Array<Record<string, unknown>>,
-  updates: [] as Array<{ table: string; payload: Record<string, unknown>; orFilter?: string }>,
+  updates: [] as Array<{ table: string; payload: Record<string, unknown>; orFilter?: string; eqFilter?: string }>,
+  // what the existing company's Filing ID currently is (undefined = the company row reads back empty / null)
+  currentFilingId: undefined as string | null | undefined,
   filledRows: [{ id: 'a-1' }] as Array<{ id: string }>,
   updateError: null as null | { message: string },
 }))
@@ -26,11 +28,12 @@ vi.mock('@/lib/supabase-admin', () => ({
         table === 'formation_submissions' ? { data: { id: 'sub-1', submitted_data: {}, upload_paths: [], state: 'NM', entity_type: 'SMLLC', created_at: '2026-10-19T10:00:00Z' }, error: null }
         : table === 'wizard_progress' ? { data: { id: 'wp-1', data: {}, lead_id: null, created_at: '2026-10-01T10:00:00Z' }, error: null }
         : table === 'account_contacts' ? { data: state.links, error: null }
+        : table === 'accounts' ? { data: state.currentFilingId === undefined ? null : { filing_id: state.currentFilingId }, error: null }
         : { data: null, error: null }
-      let pendingUpdate: { table: string; payload: Record<string, unknown>; orFilter?: string } | null = null
+      let pendingUpdate: { table: string; payload: Record<string, unknown>; orFilter?: string; eqFilter?: string } | null = null
       const chain: Record<string, unknown> = {
         select: () => chain,
-        eq: () => chain,
+        eq: (col?: string, val?: string) => { if (pendingUpdate && col === 'filing_id') pendingUpdate.eqFilter = val; return chain },
         in: () => chain,
         order: () => chain,
         limit: () => chain,
@@ -79,6 +82,7 @@ beforeEach(() => {
   state.links = []
   state.inserts = []
   state.updates = []
+  state.currentFilingId = undefined
   state.filledRows = [{ id: 'a-1' }]
   state.updateError = null
   vi.mocked(logAction).mockClear()
@@ -121,6 +125,35 @@ describe('materializer — a RETRY on an already-created company', () => {
     expect(r.outcome).toBe('already_materialized')
     expect(r.steps.find((s) => s.step === 'filing_id')).toMatchObject({ status: 'skipped' })
     expect(vi.mocked(logAction)).not.toHaveBeenCalled()
+  })
+
+  it('the SAME number already on the company is not a warning — nothing is written and the step is a plain ok', async () => {
+    state.links = EXISTING
+    state.currentFilingId = '2026 - 002103965' // written with spaces around the dash; the same number once tidied
+    const r = await materializeFormationCompany({ ...base, filing_id: '2026-002103965' })
+    expect(r.outcome).toBe('already_materialized')
+    expect(state.updates.filter((u) => u.table === 'accounts')).toHaveLength(0)
+    expect(r.steps.find((s) => s.step === 'filing_id')).toMatchObject({ status: 'ok' })
+    expect(filingIdNoteFromSteps(r.steps)).toBeNull()
+  })
+
+  it('a DIFFERENT number already on the company is kept — no write attempted, the step says skipped', async () => {
+    state.links = EXISTING
+    state.currentFilingId = '3190157'
+    const r = await materializeFormationCompany({ ...base, filing_id: '3190158' })
+    expect(state.updates.filter((u) => u.table === 'accounts')).toHaveLength(0)
+    expect(r.steps.find((s) => s.step === 'filing_id')).toMatchObject({ status: 'skipped' })
+  })
+
+  it('a Filing ID made only of spaces counts as empty and is replaced (matched by its exact text, not by "is null or empty")', async () => {
+    state.links = EXISTING
+    state.currentFilingId = '   '
+    const r = await materializeFormationCompany({ ...base, filing_id: '3190157' })
+    const fill = state.updates.find((u) => u.table === 'accounts')
+    expect(fill?.payload.filing_id).toBe('3190157')
+    expect(fill?.eqFilter).toBe('   ')
+    expect(fill?.orFilter).toBeUndefined()
+    expect(r.steps.find((s) => s.step === 'filing_id')).toMatchObject({ status: 'ok' })
   })
 
   it('a failed save is reported in the step log (never silent) and does not fail the retry', async () => {

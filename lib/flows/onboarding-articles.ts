@@ -5,6 +5,8 @@
  * upload `{wizardType}/{identifier}/{fieldName}_{unique}_{filename}`, so the Articles slot's files start with `articles_of_organization`.
  */
 
+import { isTraversalSafePath } from "@/lib/storage/safe-path"
+
 export interface SubmissionUploadOwner {
   token: string | null
   account_id: string | null
@@ -26,7 +28,8 @@ export function ownedUploadPaths(sub: SubmissionUploadOwner, allPaths: string[])
     sub.offer_id ? `onboarding/${sub.offer_id}/` : null,
     sub.contact_id ? `onboarding/${sub.contact_id}/` : null,
   ].filter((p): p is string => !!p)
-  const owned = allPaths.filter((p) => prefixes.some((prefix) => p.startsWith(prefix)))
+  // a path that can walk out of its folder ("../") is never owned, whatever its prefix says
+  const owned = allPaths.filter((p) => isTraversalSafePath(p) && prefixes.some((prefix) => p.startsWith(prefix)))
   return { owned, rejected: allPaths.length - owned.length }
 }
 

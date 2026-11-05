@@ -251,7 +251,7 @@ export function ConfirmPanel({ entry }: { entry: OnboardingReviewEntry }) {
         body: JSON.stringify({
           suite_choice: suiteChoice,
           suite_reason: suiteChoice === 'waive' ? suiteReason : undefined,
-          // the number staff checked on the card (null = none on the document); absent when there was nothing to check
+          // the number staff checked on the card (null = none on the document, or the Articles could not be checked); the card is always shown
           ...(filingGate.choice ? { filing_id: filingGate.choice.value } : {}),
         }),
       })
@@ -321,7 +321,7 @@ export function ConfirmPanel({ entry }: { entry: OnboardingReviewEntry }) {
           )}
         </div>
       )}
-      <OnboardingFilingIdCheck entryId={entry.id} clientTyped={clientTypedFilingId} onGate={setFilingGate} />
+      <OnboardingFilingIdCheck entryId={entry.id} clientTyped={clientTypedFilingId} einHint={typeof entry.submitted_data.ein === 'string' ? entry.submitted_data.ein : null} onGate={setFilingGate} />
       <label className="flex items-start gap-2 text-sm">
         <input
           type="checkbox"
