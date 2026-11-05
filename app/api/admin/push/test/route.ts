@@ -21,6 +21,7 @@ export async function POST() {
     body: 'Admin push notifications are working!',
     url: '/portal-chats',
     tag: 'admin-test-notification',
+    alertKind: 'test_alert',
   })
 
   return NextResponse.json(result)

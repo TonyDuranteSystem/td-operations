@@ -26,7 +26,7 @@ vi.mock('server-only', () => ({}))
 vi.mock('@/lib/auth-admin-helpers', () => ({ listAllAuthUsers: mockListAllAuthUsers }))
 vi.mock('@/lib/portal/web-push', () => ({ sendPushToAdminUsers: mockSendPushToAdminUsers }))
 
-const PAYLOAD = { title: 't', body: 'b', url: '/team-chat', tag: 'x' }
+const PAYLOAD = { title: 't', body: 'b', url: '/team-chat', tag: 'x', alertKind: 'talk_room_message' as const }
 
 // Shaped like the REAL production directory (verified 2026-07-22): admin, team,
 // a managed partner, and a client.

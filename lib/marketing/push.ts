@@ -5,17 +5,20 @@
  */
 import webpush from "web-push"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import type { MarketingAlertKind } from "@/lib/push/alert-kinds"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- newer tables than the generated types
 const db = () => supabaseAdmin as unknown as { from: (t: string) => any }
 const DEAD = new Set([400, 401, 403, 404, 410])
 
-export interface MarketingPushPayload { title: string; body: string; url: string; tag?: string }
+/** `alertKind` is required (lib/push/alert-kinds.ts): what kind of alert this is. It is removed before the web send; the phone leg (TD Social, pull request C2) reads it. */
+export interface MarketingPushPayload { title: string; body: string; url: string; tag?: string; alertKind: MarketingAlertKind }
 
 /** Tell these people (by login id) on this team. Never throws: a failed notification must not fail the message that caused it. */
 export async function sendMarketingPush(teamId: string, userIds: readonly string[], payload: MarketingPushPayload): Promise<{ sent: number; failed: number }> {
   const ids = Array.from(new Set(userIds.filter(Boolean)))
   if (ids.length === 0) return { sent: 0, failed: 0 }
+  const { alertKind, ...wire } = payload // the label is not part of what the browser receives
   const pub = process.env.VAPID_PUBLIC_KEY, priv = process.env.VAPID_PRIVATE_KEY
   if (!pub || !priv) return { sent: 0, failed: 0 }
   try {
@@ -25,7 +28,7 @@ export async function sendMarketingPush(teamId: string, userIds: readonly string
     // all at once, each with its own time limit: one slow or dead address must not hold up the others
     await Promise.allSettled(((data ?? []) as Array<{ id: string; endpoint: string; p256dh: string; auth_key: string }>).map(async s => {
       try {
-        await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth_key } }, JSON.stringify(payload), { timeout: 8000 })
+        await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth_key } }, JSON.stringify(wire), { timeout: 8000 })
         sent++
       } catch (e) {
         failed++
