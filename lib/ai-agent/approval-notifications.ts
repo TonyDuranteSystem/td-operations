@@ -95,9 +95,7 @@ async function getSystemThreadId(): Promise<string | null> {
 /** Best-effort push to admins — failure is non-critical and swallowed. */
 async function pushToAdmins(title: string, body: string, tag: string): Promise<void> {
   try {
-    const db = supabaseAdmin as AnyDb
-    const { data: subs } = await db.from("admin_push_subscriptions").select("id").limit(1)
-    if (!subs?.length) return
+    // no pre-check on the web subscription table: who is told is decided inside the sender, and a person with only a TD Social phone must still get this
     const { sendPushToStaff } = await import("@/lib/team/notify")
     await sendPushToStaff({ title, body, url: "/portal-chats?view=internal", tag, alertKind: "approval" })
   } catch {

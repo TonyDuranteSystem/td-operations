@@ -16,6 +16,7 @@ import { isDashboardUser, getUserDisplayName } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { emitUiEvent } from "@/lib/ui-events"
 import { sendPushToAdminUsers } from "@/lib/portal/web-push"
+import { waitForPhoneLeg } from "@/lib/app/phone-leg"
 import { listTeamMembers } from "@/lib/team/directory"
 import {
   notesTable,
@@ -275,13 +276,13 @@ export async function POST(req: NextRequest) {
   // Deep-links to the exact note (the Notes page opens it), never just the dashboard.
   if (pushTargetId) {
     const dateSuffix = comeBackIso && !warning ? ` (comes back ${comeBackDisplay || "later"})` : ""
-    void sendPushToAdminUsers([pushTargetId], {
+    await waitForPhoneLeg(sendPushToAdminUsers([pushTargetId], {
       title: `${getUserDisplayName(user)} shared a note`,
       body: `${body.slice(0, 120)}${dateSuffix}`,
       url: `/notes?note=${data.id}`,
       tag: `staff-note-${data.id}`,
       alertKind: "staff_note",
-    }).catch(() => {})
+    }).catch(() => {}))
   }
 
   emitUiEvent("notes") // NO payload — the bus reaches every staff tab
@@ -344,13 +345,13 @@ export async function PATCH(req: NextRequest) {
       .map((m) => m.id)
     const targets = replyNotifyTargets(note, user.id, staffIds, new Date())
     if (targets.length > 0) {
-      void sendPushToAdminUsers(targets, {
+      await waitForPhoneLeg(sendPushToAdminUsers(targets, {
         title: `${getUserDisplayName(user)} replied to a note`,
         body: body.slice(0, 120),
         url: `/notes?note=${id}`,
         tag: `staff-note-${id}`,
         alertKind: "staff_note",
-      }).catch(() => {})
+      }).catch(() => {}))
     }
 
     emitUiEvent("notes")
@@ -532,13 +533,13 @@ export async function PATCH(req: NextRequest) {
   // Push to the person a note was just handed to — fire-and-forget, never blocks the response.
   // Deep-links to the exact note: the Notes page opens it, whatever state it's in there.
   if (pushTo) {
-    void sendPushToAdminUsers([pushTo.userId], {
+    await waitForPhoneLeg(sendPushToAdminUsers([pushTo.userId], {
       title: `${getUserDisplayName(user)} shared a note`,
       body: pushTo.noteBody.slice(0, 120),
       url: `/notes?note=${id}`,
       tag: `staff-note-${id}`,
       alertKind: "staff_note",
-    }).catch(() => {})
+    }).catch(() => {}))
   }
 
   // An EDITED shared/team note tells the other person — this is how a reply typed into a
@@ -555,13 +556,13 @@ export async function PATCH(req: NextRequest) {
       .map((m) => m.id)
     const targets = editNotifyTargets(note, user.id, staffIds)
     if (targets.length > 0) {
-      void sendPushToAdminUsers(targets, {
+      await waitForPhoneLeg(sendPushToAdminUsers(targets, {
         title: `${getUserDisplayName(user)} updated a note`,
         body: editedBody.slice(0, 120),
         url: `/notes?note=${id}`,
         tag: `staff-note-${id}`,
         alertKind: "staff_note",
-      }).catch(() => {})
+      }).catch(() => {}))
     }
   }
 

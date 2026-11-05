@@ -292,6 +292,7 @@ export async function POST(request: NextRequest) {
       tag: `team-share-${threadId}`,
       dm: sharedToDm,
       alertKind: 'shared_item',
+      phoneName: displayName,
     })
   } catch {
     // non-critical
