@@ -128,7 +128,7 @@ Every system listed above now has a deep doc under `docs/systems/`, each written
 
 ## Appendix D — Guardrail rules
 <!-- GENERATED:rules -->
-_Regenerated 2026-11-05 from the R-rule list in CLAUDE.md — **42 rules**, highest is R113._
+_Regenerated 2026-11-05 from the R-rule list in CLAUDE.md — **43 rules**, highest is R114._
 
 - **R005** — td-operations.vercel.app is INTERNAL: NEVER send this domain to clients. {file:lib/config.ts}
 - **R012** — All client-facing URLs MUST use APP_BASE_URL from {file:lib/config.ts} — never hardcode domains; the .husky/pre-push hook blocks hardcoded domains.
@@ -172,6 +172,7 @@ _Regenerated 2026-11-05 from the R-rule list in CLAUDE.md — **42 rules**, high
 - **R111** — WORKER NEVER LAUNCHES OR SHIPS CODE (**AMENDED 2026-07-10, Antonio** — supersedes the 2026-06-30 Antonio-only gate). …_(truncated — read the full rule in CLAUDE.md)_
 - **R112** — DEV-TRACKER BOARD DISCIPLINE (2026-07-11). Every Claude Code session that does dev work (feature/bug/refactor/etc.) MUST be tied to exactly ONE dev job in dev_tasks — the durable, compaction-proof record shown on the /dev-board board (per-c …_(truncated — read the full rule in CLAUDE.md)_
 - **R113** — ASK THE SYSTEM COUNSELOR FIRST, ON EVERY INVESTIGATION (2026-08-02). Before forming a theory about any investigation — bug, "how does X work", audit, or a feature touching an existing flow — consult the system-counselor subagent FIRST, in c …_(truncated — read the full rule in CLAUDE.md)_
+- **R114** — ATTACHING A FILE TO A TD TALK / TEAM-CHAT POST (2026-11-05, PRs #960 + #965, dev job f34c915d). …_(truncated — read the full rule in CLAUDE.md)_
 <!-- /GENERATED:rules -->
 
 ## Appendix E — Subsystem deep docs

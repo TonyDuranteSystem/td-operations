@@ -1,4 +1,5 @@
 # SYSTEM-KNOWLEDGE — the System Counselor's index to the live business and system
+_Last verified: 2026-11-05 — Claude (dev job `f34c915d`: Claude can attach a file to a TD Talk / team-chat post — one playbook row added to §2; the old `portal_chat_attach_file` hand-off for team chat never worked)._
 _Last verified: 2026-11-02 — Claude (dev job `4effa56d`: the bank-application intake no longer emails an application on its own — era marker added to §4; the old "emailed to the link's addresses at submit" behaviour is reversed)._
 _Last verified: 2026-10-26 — Claude (dev job `d2971d11`: a NEW service now has its own stored, owner-approved contract — one playbook row added to §2; the offers/service-contracts docs hold the detail)._
 _Last verified: 2026-10-15 — Claude (dev job `be7da01a`: Company Closure gets a 'Wrap-up' step — era marker added to §4, three playbook rows to §2 reported by the Counselor's drift check (how to take a company off the Calendar; why a step renumbering must re-sync the jobs; what finishes Client Onboarding); the Open services line in §4 now says the page IS live on production for all staff.)_
@@ -64,6 +65,7 @@ What lives here instead:
 | Who changed a service card or step setting, and when? | `service_settings_history` (actor stamped by the `x-td-actor` header; raw SQL shows `db:<role>` unless stamped) | `updated_at` alone |
 | Has this been paid / is it overdue? | the payments records | an invoice's own copy of "amount paid" (known to disagree) |
 | What services do we actually sell? | the **live catalog** (service vocabulary is data, not code) | a hardcoded list anywhere, including §3 below |
+| How does Claude put a FILE into a TD Talk / team-chat post? | `team_chat_send` with `attachments:[{my_files_file_id}]` — a file in the owner's My files › From Claude, owner session only (`docs/systems/team-workspace.md`, rule R114) | `portal_chat_attach_file` (its portal link is rejected by `team_chat_send` — that hand-off never worked for team chat), a link pasted into the message text (no attachment chip) |
 | Where is this service delivery stuck? | the service-delivery pipeline + its stage | the client's own description |
 | What is due, and when? | the deadlines records + the compliance docs | remembered state rules — they are per-state |
 | Does this code/tool/feature already exist? | code search + the tool registration route + the catalog | assuming; this is the #1 duplicate-build cause |
