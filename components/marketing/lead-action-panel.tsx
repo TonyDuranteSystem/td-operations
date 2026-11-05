@@ -28,10 +28,12 @@ interface Props {
   archived?: boolean
   /** whose clocks a typed time is shown in (the viewer's own zone, the lead's, the seller's, never the owner's for a setter) */
   zone?: ZoneInfo
+  /** the call that stands on this lead now (its time), or null: pressing a result that puts the lead aside while it is still ahead shows the warning below, nothing is cancelled for the person */
+  callAt?: string | null
 }
 
 /** The buttons a setter or the owner uses on one lead. Every server answer (including the refusals) is shown as the server wrote it. */
-export function LeadActionPanel({ leadId, canMark, claim, isOwner, checklist, reasons, afterHref, role = 'setter', afterPay = false, archived = false, zone = { viewer: ROME, client: null, clientName: '', seller: null, owner: null } }: Props) {
+export function LeadActionPanel({ leadId, canMark, claim, isOwner, checklist, reasons, afterHref, role = 'setter', afterPay = false, archived = false, zone = { viewer: ROME, client: null, clientName: '', seller: null, owner: null }, callAt = null }: Props) {
   const router = useRouter()
   const t = useT()
   const [mode, setMode] = useState<Mode>(null)
@@ -41,6 +43,9 @@ export function LeadActionPanel({ leadId, canMark, claim, isOwner, checklist, re
   const [reason, setReason] = useState('')
   const [when, setWhen] = useState('')
   const [note, setNote] = useState('')
+  // the call that stands (from the page, or from the server's refusal when the page was out of date); the warning shows while it is still ahead
+  const [standing, setStanding] = useState<string | null>(callAt)
+  const [info, setInfo] = useState<string | null>(null)
 
   const blocked = claim === 'other' && !isOwner
   const markOk = canMark && !blocked
@@ -52,6 +57,7 @@ export function LeadActionPanel({ leadId, canMark, claim, isOwner, checklist, re
       const res = await fetch(`/api/marketing/leads/${leadId}/action`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
+        if (d.code === 'CALL_STANDS' && typeof d.callAt === 'string') setStanding(d.callAt)
         throw new Error(d.error ? t(d.error) : t('Could not save. Please try again.'))
       }
       setMode(null); setNote(''); setTicked([]); setReason(''); setWhen('')
@@ -64,6 +70,25 @@ export function LeadActionPanel({ leadId, canMark, claim, isOwner, checklist, re
     }
   }
 
+  /** Rocco's own choice: take the call off (the same cancel as on the call box: his Google calendar, the booking link and the client follow). The result form stays filled; he presses Save afterwards. */
+  async function cancelCall() {
+    if (!standing) return
+    setBusy(true); setError(null); setInfo(null)
+    try {
+      const res = await fetch(`/api/marketing/leads/${leadId}/action`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'appointment', at: null, replaces: standing }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error ? t(d.error) : t('Could not save. Please try again.'))
+      setStanding(null)
+      setInfo(d.calendar?.state === 'failed' ? t("The call is cancelled, but the seller's calendar was not updated. Tell Antonio.") : t('The call is cancelled. Now press Save.'))
+      router.refresh()
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : t('Could not save. Please try again.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const callAhead = standing !== null && Date.parse(standing) > Date.now()
+  const endsCall = mode === 'not_in_target' || mode === 'not_ready' || mode === 'archive' || mode === 'not_closed'
   const btn = 'rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50'
   return (
     <section className="mt-5 rounded-xl border bg-white p-4">
@@ -112,13 +137,22 @@ export function LeadActionPanel({ leadId, canMark, claim, isOwner, checklist, re
               <span className="mt-2 block"><TimesLine at={localToIso(when, zone.viewer)} info={zone} /></span>
             </label>
           )}
+          {endsCall && callAhead && (
+            <div role="alert" data-testid="call-stands-warning" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900">
+              <p>{t('This lead has a call booked for {when} ({zone}). Cancel the call first, or keep it and choose something else.', { when: new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: zone.viewer }).format(new Date(standing as string)), zone: zoneName(zone.viewer) })}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" className={`${btn} bg-white`} disabled={busy} data-testid="call-stands-cancel" onClick={() => void cancelCall()}>{t('Cancel the call')}</button>
+                <button type="button" className={`${btn} bg-white`} disabled={busy} data-testid="call-stands-keep" onClick={() => setMode(null)}>{t('Keep the call')}</button>
+              </div>
+            </div>
+          )}
           <label className="block">
             <span className="text-slate-500">{mode === 'note' ? t('Note') : t('Note (optional)')}</span>
             <textarea className="mt-1 w-full rounded-lg border px-3 py-2" rows={3} maxLength={2000} value={note} onChange={e => setNote(e.target.value)} />
           </label>
           <button
             className={`${btn} bg-slate-900 text-white`}
-            disabled={busy || (mode === 'not_in_target' && !reason) || ((mode === 'call_back' || mode === 'not_ready') && !when) || (mode === 'note' && !note.trim())}
+            disabled={busy || (endsCall && callAhead) || (mode === 'not_in_target' && !reason) || ((mode === 'call_back' || mode === 'not_ready') && !when) || (mode === 'note' && !note.trim())}
             onClick={() => {
               const n = note.trim() || undefined
               if (mode === 'good') return send({ action: 'good', ticked, note: n })
@@ -133,6 +167,7 @@ export function LeadActionPanel({ leadId, canMark, claim, isOwner, checklist, re
           </button>
         </div>
       )}
+      {info && <p role="status" data-testid="call-stands-info" className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{info}</p>}
       {error && <p role="alert" className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p>}
     </section>
   )

@@ -53,7 +53,8 @@ class Query {
     if (this.op === "insert") {
       const key = UNIQUE[this.t]
       if (key && all.some(r => r[key] === this.payload[key])) return { data: [], error: { code: "23505", message: "duplicate key" } }
-      const row: Row = { id: `${this.t}-${++this.db.seq}`, status: "pending", attempts: 0, ...this.payload }
+      // a row written through the app is newer than any row a test seeded by hand (so "newest first" means "written last")
+      const row: Row = { id: `${this.t}-${++this.db.seq}`, status: "pending", attempts: 0, created_at: new Date(Date.UTC(2100, 0, 1) + this.db.seq * 1000).toISOString(), ...this.payload }
       all.push(row)
       return { data: [row], error: null }
     }

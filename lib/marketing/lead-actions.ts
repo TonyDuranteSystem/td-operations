@@ -68,10 +68,8 @@ export interface PlannedChange {
   patch: Record<string, unknown>
   /** the history row to write */
   event: { kind: string; data: Record<string, unknown> }
-  /** a result that ends the sale also takes the call that still stands off the books (the time it was booked for): the server writes the cancel line after the result line */
-  cancelsCall?: { at: string }
 }
-export type Plan = { ok: true; change: PlannedChange } | { ok: false; status: 400 | 409; error: string }
+export type Plan = { ok: true; change: PlannedChange } | { ok: false; status: 400 | 409; error: string; /** "CALL_STANDS": the lead has a call still ahead, so the person must cancel it first; `callAt` is its time */ code?: "CALL_STANDS"; callAt?: string }
 
 const fail = (status: 400 | 409, error: string): Plan => ({ ok: false, status, error })
 const MAX_AHEAD_MS = 180 * 24 * 3600 * 1000
@@ -115,12 +113,13 @@ function sellerResultGuard(action: "closed" | "not_closed" | "not_ready", lead: 
   return null
 }
 
-/** The seller's results that put a lead aside or out (not in target, archived, not ready now, not closed): a call still ahead on such a lead is cancelled with it, or the Calendar, the seller's Google calendar and the client's link would go on showing a call nobody will take. A call whose time has passed stays as it was (it happened or was missed). "Link sent" is left alone: that follows a call that took place. */
+/** The results that put a lead aside or out (not in target, archived, not ready now, not closed): while a call is still ahead on the lead, nothing is changed and the person is told to cancel the call first (3 Nov 2026, Antonio: the system warns, the person decides; it never cancels a call by itself). A call whose time has passed does not stop anything (it happened or was missed). "Link sent" follows a call that took place and is not held back. */
 export const ENDS_CALL: ReadonlySet<string> = new Set(["not_in_target", "archive", "not_ready", "not_closed"])
+export const CALL_STANDS_MESSAGE = "This lead has a call booked. Cancel the call first, then choose this result."
 
 export function planLeadAction(input: LeadActionInput, lead: LeadFacts, actor: Actor, s: ActionSettings, now: Date): Plan {
   const p = planOne(input, lead, actor, s, now)
-  if (p.ok && ENDS_CALL.has(input.action) && lead.appointment_at && Date.parse(lead.appointment_at) > now.getTime()) p.change.cancelsCall = { at: lead.appointment_at }
+  if (p.ok && ENDS_CALL.has(input.action) && lead.appointment_at && Date.parse(lead.appointment_at) > now.getTime()) return { ok: false, status: 409, error: CALL_STANDS_MESSAGE, code: "CALL_STANDS", callAt: lead.appointment_at }
   return p
 }
 
