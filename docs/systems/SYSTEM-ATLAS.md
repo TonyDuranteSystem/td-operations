@@ -212,7 +212,7 @@ _Regenerated 2026-11-05. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-10-22)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
-- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-04)_
+- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-05)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
 - [portal.md](portal.md) — Client Portal _(verified 2026-11-05)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-11-05)_
@@ -225,7 +225,7 @@ _Regenerated 2026-11-05. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-04)_
 - [storage.md](storage.md) — CRM Storage _(verified 2026-11-05)_
 - [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-05)_
-- [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-04)_
+- [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-05)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-19)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_
