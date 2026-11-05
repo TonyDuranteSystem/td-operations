@@ -54,6 +54,14 @@ const nextConfig = {
   // which CI does not do — Vercel builds and traces the full app itself. GITHUB_ACTIONS is set
   // by GitHub automatically and never on Vercel or a dev machine, so this cannot leak.
   outputFileTracing: process.env.GITHUB_ACTIONS !== 'true',
+  // This deployment's own release stamp, baked into BOTH the browser bundle and the server bundle (dev job dc629a3d). The open CRM pages
+  // compare the stamp they were loaded with against /api/release of the live deployment and offer "New release available — refresh".
+  // Vercel git builds: the commit (VERCEL_GIT_COMMIT_SHA, available at build time), first 7 characters like /api/health. The sandbox is
+  // git-disconnected and stamps itself (scripts/deploy-sandbox.sh passes NEXT_PUBLIC_BUILD_SHA), which wins when present. Neither set
+  // (local dev) → empty → the check stays off.
+  env: {
+    NEXT_PUBLIC_BUILD_SHA: process.env.NEXT_PUBLIC_BUILD_SHA || (process.env.VERCEL_GIT_COMMIT_SHA || '').slice(0, 7),
+  },
   eslint: {
     // Warnings in MCP tool files should not block production builds.
     // ESLint still runs in pre-commit (lint-staged) and pre-push hooks.
