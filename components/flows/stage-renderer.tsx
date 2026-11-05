@@ -171,7 +171,7 @@ function renderComponent(
       return <FlowChat key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'action_buttons':
       return (
-        <ActionButtons key={key} serviceDeliveryId={serviceDelivery.id} actions={component.actions} />
+        <ActionButtons key={key} serviceDeliveryId={serviceDelivery.id} actions={component.actions} hasCompany={!!serviceDelivery.account_id} />
       )
     case 'notes':
       return <StubPanel key={key} type="notes" />

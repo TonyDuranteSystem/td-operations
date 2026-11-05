@@ -12,6 +12,7 @@ import { NextRequest } from 'next/server'
 import { parseStageLayout } from '@/lib/flows/stage-layout'
 import { buildStepHints, stepHintProblems } from '@/lib/flows/storage-step-rules'
 import { trackingRequiredToAdvance, trackingMissingMessage } from '@/lib/flows/tracking-gate'
+import { actionConfirmText } from '@/lib/flows/action-confirm'
 
 const fx = vi.hoisted(() => ({
   // applyDeliveryConfirmation
@@ -110,15 +111,20 @@ describe('the six closure screens (as written by the migration)', () => {
       'State Compliance Check': 'State Dissolution Filing',
       'State Dissolution Filing': 'IRS Closure',
       'IRS Closure': 'Waiting for the IRS',
+      'Waiting for the IRS': 'Closing',
     })
     for (const target of next.values()) expect(STEP_ORDER).toContain(target)
   })
 
-  it('the IRS letter is the one upload that moves the job on by itself (to the finishing step); the other two uploads only file the document', () => {
-    const auto = (name: string) => parseStageLayout(layouts.get(name)!.json)!.components.find((c) => c.type === 'document_upload')?.autoAdvance
-    expect(auto('Waiting for the IRS')).toBe(true)
-    expect(auto('State Dissolution Filing')).toBe(false)
-    expect(auto('IRS Closure')).toBe(false)
+  it('no upload moves a job on by itself; finishing the job is a button that ASKS first, and for a company of ours it says the company will be closed', () => {
+    for (const name of ['State Dissolution Filing', 'IRS Closure', 'Waiting for the IRS']) {
+      expect(parseStageLayout(layouts.get(name)!.json)!.components.find((c) => c.type === 'document_upload')?.autoAdvance, name).toBe(false)
+    }
+    const finish = parseStageLayout(layouts.get('Waiting for the IRS')!.json)!.components.find((c) => c.type === 'action_buttons')!.actions![0]
+    expect(typeof finish === 'object' && finish.target).toBe('Closing')
+    expect(actionConfirmText(finish, false)).toMatch(/Finish the closure job/)
+    expect(actionConfirmText(finish, true)).toMatch(/CLOSES THE COMPANY/)
+    expect(actionConfirmText(finish, true)).toMatch(/portal is turned off/)
   })
 
   it('the storage rules built from the screens are clean and name the three documents', () => {
@@ -253,5 +259,26 @@ describe('closure wizard answers on the workspace (GET /api/flows/[id]/submissio
     const { status, body } = await get()
     expect(status).toBe(500)
     expect(body.error).toContain('boom')
+  })
+})
+
+describe('actionConfirmText — "ask before you act" on a workspace button', () => {
+  it('a bare key or a button with no sentence acts at once', () => {
+    expect(actionConfirmText('approve', true)).toBeNull()
+    expect(actionConfirmText({ key: 'advance_next', target: 'X' }, true)).toBeNull()
+    expect(actionConfirmText({ key: 'advance_next', target: 'X', confirm: '   ' }, false)).toBeNull()
+  })
+  it('the company sentence is used only for a job with a company, otherwise the plain one', () => {
+    const a = { key: 'advance_next', target: 'X', confirm: 'Plain?', confirmCompany: 'Company!' }
+    expect(actionConfirmText(a, true)).toBe('Company!')
+    expect(actionConfirmText(a, false)).toBe('Plain?')
+  })
+  it('a company-only sentence means a job with no company acts at once; a plain-only sentence is asked for both', () => {
+    expect(actionConfirmText({ key: 'advance_next', target: 'X', confirmCompany: 'Company!' }, false)).toBeNull()
+    expect(actionConfirmText({ key: 'advance_next', target: 'X', confirm: 'Plain?' }, true)).toBe('Plain?')
+  })
+  it('parseStageLayout keeps the sentences and drops blank or non-text ones', () => {
+    const [c] = parseStageLayout({ components: [{ type: 'action_buttons', actions: [{ key: 'advance_next', target: 'X', confirm: ' Sure? ', confirmCompany: '', label: 'Go' }, { key: 'advance_next', target: 'Y', confirm: 7 }] }] })!.components
+    expect(c.actions).toEqual([{ key: 'advance_next', label: 'Go', target: 'X', confirm: ' Sure? ' }, { key: 'advance_next', target: 'Y' }])
   })
 })

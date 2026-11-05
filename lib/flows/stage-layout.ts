@@ -58,8 +58,12 @@ export type StageComponentType = (typeof STAGE_COMPONENT_TYPES)[number]
  * ACTION_CONFIG (e.g. "start_review", "complete"), or an object for the generic
  * "advance_next" forward action which carries its own button label and an
  * explicit target stage to advance to.
+ *
+ * `confirm` makes the button ASK first (an in-page "are you sure" with this sentence, then Confirm / Cancel) instead of acting at once;
+ * `confirmCompany` is a different sentence used only when the job belongs to a company of ours (e.g. "this also closes the company").
+ * Neither = the button acts at once, as before (lib/flows/action-confirm.ts).
  */
-export type StageAction = string | { key: string; label?: string; target?: string }
+export type StageAction = string | { key: string; label?: string; target?: string; confirm?: string; confirmCompany?: string }
 
 export interface StageComponent {
   type: StageComponentType
@@ -163,12 +167,14 @@ export function parseStorageHint(value: unknown): StageBoxStorageHint | undefine
 function parseStageAction(a: unknown): StageAction | null {
   if (typeof a === 'string') return a
   if (a && typeof a === 'object') {
-    const obj = a as { key?: unknown; label?: unknown; target?: unknown }
+    const obj = a as { key?: unknown; label?: unknown; target?: unknown; confirm?: unknown; confirmCompany?: unknown }
     if (typeof obj.key !== 'string') return null
     return {
       key: obj.key,
       ...(typeof obj.label === 'string' ? { label: obj.label } : {}),
       ...(typeof obj.target === 'string' ? { target: obj.target } : {}),
+      ...(typeof obj.confirm === 'string' && obj.confirm.trim() ? { confirm: obj.confirm } : {}),
+      ...(typeof obj.confirmCompany === 'string' && obj.confirmCompany.trim() ? { confirmCompany: obj.confirmCompany } : {}),
     }
   }
   return null
