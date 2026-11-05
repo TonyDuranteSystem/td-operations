@@ -6,7 +6,10 @@ import { resolveThreadTitle } from "@/lib/team/thread-title"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { listAllAuthUsers, findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { assertThreadAccess } from "@/lib/team/groups"
-import { getMcpAuthContext } from "@/lib/mcp/auth-context"
+import { callerIsOwner, getMcpAuthContext } from "@/lib/mcp/auth-context"
+import { attachMyFilesToChat, removeChatCopies } from "@/lib/team/attach-from-my-files"
+import { splitAttachmentRefs } from "@/lib/team/attach-from-my-files-rules"
+import type { ChatAttachment } from "@/lib/types"
 
 const PRIVATE_DENIED = "❌ That is a private chat (a direct message or a group) and I could not confirm you are in it, so I will not read it."
 
@@ -19,8 +22,9 @@ async function refusePrivateChat(threadId: string): Promise<string | null> {
 }
 
 const attachmentSchema = z.object({
-  url: z.string().describe("File URL — must already be hosted on our own Storage (e.g. from portal_chat_attach_file). An off-site URL is rejected."),
-  name: z.string().describe("Display filename shown on the attachment chip."),
+  url: z.string().optional().describe("A file ALREADY on our own Storage (its public link). An off-site link is rejected. Give this OR my_files_file_id, not both."),
+  my_files_file_id: z.string().uuid().optional().describe("The id (from my_files_list) of a file in Antonio's My files › \"From Claude\" folder. The system copies it into Team Chat's own file storage and attaches it. Owner session only."),
+  name: z.string().optional().describe("Display filename shown on the attachment chip. Required with url; with my_files_file_id the file's own name is used."),
   mime_type: z.string().optional(),
   size: z.number().optional(),
 })
@@ -44,7 +48,10 @@ Target — provide EXACTLY ONE:
 
 ANSWERING A SPECIFIC BUG — add root_id: the answer lands INSIDE that bug's own thread instead of as a new message in the channel, and the teammate's notification opens the bug. ALWAYS prefer this when replying about a bug someone already opened; a bare channel post detaches the answer from the bug it belongs to. Get the root id from team_chat_read_thread (the link Antonio pasted carries it). Cannot be combined with dm_user_id.
 
-ATTACHING A FILE — pass attachments (same shape as portal_chat_send). Every url must already be hosted on our own Storage — an arbitrary external link is rejected, and a plain link pasted into the message text does NOT render as a real attachment chip. To get a file onto our Storage first, use portal_chat_attach_file (source='drive'/'gmail'/'url'/'supabase_storage') — it returns a url safe to pass here even though its name says "portal".
+ATTACHING A FILE — pass attachments (up to 5). A plain link pasted into the message text does NOT render as a real attachment chip. Two ways, one per attachment:
+- my_files_file_id: a file in Antonio's My files › "From Claude" folder (put it there with my_files_write or my_files_save, or he drops it there; get its id from my_files_list). The system copies it into Team Chat's own file storage and attaches it in this same call. Owner session only; only files inside "From Claude"; up to 20 MB; web pages, scripts and programs are refused. The attached file opens by link without a login, the same as a file added with the paperclip.
+- url: a file ALREADY on our own Storage. An arbitrary external link is rejected. (portal_chat_attach_file does NOT work for this: it returns a client-portal link that is rejected here.)
+In the draft you show Antonio, list each file by name — attaching one is part of what he approves.
 
 ⚠️ MANDATORY — approval before sending (same rule as gmail_send): SHOW THE FULL DRAFT (target + exact message) in chat and WAIT for Antonio's explicit approval ("send it" / "go") before calling this tool. A general "tell Luca about X" is NOT approval — show the draft first. Never call this on the first turn that proposes the message.`,
     {
@@ -53,17 +60,37 @@ ATTACHING A FILE — pass attachments (same shape as portal_chat_send). Every ur
       dm_user_id: z.string().uuid().optional().describe("Staff user UUID to DM as Claude. Provide exactly one target."),
       root_id: z.string().uuid().optional().describe("Root message UUID of an existing thread — answer INSIDE that bug/topic rather than posting a new message into the channel. Must belong to the targeted channel."),
       message: z.string().describe('Message body. @mention staff (e.g. "@Luca") to push them.'),
-      attachments: z.array(attachmentSchema).optional().describe("Real file attachments (rendered as chips, not text links). Every url must already be on our own Storage — see portal_chat_attach_file."),
+      attachments: z.array(attachmentSchema).optional().describe("Real file attachments (rendered as chips, not text links), up to 5. Each is EITHER a my_files_file_id (a file in My files › From Claude) OR a url already on our own Storage."),
     },
     async ({ channel, thread_id, dm_user_id, root_id, message, attachments }) => {
+      // files copied from My files for THIS post: removed again if the post does not happen
+      let copiedPaths: string[] = []
       try {
+        // Sort the attachment slots first: ready links stay as they are, My files ids are checked and copied (owner session only).
+        let finalAttachments: ChatAttachment[] | undefined
+        if (attachments && attachments.length > 0) {
+          const split = splitAttachmentRefs(attachments)
+          if (split.ok === false) return { content: [{ type: "text" as const, text: `❌ Could not post to team chat: ${split.error}` }] }
+          let copied: ChatAttachment[] = []
+          if (split.fileIds.length > 0) {
+            if (!callerIsOwner()) {
+              return { content: [{ type: "text" as const, text: "❌ Could not post to team chat: attaching a My files file only works for a session signed in as the owner." }] }
+            }
+            const ctx = getMcpAuthContext()
+            const made = await attachMyFilesToChat(split.fileIds, { method: ctx?.method ?? "unknown", email: ctx?.email ?? "" })
+            if (made.ok === false) return { content: [{ type: "text" as const, text: `❌ Could not post to team chat: ${made.error}` }] }
+            copied = made.attachments
+            copiedPaths = made.paths
+          }
+          finalAttachments = [...split.links, ...copied]
+        }
         // Who is dictating this send: the static Claude Code key maps to the
         // configured operator (Antonio); an OAuth connector session maps to its
         // own user; unknown maps to null = everyone notified (council rule —
         // see lib/mcp/auth-context.ts). The stamp silences ONLY that person's
         // push/toast/unread for their own dictated message.
         const { actingEmailForTeamChat } = await import("@/lib/mcp/auth-context")
-        const result = await postTeamMessage({ channel, thread_id, dm_user_id, root_id, message, attachments, on_behalf_of: actingEmailForTeamChat() })
+        const result = await postTeamMessage({ channel, thread_id, dm_user_id, root_id, message, attachments: finalAttachments, on_behalf_of: actingEmailForTeamChat() })
         const who = result.mentioned_user_ids.length
           ? ` (pushed ${result.mentioned_user_ids.length} mentioned teammate${result.mentioned_user_ids.length > 1 ? "s" : ""})`
           : ""
@@ -76,6 +103,8 @@ ATTACHING A FILE — pass attachments (same shape as portal_chat_send). Every ur
           ],
         }
       } catch (e) {
+        // the post did not happen, so the copies made for it are not needed
+        await removeChatCopies(copiedPaths)
         return {
           content: [{ type: "text" as const, text: `❌ Could not post to team chat: ${e instanceof Error ? e.message : String(e)}` }],
         }
