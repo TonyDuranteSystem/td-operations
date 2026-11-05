@@ -217,6 +217,20 @@ export async function recordPaidCall(params: {
     if (creditErr) throw new Error(`paid-call: credit note activation failed: ${creditErr.message}`)
   }
 
+  // The department, on rows that ALREADY existed. createTDInvoice writes it only in the INSERT, so a row it simply returns (a person confirmed this same Stripe
+  // payment by hand before the automatic step ran, or this is a retry) or an activated credit reused above never got it. Stamp both rows here — only where nothing
+  // is stored yet, so a row already filed under a department is never moved. A failure is loud: the settle step waits, retries and reports it, rather than
+  // leaving a marketing invoice under TD clients without a word.
+  if (departmentEntryId) {
+    // eslint-disable-next-line no-restricted-syntax -- department bookkeeping on the invoice/credit rows of this paid call; not a client/tier field.
+    const { error: deptErr } = await supabaseAdmin
+      .from("payments")
+      .update({ department_entry_id: departmentEntryId })
+      .in("id", [invoice.paymentId, credit.paymentId])
+      .is("department_entry_id", null)
+    if (deptErr) throw new Error(`paid-call: could not file the invoice and credit note under their department: ${deptErr.message}`)
+  }
+
   return {
     contactId: contact.id,
     contactCreated: contact.created,

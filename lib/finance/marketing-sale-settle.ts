@@ -50,8 +50,14 @@ async function park(feedId: string, reason: string): Promise<MarketingSettleResu
 }
 
 /** A step failed and will be tried again on the next run — but only a few times: after that the row is parked with the reason (and so is visible to Antonio, not stuck first in line forever). */
-async function failTry(feedId: string, feed: Record<string, any>, error: string, opts: { count?: boolean } = {}): Promise<MarketingSettleResult> { // eslint-disable-line @typescript-eslint/no-explicit-any
-  if (opts.count === false) return { matched: false, error }
+export async function failTry(feedId: string, feed: Record<string, any>, error: string, opts: { count?: boolean } = {}): Promise<MarketingSettleResult> { // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (opts.count === false) {
+    // A wait that is not the payment's fault (a broken setup list): the try is NOT counted, but the reason is written on the row so a person who opens it
+    // can see why it is still unsettled. Not rewritten when the row already says the same thing (this runs every few minutes); cleared when the row is matched.
+    const prev = (feed.review_metadata as { marketing_settle_waiting?: { reason?: unknown } } | null)?.marketing_settle_waiting
+    if (prev?.reason !== error) await updateFeed(feedId, { review_metadata: { marketing_settle_waiting: { reason: error, at: new Date().toISOString() } } }, "marketing-sale:waiting")
+    return { matched: false, error }
+  }
   const tries = Number((feed.review_metadata as { marketing_settle_tries?: unknown } | null)?.marketing_settle_tries ?? 0) + 1
   if (tries >= MAX_SETTLE_TRIES) return park(feedId, `could not be settled after ${tries} tries: ${error}`)
   await updateFeed(feedId, { review_metadata: { marketing_settle_tries: tries, marketing_settle_last_error: error } }, "marketing-sale:try")
@@ -163,7 +169,7 @@ async function settleWithRef(feedId: string, feed: Record<string, any>, ref: Mar
   const note = `TD Marketing sale — ${l.full_name ?? "lead"}: matched to invoice ${invoice.invoiceNumber} and to the sale; the card moved to Paid.`
   const wrote = await updateFeed(feedId, {
     status: "matched", matched_payment_id: invoice.invoiceId, match_confidence: "retroactive", matched_at: new Date().toISOString(), matched_by: "auto",
-    review_metadata: { ...auditLinkMetadata("payment_intent", note), marketing_sale: { sale_id: s.id, marketing_lead_id: l.id, matched_at: new Date().toISOString() } },
+    review_metadata: { ...auditLinkMetadata("payment_intent", note), marketing_sale: { sale_id: s.id, marketing_lead_id: l.id, matched_at: new Date().toISOString() }, marketing_settle_waiting: null },
   }, "marketing-sale:matched")
   if (!wrote.ok) return failTry(feedId, feed, `The sale was settled but the Bank Feed row could not be marked: ${wrote.error ?? "unknown"}`)
 

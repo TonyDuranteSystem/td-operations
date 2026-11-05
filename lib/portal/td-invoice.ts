@@ -122,7 +122,7 @@ export interface TDInvoiceInput {
   /**
    * The invoice's DEPARTMENT: a row id of the catalog `invoice_departments` (see lib/invoices/departments.ts). Leave it out for the default department
    * (TD clients): a default invoice never names the column, so an empty value means "TD clients" for ever. Pass it only for another department (the
-   * invoice + credit note of a TD Marketing sale). Written in the INSERT itself, so it is part of every NEW row. A row that already exists and is simply returned by an idempotent retry (findByIdempotencyKey, or the unique-violation winner) is NOT changed: rows made before this existed are tagged by the step-2 backfill.
+   * invoice + credit note of a TD Marketing sale). Written in the INSERT itself, so it is part of every NEW row. A row that already exists and is simply returned by an idempotent retry (findByIdempotencyKey, or the unique-violation winner) is NOT changed here (recordPaidCall stamps the rows of a department-bearing paid call after the fact; rows made before this existed are tagged by the step-2 backfill).
    */
   department_entry_id?: string | null
   /**

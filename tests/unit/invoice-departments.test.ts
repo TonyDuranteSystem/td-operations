@@ -104,12 +104,26 @@ describe("the switches", () => {
 
 // ───────── a paid TD Marketing call stamps the invoice AND its credit note ─────────
 const createTDInvoice = vi.fn()
+// What the fake database was asked to do: every update with the filters that came with it, and what a read for an activated credit answers.
+type Write = { payload: Record<string, unknown>; ids?: unknown; isNull?: string }
+let writes: Write[] = []
+let activatedRow: unknown = null
+let deptWriteError: { message: string } | null = null
 function builder() {
+  let payload: Record<string, unknown> | null = null
+  const rec: Write = { payload: {} }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const b: any = {
-    select: () => b, update: () => b, eq: () => b, neq: () => b, limit: () => b,
-    maybeSingle: () => Promise.resolve({ data: null, error: null }),
-    then: (res: (v: unknown) => unknown) => Promise.resolve({ data: null, error: null }).then(res),
+    select: () => b, eq: () => b, neq: () => b, limit: () => b,
+    update: (p: Record<string, unknown>) => { payload = p; rec.payload = p; return b },
+    in: (_col: string, ids: unknown) => { rec.ids = ids; return b },
+    is: (col: string) => { rec.isNull = col; return b },
+    maybeSingle: () => Promise.resolve({ data: activatedRow, error: null }),
+    then: (res: (v: unknown) => unknown) => {
+      if (payload) writes.push(rec)
+      const error = payload && "department_entry_id" in payload ? deptWriteError : null
+      return Promise.resolve({ data: null, error }).then(res)
+    },
   }
   return b
 }
@@ -130,6 +144,7 @@ const params = {
 
 describe("recordPaidCall + department", () => {
   beforeEach(() => {
+    writes = []; activatedRow = null; deptWriteError = null
     createTDInvoice.mockReset()
     createTDInvoice
       .mockResolvedValueOnce({ paymentId: "p-inv", invoiceNumber: "INV-1", expenseId: "", total: 397, status: "Paid" })
@@ -142,6 +157,31 @@ describe("recordPaidCall + department", () => {
     expect(createTDInvoice.mock.calls[1][0].idempotency_key).toMatch(/:credit$/)
     expect(createTDInvoice.mock.calls[0][0].department_entry_id).toBe(MARKETING_ID)
     expect(createTDInvoice.mock.calls[1][0].department_entry_id).toBe(MARKETING_ID)
+  })
+  const deptWrites = () => writes.filter(w => "department_entry_id" in w.payload)
+  it("rows that ALREADY existed (a person confirmed the same Stripe payment by hand first) are stamped too, and only where nothing is stored yet", async () => {
+    await recordPaidCall({ ...params, departmentEntryId: MARKETING_ID })
+    expect(deptWrites()).toHaveLength(1)
+    expect(deptWrites()[0].payload).toEqual({ department_entry_id: MARKETING_ID })
+    expect(deptWrites()[0].ids).toEqual(["p-inv", "p-cr"])
+    expect(deptWrites()[0].isNull).toBe("department_entry_id")
+  })
+  it("an activated credit reused on a redelivery is stamped as well (createTDInvoice is not called for it)", async () => {
+    activatedRow = { id: "p-cr-old", invoice_number: "CN-9" }
+    createTDInvoice.mockReset()
+    createTDInvoice.mockResolvedValueOnce({ paymentId: "p-inv", invoiceNumber: "INV-1", expenseId: "", total: 397, status: "Paid" })
+    const r = await recordPaidCall({ ...params, departmentEntryId: MARKETING_ID })
+    expect(createTDInvoice).toHaveBeenCalledTimes(1)
+    expect(r.creditId).toBe("p-cr-old")
+    expect(deptWrites()[0].ids).toEqual(["p-inv", "p-cr-old"])
+  })
+  it("a failed stamp is an error (the settle step then waits and retries), never a silent unstamped marketing invoice", async () => {
+    deptWriteError = { message: "boom" }
+    await expect(recordPaidCall({ ...params, departmentEntryId: MARKETING_ID })).rejects.toThrow(/could not file the invoice and credit note under their department: boom/)
+  })
+  it("no department: nothing is written about departments", async () => {
+    await recordPaidCall(params)
+    expect(deptWrites()).toHaveLength(0)
   })
   it("without a department (every other paid call: Calendly, bank attach) neither row names the column", async () => {
     await recordPaidCall(params)
