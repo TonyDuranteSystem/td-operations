@@ -8,7 +8,7 @@ import { getMarketingSetting } from "@/lib/marketing/settings"
 import { getTeamLead } from "@/lib/marketing/leads-read"
 import { loadPrefsAndTakers } from "@/lib/marketing/time-prefs-server"
 import { resolveCallHours, sellerForLead } from "@/lib/marketing/time-prefs"
-import { ENDS_CALL, leadActionSchema, planLeadAction, type ActionSettings, type Actor, type LeadActionInput, type LeadFacts } from "@/lib/marketing/lead-actions"
+import { ENDS_CALL, leadActionSchema, planLeadAction, sellerOf, type ActionSettings, type Actor, type LeadActionInput, type LeadFacts } from "@/lib/marketing/lead-actions"
 
 export type ActionResult = { ok: true } | { ok: false; status: 400 | 404 | 409 | 500; error: string; code?: "CALL_STANDS"; callAt?: string }
 
@@ -60,7 +60,7 @@ export async function applyLeadAction(
   // two leads must not hold the same slot with the same seller: checked for a call booked or moved from a person's page (the client's booking link has its own slot rules)
   const newAt = opts.fromClientLink ? null : input.action === "appointment" && input.at !== null && input.replaces !== undefined ? input.at : input.action === "reschedule" && input.target === "appointment" ? input.at : null
   if (newAt !== null && !Number.isNaN(Date.parse(newAt))) {
-    const taken = await slotTaken(db, teamId, lead.id, facts.claimed_by, Date.parse(newAt))
+    const taken = await slotTaken(db, teamId, lead.id, facts.claimed_by ?? actor.id, Date.parse(newAt), endedStatuses(settings))
     if (taken === null) return { ok: false, status: 500, error: "Could not check the call. Please try again." }
     facts.slot_taken = taken
   }
@@ -82,24 +82,28 @@ export async function applyLeadAction(
   return { ok: true }
 }
 
+/** the stages that put a lead aside: a call left on such a lead (older data) no longer holds a slot */
+const endedStatuses = (s: ActionSettings): ReadonlySet<string> => new Set([s.outcomeStages.not_in_target, sellerOf(s).archived, sellerOf(s).not_ready, sellerOf(s).not_closed])
+
 /** Two leads must not hold the same slot on the same seller's calendar: is there another lead whose call STANDS (its newest booking line has a time) within one slot of `atMs` on the calendar this lead's call lands on? The calendar is the one of `sellerForLead` (the lead's picker when he takes calls, else the first person who takes calls), the same rule the Calendar and the Google write use. `null` = the check itself failed. */
-async function slotTaken(db: Db, teamId: string, leadId: string, claimedBy: string | null, atMs: number): Promise<boolean | null> {
+async function slotTaken(db: Db, teamId: string, leadId: string, calendarFor: string, atMs: number, ended: ReadonlySet<string>): Promise<boolean | null> {
   const day = 24 * 3600_000
   // booking lines near that time (a wide window, the exact test is below: stored times may be written with different offsets)
   const { data: near, error } = await db.from("marketing_lead_events").select("lead_id, data").eq("kind", "appointment").gte("data->>at", new Date(atMs - day).toISOString()).lte("data->>at", new Date(atMs + day).toISOString())
   if (error) return null
   const ids = Array.from(new Set(((near ?? []) as Array<{ lead_id: string }>).map(e => e.lead_id).filter(id => id !== leadId)))
   if (ids.length === 0) return false
-  const { data: others, error: lErr } = await db.from("marketing_leads").select("id, claimed_by").eq("team_id", teamId).in("id", ids)
+  const { data: others, error: lErr } = await db.from("marketing_leads").select("id, claimed_by, status").eq("team_id", teamId).in("id", ids)
   if (lErr) return null
   if ((others ?? []).length === 0) return false
   // whose calendar each call lands on, and that seller's slot length (only looked up now that another call is near)
   let takers: Awaited<ReturnType<typeof loadPrefsAndTakers>>["takers"] = [], callHours: Record<string, unknown> = {}
   try { const l = await loadPrefsAndTakers(teamId); takers = l.takers; callHours = l.prefs.callHours as Record<string, unknown> } catch { /* nobody known: every call counts as the same calendar */ }
   const calendarOf = (claimed: string | null) => sellerForLead(takers, claimed)?.userId ?? null
-  const mine = calendarOf(claimedBy)
+  const mine = calendarOf(calendarFor)
   const slot = resolveCallHours((mine ? callHours[mine] : undefined) as Parameters<typeof resolveCallHours>[0]).slot
-  for (const o of others as Array<{ id: string; claimed_by: string | null }>) {
+  for (const o of others as Array<{ id: string; claimed_by: string | null; status?: string }>) {
+    if (o.status !== undefined && ended.has(o.status)) continue // a lead put aside (archived, not in target, not ready, not closed) before calls were held back: its leftover call is a ghost, not a real booking
     if (calendarOf(o.claimed_by) !== mine) continue // another seller's calendar
     // does that lead's call still stand? only its newest booking line says
     const { data: evs, error: eErr } = await db.from("marketing_lead_events").select("data, created_at").eq("lead_id", o.id).eq("kind", "appointment").order("created_at", { ascending: false }).order("id", { ascending: false }).limit(1)

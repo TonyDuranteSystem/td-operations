@@ -377,6 +377,23 @@ describe("a result while a call is still ahead: the person is warned, nothing is
       db.rows("marketing_leads")[0].claimed_by = null
       expect(await applyLeadAction(db as never, "T1", A, move, owner, full, NOW)).toMatchObject({ ok: false, status: 409 })
     })
+    it("a call left on a lead that was put aside (older data: archived, not in target, not ready, not closed) is a ghost and does not hold the slot", async () => {
+      for (const status of ["archived", "not_in_target", "not_ready", "not_closed"]) {
+        const db = mk(FUTURE)
+        db.rows("marketing_leads")[1].status = status
+        expect(await book(db, FUTURE)).toEqual({ ok: true })
+      }
+      const live = mk(FUTURE); live.rows("marketing_leads")[1].status = "closed" // Link sent: the call is real
+      expect(await book(live, FUTURE)).toMatchObject({ ok: false, status: 409 })
+    })
+    it("an unpicked lead booked by a seller lands on THAT seller's calendar, so only his calls block it", async () => {
+      const other = { id: "u-other-seller", email: "o@x.com", role: "member" as const }
+      const bookAsOther = (db: FakeDb) => applyLeadAction(db as never, "T1", A, { action: "appointment", at: FUTURE, replaces: null }, other, full, NOW)
+      const onRocco = mk(FUTURE, "u-owner"); onRocco.rows("marketing_leads")[0].claimed_by = null
+      expect(await bookAsOther(onRocco)).toEqual({ ok: true }) // Rocco's call does not block the other seller's slot
+      const onOther = mk(FUTURE, "u-other-seller"); onOther.rows("marketing_leads")[0].claimed_by = null
+      expect(await bookAsOther(onOther)).toMatchObject({ ok: false, status: 409 })
+    })
     it("the client's own booking and move through the link are never held to this check", async () => {
       const db = mk(FUTURE)
       expect(await applyLeadAction(db as never, "T1", A, { action: "appointment", at: FUTURE }, owner, full, NOW)).toEqual({ ok: true })
