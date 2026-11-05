@@ -8,7 +8,7 @@
  *   - metadata.sort_order = the order of the switches on the Finance screen.
  * Only a NON-default department is stored on an invoice (payments.department_entry_id); the default is "nothing stored".
  *
- * A broken catalog FAILS LOUD: zero or two defaults, or an origin nobody owns, throws a DepartmentConfigError. The caller must show the reason and retry; it
+ * A broken catalog FAILS LOUD: zero or two defaults, or an origin nobody (or two departments) owns, throws a DepartmentConfigError. The caller must show the reason and retry; it
  * must never file the invoice under a department by guessing. Nothing here is cached: one tiny read, and an error is never remembered as "no department".
  */
 import { listEntries, type CatalogEntry } from "@/lib/catalog/framework"
@@ -48,13 +48,13 @@ export function pickDefaultDepartment<T extends DepartmentEntry>(entries: readon
 
 /**
  * The department that owns an invoice origin: an ACTIVE department whose metadata.origins lists it. Nobody owning it throws (the invoice would otherwise fall
- * back to the default without a word); two owners take the oldest one, deterministically (the caller may log it).
+ * back to the default without a word); two owners throw too (an origin listed on the default department as well would otherwise be filed under it silently).
  */
 export function pickDepartmentForOrigin<T extends DepartmentEntry>(entries: readonly T[], origin: string): T {
   const owners = entries.filter(e => e.status === "active" && originsOf(e).includes(origin))
   if (owners.length === 0) throw new DepartmentConfigError(`no active invoice department owns the origin "${origin}" (metadata.origins)`)
-  if (owners.length === 1) return owners[0]
-  return [...owners].sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? "") || a.slug.localeCompare(b.slug))[0]
+  if (owners.length > 1) throw new DepartmentConfigError(`${owners.length} active invoice departments claim the origin "${origin}" (${owners.map(e => e.slug).join(", ")}); exactly one may own it`)
+  return owners[0]
 }
 
 /** What to STORE on an invoice made for this origin: the owning department's id, or null when the owner is the default (nothing is stored for the default). */

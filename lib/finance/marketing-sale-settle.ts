@@ -124,7 +124,11 @@ async function settleWithRef(feedId: string, feed: Record<string, any>, ref: Mar
   try {
     departmentEntryId = await departmentIdToStoreForOrigin(INVOICE_ORIGINS.marketingSale)
   } catch (e) {
-    return failTry(feedId, feed, `Could not find the department for TD Marketing invoices: ${e instanceof Error ? e.message : String(e)}`)
+    // NOT counted (count: false): this is a setup problem (the migration / the catalog), not a problem with this payment. Counting it would park a PAID customer's
+    // payment for a person after ~10 minutes and the later fix would never reach it. Uncounted, the payment waits and settles by itself once the catalog answers
+    // (a payment older than LABELLED_MAX_AGE_DAYS is left for a person, as always).
+    console.error(`[marketing-sale-settle] invoice departments catalog problem — payment ${feedId} is waiting: ${e instanceof Error ? e.message : String(e)}`)
+    return failTry(feedId, feed, `The invoice departments list is missing or broken, so this payment is waiting and has not been invoiced yet: ${e instanceof Error ? e.message : String(e)}`, { count: false })
   }
 
   // 2. The invoice + the credit (idempotent on the Stripe session).

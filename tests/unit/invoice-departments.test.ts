@@ -50,10 +50,10 @@ describe("the department that owns an origin", () => {
   it("a RETIRED owner does not count", () => {
     expect(() => pickDepartmentForOrigin([td(), mk({ status: "deprecated" })] as never, "marketing_sale")).toThrow(DepartmentConfigError)
   })
-  it("two owners: the oldest wins, deterministically, whatever the input order", () => {
-    const newer = mk({ id: "33333333-3333-3333-3333-333333333333", slug: "aaa_newer", created_at: "2026-12-01T00:00:00Z" })
-    expect(pickDepartmentForOrigin([newer, mk(), td()] as never, "marketing_sale").slug).toBe("td_marketing")
-    expect(pickDepartmentForOrigin([td(), mk(), newer] as never, "marketing_sale").slug).toBe("td_marketing")
+  it("two owners of one origin fail loud (a default department that ALSO lists the origin must not win silently)", () => {
+    const alsoOnDefault = td({ metadata: { is_default: true, origins: ["marketing_sale"] } })
+    expect(() => pickDepartmentForOrigin([alsoOnDefault, mk()] as never, "marketing_sale")).toThrow(/2 active invoice departments claim the origin "marketing_sale" \(td_clients, td_marketing\)/)
+    expect(() => departmentIdToStore([mk(), alsoOnDefault] as never, "marketing_sale")).toThrow(DepartmentConfigError)
   })
   it("malformed metadata (no origins, an origins that is not a list) owns nothing and does not crash", () => {
     expect(() => pickDepartmentForOrigin([td(), mk({ metadata: { origins: "marketing_sale" } })] as never, "marketing_sale")).toThrow(DepartmentConfigError)
@@ -154,12 +154,21 @@ describe("recordPaidCall + department", () => {
 import { readFileSync } from "node:fs"
 describe("guard: the TD Marketing settle step cannot forget the department", () => {
   const src = readFileSync("lib/finance/marketing-sale-settle.ts", "utf8")
-  it("asks the catalog which department owns a marketing sale (never a hardcoded slug) and passes it to recordPaidCall", () => {
-    expect(src).toMatch(/departmentIdToStoreForOrigin\(INVOICE_ORIGINS\.marketingSale\)/)
-    expect(src).toMatch(/recordPaidCall\(\{[\s\S]*?\bdepartmentEntryId\b[\s\S]*?\}\)/)
+  const lookup = src.indexOf("departmentIdToStoreForOrigin(INVOICE_ORIGINS.marketingSale)")
+  const call = src.indexOf("recordPaidCall({")
+  it("asks the catalog which department owns a marketing sale (never a hardcoded name), BEFORE it creates anything", () => {
+    expect(lookup).toBeGreaterThan(0)
+    expect(call).toBeGreaterThan(lookup)
     expect(src).not.toMatch(/td_marketing|td_clients/)
   })
-  it("a catalog problem stops the step with a reason and a retry, never an invoice under the default", () => {
-    expect(src).toMatch(/Could not find the department for TD Marketing invoices/)
+  it("hands the answer to recordPaidCall as the departmentEntryId argument (not null, not elsewhere)", () => {
+    const callBody = src.slice(call, src.indexOf("})", call))
+    expect(callBody).toMatch(/\n\s+departmentEntryId,\n/)
+  })
+  it("a catalog problem is caught between the lookup and the creation, and the row WAITS: the try is not counted, so it can never park a paid payment", () => {
+    const between = src.slice(lookup, call)
+    expect(between).toMatch(/catch \(e\)/)
+    expect(between).toMatch(/failTry\([^\n]*\{ count: false \}\)/)
+    expect(between).toMatch(/waiting and has not been invoiced yet/)
   })
 })
