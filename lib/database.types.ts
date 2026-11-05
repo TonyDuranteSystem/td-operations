@@ -17012,6 +17012,24 @@ export type Database = {
         }
         Relationships: []
       }
+      staff_menu_layouts: {
+        Row: {
+          auth_user_id: string
+          layout: Json
+          updated_at: string
+        }
+        Insert: {
+          auth_user_id: string
+          layout: Json
+          updated_at?: string
+        }
+        Update: {
+          auth_user_id?: string
+          layout?: Json
+          updated_at?: string
+        }
+        Relationships: []
+      }
       staff_note_replies: {
         Row: {
           author_name: string | null
