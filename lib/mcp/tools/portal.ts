@@ -1312,6 +1312,7 @@ Supports both:
             body: msgText.slice(0, 100),
             url: "/portal-chats?view=internal",
             tag: `internal-thread-${threadId}`,
+            alertKind: "client_thread_message",
           })
         } catch {
           // Push notification failure is non-critical

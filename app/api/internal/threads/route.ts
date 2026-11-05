@@ -160,6 +160,7 @@ export async function POST(request: NextRequest) {
         body: title || firstMessage.slice(0, 100),
         url: `/portal-chats?view=internal`,
         tag: `internal-thread-${thread.id}`,
+        alertKind: account_id || contact_id ? 'client_thread_message' : 'talk_room_message',
       })
     }
   } catch {

@@ -39,7 +39,7 @@ export async function POST(
   // Verify thread exists
   const { data: thread } = await supabaseAdmin
     .from('internal_threads')
-    .select('id, account_id')
+    .select('id, account_id, contact_id')
     .eq('id', threadId)
     .single()
 
@@ -100,6 +100,7 @@ export async function POST(
         body,
         url: `/portal-chats?view=internal`,
         tag: `internal-thread-${threadId}`,
+        alertKind: 'client_thread_message',
       })
     } else {
       // Team general thread — "Antonio: message" or "Luca: message"
@@ -108,6 +109,8 @@ export async function POST(
         body,
         url: `/team-chat`,
         tag: `team-chat-${threadId}`,
+        // a thread tied to a contact (not an account) is still a client's thread
+        alertKind: thread.contact_id ? 'client_thread_message' : 'talk_room_message',
       })
     }
   } catch {

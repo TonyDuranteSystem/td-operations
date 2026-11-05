@@ -1,6 +1,7 @@
 import webpush from 'web-push'
 import { routeAdminSubscriptions } from '@/lib/push/route-subscriptions'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import type { StaffAlertKind } from '@/lib/push/alert-kinds'
 
 // Status codes that mean the push subscription is permanently dead and
 // must be removed. Excludes 408 (timeout) and 429 (rate-limit) — those
@@ -23,6 +24,12 @@ type StoredSubscription = {
  * standalone team chat app, receives direct messages and nothing else) and is never sent to the browser.
  */
 type PushPayload = { title: string; body: string; url?: string; tag?: string; dm?: boolean }
+
+/**
+ * What a STAFF alert must carry: the label `alertKind` (lib/push/alert-kinds.ts) says what kind of alert it is. It is required, so a sender that forgets it
+ * does not compile, and it is removed before the web send exactly like `dm`. The phone leg (TD Social, pull request C2) reads it; the browser never sees it.
+ */
+export type StaffPushPayload = PushPayload & { alertKind: StaffAlertKind }
 
 function getVapidKeys() {
   const publicKey = process.env.VAPID_PUBLIC_KEY
@@ -168,7 +175,7 @@ export async function sendPushToContact(
  */
 export async function sendPushToAdminUsers(
   userIds: string[],
-  payload: PushPayload,
+  payload: StaffPushPayload,
 ) {
   const ids = Array.from(new Set((userIds || []).filter(Boolean)))
   if (ids.length === 0) return { sent: 0, failed: 0 }
@@ -188,7 +195,7 @@ export async function sendPushToAdminUsers(
   if (!subscriptions?.length) return { sent: 0, failed: 0 }
 
   // TD Talk gets direct messages only, and a person with TD Talk gets their DMs there instead of the CRM app.
-  const { dm, ...wire } = payload
+  const { dm, alertKind, ...wire } = payload // `alertKind` is a label for the phone leg, never sent to a browser
   const routed = routeAdminSubscriptions(
     subscriptions as unknown as Array<StoredSubscription & { user_id: string; app?: string | null }>,
     dm === true,

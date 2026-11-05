@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
     const send = async (n: { title: string; body: string; tag: string }): Promise<number> => {
       const ids = (await listTeamMembers()).filter(m => m.email && wanted.has(m.email.toLowerCase())).map(m => m.id)
       // dm: true = a person with TD Talk installed is told there, everybody else in the CRM app (once each, never twice)
-      const r = await sendPushToAdminUsers(ids, { title: n.title, body: n.body, url: '/', tag: n.tag, dm: true })
+      const r = await sendPushToAdminUsers(ids, { title: n.title, body: n.body, url: '/', tag: n.tag, dm: true, alertKind: 'supabase_notice' })
       return r?.sent ?? 0
     }
     const r = await runStatusNotices({ feed, region: supabaseRegion(), now: Date.now(), store, send, dryRun })

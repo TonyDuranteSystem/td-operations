@@ -291,6 +291,7 @@ export async function POST(request: NextRequest) {
       url: `/team-chat?thread=${threadId}`,
       tag: `team-share-${threadId}`,
       dm: sharedToDm,
+      alertKind: 'shared_item',
     })
   } catch {
     // non-critical

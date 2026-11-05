@@ -9,6 +9,7 @@ import { parseClientId } from '@/lib/chat/client-id'
 import { triggerClaudeReply } from '@/lib/team/claude-trigger'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import { sendPushToStaffExcept } from '@/lib/team/notify'
+import { talkAlertKind } from '@/lib/push/alert-kinds'
 import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
 import type { ChatAttachment } from '@/lib/types'
 import { NextRequest, NextResponse } from 'next/server'
@@ -215,6 +216,8 @@ export async function POST(
 
   // Notifications (best-effort, never block the send).
   try {
+    // what kind of alert this thread makes: a chat tied to a client is always the client kind (lib/push/alert-kinds.ts)
+    const alertKind = talkAlertKind(thread)
     const preview = message.slice(0, 120) || (attachments?.length ? `📎 ${attachments[0].name}` : card ? '📇 Shared a card' : 'New message')
     // Deep-link: a reply opens the thread pane on its root; a top-level message
     // opens the channel.
@@ -236,7 +239,7 @@ export async function POST(
       // Tagged per THREAD, not per channel: two bugs must not replace each other
       // on the lock screen.
       const tag = rootId ? `team-thread-${rootId}` : `team-channel-${threadId}-${msg.id}`
-      const base = { body: preview, url: threadUrl, tag }
+      const base = { body: preview, url: threadUrl, tag, alertKind }
       // Two pushes, not one: everyone is told, but only the people actually
       // named are told they were named. One broadcast carrying the "mentioned
       // you" title would tell every teammate they had been @named when they had
@@ -266,7 +269,7 @@ export async function POST(
       const others = otherMembers(groupMembers, user.id)
       const toMentioned = others.filter(id => mentionedSet.has(id))
       const toRest = others.filter(id => !mentionedSet.has(id))
-      const base = { body: preview, url: threadUrl, tag: `team-group-${threadId}`, dm: true }
+      const base = { body: preview, url: threadUrl, tag: `team-group-${threadId}`, dm: true, alertKind }
       await Promise.allSettled([
         toMentioned.length > 0 ? sendPushToAdminUsers(toMentioned, { ...base, title: `${displayName} mentioned you · ${groupName}` }) : Promise.resolve(),
         toRest.length > 0 ? sendPushToAdminUsers(toRest, { ...base, title: `${displayName} · ${groupName}` }) : Promise.resolve(),
@@ -277,6 +280,7 @@ export async function POST(
         body: preview,
         url: threadUrl,
         tag: `team-mention-${threadId}`,
+        alertKind,
         dm: thread.thread_type === 'dm', // TD Talk receives direct messages only
       })
     } else if (thread.thread_type === 'dm') {
@@ -287,6 +291,7 @@ export async function POST(
           body: preview,
           url: threadUrl,
           tag: `team-dm-${threadId}`,
+          alertKind,
           dm: true, // TD Talk receives direct messages only (lib/push/route-subscriptions.ts)
         })
       }
@@ -308,6 +313,7 @@ export async function POST(
           body: preview,
           url: threadUrl,
           tag: `team-thread-${rootId}`,
+          alertKind,
         })
       }
     } else if (thread.thread_type === 'discussion' && conversationNotifiesParticipants(isInternalTopic)) {
@@ -341,6 +347,7 @@ export async function POST(
           body: preview,
           url: threadUrl,
           tag: `team-conversation-${threadId}`,
+          alertKind,
         })
       }
     }

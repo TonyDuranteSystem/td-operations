@@ -83,7 +83,7 @@ describe('sendPushToAdminUsers routes by app', () => {
 
   it('a direct message buzzes TD Talk only, and the "dm" hint never reaches the phone', async () => {
     const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
-    const r = await sendPushToAdminUsers(['luca'], { title: 'Antonio', body: 'hi', url: '/team-chat?thread=t1', tag: 'dm', dm: true })
+    const r = await sendPushToAdminUsers(['luca'], { title: 'Antonio', body: 'hi', url: '/team-chat?thread=t1', tag: 'dm', dm: true, alertKind: 'talk_direct_message' })
     expect(r).toEqual({ sent: 1, failed: 0 })
     expect(h.sent.map(s => s.endpoint)).toEqual(['https://push/luca-talk'])
     expect(h.sent[0].payload).toEqual({ title: 'Antonio', body: 'hi', url: '/team-chat?thread=t1', tag: 'dm' })
@@ -91,13 +91,13 @@ describe('sendPushToAdminUsers routes by app', () => {
   })
   it('a channel post buzzes the CRM app only', async () => {
     const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
-    await sendPushToAdminUsers(['luca'], { title: 'Antonio · #td-bug', body: 'x' })
+    await sendPushToAdminUsers(['luca'], { title: 'Antonio · #td-bug', body: 'x', alertKind: 'talk_room_message' })
     expect(h.sent.map(s => s.endpoint)).toEqual(['https://push/luca-crm'])
   })
   it('sends nothing when the only subscription is TD Talk and it is not a direct message', async () => {
     h.subs = [h.subs[1]]
     const { sendPushToAdminUsers } = await import('@/lib/portal/web-push')
-    expect(await sendPushToAdminUsers(['luca'], { title: 't', body: 'b' })).toEqual({ sent: 0, failed: 0 })
+    expect(await sendPushToAdminUsers(['luca'], { title: 't', body: 'b', alertKind: 'general_notification' })).toEqual({ sent: 0, failed: 0 })
     expect(h.sent).toEqual([])
   })
 })
