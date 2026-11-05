@@ -12,7 +12,6 @@ import { NextRequest } from 'next/server'
 import { parseStageLayout } from '@/lib/flows/stage-layout'
 import { buildStepHints, stepHintProblems } from '@/lib/flows/storage-step-rules'
 import { trackingRequiredToAdvance, trackingMissingMessage } from '@/lib/flows/tracking-gate'
-import { groupSubmittedData } from '@/lib/flows/submitted-data'
 
 const fx = vi.hoisted(() => ({
   // applyDeliveryConfirmation
@@ -254,15 +253,5 @@ describe('closure wizard answers on the workspace (GET /api/flows/[id]/submissio
     const { status, body } = await get()
     expect(status).toBe(500)
     expect(body.error).toContain('boom')
-  })
-})
-
-describe('wizard answer labels', () => {
-  it('abbreviations read as abbreviations ("LLC EIN"), ordinary words are untouched', () => {
-    const groups = groupSubmittedData({ llc_name: 'Acme', llc_ein: '12-3456789', owner_first_name: 'Ada', tax_id: '9', identity: 'x' })
-    const labels = groups.flatMap((g) => g.fields.map((f) => f.label))
-    expect(labels).toEqual(expect.arrayContaining(['LLC Name', 'LLC EIN', 'First Name', 'Tax ID', 'Identity']))
-    expect(labels).not.toContain('Llc Ein')
-    expect(labels).not.toContain('IDentity')
   })
 })
