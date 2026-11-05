@@ -38,5 +38,6 @@ export function SwRegister() {
     return () => navigator.serviceWorker.removeEventListener('message', onMessage)
   }, [router])
 
-  return <UpdateBanner swPath="/dashboard-sw.js" />
+  // checkRelease: also tell staff when a newer RELEASE is live (the worker file alone almost never changes — dev job dc629a3d)
+  return <UpdateBanner swPath="/dashboard-sw.js" checkRelease />
 }
