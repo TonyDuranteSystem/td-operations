@@ -9,16 +9,18 @@
 import { createClient } from "@/lib/supabase/server"
 import { getUserDisplayName, isAdmin, isStaffUser } from "@/lib/auth"
 import { normalizeRole } from "@/lib/auth/role-door"
-import { adminMemberContext, resolveMarketingContext } from "@/lib/marketing/guard"
+import { adminMemberContext, resolveMarketingContext, type MarketingContext } from "@/lib/marketing/guard"
 import { hasPermission } from "@/lib/marketing/permissions"
 import type { AppIdentity } from "@/lib/app/tabs"
 
 export interface ResolvedAppIdentity {
   user: { id: string; email: string | null; name: string }
   identity: AppIdentity
+  /** the person's Marketing context, set only when they have a Marketing tab (the counters need it; no second lookup) */
+  marketing?: MarketingContext
 }
 
-async function hasMarketingChat(user: { id: string; email?: string | null }, admin: boolean, role: string): Promise<boolean> {
+async function marketingChatContext(user: { id: string; email?: string | null }, admin: boolean, role: string): Promise<MarketingContext | null> {
   try {
     // an admin works Marketing as an ACTIVE member of a team (no "View as" involved); a marketing login through its own guard; nobody else
     const g = admin
@@ -26,9 +28,9 @@ async function hasMarketingChat(user: { id: string; email?: string | null }, adm
       : role === "marketing"
         ? await resolveMarketingContext()
         : null
-    return !!g && g.ok === true && hasPermission(g.ctx.permissions, "chat")
+    return g && g.ok === true && hasPermission(g.ctx.permissions, "chat") ? g.ctx : null
   } catch {
-    return false
+    return null
   }
 }
 
@@ -38,13 +40,15 @@ export async function resolveAppIdentity(): Promise<ResolvedAppIdentity | null> 
   if (!user) return null
   const role = normalizeRole(user.app_metadata?.role)
   const admin = isAdmin(user)
+  const marketing = await marketingChatContext(user, admin, role)
   return {
     user: { id: user.id, email: user.email ?? null, name: getUserDisplayName(user) },
     identity: {
       authRole: role,
       isAdmin: admin,
       isStaff: isStaffUser(user),
-      marketingChat: await hasMarketingChat(user, admin, role),
+      marketingChat: marketing !== null,
     },
+    ...(marketing ? { marketing } : {}),
   }
 }

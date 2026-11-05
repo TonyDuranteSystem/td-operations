@@ -182,26 +182,48 @@ describe("DELETE /api/marketing/app/devices (remove)", () => {
   })
 })
 
-describe("source guard: the switch is the first thing each route does, and no route takes a person id from the request", () => {
+describe("source guard: the shared gate runs first in every route, and no route takes a person id from the request", () => {
   const read = (p: string) => readFileSync(join(__dirname, "..", "..", p), "utf8")
-  const me = read("app/api/marketing/app/me/route.ts")
-  const devices = read("app/api/marketing/app/devices/route.ts")
+  const gate = read("lib/app/gate.ts")
+  const routes = {
+    me: read("app/api/marketing/app/me/route.ts"),
+    devices: read("app/api/marketing/app/devices/route.ts"),
+    prefs: read("app/api/marketing/app/prefs/route.ts"),
+    seen: read("app/api/marketing/app/seen/route.ts"),
+  }
 
-  it("me: isSocialAppEnabled is awaited before resolveAppIdentity", () => {
-    expect(me.indexOf("isSocialAppEnabled()")).toBeGreaterThan(-1)
-    expect(me.indexOf("isSocialAppEnabled()")).toBeLessThan(me.indexOf("resolveAppIdentity()"))
+  it("the gate checks the switch BEFORE it looks anybody up", () => {
+    expect(gate.indexOf("isSocialAppEnabled()")).toBeGreaterThan(-1)
+    expect(gate.indexOf("isSocialAppEnabled()")).toBeLessThan(gate.indexOf("resolveAppIdentity()"))
   })
 
-  it("devices: the gate (switch, then identity) comes before any parse or write", () => {
-    expect(devices.indexOf("isSocialAppEnabled()")).toBeLessThan(devices.indexOf("resolveAppIdentity()"))
-    expect(devices.indexOf("resolveAppIdentity()")).toBeLessThan(devices.indexOf("parseRegistration("))
-    expect(devices.indexOf("parseRegistration(")).toBeLessThan(devices.indexOf("registerDevice("))
+  it("every handler calls the gate before anything else it does (parse, read or write)", () => {
+    for (const [name, src] of Object.entries(routes)) {
+      expect(src.indexOf("appGate()"), name).toBeGreaterThan(-1)
+      for (const later of ["buildMe(", "parseRegistration(", "parseRemoval(", "parsePrefsPatch(", "markInboxOpened(", "mergePrefs(", "registerDevice(", "removeDevice("]) {
+        const i = src.indexOf(later)
+        if (i > -1) expect(src.indexOf("appGate()"), `${name} ${later}`).toBeLessThan(i)
+      }
+    }
   })
 
-  it("the person written to the list is the session's (g.who.user.id), never a value read from the body", () => {
-    expect(devices).toContain("registerDevice(g.who.user.id,")
-    expect(devices).toContain("removeDevice(g.who.user.id,")
-    expect(devices).not.toMatch(/body\.(userId|user_id)/)
-    expect(devices).not.toMatch(/parsed\.value\.(userId|user_id)/)
+  it("devices: gate, then parse, then write", () => {
+    expect(routes.devices.indexOf("appGate()")).toBeLessThan(routes.devices.indexOf("parseRegistration("))
+    expect(routes.devices.indexOf("parseRegistration(")).toBeLessThan(routes.devices.indexOf("registerDevice("))
+  })
+
+  it("the person written to is the session's (g.who.user.id), never a value read from the body", () => {
+    expect(routes.devices).toContain("registerDevice(g.who.user.id,")
+    expect(routes.devices).toContain("removeDevice(g.who.user.id,")
+    expect(routes.prefs).toContain("mergePrefs(g.who.user.id,")
+    expect(routes.seen).toContain("markInboxOpened(g.who.user.id,")
+    for (const [name, src] of Object.entries(routes)) {
+      expect(src, name).not.toMatch(/body\.(userId|user_id)/)
+      expect(src, name).not.toMatch(/parsed\.value\.(userId|user_id)/)
+    }
+  })
+
+  it("the routes that answer for one person are never cached", () => {
+    for (const name of ["me", "prefs", "seen"] as const) expect(routes[name], name).toContain('export const dynamic = "force-dynamic"')
   })
 })
