@@ -22,7 +22,7 @@ vi.mock("@/lib/supabase-admin", () => {
   return { supabaseAdmin: { from: () => ({ select: () => chain(), delete: () => ({ eq: () => Promise.resolve({ data: null, error: null }) }) }) } }
 })
 
-import { startPhoneLeg, type PhoneAlert } from "@/lib/app/phone-leg"
+import { PHONE_WAIT_MS, startPhoneLeg, waitForPhoneLeg, type PhoneAlert } from "@/lib/app/phone-leg"
 import { marketingRecipientsFrom, staffRecipients, type MemberRow } from "@/lib/app/phone-recipients"
 
 const ROOT = path.resolve(__dirname, "../..")
@@ -52,6 +52,15 @@ describe("startPhoneLeg: the first line of the phone leg", () => {
     expect(live).toHaveBeenCalledWith(A)
   })
 
+  it("a kind that never goes to phones (a channel message) ends the leg BEFORE anything is loaded", async () => {
+    process.env.APNS_KEY_ID = "x"; process.env.APNS_TEAM_ID = "y"; process.env.APNS_PRIVATE_KEY = "z"
+    await startPhoneLeg({ ...A, kind: "talk_room_message", dm: false })
+    await startPhoneLeg({ ...A, kind: "claude_reply", dm: false })
+    expect(live).not.toHaveBeenCalled()
+    await startPhoneLeg({ ...A, kind: "talk_direct_message", dm: true, title: "Luca", body: "hi" })
+    expect(live).toHaveBeenCalledTimes(1)
+  })
+
   it("a sender that throws never makes the leg reject (a failed phone alert must not fail the message that caused it)", async () => {
     process.env.APNS_KEY_ID = "x"; process.env.APNS_TEAM_ID = "y"; process.env.APNS_PRIVATE_KEY = "z"
     const err = vi.spyOn(console, "error").mockImplementation(() => {})
@@ -69,7 +78,7 @@ describe("the two senders call the phone leg first, whatever the web side does",
     sendNotification.mockReset()
     sendNotification.mockResolvedValue({})
     process.env.VAPID_PUBLIC_KEY = "pub"; process.env.VAPID_PRIVATE_KEY = "priv"
-    vi.doMock("@/lib/app/phone-leg", () => ({ startPhoneLeg: startMock }))
+    vi.doMock("@/lib/app/phone-leg", async () => ({ ...(await vi.importActual<typeof import("@/lib/app/phone-leg")>("@/lib/app/phone-leg")), startPhoneLeg: startMock }))
   })
   afterEach(() => { vi.doUnmock("@/lib/app/phone-leg") })
 
@@ -92,9 +101,25 @@ describe("the two senders call the phone leg first, whatever the web side does",
 
   it("staff: the phone leg still runs when the web keys are missing (the early return that used to hide it)", async () => {
     delete process.env.VAPID_PUBLIC_KEY; delete process.env.VAPID_PRIVATE_KEY
+    startMock.mockResolvedValue(undefined)
     const { sendPushToAdminUsers } = await import("@/lib/portal/web-push")
     expect(await sendPushToAdminUsers(["u1"], { title: "T", body: "B", alertKind: "staff_note" })).toEqual({ sent: 0, failed: 0 })
     expect(startMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("the sender never waits longer than the cap for a slow phone leg (it answers its caller anyway)", async () => {
+    vi.useFakeTimers()
+    try {
+      startMock.mockReturnValue(new Promise<void>(() => { /* never finishes */ }))
+      const { sendPushToAdminUsers } = await import("@/lib/portal/web-push")
+      let done = false
+      const p = sendPushToAdminUsers(["u1"], { title: "T", body: "B", alertKind: "staff_note" }).then(r => { done = true; return r })
+      await vi.advanceTimersByTimeAsync(PHONE_WAIT_MS - 100)
+      expect(done).toBe(false)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(done).toBe(true)
+      expect(await p).toEqual({ sent: 1, failed: 0 })
+    } finally { vi.useRealTimers() }
   })
 
   it("staff: the sender waits for the phone leg to finish before it answers", async () => {
@@ -121,6 +146,14 @@ describe("the two senders call the phone leg first, whatever the web side does",
     startMock.mockClear()
     expect(await sendMarketingPush("team1", ["u1"], { title: "T", body: "B", url: "/m", alertKind: "marketing_news" })).toEqual({ sent: 0, failed: 0 })
     expect(startMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("Marketing: the lead of a call alert is passed to the phone leg and never sent to a browser", async () => {
+    startMock.mockResolvedValue(undefined)
+    const { sendMarketingPush } = await import("@/lib/marketing/push")
+    await sendMarketingPush("team1", ["u1"], { title: "T", body: "B", url: "/m", tag: "t", alertKind: "marketing_lead_moved", leadId: "lead-9" })
+    expect(startMock.mock.calls[0][0]).toMatchObject({ kind: "marketing_lead_moved", leadId: "lead-9" })
+    expect(sendNotification.mock.calls[0][1]).toBe(JSON.stringify({ title: "T", body: "B", url: "/m", tag: "t" }))
   })
 
   it("Marketing: nobody to tell = no phone leg", async () => {
@@ -189,5 +222,24 @@ describe("the two web-table pre-checks that would have hidden alerts from a phon
     }
     for (const d of ["app", "lib"]) walk(d)
     expect(offenders).toEqual([])
+  })
+})
+
+describe("waitForPhoneLeg", () => {
+  it("returns as soon as the leg is done, and never rejects", async () => {
+    await expect(waitForPhoneLeg(Promise.resolve("x"), 5000)).resolves.toBeUndefined()
+    await expect(waitForPhoneLeg(Promise.reject(new Error("boom")), 5000)).resolves.toBeUndefined()
+  })
+
+  it("gives up after the cap when the leg is still running", async () => {
+    const t0 = Date.now()
+    await waitForPhoneLeg(new Promise(() => { /* never */ }), 60)
+    const took = Date.now() - t0
+    expect(took).toBeGreaterThanOrEqual(50)
+    expect(took).toBeLessThan(1000)
+  })
+
+  it("the cap is shorter than the leg's own limit, so a caller is never held for the whole 9 s", () => {
+    expect(PHONE_WAIT_MS).toBeLessThanOrEqual(5000)
   })
 })

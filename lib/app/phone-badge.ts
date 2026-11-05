@@ -29,7 +29,8 @@ export async function badgeForUser(userId: string): Promise<number | null> {
     }
     const tabs = tabsFor({ authRole: role, isAdmin: admin, isStaff: isStaffUser(user), marketingChat: marketing !== undefined })
     if (tabs.length === 0) return null
-    const state = await readState(userId).catch(() => null)
+    // a failed read is NOT the same as "no row yet": it would count muted tabs and miss the email baseline, so the number would be wrong. No number is the honest answer.
+    const state = await readState(userId)
     const { badge } = await countTabs({ userId, tabs, mutedTabs: state?.muted_tabs ?? [], inboxOpened: state?.inbox_opened ?? {}, marketing })
     return badge
   } catch {

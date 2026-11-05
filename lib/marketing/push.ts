@@ -6,31 +6,31 @@
 import webpush from "web-push"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { MarketingAlertKind } from "@/lib/push/alert-kinds"
-import { startPhoneLeg } from "@/lib/app/phone-leg"
+import { startPhoneLeg, waitForPhoneLeg } from "@/lib/app/phone-leg"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- newer tables than the generated types
 const db = () => supabaseAdmin as unknown as { from: (t: string) => any }
 const DEAD = new Set([400, 401, 403, 404, 410])
 
 /** `alertKind` is required (lib/push/alert-kinds.ts): what kind of alert this is. It is removed before the web send; the phone leg (TD Social, pull request C2) reads it. */
-export interface MarketingPushPayload { title: string; body: string; url: string; tag?: string; alertKind: MarketingAlertKind; phoneName?: string }
+export interface MarketingPushPayload { title: string; body: string; url: string; tag?: string; alertKind: MarketingAlertKind; phoneName?: string; leadId?: string }
 
 /** Tell these people (by login id) on this team. Never throws: a failed notification must not fail the message that caused it. */
 export async function sendMarketingPush(teamId: string, userIds: readonly string[], payload: MarketingPushPayload): Promise<{ sent: number; failed: number }> {
   const ids = Array.from(new Set(userIds.filter(Boolean)))
   if (ids.length === 0) return { sent: 0, failed: 0 }
-  const { alertKind, phoneName, ...wire } = payload // the label and the lock-screen name are not part of what the browser receives
+  const { alertKind, phoneName, leadId, ...wire } = payload // the label, the lock-screen name and the lead are not part of what the browser receives
   // TD Social phones (pull request C2): starts first, before the early return below, beside the web send; does nothing without the Apple key and the TD Social switch, never throws.
-  const phone = startPhoneLeg({ source: "marketing", teamId, userIds: ids, kind: alertKind, title: payload.title, body: payload.body, url: payload.url, tag: payload.tag, name: phoneName, dm: false })
+  const phone = startPhoneLeg({ source: "marketing", teamId, userIds: ids, kind: alertKind, title: payload.title, body: payload.body, url: payload.url, tag: payload.tag, name: phoneName, dm: false, leadId })
   try {
     return await sendMarketingWeb(ids, teamId, wire)
   } finally {
-    await phone
+    await waitForPhoneLeg(phone)
   }
 }
 
 /** The web send to the team's browsers, unchanged from before the phone leg existed (the same body, now one step down). */
-async function sendMarketingWeb(ids: string[], teamId: string, wire: Omit<MarketingPushPayload, "alertKind" | "phoneName">): Promise<{ sent: number; failed: number }> {
+async function sendMarketingWeb(ids: string[], teamId: string, wire: Omit<MarketingPushPayload, "alertKind" | "phoneName" | "leadId">): Promise<{ sent: number; failed: number }> {
   const pub = process.env.VAPID_PUBLIC_KEY, priv = process.env.VAPID_PRIVATE_KEY
   if (!pub || !priv) return { sent: 0, failed: 0 }
   try {

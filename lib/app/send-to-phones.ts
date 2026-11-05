@@ -28,6 +28,8 @@ export const MAX_PHONES = 60
 export const SEND_TIMEOUT_MS = 5000
 export const LEG_DEADLINE_MS = 9000
 export const CONCURRENCY = 8
+/** A side lookup (a person's mutes, their icon number) gets this long; slower than that it is treated as "unknown" and the alert goes without it. */
+export const SIDE_LOOKUP_MS = 1500
 
 export interface PhoneRow { id: string; user_id: string; token: string; bundle_id: string; apns_env: string }
 
@@ -83,7 +85,7 @@ export async function sendToPhones(alert: PhoneAlert, deps: PhoneDeps): Promise<
   const allowed = (await deps.recipients(alert)).slice(0, MAX_RECIPIENTS)
   if (allowed.length === 0) return empty("no recipients")
   const wanted = tab
-    ? (await Promise.all(allowed.map(async id => ((await deps.mutedTabs(id)).includes(tab) ? null : id)))).filter((id): id is string => id !== null)
+    ? (await Promise.all(allowed.map(async id => ((await withDeadline(deps.mutedTabs(id), SIDE_LOOKUP_MS, [] as string[])).includes(tab) ? null : id)))).filter((id): id is string => id !== null)
     : allowed
   if (wanted.length === 0) return empty("all muted")
 
@@ -94,7 +96,7 @@ export async function sendToPhones(alert: PhoneAlert, deps: PhoneDeps): Promise<
 
   // 7. the icon number per person (each capped inside; null = leave the phone's number as it is)
   const people = Array.from(new Set(phones.map(p => p.user_id)))
-  const badges = new Map<string, number | null>(await Promise.all(people.map(async id => [id, await deps.badge(id).catch(() => null)] as const)))
+  const badges = new Map<string, number | null>(await Promise.all(people.map(async id => [id, await withDeadline(deps.badge(id), SIDE_LOOKUP_MS, null)] as const)))
 
   // 8. send
   let jwt: string
@@ -113,11 +115,19 @@ export async function sendToPhones(alert: PhoneAlert, deps: PhoneDeps): Promise<
     if (!s) { s = deps.connect(host); sessions.set(host, s) }
     return s
   }
+  // the leg's own deadline: past it nothing more is sent (a late alert is worse than none, and the 9 s wrapper cannot cancel work that already started)
+  const deadline = deps.now() + LEG_DEADLINE_MS
+  // Apple's refusal of the key or its "slow down" stops only THAT address (a key scoped to one environment fails there and works on the other)
+  const stoppedHosts = new Set<string>()
+  const hostOf = (env: string): string | null => (env === "development" ? APNS_HOSTS.development : env === "production" ? APNS_HOSTS.production : null)
   const queue = phones.slice()
   const worker = async () => {
     for (;;) {
       const phone = queue.shift()
-      if (!phone || result.stopped) return
+      if (!phone) return
+      if (deps.now() > deadline) { result.stopped = true; return }
+      const host = hostOf(phone.apns_env)
+      if (host && stoppedHosts.has(host)) continue
       const session = sessionFor(phone.apns_env)
       const req = session ? buildApnsRequest({
         deviceToken: phone.token, bundleId, jwt, nowMs: deps.now(),
@@ -138,8 +148,8 @@ export async function sendToPhones(alert: PhoneAlert, deps: PhoneDeps): Promise<
         await deps.revoke(phone.id, `apple_${outcome.reason}`).catch(() => undefined)
       } else {
         result.failed++
-        // a refused key or a "slow down" must never turn into removals: stop the batch, keep every phone
-        if (outcome.kind === "key_problem" || outcome.kind === "slow_down") result.stopped = true
+        // a refused key or a "slow down" must never turn into removals: stop sending to that address, keep every phone
+        if ((outcome.kind === "key_problem" || outcome.kind === "slow_down") && host) { stoppedHosts.add(host); result.stopped = true }
       }
     }
   }
@@ -158,13 +168,14 @@ const db = () => supabaseAdmin as unknown as { from: (t: string) => any }
 
 /** One system alert per hour per server when Apple refuses the key (a 403 means the key or team is wrong; every phone would fail the same way). */
 let lastKeyAlertAt = 0
+let lastBadKeyLogAt = 0
 
 export function liveDeps(): PhoneDeps {
   return {
     key: readApnsKey(),
     isOn: isSocialAppEnabled,
     bundleId: allowedBundleId(currentAppServerEnv()),
-    recipients: a => (a.source === "marketing" ? marketingRecipients(a.teamId ?? "", a.userIds) : staffRecipients(a.userIds)),
+    recipients: a => (a.source === "marketing" ? marketingRecipients(a.teamId ?? "", a.userIds, { kind: a.kind, leadId: a.leadId }) : staffRecipients(a.userIds)),
     mutedTabs: async id => { try { return (await readState(id))?.muted_tabs ?? [] } catch { return [] } },
     phones: async (userIds, bundleId, sinceIso) => {
       const { data, error } = await db().from("social_app_devices").select("id, user_id, token, bundle_id, apns_env")
@@ -189,5 +200,11 @@ export function liveDeps(): PhoneDeps {
 
 /** The real thing, under one overall deadline. Never throws. */
 export async function sendToPhonesLive(alert: PhoneAlert): Promise<PhoneResult> {
-  return withDeadline(sendToPhones(alert, liveDeps()), LEG_DEADLINE_MS, empty("deadline"))
+  const deps = liveDeps()
+  // the three values are set but not usable (a pasted key with quotes, a wrong id): say so once an hour, never print any of them
+  if (!deps.key && Date.now() - lastBadKeyLogAt > 3_600_000) {
+    lastBadKeyLogAt = Date.now()
+    console.error("[social-app] the Apple key values are set but cannot be used (check the key id, the team id and the key text); no phone alerts are sent")
+  }
+  return withDeadline(sendToPhones(alert, deps), LEG_DEADLINE_MS, empty("deadline"))
 }

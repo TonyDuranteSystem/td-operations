@@ -32,6 +32,9 @@ export const NAME_MAX = 40
 export const TITLE_MAX = 60
 export const BODY_MAX = 140
 const GENERIC: PhoneAlertText = { title: "New notification", body: "" }
+/** the two prefixes the TD Talk send route puts in front of a body it builds itself (a file name, a card) when the person typed no text */
+const ATTACHMENT_MARK = String.fromCodePoint(0x1f4ce)
+const CARD_MARK = String.fromCodePoint(0x1f4c7)
 
 /** The TD Social tab an alert belongs to (null = none). A person who muted that tab gets no phone alert for it. */
 export function phoneTabFor(kind: AlertKind): TabId | null {
@@ -41,6 +44,7 @@ export function phoneTabFor(kind: AlertKind): TabId | null {
     case "shared_item":
       return "talk"
     case "client_chat":
+    case "client_share_check":
     case "client_thread_message":
       return "portal"
     case "marketing_lead_chat":
@@ -65,7 +69,12 @@ export function phoneWording(input: WordingInput): PhoneAlertText | null {
   switch (input.kind) {
     case "talk_direct_message": {
       const title = cleanLabel(input.title, TITLE_MAX)
-      return title ? { title, body: cleanLabel(input.body, BODY_MAX) } : GENERIC
+      if (!title) return GENERIC
+      // the web body is typed text, EXCEPT when the message was only a file or a card: then the web code builds it from the FILE NAME, which must never reach a lock screen
+      const raw = typeof input.body === "string" ? input.body : ""
+      if (raw.startsWith(ATTACHMENT_MARK)) return { title, body: "Sent an attachment" }
+      if (raw.startsWith(CARD_MARK)) return { title, body: "Shared a card" }
+      return { title, body: cleanLabel(raw, BODY_MAX) }
     }
     case "talk_room_message":
       return null
@@ -78,6 +87,8 @@ export function phoneWording(input: WordingInput): PhoneAlertText | null {
       return { title: "New message in a client chat", body: "" }
     case "client_chat":
       return { title: `Chat: ${name || "a client"}`, body: "" }
+    case "client_share_check":
+      return { title: "A file was sent to a client", body: "" }
     case "staff_note":
       return { title: "New staff note", body: "" }
     case "approval":
@@ -96,7 +107,8 @@ export function phoneWording(input: WordingInput): PhoneAlertText | null {
     case "marketing_lead_moved":
       return { title: name ? `Chiamata spostata · ${name}` : "Chiamata spostata", body: "" }
     case "marketing_call":
-      return { title: name ? `Nuova chiamata · ${name}` : "Nuova chiamata", body: "" }
+      // one kind covers a call booked, moved and cancelled by the client, so the words must be true for all three
+      return { title: name ? `Aggiornamento sulla chiamata · ${name}` : "Aggiornamento sulla chiamata", body: "" }
     case "marketing_news":
       return { title: "Novità in TD Marketing", body: "" }
     case "general_notification":

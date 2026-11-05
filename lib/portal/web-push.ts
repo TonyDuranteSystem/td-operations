@@ -2,7 +2,7 @@ import webpush from 'web-push'
 import { routeAdminSubscriptions } from '@/lib/push/route-subscriptions'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import type { StaffAlertKind } from '@/lib/push/alert-kinds'
-import { startPhoneLeg } from '@/lib/app/phone-leg'
+import { startPhoneLeg, waitForPhoneLeg } from '@/lib/app/phone-leg'
 
 // Status codes that mean the push subscription is permanently dead and
 // must be removed. Excludes 408 (timeout) and 429 (rate-limit) — those
@@ -193,7 +193,7 @@ export async function sendPushToAdminUsers(
   try {
     return await sendAdminWeb(ids, payload)
   } finally {
-    await phone
+    await waitForPhoneLeg(phone)
   }
 }
 

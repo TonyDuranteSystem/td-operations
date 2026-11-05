@@ -62,7 +62,7 @@ async function notifyMoved(teamId: string, moverId: string, moverEmail: string |
     for (const id of to) { const z = memberZone(prefs, id); byZone.set(z, [...(byZone.get(z) ?? []), id]) }
     const sends = Array.from(byZone, ([zone, ids]) => {
       const text = reschedulePush({ moverName: personName(moverEmail ?? ""), leadName: lead?.full_name || lead?.email || "Lead", from: a.from ?? null, to: new Date(a.at).toISOString(), reason: a.reason }, "en-GB", zone)
-      return sendMarketingPush(teamId, ids, { ...text, url: `/marketing/board?open=${leadId}`, tag: `moved-${leadId}`, alertKind: "marketing_lead_moved", phoneName: lead?.full_name || undefined })
+      return sendMarketingPush(teamId, ids, { ...text, url: `/marketing/board?open=${leadId}`, tag: `moved-${leadId}`, alertKind: "marketing_lead_moved", phoneName: lead?.full_name || undefined, leadId })
     })
     const r = await Promise.race([
       Promise.all(sends),

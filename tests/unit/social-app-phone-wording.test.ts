@@ -3,7 +3,7 @@
  * with no client attached may show typed text; everything else is fixed words plus at most one cleaned name.
  */
 import { describe, it, expect } from "vitest"
-import { ALERT_KINDS, type AlertKind } from "@/lib/push/alert-kinds"
+import { ALERT_KINDS, MARKETING_ALERT_KINDS, STAFF_ALERT_KINDS, type AlertKind } from "@/lib/push/alert-kinds"
 import { BODY_MAX, NAME_MAX, TITLE_MAX, phoneTabFor, phoneWording } from "@/lib/app/phone-wording"
 
 const SECRET_TITLE = "Maria Rossi EIN 12-3456789"
@@ -33,6 +33,13 @@ describe("the typed-text kind is the ONLY one that shows typed text", () => {
         expect(shown, `${kind} (dm=${dm})`).not.toContain("Maria")
       }
     }
+  })
+
+  it("a message that is only a file or a card never shows the FILE NAME on the lock screen", () => {
+    const clip = String.fromCodePoint(0x1f4ce), card = String.fromCodePoint(0x1f4c7)
+    expect(phoneWording({ kind: "talk_direct_message", title: "Luca", body: `${clip} Rossi_Passport.pdf` })).toEqual({ title: "Luca", body: "Sent an attachment" })
+    expect(phoneWording({ kind: "talk_direct_message", title: "Luca", body: `${card} Shared a card` })).toEqual({ title: "Luca", body: "Shared a card" })
+    expect(phoneWording({ kind: "talk_direct_message", title: "Luca", body: "New message" })).toEqual({ title: "Luca", body: "New message" })
   })
 
   it("the system notice shows its own system-written text (it is not typed by a person or a client)", () => {
@@ -84,7 +91,9 @@ describe("Marketing is in Italian, with the lead's name and no text", () => {
     expect(w("marketing_team_chat", { name: "Rocco" })).toEqual({ title: "Nuovo messaggio da Rocco", body: "" })
     expect(w("marketing_team_chat")).toEqual({ title: "Nuovo messaggio nel team", body: "" })
     expect(w("marketing_lead_moved", { name: "Giulia" })).toEqual({ title: "Chiamata spostata · Giulia", body: "" })
-    expect(w("marketing_call")).toEqual({ title: "Nuova chiamata", body: "" })
+    // one kind covers a call booked, moved AND cancelled by the client, so the words are true for all three
+    expect(w("marketing_call")).toEqual({ title: "Aggiornamento sulla chiamata", body: "" })
+    expect(w("marketing_call", { name: "Giulia" })).toEqual({ title: "Aggiornamento sulla chiamata · Giulia", body: "" })
     expect(w("marketing_news", { name: "ignored" })).toEqual({ title: "Novità in TD Marketing", body: "" })
   })
 })
@@ -115,6 +124,30 @@ describe("which tab an alert belongs to (a muted tab sends no phone alert)", () 
     expect(phoneTabFor("client_chat")).toBe("portal")
     expect(phoneTabFor("client_thread_message")).toBe("portal")
     for (const k of ["marketing_lead_chat", "marketing_team_chat", "marketing_lead_moved", "marketing_call", "marketing_news"] as const) expect(phoneTabFor(k)).toBe("marketing")
+    expect(phoneTabFor("client_share_check")).toBe("portal")
     for (const k of ["staff_note", "approval", "supabase_notice", "test_alert", "general_notification", "talk_room_message"] as const) expect(phoneTabFor(k)).toBeNull()
+  })
+})
+
+describe("every alert kind is covered (so a future alert can never be silently left off the phones)", () => {
+  it("every Marketing kind has its own Italian wording, never the English generic one", () => {
+    for (const kind of MARKETING_ALERT_KINDS) {
+      const out = phoneWording({ kind, title: "x", body: "y", dm: false })
+      expect(out, kind).not.toBeNull()
+      expect(out!.title, kind).not.toBe("New notification")
+      expect(out!.title.length, kind).toBeGreaterThan(0)
+    }
+  })
+
+  it("every staff kind is either a phone alert with words, or on purpose not one (channel messages)", () => {
+    for (const kind of STAFF_ALERT_KINDS) {
+      const out = phoneWording({ kind, title: "T", body: "B", dm: true })
+      if (kind === "talk_room_message") expect(out).toBeNull()
+      else { expect(out, kind).not.toBeNull(); expect(out!.title.length, kind).toBeGreaterThan(0) }
+    }
+  })
+
+  it("the new safety alert for a file sent into a client chat shows fixed words only", () => {
+    expect(w("client_share_check", { name: "Acme LLC", title: "File sent to client", body: "Rossi_Passport.pdf was shared" })).toEqual({ title: "A file was sent to a client", body: "" })
   })
 })

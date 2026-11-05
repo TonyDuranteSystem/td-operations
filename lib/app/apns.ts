@@ -24,6 +24,8 @@ const TOKEN_RE = /^[0-9a-f]{64,200}$/
 const REASON_RE = /^[A-Za-z]{1,40}$/
 /** The signed token's life: a new one per slot (30 minutes), so it is never older than 30 minutes and never refreshed more often than that. */
 export const TOKEN_SLOT_SECONDS = 1800
+/** The issue time is a minute BEFORE the slot starts, so a server clock a little ahead of Apple's never puts it in Apple's future (Apple refuses such a token with 403). */
+export const IAT_MARGIN_SECONDS = 60
 /** Apple's limit for the whole payload. */
 export const MAX_PAYLOAD_BYTES = 4096
 /** An alert nobody saw within this long is dropped by Apple instead of arriving late. */
@@ -40,7 +42,7 @@ export function providerToken(key: ApnsKey, nowMs: number, cache: Map<string, { 
   const hit = cache.get(cacheKey)
   if (hit && hit.slot === slot) return hit.token
   const head = b64url(JSON.stringify({ alg: "ES256", kid: key.keyId }))
-  const claims = b64url(JSON.stringify({ iss: key.teamId, iat: slot * TOKEN_SLOT_SECONDS }))
+  const claims = b64url(JSON.stringify({ iss: key.teamId, iat: slot * TOKEN_SLOT_SECONDS - IAT_MARGIN_SECONDS }))
   const input = `${head}.${claims}`
   const sig = crypto.sign("sha256", Buffer.from(input), { key: key.privateKey, dsaEncoding: "ieee-p1363" })
   const token = `${input}.${b64url(sig)}`
@@ -134,10 +136,8 @@ export interface ApnsSession {
 }
 export type ApnsConnect = (host: string) => ApnsSession
 
-/** The real connection (HTTP/2 only, as Apple requires). The host is checked against the two constants; anything else is refused. */
-export const connectToApple: ApnsConnect = host => {
-  if (host !== APNS_HOSTS.development && host !== APNS_HOSTS.production) throw new Error("not an Apple push host")
-  const client = http2.connect(`https://${host}`)
+/** One open connection to one Apple address, over an HTTP/2 client (the real one, or a local test server's). */
+export function sessionOver(client: http2.ClientHttp2Session): ApnsSession {
   let broken: Error | null = null
   client.on("error", e => { broken = e })
   client.on("goaway", () => { broken = new Error("connection closed by Apple") })
@@ -146,16 +146,22 @@ export const connectToApple: ApnsConnect = host => {
       return new Promise<ApnsAnswer>((resolve, reject) => {
         if (broken || client.destroyed || client.closed) { reject(broken ?? new Error("connection closed")); return }
         let settled = false
-        const timer = setTimeout(() => finish(() => reject(new Error("timeout"))), timeoutMs)
+        let stream: http2.ClientHttp2Stream | undefined
+        const timer = setTimeout(() => finish(() => {
+          // cancel the request itself: a stuck stream must not keep holding the connection after we gave up on it
+          try { stream?.close(http2.constants.NGHTTP2_CANCEL) } catch { /* already closed */ }
+          reject(new Error("timeout"))
+        }), timeoutMs)
         const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); fn() }
         try {
-          const stream = client.request({ ":method": "POST", ":path": req.path, ...req.headers })
+          stream = client.request({ ":method": "POST", ":path": req.path, ...req.headers })
           let status = 0
           let text = ""
           stream.setEncoding("utf8")
           stream.on("response", h => { status = Number(h[":status"]) || 0 })
           stream.on("data", (c: string) => { if (text.length < 2048) text += c })
-          stream.on("end", () => finish(() => resolve({ status, reason: parseReason(text) })))
+          // an end with no status line means the connection died under the request: that is an error, never an answer
+          stream.on("end", () => finish(() => (status ? resolve({ status, reason: parseReason(text) }) : reject(new Error("no response")))))
           stream.on("error", e => finish(() => reject(e)))
           stream.on("close", () => finish(() => (status ? resolve({ status, reason: parseReason(text) }) : reject(new Error("stream closed")))))
           stream.end(req.body)
@@ -168,4 +174,10 @@ export const connectToApple: ApnsConnect = host => {
       try { client.close() } catch { /* already closed */ }
     },
   }
+}
+
+/** The real connection (HTTP/2 only, as Apple requires). The host is checked against the two constants; anything else is refused. */
+export const connectToApple: ApnsConnect = host => {
+  if (host !== APNS_HOSTS.development && host !== APNS_HOSTS.production) throw new Error("not an Apple push host")
+  return sessionOver(http2.connect(`https://${host}`))
 }

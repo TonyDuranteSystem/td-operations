@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest"
 import crypto from "node:crypto"
 import { apnsConfigured, normalizePrivateKey, readApnsKey } from "@/lib/app/apns-key"
-import { APNS_HOSTS, MAX_PAYLOAD_BYTES, TOKEN_SLOT_SECONDS, buildApnsRequest, classifyApnsAnswer, connectToApple, parseReason, providerToken, safeRelativeUrl } from "@/lib/app/apns"
+import { APNS_HOSTS, IAT_MARGIN_SECONDS, MAX_PAYLOAD_BYTES, TOKEN_SLOT_SECONDS, buildApnsRequest, classifyApnsAnswer, connectToApple, parseReason, providerToken, safeRelativeUrl } from "@/lib/app/apns"
 
 const pair = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" })
 const PEM = pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString().trim()
@@ -48,7 +48,7 @@ describe("the signed token", () => {
     expect(b64(h)).toEqual({ alg: "ES256", kid: "ABCDE12345" })
     const claims = b64(c)
     expect(claims.iss).toBe("TEAM123456")
-    expect(claims.iat).toBe(Math.floor(1_800_000_000 / TOKEN_SLOT_SECONDS) * TOKEN_SLOT_SECONDS)
+    expect(claims.iat).toBe(Math.floor(1_800_000_000 / TOKEN_SLOT_SECONDS) * TOKEN_SLOT_SECONDS - IAT_MARGIN_SECONDS)
     expect(crypto.verify("sha256", Buffer.from(`${h}.${c}`), { key: pair.publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(sig, "base64url"))).toBe(true)
   })
 
@@ -61,11 +61,13 @@ describe("the signed token", () => {
     expect(providerToken(KEY, t0 + TOKEN_SLOT_SECONDS * 1000, cache)).not.toBe(first)
   })
 
-  it("a token is never older than half an hour when it is used (the issue time is the slot's start)", () => {
-    const now = 1_800_000_000_000
-    const iat = b64(providerToken(KEY, now, new Map()).split(".")[1]).iat
-    expect(now / 1000 - iat).toBeLessThan(TOKEN_SLOT_SECONDS)
-    expect(now / 1000 - iat).toBeGreaterThanOrEqual(0)
+  it("a token is never much older than half an hour, and its issue time is never in Apple's future even if our clock runs a minute fast", () => {
+    for (const now of [1_800_000_000_000, 1_800_000_000_000 + 1_799_000, 1_800_000_000_000 + 5_000]) {
+      const iat = b64(providerToken(KEY, now, new Map()).split(".")[1]).iat
+      expect(now / 1000 - iat).toBeLessThan(TOKEN_SLOT_SECONDS + IAT_MARGIN_SECONDS)
+      // our clock may be up to a minute AHEAD of Apple's: the issue time is at least a minute before our own now, so it is still not in Apple's future
+      expect(iat).toBeLessThanOrEqual(Math.floor(now / 1000) - IAT_MARGIN_SECONDS)
+    }
   })
 
   it("a key that cannot sign throws (the caller leaves every phone alone)", () => {

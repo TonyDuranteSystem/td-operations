@@ -1,3 +1,4 @@
+import { waitForPhoneLeg } from '@/lib/app/phone-leg'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
@@ -576,7 +577,8 @@ export async function POST(request: NextRequest) {
     if (await isPortalAdminEmailEnabled()) {
       notifyAdminOfClientMessage(account_id, resolvedContactId, user.email || '', (message || '').trim()).catch(() => {})
     }
-    pushNotifyAdmin(account_id, resolvedContactId, (message || '').trim()).catch(() => {})
+    // wait (at most 4 s) for the staff alert, phone leg included: a serverless function may be stopped as soon as it has answered
+    await waitForPhoneLeg(pushNotifyAdmin(account_id, resolvedContactId, (message || '').trim()).catch(() => {}))
 
     if (!isOfficeOpen()) {
       sendOfficeClosedAutoReply({

@@ -69,10 +69,17 @@ describe("badgeForUser", () => {
     expect(await badgeForUser("u1")).toBeNull()
   })
 
-  it("unreadable switches fall back to the rule defaults (nothing muted), the number still works", async () => {
+  it("unreadable switches mean NO number (a failed read is not the same as \"no row yet\": it would count muted tabs and miss the email baseline)", async () => {
     getUserById.mockResolvedValue(user("team"))
     readState.mockRejectedValue(new Error("table missing"))
-    await badgeForUser("u1")
+    expect(await badgeForUser("u1")).toBeNull()
+    expect(countTabs).not.toHaveBeenCalled()
+  })
+
+  it("a person with no stored row at all (nothing muted yet) still gets a number from the rule defaults", async () => {
+    getUserById.mockResolvedValue(user("team"))
+    readState.mockResolvedValue(null)
+    expect(await badgeForUser("u1")).toBe(5)
     expect(countTabs.mock.calls[0][0].mutedTabs).toEqual([])
     expect(countTabs.mock.calls[0][0].inboxOpened).toEqual({})
   })

@@ -9,7 +9,7 @@ vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: {} }))
 vi.mock("@/lib/app/phone-recipients", () => ({ staffRecipients: vi.fn(), marketingRecipients: vi.fn() }))
 vi.mock("@/lib/app/phone-badge", () => ({ badgeForUser: vi.fn() }))
 
-import { CONCURRENCY, MAX_PHONES, MAX_RECIPIENTS, sendToPhones, type PhoneDeps, type PhoneRow } from "@/lib/app/send-to-phones"
+import { CONCURRENCY, LEG_DEADLINE_MS, MAX_PHONES, MAX_RECIPIENTS, SIDE_LOOKUP_MS, sendToPhones, type PhoneDeps, type PhoneRow } from "@/lib/app/send-to-phones"
 import type { PhoneAlert } from "@/lib/app/phone-leg"
 import type { ApnsAnswer, ApnsRequest } from "@/lib/app/apns"
 
@@ -315,5 +315,70 @@ describe("Marketing", () => {
     const r = await sendToPhones(alert({ source: "marketing", teamId: "t1", kind: "marketing_lead_chat", name: "Giulia" }), h.deps)
     expect(r.sent).toBe(1)
     expect(body(h.sent[0].req).aps.alert).toEqual({ title: "Nuovo messaggio · Giulia" })
+  })
+})
+
+describe("slow side lookups never hold an alert back", () => {
+  it("a slow icon-number lookup: the alert goes WITHOUT a number", async () => {
+    vi.useFakeTimers()
+    try {
+      const h = harness({ over: { badge: () => new Promise<number | null>(() => { /* never answers */ }) } })
+      const p = sendToPhones(alert(), h.deps)
+      await vi.advanceTimersByTimeAsync(SIDE_LOOKUP_MS + 100)
+      const r = await p
+      expect(r.sent).toBe(2)
+      for (const x of h.sent) expect("badge" in body(x.req).aps).toBe(false)
+    } finally { vi.useRealTimers() }
+  })
+
+  it("a slow lookup of someone's mutes: they are treated as not muted (a mute is a convenience)", async () => {
+    vi.useFakeTimers()
+    try {
+      const h = harness({ over: { mutedTabs: () => new Promise<string[]>(() => { /* never answers */ }) } })
+      const p = sendToPhones(alert(), h.deps)
+      await vi.advanceTimersByTimeAsync(SIDE_LOOKUP_MS + 100)
+      expect((await p).sent).toBe(2)
+    } finally { vi.useRealTimers() }
+  })
+})
+
+describe("a refused key stops only THAT Apple address", () => {
+  it("403 on the production address leaves the test address working, and removes nothing", async () => {
+    const phones = [phone(1, "u1", "production"), phone(2, "u1", "production"), phone(3, "u2", "development"), phone(4, "u2", "development")]
+    const h = harness({ phones, answer: (_req, host) => (host === "api.push.apple.com" ? { status: 403, reason: "InvalidProviderToken" } : { status: 200, reason: null }) })
+    const r = await sendToPhones(alert(), h.deps)
+    expect(h.sent.filter(x => x.host === "api.sandbox.push.apple.com")).toHaveLength(2)
+    expect(r.sent).toBe(2)
+    expect(r.stopped).toBe(true)
+    expect(h.revoked).toEqual([])
+  })
+})
+
+describe("the leg's own deadline", () => {
+  it("past the deadline nothing more is sent (a late alert is worse than none), and nothing is removed", async () => {
+    let t = 1_800_000_000_000
+    const many = Array.from({ length: 20 }, (_, i) => phone(i + 1, "u1"))
+    const h = harness({
+      phones: many,
+      over: { recipients: async () => ["u1"], now: () => t },
+      answer: async () => { t += LEG_DEADLINE_MS + 1000; return { status: 200, reason: null } },
+    })
+    const r = await sendToPhones(alert(), h.deps)
+    // the first answer moves the clock past the deadline: nothing after it is sent
+    expect(r.sent).toBeGreaterThanOrEqual(1)
+    expect(r.sent).toBeLessThan(many.length)
+    expect(h.sent).toHaveLength(r.sent)
+    expect(r.stopped).toBe(true)
+    expect(h.revoked).toEqual([])
+  })
+})
+
+describe("the alert's facts reach the recipient check", () => {
+  it("the kind and the lead of a Marketing alert are handed to it unchanged", async () => {
+    let seen: PhoneAlert | undefined
+    const h = harness({ over: { recipients: async a => { seen = a; return a.userIds } } })
+    const a = alert({ source: "marketing", teamId: "t1", kind: "marketing_lead_moved", leadId: "lead-1", name: "Giulia" })
+    await sendToPhones(a, h.deps)
+    expect(seen).toMatchObject({ kind: "marketing_lead_moved", leadId: "lead-1", teamId: "t1" })
   })
 })
