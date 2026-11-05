@@ -17,7 +17,8 @@ import { saveBytesToStore, StoreFrozenFileError } from "./writer"
 import { plainStoreError } from "./lock-errors"
 import { effectiveKind, isLockedFolder, ownersAreaUserId } from "./structure"
 import { storeNameKey } from "./rules"
-import { checkDropContent, checkDropName, decodeDropContent, sha256Of } from "./my-files-drop-rules"
+import { checkDropContent, checkDropName, decodeDropContent, DROP_FOLDER_NAME, DROP_FOLDER_SETTING, sha256Of } from "./my-files-drop-rules"
+import { checkMyFileForChat, inDropFolder, MY_FILES_CHAT_MAX_BYTES, MY_FILES_CHAT_MAX_MB } from "@/lib/team/attach-from-my-files-rules"
 import {
   ACCESS_LIMITS, accessEnabled, accessRateRefusal, checkRenamedFile, clipText, isTextual, isUuid, parseIfExists, parseOptionalPath, parseFolderPath,
   type AccessKind,
@@ -255,6 +256,65 @@ export async function readMyFile(input: { file_id?: unknown; as_base64?: unknown
     if (!wantB64) throw new Refuse(`"${f.name}" is a binary file (${got.bytes.length} bytes). Ask again with as_base64: true (files up to ${ACCESS_LIMITS.maxReadBase64Bytes / 1048576} MB).`)
     if (got.bytes.length > ACCESS_LIMITS.maxReadBase64Bytes) throw new Refuse(`"${f.name}" is ${(got.bytes.length / 1048576).toFixed(1)} MB — too big to hand back (limit ${ACCESS_LIMITS.maxReadBase64Bytes / 1048576} MB). Open it on the Storage page.`)
     return { name: f.name, folder: await relPath(f.folder_id), size: got.bytes.length, mime_type: got.mimeType, encoding: "base64" as const, content: got.bytes.toString("base64"), cut: false }
+  })
+}
+
+/** The folder and its parents, nearest first (ids). Stops at the top or after 50 steps. */
+async function folderChain(folderId: string): Promise<string[]> {
+  const ids: string[] = []
+  let cur: string | null = folderId
+  for (let i = 0; i < 50 && cur; i++) {
+    const f = await folderRow(cur)
+    if (!f) break
+    ids.push(f.id)
+    cur = f.parent_id
+  }
+  return ids
+}
+
+/**
+ * The drop folder ("From Claude") of this area: the folder the setting remembers, checked to still be a live plain folder of the owner
+ * under My files (never "Shared with staff"). Antonio may rename or move it, so it is found by id, as the drop does.
+ */
+async function dropFolderId(area: Area): Promise<string> {
+  const { data: row, error } = await db().from("app_settings").select("value").eq("key", DROP_FOLDER_SETTING).maybeSingle()
+  if (error) throw new Error(`setting read: ${error.message}`)
+  const id = typeof row?.value === "string" ? (row.value as string) : null
+  if (!id) throw new Refuse(`There is no "${DROP_FOLDER_NAME}" folder yet, so there is nothing to attach.`)
+  const f = await folderRow(id)
+  if (!f || f.owner_id !== area.ownerId || f.trashed_at || f.kind !== "custom" || (await effectiveKind(id)) !== "private_root") {
+    throw new Refuse(`The "${DROP_FOLDER_NAME}" folder could not be verified, so nothing was attached.`)
+  }
+  return f.id
+}
+
+/**
+ * Read ONE file of the owner's "From Claude" folder so it can be attached to a Claude post in Team Chat / TD Talk (dev job f34c915d).
+ * The caller names the file by id (taken from my_files_list); nothing is searched for. Refused unless the file is a live file of THIS
+ * area, inside the drop folder (any depth), of a type allowed on a public chat link, and within the size cap. The audit row is written first
+ * like every other call here. The bytes go to `attachMyFilesToChat`, never back to the model.
+ */
+export async function readMyFileForChat(input: { file_id?: unknown }, caller: AccessCaller): Promise<AccessResult<{ name: string; folder: string; size: number; mime_type: string | null; bytes: Buffer }>> {
+  return guarded({ caller, tool: "team_chat_attach", kind: "read", summary: "read a file to attach to a chat post", detail: { file_id: clip(input.file_id) }, recordId: isUuid(input.file_id) ? input.file_id : null }, async (note) => {
+    const area = await resolveArea()
+    const f = await areaFile(area, input.file_id)
+    const drop = await dropFolderId(area)
+    if (!inDropFolder(await folderChain(f.folder_id), drop)) {
+      throw new Refuse(`"${f.name}" is not inside the "${DROP_FOLDER_NAME}" folder. Only files in "${DROP_FOLDER_NAME}" can be attached to a chat post — move it there first (my_files_move).`)
+    }
+    const { data: cur, error: sErr } = await db().from("store_files").select("store_file_versions!store_files_current_version_fk(size_bytes, mime_type)").eq("id", f.id).maybeSingle()
+    if (sErr) throw new Error(`size lookup: ${sErr.message}`)
+    const ver = (cur?.store_file_versions ?? null) as { size_bytes: number | null; mime_type: string | null } | null
+    const problem = checkMyFileForChat({ name: f.name, size: ver?.size_bytes ?? null, mimeType: ver?.mime_type ?? null })
+    if (problem) throw new Refuse(problem)
+    const { readFileForStaff } = await import("./browse")
+    const got = await readFileForStaff(f.id)
+    // the recorded size is only a hint: the bytes themselves are held to the cap too
+    if (got.bytes.length > MY_FILES_CHAT_MAX_BYTES) {
+      throw new Refuse(`"${f.name}" is ${(got.bytes.length / 1048576).toFixed(1)} MB — too big to attach from here (limit ${MY_FILES_CHAT_MAX_MB} MB). Attach it by hand with the paperclip.`)
+    }
+    note({ file_name: f.name, size: got.bytes.length })
+    return { name: f.name, folder: await relPath(f.folder_id), size: got.bytes.length, mime_type: got.mimeType ?? ver?.mime_type ?? null, bytes: got.bytes }
   })
 }
 

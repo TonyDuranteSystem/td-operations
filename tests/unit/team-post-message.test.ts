@@ -67,7 +67,16 @@ describe('validateTeamPostAttachments', () => {
   it('one bad attachment among good ones still fails the whole batch', () => {
     expect(validateTeamPostAttachments([ok, { url: 'https://evil.example.com/f.pdf', name: 'f.pdf' }], HOST)).toMatch(/must be hosted on our own storage/i)
   })
-  it('with no configured host, only checks presence (defense in depth without blocking local/test runs)', () => {
-    expect(validateTeamPostAttachments([{ url: 'https://anywhere.example.com/f.pdf', name: 'f.pdf' }], '')).toBeNull()
+  it('with no configured host the check FAILS CLOSED (it must never be skipped — same as the human send route)', () => {
+    expect(validateTeamPostAttachments([{ url: 'https://anywhere.example.com/f.pdf', name: 'f.pdf' }], '')).toMatch(/unavailable/i)
+    expect(validateTeamPostAttachments([{ url: 'https://anywhere.example.com/f.pdf', name: 'f.pdf' }], '   ')).toMatch(/unavailable/i)
+  })
+  it('a lookalike host that merely STARTS with ours is refused (the bare-prefix hole)', () => {
+    expect(validateTeamPostAttachments([{ url: `${HOST}.evil.com/f.pdf`, name: 'f.pdf' }], HOST)).toMatch(/must be hosted on our own storage/i)
+    expect(validateTeamPostAttachments([{ url: `${HOST}@evil.com/f.pdf`, name: 'f.pdf' }], HOST)).toMatch(/must be hosted on our own storage/i)
+  })
+  it('a trailing slash on the configured host makes no difference', () => {
+    expect(validateTeamPostAttachments([ok], `${HOST}/`)).toBeNull()
+    expect(validateTeamPostAttachments([{ url: `${HOST}.evil.com/f.pdf`, name: 'f.pdf' }], `${HOST}/`)).toMatch(/must be hosted on our own storage/i)
   })
 })

@@ -49,6 +49,8 @@ export function validateTeamPostMessage(message: string, card?: unknown): string
  * Validate optional attachments. Mirrors the human send route's own guard
  * (app/api/team/threads/[id]/messages/route.ts): every attachment must live
  * on our own Storage host — never an arbitrary off-site URL — plus a name.
+ * The check is against `<host>/` (a bare prefix would let https://proj.supabase.co.evil.com through) and it FAILS CLOSED when
+ * the Storage host is not configured, instead of skipping the check (counselor finding on the Claude path, dev job f34c915d).
  * `allowedUrlPrefix` is passed in (never read from env here) so this stays a
  * pure, unit-testable function like its siblings above.
  */
@@ -57,10 +59,12 @@ export function validateTeamPostAttachments(
   allowedUrlPrefix: string,
 ): string | null {
   if (!attachments || attachments.length === 0) return null
+  const host = (allowedUrlPrefix ?? '').trim().replace(/\/+$/, '')
+  if (!host) return 'Attachments are unavailable right now.'
   for (const a of attachments) {
     const url = (a?.url ?? '').toString().trim()
     if (!url) return 'Each attachment needs a url.'
-    if (allowedUrlPrefix && !url.startsWith(allowedUrlPrefix)) {
+    if (!url.startsWith(`${host}/`)) {
       return 'Invalid attachment URL — must be hosted on our own Storage.'
     }
     if (!a?.name) return 'Each attachment needs a name.'
