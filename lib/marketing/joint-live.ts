@@ -77,7 +77,7 @@ export function liveJointEnv(): JointEnv {
       await gmailPost("/messages/send", { raw: Buffer.from(buildJointMime(to, mail)).toString("base64url") })
     },
     async tellSeller(teamId, sellerUserId, leadId, text) {
-      await sendMarketingPush(teamId, [sellerUserId], { title: "Call with Antonio", body: text, url: `/marketing/board?open=${leadId}`, tag: `joint-${leadId}`, alertKind: "marketing_call" })
+      await sendMarketingPush(teamId, [sellerUserId], { title: "Call with Antonio", body: text, url: `/marketing/board?open=${leadId}`, tag: `joint-${leadId}`, alertKind: "marketing_call", leadId })
     },
   }
 }

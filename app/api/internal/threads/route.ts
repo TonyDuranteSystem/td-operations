@@ -130,39 +130,33 @@ export async function POST(request: NextRequest) {
 
   // Send push notification to other admins
   try {
-    const { data: subs } = await supabaseAdmin
-      .from('admin_push_subscriptions')
-      .select('*')
-      .neq('user_id', user.id)
-
-    if (subs?.length) {
-      const { sendPushToStaffExcept } = await import('@/lib/team/notify')
-      // Get name for notification
-      let notifName = title || 'Team'
-      if (account_id) {
-        const { data: account } = await supabaseAdmin
-          .from('accounts')
-          .select('company_name')
-          .eq('id', account_id)
-          .single()
-        notifName = account?.company_name ?? 'Team'
-      } else if (contact_id) {
-        const { data: contact } = await supabaseAdmin
-          .from('contacts')
-          .select('full_name')
-          .eq('id', contact_id)
-          .single()
-        notifName = contact?.full_name ?? 'Team'
-      }
-
-      await sendPushToStaffExcept(user.id, {
-        title: `Team: ${notifName}`,
-        body: title || firstMessage.slice(0, 100),
-        url: `/portal-chats?view=internal`,
-        tag: `internal-thread-${thread.id}`,
-        alertKind: account_id || contact_id ? 'client_thread_message' : 'talk_room_message',
-      })
+    // no pre-check on the web subscription table: who is told is decided inside the sender, and a person with only a TD Social phone must still get this
+    const { sendPushToStaffExcept } = await import('@/lib/team/notify')
+    // Get name for notification
+    let notifName = title || 'Team'
+    if (account_id) {
+      const { data: account } = await supabaseAdmin
+        .from('accounts')
+        .select('company_name')
+        .eq('id', account_id)
+        .single()
+      notifName = account?.company_name ?? 'Team'
+    } else if (contact_id) {
+      const { data: contact } = await supabaseAdmin
+        .from('contacts')
+        .select('full_name')
+        .eq('id', contact_id)
+        .single()
+      notifName = contact?.full_name ?? 'Team'
     }
+
+    await sendPushToStaffExcept(user.id, {
+      title: `Team: ${notifName}`,
+      body: title || firstMessage.slice(0, 100),
+      url: `/portal-chats?view=internal`,
+      tag: `internal-thread-${thread.id}`,
+      alertKind: account_id || contact_id ? 'client_thread_message' : 'talk_room_message',
+    })
   } catch {
     // Push notification failure is non-critical
   }

@@ -1,3 +1,4 @@
+import { waitForPhoneLeg } from '@/lib/app/phone-leg'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, getUserDisplayName } from '@/lib/auth'
@@ -149,7 +150,7 @@ export async function POST(
       // Client / teammate reacted to a team message → push to staff (no email).
       const throttleKey = `to-staff:${id}`
       if (!throttled(throttleKey)) {
-        notifyAdminOfReaction(msg.account_id, msg.contact_id, emoji).catch(() => {})
+        await waitForPhoneLeg(notifyAdminOfReaction(msg.account_id, msg.contact_id, emoji).catch(() => {}))
       }
     }
   }
@@ -218,5 +219,6 @@ async function notifyAdminOfReaction(accountId: string | null, contactId: string
     url: `/portal-chats${accountId ? `?account=${accountId}` : ''}`,
     tag: `admin-chat-reaction-${accountId || contactId || 'unknown'}`,
     alertKind: 'client_chat',
+    phoneName: displayName,
   })
 }

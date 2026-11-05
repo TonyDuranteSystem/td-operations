@@ -277,7 +277,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       body: `${user.email ?? "Someone"} shared a screenshot in the portal chat.`,
       url: accountId ? `/portal-chats?account=${accountId}` : `/portal-chats?contact=${contactId}`,
       tag: `capture-portal-chat-${captureId}`,
-      alertKind: "client_chat",
+      alertKind: "client_share_check",
     })
   } catch {
     // never block the send on an alert failure
