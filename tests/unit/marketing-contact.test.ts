@@ -28,6 +28,14 @@ describe("contactState", () => {
   it("Antonio looking in with View as is not the team's work", () => {
     expect(contactState([ev("whatsapp", "2026-10-20T10:00:00Z", { state: "sent", via_view_as: true })]).whatsapp).toBeNull()
   })
+  it("a call booked or cancelled in View as still counts for the CALL (the server decides from the same line), nothing else from View as does", () => {
+    const booked = ev("appointment", "2026-10-20T10:00:00Z", { at: "2026-10-26T09:00:00.000Z", via_view_as: true })
+    expect(contactState([booked]).appointmentAt).toBe("2026-10-26T09:00:00.000Z")
+    expect(contactState([booked, ev("appointment", "2026-10-21T10:00:00Z", { at: null, via_view_as: true })]).appointmentAt).toBeNull()
+    const s = contactState([booked, ev("attempt", "2026-10-20T11:00:00Z", { result: "no_answer", via_view_as: true }), ev("status_changed", "2026-10-20T12:00:00Z", { outcome: "good", via_view_as: true })])
+    expect(s.attempts).toBe(0)
+    expect(s.appointmentAt).toBe("2026-10-26T09:00:00.000Z")
+  })
   it("many leads from one flat list", () => {
     const m = contactStates([{ lead_id: "a", ...ev("whatsapp", "2026-10-20T10:00:00Z", { state: "sent" }) }, { lead_id: "b", ...ev("attempt", "2026-10-20T10:00:00Z", { result: "no_answer" }) }])
     expect(m.get("a")?.whatsapp).toBe("sent")

@@ -13,6 +13,7 @@ import { loadPrefsAndTakers } from "@/lib/marketing/time-prefs-server"
 import { resolveCallHours } from "@/lib/marketing/time-prefs"
 import { loadCalendarData } from "@/lib/marketing/calendar-read"
 import { applyLeadAction, loadActionSettings } from "@/lib/marketing/lead-actions-server"
+import { syncAfterAppointment } from "@/lib/marketing/call-sync-server"
 import { buildJointMime } from "@/lib/marketing/joint-rules"
 import { makeJointStore } from "@/lib/marketing/joint-store"
 import { sendMarketingPush } from "@/lib/marketing/push"
@@ -64,6 +65,10 @@ export function liveJointEnv(): JointEnv {
           : { action: "appointment" as const, at: null, note: op.note }
       const r = await applyLeadAction(db, teamId, leadId, input, ACTOR, settings, new Date(), false, { fromClientLink: true })
       return r.ok === false ? { ok: false, error: r.error } : { ok: true }
+    },
+    async dropStaffCalendarEvent(teamId, leadId) {
+      // the same safe removal a person's own cancel uses: it only touches the entry the history remembers and that carries this lead's mark
+      await syncAfterAppointment({ db, teamId, leadId, actor: ACTOR.email, action: { kind: "cancel" } })
     },
     async recordSynced(leadId, kind, data) {
       await db.from("marketing_lead_events").insert({ lead_id: leadId, kind, actor: ACTOR.email, data })

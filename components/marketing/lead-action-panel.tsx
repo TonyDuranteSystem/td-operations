@@ -61,7 +61,7 @@ export function LeadActionPanel({ leadId, canMark, claim, isOwner, checklist, re
       const res = await fetch(`/api/marketing/leads/${leadId}/action`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
-        if (d.code === 'CALL_STANDS' && typeof d.callAt === 'string') setOverride({ forPage: callAt, callAt: d.callAt })
+        if (d.code === 'CALL_STANDS' && typeof d.callAt === 'string') { setOverride({ forPage: callAt, callAt: d.callAt }); return } // the amber warning says it: no second red line
         throw new Error(d.error ? t(d.error) : t('Could not save. Please try again.'))
       }
       setMode(null); setNote(''); setTicked([]); setReason(''); setWhen(''); setInfo(null)
