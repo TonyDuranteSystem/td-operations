@@ -35,7 +35,6 @@ vi.mock("@/lib/supabase-admin", () => ({
 
 import {
   newServiceTypesOnOffer,
-  offerReadinessProblemForToken,
   offerServicesReadinessProblem,
   serviceReadinessProblem,
 } from "@/lib/offers/service-readiness"
@@ -195,32 +194,10 @@ describe("offerServicesReadinessProblem (database)", () => {
   })
 })
 
-describe("offerReadinessProblemForToken (Activate Lead)", () => {
-  it("reads the stored offer and applies the same check to all three places", async () => {
-    db.offer = { data: { services: [], bundled_pipelines: ["Apostille"], packages: null }, error: null }
-    db.catalog = { data: [activeApostille], error: null }
-    expect(await offerReadinessProblemForToken("tok")).toMatch(/no steps yet/)
-    expect(db.tablesRead[0]).toBe("offers")
-  })
-
-  it("has nothing to refuse for a missing offer, and refuses (closed) if the offer cannot be read", async () => {
-    db.offer = { data: null, error: null }
-    expect(await offerReadinessProblemForToken("missing")).toBeNull()
-    db.offer = { data: null, error: { message: "db down" } }
-    expect(await offerReadinessProblemForToken("tok")).toMatch(/could not check the services.*db down/)
-  })
-
-  it("passes an offer with only historical services without reading the catalog", async () => {
-    db.offer = { data: { services: [{ pipeline_type: "ITIN" }], bundled_pipelines: ["ITIN"], packages: null }, error: null }
-    expect(await offerReadinessProblemForToken("tok")).toBeNull()
-    expect(db.tablesRead).toEqual(["offers"])
-  })
-})
-
 describe("wiring", () => {
   const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8")
 
-  // Offer builder Part 1: the checks moved out of publishOffer / the Activate Lead route into ONE function (lib/offers/send-check.ts).
+  // Offer builder Part 1: the checks moved out of publishOffer into ONE function (lib/offers/send-check.ts).
   // The promises these tests pin are the same; they are now pinned where the code lives.
   it("publishOffer checks the offer's services after the draft test and before any portal user or email", () => {
     const check = read("lib/offers/send-check.ts")
@@ -231,38 +208,19 @@ describe("wiring", () => {
     expect(check).toContain("bundledPipelines: offer.bundled_pipelines")
     // the real send calls that function, in the real-send mode, before its first side effect, and refuses with the engine's list
     const src = read("lib/offers/publish.ts")
-    const call = src.indexOf(`offerSendCheck({ offer, door: "send", mode: "send" })`)
+    const call = src.indexOf(`offerSendCheck({ offer, mode: "send" })`)
     const firstSideEffect = src.indexOf("autoCreatePortalUser({")
     expect(call).toBeGreaterThan(0)
     expect(firstSideEffect).toBeGreaterThan(call)
     expect(src).toMatch(/Cannot publish: \$\{first\.message\}/)
     expect(src).toMatch(/blockers: first\.readiness/)
   })
-
-  it("Activate Lead runs the same check before it creates a login or changes any status", () => {
-    const src = read("app/api/crm/admin-actions/activate-lead/route.ts")
-    const gate = src.indexOf("offerSendCheck({")
-    expect(gate).toBeGreaterThan(0)
-    expect(src).toContain("door: 'activate_lead', mode: 'send'")
-    expect(src.indexOf("createUser({")).toBeGreaterThan(gate)
-    expect(src.indexOf(".update({ status: 'sent' })")).toBeGreaterThan(gate)
-    expect(src).toMatch(/Cannot activate: \$\{first\.message\}/)
-    expect(src).toMatch(/blockers: first\.readiness/)
-    // and the shared function gives that door the readiness check on the stored offer
-    expect(read("lib/offers/send-check.ts")).toContain("offerReadinessForToken(offer.token)")
-  })
 })
 
 describe("wiring — when the wording is frozen (bug-hunter findings, 2026-10-26)", () => {
   const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8")
-  it("Activate Lead takes a FRESH copy only for a draft; an offer already out keeps the wording it carries", () => {
-    const src = read("lib/offers/send-check.ts")
-    expect(src).toMatch(/door === "send" \|\| offer\.status === "draft" \? \{ refresh: true \} : \{\}/)
-    // the Activate Lead route hands over the offer's own status, so the rule above sees it
-    expect(read("app/api/crm/admin-actions/activate-lead/route.ts")).toMatch(/offer: \{ token: offer\.token, status: offer\.status,/)
-  })
   it("publishOffer takes a fresh copy at the real send", () => {
-    expect(read("lib/offers/send-check.ts")).toMatch(/preview \? \{ refresh: true, persist: false \} : door === "send"/)
+    expect(read("lib/offers/send-check.ts")).toMatch(/preview \? \{ refresh: true, persist: false \} : \{ refresh: true \}/)
     expect(read("lib/offers/publish.ts")).toContain(`mode: "send"`)
   })
   it("the formation and onboarding pages: a new service's add-on agreement uses the shared body (approved phrases) and blocks signing when its wording is missing", () => {

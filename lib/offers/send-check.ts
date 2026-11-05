@@ -2,14 +2,12 @@
  * ONE place that decides "can this offer be sent?" (offer builder Part 1, dev job d2971d11).
  *
  * Before this file the Send checks lived inside publishOffer (the CRM Send button, Publish Offer and Claude's offer_send
- * tool) and a smaller copy of them inside the Activate Lead route. The box beside the Send buttons has to say exactly what
- * the real Send will say, so both now call this function.
+ * tool). The box beside the Send buttons has to say exactly what the real Send will say, so both call this function.
  *
- * Two doors, because the doors really differ today and Part 1 changes none of those answers (tests/unit/
- * offer-send-gate-parity.test.ts and offer-activate-lead-gate-parity.test.ts freeze them):
- *   "send"          client email -> yearly fee -> still a draft -> new services ready -> approved wording frozen
- *   "activate_lead" new services ready -> approved wording frozen   (no email / yearly-fee / status check — Part 3 lines it up)
- * The client's portal login is the step after these; it CREATES the login, so it is never run here.
+ * The order (tests/unit/offer-send-gate-parity.test.ts freezes it):
+ *   client email -> yearly fee -> still a draft -> new services ready -> approved wording frozen
+ * (The lead page's old Activate Lead button was a second door with a smaller list; it was removed — the lead page sends an
+ * offer through Send only.) The client's portal login is the step after these; it CREATES the login, so it is never run here.
  *
  * Two modes:
  *   "send"    the real send. The FIRST problem stops everything after it, exactly like the old code (the wording step WRITES,
@@ -21,18 +19,17 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { yearlyFeeMissingReason } from "@/lib/offers/annual-maintenance-wording"
-import { offerReadinessForToken, offerServicesReadiness, type ReadinessBlocker } from "@/lib/offers/service-readiness"
+import { offerServicesReadiness, type ReadinessBlocker } from "@/lib/offers/service-readiness"
 import { ensureOfferContractTexts, type EnsureOptions } from "@/lib/offers/contract-texts-snapshot"
 import { agreementCoverageGap, agreementCoverageWarnings } from "@/lib/offers/standalone-agreement-lines"
 import { multiAgreementsEnabled } from "@/lib/offers/multi-agreements-switch"
 
-export type SendDoor = "send" | "activate_lead"
 export type SendCheckMode = "send" | "preview"
 export type SendCheckStep = "email" | "yearly_fee" | "status" | "services" | "wording"
 
 export interface SendCheckBlocker {
   step: SendCheckStep
-  /** The reason in plain English, without the "Cannot publish:" / "Cannot activate:" the door adds in front. */
+  /** The reason in plain English, without the "Cannot publish:" the real Send adds in front. */
   message: string
   /** True when the check could not run (a lookup failed or threw) rather than found something wrong. */
   couldNotCheck?: boolean
@@ -79,8 +76,8 @@ function nameOnlyServiceLines(services: unknown): string[] {
   return out
 }
 
-export async function offerSendCheck(p: { offer: OfferForSendCheck; door: SendDoor; mode: SendCheckMode }): Promise<SendCheckResult> {
-  const { offer, door, mode } = p
+export async function offerSendCheck(p: { offer: OfferForSendCheck; mode: SendCheckMode }): Promise<SendCheckResult> {
+  const { offer, mode } = p
   const preview = mode === "preview"
   const out: SendCheckResult = { blockers: [], risks: [], notChecked: [], willSendTo: offer.client_email || null }
 
@@ -91,14 +88,14 @@ export async function offerSendCheck(p: { offer: OfferForSendCheck; door: SendDo
     else out.blockers.push(b)
   }
 
-  // 1. client email (Send only)
-  if (door === "send" && !offer.client_email) {
+  // 1. client email
+  if (!offer.client_email) {
     problem({ step: "email", message: "client_email is not set on this offer. Update it first." })
   }
 
-  // 2. the yearly fee is written down (Send only). Which services carry a yearly fee comes from the service catalog (has_annual).
+  // 2. the yearly fee is written down. Which services carry a yearly fee comes from the service catalog (has_annual).
   let packages: unknown = null
-  if (door === "send" && !stopped()) {
+  if (!stopped()) {
     const { data: annualRows, error: annualErr } = await supabaseAdmin.from("service_catalog").select("pipeline").eq("has_annual", true)
     const { data: pk, error: pkErr } = await supabaseAdmin
       .from("offers")
@@ -124,22 +121,19 @@ export async function offerSendCheck(p: { offer: OfferForSendCheck; door: SendDo
     }
   }
 
-  // 3. still a draft (Send only)
-  if (door === "send" && !stopped() && offer.status !== "draft") {
+  // 3. still a draft
+  if (!stopped() && offer.status !== "draft") {
     problem({ step: "status", message: `offer is in '${offer.status}' status. Only 'draft' offers can be published.` })
   }
 
   // 4. every NEW service on the offer is ready to be sold (in the catalog, switched on, has steps, has an approved contract)
   if (!stopped()) {
-    const readiness =
-      door === "send"
-        ? await offerServicesReadiness({
-            services: offer.services,
-            bundledPipelines: offer.bundled_pipelines,
-            packages,
-            contractType: offer.contract_type ?? null,
-          })
-        : await offerReadinessForToken(offer.token)
+    const readiness = await offerServicesReadiness({
+      services: offer.services,
+      bundledPipelines: offer.bundled_pipelines,
+      packages,
+      contractType: offer.contract_type ?? null,
+    })
     if (readiness.problem) {
       const lookupOnly = readiness.blockers.length > 0 && readiness.blockers.every((b) => b.kind === "lookup")
       problem({ step: "services", message: readiness.problem, readiness: readiness.blockers, couldNotCheck: lookupOnly })
@@ -149,7 +143,7 @@ export async function offerSendCheck(p: { offer: OfferForSendCheck; door: SendDo
   // 5. the approved wording of every new service's contract can be frozen onto the offer. On the real send this WRITES (a fresh
   //    copy); the preview works it out in memory and writes nothing.
   if (!stopped()) {
-    const opts: EnsureOptions = preview ? { refresh: true, persist: false } : door === "send" || offer.status === "draft" ? { refresh: true } : {}
+    const opts: EnsureOptions = preview ? { refresh: true, persist: false } : { refresh: true }
     try {
       const frozen = await ensureOfferContractTexts(offer.token, opts)
       if (frozen.missing.length > 0) {
