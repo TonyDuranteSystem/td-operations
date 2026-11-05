@@ -12586,6 +12586,7 @@ export type Database = {
           required_documents: Json | null
           selected_package_key: string | null
           selected_services: Json | null
+          send_started_at: string | null
           services: Json | null
           status: string | null
           strategy: Json | null
@@ -12662,6 +12663,7 @@ export type Database = {
           required_documents?: Json | null
           selected_package_key?: string | null
           selected_services?: Json | null
+          send_started_at?: string | null
           services?: Json | null
           status?: string | null
           strategy?: Json | null
@@ -12738,6 +12740,7 @@ export type Database = {
           required_documents?: Json | null
           selected_package_key?: string | null
           selected_services?: Json | null
+          send_started_at?: string | null
           services?: Json | null
           status?: string | null
           strategy?: Json | null
@@ -13775,6 +13778,13 @@ export type Database = {
             columns: ["department_entry_id"]
             isOneToOne: false
             referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payments_department_entry_id_fkey"
+            columns: ["department_entry_id"]
+            isOneToOne: false
+            referencedRelation: "service_catalog"
             referencedColumns: ["id"]
           },
         ]
