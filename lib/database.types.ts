@@ -12586,6 +12586,7 @@ export type Database = {
           required_documents: Json | null
           selected_package_key: string | null
           selected_services: Json | null
+          send_started_at: string | null
           services: Json | null
           status: string | null
           strategy: Json | null
@@ -12662,6 +12663,7 @@ export type Database = {
           required_documents?: Json | null
           selected_package_key?: string | null
           selected_services?: Json | null
+          send_started_at?: string | null
           services?: Json | null
           status?: string | null
           strategy?: Json | null
@@ -12738,6 +12740,7 @@ export type Database = {
           required_documents?: Json | null
           selected_package_key?: string | null
           selected_services?: Json | null
+          send_started_at?: string | null
           services?: Json | null
           status?: string | null
           strategy?: Json | null
