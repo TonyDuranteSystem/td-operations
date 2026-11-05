@@ -2,14 +2,14 @@
  * GET /api/crm/admin-actions/offer-builder-features?lead_id=&account_id=&contact_id=&token=
  *
  * Staff only. READ-ONLY. The offer screens ask this which NEW offer-builder pieces they may show for the record they are
- * about (offer builder rollout, dev job d2971d11): `{ addService: boolean, sendCheckBox: boolean }`. The decision is made
+ * about (offer builder rollout, dev job d2971d11): `{ sendCheckBox: boolean }`. The decision is made
  * here, on the server, from the stored settings (off / test / on — set by Claude on Antonio's word, no screen) and, for a
  * piece set to "test", from whether the record is marked as a test record. See lib/offers/rollout.ts and
  * lib/offers/rollout-server.ts.
  *
  * Lives under /api/crm (a session is required) and NOT under /api/offers (a public prefix in the middleware).
  *
- * Answers: 401 not signed in · 403 not staff · 200 { addService, sendCheckBox } · 500 { error } (the screens treat any
+ * Answers: 401 not signed in · 403 not staff · 200 { sendCheckBox } · 500 { error } (the screens treat any
  * non-200 as "show nothing"). Never cached.
  */
 

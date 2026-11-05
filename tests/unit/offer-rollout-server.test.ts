@@ -1,6 +1,6 @@
 /**
- * Server decision for the offer-builder rollout (lib/offers/rollout-server.ts): for ONE record, which new pieces may
- * be shown. Off / test / on per piece; "test" looks up whether the record is marked is_test. Fake database, no network.
+ * Server decision for the offer-builder rollout (lib/offers/rollout-server.ts): for ONE record, which new piece may
+ * be shown. Off / test / on for the piece; "test" looks up whether the record is marked is_test. Fake database, no network.
  * Fails CLOSED everywhere.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -45,12 +45,10 @@ import { offerBuilderFeaturesFor, pickSubjectRecord } from "@/lib/offers/rollout
 const ACCT = "11111111-1111-4111-8111-111111111111"
 const LEAD = "22222222-2222-4222-8222-222222222222"
 const CONTACT = "33333333-3333-4333-8333-333333333333"
-const ADD = "offer_add_service_enabled"
 const BOX = "offer_send_check_box_enabled"
 
-const setSettings = (add: unknown, box: unknown) => {
+const setSettings = (box: unknown) => {
   const data: Array<{ key: string; value: unknown }> = []
-  if (add !== undefined) data.push({ key: ADD, value: add })
   if (box !== undefined) data.push({ key: BOX, value: box })
   h.settings = { data, error: null }
 }
@@ -81,29 +79,29 @@ describe("pickSubjectRecord — the most specific record decides", () => {
 
 describe("settings: off, or a failed read, shows nothing and looks at no record", () => {
   it("no rows at all (production today) = everything hidden, and only the settings were read", async () => {
-    setSettings(undefined, undefined)
-    expect(await offerBuilderFeaturesFor({ accountId: ACCT })).toEqual({ addService: false, sendCheckBox: false })
+    setSettings(undefined)
+    expect(await offerBuilderFeaturesFor({ accountId: ACCT })).toEqual({ sendCheckBox: false })
     expect(h.calls).toEqual(["app_settings.in"])
   })
   it("a failed settings read hides everything", async () => {
     h.settings = { data: null, error: { message: "db down" } }
-    expect(await offerBuilderFeaturesFor({ accountId: ACCT })).toEqual({ addService: false, sendCheckBox: false })
-    h.settings = { data: [{ key: ADD, value: true }], error: { message: "partial" } }
-    expect(await offerBuilderFeaturesFor({ accountId: ACCT })).toEqual({ addService: false, sendCheckBox: false })
+    expect(await offerBuilderFeaturesFor({ accountId: ACCT })).toEqual({ sendCheckBox: false })
+    h.settings = { data: [{ key: BOX, value: true }], error: { message: "partial" } }
+    expect(await offerBuilderFeaturesFor({ accountId: ACCT })).toEqual({ sendCheckBox: false })
   })
   it.each([["false", false], ["'true'", "true"], ["'on'", "on"], ["'TEST'", "TEST"], ["the number 1", 1], ["null", null]])("a stored %s is off", async (_l, v) => {
-    setSettings(v, v)
+    setSettings(v)
     rec("accounts", ACCT, true)
-    expect(await offerBuilderFeaturesFor({ accountId: ACCT })).toEqual({ addService: false, sendCheckBox: false })
+    expect(await offerBuilderFeaturesFor({ accountId: ACCT })).toEqual({ sendCheckBox: false })
   })
 })
 
 describe("ON = everyone, and no record needs to be looked up", () => {
   it("shows for a real record, a test record, an unknown record and no record at all", async () => {
-    setSettings(true, true)
+    setSettings(true)
     rec("accounts", ACCT, false)
     for (const subject of [{ accountId: ACCT }, { accountId: LEAD }, {}, { token: "tok-x" }]) {
-      expect(await offerBuilderFeaturesFor(subject)).toEqual({ addService: true, sendCheckBox: true })
+      expect(await offerBuilderFeaturesFor(subject)).toEqual({ sendCheckBox: true })
     }
     expect(h.calls.filter((c) => !c.startsWith("app_settings"))).toEqual([])
   })
@@ -111,104 +109,89 @@ describe("ON = everyone, and no record needs to be looked up", () => {
 
 describe("TEST = only records marked as test", () => {
   it("a test company shows the piece; a real company does not", async () => {
-    setSettings("test", "test")
+    setSettings("test")
     rec("accounts", ACCT, true)
-    expect(await offerBuilderFeaturesFor({ accountId: ACCT })).toEqual({ addService: true, sendCheckBox: true })
+    expect(await offerBuilderFeaturesFor({ accountId: ACCT })).toEqual({ sendCheckBox: true })
     rec("accounts", ACCT, false)
-    expect(await offerBuilderFeaturesFor({ accountId: ACCT })).toEqual({ addService: false, sendCheckBox: false })
+    expect(await offerBuilderFeaturesFor({ accountId: ACCT })).toEqual({ sendCheckBox: false })
   })
   it("a record with is_test empty (null) is a REAL record", async () => {
-    setSettings("test", "test")
+    setSettings("test")
     rec("leads", LEAD, null)
-    expect(await offerBuilderFeaturesFor({ leadId: LEAD })).toEqual({ addService: false, sendCheckBox: false })
+    expect(await offerBuilderFeaturesFor({ leadId: LEAD })).toEqual({ sendCheckBox: false })
   })
   it("a record that cannot be found, a failed read, or no record given = hidden (unknown is never test)", async () => {
-    setSettings("test", "test")
-    expect(await offerBuilderFeaturesFor({ leadId: LEAD })).toEqual({ addService: false, sendCheckBox: false }) // not found
+    setSettings("test")
+    expect(await offerBuilderFeaturesFor({ leadId: LEAD })).toEqual({ sendCheckBox: false }) // not found
     h.rows[`leads:${LEAD}`] = { data: null, error: { message: "boom" } }
-    expect(await offerBuilderFeaturesFor({ leadId: LEAD })).toEqual({ addService: false, sendCheckBox: false }) // read failed
-    expect(await offerBuilderFeaturesFor({})).toEqual({ addService: false, sendCheckBox: false }) // nothing given
-    expect(await offerBuilderFeaturesFor({ accountId: "garbage" })).toEqual({ addService: false, sendCheckBox: false })
+    expect(await offerBuilderFeaturesFor({ leadId: LEAD })).toEqual({ sendCheckBox: false }) // read failed
+    expect(await offerBuilderFeaturesFor({})).toEqual({ sendCheckBox: false }) // nothing given
+    expect(await offerBuilderFeaturesFor({ accountId: "garbage" })).toEqual({ sendCheckBox: false })
   })
   it("the company decides over the lead and the lead over the contact", async () => {
-    setSettings("test", "test")
+    setSettings("test")
     rec("accounts", ACCT, false)
     rec("leads", LEAD, true)
     rec("contacts", CONTACT, true)
     // real company, test lead + test contact -> the company wins -> hidden
-    expect(await offerBuilderFeaturesFor({ accountId: ACCT, leadId: LEAD, contactId: CONTACT })).toEqual({ addService: false, sendCheckBox: false })
+    expect(await offerBuilderFeaturesFor({ accountId: ACCT, leadId: LEAD, contactId: CONTACT })).toEqual({ sendCheckBox: false })
     // test company with an unmarked contact -> shown
     rec("accounts", ACCT, true)
     rec("contacts", CONTACT, false)
-    expect(await offerBuilderFeaturesFor({ accountId: ACCT, contactId: CONTACT })).toEqual({ addService: true, sendCheckBox: true })
+    expect(await offerBuilderFeaturesFor({ accountId: ACCT, contactId: CONTACT })).toEqual({ sendCheckBox: true })
     // no company: the lead decides over the contact
     rec("leads", LEAD, false)
     rec("contacts", CONTACT, true)
-    expect(await offerBuilderFeaturesFor({ leadId: LEAD, contactId: CONTACT })).toEqual({ addService: false, sendCheckBox: false })
+    expect(await offerBuilderFeaturesFor({ leadId: LEAD, contactId: CONTACT })).toEqual({ sendCheckBox: false })
     // only a contact
-    expect(await offerBuilderFeaturesFor({ contactId: CONTACT })).toEqual({ addService: true, sendCheckBox: true })
+    expect(await offerBuilderFeaturesFor({ contactId: CONTACT })).toEqual({ sendCheckBox: true })
   })
   it("only the deciding record is read", async () => {
-    setSettings("test", "test")
+    setSettings("test")
     rec("accounts", ACCT, true)
     await offerBuilderFeaturesFor({ accountId: ACCT, leadId: LEAD, contactId: CONTACT })
     expect(h.calls).toEqual(["app_settings.in", `accounts:${ACCT}`])
   })
 })
 
-describe("each piece is decided on its own", () => {
-  it("one on + one test: the 'on' piece shows for a real record, the 'test' piece does not", async () => {
-    setSettings(true, "test")
-    rec("leads", LEAD, false)
-    expect(await offerBuilderFeaturesFor({ leadId: LEAD })).toEqual({ addService: true, sendCheckBox: false })
-    rec("leads", LEAD, true)
-    expect(await offerBuilderFeaturesFor({ leadId: LEAD })).toEqual({ addService: true, sendCheckBox: true })
-  })
-  it("one test + one off: only the test piece shows, and only for a test record", async () => {
-    setSettings("test", undefined)
-    rec("leads", LEAD, true)
-    expect(await offerBuilderFeaturesFor({ leadId: LEAD })).toEqual({ addService: true, sendCheckBox: false })
-  })
-})
-
 describe("an offer's token says which record it belongs to", () => {
   it("the offer's company decides", async () => {
-    setSettings(undefined, "test")
+    setSettings("test")
     h.rows["offers:tok-1"] = { data: { account_id: ACCT, lead_id: LEAD, contact_id: null }, error: null }
     rec("accounts", ACCT, true)
-    expect(await offerBuilderFeaturesFor({ token: "tok-1" })).toEqual({ addService: false, sendCheckBox: true })
+    expect(await offerBuilderFeaturesFor({ token: "tok-1" })).toEqual({ sendCheckBox: true })
     rec("accounts", ACCT, false)
-    expect(await offerBuilderFeaturesFor({ token: "tok-1" })).toEqual({ addService: false, sendCheckBox: false })
+    expect(await offerBuilderFeaturesFor({ token: "tok-1" })).toEqual({ sendCheckBox: false })
   })
   it("an offer with no company falls back to its lead, then its contact", async () => {
-    setSettings(undefined, "test")
+    setSettings("test")
     h.rows["offers:tok-2"] = { data: { account_id: null, lead_id: LEAD, contact_id: CONTACT }, error: null }
     rec("leads", LEAD, true)
-    expect(await offerBuilderFeaturesFor({ token: "tok-2" })).toEqual({ addService: false, sendCheckBox: true })
+    expect(await offerBuilderFeaturesFor({ token: "tok-2" })).toEqual({ sendCheckBox: true })
     h.rows["offers:tok-3"] = { data: { account_id: null, lead_id: null, contact_id: CONTACT }, error: null }
     rec("contacts", CONTACT, false)
-    expect(await offerBuilderFeaturesFor({ token: "tok-3" })).toEqual({ addService: false, sendCheckBox: false })
+    expect(await offerBuilderFeaturesFor({ token: "tok-3" })).toEqual({ sendCheckBox: false })
   })
   it("an unknown token, or a failed offer read with nothing else known, is hidden", async () => {
-    setSettings(undefined, "test")
-    expect(await offerBuilderFeaturesFor({ token: "no-such-offer" })).toEqual({ addService: false, sendCheckBox: false })
+    setSettings("test")
+    expect(await offerBuilderFeaturesFor({ token: "no-such-offer" })).toEqual({ sendCheckBox: false })
     h.rows["offers:tok-4"] = { data: null, error: { message: "boom" } }
-    expect(await offerBuilderFeaturesFor({ token: "tok-4" })).toEqual({ addService: false, sendCheckBox: false })
+    expect(await offerBuilderFeaturesFor({ token: "tok-4" })).toEqual({ sendCheckBox: false })
   })
   it("a failed offer read still uses explicit ids when the screen gave some", async () => {
-    setSettings(undefined, "test")
+    setSettings("test")
     h.rows["offers:tok-5"] = { data: null, error: { message: "boom" } }
     rec("leads", LEAD, true)
-    expect(await offerBuilderFeaturesFor({ token: "tok-5", leadId: LEAD })).toEqual({ addService: false, sendCheckBox: true })
+    expect(await offerBuilderFeaturesFor({ token: "tok-5", leadId: LEAD })).toEqual({ sendCheckBox: true })
   })
 })
 
 describe("it only ever reads", () => {
   it("no insert / update / upsert / delete in any path", async () => {
-    setSettings("test", true)
+    setSettings("test")
     rec("accounts", ACCT, true)
     await offerBuilderFeaturesFor({ accountId: ACCT, token: "tok-1" })
-    setSettings(undefined, undefined)
+    setSettings(undefined)
     await offerBuilderFeaturesFor({})
     h.settings = { data: null, error: { message: "x" } }
     await offerBuilderFeaturesFor({ leadId: LEAD })

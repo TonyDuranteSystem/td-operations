@@ -23,7 +23,7 @@ describe("the box's own setting — rolled out per record (off / test accounts o
     expect(SEND_CHECK_BOX_KEY).toBe("offer_send_check_box_enabled")
   })
   it("is decided by the server answer: shown only for a clean `true`", () => {
-    expect(parseFeaturesReply(true, { addService: false, sendCheckBox: true }).sendCheckBox).toBe(true)
+    expect(parseFeaturesReply(true, { sendCheckBox: true }).sendCheckBox).toBe(true)
     expect(parseFeaturesReply(true, { sendCheckBox: "true" }).sendCheckBox).toBe(false)
     expect(parseFeaturesReply(false, { sendCheckBox: true }).sendCheckBox).toBe(false)
     expect(parseFeaturesReply(true, null).sendCheckBox).toBe(false)

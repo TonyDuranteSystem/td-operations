@@ -34,12 +34,17 @@ class Query {
   select(_cols?: string) { return this }
   insert(row: Row) { this.op = "insert"; this.payload = row; return this }
   update(patch: Row) { this.op = "update"; this.payload = patch; return this }
-  eq(c: string, v: unknown) { this.filters.push(r => r[c] === v); return this }
+  /** a column, or a JSON path like "data->>at" */
+  private col(r: Row, c: string): unknown { const [head, key] = c.split("->>"); const v = r[head]; return key === undefined ? v : (v as Record<string, unknown> | undefined)?.[key] }
+  eq(c: string, v: unknown) { this.filters.push(r => this.col(r, c) === v); return this }
+  gte(c: string, v: string) { this.filters.push(r => { const x = this.col(r, c); return typeof x === "string" && x >= v }); return this }
+  lte(c: string, v: string) { this.filters.push(r => { const x = this.col(r, c); return typeof x === "string" && x <= v }); return this }
   is(c: string, v: null) { this.filters.push(r => (r[c] ?? null) === v); return this }
   in(c: string, vs: unknown[]) { this.filters.push(r => vs.includes(r[c])); return this }
   lt(c: string, v: string) { this.filters.push(r => String(r[c] ?? "") < v); return this }
   ilike(c: string, pat: string) { const re = likeToRegExp(pat); this.filters.push(r => re.test(String(r[c] ?? ""))); return this }
-  order() { return this }
+  private sorts: Array<{ c: string; asc: boolean }> = []
+  order(c?: string, o?: { ascending?: boolean }) { if (c) this.sorts.push({ c, asc: o?.ascending !== false }); return this }
   limit(n: number) { this.lim = n; return this }
   range(from: number, to: number) { this.off = from; this.lim = to - from + 1; return this }
   private run(): Result {
@@ -48,11 +53,14 @@ class Query {
     if (this.op === "insert") {
       const key = UNIQUE[this.t]
       if (key && all.some(r => r[key] === this.payload[key])) return { data: [], error: { code: "23505", message: "duplicate key" } }
-      const row: Row = { id: `${this.t}-${++this.db.seq}`, status: "pending", attempts: 0, ...this.payload }
+      // a row written through the app is newer than any row a test seeded by hand (so "newest first" means "written last")
+      const row: Row = { id: `${this.t}-${++this.db.seq}`, status: "pending", attempts: 0, created_at: new Date(Date.UTC(2100, 0, 1) + this.db.seq * 1000).toISOString(), ...this.payload }
       all.push(row)
       return { data: [row], error: null }
     }
     const hit = all.filter(r => this.filters.every(f => f(r)))
+    // a sort only applies to rows that carry the column (stable: rows without it keep their insertion order)
+    for (const { c, asc } of [...this.sorts].reverse()) hit.sort((a, b) => { const x = a[c], y = b[c]; return typeof x === "string" && typeof y === "string" ? (asc ? 1 : -1) * x.localeCompare(y) : 0 })
     if (this.op === "update") { hit.forEach(r => Object.assign(r, this.payload)); return { data: hit, error: null } }
     return { data: hit.slice(this.off, this.off + this.lim), error: null }
   }

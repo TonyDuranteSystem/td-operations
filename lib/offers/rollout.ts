@@ -14,12 +14,10 @@
  * answers with plain yes/no per piece. This file holds the rules both sides share.
  */
 
-export const ADD_SERVICE_KEY = 'offer_add_service_enabled' as const
 export const SEND_CHECK_BOX_KEY = 'offer_send_check_box_enabled' as const
 
 /** The pieces, and the app_settings key each one is stored under. Add a new piece here and nowhere else. */
 export const OFFER_BUILDER_FEATURE_KEYS = {
-  addService: ADD_SERVICE_KEY, // Part 4: "Add a new service" in Create Offer
   sendCheckBox: SEND_CHECK_BOX_KEY, // Part 1: the box "Before this offer can be sent"
 } as const
 
@@ -28,7 +26,7 @@ export type RolloutMode = 'off' | 'test' | 'on'
 export type OfferBuilderFeatures = Record<OfferBuilderFeature, boolean>
 
 /** Everything hidden — what any untrusted answer turns into. */
-export const NO_FEATURES: OfferBuilderFeatures = { addService: false, sendCheckBox: false }
+export const NO_FEATURES: OfferBuilderFeatures = { sendCheckBox: false }
 
 /**
  * A stored value → its mode. Only the boolean `true` means on and only the exact text "test" means test. The text
@@ -58,7 +56,6 @@ export function parseFeaturesReply(ok: boolean, body: unknown): OfferBuilderFeat
   if (!ok || !body || typeof body !== 'object') return { ...NO_FEATURES }
   const b = body as Record<string, unknown>
   return {
-    addService: b.addService === true,
     sendCheckBox: b.sendCheckBox === true,
   }
 }
