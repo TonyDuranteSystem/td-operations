@@ -78,6 +78,60 @@ export function departmentsForSwitches<T extends DepartmentEntry>(entries: reado
     .sort((a, b) => sortKey(a) - sortKey(b) || a.slug.localeCompare(b.slug))
 }
 
+/** What the Finance screen's department switch asks for. */
+export type DepartmentFilter =
+  | { kind: "all" }
+  | { kind: "default" } // invoices with NO department stored (department_entry_id IS NULL)
+  | { kind: "department"; id: string } // invoices stored under this non-default department
+
+/**
+ * Turn the `?dept=` value of the Finance screen into a filter. The value is a department slug from the catalog. Anything else (missing, empty, unknown, a
+ * retired department nobody references) means "all" - a bad link shows everything, it never hides invoices or errors.
+ * `referencedIds` lets a retired department that still holds invoices stay selectable (same rule as departmentsForSwitches).
+ */
+export function resolveDepartmentFilter<T extends DepartmentEntry>(
+  entries: readonly T[],
+  slug: string | null | undefined,
+  referencedIds: ReadonlySet<string> = new Set(),
+): DepartmentFilter {
+  if (!slug) return { kind: "all" }
+  const choice = departmentsForSwitches(entries, referencedIds).find(e => e.slug === slug)
+  if (!choice) return { kind: "all" }
+  return pickDefaultDepartment(entries).id === choice.id ? { kind: "default" } : { kind: "department", id: choice.id }
+}
+
+/** Does an invoice (by the department id stored on it, NULL = default) pass the filter? */
+export function departmentFilterMatches(filter: DepartmentFilter, storedDepartmentId: string | null | undefined): boolean {
+  if (filter.kind === "all") return true
+  if (filter.kind === "default") return !storedDepartmentId
+  return storedDepartmentId === filter.id
+}
+
+export interface DepartmentSwitch {
+  slug: string
+  label: string
+  count: number
+}
+
+/**
+ * The switches to show, in order, each with how many invoices it holds. `rows` are the already-loaded invoices (only their stored department id matters).
+ * A NULL id counts for the default department. A department with an id the catalog does not know is not counted anywhere (it cannot be shown either).
+ */
+export function buildDepartmentSwitches<T extends DepartmentEntry>(
+  entries: readonly T[],
+  rows: ReadonlyArray<{ department_entry_id?: string | null }>,
+): DepartmentSwitch[] {
+  const defaultId = pickDefaultDepartment(entries).id
+  const counts = new Map<string, number>()
+  for (const r of rows) {
+    const id = r.department_entry_id || defaultId
+    counts.set(id, (counts.get(id) ?? 0) + 1)
+  }
+  const referenced = new Set<string>()
+  counts.forEach((n, id) => { if (n > 0) referenced.add(id) })
+  return departmentsForSwitches(entries, referenced).map(e => ({ slug: e.slug, label: e.display_name, count: counts.get(e.id) ?? 0 }))
+}
+
 async function readDepartments(): Promise<CatalogEntry[]> {
   return listEntries(DEPARTMENTS_CATALOG, { includeDeprecated: true })
 }
