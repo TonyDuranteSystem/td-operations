@@ -12586,6 +12586,7 @@ export type Database = {
           required_documents: Json | null
           selected_package_key: string | null
           selected_services: Json | null
+          send_started_at: string | null
           services: Json | null
           status: string | null
           strategy: Json | null
@@ -12662,6 +12663,7 @@ export type Database = {
           required_documents?: Json | null
           selected_package_key?: string | null
           selected_services?: Json | null
+          send_started_at?: string | null
           services?: Json | null
           status?: string | null
           strategy?: Json | null
@@ -12738,6 +12740,7 @@ export type Database = {
           required_documents?: Json | null
           selected_package_key?: string | null
           selected_services?: Json | null
+          send_started_at?: string | null
           services?: Json | null
           status?: string | null
           strategy?: Json | null
@@ -13501,6 +13504,7 @@ export type Database = {
           credit_remaining: number | null
           deal_id: string | null
           delay_approved_until: string | null
+          department_entry_id: string | null
           description: string | null
           discount: number | null
           due_date: string | null
@@ -13570,6 +13574,7 @@ export type Database = {
           credit_remaining?: number | null
           deal_id?: string | null
           delay_approved_until?: string | null
+          department_entry_id?: string | null
           description?: string | null
           discount?: number | null
           due_date?: string | null
@@ -13639,6 +13644,7 @@ export type Database = {
           credit_remaining?: number | null
           deal_id?: string | null
           delay_approved_until?: string | null
+          department_entry_id?: string | null
           description?: string | null
           discount?: number | null
           due_date?: string | null
@@ -13765,6 +13771,20 @@ export type Database = {
             columns: ["deal_id"]
             isOneToOne: false
             referencedRelation: "deals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payments_department_entry_id_fkey"
+            columns: ["department_entry_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payments_department_entry_id_fkey"
+            columns: ["department_entry_id"]
+            isOneToOne: false
+            referencedRelation: "service_catalog"
             referencedColumns: ["id"]
           },
         ]
