@@ -20,6 +20,7 @@ import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { paidCallIdempotencyKey, manualPaidCallIdempotencyKey, paidCallDescription, type CalendlyPayment } from "@/lib/calendly/paid-booking"
 import { paymentIntentIdForCharge } from "@/lib/stripe-sync"
 import { resolveCreditSubject, subjectForRecording } from "@/lib/operations/credit-subject"
+import { departmentFields } from "@/lib/invoices/departments"
 
 export interface PaidCallResult {
   contactId: string
@@ -91,6 +92,11 @@ export async function recordPaidCall(params: {
    */
   isTest?: boolean
   /**
+   * The department of this paid call (a row id of the catalog `invoice_departments`), stamped on BOTH the invoice and its credit note so the pair
+   * always sits together. Omit it for the default department (TD clients). TD Marketing sales pass it (lib/finance/marketing-sale-settle.ts).
+   */
+  departmentEntryId?: string | null
+  /**
    * Set when a human ATTACHES an unmatched bank-feed row to a person, because
    * the client paid under an address the system cannot tie to them. Keys the
    * rows on the FEED instead of the charge so a double-click cannot mint a
@@ -111,7 +117,7 @@ export async function recordPaidCall(params: {
      creditUsedAtCreation?: boolean
   }
 }): Promise<PaidCallResult> {
-  const { payment, inviteeEmail, inviteeName, callDate, manual, isTest } = params
+  const { payment, inviteeEmail, inviteeName, callDate, manual, isTest, departmentEntryId } = params
   const description = paidCallDescription(callDate ?? null)
   const keyFor = (kind: "invoice" | "credit") =>
     manual ? manualPaidCallIdempotencyKey(manual.feedId, kind) : paidCallIdempotencyKey(payment.chargeId, kind)
@@ -142,6 +148,7 @@ export async function recordPaidCall(params: {
       ? `Paid strategy call — attached by hand from ${manual.sourceLabel ?? "bank transaction"} ${manual.feedId}.`
       : `Paid strategy call (Calendly booking, charge ${payment.chargeId}).`,
     idempotency_key: keyFor("invoice"),
+    ...departmentFields(departmentEntryId),
     // A paid row must never absorb credits — it is revenue, not a bill.
     skip_credit_netting: true,
   })
@@ -186,6 +193,7 @@ export async function recordPaidCall(params: {
         ? `Deductible from the client's next service purchase (paid call attached by hand from ${manual.sourceLabel ?? "bank transaction"} ${manual.feedId}).`
         : `Deductible from the client's next service purchase (paid call, charge ${payment.chargeId}).`,
     idempotency_key: keyFor("credit"),
+    ...departmentFields(departmentEntryId),
     skip_credit_netting: true,
   })
 

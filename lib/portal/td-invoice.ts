@@ -19,6 +19,7 @@ import { categoryFromInstallmentLabel, isInstallment } from '@/lib/billing/payme
 import { DEAD_INVOICE_STATUSES } from '@/lib/offers/payment-plan-state'
 import { resolveCreationCardFeeRate } from '@/lib/payments/card-fee-config'
 import { getOfficeDateString } from '@/lib/portal/office-hours'
+import { departmentFields } from '@/lib/invoices/departments'
 
 // ─── Types ──────────────────────────────────────────
 
@@ -118,6 +119,12 @@ export interface TDInvoiceInput {
    * classifies via this field, never via the free-text description.
    */
   payment_category?: string
+  /**
+   * The invoice's DEPARTMENT: a row id of the catalog `invoice_departments` (see lib/invoices/departments.ts). Leave it out for the default department
+   * (TD clients): a default invoice never names the column, so an empty value means "TD clients" for ever. Pass it only for another department (the
+   * invoice + credit note of a TD Marketing sale). Written in the INSERT itself, so a retry that finds the row can never leave it unstamped.
+   */
+  department_entry_id?: string | null
   /**
    * Billing year for `payments.year`. Stamp it on installment invoices so
    * year-scoped classification is reliable (the cron passes the installment year).
@@ -250,6 +257,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     idempotency_key,
     installment,
     payment_category,
+    department_entry_id,
     year,
     skip_credit_netting = false,
     credit_scope,
@@ -545,6 +553,8 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         idempotency_key: idempotency_key || null,
         installment: installment || null,
         payment_category: resolvedCategory,
+        // Only a non-default department is stored (see the param's note): an ordinary invoice never names the column.
+        ...departmentFields(department_entry_id),
         year: year ?? null,
         description: invoiceDescription,
         amount: total,

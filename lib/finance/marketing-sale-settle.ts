@@ -16,6 +16,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { leadDb } from "@/lib/marketing/meta-leads/service"
 import type { Db } from "@/lib/marketing/meta-leads/ingest"
 import { recordPaidSession } from "@/lib/marketing/sales-server"
+import { INVOICE_ORIGINS, departmentIdToStoreForOrigin } from "@/lib/invoices/departments"
 import { recordPaidCall } from "@/lib/operations/paid-call-credit"
 import { isChargeRefundedNow } from "@/lib/stripe-sync"
 import { updateFeed } from "@/lib/finance/feed-write"
@@ -117,6 +118,15 @@ async function settleWithRef(feedId: string, feed: Record<string, any>, ref: Mar
   // the date on the invoice is the business day in New York, not the UTC day (a payment at 9pm ET is still that day)
   const callDate = when.toLocaleDateString("en-CA", { timeZone: "America/New_York" })
 
+  // 2a. The department of this invoice: asked from the catalog (which department owns a marketing sale?), never named here. A broken or missing catalog
+  //     answer stops THIS step with a visible reason and a retry (failTry) instead of filing a marketing invoice under TD clients without a word.
+  let departmentEntryId: string | null
+  try {
+    departmentEntryId = await departmentIdToStoreForOrigin(INVOICE_ORIGINS.marketingSale)
+  } catch (e) {
+    return failTry(feedId, feed, `Could not find the department for TD Marketing invoices: ${e instanceof Error ? e.message : String(e)}`)
+  }
+
   // 2. The invoice + the credit (idempotent on the Stripe session).
   let invoice: { invoiceId: string; invoiceNumber: string; contactId: string; contactCreated: boolean }
   try {
@@ -126,6 +136,7 @@ async function settleWithRef(feedId: string, feed: Record<string, any>, ref: Mar
       inviteeName: l.full_name,
       callDate,
       isTest: false,
+      departmentEntryId,
       manual: { feedId: `stripe-session:${sessionId}`, sourceLabel: "Stripe payment (TD Marketing link)", creditUsedAtCreation: false },
     })
   } catch (e) {
