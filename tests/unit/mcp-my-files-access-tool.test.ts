@@ -84,14 +84,27 @@ describe("privacy boundary — My files access is not reachable from any HTTP ro
     }
     return out
   }
-  it("only the MCP tool file imports the access module, and only the MCP route registers the tool file", () => {
+  it("only the MCP tool file imports the access module (plus the one chat-attach module below), and only the MCP route registers the tool file", () => {
     const root = process.cwd()
     const files = [...walk(join(root, "app")), ...walk(join(root, "lib")), ...walk(join(root, "components"))]
     const importers = files.filter((f) => {
       if (f.endsWith("lib/crm-store/my-files-access.ts") || f.endsWith("lib/crm-store/my-files-access-rules.ts")) return false
       return /from\s+["'][^"']*my-files-access/.test(readFileSync(f, "utf8"))
     }).map((f) => f.replace(root + "/", ""))
-    expect(importers.sort()).toEqual(["app/api/[transport]/route.ts", "lib/mcp/tools/my-files-access.ts"])
+    // lib/team/attach-from-my-files.ts (dev job f34c915d) is the one other importer: it reads ONE named From Claude file for a Claude post in
+    // Team Chat. Its own reachability is pinned by the next test — only the team_chat_send MCP tool may import it.
+    expect(importers.sort()).toEqual(["app/api/[transport]/route.ts", "lib/mcp/tools/my-files-access.ts", "lib/team/attach-from-my-files.ts"])
+  })
+  it("the chat-attach module is imported only by the team_chat_send MCP tool — never by a route, a page, a component or the AI worker", () => {
+    const root = process.cwd()
+    const files = [...walk(join(root, "app")), ...walk(join(root, "lib")), ...walk(join(root, "components"))]
+    const users = files
+      .filter((f) => !f.endsWith("lib/team/attach-from-my-files.ts") && /from\s+["'][^"']*attach-from-my-files["']/.test(readFileSync(f, "utf8")))
+      .map((f) => f.replace(root + "/", ""))
+    expect(users).toEqual(["lib/mcp/tools/team-chat.ts"])
+    // …and that tool file is registered only by the MCP route
+    const toolUsers = files.filter((f) => !f.endsWith("lib/mcp/tools/team-chat.ts") && /tools\/team-chat["']/.test(readFileSync(f, "utf8"))).map((f) => f.replace(root + "/", ""))
+    expect(toolUsers).toEqual(["app/api/[transport]/route.ts"])
   })
   it("the tool file is imported only by the MCP route (static or dynamic)", () => {
     const root = process.cwd()

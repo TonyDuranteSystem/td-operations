@@ -70,6 +70,8 @@ export interface JointEnv {
   lead(teamId: string, leadId: string): Promise<LeadFacts | null>
   recordCall(teamId: string, leadId: string, op: CallOp): Promise<{ ok: true } | { ok: false; error: string }>
   recordSynced(leadId: string, kind: "calendar_synced" | "calendar_sync_failed", data: Record<string, unknown>): Promise<void>
+  /** Takes the calendar entry a person wrote for this lead's EARLIER call (the setter's or the seller's own booking) off the seller's calendar, before the client's booking writes its own: otherwise the old entry stays there for good beside the new one. Best effort, never fails the booking. */
+  dropStaffCalendarEvent?(teamId: string, leadId: string): Promise<void>
   sendMail(to: string, mail: JointMail): Promise<void>
   /** a plain note for the seller ("the client cancelled") */
   tellSeller(teamId: string, sellerUserId: string, leadId: string, text: string): Promise<void>
@@ -223,6 +225,8 @@ export async function bookJoint(env: JointEnv, token: unknown, i: { startIso: un
     undo.push(async () => env.zoom.deleteMeeting(zoom.id))
     const recorded = await env.recordCall(row.team_id, row.lead_id, { kind: "set", at: range.startsAt, note: "Booked by the client through the booking link with Antonio (Zoom)" })
     if (recorded.ok === false) return await fail("The booking could not be saved. Please try again.", 502)
+    // the lead's earlier call (booked by a person) had its own entry on the seller's calendar: it goes now, the client's entry below replaces it
+    try { await env.dropStaffCalendarEvent?.(row.team_id, row.lead_id) } catch { /* the booking goes on; a leftover entry is only untidy */ }
     undo.push(async () => { await env.recordCall(row.team_id, row.lead_id, { kind: "cancel", note: "The booking could not be finished and was taken back" }) })
     // the Google invitation reaches Antonio and the client only now, when the lead already has the call: a booking that fails before this point never sends one
     const ev = await env.gcal.createEvent(offer.seller.email as string, "primary", {
