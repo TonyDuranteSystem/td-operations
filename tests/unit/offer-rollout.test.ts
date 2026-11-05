@@ -4,7 +4,6 @@
  */
 import { describe, expect, it } from "vitest"
 import {
-  ADD_SERVICE_KEY,
   NO_FEATURES,
   OFFER_BUILDER_FEATURE_KEYS,
   SEND_CHECK_BOX_KEY,
@@ -14,10 +13,9 @@ import {
 } from "@/lib/offers/rollout"
 
 describe("the keys", () => {
-  it("each piece keeps the name it was stored under before (so nothing already stored changes meaning)", () => {
-    expect(ADD_SERVICE_KEY).toBe("offer_add_service_enabled")
+  it("the piece keeps the name it was stored under (so nothing already stored changes meaning)", () => {
     expect(SEND_CHECK_BOX_KEY).toBe("offer_send_check_box_enabled")
-    expect(OFFER_BUILDER_FEATURE_KEYS).toEqual({ addService: "offer_add_service_enabled", sendCheckBox: "offer_send_check_box_enabled" })
+    expect(OFFER_BUILDER_FEATURE_KEYS).toEqual({ sendCheckBox: "offer_send_check_box_enabled" })
   })
 })
 
@@ -62,19 +60,21 @@ describe("featureVisible — can this piece be seen for this record?", () => {
 })
 
 describe("parseFeaturesReply — what a screen does with the route's answer", () => {
-  it("a clean answer shows exactly the pieces answered true", () => {
-    expect(parseFeaturesReply(true, { addService: true, sendCheckBox: false })).toEqual({ addService: true, sendCheckBox: false })
-    expect(parseFeaturesReply(true, { addService: false, sendCheckBox: true })).toEqual({ addService: false, sendCheckBox: true })
-    expect(parseFeaturesReply(true, { addService: true, sendCheckBox: true })).toEqual({ addService: true, sendCheckBox: true })
+  it("a clean answer shows the piece answered true", () => {
+    expect(parseFeaturesReply(true, { sendCheckBox: true })).toEqual({ sendCheckBox: true })
+    expect(parseFeaturesReply(true, { sendCheckBox: false })).toEqual({ sendCheckBox: false })
   })
   it("only the boolean true shows a piece — 'true', 1, objects and missing fields do not", () => {
-    expect(parseFeaturesReply(true, { addService: "true", sendCheckBox: 1 })).toEqual(NO_FEATURES)
-    expect(parseFeaturesReply(true, { addService: {}, sendCheckBox: [true] })).toEqual(NO_FEATURES)
+    expect(parseFeaturesReply(true, { sendCheckBox: "true" })).toEqual(NO_FEATURES)
+    expect(parseFeaturesReply(true, { sendCheckBox: 1 })).toEqual(NO_FEATURES)
+    expect(parseFeaturesReply(true, { sendCheckBox: [true] })).toEqual(NO_FEATURES)
     expect(parseFeaturesReply(true, {})).toEqual(NO_FEATURES)
-    expect(parseFeaturesReply(true, { addService: true })).toEqual({ addService: true, sendCheckBox: false })
+  })
+  it("an answer about a piece that no longer exists (the retired 'add a new service') shows nothing", () => {
+    expect(parseFeaturesReply(true, { addService: true })).toEqual(NO_FEATURES)
   })
   it("a failed reply hides everything, even when the body says true", () => {
-    expect(parseFeaturesReply(false, { addService: true, sendCheckBox: true })).toEqual(NO_FEATURES)
+    expect(parseFeaturesReply(false, { sendCheckBox: true })).toEqual(NO_FEATURES)
   })
   it("an unreadable body (expired login, error page, nothing) hides everything", () => {
     expect(parseFeaturesReply(true, null)).toEqual(NO_FEATURES)
@@ -84,8 +84,8 @@ describe("parseFeaturesReply — what a screen does with the route's answer", ()
   })
   it("never hands out the shared NO_FEATURES object to be changed", () => {
     const a = parseFeaturesReply(false, null)
-    a.addService = true
-    expect(NO_FEATURES.addService).toBe(false)
-    expect(parseFeaturesReply(false, null).addService).toBe(false)
+    a.sendCheckBox = true
+    expect(NO_FEATURES.sendCheckBox).toBe(false)
+    expect(parseFeaturesReply(false, null).sendCheckBox).toBe(false)
   })
 })
