@@ -30,7 +30,6 @@ export type TeamAction =
   | "convert_lead"
   | "create_offer"
   | "create_lead"
-  | "activate_lead"
   | "mark_lost"
   | "place_client"
   | "create_portal_login"

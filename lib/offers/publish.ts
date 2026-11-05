@@ -68,10 +68,10 @@ export async function publishOffer(
   }
 
   // Every check that can refuse a send lives in ONE function (lib/offers/send-check.ts), shared with the read-only box
-  // beside the Send buttons and with Activate Lead, so they can never disagree. In this real-send mode the FIRST problem
+  // beside the Send buttons, so they can never disagree. In this real-send mode the FIRST problem
   // stops the rest, in the same order and with the same words as before: client email, yearly fee, still a draft, new
   // services ready, approved wording frozen (that last step writes, so it never runs after an earlier failure).
-  const check = await offerSendCheck({ offer, door: "send", mode: "send" })
+  const check = await offerSendCheck({ offer, mode: "send" })
   if (check.blockers.length > 0) {
     const first = check.blockers[0]
     return { ...fail(`Cannot publish: ${first.message}`), ...(first.readiness ? { blockers: first.readiness } : {}) }

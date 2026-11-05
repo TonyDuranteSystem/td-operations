@@ -4,7 +4,7 @@ import { useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   CreditCard, UserPlus, XCircle,
-  Loader2, FileText, Rocket, Trash2, RotateCcw, UserX, Send,
+  Loader2, FileText, Trash2, RotateCcw, UserX, Send,
   MessageCircle, GitBranch,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -16,7 +16,6 @@ import { WelcomeLinkButton, type WelcomeLinkButtonHandle } from '@/components/of
 import { ConfirmPaymentDialog } from './confirm-payment-dialog'
 import { ConvertLeadDialog } from './convert-lead-dialog'
 import { CreateOfferDialog } from './create-offer-dialog'
-import { ActivateLeadDialog } from './activate-lead-dialog'
 import { OfferBlockedDialog } from '@/components/offers/offer-blocked-dialog'
 import { OfferSendCheckBox } from '@/components/offers/offer-send-check-box'
 import type { ReadinessBlocker } from '@/lib/offers/service-readiness'
@@ -76,7 +75,6 @@ export function LeadActions({
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [showCreateOffer, setShowCreateOffer] = useState(false)
-  const [showActivateLead, setShowActivateLead] = useState(false)
   const [showConfirmPayment, setShowConfirmPayment] = useState(false)
   const [showConvert, setShowConvert] = useState(false)
   const [showWhatsApp, setShowWhatsApp] = useState(false)
@@ -104,13 +102,11 @@ export function LeadActions({
   const isActivated = activation?.status === 'activated'
   const hasOffer = !!offer
   const hasEmail = !!leadEmail
-  const isOfferSentOrBeyond = ['Offer Sent', 'Negotiating', 'Converted'].includes(leadStatus)
   const isOfferDraft = hasOffer && offer.status === 'draft'
   const isOfferPublished = hasOffer && offer.status !== 'draft'
 
   // Sequential unlock logic
   const canCreateOffer = !hasOffer && !isConverted && !isLost
-  const canActivateLead = hasOffer && hasEmail && !isOfferSentOrBeyond && !isConverted && !isLost
   const canConfirmPayment = !isConverted && !isActivated
   const canConvert = !isConverted
   const canMarkLost = !isConverted && !isLost
@@ -397,21 +393,10 @@ export function LeadActions({
             />
           )}
 
-          {/* Step 2: Activate Lead (enabled only after offer exists) */}
-          {canActivateLead && (
-            <button
-              onClick={() => setShowActivateLead(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
-            >
-              <Rocket className="h-4 w-4" />
-              Activate Lead
-            </button>
-          )}
-
           {/* Disabled state hints */}
           {hasOffer && !hasEmail && !isConverted && !isLost && (
             <span className="inline-flex items-center gap-1.5 px-3 py-2 text-xs text-amber-700 bg-amber-50 rounded-md border border-amber-200">
-              Lead needs an email to activate
+              Lead needs an email to send the offer
             </span>
           )}
 
@@ -569,15 +554,6 @@ export function LeadActions({
       />
 
       {blockedBy && <OfferBlockedDialog blockers={blockedBy} onClose={() => setBlockedBy(null)} />}
-
-      <ActivateLeadDialog
-        open={showActivateLead}
-        onClose={() => setShowActivateLead(false)}
-        leadId={leadId}
-        leadName={leadName}
-        leadEmail={leadEmail || ''}
-        offerToken={offer?.token || null}
-      />
 
       <ConfirmPaymentDialog
         open={showConfirmPayment}

@@ -99,7 +99,7 @@ describe("offer-send-check route — what it answers", () => {
   it("a draft: runs the shared check in PREVIEW mode for the Send door and returns its three lists", async () => {
     const r = await call()
     expect(r.status).toBe(200)
-    expect(h.check).toHaveBeenCalledWith({ offer: draft, door: "send", mode: "preview" })
+    expect(h.check).toHaveBeenCalledWith({ offer: draft, mode: "preview" })
     expect(r.json).toMatchObject({ applicable: true, status: "draft", risks: ["r1"], notChecked: ["n1"], willSendTo: "jane@example.com" })
     expect((r.json.blockers as Array<{ step: string }>)[0].step).toBe("email")
     expect(typeof r.json.checkedAt).toBe("string")
