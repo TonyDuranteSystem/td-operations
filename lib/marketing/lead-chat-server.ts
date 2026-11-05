@@ -296,7 +296,7 @@ export async function sendChatMessage(ctx: MarketingContext, lead: LeadRow, body
     // WAIT for the notifications (a function may be stopped as soon as it has answered), but never longer than a few seconds: a slow phone service must not hold up the sender.
     // A person named with @ gets a note that says so.
     const send = (ids: string[], mentioned: boolean) => (ids.length === 0 ? Promise.resolve() : Promise.race([
-      sendMarketingPush(ctx.team.id, ids, { ...threadPush({ senderName, threadTitle: leadName, kind: "lead", mentioned, preview }), alertKind: "marketing_lead_chat", url: chatUrlFor(lead.id, lane), tag: mentioned ? `chat-${lead.id}-${lane}-at` : `chat-${lead.id}-${lane}` }),
+      sendMarketingPush(ctx.team.id, ids, { ...threadPush({ senderName, threadTitle: leadName, kind: "lead", mentioned, preview }), alertKind: "marketing_lead_chat", phoneName: lead.full_name || undefined, url: chatUrlFor(lead.id, lane), tag: mentioned ? `chat-${lead.id}-${lane}-at` : `chat-${lead.id}-${lane}` }),
       new Promise(resolve => setTimeout(resolve, 4000)),
     ]))
     await Promise.all([send(named, true), send(rest, false)])
@@ -342,7 +342,7 @@ async function remention(ctx: MarketingContext, m: ChatMessageRow & { lead_id: s
     if (to.length === 0) return
     const { data: lead } = await db().from("marketing_leads").select("full_name, email").eq("id", m.lead_id).eq("team_id", ctx.team.id).maybeSingle()
     await Promise.race([
-      sendMarketingPush(ctx.team.id, to, { ...threadPush({ senderName: personName(ctx.user.email ?? ""), threadTitle: lead?.full_name || lead?.email || "Lead", kind: "lead", mentioned: true, preview: previewLine({ message: text, attachments: m.attachments, deleted_at: null }) }), alertKind: "marketing_lead_chat", url: chatUrlFor(m.lead_id, m.lane), tag: `chat-${m.lead_id}-${m.lane}-at` }),
+      sendMarketingPush(ctx.team.id, to, { ...threadPush({ senderName: personName(ctx.user.email ?? ""), threadTitle: lead?.full_name || lead?.email || "Lead", kind: "lead", mentioned: true, preview: previewLine({ message: text, attachments: m.attachments, deleted_at: null }) }), alertKind: "marketing_lead_chat", phoneName: lead?.full_name || undefined, url: chatUrlFor(m.lead_id, m.lane), tag: `chat-${m.lead_id}-${m.lane}-at` }),
       new Promise(resolve => setTimeout(resolve, 4000)),
     ])
   } catch { /* the edit is already saved */ }

@@ -10,17 +10,20 @@
 
 // [first, last] code points: C0 and C1 controls, soft hyphen, Arabic letter mark, Mongolian vowel separator, zero-width and
 // direction marks, line / paragraph separators and direction embeddings / overrides, invisible operators and direction isolates,
-// the byte-order mark, interlinear annotation marks.
+// the byte-order mark, interlinear annotation marks, lone surrogate halves (Apple refuses a payload that is not valid text).
+// The zero-width NON-joiner and JOINER (U+200C, U+200D) are KEPT: they are part of real names (Persian, many emoji) and cannot reverse text direction.
 const UNSAFE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0x0000, 0x001f],
   [0x007f, 0x009f],
   [0x00ad, 0x00ad],
   [0x061c, 0x061c],
   [0x180e, 0x180e],
-  [0x200b, 0x200f],
+  [0x200b, 0x200b],
+  [0x200e, 0x200f],
   [0x2028, 0x202e],
   [0x2060, 0x206f],
   [0xfeff, 0xfeff],
+  [0xd800, 0xdfff],
   [0xfff9, 0xfffb],
 ]
 

@@ -10,6 +10,7 @@
  *   - talk_room_message    channel / topic message: who and where, no text (the phone does not alert for these; computers keep theirs)
  *   - client_thread_message  a team chat attached to a client: "New message in a client chat", no names, no text
  *   - client_chat          client portal chat: "Chat: <company>" (cleaned), no text, no file name
+ *   - client_share_check   the safety alert when staff sent a file or screenshot INTO a client chat: "A file was sent to a client", no names
  *   - claude_reply         "Claude replied", no text (an answer about a client can quote an EIN or a balance)
  *   - shared_item          "<name> shared something with you", no card title
  *   - staff_note           "New staff note", no text
@@ -26,6 +27,7 @@ export const STAFF_ALERT_KINDS = [
   "talk_room_message",
   "client_thread_message",
   "client_chat",
+  "client_share_check",
   "claude_reply",
   "shared_item",
   "staff_note",
