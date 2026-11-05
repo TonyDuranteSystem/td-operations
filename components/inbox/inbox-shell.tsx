@@ -1383,6 +1383,14 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
     ? selected.id.replace('whatsapp:', '')
     : null
 
+  // Email and WhatsApp are separate screens now (the desktop menu pages AND the phone app's tabs): Compose does the one thing that
+  // fits THIS screen — no menu that could open a WhatsApp chat inside the email screen, or the reverse.
+  const onComposeClick = () => {
+    if (lockedChannel === 'gmail') { setForwardData(null); setComposeOpen(true) }
+    else if (lockedChannel === 'whatsapp') setWhatsappPickerOpen(true)
+    else setComposeMenuOpen(!composeMenuOpen)
+  }
+
   return (
     <div className="flex flex-col h-full bg-white">
       {/* Header with channel tabs + compose button */}
@@ -1431,13 +1439,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
             </button>
           )}
           <button
-            onClick={() => {
-              // Email and WhatsApp are separate screens now: Compose does the one thing that fits THIS screen (no menu that could
-              // open a WhatsApp chat inside the email screen, or the reverse).
-              if (lockedChannel === 'gmail') { setForwardData(null); setComposeOpen(true) }
-              else if (lockedChannel === 'whatsapp') setWhatsappPickerOpen(true)
-              else setComposeMenuOpen(!composeMenuOpen)
-            }}
+            onClick={onComposeClick}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition-colors"
           >
             <PenSquare className="h-3.5 w-3.5" />
@@ -1480,13 +1482,13 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
         <div className="fixed bottom-4 right-4 z-40">
           <button
             type="button"
-            onClick={() => setComposeMenuOpen(!composeMenuOpen)}
+            onClick={onComposeClick}
             aria-label="Compose"
             className="flex h-14 w-14 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg"
           >
             <PenSquare className="h-6 w-6" />
           </button>
-          {composeMenuOpen && (
+          {composeMenuOpen && !lockedChannel && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setComposeMenuOpen(false)} />
               <div className="absolute bottom-full right-0 z-50 mb-2 w-60 rounded-lg border border-zinc-200 bg-white py-1 shadow-xl">

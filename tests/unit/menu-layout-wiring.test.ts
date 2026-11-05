@@ -179,7 +179,9 @@ describe("bug-hunt fixes (2026-11-04) that must not drift", () => {
     const shell = read("components/inbox/inbox-shell.tsx")
     expect(shell).toContain("if (lockedChannel === 'gmail') { setForwardData(null); setComposeOpen(true) }")
     expect(shell).toContain("else if (lockedChannel === 'whatsapp') setWhatsappPickerOpen(true)")
-    expect(shell).toContain("{composeMenuOpen && !lockedChannel && (")
+    // one handler for the desktop Compose button AND the phone app's round button; neither draws the two-way menu on a one-channel screen
+    expect((shell.match(/onClick=\{onComposeClick\}/g) ?? []).length).toBe(2)
+    expect((shell.match(/\{composeMenuOpen && !lockedChannel && \(/g) ?? []).length).toBe(2)
   })
   it("the name box closes with Esc, and opening it shuts any panel", () => {
     expect(read("components/dashboard/menu-editor.tsx")).toContain("if (e.key === 'Escape') { e.stopPropagation(); onClose() }")
