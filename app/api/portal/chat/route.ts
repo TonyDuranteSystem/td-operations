@@ -709,5 +709,6 @@ async function pushNotifyAdmin(accountId: string | null, contactId: string | nul
     url: `/portal-chats${accountId ? `?account=${accountId}` : ''}`,
     tag: `admin-chat-${accountId || contactId || 'unknown'}`,
     alertKind: 'client_chat',
+    phoneName: displayName,
   })
 }

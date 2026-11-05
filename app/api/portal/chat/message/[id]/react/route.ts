@@ -218,5 +218,6 @@ async function notifyAdminOfReaction(accountId: string | null, contactId: string
     url: `/portal-chats${accountId ? `?account=${accountId}` : ''}`,
     tag: `admin-chat-reaction-${accountId || contactId || 'unknown'}`,
     alertKind: 'client_chat',
+    phoneName: displayName,
   })
 }
