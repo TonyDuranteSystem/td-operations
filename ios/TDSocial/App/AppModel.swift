@@ -17,6 +17,8 @@ final class AppModel: ObservableObject {
     @Published var offline = false
     @Published var showAlertsSheet = false
     @Published var alertsAuthorized = false
+    /// the "You" screen is open (asked for by the round button inside a web screen, or by the failed-page overlay)
+    @Published var showYou = false
     @Published var signInHost = WebHost(path: TabPath.signInPath)
 
     private var hosts: [String: WebHost] = [:]

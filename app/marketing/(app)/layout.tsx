@@ -14,6 +14,7 @@ import { OwnerNav } from '@/components/marketing/owner-nav'
 import { MessageVoice, VoiceSwitch } from '@/components/marketing/message-voice'
 import { LangProvider } from '@/components/marketing/lang-provider'
 import { LangSwitch } from '@/components/marketing/lang-switch'
+import { AppYouButton } from '@/components/app-mode/app-you-button'
 import { MarketingPushBanner } from '@/components/marketing/push-banner'
 import { MARKETING_PERMISSIONS, hasPermission } from '@/lib/marketing/permissions'
 import { LeadWindowsHost } from '@/components/marketing/lead-windows-host'
@@ -84,7 +85,7 @@ export default async function MarketingAppLayout({ children }: { children: React
           <div className="flex h-screen flex-col bg-white">
             <div className="app-marketing-top flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2">
               <p className="min-w-0 truncate text-base font-semibold" data-testid="app-marketing-title">TD Marketing</p>
-              <LangSwitch />
+              <div className="flex items-center gap-2"><LangSwitch /><AppYouButton /></div>
             </div>
             {/* "View as" is a safety notice, not decoration: Antonio sees the team's Marketing as its owner, and what he does is recorded under his own email. It stays in the app, as one line with the way out. */}
             {ctx.viewAs && (

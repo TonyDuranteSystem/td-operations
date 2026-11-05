@@ -54,6 +54,7 @@ import { openedConversation } from '@/lib/inbox/opened-conversation'
 import { insertLineBreaksForBlockTags } from '@/lib/inbox/email-html'
 import { pickNewestNonOwnMessage } from '@/lib/inbox/default-reply-target'
 import { inboxChannelFromParams } from '@/lib/nav/nav-active'
+import { AppListTitle } from '@/components/app-mode/app-you-button'
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
   gmail: Mail,
@@ -1403,6 +1404,8 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
 
   return (
     <div className="flex flex-col h-full bg-white">
+      {/* TD Social phone app: the list screens get a title bar with the round "You" button (app 0.2.0+; renders nothing otherwise and on the computer) */}
+      {appMode && !selected && <AppListTitle title={isWhatsApp ? 'WhatsApp' : 'Inbox'} />}
       {/* Header with channel tabs + compose button */}
       <div className={cn('flex items-center justify-between border-b bg-white', appMode && 'hidden')}>
         <InboxHeader

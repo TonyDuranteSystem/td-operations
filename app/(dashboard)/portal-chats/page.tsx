@@ -36,6 +36,7 @@ import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuickCreateModal } from '@/components/dashboard/quick-create-modal'
 import { HelpDot } from '@/components/help/help-dot'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
+import { AppYouButton } from '@/components/app-mode/app-you-button'
 import { PhoneConvNav, PhoneViewStrip, PhoneMoreSheet, PhoneReplyToLine, PhoneReplyToSheet, PhonePlusButton, PhonePlusSheet } from '@/components/portal-chats/app-phone-chrome'
 import {
   filterForSurfaceAndContext as filterTopicsForSurfaceAndContext,
@@ -2564,6 +2565,8 @@ export default function PortalChatsPage() {
                   <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
                 </button>
               </FastTooltip>
+              {/* phone app: the round "You" button lives in this bar (nothing on the computer or on older app builds) */}
+              <AppYouButton className="ml-1" />
             </div>
           </div>
           {/* Sidebar tabs: Chats | Actions | Team */}

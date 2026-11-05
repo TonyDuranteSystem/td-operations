@@ -62,11 +62,14 @@ struct SignInView: View {
 
 struct FailedOverlay: View {
     @ObservedObject var host: WebHost
+    @EnvironmentObject var model: AppModel
     var body: some View {
         if host.failed {
             VStack(spacing: 14) {
                 Text(AppConfig.say(.couldntLoad)).font(.headline)
                 Button(AppConfig.say(.tryAgain)) { host.reload() }.buttonStyle(.borderedProminent).tint(brandRed)
+                // a page that will not load must never lock the person out of "You" (sign out, alert switches)
+                if model.me != nil { Button(AppConfig.say(.youTitle)) { model.showYou = true }.foregroundColor(.secondary) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(.systemBackground))
         }
@@ -86,32 +89,21 @@ private func symbol(for tabId: String) -> String {
 
 struct TabsView: View {
     @EnvironmentObject var model: AppModel
-    @State private var showYou = false
     var body: some View {
         if let me = model.me {
-            VStack(spacing: 0) {
-                // the "You" button lives in a thin strip, not in the tab bar: iPhone folds a sixth tab under "More"
-                HStack {
-                    Spacer()
-                    Button { showYou = true } label: {
-                        Text(Initials.of(name: me.user.name, email: me.user.email)).font(.footnote.weight(.semibold)).foregroundColor(.white)
-                            .frame(width: 30, height: 30).background(Circle().fill(brandRed))
-                    }
-                    .accessibilityLabel(AppConfig.say(.youTitle))
+            // No strip above the pages any more (0.2.0): the round "You" button is inside the top bar of each list screen (the web screens draw it
+            // and ask for this sheet with a message, see YouBridge); a screen that cannot load offers "You" itself (FailedOverlay).
+            TabView(selection: $model.selectedTab) {
+                ForEach(me.tabs) { tab in
+                    TabPage(tabId: tab.id, host: model.host(for: tab.id))
+                        .tabItem { Label(TabPath.shortLabel(for: tab.id, fallback: tab.label), systemImage: symbol(for: tab.id)) }
+                        .tag(tab.id)
+                        .badge(me.count(for: tab.id))
                 }
-                .padding(.horizontal, 12).padding(.vertical, 4)
-                TabView(selection: $model.selectedTab) {
-                    ForEach(me.tabs) { tab in
-                        TabPage(tabId: tab.id, host: model.host(for: tab.id))
-                            .tabItem { Label(TabPath.shortLabel(for: tab.id, fallback: tab.label), systemImage: symbol(for: tab.id)) }
-                            .tag(tab.id)
-                            .badge(me.count(for: tab.id))
-                    }
-                }
-                .toolbar(me.tabs.count > 1 ? .visible : .hidden, for: .tabBar)   // a person with one tab (marketing) gets no tab bar
-                .tint(brandRed)
             }
-            .sheet(isPresented: $showYou) { YouView() }
+            .toolbar(me.tabs.count > 1 ? .visible : .hidden, for: .tabBar)   // a person with one tab (marketing) gets no tab bar
+            .tint(brandRed)
+            .sheet(isPresented: $model.showYou) { YouView() }
             .onChange(of: model.selectedTab) { _, _ in model.tabChanged() }
         }
     }

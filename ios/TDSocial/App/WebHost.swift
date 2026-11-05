@@ -3,6 +3,15 @@
 import SwiftUI
 import WebKit
 
+/// Receives the one message a web screen may send: "you". Only a page of OUR server, in the main frame, is believed (a payment frame or an
+/// embedded player must never be able to open the app's screens).
+final class YouBridge: NSObject, WKScriptMessageHandler {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame, message.frameInfo.securityOrigin.host.lowercased() == AppConfig.serverHost.lowercased(), (message.body as? String) == "you" else { return }
+        Task { @MainActor in AppModel.shared.showYou = true }
+    }
+}
+
 @MainActor
 final class WebHost: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
     let webView: WKWebView
@@ -19,6 +28,8 @@ final class WebHost: NSObject, ObservableObject, WKNavigationDelegate, WKUIDeleg
         cfg.applicationNameForUserAgent = "\(ServerRules.userAgentToken)\(AppConfig.version)"   // the one thing that switches the web screens into app mode
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
+        // a web screen's round "You" button asks the app to open its "You" screen (web: components/app-mode/app-you-button.tsx)
+        cfg.userContentController.add(YouBridge(), name: "tdsocial")
         #if DEBUG
         // simulator tests only: production has no orange test-server bar, so hide it to see (and measure) the real layout
         cfg.userContentController.addUserScript(WKUserScript(source: "var s=document.createElement('style');s.textContent='.fixed.top-0.bg-orange-500{display:none!important}';document.documentElement.appendChild(s);", injectionTime: .atDocumentEnd, forMainFrameOnly: false))
