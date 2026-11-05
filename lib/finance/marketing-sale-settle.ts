@@ -16,6 +16,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { leadDb } from "@/lib/marketing/meta-leads/service"
 import type { Db } from "@/lib/marketing/meta-leads/ingest"
 import { recordPaidSession } from "@/lib/marketing/sales-server"
+import { INVOICE_ORIGINS, departmentIdToStoreForOrigin } from "@/lib/invoices/departments"
 import { recordPaidCall } from "@/lib/operations/paid-call-credit"
 import { isChargeRefundedNow } from "@/lib/stripe-sync"
 import { updateFeed } from "@/lib/finance/feed-write"
@@ -49,8 +50,14 @@ async function park(feedId: string, reason: string): Promise<MarketingSettleResu
 }
 
 /** A step failed and will be tried again on the next run — but only a few times: after that the row is parked with the reason (and so is visible to Antonio, not stuck first in line forever). */
-async function failTry(feedId: string, feed: Record<string, any>, error: string, opts: { count?: boolean } = {}): Promise<MarketingSettleResult> { // eslint-disable-line @typescript-eslint/no-explicit-any
-  if (opts.count === false) return { matched: false, error }
+export async function failTry(feedId: string, feed: Record<string, any>, error: string, opts: { count?: boolean } = {}): Promise<MarketingSettleResult> { // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (opts.count === false) {
+    // A wait that is not the payment's fault (a broken setup list): the try is NOT counted, but the reason is written on the row so a person who opens it
+    // can see why it is still unsettled. Not rewritten when the row already says the same thing (this runs every few minutes); cleared when the row is matched.
+    const prev = (feed.review_metadata as { marketing_settle_waiting?: { reason?: unknown } } | null)?.marketing_settle_waiting
+    if (prev?.reason !== error) await updateFeed(feedId, { review_metadata: { marketing_settle_waiting: { reason: error, at: new Date().toISOString() } } }, "marketing-sale:waiting")
+    return { matched: false, error }
+  }
   const tries = Number((feed.review_metadata as { marketing_settle_tries?: unknown } | null)?.marketing_settle_tries ?? 0) + 1
   if (tries >= MAX_SETTLE_TRIES) return park(feedId, `could not be settled after ${tries} tries: ${error}`)
   await updateFeed(feedId, { review_metadata: { marketing_settle_tries: tries, marketing_settle_last_error: error } }, "marketing-sale:try")
@@ -117,6 +124,19 @@ async function settleWithRef(feedId: string, feed: Record<string, any>, ref: Mar
   // the date on the invoice is the business day in New York, not the UTC day (a payment at 9pm ET is still that day)
   const callDate = when.toLocaleDateString("en-CA", { timeZone: "America/New_York" })
 
+  // 2a. The department of this invoice: asked from the catalog (which department owns a marketing sale?), never named here. A broken or missing catalog
+  //     answer stops THIS step with a visible reason and a retry (failTry) instead of filing a marketing invoice under TD clients without a word.
+  let departmentEntryId: string | null
+  try {
+    departmentEntryId = await departmentIdToStoreForOrigin(INVOICE_ORIGINS.marketingSale)
+  } catch (e) {
+    // NOT counted (count: false): this is a setup problem (the migration / the catalog), not a problem with this payment. Counting it would park a PAID customer's
+    // payment for a person after ~10 minutes and the later fix would never reach it. Uncounted, the payment waits and settles by itself once the catalog answers
+    // (a payment older than LABELLED_MAX_AGE_DAYS is left for a person, as always).
+    console.error(`[marketing-sale-settle] invoice departments catalog problem — payment ${feedId} is waiting: ${e instanceof Error ? e.message : String(e)}`)
+    return failTry(feedId, feed, `The invoice departments list is missing or broken, so this payment is waiting and has not been invoiced yet: ${e instanceof Error ? e.message : String(e)}`, { count: false })
+  }
+
   // 2. The invoice + the credit (idempotent on the Stripe session).
   let invoice: { invoiceId: string; invoiceNumber: string; contactId: string; contactCreated: boolean }
   try {
@@ -126,6 +146,7 @@ async function settleWithRef(feedId: string, feed: Record<string, any>, ref: Mar
       inviteeName: l.full_name,
       callDate,
       isTest: false,
+      departmentEntryId,
       manual: { feedId: `stripe-session:${sessionId}`, sourceLabel: "Stripe payment (TD Marketing link)", creditUsedAtCreation: false },
     })
   } catch (e) {
@@ -148,7 +169,7 @@ async function settleWithRef(feedId: string, feed: Record<string, any>, ref: Mar
   const note = `TD Marketing sale — ${l.full_name ?? "lead"}: matched to invoice ${invoice.invoiceNumber} and to the sale; the card moved to Paid.`
   const wrote = await updateFeed(feedId, {
     status: "matched", matched_payment_id: invoice.invoiceId, match_confidence: "retroactive", matched_at: new Date().toISOString(), matched_by: "auto",
-    review_metadata: { ...auditLinkMetadata("payment_intent", note), marketing_sale: { sale_id: s.id, marketing_lead_id: l.id, matched_at: new Date().toISOString() } },
+    review_metadata: { ...auditLinkMetadata("payment_intent", note), marketing_sale: { sale_id: s.id, marketing_lead_id: l.id, matched_at: new Date().toISOString() }, marketing_settle_waiting: null },
   }, "marketing-sale:matched")
   if (!wrote.ok) return failTry(feedId, feed, `The sale was settled but the Bank Feed row could not be marked: ${wrote.error ?? "unknown"}`)
 
