@@ -146,6 +146,7 @@ export async function LeadPane({ lead: leadIn, events: eventsIn, stages, reasons
         afterPay={afterPay}
         archived={lead.status === sellerKeys.archived}
         zone={zoneInfo}
+        callAt={contact.appointmentAt ?? null}
       />
 
       {role === 'seller' && lead.claimed_by !== null && lead.status !== sellerKeys.archived && <JointLinkPanel leadId={lead.id} leadName={lead.full_name} phone={canSeePhone(permissions) ? lead.phone : null} email={lead.email} canAct={canAct} canWhatsApp={hasPermission(permissions, 'whatsapp')} canEmail={hasPermission(permissions, 'inbox')} />}
