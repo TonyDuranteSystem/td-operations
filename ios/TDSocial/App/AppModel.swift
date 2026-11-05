@@ -58,6 +58,9 @@ final class AppModel: ObservableObject {
         if me.notSetUp { screen = .noAccess; return }
         if selectedTab == "" || !me.tabs.contains(where: { $0.id == selectedTab }) { selectedTab = me.tabs.first?.id ?? "" }
         if screen != .ready { screen = .ready }
+        #if DEBUG
+        if let open = API.takeDevOpen(), me.tabs.contains(where: { $0.id == open.tab }) { selectedTab = open.tab; host(for: open.tab).load(open.path) }   // simulator tests only
+        #endif
         if let b = me.badge { UNUserNotificationCenter.current().setBadgeCount(b) { _ in } }
         Task { await refreshAlertState() }
     }

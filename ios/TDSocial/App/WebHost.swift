@@ -7,7 +7,11 @@ import WebKit
 final class WebHost: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
     let webView: WKWebView
     @Published var failed = false
+    /// can the page go back, and which address is it on: the app draws its own Back bar when the tab has left its own screens (see BackRules)
+    @Published var canGoBack = false
+    @Published var currentPath: String?
     var onFinish: (() -> Void)?
+    private var observers: [NSKeyValueObservation] = []
 
     init(path: String) {
         let cfg = WKWebViewConfiguration()
@@ -22,6 +26,10 @@ final class WebHost: NSObject, ObservableObject, WKNavigationDelegate, WKUIDeleg
         webView.allowsBackForwardNavigationGestures = false   // Portal chats and the Inbox move by state, not by address
         webView.scrollView.contentInsetAdjustmentBehavior = .automatic
         webView.isInspectable = true
+        observers = [
+            webView.observe(\.canGoBack, options: [.initial, .new]) { [weak self] web, _ in Task { @MainActor in self?.canGoBack = web.canGoBack } },
+            webView.observe(\.url, options: [.initial, .new]) { [weak self] web, _ in Task { @MainActor in self?.currentPath = web.url?.path } },
+        ]
         load(path)
     }
 
@@ -40,11 +48,31 @@ final class WebHost: NSObject, ObservableObject, WKNavigationDelegate, WKUIDeleg
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { noteFailure(error) }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { noteFailure(error) }
     private func noteFailure(_ error: Error) {
-        if (error as NSError).code == NSURLErrorCancelled { return }   // a page replaced by another one is not a failure
+        let e = error as NSError
+        if e.code == NSURLErrorCancelled { return }   // a page replaced by another one is not a failure
+        if e.domain == "WebKitErrorDomain" && e.code == 102 { return }   // "frame load interrupted": the page turned into a file for the viewer, the screen under it is fine
         failed = true
     }
 
+    // a page that turns out to be a FILE (a PDF, a picture, an attachment) opens in the phone's viewer, over the app, with Done and Share:
+    // it never replaces the screen, so there is nothing to get stuck on
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        let http = navigationResponse.response as? HTTPURLResponse
+        if navigationResponse.isForMainFrame, FileRules.opensAsFile(mimeType: navigationResponse.response.mimeType, contentDisposition: http?.value(forHTTPHeaderField: "Content-Disposition")) {
+            decisionHandler(.download)
+        } else {
+            decisionHandler(.allow)
+        }
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) { FileOpener.shared.adopt(download) }
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) { FileOpener.shared.adopt(download) }
+
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if action.shouldPerformDownload, let u = action.request.url, (u.scheme == "http" || u.scheme == "https"), LinkRules.staysInApp(host: u.host, serverHost: AppConfig.serverHost) {
+            decisionHandler(.download)   // a link marked "download" on one of our own pages
+            return
+        }
         guard let url = action.request.url, let scheme = url.scheme?.lowercased() else { decisionHandler(.cancel); return }
         if scheme == "about" || scheme == "blob" || scheme == "data" { decisionHandler(.allow); return }
         if (scheme == "http" || scheme == "https") && LinkRules.staysInApp(host: url.host, serverHost: AppConfig.serverHost) { decisionHandler(.allow); return }

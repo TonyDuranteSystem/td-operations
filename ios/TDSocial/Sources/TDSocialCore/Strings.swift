@@ -6,6 +6,7 @@ public enum Msg: CaseIterable {
     case signingIn, checking, noConnectionBar, couldntLoad, tryAgain, noAccessTitle, noAccessBody, notSwitchedOn
     case alertsTitle, alertsBody, alertsTurnOn, alertsNotNow, alertsOffStrip, alertsOpenSettings
     case youTitle, signOut, signedOutSheet
+    case back, fileNotOpened, ok
 }
 
 public enum Strings {
@@ -32,6 +33,9 @@ public enum Strings {
         case .youTitle: return "You"
         case .signOut: return "Sign out"
         case .signedOutSheet: return "You were signed out. Sign in to carry on. Your unsent messages are kept."
+        case .back: return "Back"
+        case .fileNotOpened: return "Couldn't open this file. Try again."
+        case .ok: return "OK"
         }
     }
 
@@ -54,6 +58,9 @@ public enum Strings {
         case .youTitle: return "Tu"
         case .signOut: return "Esci"
         case .signedOutSheet: return "Sei stato disconnesso. Accedi per continuare. I messaggi non inviati sono conservati."
+        case .back: return "Indietro"
+        case .fileNotOpened: return "Impossibile aprire il file. Riprova."
+        case .ok: return "Va bene"
         }
     }
 }

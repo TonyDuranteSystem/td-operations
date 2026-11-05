@@ -62,10 +62,22 @@ enum API {
         guard let data = try? Data(contentsOf: file), let s = try? JSONDecoder().decode(DevSession.self, from: data) else { return }
         let store = WKWebsiteDataStore.default().httpCookieStore
         for c in s.cookies {
-            let props: [HTTPCookiePropertyKey: Any] = [.name: c.name, .value: c.value, .domain: AppConfig.serverHost, .path: "/", .secure: "TRUE"]
+            var props: [HTTPCookiePropertyKey: Any] = [.name: c.name, .value: c.value, .domain: AppConfig.serverHost, .path: "/"]
+            if AppConfig.serverURL.scheme == "https" { props[.secure] = "TRUE" }   // a local test server on plain http would never receive a secure cookie
             if let cookie = HTTPCookie(properties: props) { await store.setCookie(cookie) }
         }
         try? FileManager.default.removeItem(at: file)
+    }
+
+    /// Simulator testing only: a file `dev-open.txt` ("tab:/path", e.g. "inbox:/some-page") in Documents opens that page in that tab once, then is removed.
+    static func takeDevOpen() -> (tab: String, path: String)? {
+        let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("dev-open.txt")
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        try? FileManager.default.removeItem(at: file)
+        let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let colon = line.firstIndex(of: ":") else { return nil }
+        let tab = String(line[..<colon]), path = String(line[line.index(after: colon)...])
+        return path.hasPrefix("/") ? (tab, path) : nil
     }
     #endif
 }

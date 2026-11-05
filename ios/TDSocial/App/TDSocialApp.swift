@@ -8,7 +8,8 @@ struct TDSocialApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel.shared
     var body: some Scene {
-        WindowGroup { RootView().environmentObject(model) }
+        // light only: every web screen is light (app mode switches dark mode off), so the app's own bars must not turn black on a dark phone
+        WindowGroup { RootView().environmentObject(model).preferredColorScheme(.light) }
     }
 }
 

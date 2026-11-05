@@ -102,7 +102,7 @@ struct TabsView: View {
                 .padding(.horizontal, 12).padding(.vertical, 4)
                 TabView(selection: $model.selectedTab) {
                     ForEach(me.tabs) { tab in
-                        TabPage(host: model.host(for: tab.id))
+                        TabPage(tabId: tab.id, host: model.host(for: tab.id))
                             .tabItem { Label(TabPath.shortLabel(for: tab.id, fallback: tab.label), systemImage: symbol(for: tab.id)) }
                             .tag(tab.id)
                             .badge(me.count(for: tab.id))
@@ -119,9 +119,26 @@ struct TabsView: View {
 
 struct TabPage: View {
     @EnvironmentObject var model: AppModel
+    let tabId: String
     @ObservedObject var host: WebHost
     var body: some View {
         VStack(spacing: 0) {
+            // a page that is not one of this tab's own screens (a client's page, an account) always has a way back
+            if BackRules.showBack(tabId: tabId, path: host.currentPath, canGoBack: host.canGoBack) {
+                Button { host.webView.goBack() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.left").font(.body.weight(.semibold))
+                        Text(AppConfig.say(.back)).font(.body)
+                        Spacer()
+                    }
+                    .foregroundColor(brandRed)
+                    .padding(.horizontal, 14).frame(height: 44)
+                    .background(Color(.systemBackground))
+                    .overlay(Rectangle().frame(height: 0.5).foregroundColor(Color(.separator)), alignment: .bottom)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(AppConfig.say(.back))
+            }
             if model.offline { Text(AppConfig.say(.noConnectionBar)).font(.footnote).padding(8).frame(maxWidth: .infinity).background(Color.yellow.opacity(0.35)) }
             if !model.alertsAuthorized && !model.showAlertsSheet {
                 Button { Task { await model.turnOnAlerts() } } label: {
