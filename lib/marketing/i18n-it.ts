@@ -395,6 +395,7 @@ export const IT: Record<string, string> = {
   "Times are Rome time ({zone}). A row opens the lead; to change a time, open the lead and press ": "Gli orari sono in ora di Roma ({zone}). Una riga apre il lead; per cambiare un orario, apri il lead e premi ",
   "Today": "Oggi",
   "Tomorrow": "Domani",
+  "Yesterday": "Ieri",
   "Totals": "Totali",
   "Totals in {currency}": "Totali in {currency}",
   "Unknown login": "Accesso sconosciuto",

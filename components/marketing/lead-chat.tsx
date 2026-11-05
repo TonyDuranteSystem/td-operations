@@ -1,7 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Loader2, Pin, Search, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { ChevronDown, ChevronLeft, Loader2, Pin, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { isBeingViewed } from '@/lib/talk/window-front'
@@ -34,15 +34,18 @@ export function LeadChat({ leadId, lane }: { leadId: string; /** which of the le
 }
 
 /** The chat of a team conversation (a direct message or a group): the same screen, fed by /api/marketing/team-chat. */
-export function TeamChat({ threadId }: { threadId: string }) {
-  return <ConversationChat id={threadId} api="/api/marketing/team-chat" idField="thread_id" channel="tdm-team-typing" />
+export function TeamChat({ threadId, phoneHeader }: { threadId: string; phoneHeader?: PhoneChatHeader }) {
+  return <ConversationChat id={threadId} api="/api/marketing/team-chat" idField="thread_id" channel="tdm-team-typing" phoneHeader={phoneHeader} />
 }
+
+/** TD Social phone app: the conversation draws ONE top bar (back, name, who is in it or "typing…", search) instead of a header above a status row. */
+export interface PhoneChatHeader { title: string; onBack: () => void; right?: ReactNode }
 
 /**
  * One conversation, whatever it is about: a lead, a direct message, a group. `api` is the chat's own address (it answers the same shape everywhere), `idField` names the id in the
  * "delivered" call, `channel` the live "typing…" channel. Everything below is the lead chat's own code, only not tied to a lead any more.
  */
-function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix, lane }: { id: string; api: string; idField: 'lead_id' | 'thread_id'; channel: string; lane?: string }) {
+function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix, lane, phoneHeader }: { id: string; api: string; idField: 'lead_id' | 'thread_id'; channel: string; lane?: string; phoneHeader?: PhoneChatHeader }) {
   const VOICE_API = `${API}/messages`
   // a lead has two chats: every request names the one on screen (a team conversation has no lane)
   const laneQs = lane ? `?lane=${encodeURIComponent(lane)}` : ''
@@ -295,6 +298,21 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
     <TalkI18nProvider value={i18n}>
     <TalkMentionNames.Provider value={mentionNames}>
     <div className="flex h-full flex-col bg-white" data-testid="lead-chat">
+      {phoneHeader ? (
+        <div className="flex h-[52px] shrink-0 items-center gap-1 border-b border-zinc-200 pl-1 pr-2" data-testid="phone-chat-bar">
+          <button type="button" onClick={phoneHeader.onBack} aria-label={t('Back to the chats')} data-testid="chat-back" className="flex h-11 w-9 shrink-0 items-center justify-center text-slate-600"><ChevronLeft className="h-7 w-7" /></button>
+          <div className="min-w-0 flex-1">
+            <b className="block truncate text-[17px] leading-tight" data-testid="thread-title">{phoneHeader.title}</b>
+            <span className="block truncate text-xs leading-tight text-zinc-500" data-testid="lead-chat-status">
+              {peerTyping ? <span className="text-slate-900" data-testid="talk-typing">{typingText}</span> : (others.length > 0 ? `${others.map(id => names[id]).filter(Boolean).join(', ')}` : t('Only you can read this chat for now'))}
+            </span>
+          </div>
+          {phoneHeader.right}
+          <button type="button" onClick={() => { setSearchOpen(o => !o); setSearchQ('') }} aria-label={t('Search this chat')} data-testid="talk-search-toggle" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-600 hover:bg-zinc-100">
+            {searchOpen ? <X className="h-5 w-5" /> : <Search className="h-5 w-5" />}
+          </button>
+        </div>
+      ) : (
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-zinc-200 px-3 py-1.5">
         <span className="min-w-0 truncate text-xs text-zinc-500" data-testid="lead-chat-status">
           {peerTyping ? <span className="text-slate-900" data-testid="talk-typing">{typingText}</span> : (others.length > 0 ? `${others.map(id => names[id]).filter(Boolean).join(', ')}` : t('Only you can read this chat for now'))}
@@ -303,6 +321,7 @@ function ConversationChat({ id: leadId, api: API, idField, channel: typingPrefix
           {searchOpen ? <X className="h-4 w-4" /> : <Search className="h-4 w-4" />}
         </button>
       </div>
+      )}
       {offline && <div role="status" className="shrink-0 bg-amber-50 px-3 py-1 text-xs text-amber-900" data-testid="chat-offline">{t('Connection problem. New messages may be late; trying again.')}</div>}
       {pinShown && !searchOpen && (
         <div className="flex shrink-0 items-center gap-2 border-b border-amber-200 bg-amber-50 px-3 py-1.5" data-testid="pinned-bar">

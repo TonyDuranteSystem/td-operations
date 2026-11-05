@@ -173,3 +173,11 @@
 [data-app-mode="true"] .app-thread-head { padding: 2px 6px; row-gap: 0; column-gap: 4px; }
 [data-app-mode="true"] .app-note-row { justify-content: flex-start; gap: 6px; padding-top: 0; padding-bottom: 0; }
 [data-app-mode="true"] .app-note-row button { min-height: 36px !important; }
+/* WhatsApp chat: the strip under the header and the note under the message box are one short line; the message box has less spacing around it */
+[data-app-mode="true"] .app-tight { padding-top: 0; padding-bottom: 0; }
+/* Marketing chat: while a conversation is open its own bar replaces the "TD Marketing" bar (the Chat list screen keeps it, with the IT | EN switch);
+   the floating day marker is solid, so a message never shows through it. */
+[data-app-mode="true"][data-chat-open] .app-marketing-top { display: none; }
+[data-app-mode="true"] .app-day-pill { background-color: #fff !important; }
+[data-app-mode="true"] .app-wa-composer { padding: 6px 8px; row-gap: 2px; }
+[data-app-mode="true"] .app-wa-composer > * + * { margin-top: 2px !important; }

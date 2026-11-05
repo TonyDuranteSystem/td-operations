@@ -69,6 +69,14 @@ export function ChatWorkspace({ initial, leadConversations, showLeads, startThre
     } catch (e) { setError(e instanceof Error && e.message ? e.message : t('Could not do that. Please try again.')); return null } finally { setBusy(false) }
   }
 
+  // TD Social phone app: while a chat is open its own bar replaces the "TD Marketing" bar above it (the layout hides that bar by this marker)
+  const chatOpenInApp = fill && sel !== null && snap.threads.some(x => x.id === sel)
+  useEffect(() => {
+    if (!chatOpenInApp) return
+    document.documentElement.setAttribute('data-chat-open', 'true')
+    return () => document.documentElement.removeAttribute('data-chat-open')
+  }, [chatOpenInApp])
+
   const dms = snap.threads.filter(x => x.kind === 'dm')
   const groups = snap.threads.filter(x => x.kind === 'group')
   const current = snap.threads.find(x => x.id === sel) ?? null
@@ -118,12 +126,25 @@ export function ChatWorkspace({ initial, leadConversations, showLeads, startThre
         <div className={`min-h-0 min-w-0 flex-col ${current ? 'flex' : 'hidden md:flex'}`} data-testid="chat-pane">
           {current ? (
             <>
-              <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2.5">
-                <button type="button" onClick={back} aria-label={t('Back to the chats')} data-testid="chat-back" className="-ml-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xl text-slate-600 hover:bg-slate-100 md:hidden">&#8249;</button>
-                <div className="min-w-0 flex-1"><b className="block truncate" data-testid="thread-title">{current.title}</b>{current.kind === 'group' && <span className="block truncate text-xs text-slate-500">{current.memberIds.map(nameOf).join(', ')}</span>}</div>
-                {current.kind === 'group' && <button type="button" className={btn} data-testid="group-info" onClick={() => { setError(''); setDialog('info') }}>{t('Group info')}</button>}
+              {/* In the phone app this bar is drawn by the chat itself (ONE bar: back, name, search), see `phoneHeader` below */}
+              {!fill && (
+                <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2.5">
+                  <button type="button" onClick={back} aria-label={t('Back to the chats')} data-testid="chat-back" className="-ml-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xl text-slate-600 hover:bg-slate-100 md:hidden">&#8249;</button>
+                  <div className="min-w-0 flex-1"><b className="block truncate" data-testid="thread-title">{current.title}</b>{current.kind === 'group' && <span className="block truncate text-xs text-slate-500">{current.memberIds.map(nameOf).join(', ')}</span>}</div>
+                  {current.kind === 'group' && <button type="button" className={btn} data-testid="group-info" onClick={() => { setError(''); setDialog('info') }}>{t('Group info')}</button>}
+                </div>
+              )}
+              <div className="min-h-0 flex-1">
+                <TeamChat
+                  key={current.id}
+                  threadId={current.id}
+                  phoneHeader={fill ? {
+                    title: current.title,
+                    onBack: back,
+                    right: current.kind === 'group' ? <button type="button" className="flex h-11 shrink-0 items-center rounded-lg px-2 text-sm font-medium text-sky-700" data-testid="group-info" onClick={() => { setError(''); setDialog('info') }}>{t('Group info')}</button> : undefined,
+                  } : undefined}
+                />
               </div>
-              <div className="min-h-0 flex-1"><TeamChat key={current.id} threadId={current.id} /></div>
             </>
           ) : <div className="flex flex-1 items-center justify-center text-sm text-slate-500">{t('Pick a chat on the left, or start a new one.')}</div>}
         </div>

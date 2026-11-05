@@ -82,7 +82,7 @@ export default async function MarketingAppLayout({ children }: { children: React
       <LangProvider lang={lang}>
         <TourProvider own={{ key: tourKey, steps: ownSteps }} previews={null} autoStart={false} recordable={false}>
           <div className="flex h-screen flex-col bg-white">
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2">
+            <div className="app-marketing-top flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2">
               <p className="min-w-0 truncate text-base font-semibold" data-testid="app-marketing-title">TD Marketing</p>
               <LangSwitch />
             </div>
