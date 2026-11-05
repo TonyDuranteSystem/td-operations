@@ -862,6 +862,7 @@ export const IT: Record<string, string> = {
   "No messages yet.": "Ancora nessun messaggio.",
   "You were mentioned": "Sei stato citato",
   "Direct messages": "Messaggi diretti",
+  "Back to the chats": "Torna alle chat",
   "+ New": "+ Nuovo",
   "None yet.": "Ancora nessuno.",
   "Groups": "Gruppi",
