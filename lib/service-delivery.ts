@@ -36,6 +36,7 @@ import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
 import { filedName, filedLegalName, type NameCheck } from "@/lib/flows/name-checks"
 import { CHANGE_NAME_STAGES } from "@/lib/flows/change-name-stages"
+import { trackingRequiredToAdvance, trackingMissingMessage } from "@/lib/flows/tracking-gate"
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -329,11 +330,14 @@ export async function advanceServiceDelivery(
   // action button AND the flow Workspace stepper (moveServiceDeliveryToStage)
   // call for a forward move — a UI-only check would leave the stepper's
   // shortcut path unenforced.
+  // Any other service opts in from its own step screen: an irs_tracking_entry box with requiredToAdvance (Company
+  // Closure "IRS Closure", Antonio 2026-11-05) — read from the stage rows already loaded above, no extra query.
+  const trackingFromStage = currentOrder > 0 ? stages.find(s => s.stage_order === currentOrder) : undefined
   if (
-    delivery.service_type === "ITIN" &&
     currentOrder > 0 &&
-    stages.find(s => s.stage_order === currentOrder)?.stage_name === "Submitted to IRS" &&
-    targetStage.stage_order > currentOrder
+    targetStage.stage_order > currentOrder &&
+    ((delivery.service_type === "ITIN" && trackingFromStage?.stage_name === "Submitted to IRS") ||
+      trackingRequiredToAdvance(trackingFromStage?.stage_layout))
   ) {
     // irs_shipment_tracking isn't in the generated types until Antonio promotes
     // the migration to production (sandbox-only until then).
@@ -346,7 +350,7 @@ export async function advanceServiceDelivery(
     if (!tracking?.tracking_number) {
       return {
         success: false,
-        error: `Enter the IRS mailing tracking number before moving this case to "${targetStage.stage_name}".`,
+        error: trackingMissingMessage(targetStage.stage_name),
         from_stage: delivery.stage || "New",
         to_stage: targetStage.stage_name,
         to_order: targetStage.stage_order,

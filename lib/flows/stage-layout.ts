@@ -91,6 +91,12 @@ export interface StageComponent {
   /** document_viewer: render with a collapse/expand toggle, starting collapsed.
    *  Absent/false = always-open list (original behavior, unchanged). */
   collapsible?: boolean
+  /** irs_tracking_entry: the job may not move FORWARD from this step until a tracking number is saved (lib/flows/tracking-gate.ts,
+   *  enforced in advanceServiceDelivery). Absent/false = the box is only an entry form. ITIN keeps its own older rule for "Submitted to IRS". */
+  requiredToAdvance?: boolean
+  /** irs_tracking_entry: replaces the help sentence under the box (the default says the client is told when the letter is delivered —
+   *  not true of every service). Text only. */
+  helpText?: string
 }
 
 /** One thing the workspace does when this box takes its file. `key` names an action Storage itself ALSO does for some types (STORAGE_OWN_ACTIONS). */
@@ -184,7 +190,7 @@ export function parseStageLayout(value: unknown): StageLayout | null {
     const comp = c as { type?: unknown; label?: unknown; url?: unknown; actions?: unknown }
     if (typeof comp.type !== 'string') continue
     if (!(STAGE_COMPONENT_TYPES as readonly string[]).includes(comp.type)) continue
-    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown; collapsible?: unknown; documentType?: unknown; storageHint?: unknown }
+    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown; collapsible?: unknown; documentType?: unknown; storageHint?: unknown; requiredToAdvance?: unknown; helpText?: unknown }
     components.push({
       type: comp.type as StageComponentType,
       label: typeof comp.label === 'string' ? resolveTokens(comp.label) : undefined,
@@ -198,6 +204,8 @@ export function parseStageLayout(value: unknown): StageLayout | null {
       documentType: typeof rawComp.documentType === 'string' && rawComp.documentType ? rawComp.documentType : undefined,
       storageHint: parseStorageHint(rawComp.storageHint),
       collapsible: typeof rawComp.collapsible === 'boolean' ? rawComp.collapsible : undefined,
+      requiredToAdvance: typeof rawComp.requiredToAdvance === 'boolean' ? rawComp.requiredToAdvance : undefined,
+      helpText: typeof rawComp.helpText === 'string' && rawComp.helpText.trim() ? resolveTokens(rawComp.helpText) : undefined,
     })
   }
   return {

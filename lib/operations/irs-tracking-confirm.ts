@@ -56,7 +56,11 @@ export async function applyDeliveryConfirmation(
     .eq('stage_name', sd.stage || '')
     .maybeSingle()
 
-  const message = (stageCfg?.tracking_delivered_message as string | null) || FALLBACK_DELIVERED_MESSAGE
+  const configured = stageCfg?.tracking_delivered_message as string | null | undefined
+  // An EMPTY message (not null) is a deliberate "tell the client nothing" for that step — Company Closure's "Waiting for the IRS" (Antonio
+  // 2026-11-05: staff decide what the client hears). The delivery itself is already recorded above and shows on the staff screen.
+  if (configured === '') return { justConfirmed: true }
+  const message = configured || FALLBACK_DELIVERED_MESSAGE
   const topic = (stageCfg?.client_chat_topic as string | null) || sd.service_type
 
   try {

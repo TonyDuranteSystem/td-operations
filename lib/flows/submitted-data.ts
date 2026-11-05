@@ -35,6 +35,8 @@ export function humanizeKey(key: string): string {
     .replace(/[_-]+/g, ' ')
     .trim()
     .replace(/\b\w/g, (c) => c.toUpperCase())
+    // words that are abbreviations read as such ("Llc Ein" -> "LLC EIN") — the closure wizard keys are llc_name, llc_ein …
+    .replace(/\b(Llc|Ein|Itin|Ssn|Irs|Dob|Id)\b/g, (w) => w.toUpperCase())
 }
 
 /** Naive singularize for entity-group titles ("bank_accounts" → "bank_account"). */

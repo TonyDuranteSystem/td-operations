@@ -149,7 +149,7 @@ function renderComponent(
     case 'members_panel':
       return <MembersPanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'irs_tracking_entry':
-      return <IrsTrackingEntry key={key} serviceDeliveryId={serviceDelivery.id} />
+      return <IrsTrackingEntry key={key} serviceDeliveryId={serviceDelivery.id} helpText={component.helpText} />
     case 'suite_panel':
       return <SuitePanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'esign_panel':

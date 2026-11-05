@@ -2,7 +2,10 @@
  * Fetch the client's submitted data for a flow (service_delivery). Backs the
  * flow Workspace data_viewer component.
  *
- * Two sources, by service_type:
+ * Three sources, by service_type:
+ *   - Company Closure → the newest finished `closure_submissions` row (the client's closure wizard), `source:'closure'`.
+ *     A job with a company is matched by account; a job with NO company (closing a company that is not ours) by contact
+ *     with no account — the same matching closure-form-completed itself uses to find the job.
  *   - Company Formation → the latest `wizard_progress` row for the SD's
  *     contact (wizard_type='formation'). Formation SDs are CONTACT-scoped
  *     (account_id NULL until the company is materialized at Articles Received),
@@ -109,6 +112,37 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
               review_status: sub.status ?? null,
               created_at: sub.created_at ?? null,
               submitted_data: sub.submitted_data ?? null,
+            }
+          : null,
+      })
+    }
+
+    // 2c. Company Closure — the client's closure wizard answers.
+    if (sd.service_type === 'Company Closure') {
+      let q = supabaseAdmin
+        .from('closure_submissions')
+        .select('submitted_data, status, completed_at, created_at')
+        .in('status', ['completed', 'reviewed'])
+      if (sd.account_id) q = q.eq('account_id', sd.account_id)
+      else if (sd.contact_id) q = q.eq('contact_id', sd.contact_id).is('account_id', null)
+      else return NextResponse.json({ success: true, source: 'closure', submission: null })
+      const { data: cs, error: csErr } = await q.order('created_at', { ascending: false }).limit(1).maybeSingle()
+      if (csErr) {
+        return NextResponse.json(
+          { success: false, error: `Could not load the closure wizard: ${csErr.message}` },
+          { status: 500 },
+        )
+      }
+      return NextResponse.json({
+        success: true,
+        source: 'closure',
+        submission: cs
+          ? {
+              entity_type: null,
+              tax_year: null,
+              review_status: cs.status ?? null,
+              created_at: cs.completed_at ?? cs.created_at ?? null,
+              submitted_data: cs.submitted_data ?? null,
             }
           : null,
       })
