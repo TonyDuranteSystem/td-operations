@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key><string>en</string>
+	<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+	<key>CFBundleDisplayName</key><string>$(TD_DISPLAY_NAME)</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key><true/>
+	<key>UILaunchScreen</key><dict/>
+	<key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>
+	<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
+	<key>UIApplicationSupportsIndirectInputEvents</key><true/>
+	<key>ITSAppUsesNonExemptEncryption</key><false/>
+	<key>NSMicrophoneUsageDescription</key><string>TD Social needs the microphone to record voice messages.</string>
+	<key>NSCameraUsageDescription</key><string>TD Social needs the camera to take photos you attach to messages.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key><string>TD Social saves photos you choose to keep to your photo library.</string>
+	<key>TDServerURL</key><string>$(TD_SERVER_URL)</string>
+	<key>TDApnsEnv</key><string>$(TD_APNS_ENV)</string>
+	<key>TDServerName</key><string>$(TD_SERVER_NAME)</string>
+</dict>
+</plist>

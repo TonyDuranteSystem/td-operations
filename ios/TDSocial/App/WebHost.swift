@@ -1,0 +1,97 @@
+// One web view for one tab (or for the sign-in page). It keeps its page while the person moves between tabs, shows the existing screen,
+// keeps pages of OUR server inside the app and sends every other link to Safari.
+import SwiftUI
+import WebKit
+
+@MainActor
+final class WebHost: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
+    let webView: WKWebView
+    @Published var failed = false
+    var onFinish: (() -> Void)?
+
+    init(path: String) {
+        let cfg = WKWebViewConfiguration()
+        cfg.websiteDataStore = WKWebsiteDataStore.default()
+        cfg.applicationNameForUserAgent = "\(ServerRules.userAgentToken)\(AppConfig.version)"   // the one thing that switches the web screens into app mode
+        cfg.allowsInlineMediaPlayback = true
+        cfg.mediaTypesRequiringUserActionForPlayback = []
+        webView = WKWebView(frame: .zero, configuration: cfg)
+        super.init()
+        webView.navigationDelegate = self
+        webView.uiDelegate = self
+        webView.allowsBackForwardNavigationGestures = false   // Portal chats and the Inbox move by state, not by address
+        webView.scrollView.contentInsetAdjustmentBehavior = .automatic
+        webView.isInspectable = true
+        load(path)
+    }
+
+    func load(_ path: String) {
+        failed = false
+        guard let url = URL(string: AppConfig.serverURL.absoluteString + path) else { return }
+        webView.load(URLRequest(url: url))
+    }
+
+    func reload() { failed = false; if webView.url == nil { load("/") } else { webView.reload() } }
+
+    // MARK: navigation
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { failed = false; onFinish?() }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { noteFailure(error) }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { noteFailure(error) }
+    private func noteFailure(_ error: Error) {
+        if (error as NSError).code == NSURLErrorCancelled { return }   // a page replaced by another one is not a failure
+        failed = true
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let url = action.request.url, let scheme = url.scheme?.lowercased() else { decisionHandler(.cancel); return }
+        if scheme == "about" || scheme == "blob" || scheme == "data" { decisionHandler(.allow); return }
+        if (scheme == "http" || scheme == "https") && LinkRules.staysInApp(host: url.host, serverHost: AppConfig.serverHost) { decisionHandler(.allow); return }
+        // another site, a mail or phone link, a file: hand it to the phone (Safari, Mail, Phone ...)
+        if action.navigationType == .linkActivated || action.targetFrame == nil || action.targetFrame?.isMainFrame == true {
+            UIApplication.shared.open(url)
+            decisionHandler(.cancel)
+        } else {
+            decisionHandler(.allow)   // a frame inside the page (an embedded player, a payment frame)
+        }
+    }
+
+    // MARK: new windows, microphone and camera, the page's own dialogs
+
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        // target=_blank / window.open: our own pages open in this same view, anything else goes to Safari
+        if let url = action.request.url {
+            if LinkRules.staysInApp(host: url.host, serverHost: AppConfig.serverHost) { webView.load(action.request) } else { UIApplication.shared.open(url) }
+        }
+        return nil
+    }
+
+    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        // only OUR server may use the microphone / camera; iPhone itself still asks the person (once)
+        decisionHandler(LinkRules.staysInApp(host: origin.host, serverHost: AppConfig.serverHost) ? .grant : .deny)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        present(message: message, buttons: ["OK"]) { _ in completionHandler() }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        present(message: message, buttons: ["OK", "Cancel"]) { completionHandler($0 == 0) }
+    }
+
+    private func present(message: String, buttons: [String], done: @escaping (Int) -> Void) {
+        let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+        for (i, b) in buttons.enumerated() { alert.addAction(UIAlertAction(title: b, style: i == 0 ? .default : .cancel) { _ in done(i) }) }
+        guard let root = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow?.rootViewController }).first else { done(buttons.count - 1); return }
+        var top = root
+        while let next = top.presentedViewController { top = next }
+        top.present(alert, animated: true)
+    }
+}
+
+struct WebHostView: UIViewRepresentable {
+    let host: WebHost
+    func makeUIView(context: Context) -> WKWebView { host.webView }
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
+}
