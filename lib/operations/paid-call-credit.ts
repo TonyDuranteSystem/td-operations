@@ -20,6 +20,7 @@ import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { paidCallIdempotencyKey, manualPaidCallIdempotencyKey, paidCallDescription, type CalendlyPayment } from "@/lib/calendly/paid-booking"
 import { paymentIntentIdForCharge } from "@/lib/stripe-sync"
 import { resolveCreditSubject, subjectForRecording } from "@/lib/operations/credit-subject"
+import { departmentFields } from "@/lib/invoices/departments"
 
 export interface PaidCallResult {
   contactId: string
@@ -91,6 +92,11 @@ export async function recordPaidCall(params: {
    */
   isTest?: boolean
   /**
+   * The department of this paid call (a row id of the catalog `invoice_departments`), stamped on BOTH the invoice and its credit note so the pair
+   * always sits together. Omit it for the default department (TD clients). TD Marketing sales pass it (lib/finance/marketing-sale-settle.ts).
+   */
+  departmentEntryId?: string | null
+  /**
    * Set when a human ATTACHES an unmatched bank-feed row to a person, because
    * the client paid under an address the system cannot tie to them. Keys the
    * rows on the FEED instead of the charge so a double-click cannot mint a
@@ -111,7 +117,7 @@ export async function recordPaidCall(params: {
      creditUsedAtCreation?: boolean
   }
 }): Promise<PaidCallResult> {
-  const { payment, inviteeEmail, inviteeName, callDate, manual, isTest } = params
+  const { payment, inviteeEmail, inviteeName, callDate, manual, isTest, departmentEntryId } = params
   const description = paidCallDescription(callDate ?? null)
   const keyFor = (kind: "invoice" | "credit") =>
     manual ? manualPaidCallIdempotencyKey(manual.feedId, kind) : paidCallIdempotencyKey(payment.chargeId, kind)
@@ -142,6 +148,7 @@ export async function recordPaidCall(params: {
       ? `Paid strategy call — attached by hand from ${manual.sourceLabel ?? "bank transaction"} ${manual.feedId}.`
       : `Paid strategy call (Calendly booking, charge ${payment.chargeId}).`,
     idempotency_key: keyFor("invoice"),
+    ...departmentFields(departmentEntryId),
     // A paid row must never absorb credits — it is revenue, not a bill.
     skip_credit_netting: true,
   })
@@ -186,6 +193,7 @@ export async function recordPaidCall(params: {
         ? `Deductible from the client's next service purchase (paid call attached by hand from ${manual.sourceLabel ?? "bank transaction"} ${manual.feedId}).`
         : `Deductible from the client's next service purchase (paid call, charge ${payment.chargeId}).`,
     idempotency_key: keyFor("credit"),
+    ...departmentFields(departmentEntryId),
     skip_credit_netting: true,
   })
 
@@ -207,6 +215,20 @@ export async function recordPaidCall(params: {
       .eq("id", credit.paymentId)
       .neq("invoice_status", "Credit")
     if (creditErr) throw new Error(`paid-call: credit note activation failed: ${creditErr.message}`)
+  }
+
+  // The department, on rows that ALREADY existed. createTDInvoice writes it only in the INSERT, so a row it simply returns (a person confirmed this same Stripe
+  // payment by hand before the automatic step ran, or this is a retry) or an activated credit reused above never got it. Stamp both rows here — only where nothing
+  // is stored yet, so a row already filed under a department is never moved. A failure is loud: the settle step waits, retries and reports it, rather than
+  // leaving a marketing invoice under TD clients without a word.
+  if (departmentEntryId) {
+    // eslint-disable-next-line no-restricted-syntax -- department bookkeeping on the invoice/credit rows of this paid call; not a client/tier field.
+    const { error: deptErr } = await supabaseAdmin
+      .from("payments")
+      .update({ department_entry_id: departmentEntryId })
+      .in("id", [invoice.paymentId, credit.paymentId])
+      .is("department_entry_id", null)
+    if (deptErr) throw new Error(`paid-call: could not file the invoice and credit note under their department: ${deptErr.message}`)
   }
 
   return {

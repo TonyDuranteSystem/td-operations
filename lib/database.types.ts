@@ -16659,6 +16659,96 @@ export type Database = {
         }
         Relationships: []
       }
+      social_app_alerted: {
+        Row: {
+          alerted: boolean
+          created_at: string
+          message_id: string
+          source: string
+        }
+        Insert: {
+          alerted?: boolean
+          created_at?: string
+          message_id: string
+          source: string
+        }
+        Update: {
+          alerted?: boolean
+          created_at?: string
+          message_id?: string
+          source?: string
+        }
+        Relationships: []
+      }
+      social_app_devices: {
+        Row: {
+          apns_env: string
+          app_build: number | null
+          app_version: string | null
+          bundle_id: string
+          created_at: string
+          device_name: string | null
+          id: string
+          last_seen_at: string
+          revoked_at: string | null
+          revoked_reason: string | null
+          token: string
+          user_id: string
+        }
+        Insert: {
+          apns_env: string
+          app_build?: number | null
+          app_version?: string | null
+          bundle_id: string
+          created_at?: string
+          device_name?: string | null
+          id?: string
+          last_seen_at?: string
+          revoked_at?: string | null
+          revoked_reason?: string | null
+          token: string
+          user_id: string
+        }
+        Update: {
+          apns_env?: string
+          app_build?: number | null
+          app_version?: string | null
+          bundle_id?: string
+          created_at?: string
+          device_name?: string | null
+          id?: string
+          last_seen_at?: string
+          revoked_at?: string | null
+          revoked_reason?: string | null
+          token?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      social_app_user_state: {
+        Row: {
+          alerts: Json
+          inbox_opened: Json
+          muted_tabs: string[]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          alerts?: Json
+          inbox_opened?: Json
+          muted_tabs?: string[]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          alerts?: Json
+          inbox_opened?: Json
+          muted_tabs?: string[]
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       sop_runbooks: {
         Row: {
           airtable_id: string | null
@@ -22981,6 +23071,29 @@ export type Database = {
       }
       show_limit: { Args: never; Returns: number }
       show_trgm: { Args: { "": string }; Returns: string[] }
+      social_app_claim_alert: {
+        Args: {
+          p_global_cap?: number
+          p_message_id: string
+          p_source: string
+          p_source_cap?: number
+          p_window?: string
+        }
+        Returns: string
+      }
+      social_app_mark_inbox_opened: {
+        Args: {
+          p_at: string
+          p_mailbox: string
+          p_only_if_missing?: boolean
+          p_user: string
+        }
+        Returns: string
+      }
+      social_app_merge_prefs: {
+        Args: { p_alerts: Json; p_mute: Json; p_user: string }
+        Returns: undefined
+      }
       storage_app_prune: { Args: never; Returns: number }
       storage_app_reserve_read: {
         Args: {
