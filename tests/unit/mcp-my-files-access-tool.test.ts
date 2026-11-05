@@ -102,6 +102,11 @@ describe("privacy boundary — My files access is not reachable from any HTTP ro
       .filter((f) => !f.endsWith("lib/team/attach-from-my-files.ts") && /from\s+["'][^"']*attach-from-my-files["']/.test(readFileSync(f, "utf8")))
       .map((f) => f.replace(root + "/", ""))
     expect(users).toEqual(["lib/mcp/tools/team-chat.ts"])
+    // a dynamic `await import("@/lib/team/attach-from-my-files")` (the AI worker already imports postTeamMessage that way) is just as much a way in
+    const dynamicUsers = files
+      .filter((f) => !f.endsWith("lib/team/attach-from-my-files.ts") && /import\(\s*["'][^"']*attach-from-my-files["']\s*\)/.test(readFileSync(f, "utf8")))
+      .map((f) => f.replace(root + "/", ""))
+    expect(dynamicUsers).toEqual([])
     // …and that tool file is registered only by the MCP route
     const toolUsers = files.filter((f) => !f.endsWith("lib/mcp/tools/team-chat.ts") && /tools\/team-chat["']/.test(readFileSync(f, "utf8"))).map((f) => f.replace(root + "/", ""))
     expect(toolUsers).toEqual(["app/api/[transport]/route.ts"])

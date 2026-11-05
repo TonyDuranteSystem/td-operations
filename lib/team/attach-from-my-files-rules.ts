@@ -8,7 +8,7 @@
  * and the same type block-list as the paperclip applies.
  */
 import { randomUUID } from "crypto"
-import { validateChatAttachment } from "@/lib/portal/chat-attachment"
+import { getExtension, validateChatAttachment } from "@/lib/portal/chat-attachment"
 import type { ChatAttachment } from "@/lib/types"
 
 /** One file's cap. The bucket allows 100 MB, but the bytes are held in memory while they are copied, so Claude's route stays small. */
@@ -78,8 +78,17 @@ export function inDropFolder(chain: ReadonlyArray<string>, dropFolderId: string 
 }
 
 /**
+ * Extra types refused on THIS path only, on top of the paperclip's block-list: other kinds of active content that a browser can run
+ * or hand to the system when opened from a public link (bug-hunt on PR #960, dev job f34c915d). The paperclip's own list is shared with
+ * the client portal and stays as it is.
+ */
+const EXTRA_BLOCKED_EXTENSIONS = new Set(["svgz", "xsl", "xslt", "mht", "mhtml", "hta", "swf", "lnk"])
+const EXTRA_BLOCKED_MIME_TYPES = new Set(["text/xml", "application/xml", "text/xsl", "application/xslt+xml", "application/x-shockwave-flash"])
+
+/**
  * The file itself, before any byte is read: a real size, within Claude's cap, and a type that may live on a public chat link
- * (the paperclip's block-list: web pages, scripts, programs). Returns a plain refusal, or null when allowed.
+ * (the paperclip's block-list: web pages, scripts, programs, plus the extra types above). Returns a plain refusal, or null when allowed.
+ * It runs twice on the way in: on the RECORDED size/type first, and again on the bytes and the type that will actually be stored.
  */
 export function checkMyFileForChat(file: { name: string; size: unknown; mimeType: string | null }): string | null {
   const size = Number(file.size)
@@ -91,7 +100,13 @@ export function checkMyFileForChat(file: { name: string; size: unknown; mimeType
     return `"${file.name}" is ${(size / 1048576).toFixed(1)} MB — too big to attach from here (limit ${MY_FILES_CHAT_MAX_MB} MB). Attach it by hand with the paperclip.`
   }
   const blocked = validateChatAttachment(file.name, size, file.mimeType ?? "")
-  return blocked ? `"${file.name}": ${blocked}` : null
+  if (blocked) return `"${file.name}": ${blocked}`
+  const ext = getExtension(file.name)
+  const mime = (file.mimeType ?? "").split(";")[0].trim().toLowerCase()
+  if (EXTRA_BLOCKED_EXTENSIONS.has(ext) || EXTRA_BLOCKED_MIME_TYPES.has(mime)) {
+    return `"${file.name}": this kind of file can't be sent in chat for security reasons.`
+  }
+  return null
 }
 
 /** A safe lower-case extension for the stored object name ("pdf"); "bin" when there is none. */
