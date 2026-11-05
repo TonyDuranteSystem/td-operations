@@ -27,6 +27,7 @@ import { TalkMessages } from '@/components/talk/talk-messages'
 import { TalkComposer, type TalkComposerMode, type TalkSendInput } from '@/components/talk/talk-composer'
 import { TalkMessageSheet } from '@/components/talk/talk-sheet'
 import { TalkVoiceSwitch, TalkVoiceWakeBar } from '@/components/talk/talk-voice'
+import { AppYouButton } from '@/components/app-mode/app-you-button'
 import { TalkGroupInfo, TalkNewGroup } from '@/components/talk/talk-group-sheets'
 
 const LAST_OPENED_KEY = 'td-talk-last-chat'
@@ -636,6 +637,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
             <button type="button" onClick={() => guardLeave(() => setNewGroupOpen(true))} data-testid="talk-new-group" className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-800 active:bg-zinc-100">
               <Users className="h-4 w-4" /> New group
             </button>
+            <AppYouButton />
           </div>
         </div>
         <div className="flex-1 overflow-y-auto">

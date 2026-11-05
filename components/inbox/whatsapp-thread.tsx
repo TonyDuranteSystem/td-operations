@@ -35,6 +35,8 @@ import { tickState, tickLabel } from '@/lib/messaging/wabridge-receipts'
 import { NoteComposeDialog } from '@/components/dashboard/note-quick-create'
 import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
 import { QuickCreateModal } from '@/components/dashboard/quick-create-modal'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
+import { PhonePlusButton, PhonePlusSheet } from '@/components/portal-chats/app-phone-chrome'
 
 // Same dynamic-import + ssr:false pattern as every other composer in this
 // codebase that embeds this picker (portal-chat.tsx, floating-chat.tsx, …).
@@ -162,6 +164,9 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
   const textRef = useRef('') // read by the async AI callback: the CURRENT box, not the one captured when it started
   textRef.current = text
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  // TD Social phone app: emoji, attach and AI sit under one plus, next to the message box (the computer layout keeps its row of buttons)
+  const appMode = useAppMode()
+  const [plusOpen, setPlusOpen] = useState(false)
   // Per-message "three dots" menu (Antonio 2026-09-27, "full menu", matching Portal Chats):
   // reply-to-a-message, pin, react, tag/to-do, discuss with team, share to team chat, a note, and
   // create task/service/invoice all live here. "Edit" is deliberately not offered — WhatsApp's real
@@ -1147,8 +1152,19 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
         )}
 
         {!confirming ? (
-          <div className="p-2 space-y-2">
+          <div className="app-wa-composer p-2 space-y-2">
             <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
+            {appMode && (
+              <PhonePlusSheet
+                open={plusOpen}
+                onClose={() => setPlusOpen(false)}
+                onEmoji={() => setShowEmojiPicker(true)}
+                onAttach={handlePickFile}
+                onAi={handleAi}
+                aiBusy={suggesting || audioNoteRecorder.isRecording}
+                attachBusy={!!file || audioNoteRecorder.isRecording}
+              />
+            )}
             {replyTo && (
               <div className="flex items-center gap-2 text-xs bg-blue-50 border border-blue-200 rounded px-2 py-1.5">
                 <Reply className="h-3.5 w-3.5 text-blue-500 shrink-0" />
@@ -1169,10 +1185,11 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
               </div>
             )}
             <div className="flex items-end gap-2">
+              {appMode && <PhonePlusButton onClick={() => setPlusOpen(true)} />}
               <div className="relative shrink-0" ref={emojiPickerRef}>
                 <button
                   onClick={() => setShowEmojiPicker((v) => !v)}
-                  className="inline-flex items-center justify-center h-9 w-9 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50"
+                  className="app-hide inline-flex items-center justify-center h-9 w-9 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50"
                   aria-label="Insert an emoji"
                 >
                   <Smile className="h-4 w-4" />
@@ -1210,7 +1227,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                 className="compose-reply-textarea flex-1 resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-blue-400 min-h-[40px] max-h-60 disabled:bg-zinc-50 disabled:text-zinc-400"
                 rows={1}
                 disabled={suggesting || audioNoteRecorder.isRecording}
-                placeholder={audioNoteRecorder.isRecording ? 'Recording… tap the mic to stop' : suggesting ? 'Writing a suggestion…' : 'Type a WhatsApp message…'}
+                placeholder={audioNoteRecorder.isRecording ? 'Recording… tap the mic to stop' : suggesting ? 'Writing a suggestion…' : (appMode ? 'WhatsApp message' : 'Type a WhatsApp message…')}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => {
@@ -1240,7 +1257,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
               <button
                 onClick={handlePickFile}
                 disabled={!!file || audioNoteRecorder.isRecording}
-                className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50 disabled:opacity-40"
+                className="app-hide inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50 disabled:opacity-40"
                 aria-label="Attach a file"
               >
                 <Paperclip className="h-4 w-4" />
@@ -1249,7 +1266,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                 <button
                   onClick={handleAi}
                   disabled={suggesting || audioNoteRecorder.isRecording}
-                  className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-40"
+                  className="app-hide inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-40"
                   aria-label={text.trim() ? 'Polish my text' : 'Suggest a reply'}
                 >
                   {suggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : (text.trim() ? <Wand2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />)}
@@ -1276,7 +1293,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
               </div>
             )}
             {isWabridgeLine && (
-              <p className="text-[11px] text-zinc-400 px-1">
+              <p className="app-tight text-[11px] text-zinc-400 px-1">
                 Don&apos;t send ID or tax documents over WhatsApp — use the portal instead.
               </p>
             )}
