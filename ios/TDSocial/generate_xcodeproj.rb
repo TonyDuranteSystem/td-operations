@@ -72,7 +72,7 @@ app.resources_build_phase.add_file_reference(assets, true)
 app.build_configurations.each do |c|
   cfg = CONFIGS[c.name]
   c.build_settings.merge!(
-    'PRODUCT_NAME' => 'TDSocial', 'PRODUCT_BUNDLE_IDENTIFIER' => cfg['ID'],
+    'PRODUCT_NAME' => 'TDSocial', 'PRODUCT_BUNDLE_IDENTIFIER' => cfg['ID'], 'TARGETED_DEVICE_FAMILY' => '1',   # iPhone only (the target's own default would say iPhone + iPad, which Apple then validates as iPad multitasking)
     'INFOPLIST_FILE' => 'App/Info.plist', 'CODE_SIGN_ENTITLEMENTS' => 'App/TDSocial.entitlements',
     'TD_SERVER_URL' => cfg['URL'], 'TD_SERVER_NAME' => cfg['SERVER'], 'TD_DISPLAY_NAME' => cfg['NAME'], 'TD_APNS_ENV' => cfg['APNS'],
     'TD_APS_ENVIRONMENT' => cfg['APNS'] == 'development' ? 'development' : 'production',
