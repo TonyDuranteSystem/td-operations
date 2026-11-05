@@ -6,10 +6,8 @@
  * switched it off. Such an offer used to be sent happily; the client paid and
  * nothing started (the delivery cannot be created without steps), with only a
  * system-error row to show for it. This check stops that where an offer leaves
- * draft: `publishOffer` (the CRM Send button and the MCP offer_send tool) and
- * the lead page's Activate Lead button, which sends credentials for a draft
- * offer without going through `publishOffer`. Anything that writes an offer's
- * status by hand (e.g. the MCP offer_update tool) is NOT covered.
+ * draft: `publishOffer` (the CRM Send button and the MCP offer_send tool).
+ * Anything that writes an offer's status by hand (e.g. the MCP offer_update tool) is NOT covered.
  *
  * It looks ONLY at service types the old hard-coded list does not know — the
  * "new" services — and a historical name is skipped in any spelling or case
@@ -292,29 +290,3 @@ export async function offerServicesReadiness(src: OfferServiceSources): Promise<
   return { problem: blockers.length > 0 ? blockers.map((b) => b.message).join(" ") : null, blockers }
 }
 
-/**
- * Same check for an offer that is still stored under `token` — for callers that
- * do not already hold the offer's rows (Activate Lead). A missing offer is the
- * caller's own error to report; here it simply has nothing to refuse.
- */
-export async function offerReadinessProblemForToken(token: string): Promise<string | null> {
-  return (await offerReadinessForToken(token)).problem
-}
-
-export async function offerReadinessForToken(token: string): Promise<OfferReadiness> {
-  const { data, error } = await supabaseAdmin
-    .from("offers")
-    // eslint-disable-next-line no-restricted-syntax -- packages postdates generated types (migration 20260826-1800)
-    .select("services, bundled_pipelines, packages, contract_type" as never)
-    .eq("token", token)
-    .maybeSingle()
-  if (error) return lookupFailure(`could not check the services on this offer (${error.message}) — try again.`)
-  if (!data) return READY
-  const row = data as unknown as { services?: unknown; bundled_pipelines?: unknown; packages?: unknown; contract_type?: unknown }
-  return offerServicesReadiness({
-    services: row.services,
-    bundledPipelines: row.bundled_pipelines,
-    packages: row.packages,
-    contractType: row.contract_type ?? null,
-  })
-}

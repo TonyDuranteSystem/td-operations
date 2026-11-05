@@ -123,7 +123,6 @@ describe("the screens keep their promises (source checks)", () => {
   it("it asks the read-only route and never the real send", () => {
     expect(box).toContain("/api/crm/admin-actions/offer-send-check?token=")
     expect(box).not.toContain("send-offer")
-    expect(box).not.toContain("activate-lead")
     expect(box).not.toMatch(/method:\s*['"]POST/)
   })
 

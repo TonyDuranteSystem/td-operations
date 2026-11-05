@@ -32,6 +32,7 @@ vi.mock("@/lib/supabase-admin", () => ({
     },
   },
 }))
+vi.mock("@/lib/offers/send-claim", () => ({ claimOfferSend: vi.fn(async () => ({ ok: true, claimedAt: "2026-01-01T00:00:00.000Z" })), releaseOfferSend: vi.fn(async () => {}) }))
 vi.mock("@/lib/offers/send-check", () => ({ offerSendCheck: vi.fn(async () => ({ blockers: [], risks: [], notChecked: [], willSendTo: "client@example.invalid" })) }))
 vi.mock("@/lib/portal/auto-create", () => ({ autoCreatePortalUser: vi.fn(async () => ({ success: true, alreadyExists: true })) }))
 vi.mock("@/lib/portal/welcome-token", () => ({ createWelcomeToken: vi.fn(), findWelcomeTokenBySource: vi.fn() }))
@@ -64,7 +65,7 @@ describe("Send, after the email has gone out", () => {
     expect(r.warnings).toEqual([])
     expect(h.gmail).toHaveBeenCalledTimes(1)
     const [flip] = offerWrites()
-    expect(flip.args[0]).toEqual({ status: "sent" })
+    expect(flip.args[0]).toEqual({ status: "sent", send_started_at: null })
     expect(flip.args[1]).toEqual([["token", "t1"], ["status", "draft"]])
     expect(leadWrites()).toHaveLength(1)
     expect(leadWrites()[0].args[0]).toEqual({ offer_status: "Sent", status: "Offer Sent" })

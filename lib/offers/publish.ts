@@ -28,6 +28,7 @@ import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { markOfferSent } from "@/lib/offers/mark-sent"
+import { claimOfferSend, releaseOfferSend } from "@/lib/offers/send-claim"
 import { autoCreatePortalUser } from "@/lib/portal/auto-create"
 import { createWelcomeToken, findWelcomeTokenBySource } from "@/lib/portal/welcome-token"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
@@ -52,10 +53,28 @@ export interface PublishOfferResult {
 
 // ─── Main function ────────────────────────────────────────
 
+/** How far a Send got: lets publishOffer give the claim back if — and only if — the email never went out. */
+interface SendProgress {
+  claimedAt: string | null
+  emailSent: boolean
+}
+
 export async function publishOffer(
   token: string,
   actor?: string,
 ): Promise<PublishOfferResult> {
+  const progress: SendProgress = { claimedAt: null, emailSent: false }
+  try {
+    return await runPublish(token, actor, progress)
+  } finally {
+    // A Send that stopped (or threw) BEFORE the email went out gives the offer back, so it can be sent again at once. Once the
+    // email is out the claim stays: markOfferSent clears it together with the status, and if that write fails the claim keeps a
+    // repeat from sending a second email (lib/offers/send-claim.ts).
+    if (progress.claimedAt && !progress.emailSent) await releaseOfferSend(token, progress.claimedAt)
+  }
+}
+
+async function runPublish(token: string, actor: string | undefined, progress: SendProgress): Promise<PublishOfferResult> {
   // ─── 1. Fetch and validate offer ───
   const { data: offer, error: fetchError } = await supabaseAdmin
     .from("offers")
@@ -68,14 +87,21 @@ export async function publishOffer(
   }
 
   // Every check that can refuse a send lives in ONE function (lib/offers/send-check.ts), shared with the read-only box
-  // beside the Send buttons and with Activate Lead, so they can never disagree. In this real-send mode the FIRST problem
+  // beside the Send buttons, so they can never disagree. In this real-send mode the FIRST problem
   // stops the rest, in the same order and with the same words as before: client email, yearly fee, still a draft, new
   // services ready, approved wording frozen (that last step writes, so it never runs after an earlier failure).
-  const check = await offerSendCheck({ offer, door: "send", mode: "send" })
+  const check = await offerSendCheck({ offer, mode: "send" })
   if (check.blockers.length > 0) {
     const first = check.blockers[0]
     return { ...fail(`Cannot publish: ${first.message}`), ...(first.readiness ? { blockers: first.readiness } : {}) }
   }
+
+  // ─── 1b. Claim the offer ───
+  // Two Sends that start together both read "draft" and both pass the checks above. The claim is one atomic write, so only one of
+  // them gets it; the other stops HERE, before it makes a login or sends anything (lib/offers/send-claim.ts).
+  const claim = await claimOfferSend(token)
+  if (!claim.ok) return { ...fail(claim.message), alreadySent: claim.alreadySent }
+  progress.claimedAt = claim.claimedAt
 
   // ─── 2. Create or find portal user ───
   // Use emailOverride to ensure portal user matches offer.client_email exactly
@@ -208,7 +234,9 @@ export async function publishOffer(
       // offer is deleted then recreated with the same slug, and is left stale
       // by reset-offer), so a token-based "already sent" check falsely blocks a
       // freshly (re)created draft. The status column cannot be inherited that
-      // way, so it is the correct guard.
+      // way, so it is the correct guard. (This reads the status Send saw at its
+      // START, so it cannot catch a second Send running at the same moment —
+      // the claim in step 1b does that.)
       if (offer.status !== "draft") {
         return { alreadySent: true, message: `Offer already published (status: ${offer.status}).` }
       }
@@ -216,9 +244,12 @@ export async function publishOffer(
     },
 
     sendFn: async () => {
-      return await gmailPost("/messages/send", {
+      const sent = await gmailPost("/messages/send", {
         raw: encodedRaw,
       }) as { id: string; threadId: string }
+      // From here the claim must stay: the email is out.
+      progress.emailSent = true
+      return sent
     },
 
     postSendSteps: [

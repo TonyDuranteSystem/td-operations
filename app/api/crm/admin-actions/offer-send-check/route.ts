@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const check = await offerSendCheck({ offer, door: "send", mode: "preview" })
+    const check = await offerSendCheck({ offer, mode: "preview" })
     return NextResponse.json(
       { applicable: true, status: offer.status, blockers: check.blockers, risks: check.risks, notChecked: check.notChecked, willSendTo: check.willSendTo, checkedAt },
       { headers: NO_STORE },
