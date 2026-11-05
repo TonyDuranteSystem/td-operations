@@ -18,8 +18,10 @@
  *   - supabase_notice      the system-written notice text
  *   - test_alert           the "test notification" button
  *   - general_notification "New notification" (also what anything unknown becomes)
+ *   - whatsapp_message     a new customer WhatsApp message: the CRM name if the number is linked, else "New WhatsApp message"; never the text
+ *   - email_message        a new email in the Inbox: the CRM name if the sender is linked, else "New email in support" / "in antonio"; never the subject
  *   - marketing_*          the lead's name cleaned, Italian wording for Rocco's team, no text
- * New kinds for WhatsApp and email arrive with pull request D.
+ * WhatsApp and email alerts (pull request D) go to TD Social phones ONLY: they have no web alert, so nothing in the browser senders uses these two kinds.
  */
 
 export const STAFF_ALERT_KINDS = [
@@ -35,6 +37,8 @@ export const STAFF_ALERT_KINDS = [
   "supabase_notice",
   "test_alert",
   "general_notification",
+  "whatsapp_message",
+  "email_message",
 ] as const
 
 /** Marketing has its own sender and its own subscription table; its kinds can never go through the staff sender (and the other way round). */

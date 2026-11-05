@@ -3,9 +3,8 @@
  *
  * The contract page of an offer that sells a NEW service (contract type custom_<slug>) renders that service's
  * wording from offers.contract_texts — a copy taken when the offer is sent — never from the live store, so a
- * later version can never change what a client was shown or signed. The copy is taken in three places:
- * when the offer is sent (publishOffer), by the Activate Lead button (it sends credentials for a draft offer),
- * and — as a safety net — the first time a client's page asks for an offer that has none (the offer view route).
+ * later version can never change what a client was shown or signed. The copy is taken in two places:
+ * when the offer is sent (publishOffer) and — as a safety net — the first time a client's page asks for an offer that has none (the offer view route).
  * An entry already in the copy is NEVER replaced.
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
