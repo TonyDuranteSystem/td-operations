@@ -98,6 +98,38 @@ describe("Marketing is in Italian, with the lead's name and no text", () => {
   })
 })
 
+describe("WhatsApp and email alerts: who and where, never what", () => {
+  it("a WhatsApp message shows the CRM name, or generic words when the number is not linked", () => {
+    expect(w("whatsapp_message", { name: "Maria Rossi" })).toEqual({ title: "WhatsApp · Maria Rossi", body: "" })
+    expect(w("whatsapp_message")).toEqual({ title: "New WhatsApp message", body: "" })
+    expect(w("whatsapp_message", { name: "  " })).toEqual({ title: "New WhatsApp message", body: "" })
+  })
+
+  it("an email shows the CRM name, or the mailbox it arrived in; the subject and the sender's own typed name are never used", () => {
+    expect(w("email_message", { name: "Acme LLC", place: "support" })).toEqual({ title: "Email · Acme LLC", body: "" })
+    expect(w("email_message", { place: "support" })).toEqual({ title: "New email in support", body: "" })
+    expect(w("email_message", { place: "antonio" })).toEqual({ title: "New email in antonio", body: "" })
+  })
+
+  it("the mailbox is a closed list: anything else (including text that came from a mail) is dropped", () => {
+    for (const place of ["office", "SUPPORT", "support@tonydurante.us", "Re: wire 48,210 to account 12345", "", null, undefined, 5, {}]) {
+      expect(w("email_message", { place })).toEqual({ title: "New email", body: "" })
+    }
+  })
+
+  it("the web title and body (which carry the subject / the message text) never reach the lock screen", () => {
+    for (const kind of ["whatsapp_message", "email_message"]) {
+      const out = w(kind, { name: "Acme LLC", place: "support" })!
+      expect(`${out.title} ${out.body}`).not.toMatch(/12-3456789|123-45-6789|48,210|YA1234567|Maria/)
+    }
+  })
+
+  it("they belong to the WhatsApp and Inbox tabs, so a muted tab silences them", () => {
+    expect(phoneTabFor("whatsapp_message")).toBe("whatsapp")
+    expect(phoneTabFor("email_message")).toBe("inbox")
+  })
+})
+
 describe("names are never trusted as typed", () => {
   // built from numbers so no invisible character sits in this file
   const c = (...codes: number[]) => String.fromCharCode(...codes)

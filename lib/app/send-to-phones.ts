@@ -77,7 +77,7 @@ export async function sendToPhones(alert: PhoneAlert, deps: PhoneDeps): Promise<
   const bundleId = deps.bundleId
 
   // 4. what the lock screen shows (null = this kind does not go to phones)
-  const wording = phoneWording({ kind: alert.kind, title: alert.title, body: alert.body, name: alert.name, dm: alert.dm })
+  const wording = phoneWording({ kind: alert.kind, title: alert.title, body: alert.body, name: alert.name, dm: alert.dm, place: alert.place })
   if (!wording) return empty("kind not for phones")
   const tab = isAlertKind(alert.kind) ? phoneTabFor(alert.kind) : null
 

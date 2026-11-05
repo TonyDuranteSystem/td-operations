@@ -24,6 +24,8 @@ export interface PhoneAlert {
   name?: string | null
   /** true for a direct or group chat message */
   dm: boolean
+  /** the mailbox a new-email alert is about ("support" or "antonio"; the wording rule accepts only those two) */
+  place?: string | null
   /** the lead a Marketing call alert is about (an explicit fact, never read from the link): lets the phone leg decide who is involved */
   leadId?: string | null
 }
@@ -42,7 +44,7 @@ export function waitForPhoneLeg(phone: Promise<unknown>, ms: number = PHONE_WAIT
 export function startPhoneLeg(alert: PhoneAlert): Promise<void> {
   if (!apnsConfigured()) return Promise.resolve()
   // the cheap, pure question BEFORE anything is loaded or read: does this kind of alert go to phones at all? (a chatty channel's messages never do)
-  if (phoneWording({ kind: alert.kind, title: alert.title, body: alert.body, name: alert.name, dm: alert.dm }) === null) return Promise.resolve()
+  if (phoneWording({ kind: alert.kind, title: alert.title, body: alert.body, name: alert.name, dm: alert.dm, place: alert.place }) === null) return Promise.resolve()
   return import("@/lib/app/send-to-phones")
     .then(m => m.sendToPhonesLive(alert))
     .then(

@@ -38,6 +38,8 @@ export interface WabridgeMessage {
   contentText: string
   /** ISO timestamp — WhatsApp's own send time, so an outage catch-up keeps the true order. */
   createdAt: string
+  /** True only when `createdAt` is the provider's own, sane time stamp. False when it was missing or silly and defaulted to "now" (a phone alert must never treat that as fresh). */
+  tsReal?: boolean
   metadata: Record<string, unknown>
 }
 
@@ -88,6 +90,12 @@ function detectContent(p: Json, body: string | null): { type: WabridgeContentTyp
   if (body) return { type, text: body }
   if (type === "document" && filename) return { type, text: `[Document: ${filename}]` }
   return { type, text: PLACEHOLDER[type] ?? "[Unsupported message]" }
+}
+
+/** True when `safeTimestamp` would keep the provider's own value (parseable and not in the future). Same rule, so the two can never disagree. */
+function isRealTimestamp(raw: unknown, now: Date): boolean {
+  const t = typeof raw === "string" ? Date.parse(raw) : NaN
+  return !Number.isNaN(t) && t <= now.getTime() + 5 * 60_000
 }
 
 function safeTimestamp(raw: unknown, now: Date): string {
@@ -142,6 +150,7 @@ export function parseGowaEvent(body: unknown, now: Date = new Date()): WabridgeP
       contentType: content.type,
       contentText: content.text,
       createdAt: safeTimestamp(p.timestamp, now),
+      tsReal: isRealTimestamp(p.timestamp, now),
       metadata,
     },
   }
@@ -215,6 +224,7 @@ export function normalizeBackfillItem(item: unknown, now: Date = new Date()): Wa
     contentType,
     contentText,
     createdAt: safeTimestamp(item.ts, now),
+    tsReal: isRealTimestamp(item.ts, now),
     metadata: { source: "wabridge", history: true, ...(fromMe ? { sent_from: "phone" } : {}) },
   }
 }
