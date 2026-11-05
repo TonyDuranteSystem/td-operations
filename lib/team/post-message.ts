@@ -60,10 +60,17 @@ export interface PostTeamMessageInput {
   /**
    * Optional file attachments — same shape portal chat uses. Every url must be
    * hosted on our own Storage (validateTeamPostAttachments enforces this), so
-   * a caller must first land the file there (e.g. portal_chat_attach_file, or
-   * any tool that returns a Storage-hosted url) before passing it here.
+   * a caller must first land the file there before passing it here.
+   * (portal_chat_attach_file does NOT do that: it returns a client-portal link that is rejected.)
    */
   attachments?: ChatAttachment[] | null
+  /**
+   * Attachments that are made ONLY once the post is certain to go ahead: called after the message, the links, the target
+   * and the root have all been checked, and right before the insert. Whatever it returns is added after `attachments` and checked
+   * the same way. Used by team_chat_send to copy a My files file to chat storage without leaving a copy behind when the target
+   * or message was wrong. A throw here aborts the post with that message. Not used by the AI worker.
+   */
+  late_attachments?: (() => Promise<ChatAttachment[]>) | null
   /**
    * The STAFF user (auth uuid or email) who dictated this message, when the
    * calling surface knows it for certain. Stamped on the row so that person is
@@ -235,6 +242,15 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
     rootId = (root.root_id ?? root.id) as string
   }
 
+  // Late attachments are made only now, with everything above already known good (see PostTeamMessageInput.late_attachments).
+  let attachments: ChatAttachment[] | null = input.attachments ?? null
+  if (input.late_attachments) {
+    const late = await input.late_attachments()
+    attachments = [...(input.attachments ?? []), ...late]
+    const lateErr = validateTeamPostAttachments(attachments, SUPABASE_URL)
+    if (lateErr) throw new Error(lateErr)
+  }
+
   const message = input.message.trim()
   // Excluding the ACTING user from mention resolution gives typed-message
   // parity: resolveMentions never includes the sender, and for a dictated
@@ -253,7 +269,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
     root_id: rootId,
     reply_to_id: rootId,
     card: input.card ?? null,
-    attachments: input.attachments ?? null,
+    attachments,
     mentions: mentions.matchedHandles.length ? mentions.matchedHandles : [],
     mentioned_user_ids: mentions.userIds,
     read_at: now,
@@ -309,7 +325,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
   // every branch exactly as if they had typed it themselves.
   try {
     const preview = message.slice(0, 120)
-      || (input.attachments?.length ? `📎 ${input.attachments[0].name}` : input.card ? '📇 Shared a card' : 'New message')
+      || (attachments?.length ? `📎 ${attachments[0].name}` : input.card ? '📇 Shared a card' : 'New message')
     const url = `/team-chat?thread=${target.thread_id}${rootId ? `&root=${rootId}` : ''}`
     // Per-thread tag so two bugs don't replace each other on the lock screen.
     const tag = rootId ? `team-thread-${rootId}` : `team-thread-${target.thread_id}`

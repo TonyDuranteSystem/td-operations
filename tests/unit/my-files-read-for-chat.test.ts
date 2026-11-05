@@ -49,7 +49,7 @@ function builder(table: string) {
 vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: { from: (t: string) => builder(t) } }))
 vi.mock("@/lib/crm-store/structure", () => ({
   ownersAreaUserId: async () => "u1",
-  effectiveKind: async (id: string) => (id === "shared" ? "staff_share" : "private_root"),
+  effectiveKind: async (id: string) => (id === "shared" || id === "innershare" ? "staff_share" : "private_root"),
   isLockedFolder: () => false,
 }))
 const readFileForStaff = vi.fn()
@@ -198,5 +198,83 @@ describe("what is refused (nothing is read, and the refusal is audited)", () => 
     for (let i = 0; i < 300; i++) tables.action_log.push({ id: `old-${i}`, action_type: "my_files_read", created_at: new Date().toISOString() })
     await refused({ file_id: F(1) }, /./)
     expect(String(lastAudit().outcome)).toMatch(/^refused: /)
+  })
+})
+
+describe("hardening after the bug hunt on PR #960 (dev job f34c915d)", () => {
+  it("the audit row and the answer carry the private file's id (so a public copy can be traced back)", async () => {
+    const r = await readMyFileForChat({ file_id: F(1) }, caller)
+    expect(r.ok).toBe(true)
+    if (r.ok === false) return
+    expect(r.file_id).toBe(F(1))
+    expect(lastAudit()).toMatchObject({ result_file_id: F(1) })
+  })
+
+  it("the refusal for a file outside From Claude no longer tells Claude to move it in", async () => {
+    const r = await readMyFileForChat({ file_id: F(3) }, caller)
+    expect(r.ok).toBe(false)
+    if (r.ok !== false) return
+    expect(r.error).toMatch(/not inside the "From Claude" folder/)
+    expect(r.error).not.toMatch(/my_files_move|move it/i)
+  })
+
+  it("the type that is STORED is checked, not only the recorded one: no recorded type + an object that is really a web page is refused", async () => {
+    tables.store_files.push(file(11, "drop", "scan.pdf", 100, null))
+    readFileForStaff.mockImplementation(async () => ({ bytes: Buffer.from("<html>"), mimeType: "text/html", name: "x" }))
+    const r = await readMyFileForChat({ file_id: F(11) }, caller)
+    expect(r.ok).toBe(false)
+    if (r.ok !== false) return
+    expect(r.error).toMatch(/can't be sent in chat for security reasons/)
+    expect(lastAudit().outcome).toMatch(/^refused:/)
+  })
+
+  it("a recorded type that is fine but a stored object that is a web page is refused too", async () => {
+    readFileForStaff.mockImplementation(async () => ({ bytes: Buffer.from("<html>"), mimeType: "text/html", name: "x" }))
+    const r = await readMyFileForChat({ file_id: F(1) }, caller)
+    expect(r.ok).toBe(false)
+  })
+
+  it("no recorded type + an ordinary PDF object is allowed, and the stored type is what comes back", async () => {
+    tables.store_files.push(file(12, "drop", "plain.pdf", 100, null))
+    const r = await readMyFileForChat({ file_id: F(12) }, caller)
+    expect(r.ok).toBe(true)
+    if (r.ok === false) return
+    expect(r.mime_type).toBe("application/pdf")
+  })
+
+  it("the bytes actually read are also checked for emptiness (a file recorded with a size but really empty)", async () => {
+    readFileForStaff.mockImplementation(async () => ({ bytes: Buffer.alloc(0), mimeType: "application/pdf", name: "x" }))
+    const r = await readMyFileForChat({ file_id: F(1) }, caller)
+    expect(r.ok).toBe(false)
+    if (r.ok !== false) return
+    expect(r.error).toMatch(/is empty/)
+  })
+
+  it.each([
+    ["style.xsl", "application/octet-stream"],
+    ["page.mhtml", null],
+    ["drop.hta", "application/octet-stream"],
+    ["movie.swf", "application/x-shockwave-flash"],
+    ["data.pdf", "text/xml"],
+    ["shortcut.lnk", null],
+  ])("other active content is refused on this path: %s (%s)", async (name, mime) => {
+    tables.store_files.push(file(13, "drop", name, 100, mime))
+    readFileForStaff.mockImplementation(async () => ({ bytes: Buffer.from("x"), mimeType: mime, name: "x" }))
+    const r = await readMyFileForChat({ file_id: F(13) }, caller)
+    expect(r.ok, name).toBe(false)
+    if (r.ok !== false) return
+    expect(r.error).toMatch(/can't be sent in chat for security reasons/)
+  })
+
+  it("a folder of the owner that LOOKS like a plain folder but sits inside Shared with staff is not a drop folder (the effective-kind check on its own)", async () => {
+    tables.store_folders.push(folder("shared", "root", { kind: "staff_share", name: "Shared with staff" }))
+    tables.store_folders.push(folder("innershare", "shared", { name: "From Claude" })) // kind "custom", but staff can read everything under Shared
+    tables.app_settings = [{ key: "my_files_drop_folder_id", value: "innershare" }]
+    tables.store_files.push(file(14, "innershare", "report.pdf", 100, "application/pdf"))
+    const r = await readMyFileForChat({ file_id: F(14) }, caller)
+    expect(r.ok).toBe(false)
+    if (r.ok !== false) return
+    expect(r.error).toMatch(/could not be verified/)
+    expect(readFileForStaff).not.toHaveBeenCalled()
   })
 })
