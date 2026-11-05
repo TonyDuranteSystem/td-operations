@@ -17,7 +17,7 @@ export default async function NewServicePage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect("/")
   if (!isAdmin(user)) {
-    // The offer builder links here ("Add a new service"). Someone who cannot add services gets a plain answer, not the home screen.
+    // Someone who cannot add services gets a plain answer, not the home screen. (The offer builder used to link here from an "Add a new service" button; deleted 2026-11-04: new services are set up with Claude.)
     return (
       <div className="p-6 max-w-xl mx-auto">
         <h1 className="text-lg font-semibold">Only an administrator can add a service</h1>
