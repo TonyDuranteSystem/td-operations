@@ -2,7 +2,8 @@ import { createClient } from '@supabase/supabase-js'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { countTeamNotifications, countTalkNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
 import { gmailGet } from '@/lib/gmail'
-import { isDashboardUser, isSecureAdmin } from '@/lib/auth'
+import { isAdmin, isDashboardUser, isSecureAdmin } from '@/lib/auth'
+import { mailboxAllowedFor, PERSONAL_MAILBOX } from '@/lib/inbox/mailbox-access'
 import { adminMemberContext } from '@/lib/marketing/guard'
 import { marketingChatUnread } from '@/lib/marketing/menu-unread'
 import { getWhatsappUnread } from '@/lib/inbox/whatsapp-unread'
@@ -23,7 +24,8 @@ function getDb() {
  * GET /api/dashboard/badges
  * Returns unread counts for sidebar badges.
  * Portal Chats = unread client messages in portal_messages.
- * Inbox = Gmail unread from BOTH support@ and antonio@ accounts (email only).
+ * Inbox = Gmail unread (email only) from support@, plus antonio@ ONLY for a login that may open that mailbox (the Inbox's own rule,
+ * lib/inbox/mailbox-access.ts) — a team login's red number must match what its Inbox can show (dev job 1e82504b).
  * WhatsApp = unread WhatsApp conversations, its own menu row (never Telegram).
  */
 export async function GET(request: Request) {
@@ -44,10 +46,13 @@ export async function GET(request: Request) {
     // for its recipient), so we need the caller's id to compute it correctly.
     let userId: string | null = null
     let adminUser: { id: string; email?: string | null } | null = null
+    // antonio@ is his PERSONAL mailbox: only a login that may OPEN it gets it counted. Fails closed (no login found → not counted).
+    let canSeePersonalMail = false
     try {
       const { data: { user } } = await createServerClient().auth.getUser()
       userId = user?.id ?? null
       if (user && isSecureAdmin(user)) adminUser = { id: user.id, email: user.email }
+      canSeePersonalMail = mailboxAllowedFor(PERSONAL_MAILBOX, isAdmin(user))
     } catch { /* unauthenticated → teamChat stays 0 */ }
 
     // WhatsApp's own number — started now, read below.
@@ -70,8 +75,10 @@ export async function GET(request: Request) {
         : Promise.resolve({ data: [], error: null }),
       // Gmail: support@ unread
       gmailGet('/labels/INBOX', {}, 'support@tonydurante.us') as Promise<{ messagesUnread?: number }>,
-      // Gmail: antonio@ unread
-      gmailGet('/labels/INBOX', {}, 'antonio.durante@tonydurante.us') as Promise<{ messagesUnread?: number }>,
+      // Gmail: antonio@ unread — not even asked for a login that cannot open that mailbox (no wasted Gmail call, no count leaked)
+      canSeePersonalMail
+        ? (gmailGet('/labels/INBOX', {}, 'antonio.durante@tonydurante.us') as Promise<{ messagesUnread?: number }>)
+        : Promise.resolve({ messagesUnread: 0 }),
       // Tasks: count open tasks
       getDb()
         .from('tasks')

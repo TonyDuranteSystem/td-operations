@@ -86,6 +86,7 @@ describe("app mode: Supabase notice", () => {
   it("takes one line in the app (tap to read it all) and keeps the normal bar everywhere else", () => {
     expect(incident).toMatch(/if \(appMode\) \{/)
     expect(incident).toMatch(/truncate/)
-    expect(incident).toMatch(/className="sticky top-0 z-\[95\] flex w-full items-start gap-2 bg-red-600 px-4 py-2 text-sm text-white shadow"/)
+    // the normal bar is unchanged except its stacking: under the phone menu on a phone, z-95 on a computer (incident-bar-under-phone-menu.test.ts)
+    expect(incident).toMatch(/className="sticky top-0 z-\[39\] lg:z-\[95\] flex w-full items-start gap-2 bg-red-600 px-4 py-2 text-sm text-white shadow"/)
   })
 })

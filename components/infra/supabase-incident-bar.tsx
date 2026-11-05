@@ -54,8 +54,11 @@ export function SupabaseIncidentBar({ audience }: { audience: 'staff' | 'client'
       </div>
     )
   }
+  // On a PHONE the bar must sit UNDER the menu drawer (z-50) and its dimmed backdrop (z-40): at z-95 it painted over the top of the
+  // open menu and hid its first rows (dev job 362a72a9). It stays above ordinary page content, below the phone header and every
+  // overlay. On a computer (lg and up) there is no drawer: it keeps its old z-95.
   return (
-    <div role="alert" className="sticky top-0 z-[95] flex w-full items-start gap-2 bg-red-600 px-4 py-2 text-sm text-white shadow" data-testid="supabase-incident-bar">
+    <div role="alert" className="sticky top-0 z-[39] lg:z-[95] flex w-full items-start gap-2 bg-red-600 px-4 py-2 text-sm text-white shadow" data-testid="supabase-incident-bar">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
       <p className="min-w-0 flex-1">{staffMessage(incident)}</p>
       <button type="button" onClick={() => setClosedAt(incident.latestUpdateAt)} aria-label="Close" className="shrink-0 rounded p-0.5 hover:bg-red-700"><X className="h-4 w-4" /></button>
