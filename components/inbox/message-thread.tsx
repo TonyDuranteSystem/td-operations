@@ -465,7 +465,7 @@ export function MessageThread({ conversation, mailbox, registerPrint, onReplyTo,
     <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
       {/* Subject + "make a note about this email". The note picks up the client this thread is
           linked to and a link back to this page, so it can find its way home later. */}
-      <div className="flex items-center justify-center gap-2 py-2">
+      <div className="flex flex-wrap items-center justify-center gap-2 py-2">
         {data?.subject && (
           <span className="inline-block max-w-full break-words text-xs font-medium text-zinc-500 bg-zinc-100 px-3 py-1 rounded-xl">
             {data.subject}

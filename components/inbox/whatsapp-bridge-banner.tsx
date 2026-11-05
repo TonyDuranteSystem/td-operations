@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
 
 interface BridgeStatus {
   health: 'ok' | 'unmonitored' | 'none' | 'offline' | 'process_down' | 'unlinked' | 'disconnected'
@@ -29,6 +30,9 @@ export function WhatsAppBridgeBanner() {
   const [error, setError] = useState<string | null>(null)
   const [asking, setAsking] = useState(false) // between the click and the first status that shows the request
   const [askError, setAskError] = useState<string | null>(null)
+  // Inside the TD Social phone app the warning takes ONE line (it is still always shown while the link is down); tap it for the rest.
+  const appMode = useAppMode()
+  const [unfolded, setUnfolded] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -72,6 +76,18 @@ export function WhatsAppBridgeBanner() {
 
   if (error && !status) return null // a status-read failure must not block the inbox
   if (!status || status.health === 'ok' || status.health === 'unmonitored' || status.health === 'none') return null
+
+  if (appMode && !unfolded) {
+    return (
+      // the alert role sits on a wrapper, not on the button: on a button it would replace "button" and a screen reader would not offer the tap
+      <div role="alert">
+        <button type="button" onClick={() => setUnfolded(true)} className="flex min-h-[44px] w-full items-center gap-2 border-b border-red-200 bg-red-50 px-3 text-left text-xs text-red-900" data-testid="wa-bridge-banner-folded">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" />
+          <span className="min-w-0 flex-1 truncate font-semibold">WhatsApp is not connected — new messages are NOT arriving in the CRM.</span>
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="flex items-start gap-3 px-4 py-3 border-b border-red-200 bg-red-50 text-red-900" role="alert">

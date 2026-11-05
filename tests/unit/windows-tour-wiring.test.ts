@@ -132,7 +132,7 @@ describe("one tour at a time", () => {
   })
 
   it("the WhatsApp tour no longer starts by itself inside a window frame, a pop-out, or on top of another tour", () => {
-    expect(inbox).toContain("if (isFramedOrPopout() || isAnyTourActive()) return")
+    expect(inbox).toContain("if (appMode || isFramedOrPopout() || isAnyTourActive()) return")
   })
 
   it("the one-time prompt waits, and only shows to someone who has no windows yet, is not typing, and has no update bar", () => {

@@ -21,7 +21,7 @@ const btn = 'rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-50 disabled:op
  * named you). A direct message or a group opens on the right with the lead chat's own screen (text, voice, photos, files, reactions, replies, ticks); a lead chat opens its lead window on the Chat tab,
  * as before. The list refreshes by itself while the page is on screen.
  */
-export function ChatWorkspace({ initial, leadConversations, showLeads, startThread }: { initial: Snapshot; leadConversations: Conversation[]; showLeads: boolean; startThread: string | null }) {
+export function ChatWorkspace({ initial, leadConversations, showLeads, startThread, fill = false }: { initial: Snapshot; leadConversations: Conversation[]; showLeads: boolean; startThread: string | null; /** inside the TD Social phone app the workspace takes the whole screen height (no page heading around it) */ fill?: boolean }) {
   const t = useT()
   const lang = useLang()
   const { open } = useLeadWindows()
@@ -54,6 +54,11 @@ export function ChatWorkspace({ initial, leadConversations, showLeads, startThre
     setSnap(s => ({ ...s, threads: s.threads.map(x => (x.id === id ? { ...x, unread: 0, mentioned: false } : x)) }))
     try { window.history.replaceState(null, '', `${window.location.pathname}?thread=${id}`) } catch { /* the address is only cosmetic */ }
   }
+  // a phone shows ONE screen at a time (the list, or the open chat): this is the back arrow from the chat to the list
+  const back = () => {
+    setSel(null)
+    try { window.history.replaceState(null, '', window.location.pathname) } catch { /* the address is only cosmetic */ }
+  }
   const post = async (body: object): Promise<string | null> => {
     setBusy(true); setError('')
     try {
@@ -83,10 +88,13 @@ export function ChatWorkspace({ initial, leadConversations, showLeads, startThre
   )
 
   return (
-    <div className="space-y-3">
+    <div className={fill ? 'flex h-full min-h-0 flex-col gap-3' : 'space-y-3'}>
       {offline && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{t('Connection problem. New messages may be late; trying again.')}</p>}
-      <div className="grid h-[calc(100vh-13rem)] min-h-[30rem] grid-cols-[19rem_minmax(0,1fr)] overflow-hidden rounded-xl border bg-white" data-testid="chat-workspace">
-        <div className="overflow-y-auto border-r">
+      {/* Below 768 px (a phone) the list and the open chat are two screens, one at a time; from 768 px up it is the same two columns as before.
+          Which screen shows follows the chat that is really THERE (`current`), not the id that was asked for (`sel`): if a new chat was created but
+          the list could not be refreshed yet, `sel` points at nothing, and following it would hide the list AND have no chat (and no back arrow). */}
+      <div className={`grid grid-cols-1 overflow-hidden rounded-xl border bg-white md:grid-cols-[19rem_minmax(0,1fr)] ${fill ? 'min-h-0 flex-1' : 'h-[calc(100vh-13rem)] min-h-[30rem]'}`} data-testid="chat-workspace">
+        <div className={`min-h-0 overflow-y-auto border-r ${current ? 'hidden md:block' : 'block'}`}>
           <div className="flex items-center justify-between px-3 pb-1 pt-3"><h2 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{t('Direct messages')}</h2><button type="button" className="text-xs text-sky-700 hover:underline" data-testid="new-dm" onClick={() => { setError(''); setDialog('dm') }}>{t('+ New')}</button></div>
           <ul>{dms.length === 0 ? <li className="px-3 py-1 text-xs text-slate-400">{t('None yet.')}</li> : dms.map(row)}</ul>
           <div className="flex items-center justify-between px-3 pb-1 pt-4"><h2 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{t('Groups')}</h2><button type="button" className="text-xs text-sky-700 hover:underline" data-testid="new-group" onClick={() => { setError(''); setDialog('group') }}>{t('+ New group')}</button></div>
@@ -107,11 +115,12 @@ export function ChatWorkspace({ initial, leadConversations, showLeads, startThre
             </>
           )}
         </div>
-        <div className="flex min-h-0 min-w-0 flex-col" data-testid="chat-pane">
+        <div className={`min-h-0 min-w-0 flex-col ${current ? 'flex' : 'hidden md:flex'}`} data-testid="chat-pane">
           {current ? (
             <>
               <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2.5">
-                <div className="min-w-0"><b className="block truncate" data-testid="thread-title">{current.title}</b>{current.kind === 'group' && <span className="block truncate text-xs text-slate-500">{current.memberIds.map(nameOf).join(', ')}</span>}</div>
+                <button type="button" onClick={back} aria-label={t('Back to the chats')} data-testid="chat-back" className="-ml-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xl text-slate-600 hover:bg-slate-100 md:hidden">&#8249;</button>
+                <div className="min-w-0 flex-1"><b className="block truncate" data-testid="thread-title">{current.title}</b>{current.kind === 'group' && <span className="block truncate text-xs text-slate-500">{current.memberIds.map(nameOf).join(', ')}</span>}</div>
                 {current.kind === 'group' && <button type="button" className={btn} data-testid="group-info" onClick={() => { setError(''); setDialog('info') }}>{t('Group info')}</button>}
               </div>
               <div className="min-h-0 flex-1"><TeamChat key={current.id} threadId={current.id} /></div>

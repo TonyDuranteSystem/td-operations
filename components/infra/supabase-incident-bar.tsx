@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { AlertTriangle, X } from 'lucide-react'
 import { refreshIncident, useIncidentState } from '@/lib/infra/incident-client'
 import { CLIENT_UPLOAD_MESSAGE, staffMessage } from '@/lib/infra/supabase-status'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
 
 /**
  * The red bar shown to staff (and to the TD Marketing team) while Supabase reports an incident on the services we stand on, and a neutral
@@ -14,7 +15,9 @@ import { CLIENT_UPLOAD_MESSAGE, staffMessage } from '@/lib/infra/supabase-status
 export function SupabaseIncidentBar({ audience }: { audience: 'staff' | 'client' }) {
   const pathname = usePathname()
   const state = useIncidentState()
+  const appMode = useAppMode()
   const [closedAt, setClosedAt] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -38,6 +41,19 @@ export function SupabaseIncidentBar({ audience }: { audience: 'staff' | 'client'
   if (state.audience !== 'staff' || !state.incident) return null
   const incident = state.incident
   if (closedAt === incident.latestUpdateAt) return null
+  // Inside the TD Social phone app the notice stays (staff must still be told "it is Supabase, not you") but takes ONE
+  // line, not a fifth of the screen: tap it to read the whole message, tap again to fold it (Step 1b, fix-list item 12).
+  if (appMode) {
+    return (
+      <div role="alert" className="sticky top-0 z-[95] flex w-full items-start gap-2 bg-red-600 px-3 py-1 text-xs text-white shadow" data-testid="supabase-incident-bar">
+        <AlertTriangle className="mt-1 h-4 w-4 shrink-0" />
+        <button type="button" onClick={() => setExpanded(e => !e)} aria-expanded={expanded} className="min-h-[44px] min-w-0 flex-1 text-left">
+          <span className={expanded ? 'block' : 'block truncate'}>{staffMessage(incident)}</span>
+        </button>
+        <button type="button" onClick={() => setClosedAt(incident.latestUpdateAt)} aria-label="Close" className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded hover:bg-red-700"><X className="h-4 w-4" /></button>
+      </div>
+    )
+  }
   return (
     <div role="alert" className="sticky top-0 z-[95] flex w-full items-start gap-2 bg-red-600 px-4 py-2 text-sm text-white shadow" data-testid="supabase-incident-bar">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />

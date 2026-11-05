@@ -83,10 +83,12 @@ describe("layout: window mode", () => {
     expect(layout).toMatch(/<\/ShellFrame>\s*<\/WindowsAvailableProvider>\s*<\/EmbeddedProvider>/)
   })
 
-  it("only skips the chrome's data work when the page is in a window", () => {
-    expect(layout).toMatch(/embedded\s*\?\s*\{ inbox: 0/)
-    expect(layout).toMatch(/if \(!admin && !embedded\)/)
-    expect(layout).toMatch(/embedded \? false : await isFloatingChatEnabled\(\)/)
+  it("only skips the chrome's data work when the page is in a window or in the TD Social app", () => {
+    // `bare` = a window OR the phone app (dev job 2072bc3e, Step 1b): neither shows the CRM frame, so neither runs its queries.
+    expect(layout).toMatch(/const bare = embedded \|\| appMode/)
+    expect(layout).toMatch(/bare\s*\?\s*\{ inbox: 0/)
+    expect(layout).toMatch(/if \(!admin && !bare\)/)
+    expect(layout).toMatch(/bare \? false : await isFloatingChatEnabled\(\)/)
   })
 })
 
@@ -96,12 +98,15 @@ describe("embedded shell", () => {
   })
 
   it("ChromeOnly adds no markup of its own (the normal CRM renders exactly as before)", () => {
+    expect(shell).toMatch(/return embedded \|\| appMode \? null : <>\{children\}<\/>/)
+    // the few pieces the phone app keeps (the Supabase notice) are hidden only inside a window
+    expect(shell).toMatch(/export function HiddenInWindows/)
     expect(shell).toMatch(/return useEmbedded\(\) \? null : <>\{children\}<\/>/)
   })
 
   it("keeps the normal CRM's frame and main classes unchanged", () => {
     expect(shell).toContain("'flex h-[calc(100vh-2.5rem)] mt-10'")
-    expect(shell).toContain("!embedded && 'pt-14 lg:pt-0'")
+    expect(shell).toContain("!bare && 'pt-14 lg:pt-0'")
     expect(shell).toContain("'flex-1 overflow-y-auto overscroll-y-contain bg-zinc-50'")
   })
 })

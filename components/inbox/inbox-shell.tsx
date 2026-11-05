@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2, Send, Printer, ArchiveRestore, HelpCircle } from 'lucide-react'
+import { ArrowLeft, ChevronDown, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2, Send, Printer, ArchiveRestore, HelpCircle } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -20,6 +20,9 @@ import { NewWhatsAppRecipientPicker, type WhatsAppRecipient } from '@/components
 import { WhatsAppContactMatchBanner } from '@/components/messaging/whatsapp-contact-match-banner'
 import { WhatsAppBackfillMatchesDialog } from '@/components/messaging/whatsapp-backfill-matches-dialog'
 import { ComposeReply } from './compose-reply'
+import { AppThreadActions } from './app-thread-actions'
+import { appThreadPlan } from '@/lib/inbox/app-thread-actions'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { ComposeDialog, type PrefillAttachmentSource } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
 import { WorkerChatPanel } from './worker-chat-panel'
@@ -160,6 +163,17 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
   const [waWorkerOpen, setWaWorkerOpen] = useState(false)
   const [waTourOpen, setWaTourOpen] = useState(false)
   const [replyTourOpen, setReplyTourOpen] = useState(false)
+  // Inside the TD Social phone app (dev job 2072bc3e, Step 1b) the Inbox is drawn for a phone: no channel buttons (the
+  // app's tabs do that), a round Compose button, a folder picker, a short toolbar, no tours. The computer layout is untouched.
+  const appMode = useAppMode()
+  const [folderSheetOpen, setFolderSheetOpen] = useState(false)
+  // Escape closes the Folders sheet
+  useEffect(() => {
+    if (!folderSheetOpen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFolderSheetOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [folderSheetOpen])
   const waFirstRowRef = useRef<InboxConversation | null>(null)
   const [waListReady, setWaListReady] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
@@ -288,7 +302,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
     if (!isWhatsApp || !waListReady || selected || !userId) return
     // Never inside a floating window's small frame or a pop-out browser window (it would use up the person's
     // one-time flag where they cannot see it properly), and never on top of another tour that is open.
-    if (isFramedOrPopout() || isAnyTourActive()) return
+    if (appMode || isFramedOrPopout() || isAnyTourActive()) return
     try {
       const key = `wa-tour-seen:${userId}`
       if (window.localStorage.getItem(key)) return
@@ -297,7 +311,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
     } catch {
       // Storage blocked (private window) — no auto-start; the button still works.
     }
-  }, [isWhatsApp, waListReady, selected, userId])
+  }, [isWhatsApp, waListReady, selected, userId, appMode])
   const isGmail = selected?.channel === 'gmail'
   // The reply tour (new reply box: pop-up, formatting, AI, unsent-reply safety net) NEVER starts by itself — only the
   // "Reply tour" button opens it (Antonio, 2026-10-07: it popped up on every page). Dev job 10b8dfce.
@@ -1372,7 +1386,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
   return (
     <div className="flex flex-col h-full bg-white">
       {/* Header with channel tabs + compose button */}
-      <div className="flex items-center justify-between border-b bg-white">
+      <div className={cn('flex items-center justify-between border-b bg-white', appMode && 'hidden')}>
         <InboxHeader
           activeChannel={activeChannel}
           onlyChannel={lockedChannel}
@@ -1460,9 +1474,47 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
         </div>
       </div>
 
+      {/* TD Social app: the round Compose button, bottom-right (the thumb zone), only on the lists. Same two actions as the
+          Compose menu above; the menu opens upward. */}
+      {appMode && !selected && (
+        <div className="fixed bottom-4 right-4 z-40">
+          <button
+            type="button"
+            onClick={() => setComposeMenuOpen(!composeMenuOpen)}
+            aria-label="Compose"
+            className="flex h-14 w-14 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg"
+          >
+            <PenSquare className="h-6 w-6" />
+          </button>
+          {composeMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setComposeMenuOpen(false)} />
+              <div className="absolute bottom-full right-0 z-50 mb-2 w-60 rounded-lg border border-zinc-200 bg-white py-1 shadow-xl">
+                <button
+                  type="button"
+                  onClick={() => { setComposeMenuOpen(false); setForwardData(null); setComposeOpen(true) }}
+                  className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-sm text-zinc-700 hover:bg-zinc-50"
+                >
+                  <Mail className="h-4 w-4 text-blue-500" />
+                  New Email
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setComposeMenuOpen(false); setWhatsappPickerOpen(true) }}
+                  className="flex min-h-[44px] w-full items-center gap-2.5 px-4 text-sm text-zinc-700 hover:bg-zinc-50"
+                >
+                  <MessageSquare className="h-4 w-4 text-green-600" />
+                  New WhatsApp Message
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Mailbox selector — Gmail only; antonio@ is personal (admin only) */}
       {!isWhatsApp && canUsePersonalMailbox && (
-        <div className="flex items-center gap-1 px-4 py-1.5 border-b bg-zinc-50/50">
+        <div className={cn('flex items-center gap-1 px-4 py-1.5 border-b bg-zinc-50/50', appMode && selected && 'hidden')}>
           <span className="text-xs text-zinc-400 mr-2">Mailbox:</span>
           {(['support', 'antonio'] as const).map(mb => (
             <button
@@ -1483,7 +1535,12 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
 
       {/* Search bar + Read/Unread filter — Gmail only */}
       {!isWhatsApp && (
-        <div className="relative flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50">
+        <div className={cn('relative flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50', appMode && selected && 'hidden')}>
+          {appMode && (
+            <button type="button" onClick={() => setFolderSheetOpen(true)} className="inline-flex min-h-[44px] shrink-0 items-center gap-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700">
+              Folders <ChevronDown className="h-4 w-4" />
+            </button>
+          )}
           <Search className="h-4 w-4 text-zinc-400 shrink-0" />
           <input
             type="text"
@@ -1565,7 +1622,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
       {/* Self-hosted WhatsApp link health + owner-only Reconnect (pairing code). Renders nothing while healthy. */}
       {isWhatsApp && <WhatsAppBridgeBanner />}
       {/* Owner-only pause switch + approved numbers for CRM replies (renders nothing for anyone else). */}
-      {isWhatsApp && <WhatsAppSendSwitch />}
+      {isWhatsApp && !(appMode && selected) && <WhatsAppSendSwitch />}
 
       {/* Search + Read/Unread filter — WhatsApp. Client-side only (no Gmail-style
           operator search): filters the already-loaded conversations by name or
@@ -1574,7 +1631,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
           Antonio, 2026-09-19: asked for a way to find a conversation by name/
           number, and to filter down to what's actually unread. */}
       {isWhatsApp && (
-        <div data-tour="wa-search" className="relative flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50">
+        <div data-tour="wa-search" className={cn('relative flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50', appMode && selected && 'hidden')}>
           <Search className="h-4 w-4 text-zinc-400 shrink-0" />
           <input
             type="text"
@@ -1605,7 +1662,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
             ))}
           </div>
           {/* Which sound plays for a new customer message (per person, this browser) — dev job c84dfb4d */}
-          <WhatsAppSoundPicker />
+          {!appMode && <WhatsAppSoundPicker />}
         </div>
       )}
 
@@ -1830,6 +1887,36 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
                 {/* Action buttons — WhatsApp gets Reply plus its own read-only Worker
                     (dev job 6668385e); the email Worker and the CRM quick-create actions
                     stay Gmail/Telegram-only. */}
+                {appMode ? (
+                  <AppThreadActions
+                    plan={appThreadPlan({ channel: selected.channel, isTrash: selectedOrigin === trashViewKey, hasWhatsAppGroup: !!whatsappGroupId })}
+                    unread={openUnread}
+                    starred={!!selected.starred}
+                    busy={emailActionMutation.isPending || restoreOpenMutation.isPending}
+                    handlers={{
+                      reply: handleReply,
+                      archive: () => emailActionMutation.mutate({ action: 'archive', originView: selectedOrigin, conv: selected }),
+                      toggleRead: () => emailActionMutation.mutate({ action: openUnread ? 'mark_read' : 'mark_unread', conv: selected }),
+                      delete: () => emailActionMutation.mutate({ action: 'trash', originView: selectedOrigin, conv: selected }),
+                      restore: () => handleRestoreOpen(selected, null),
+                      task: () => setCreateDialog({ type: 'task', conversation: selected }),
+                      service: () => setCreateDialog({ type: 'service', conversation: selected }),
+                      invoice: () => setCreateDialog({ type: 'invoice', conversation: selected }),
+                      worker: () => { if (isWhatsApp) setWaWorkerOpen(true); else handleWorker() },
+                      share: openShareForSelectedEmail,
+                      forward: () => handleForward(),
+                      star: () => emailActionMutation.mutate({ action: selected.starred ? 'unstar' : 'star', conv: selected }),
+                      link: () => setLinkOpen(true),
+                      print: () => printRef.current?.(),
+                      copyLink: () => {
+                        const url = `${window.location.origin}/inbox?thread=whatsapp:${whatsappGroupId}`
+                        navigator.clipboard.writeText(url)
+                          .then(() => toast.success('Conversation link copied'))
+                          .catch(() => toast.error('Could not copy the link.'))
+                      },
+                    }}
+                  />
+                ) : (
                 <div className="flex items-center gap-1 min-w-0 flex-wrap justify-end ml-auto">
                   {!isWhatsApp && (
                     <>
@@ -2114,6 +2201,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
                     </>
                   )}
                   </div>
+                )}
               </div>
 
               {/* Thread body */}
@@ -2201,6 +2289,26 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
 
       {backfillMatchesOpen && (
         <WhatsAppBackfillMatchesDialog onClose={() => setBackfillMatchesOpen(false)} />
+      )}
+
+      {/* TD Social app: the folder list (Sent, Starred, Drafts, Trash, labels) as a sheet — on a phone it has no column. */}
+      {appMode && folderSheetOpen && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setFolderSheetOpen(false)} />
+          <div className="absolute inset-x-0 bottom-0 max-h-[70vh] overflow-y-auto rounded-t-2xl bg-white pb-4 shadow-xl" role="dialog" aria-modal="true" aria-label="Folders" data-testid="app-folder-sheet">
+            <div className="flex items-center justify-between px-4 py-2">
+              <p className="text-sm font-semibold text-zinc-900">Folders</p>
+              <button type="button" onClick={() => setFolderSheetOpen(false)} aria-label="Close" className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-500">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <InboxSidebar
+              activeLabel={activeLabel}
+              onLabelChange={(id) => { handleLabelChange(id); setFolderSheetOpen(false) }}
+              mailbox={activeMailbox}
+            />
+          </div>
+        </div>
       )}
 
       <WhatsAppTour

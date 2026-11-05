@@ -7,6 +7,7 @@ import { listConversations } from '@/lib/marketing/lead-chat-server'
 import { listThreads } from '@/lib/marketing/team-chat-server'
 import { isInvolved } from '@/lib/marketing/lead-chat'
 import { ChatWorkspace } from '@/components/marketing/chat-workspace'
+import { getAppMode } from '@/lib/app-mode/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,10 +25,12 @@ export default async function MarketingChat({ searchParams }: { searchParams: Pr
   const sp = await searchParams
   const showLeads = hasPermission(g.ctx.permissions, 'leads.read') && isInvolved(g.ctx.permissions)
   const [snap, leadConversations] = await Promise.all([listThreads(g.ctx), showLeads ? listConversations(g.ctx) : Promise.resolve([])])
+  // Inside the TD Social phone app the chat IS the screen: no page heading, no padding, the workspace takes the height.
+  const appMode = getAppMode()
   return (
-    <div className="space-y-4 p-6 pb-20">
-      <div><h1 className="text-2xl font-semibold">{t('Chat')}</h1><p className="mt-1 text-sm text-slate-500">{t('Direct messages, groups and the chats about leads.')}</p></div>
-      <ChatWorkspace initial={snap} leadConversations={leadConversations} showLeads={showLeads} startThread={typeof sp.thread === 'string' ? sp.thread : null} />
+    <div className={appMode ? 'flex h-full min-h-0 flex-col' : 'space-y-4 p-6 pb-20'}>
+      {!appMode && <div><h1 className="text-2xl font-semibold">{t('Chat')}</h1><p className="mt-1 text-sm text-slate-500">{t('Direct messages, groups and the chats about leads.')}</p></div>}
+      <ChatWorkspace initial={snap} leadConversations={leadConversations} showLeads={showLeads} startThread={typeof sp.thread === 'string' ? sp.thread : null} fill={appMode} />
     </div>
   )
 }

@@ -91,7 +91,7 @@ export function TalkVoiceWakeBar() {
   }, [])
   if (!show) return null
   return (
-    <div role="status" data-testid="talk-voice-wake-bar" className="fixed left-1/2 top-10 z-[60] -translate-x-1/2 rounded-full border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-900 shadow">
+    <div role="status" data-testid="talk-voice-wake-bar" className="app-hide fixed left-1/2 top-10 z-[60] -translate-x-1/2 rounded-full border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-900 shadow">
       🔔 Sound is on. Tap anywhere to start the voice.
     </div>
   )
@@ -118,7 +118,7 @@ export function TalkVoiceSwitch() {
   if (on === null) return null
   return (
     <button type="button" onClick={toggle} aria-pressed={on} data-testid="talk-voice-switch"
-      className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium ${on ? 'border-teal-200 bg-teal-50 text-teal-800' : 'border-zinc-200 text-zinc-600 active:bg-zinc-100'}`}>
+      className={`app-hide flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium ${on ? 'border-teal-200 bg-teal-50 text-teal-800' : 'border-zinc-200 text-zinc-600 active:bg-zinc-100'}`}>
       🔔 Voice: {on ? 'On' : 'Off'}
     </button>
   )
