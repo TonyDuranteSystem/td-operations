@@ -46,15 +46,17 @@ describe("sidebar wiring", () => {
   const sidebar = read("components/dashboard/sidebar.tsx")
 
   it("the launcher is handed the SAME permission-filtered list the menu renders", () => {
-    expect(sidebar).toContain("<WindowsLauncher items={orderedNav} />")
-    // orderedNav is the list after the admin-only (or named-person, extraNavIds) / owner-only / feature-flag filter
+    // the list is the menu layout flattened through the same per-page rule the menu itself uses (isVisible):
+    // admin-only (or named-person, extraNavIds) / owner-only / feature-flag — wherever the person has put the page
+    expect(sidebar).toContain("<WindowsLauncher items={flattenVisible(layout, isVisible)")
     const filter = sidebar.indexOf("if (item.adminOnly && !isAdmin && !extraNavIds.includes(item.id)) return false")
-    expect(filter).toBeGreaterThan(sidebar.indexOf("const orderedNav"))
+    expect(filter).toBeGreaterThan(sidebar.indexOf("const isVisible"))
     expect(filter).toBeLessThan(sidebar.indexOf("<WindowsLauncher"))
   })
 
   it("Option-click opens a window only when windows are on, and otherwise leaves the click alone", () => {
-    expect(sidebar).toMatch(/canOpenWindowNow\(windowsAvailable\) && isWindowOpenClick\(e\) && isWindowableUrl\(item\.href\)/)
+    // the one row every page uses (main list, group panel, phone drawer)
+    expect(read("components/dashboard/nav-item-row.tsx")).toMatch(/canOpenWindowNow\(windowsAvailable\) && isWindowOpenClick\(e\) && isWindowableUrl\(item\.href\)/)
   })
 })
 

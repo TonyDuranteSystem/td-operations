@@ -147,7 +147,7 @@ async function pushNews(n: NewsRow): Promise<number> {
     for (const r of rec) byTeam.set(r.teamId, [...(byTeam.get(r.teamId) ?? []), r.id])
     let sent = 0
     for (const [teamId, ids] of Array.from(byTeam.entries())) {
-      const r = await sendMarketingPush(teamId, ids, { title: n.title_it || n.title, body: (n.body_it || n.body).slice(0, 140), url: hrefForLink(n.link_key) ?? "/marketing/news", tag: `news-${n.id}` })
+      const r = await sendMarketingPush(teamId, ids, { title: n.title_it || n.title, body: (n.body_it || n.body).slice(0, 140), url: hrefForLink(n.link_key) ?? "/marketing/news", tag: `news-${n.id}`, alertKind: "marketing_news" })
       sent += r.sent
     }
     return sent

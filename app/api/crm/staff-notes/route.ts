@@ -280,6 +280,7 @@ export async function POST(req: NextRequest) {
       body: `${body.slice(0, 120)}${dateSuffix}`,
       url: `/notes?note=${data.id}`,
       tag: `staff-note-${data.id}`,
+      alertKind: "staff_note",
     }).catch(() => {})
   }
 
@@ -348,6 +349,7 @@ export async function PATCH(req: NextRequest) {
         body: body.slice(0, 120),
         url: `/notes?note=${id}`,
         tag: `staff-note-${id}`,
+        alertKind: "staff_note",
       }).catch(() => {})
     }
 
@@ -535,6 +537,7 @@ export async function PATCH(req: NextRequest) {
       body: pushTo.noteBody.slice(0, 120),
       url: `/notes?note=${id}`,
       tag: `staff-note-${id}`,
+      alertKind: "staff_note",
     }).catch(() => {})
   }
 
@@ -557,6 +560,7 @@ export async function PATCH(req: NextRequest) {
         body: editedBody.slice(0, 120),
         url: `/notes?note=${id}`,
         tag: `staff-note-${id}`,
+        alertKind: "staff_note",
       }).catch(() => {})
     }
   }

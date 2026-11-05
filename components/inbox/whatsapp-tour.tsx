@@ -41,9 +41,9 @@ interface TourStep extends Step {
 
 const STEPS: TourStep[] = [
   {
-    target: '[data-tour="wa-tab"]',
-    title: 'The WhatsApp tab',
-    content: "Every real client WhatsApp conversation lives here, separate from email. The number shown is how many conversations are unread.",
+    target: '[data-tour="wa-title"]',
+    title: 'The WhatsApp page',
+    content: "Every real client WhatsApp conversation lives here, on its own page, separate from email. The red number next to WhatsApp in the left menu is how many conversations are unread.",
     disableBeacon: true,
     placement: 'bottom',
   },

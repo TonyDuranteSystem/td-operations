@@ -708,5 +708,6 @@ async function pushNotifyAdmin(accountId: string | null, contactId: string | nul
     body: messagePreview.slice(0, 200) || '[Attachment]',
     url: `/portal-chats${accountId ? `?account=${accountId}` : ''}`,
     tag: `admin-chat-${accountId || contactId || 'unknown'}`,
+    alertKind: 'client_chat',
   })
 }

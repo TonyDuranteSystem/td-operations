@@ -213,7 +213,10 @@ describe("what the ring points at", () => {
     expect(ringSelector(step("hide-restore"), p, snap({ ids: ["w1"], minimized: ["w1"] }))).toBe('[data-win-part="tray-chip"][data-win-id="w1"]')
   })
   it("the Leads item in the left menu for the fast way, and X of the window the person opened for 'close'", () => {
-    expect(ringSelector(step("fast-way"), newProgress(), snap())).toBe('aside a[href="/leads"]')
+    // Leads sits inside Network now: the Leads link when its panel is open (or when moved to the main list), else the Network row — in that order
+    const ring = ringSelector(step("fast-way"), newProgress(), snap())
+    expect(ring?.split(" || ")).toEqual(['[data-flyout] a[href="/leads"]', 'aside a[href="/leads"]', '[data-testid="menu-group-g-network"]'])
+    expect(step("fast-way").tryIt).toContain("Network")
     expect(ringSelector(step("close"), at("close", { practiceId: "w1", opened: ["w1", "w2"] }), snap({ ids: ["w1", "w2"], count: 2 }))).toBe('[data-win-id="w2"] [data-win-part="close"]')
   })
   it("nothing to point at when there is no practice window, and none on the welcome / wrap-up cards", () => {

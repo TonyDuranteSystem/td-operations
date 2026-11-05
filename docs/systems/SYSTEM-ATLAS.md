@@ -179,12 +179,12 @@ _Regenerated 2026-11-05 from the R-rule list in CLAUDE.md — **42 rules**, high
 _Regenerated 2026-11-05. Every subsystem doc under `docs/systems/` (55 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-04)_
-- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-04)_
+- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-05)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-02)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-10-30)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-28)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-11-03)_
-- [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-09-23)_
+- [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-11-05)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-10-20)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-19)_
@@ -213,17 +213,17 @@ _Regenerated 2026-11-05. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-04)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-11-02)_
-- [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-10-23)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-11-05)_
+- [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-11-05)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-11-01)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-04)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [social-app.md](social-app.md) — TD Social (iPhone app) — "app mode" on the web side _(verified 2026-11-05)_
-- [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-10-13)_
+- [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-11-05)_
 - [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-04)_
 - [storage.md](storage.md) — CRM Storage _(verified 2026-11-05)_
-- [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-04)_
+- [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-05)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-04)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-19)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_

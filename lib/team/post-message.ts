@@ -336,6 +336,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
         body: preview,
         url,
         tag: `team-mention-${target.thread_id}`,
+        alertKind: 'claude_reply',
         dm: target.thread_type === 'dm', // TD Talk receives direct messages only
       })
     } else if (target.thread_type === 'dm') {
@@ -347,7 +348,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
       // once a dictated DM could be keyed to the real acting user.
       const otherId = otherDmParty(target.dm_key, [CLAUDE_SENDER_UUID, actingUserId])
       if (otherId) {
-        await sendPushToAdminUsers([otherId], { title: CLAUDE_SENDER_NAME, body: preview, url, tag, dm: true })
+        await sendPushToAdminUsers([otherId], { title: CLAUDE_SENDER_NAME, body: preview, url, tag, dm: true, alertKind: 'claude_reply' })
       }
     } else if (target.thread_type === 'channel' || target.thread_type === 'general') {
       // SAME silence rule as the human send route — Claude answering in the
@@ -355,7 +356,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
       // Claude to prefer root_id when answering a bug, and worker bug reports
       // end with "@claude — investigate", so this path is genuinely reachable.
       if (channelNotifiesStaff(target.channel_slug ?? target.channel_name ?? null)) {
-        await sendPushToStaffExcept(CLAUDE_SENDER_UUID, { title: CLAUDE_SENDER_NAME, body: preview, url, tag }, actingUserId ? [actingUserId] : undefined)
+        await sendPushToStaffExcept(CLAUDE_SENDER_UUID, { title: CLAUDE_SENDER_NAME, body: preview, url, tag, alertKind: 'claude_reply' }, actingUserId ? [actingUserId] : undefined)
       }
     } else if (conversationNotifiesParticipants(target.thread_type === 'discussion' && !target.account_id && !target.contact_id && !target.lead_id)) {
       // A client discussion: participants only, never every staff device.
@@ -375,7 +376,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
         .map(p => p.user_id)
         .filter(uid => uid && uid !== CLAUDE_SENDER_UUID && uid !== actingUserId)
       if (ids.length > 0) {
-        await sendPushToAdminUsers(ids, { title: CLAUDE_SENDER_NAME, body: preview, url, tag })
+        await sendPushToAdminUsers(ids, { title: CLAUDE_SENDER_NAME, body: preview, url, tag, alertKind: 'claude_reply' })
       }
     }
   } catch {
