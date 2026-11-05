@@ -16,7 +16,7 @@ import { logAction } from "@/lib/mcp/action-log"
 import { getGreeting } from "@/lib/greeting"
 import { APP_BASE_URL } from "@/lib/config"
 import { publishOffer, resendOfferEmail } from "@/lib/offers/publish"
-import { editReasonProblem } from "@/lib/offers/edit-after-sent"
+import { editReasonProblem, statusSetByHandProblem } from "@/lib/offers/edit-after-sent"
 import { clientFacingPartLabel, validatePaymentPlan } from "@/lib/offers/payment-plan"
 import { createOffer, type OfferContractType, type OfferPaymentType, type OfferPaymentGateway } from "@/lib/operations/offers"
 import { STANDALONE_AGREEMENT_TYPES, CUSTOM_CONTRACT_TYPE_PATTERN } from "@/lib/offers/standalone-contract-types"
@@ -509,10 +509,10 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
   // ═══════════════════════════════════════
   server.tool(
     "offer_update",
-    "Update one or more fields of an existing offer by token. Only provided fields are changed — all others remain untouched. Use English column names: services, cost_summary, recurring_costs, issues, immediate_actions, strategy, next_steps, future_developments, additional_services. Use offer_get first to review current values. For approving and sending, use offer_send instead.",
+    "Update one or more fields of an existing offer by token. Only provided fields are changed — all others remain untouched. Use English column names: services, cost_summary, recurring_costs, issues, immediate_actions, strategy, next_steps, future_developments, additional_services. Use offer_get first to review current values. For approving and sending, use offer_send instead — setting status to 'sent' here is refused (it would skip the Send checks and email nobody).",
     {
       token: z.string().describe("Offer token to update"),
-      updates: z.record(z.string(), z.any()).describe("Object with fields to update (e.g. {status: 'sent', client_email: 'new@email.com'})"),
+      updates: z.record(z.string(), z.any()).describe("Object with fields to update (e.g. {client_email: 'new@email.com'}). status 'sent' is refused — use offer_send."),
       reason: z.string().optional().describe("REQUIRED when the offer is no longer a draft (sent, viewed, signed, completed…): one clear sentence saying what is being changed and why (at least 15 characters). Tell Antonio first. It is saved in the activity log. Not needed for a draft."),
     },
     async ({ token, updates, reason }) => {
@@ -520,6 +520,11 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
         // Part 3 item D: an offer that is already out may have been seen or signed by the client. Editing it takes a written
         // reason (and Antonio told first); the reason goes to the activity log. See lib/offers/edit-after-sent.ts.
         const { data: current } = await supabaseAdmin.from("offers").select("status").eq("token", token).maybeSingle()
+        // Call 1: an offer becomes "sent" only through Send. Checked before the reason rule so the answer is the relevant one.
+        const handSent = statusSetByHandProblem({ currentStatus: current?.status, updates })
+        if (handSent) {
+          return { content: [{ type: "text" as const, text: `❌ offer_update refused: ${handSent}` }] }
+        }
         const needsReason = editReasonProblem({ status: current?.status, reason })
         if (needsReason) {
           return { content: [{ type: "text" as const, text: `❌ offer_update refused: ${needsReason}` }] }

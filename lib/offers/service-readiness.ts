@@ -7,7 +7,7 @@
  * nothing started (the delivery cannot be created without steps), with only a
  * system-error row to show for it. This check stops that where an offer leaves
  * draft: `publishOffer` (the CRM Send button and the MCP offer_send tool).
- * Anything that writes an offer's status by hand (e.g. the MCP offer_update tool) is NOT covered.
+ * The MCP offer_update tool refuses status 'sent' (lib/offers/edit-after-sent.ts); any other hand-written status is NOT covered.
  *
  * It looks ONLY at service types the old hard-coded list does not know — the
  * "new" services — and a historical name is skipped in any spelling or case
