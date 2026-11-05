@@ -22,7 +22,7 @@ export default async function NewServicePage() {
       <div className="p-6 max-w-xl mx-auto">
         <h1 className="text-lg font-semibold">Only an administrator can add a service</h1>
         <p className="mt-2 text-sm text-zinc-600">
-          Ask Antonio or Jodi to add it, then go back to your offer. The offer you were building is still open in the other tab.
+          Ask Antonio or Jodi to add it.
         </p>
       </div>
     )

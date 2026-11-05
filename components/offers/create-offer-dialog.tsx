@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useTransition, useMemo } from 'react'
+import { useState, useEffect, useTransition, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote, ExternalLink, CheckCircle2, BookOpen, Phone, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
@@ -13,6 +13,7 @@ import { buildAnnualCostRows } from '@/lib/offers/annual-maintenance-wording'
 import { formatOptionLabel } from '@/lib/offers/package-option-label'
 import { canGroundFormationState, canGroundEntityType } from '@/lib/offers/narrative-business-rules'
 import { offerPreviewHref } from '@/lib/offers/offer-preview-href'
+import { parseServiceListReply } from '@/lib/offers/service-list-reply'
 import { OfferSendCheckBox } from './offer-send-check-box'
 import {
   validatePaymentPlan,
@@ -214,14 +215,25 @@ export function CreateOfferDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, referrerName, referrerType])
 
-  // Fetch service catalog from DB when dialog opens
+  // Service list: read from the catalog EVERY time the window opens, so a service added since this page loaded (Antonio's page
+  // stays open while Claude sets a new service up) shows up. Only a reply that really is a list replaces the one on screen: an
+  // expired login or a server error keeps the list already shown, and "failed to load" is said only when there is none yet.
+  // See lib/offers/service-list-reply.ts.
+  const hasCatalog = useRef(false)
   useEffect(() => {
-    if (!open || catalog.length > 0) return
-    setCatalogLoading(true)
-    fetch('/api/service-catalog')
-      .then(r => r.json())
-      .then(d => {
-        const services = (d.services ?? []) as Array<Record<string, unknown>>
+    if (!open) return
+    let cancelled = false
+    if (!hasCatalog.current) setCatalogLoading(true)
+    fetch('/api/service-catalog', { cache: 'no-store' })
+      .then(async r => parseServiceListReply(r.ok, await r.json().catch(() => null)))
+      .then(services => {
+        if (cancelled) return
+        if (!services) {
+          if (!hasCatalog.current) toast.error('Failed to load service catalog')
+          return
+        }
+        if (services.length === 0 && hasCatalog.current) return // never replace a list with an empty one
+        hasCatalog.current = services.length > 0
         setCatalog(services.map(s => {
           const ctx = s.default_service_context as string | null | undefined
           return {
@@ -241,9 +253,12 @@ export function CreateOfferDialog({
           }
         }))
       })
-      .catch(() => toast.error('Failed to load service catalog'))
+      .catch(() => {
+        if (!cancelled && !hasCatalog.current) toast.error('Failed to load service catalog')
+      })
       .finally(() => setCatalogLoading(false))
-  }, [open, catalog.length])
+    return () => { cancelled = true }
+  }, [open])
 
   const [language, setLanguage] = useState(
     clientLanguage === 'Italian' || clientLanguage === 'it' ? 'it' : 'en'

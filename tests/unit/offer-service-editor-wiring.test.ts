@@ -26,9 +26,17 @@ describe("Create Offer: the add-a-service button is gone", () => {
     expect(dialog).not.toContain("window.open('/service-catalog")
   })
 
-  it("the list is read the way it always was: once, while empty, with no re-read on focus", () => {
-    expect(dialog).toContain("catalog.length > 0) return")
-    expect(dialog).not.toMatch(/addEventListener\('focus'/)
+  it("the list is read through the checked reader on every open, keeps the list on screen on a bad answer, and is never re-read behind the user's back", () => {
+    expect(dialog).toContain("from '@/lib/offers/service-list-reply'")
+    expect(dialog).toContain("parseServiceListReply(")
+    expect(dialog).toContain("if (!services) {")
+    expect(dialog).toContain("if (services.length === 0 && hasCatalog.current) return")
+    expect(dialog).toContain("}, [open])")
+    // the old shape: read whatever JSON came back as the list (an expired login or a server error became an empty list)
+    expect(dialog).not.toMatch(/d\.services \?\? \[\]/)
+    // no focus / visibility re-read (either quote style, or the on-property form)
+    expect(dialog).not.toMatch(/addEventListener\(\s*['"](focus|visibilitychange)['"]/)
+    expect(dialog).not.toContain("onfocus")
     expect(dialog).not.toContain("selectedServicesDrift")
     expect(dialog).not.toContain("decideNewService")
   })

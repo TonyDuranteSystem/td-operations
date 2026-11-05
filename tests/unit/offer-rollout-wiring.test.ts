@@ -49,7 +49,7 @@ describe("the screens ask the server, per record", () => {
     expect(hook).not.toContain("/api/app-settings")
   })
 
-  it("Create Offer no longer asks the rollout route at all (its only piece, the add-a-service button, was deleted); the box inside it asks by token", () => {
+  it("the Create Offer dialog itself no longer asks the rollout route (its only piece, the add-a-service button, was deleted); the box shown inside it after Save asks by offer token", () => {
     expect(dialog).not.toContain("useOfferBuilderFeatures")
     expect(dialog).not.toContain("/api/app-settings")
     expect(dialog).toContain("<OfferSendCheckBox token={createdToken} />")
