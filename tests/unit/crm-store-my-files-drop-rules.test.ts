@@ -36,8 +36,17 @@ describe("checkDropName", () => {
     const r = checkDropName("TD Marketing plan.DOCX")
     expect(r).toMatchObject({ ok: true, name: "TD Marketing plan.DOCX", ext: "docx" })
   })
-  it.each(["a.html", "a.svg", "a.js", "a.exe", "a.doc", "a.xls", "a.ppt", "a.rtf", "a.zip", "noextension", "a.pdf.exe", "x."])("refuses %s", (n) => {
+  it.each(["a.svg", "a.js", "a.exe", "a.doc", "a.xls", "a.ppt", "a.rtf", "a.zip", "noextension", "a.pdf.exe", "x."])("refuses %s", (n) => {
     expect(checkDropName(n).ok).toBe(false)
+  })
+  it.each(["mockup.html", "Mockup.HTM"])("accepts the web page %s as text/html", (n) => {
+    expect(checkDropName(n)).toMatchObject({ ok: true, mime: "text/html" })
+  })
+  it("a web page must be UTF-8 text without NUL; script-capable look-alikes stay refused", () => {
+    expect(checkDropContent("html", Buffer.from("<!doctype html><title>x</title><script>1</script>")).ok).toBe(true)
+    expect(checkDropContent("html", Buffer.from([0x3c, 0x00, 0x62])).ok).toBe(false)
+    expect(checkDropContent("htm", Buffer.from([0xff, 0xfe, 0xfd])).ok).toBe(false)
+    for (const n of ["a.xhtml", "a.svgz", "a.mhtml", "a.js"]) expect(checkDropName(n).ok).toBe(false)
   })
   it("refuses slashes, dots-only, leading dot, trailing dot/space, direction-changing characters", () => {
     for (const n of ["a/b.pdf", "a\\b.pdf", "..", ".hidden.pdf", "plan.pdf.", "x‮gnp.pdf", "a​b.pdf", "line\nbreak.pdf", ""]) {
