@@ -81,7 +81,7 @@ export function HandoverPanel({ leadId, role, canAct, contact, zone, offer = nul
             <button type="button" className={`${btn} ${mode === 'book' ? 'bg-slate-900 text-white' : ''}`} aria-pressed={mode === 'book'} data-testid="handover-book" onClick={() => setMode(mode === 'book' ? null : 'book')}>
               {seller ? (contact.appointmentAt ? t('Move the call') : t('Fix the call')) : (contact.appointmentAt ? t("Move Rocco's call") : t("Book Rocco's call"))}
             </button>
-            {contact.appointmentAt && <button type="button" className={btn} disabled={busy} data-testid="call-cancel" onClick={() => send({ action: 'appointment', at: null })}>{t('Cancel the call')}</button>}
+            {contact.appointmentAt && <button type="button" className={btn} disabled={busy} data-testid="call-cancel" onClick={() => send({ action: 'appointment', at: null, replaces: contact.appointmentAt ?? null })}>{t('Cancel the call')}</button>}
           </div>
 
           {mode === 'book' && (
@@ -116,7 +116,7 @@ export function HandoverPanel({ leadId, role, canAct, contact, zone, offer = nul
                         <TimesLine at={picked} info={zone} />
                         <label className="block"><span className="text-slate-500">{t('Note for Rocco (optional)')}</span>
                           <textarea className="mt-1 w-full rounded-lg border px-3 py-2" rows={2} value={note} onChange={e => setNote(e.target.value)} placeholder={t('For example: he wants to know the costs')} /></label>
-                        <button type="button" className={`${btn} bg-slate-900 text-white`} disabled={busy} data-testid="book-confirm-slot" onClick={() => void send({ action: 'appointment', at: picked, ...(note.trim() ? { note: note.trim() } : {}) })}>{t('Save the call')}</button>
+                        <button type="button" className={`${btn} bg-slate-900 text-white`} disabled={busy} data-testid="book-confirm-slot" onClick={() => void send({ action: 'appointment', at: picked, replaces: contact.appointmentAt ?? null, ...(note.trim() ? { note: note.trim() } : {}) })}>{t('Save the call')}</button>
                       </div>
                     )}
                   </div>
@@ -130,7 +130,7 @@ export function HandoverPanel({ leadId, role, canAct, contact, zone, offer = nul
                   <label className="block"><span className="text-slate-500">{t('Note for Rocco (optional)')}</span>
                     <textarea className="mt-1 w-full rounded-lg border px-3 py-2" rows={2} value={note} onChange={e => setNote(e.target.value)} placeholder={t('For example: he wants to know the costs')} /></label>
                   <button type="button" className={`${btn} bg-slate-900 text-white`} disabled={busy || !when} data-testid="book-confirm"
-                    onClick={() => { const at = localToIso(when, zone.viewer); if (!at) { setError(t('Pick a valid day and time.')); return } void send({ action: 'appointment', at, ...(note.trim() ? { note: note.trim() } : {}) }) }}>{t('Save the call')}</button>
+                    onClick={() => { const at = localToIso(when, zone.viewer); if (!at) { setError(t('Pick a valid day and time.')); return } void send({ action: 'appointment', at, replaces: contact.appointmentAt ?? null, ...(note.trim() ? { note: note.trim() } : {}) }) }}>{t('Save the call')}</button>
                 </div>
               )}
               {offer?.state === 'ok' && <button type="button" className="text-sm underline" onClick={() => { setTyped(!typed); setPicked(null) }} data-testid="slots-toggle-typed">{typed ? t('Show the free times') : t('Type a time yourself instead')}</button>}
