@@ -229,7 +229,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         body: `${file.file_name} was shared in the portal chat.`,
         url: accountId ? `/portal-chats?account=${accountId}` : `/portal-chats?contact=${contactId}`,
         tag: `crm-storage-portal-chat-${fileId}`,
-        alertKind: "client_chat",
+        alertKind: "client_share_check",
       })
     } catch {
       // never block the send on an alert failure

@@ -2,6 +2,7 @@ import webpush from 'web-push'
 import { routeAdminSubscriptions } from '@/lib/push/route-subscriptions'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import type { StaffAlertKind } from '@/lib/push/alert-kinds'
+import { startPhoneLeg, waitForPhoneLeg } from '@/lib/app/phone-leg'
 
 // Status codes that mean the push subscription is permanently dead and
 // must be removed. Excludes 408 (timeout) and 429 (rate-limit) — those
@@ -29,7 +30,11 @@ type PushPayload = { title: string; body: string; url?: string; tag?: string; dm
  * What a STAFF alert must carry: the label `alertKind` (lib/push/alert-kinds.ts) says what kind of alert it is. It is required, so a sender that forgets it
  * does not compile, and it is removed before the web send exactly like `dm`. The phone leg (TD Social, pull request C2) reads it; the browser never sees it.
  */
-export type StaffPushPayload = PushPayload & { alertKind: StaffAlertKind }
+export type StaffPushPayload = PushPayload & {
+  alertKind: StaffAlertKind
+  /** one name the lock screen of a TD Social phone may show (a company, a person); cleaned there, never sent to a browser */
+  phoneName?: string
+}
 
 function getVapidKeys() {
   const publicKey = process.env.VAPID_PUBLIC_KEY
@@ -179,6 +184,21 @@ export async function sendPushToAdminUsers(
 ) {
   const ids = Array.from(new Set((userIds || []).filter(Boolean)))
   if (ids.length === 0) return { sent: 0, failed: 0 }
+  // TD Social phones (pull request C2): the phone leg starts FIRST, before any of the early returns below, and runs beside the web send. It does nothing
+  // unless the Apple key is set and the TD Social switch is on, and it never throws, so the web send is exactly what it was.
+  const phone = startPhoneLeg({
+    source: 'staff', userIds: ids, kind: payload.alertKind, title: payload.title, body: payload.body,
+    url: payload.url, tag: payload.tag, name: payload.phoneName, dm: payload.dm === true,
+  })
+  try {
+    return await sendAdminWeb(ids, payload)
+  } finally {
+    await waitForPhoneLeg(phone)
+  }
+}
+
+/** The web send to staff browsers, unchanged from before the phone leg existed (the same body, now one step down). */
+async function sendAdminWeb(ids: string[], payload: StaffPushPayload) {
   try {
     initWebPush()
   } catch {
@@ -195,7 +215,7 @@ export async function sendPushToAdminUsers(
   if (!subscriptions?.length) return { sent: 0, failed: 0 }
 
   // TD Talk gets direct messages only, and a person with TD Talk gets their DMs there instead of the CRM app.
-  const { dm, alertKind, ...wire } = payload // `alertKind` is a label for the phone leg, never sent to a browser
+  const { dm, alertKind, phoneName, ...wire } = payload // the label and the lock-screen name are for the phone leg, never sent to a browser
   const routed = routeAdminSubscriptions(
     subscriptions as unknown as Array<StoredSubscription & { user_id: string; app?: string | null }>,
     dm === true,

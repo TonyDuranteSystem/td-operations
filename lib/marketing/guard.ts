@@ -100,6 +100,15 @@ export async function adminMemberContext(user: { id: string; email?: string | nu
   return r.ok ? { ok: true, ctx: { ...r.ctx, admin: true } } : r
 }
 
+/**
+ * The Marketing context of a person looked up BY ID, with no session (server-side work such as TD Social phone alerts and the icon number). Not ok when the person
+ * is not an ACTIVE member of a LIVE team. `admin` marks a CRM admin who works as a member (the chat treats him differently from an owner), exactly as adminMemberContext does.
+ */
+export async function memberContextForUser(user: { id: string; email?: string | null }, admin: boolean): Promise<GuardResult> {
+  const r = await memberContext(user.id, user.email ?? null, "marketing")
+  return r.ok && admin ? { ok: true, ctx: { ...r.ctx, admin: true } } : r
+}
+
 /** For API routes: the context, or the ready-to-return refusal. */
 export async function requireMarketing(need?: MarketingPermission): Promise<{ ctx: MarketingContext; res?: undefined } | { ctx?: undefined; res: NextResponse }> {
   const g = await resolveMarketingContext()
