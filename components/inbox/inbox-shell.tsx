@@ -53,6 +53,7 @@ import { openMarkReadSettled } from '@/lib/inbox/pending-mark-read'
 import { openedConversation } from '@/lib/inbox/opened-conversation'
 import { insertLineBreaksForBlockTags } from '@/lib/inbox/email-html'
 import { pickNewestNonOwnMessage } from '@/lib/inbox/default-reply-target'
+import { inboxChannelFromParams } from '@/lib/nav/nav-active'
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
   gmail: Mail,
@@ -103,10 +104,19 @@ interface InboxShellProps {
   canUsePersonalMailbox?: boolean
   /** The signed-in user — keys the "has seen the WhatsApp tour" memory so each person gets it once. */
   userId?: string
+  /**
+   * The ONE channel this screen shows (the page reads it from the address). Email and WhatsApp are separate pages of the left menu
+   * now: no Gmail/WhatsApp tabs, and nothing the address or a click does switches channel inside this screen.
+   */
+  channel?: 'gmail' | 'whatsapp'
 }
 
-export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShellProps) {
-  const [activeChannel, setActiveChannel] = useState<InboxChannel | null>('gmail')
+export function InboxShell({ canUsePersonalMailbox = false, userId, channel: lockedChannel }: InboxShellProps) {
+  const [activeChannel, setActiveChannelRaw] = useState<InboxChannel | null>(lockedChannel ?? 'gmail')
+  const setActiveChannel = useCallback((next: InboxChannel | null) => {
+    if (lockedChannel) return
+    setActiveChannelRaw(next)
+  }, [lockedChannel])
   const [activeLabel, setActiveLabel] = useState<string | null>(null)
   const [activeMailbox, setActiveMailbox] = useState<'support' | 'antonio'>('support')
   const [selected, setSelected] = useState<InboxConversation | null>(null)
@@ -360,6 +370,8 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
   // id and reports the chat's name/phone back via onChatInfo.
   const applyThreadParams = useCallback((params: URLSearchParams) => {
     const thread = params.get('thread')
+    // A one-channel screen ignores an address that belongs to the other channel (the page remounts for it).
+    if (lockedChannel && inboxChannelFromParams(thread, params.get('channel')) !== lockedChannel) return
     if (!thread) {
       // Nothing open — Antonio (2026-09-29, follow-up): "it works if I'm in a
       // specific message, it doesn't if I'm in whatsapp list messages". The
@@ -1371,12 +1383,21 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
     ? selected.id.replace('whatsapp:', '')
     : null
 
+  // Email and WhatsApp are separate screens now (the desktop menu pages AND the phone app's tabs): Compose does the one thing that
+  // fits THIS screen — no menu that could open a WhatsApp chat inside the email screen, or the reverse.
+  const onComposeClick = () => {
+    if (lockedChannel === 'gmail') { setForwardData(null); setComposeOpen(true) }
+    else if (lockedChannel === 'whatsapp') setWhatsappPickerOpen(true)
+    else setComposeMenuOpen(!composeMenuOpen)
+  }
+
   return (
     <div className="flex flex-col h-full bg-white">
       {/* Header with channel tabs + compose button */}
       <div className={cn('flex items-center justify-between border-b bg-white', appMode && 'hidden')}>
         <InboxHeader
           activeChannel={activeChannel}
+          onlyChannel={lockedChannel}
           onChannelChange={(ch) => {
             setActiveChannel(ch)
             setActiveLabel(null)
@@ -1418,13 +1439,13 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
             </button>
           )}
           <button
-            onClick={() => setComposeMenuOpen(!composeMenuOpen)}
+            onClick={onComposeClick}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition-colors"
           >
             <PenSquare className="h-3.5 w-3.5" />
             Compose
           </button>
-          {composeMenuOpen && (
+          {composeMenuOpen && !lockedChannel && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setComposeMenuOpen(false)} />
               <div className="absolute right-0 top-full mt-1 z-50 bg-white rounded-lg shadow-xl border border-zinc-200 py-1 w-48">
@@ -1461,13 +1482,13 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
         <div className="fixed bottom-4 right-4 z-40">
           <button
             type="button"
-            onClick={() => setComposeMenuOpen(!composeMenuOpen)}
+            onClick={onComposeClick}
             aria-label="Compose"
             className="flex h-14 w-14 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg"
           >
             <PenSquare className="h-6 w-6" />
           </button>
-          {composeMenuOpen && (
+          {composeMenuOpen && !lockedChannel && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setComposeMenuOpen(false)} />
               <div className="absolute bottom-full right-0 z-50 mb-2 w-60 rounded-lg border border-zinc-200 bg-white py-1 shadow-xl">

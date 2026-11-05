@@ -1,17 +1,13 @@
 'use client'
 
-import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { browserStore, clearAllWindows } from '@/lib/windows/windows-storage'
-import { isWindowOpenClick } from '@/lib/windows/open-intent'
-import { isWindowableUrl } from '@/lib/windows/window-model'
-import { canOpenWindowNow, requestOpenWindow, useWindowsAvailable } from '@/lib/windows/windows-context'
 import { WindowsLauncher } from '@/components/dashboard/windows-launcher'
-import type { TeamNotifItem } from '@/lib/team/workspace'
 import {
   LayoutDashboard,
   MessageSquare,
+  MessageSquareText,
   MessageCircle,
   FileText,
   Building2,
@@ -26,7 +22,6 @@ import {
   Search,
   Bot,
   Gauge,
-  GripVertical,
   Users,
   Wallet,
   KeyRound,
@@ -39,6 +34,7 @@ import {
   Share2,
   Package,
   PhoneIncoming,
+  Phone,
   Mail,
   ClipboardCheck,
   Tag,
@@ -51,60 +47,37 @@ import {
   HardDrive,
   ClipboardList,
   Megaphone,
+  Pencil,
+  Plus,
+  RotateCcw,
 } from 'lucide-react'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  TouchSensor,
-  MouseSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core'
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
 import { DashboardPushToggle } from '@/components/dashboard/push-toggle'
 import { StaffAlertsBell } from '@/components/dashboard/staff-alerts-bell'
 import { ParkedNotesTrigger } from '@/components/dashboard/parked-notes-trigger'
 import { CaptureButton } from '@/components/captures/capture-button'
 import { GlobalBackButton } from '@/components/dashboard/global-back-button'
 import { MfaSettingsDialog } from '@/components/dashboard/mfa-settings-dialog'
-import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ThemeToggle } from '@/components/dashboard/theme-sync'
-import { NavItemMenu } from '@/components/dashboard/nav-item-menu'
-
-interface NavItem {
-  id: string
-  name: string
-  href: string
-  icon: React.ElementType
-  badge?: number
-  /** Presence dot (no number) — Team Chat shows this for a new DM / @mention. */
-  dotBadge?: boolean
-  /** Secondary purple badge — used for the Portal Chats "What's New" unhandled count. */
-  purpleBadge?: number
-  adminOnly?: boolean
-  /**
-   * Visible ONLY to the code-level owner account. Stricter than adminOnly, and
-   * needed wherever the destination's own guard is isOwnerOnly: an item shown to
-   * a wider audience than the page admits is a silent dead link — the visitor is
-   * redirected home with no explanation, which is exactly what "My Finances" did
-   * to every admin between 2026-08-29 and 2026-08-30.
-   */
-  ownerOnly?: boolean
-  featureFlag?: string
-  tooltip?: string
-}
+import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { NavItemRow, type NavItem } from '@/components/dashboard/nav-item-row'
+import type { MoveMenu } from '@/components/dashboard/nav-item-menu'
+import { GroupRow, useFlyoutController, useFlyoutMode } from '@/components/dashboard/menu-groups'
+import { EditMenuTree, GroupNameDialog } from '@/components/dashboard/menu-editor'
+import { useMenuLayout } from '@/components/dashboard/use-menu-layout'
+import { isNavItemActive, onWhatsappView } from '@/lib/nav/nav-active'
+import {
+  containerOf,
+  createGroup,
+  deleteGroup,
+  flattenVisible,
+  movePage,
+  renameGroup,
+  visibleRows,
+  type ServerLayoutStatus,
+} from '@/lib/nav/menu-layout'
 
 interface SidebarProps {
   user: { email?: string }
@@ -113,8 +86,14 @@ interface SidebarProps {
   isOwner?: boolean
   /** Ids of administrator-only items this non-administrator may still see (e.g. 'forms' for the people named in lib/auth/forms-access.ts). */
   extraNavIds?: string[]
-  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; talk?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; marketing?: number; devBoard?: number }
+  badgeCounts?: { inbox: number; whatsapp?: number; tasks: number; portalChats?: number; teamChat?: number; talk?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; marketing?: number; devBoard?: number }
   enabledFeatures?: string[]
+  /** The signed-in login — keys this computer's own copy of the menu layout. */
+  userId: string
+  /** The layout saved on this login (read on the server), or null when the person has not changed the standard one. */
+  initialMenuLayout?: unknown
+  /** How reading the saved layout went. 'unavailable' = it could not be read, so editing is switched off (a save could overwrite it). */
+  menuLayoutStatus?: ServerLayoutStatus
 }
 
 /** The two pages that ARE the team chat: opening either one reads it, so the dot must not be held up while you are on it. */
@@ -122,18 +101,16 @@ function isChatTab(pathname: string | null | undefined): boolean {
   return pathname === '/team-chat' || pathname === '/td-talk'
 }
 
-const STORAGE_KEY = 'td-sidebar-order'
-// Bumped v2→v3 on 2026-06-15: the previous saved order pinned 'tools' at the
-// bottom (below the scroll fold). Bumping the key resets everyone to the new
-// default once, surfacing Tools in the Pipeline cluster.
-const STORAGE_KEY_V2 = 'td-sidebar-order-v3'
-
 const defaultNavigation: NavItem[] = [
   { id: 'td-talk', name: 'TD Talk', href: '/td-talk', icon: MessageCircle, tooltip: 'TD Talk — the simple WhatsApp-style chat with Luca, Jodi and your groups. The same messages as the TD Talk phone app and Team Chat.' },
   { id: 'home', name: 'Home', href: '/', icon: LayoutDashboard, tooltip: 'Dashboard overview — urgent tasks, unread messages, deadlines, and action items at a glance.' },
   { id: 'research', name: 'Research', href: '/research', icon: SlidersHorizontal, adminOnly: true, tooltip: 'Build a filter, search across companies, contacts, leads, deals, services, payments, tasks, offers, leases, and operating agreements. Admin only.' },
   { id: 'notes', name: 'Notes', href: '/notes', icon: StickyNote, tooltip: 'Your post-its — active, snoozed (with when they come back), and done. Private by default; share one with a teammate or the whole team.' },
   { id: 'inbox', name: 'Inbox', href: '/inbox', icon: MessageSquare, tooltip: 'Company email (Gmail). Vendor emails, government correspondence, and client replies.' },
+  // WhatsApp is its own menu page (Antonio 2026-11-04): the same screen as the Inbox, opened on the WhatsApp conversations only (the Inbox is email only).
+  { id: 'whatsapp', name: 'WhatsApp', href: '/inbox?channel=whatsapp', icon: Phone, tooltip: 'WhatsApp conversations with clients and contacts.' },
+  // Marketing Chat: the TD Marketing team chat and lead conversations. Only the owner's login sees this row; it opens in the Marketing workspace.
+  { id: 'marketing-chat', name: 'Marketing Chat', href: '/marketing/chat', icon: MessageSquareText, ownerOnly: true, tooltip: "TD Marketing chat — Rocco's team chat and the lead conversations. Opens in the Marketing workspace. Owner only." },
   { id: 'portal-chats', name: 'Portal Chats', href: '/portal-chats', icon: MessagesSquare, tooltip: 'Direct messages from clients through the portal. Reply, tag, and create tasks from here.' },
   { id: 'team-chat', name: 'Team Chat', href: '/team-chat', icon: MessageSquare, tooltip: 'Internal chat between team members. Messages are identified by sender with unique sounds per person.' },
   { id: 'dev-board', name: 'Dev Board', href: '/dev-board', icon: LayoutGrid, tooltip: 'Dev-tracker board — every dev job by channel (td-dev/td-bug/td-support): request, findings, approved plan, milestones and status. Claude Code sessions keep it current so nothing is lost.' },
@@ -181,209 +158,39 @@ const defaultNavigation: NavItem[] = [
   // buried last, below the scroll fold, so it read as "missing").
 ]
 
-function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
-  item: NavItem
-  isActive: boolean
-  onMobileClose: () => void
-  editMode: boolean
-}) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: item.id, disabled: !editMode })
+/** Every page id the menu knows — the layout always holds each of these exactly once (lib/nav/menu-layout.ts). */
+const PAGE_IDS = defaultNavigation.map(n => n.id)
 
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  }
-
-  // ⋯ placement (dev job f3f3e237 step 1, QA fix 2026-10-05): on a screen with a mouse the
-  // button OVERLAYS the right end of the row on hover (and the count badges there step
-  // aside), so it never costs the name any width — a reserved slot made "Portal Chats"
-  // and "TD Communication" shorten to "Portal ..." even with nothing hovered. Touch screens
-  // have no hover, so there the button keeps its own slot. The Team Chat dot is itself
-  // clickable and sits at that same edge, so a row with the dot keeps the slot everywhere.
-  const windowsAvailable = useWindowsAvailable()
-  const overlay = !item.dotBadge
-  // visibility (not opacity): the red badge pulses, and an animation overrides opacity.
-  const badgeStepAside = overlay
-    ? '[@media(hover:hover)]:group-hover:invisible [@media(hover:hover)]:group-focus-within:invisible [@media(hover:hover)]:group-has-[[data-state=open]]:invisible'
-    : ''
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      draggable={false}
-      className={cn(
-        'group relative flex items-center rounded-md transition-colors select-none',
-        isDragging && 'opacity-50 z-50 bg-sidebar-accent shadow-lg'
-      )}
-    >
-      {editMode && (
-        <FastTooltip label="Drag to reorder" align="left">
-          <button
-            {...attributes}
-            {...listeners}
-            onDragStart={e => e.preventDefault()}
-            className="p-1 cursor-grab active:cursor-grabbing text-sidebar-foreground/30 hover:text-sidebar-foreground/60 shrink-0"
-            style={{ touchAction: 'none' }}
-            aria-label="Drag to reorder"
-          >
-            <GripVertical className="h-3.5 w-3.5" />
-          </button>
-        </FastTooltip>
-      )}
-      <Link
-        href={item.href}
-        onClick={e => {
-          // Option/Alt-click opens the page as a floating window (step 6) — only when windows are on;
-          // Cmd/Ctrl-click and Shift-click stay the browser's own (new tab / new window).
-          if (canOpenWindowNow(windowsAvailable) && isWindowOpenClick(e) && isWindowableUrl(item.href)) {
-            e.preventDefault()
-            requestOpenWindow(item.href, item.name)
-          }
-          onMobileClose()
-        }}
-        title={item.tooltip}
-        className={cn(
-          'flex-1 min-w-0 flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
-          editMode && 'pl-1',
-          isActive
-            ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-            : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-        )}
-      >
-        <item.icon className="h-4 w-4 shrink-0" />
-        <span className="flex-1 min-w-0 truncate">{item.name}</span>
-        {item.badge != null && item.badge > 0 && (
-          <span className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center animate-pulse', badgeStepAside)}>
-            {item.badge > 999 ? '999+' : item.badge}
-          </span>
-        )}
-        {item.purpleBadge != null && item.purpleBadge > 0 && (
-          <span
-            className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-violet-500 text-white min-w-[20px] text-center', badgeStepAside)}
-            title="What's New — unhandled client actions"
-          >
-            {item.purpleBadge > 999 ? '999+' : item.purpleBadge}
-          </span>
-        )}
-      </Link>
-      {item.dotBadge && <TeamNotifDot onNavigate={onMobileClose} only={item.id === 'td-talk' ? 'talk' : undefined} />}
-      {/* ⋯ menu (dev job f3f3e237 step 1): a SIBLING of the Link, placed last so it
-          never sits on top of the count badges or the Team Chat dot; hidden in
-          reorder mode where the drag grip owns the left edge. */}
-      {!editMode && <NavItemMenu href={item.href} name={item.name} onNavigate={onMobileClose} overlay={overlay} />}
-    </div>
-  )
-}
-
-/**
- * The clickable Team Chat notification dot: a red dot that, on click, pops a
- * small list of the user's unread DMs + @mentions (each deep-linked) so they can
- * triage priority without opening Team Chat. Fixed-positioned popover (measured
- * off the dot) so the narrow scrollable sidebar can't clip it.
- */
-function TeamNotifDot({ onNavigate, only }: { onNavigate?: () => void; /** 'talk' = the TD Talk tab's dot: only DMs and groups, each linking into the tab. */ only?: 'talk' }) {
-  const [open, setOpen] = useState(false)
-  const [items, setItems] = useState<TeamNotifItem[] | null>(null)
-  const [pos, setPos] = useState<{ left: number; top: number }>({ left: 60, top: 100 })
-  const btnRef = useRef<HTMLButtonElement>(null)
-
-  const toggle = (e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const next = !open
-    setOpen(next)
-    if (next) {
-      const r = btnRef.current?.getBoundingClientRect()
-      if (r) setPos({ left: r.right + 8, top: r.top - 4 })
-      setItems(null)
-      fetch('/api/team/notifications')
-        .then(res => res.json())
-        .then(d => {
-          const all: TeamNotifItem[] = Array.isArray(d.items) ? d.items : []
-          setItems(only === 'talk'
-            ? all.filter(i => i.kind === 'dm' || i.kind === 'group').map(i => ({ ...i, url: i.url.replace('/team-chat', '/td-talk') }))
-            : all)
-        })
-        .catch(() => setItems([]))
-    }
-  }
-
-  return (
-    <span className="shrink-0 flex items-center">
-      <FastTooltip label="New — click to see what">
-        <button
-          ref={btnRef}
-          onClick={toggle}
-          className="w-2.5 h-2.5 mr-1 rounded-full bg-red-500 animate-pulse"
-          aria-label={only === 'talk' ? 'TD Talk notifications' : 'Team chat notifications'}
-        />
-      </FastTooltip>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={toggle} />
-          <div
-            className="fixed z-50 w-60 max-w-[80vw] bg-white rounded-lg shadow-xl border border-zinc-200 py-1 cursor-default"
-            style={{ left: pos.left, top: pos.top }}
-            onClick={e => e.stopPropagation()}
-          >
-            <p className="px-3 py-1.5 text-[11px] font-semibold text-zinc-400 uppercase tracking-wide">New for you</p>
-            {items === null && <p className="px-3 py-2 text-xs text-zinc-400">Loading…</p>}
-            {items !== null && items.length === 0 && <p className="px-3 py-2 text-xs text-zinc-400">Nothing new.</p>}
-            {items?.map(it => (
-              <Link
-                key={it.id}
-                href={it.url}
-                onClick={() => { setOpen(false); onNavigate?.() }}
-                className="flex items-center gap-2 px-3 py-2 hover:bg-zinc-50"
-              >
-                <span className={cn(
-                  'text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0',
-                  it.kind === 'dm' ? 'bg-blue-100 text-blue-700'
-                    : it.kind === 'conversation' ? 'bg-emerald-100 text-emerald-700'
-                    : it.kind === 'thread' ? 'bg-sky-100 text-sky-700'
-                    : 'bg-violet-100 text-violet-700',
-                )}>
-                  {it.kind === 'dm' ? 'DM' : it.kind === 'group' ? 'Group' : it.kind === 'conversation' ? 'Client' : it.kind === 'thread' ? 'Thread' : '@'}
-                </span>
-                <span className="flex-1 truncate text-sm text-zinc-800">{it.label}</span>
-                {it.count > 1 && <span className="text-[10px] text-zinc-400 shrink-0">{it.count}</span>}
-              </Link>
-            ))}
-          </div>
-        </>
-      )}
-    </span>
-  )
-}
+/** What the name box is doing: making a group (optionally putting a page straight into it) or renaming one. */
+type Naming = { kind: 'new'; pageId?: string } | { kind: 'rename'; groupId: string }
 
 export function Sidebar({
   user,
+  userId,
   isAdmin = false,
   isOwner = false,
   extraNavIds = [],
   badgeCounts,
   enabledFeatures = [],
+  initialMenuLayout = null,
+  menuLayoutStatus = 'none',
 }: SidebarProps) {
   const pathname = usePathname()
+  // Inbox and WhatsApp are the same page told apart by the address, so the menu has to read the query too.
+  const search = useSearchParams()?.toString() ?? ''
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [editMode, setEditMode] = useState(false)
-  const [navOrder, setNavOrder] = useState<string[]>([])
+  const [naming, setNaming] = useState<Naming | null>(null)
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
   const [mfaDialogOpen, setMfaDialogOpen] = useState(false)
   const [livePortalChats, setLivePortalChats] = useState(badgeCounts?.portalChats ?? 0)
   const [liveTeamChat, setLiveTeamChat] = useState(badgeCounts?.teamChat ?? 0)
   // The TD Talk tab's own signal: unread DMs + group messages only (no @mentions, channels or client conversations).
   const [liveTalk, setLiveTalk] = useState(badgeCounts?.talk ?? 0)
+  // Inbox = email only; WhatsApp has its own number (Telegram is not counted anywhere: the Inbox has no Telegram list to open).
   const [liveInbox, setLiveInbox] = useState(badgeCounts?.inbox ?? 0)
+  const [liveWhatsapp, setLiveWhatsapp] = useState(badgeCounts?.whatsapp ?? 0)
   const [liveOverdue, setLiveOverdue] = useState(badgeCounts?.overdueInvoices ?? 0)
   const [liveReconReview, setLiveReconReview] = useState(badgeCounts?.reconciliationReview ?? 0)
   const [liveComm] = useState(badgeCounts?.commUnread ?? 0)
@@ -392,11 +199,30 @@ export function Sidebar({
   const [liveMarketing, setLiveMarketing] = useState(0)
   const [liveWhatsNew, setLiveWhatsNew] = useState(0)
   const pathnameRef = useRef(pathname)
+  // Which Inbox screen is open now: its own number is not bumped while you are looking at it (it reads itself).
+  const viewRef = useRef({ email: false, whatsapp: false })
+
+  const { layout, commit, reset, canEdit } = useMenuLayout({
+    userId,
+    initial: initialMenuLayout,
+    status: menuLayoutStatus,
+    pageIds: PAGE_IDS,
+    busy: editMode || naming !== null,
+  })
+  const flyoutMode = useFlyoutMode()
+  const ctl = useFlyoutController()
+  const { close: closeFlyout } = ctl
 
   // Keep pathname ref in sync for use inside realtime callback
   useEffect(() => {
     pathnameRef.current = pathname
-  }, [pathname])
+    const wa = onWhatsappView(pathname, search)
+    viewRef.current = { whatsapp: wa, email: (pathname === '/inbox' || pathname.startsWith('/inbox/')) && !wa }
+  }, [pathname, search])
+
+  // A panel never outlives the page it was opened on, and editing the menu or naming a group starts with every panel shut.
+  useEffect(() => { closeFlyout() }, [pathname, search, editMode, naming, closeFlyout])
+  const onWhatsapp = onWhatsappView(pathname, search)
 
   // Fetch badge counts via API (uses supabaseAdmin server-side to bypass RLS)
   useEffect(() => {
@@ -417,8 +243,11 @@ export function Sidebar({
           if (typeof data.talk === 'number' && !isChatTab(pathnameRef.current)) {
             setLiveTalk(data.talk)
           }
-          if (typeof data.inbox === 'number' && pathnameRef.current !== '/inbox') {
+          if (typeof data.inbox === 'number' && !viewRef.current.email) {
             setLiveInbox(data.inbox)
+          }
+          if (typeof data.whatsapp === 'number' && !viewRef.current.whatsapp) {
+            setLiveWhatsapp(data.whatsapp)
           }
           if (typeof data.overdueInvoices === 'number') {
             setLiveOverdue(data.overdueInvoices)
@@ -469,17 +298,23 @@ export function Sidebar({
             if (typeof data.teamChat === 'number') setLiveTeamChat(data.teamChat)
             if (typeof data.talk === 'number') setLiveTalk(data.talk)
             if (typeof data.inbox === 'number') setLiveInbox(data.inbox)
+            if (typeof data.whatsapp === 'number') setLiveWhatsapp(data.whatsapp)
             if (typeof data.devBoard === 'number') setLiveDevBoard(data.devBoard)
           })
           .catch(() => {})
       }, 3000)
       return () => clearTimeout(timer)
     }
-  }, [pathname])
+  }, [pathname, onWhatsapp])
 
-  // Subscribe to new WhatsApp/Telegram messages for inbox badge
+  // A new inbound chat message (WhatsApp or Telegram — the row alone does not say which): ask the server for the WhatsApp number
+  // instead of adding one, so a Telegram message never lights the WhatsApp row. Skipped while the WhatsApp screen is open.
+  // The question is the LIGHT one (`?only=whatsapp`: one cheap lookup, no Gmail) and bursts are coalesced to at most one call per
+  // 10 seconds per tab — a bulk WhatsApp recovery or a busy group must not turn into one full badge check per message per tab.
   useEffect(() => {
     const supabase = createClient()
+    let pending: ReturnType<typeof setTimeout> | null = null
+    let lastRun = 0
     const channel = supabase
       .channel('admin-inbox-badge')
       .on(
@@ -491,14 +326,24 @@ export function Sidebar({
           filter: 'direction=eq.inbound',
         },
         () => {
-          if (pathnameRef.current !== '/inbox') {
-            setLiveInbox(prev => prev + 1)
-          }
+          if (viewRef.current.whatsapp || pending) return
+          const wait = Math.max(1000, 10_000 - (Date.now() - lastRun))
+          pending = setTimeout(() => {
+            pending = null
+            lastRun = Date.now()
+            fetch('/api/dashboard/badges?only=whatsapp')
+              .then(r => (r.ok ? r.json() : null))
+              .then(d => { if (d && typeof d.whatsapp === 'number' && !viewRef.current.whatsapp) setLiveWhatsapp(d.whatsapp) })
+              .catch(() => {})
+          }, wait)
         }
       )
       .subscribe()
 
-    return () => { supabase.removeChannel(channel) }
+    return () => {
+      if (pending) clearTimeout(pending)
+      supabase.removeChannel(channel)
+    }
   }, [])
 
   // Subscribe to new client messages + internal team messages for real-time badge updates
@@ -555,145 +400,73 @@ export function Sidebar({
     }
   }, [])
 
-  // Load saved order from localStorage (v2 > v1 > default)
-  useEffect(() => {
-    try {
-      // Check v2 first (new layout or user-customized after v2 shipped)
-      const savedV2 = localStorage.getItem(STORAGE_KEY_V2)
-      if (savedV2) {
-        const order = JSON.parse(savedV2) as string[]
-        const defaultIds = defaultNavigation.map(n => n.id)
-        const hasAll = defaultIds.every(id => order.includes(id))
-        if (hasAll) {
-          setNavOrder(order)
-          return
-        }
-      }
-      // Fall back to v1 — user had a custom order before the reorder shipped
-      const savedV1 = localStorage.getItem(STORAGE_KEY)
-      if (savedV1) {
-        const order = JSON.parse(savedV1) as string[]
-        const defaultIds = defaultNavigation.map(n => n.id)
-        const hasAll = defaultIds.every(id => order.includes(id))
-        if (hasAll) {
-          // Migrate: save their v1 order as v2 so future saves go to v2
-          localStorage.setItem(STORAGE_KEY_V2, savedV1)
-          setNavOrder(order)
-          return
-        }
-      }
-    } catch { /* ignore */ }
-    // Fresh user — use new lifecycle default order
-    const freshOrder = defaultNavigation.map(n => n.id)
-    localStorage.setItem(STORAGE_KEY_V2, JSON.stringify(freshOrder))
-    setNavOrder(freshOrder)
-  }, [])
+  // Every page with its live red numbers applied.
+  const liveItems: NavItem[] = defaultNavigation.map(item => {
+    if (item.id === 'inbox' && liveInbox > 0) return { ...item, badge: liveInbox }
+    if (item.id === 'whatsapp' && liveWhatsapp > 0) return { ...item, badge: liveWhatsapp }
+    // Tasks badge removed — daily work tracked via message action tags instead
+    if (item.id === 'portal-chats') return { ...item, badge: livePortalChats > 0 ? livePortalChats : undefined, purpleBadge: liveWhatsNew }
+    // Team Chat shows a plain DOT (not a count) — signal only, for a new DM / @mention.
+    if (item.id === 'team-chat' && liveTeamChat > 0) return { ...item, dotBadge: true }
+    // TD Talk lights the same plain dot: a new direct message / group message / @mention.
+    // Not while you are ON the tab: you are looking at the chat (it reads itself), so a dot there would only flicker.
+    if (item.id === 'td-talk' && liveTalk > 0 && pathname !== '/td-talk') return { ...item, dotBadge: true }
+    // The Marketing row and the Marketing Chat page are two doors to the same chat: both carry its unread number.
+    // (same badgeKey, so a group holding both counts it once)
+    if ((item.id === 'marketing' || item.id === 'marketing-chat') && liveMarketing > 0) return { ...item, badge: liveMarketing, badgeKey: 'marketing' }
+    if (item.id === 'dev-board' && liveDevBoard > 0) return { ...item, badge: liveDevBoard }
+    if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
+    if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }
+    // The Calendar item opens the New Calendar for the people who may see it (never inside a window: no menu there anyway).
+    if (item.id === 'calendar' && enabledFeatures.includes('new-calendar')) {
+      return { ...item, href: '/new-calendar', icon: CalendarDays, tooltip: 'The day-by-day work list: what is on us, what is waiting on someone else, what is finished. Renewals and annual reports are on its third tab.' }
+    }
+    return item
+  })
+  const itemById = new Map(liveItems.map(i => [i.id, i]))
+  const itemOf = (id: string) => itemById.get(id)
 
-  // Render the saved order, then APPEND any default nav items missing from it.
-  // This guarantees every default entry (e.g. Tools) always renders even if a
-  // user's saved localStorage order is stale or predates a newly-added/moved
-  // item — a nav entry can never silently disappear again. (Bug: items absent
-  // from the saved order were previously dropped entirely.)
-  const missingFromSaved = defaultNavigation.map(n => n.id).filter(id => !navOrder.includes(id))
-  // 'research' is a brand-new top-level item (2026-08-17) — for a returning
-  // user with a pre-existing custom order, plain append would drop it at the
-  // very bottom of a long list, invisible unless scrolled to. Insert it right
-  // after 'home' instead, once, the same place it sits in the fresh-user
-  // default order. Every OTHER newly-added item keeps the original
-  // append-at-end behavior — this is a one-off placement fix, not a change to
-  // the general merge rule.
-  // Guard on navOrder.length: before the load effect runs (first paint,
-  // navOrder still []), everything is "missing" and plain append already
-  // reproduces the correct default order — the special-case splice is only
-  // needed once a real saved order is loaded and doesn't yet contain it.
-  // 'td-talk' (2026-10-13) is new and Antonio asked for it at the VERY TOP, above Home: a returning user with a saved
-  // order gets it put first, once; a fresh user already has it first in the default order.
-  const talkIdx = navOrder.length > 0 ? missingFromSaved.indexOf('td-talk') : -1
-  if (talkIdx !== -1) missingFromSaved.splice(talkIdx, 1)
-  const researchIdx = navOrder.length > 0 ? missingFromSaved.indexOf('research') : -1
-  if (researchIdx !== -1) missingFromSaved.splice(researchIdx, 1)
-  // 'forms' (2026-10-12) is also new: for a returning user with a saved order, put it right after
-  // 'storage' instead of at the very bottom of the long list where it would not be seen.
-  const formsIdx = navOrder.length > 0 ? missingFromSaved.indexOf('forms') : -1
-  if (formsIdx !== -1) missingFromSaved.splice(formsIdx, 1)
-  // 'marketing' (2026-10-20) is new: for a returning user with a saved order, put it right after 'leads' instead of at the very bottom.
-  const marketingIdx = navOrder.length > 0 ? missingFromSaved.indexOf('marketing') : -1
-  if (marketingIdx !== -1) missingFromSaved.splice(marketingIdx, 1)
-  const withResearch = researchIdx === -1
-    ? [...navOrder, ...missingFromSaved]
-    : [...navOrder.slice(0, 1), 'research', ...navOrder.slice(1), ...missingFromSaved]
-  const baseOrder = talkIdx === -1 ? withResearch : ['td-talk', ...withResearch]
-  const storagePos = baseOrder.indexOf('storage')
-  const withForms = formsIdx === -1
-    ? baseOrder
-    : storagePos === -1
-      ? [...baseOrder, 'forms']
-      : [...baseOrder.slice(0, storagePos + 1), 'forms', ...baseOrder.slice(storagePos + 1)]
-  const leadsPos = withForms.indexOf('leads')
-  const mergedOrder = marketingIdx === -1
-    ? withForms
-    : leadsPos === -1
-      ? [...withForms, 'marketing']
-      : [...withForms.slice(0, leadsPos + 1), 'marketing', ...withForms.slice(leadsPos + 1)]
+  // WHO may see a page is decided here, per page — never by the group it sits in — so no saved layout can unlock anything.
+  const isVisible = (id: string): boolean => {
+    const item = itemById.get(id)
+    if (!item) return false
+    if (item.adminOnly && !isAdmin && !extraNavIds.includes(item.id)) return false
+    if (item.ownerOnly && !isOwner) return false
+    if (item.featureFlag && !enabledFeatures.includes(item.featureFlag)) return false
+    return true
+  }
 
-  // Build ordered nav with badges applied
-  const orderedNav = mergedOrder
-    .map(id => {
-      const item = defaultNavigation.find(n => n.id === id)
-      if (!item) return null
-      // Apply live badges
-      if (item.id === 'inbox' && liveInbox > 0) return { ...item, badge: liveInbox }
-      // Tasks badge removed — daily work tracked via message action tags instead
-      if (item.id === 'portal-chats') return { ...item, badge: livePortalChats > 0 ? livePortalChats : undefined, purpleBadge: liveWhatsNew }
-      // Team Chat shows a plain DOT (not a count) — signal only, for a new DM / @mention.
-      if (item.id === 'team-chat' && liveTeamChat > 0) return { ...item, dotBadge: true }
-      // TD Talk (the tab above Home) lights the same plain dot: a new direct message / group message / @mention.
-      // Not while you are ON the tab: you are looking at the chat (it reads itself), so a dot there would only flicker.
-      if (item.id === 'td-talk' && liveTalk > 0 && pathname !== '/td-talk') return { ...item, dotBadge: true }
-      if (item.id === 'marketing' && liveMarketing > 0) return { ...item, badge: liveMarketing }
-      if (item.id === 'dev-board' && liveDevBoard > 0) return { ...item, badge: liveDevBoard }
-      if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
-      if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }
-      // The Calendar item opens the New Calendar for the people who may see it (never inside a window: no menu there anyway).
-      if (item.id === 'calendar' && enabledFeatures.includes('new-calendar')) {
-        return { ...item, href: '/new-calendar', icon: CalendarDays, tooltip: 'The day-by-day work list: what is on us, what is waiting on someone else, what is finished. Renewals and annual reports are on its third tab.' }
-      }
-      return item
-    })
-    .filter((item): item is NavItem => {
-      if (!item) return false
-      if (item.adminOnly && !isAdmin && !extraNavIds.includes(item.id)) return false
-      if (item.ownerOnly && !isOwner) return false
-      if (item.featureFlag && !enabledFeatures.includes(item.featureFlag)) return false
-      return true
-    })
+  const shownRows = visibleRows(layout, isVisible, true)
+  const activeOf = (item: NavItem) => isNavItemActive(item, pathname, search)
+  const groupChoices = visibleRows(layout, isVisible, false)
+    .filter(r => r.type === 'group')
+    .map(r => ({ id: r.id, name: (r as { name: string }).name }))
 
-  const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 100, tolerance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  )
+  /** "Move to…" for one page's ⋯ menu. Back to the main list puts it right after the group it left (not at the far bottom). */
+  const moveFor = (item: NavItem): MoveMenu | undefined => {
+    if (!canEdit) return undefined // the saved layout could not be read: do not offer moves that would save over it
+    const current = containerOf(layout, item.id) ?? 'root'
+    return {
+      current,
+      groups: groupChoices,
+      onMove: to => commit(movePage(layout, item.id, to, to === 'root' && current !== 'root' ? { after: current } : {})),
+      onNewGroup: () => setNaming({ kind: 'new', pageId: item.id }),
+    }
+  }
 
-  const handleDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over } = event
-    if (!over || active.id === over.id) return
+  const handleDeleteGroup = (groupId: string) => {
+    const name = groupChoices.find(g => g.id === groupId)?.name ?? 'this group'
+    if (window.confirm(`Delete the group “${name}”? Its pages are not deleted — they go back to the main list.`)) {
+      commit(deleteGroup(layout, groupId))
+    }
+  }
 
-    setNavOrder(prev => {
-      const oldIndex = prev.indexOf(active.id as string)
-      const newIndex = prev.indexOf(over.id as string)
-      const newOrder = arrayMove(prev, oldIndex, newIndex)
-      localStorage.setItem(STORAGE_KEY_V2, JSON.stringify(newOrder))
-      return newOrder
-    })
-  }, [])
-
-  const handleResetOrder = useCallback(() => {
-    const defaultOrder = defaultNavigation.map(n => n.id)
-    setNavOrder(defaultOrder)
-    localStorage.removeItem(STORAGE_KEY_V2)
-    localStorage.removeItem(STORAGE_KEY)
-    setEditMode(false)
-  }, [])
+  const handleReset = () => {
+    if (window.confirm('Put the menu back to the standard groups? Your own groups and order will be removed.')) {
+      void reset()
+      setEditMode(false)
+    }
+  }
 
   const handleLogout = async () => {
     const supabase = createClient()
@@ -705,6 +478,7 @@ export function Sidebar({
   }
 
   const displayName = user.email?.split('@')[0] ?? 'User'
+  const nameOfGroup = (id: string) => groupChoices.find(g => g.id === id)?.name ?? ''
 
   return (
     <>
@@ -758,50 +532,69 @@ export function Sidebar({
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {editMode && (
-            <div className="flex items-center justify-between px-2 pb-2 mb-1 border-b border-sidebar-border">
-              <span className="text-[10px] uppercase tracking-wider text-sidebar-foreground/40 font-semibold">Drag to reorder</span>
-              <div className="flex gap-1">
+          {editMode ? (
+            <>
+              <div className="px-2 pb-2 mb-1 border-b border-sidebar-border space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase tracking-wider text-sidebar-foreground/40 font-semibold">Edit menu</span>
+                  <div className="flex gap-1">
+                    <button onClick={handleReset} className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded text-amber-400 hover:bg-amber-500/10">
+                      <RotateCcw className="h-3 w-3" />
+                      Reset
+                    </button>
+                    <button onClick={() => setEditMode(false)} className="text-[10px] px-1.5 py-0.5 rounded text-emerald-400 hover:bg-emerald-500/10">
+                      Done
+                    </button>
+                  </div>
+                </div>
                 <button
-                  onClick={handleResetOrder}
-                  className="text-[10px] px-1.5 py-0.5 rounded text-amber-400 hover:bg-amber-500/10"
+                  onClick={() => setNaming({ kind: 'new' })}
+                  className="w-full flex items-center justify-center gap-1.5 rounded-md border border-dashed border-sidebar-border px-2 py-1.5 text-xs text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
                 >
-                  Reset
+                  <Plus className="h-3.5 w-3.5" />
+                  New group
                 </button>
-                <button
-                  onClick={() => setEditMode(false)}
-                  className="text-[10px] px-1.5 py-0.5 rounded text-emerald-400 hover:bg-emerald-500/10"
-                >
-                  Done
-                </button>
+                <p className="text-[10px] leading-snug text-sidebar-foreground/40">Drag a page onto a group to put it inside, or out to the main list. Drag a group to move it.</p>
               </div>
-            </div>
-          )}
-
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext items={orderedNav.map(i => i.id)} strategy={verticalListSortingStrategy}>
-              {orderedNav.map((item) => {
-                // The Calendar item is lit on BOTH calendar pages (the new work list and the existing renewals page behind its third tab).
-                const isCalendarPage = item.id === 'calendar' && (pathname === '/calendar' || pathname.startsWith('/calendar/') || pathname === '/new-calendar' || pathname.startsWith('/new-calendar/'))
-                const isActive = item.href === '/'
-                  ? pathname === '/'
-                  : isCalendarPage || pathname === item.href || pathname.startsWith(item.href + '/')
+              <EditMenuTree
+                layout={layout}
+                isVisible={isVisible}
+                itemOf={itemOf}
+                onCommit={commit}
+                onRenameGroup={groupId => setNaming({ kind: 'rename', groupId })}
+                onDeleteGroup={handleDeleteGroup}
+              />
+            </>
+          ) : (
+            shownRows.map(row => {
+              if (row.type === 'page') {
+                const item = itemById.get(row.id)
+                if (!item) return null
                 return (
-                  <SortableNavItem
+                  <NavItemRow
                     key={item.id}
                     item={item}
-                    isActive={isActive}
+                    isActive={activeOf(item)}
                     onMobileClose={() => setMobileOpen(false)}
-                    editMode={editMode}
+                    move={moveFor(item)}
                   />
                 )
-              })}
-            </SortableContext>
-          </DndContext>
+              }
+              const children = row.children.map(id => itemById.get(id)).filter((i): i is NavItem => !!i)
+              return (
+                <GroupRow
+                  key={row.id}
+                  group={{ id: row.id, name: row.name, empty: row.empty }}
+                  items={children}
+                  isActive={activeOf}
+                  onMobileClose={() => setMobileOpen(false)}
+                  moveFor={moveFor}
+                  flyoutMode={flyoutMode}
+                  ctl={ctl}
+                />
+              )
+            })
+          )}
         </nav>
 
         {/* Search + AI Agent + Edit buttons */}
@@ -814,16 +607,23 @@ export function Sidebar({
             <span className="flex-1 text-left">AI Agent</span>
             <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 font-medium">NEW</span>
           </button>
-          {!editMode && <WindowsLauncher items={orderedNav} />}
-          {!editMode && (
-            <button
-              onClick={() => setEditMode(true)}
-              className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm text-sidebar-foreground/40 hover:bg-sidebar-accent hover:text-sidebar-foreground/60 transition-colors"
-            >
-              <GripVertical className="h-4 w-4 shrink-0" />
-              <span className="flex-1 text-left">Reorder sidebar</span>
-            </button>
-          )}
+          {!editMode && <WindowsLauncher items={flattenVisible(layout, isVisible).map(id => itemById.get(id)).filter((i): i is NavItem => !!i)} />}
+          {!editMode && (() => {
+            const note = 'Your saved menu could not be loaded, so it cannot be edited right now. Reload the page to try again.'
+            const button = (
+              <button
+                onClick={() => setEditMode(true)}
+                disabled={!canEdit}
+                aria-label={canEdit ? 'Edit menu' : `Edit menu (not available). ${note}`}
+                data-testid="edit-menu-button"
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm text-sidebar-foreground/40 hover:bg-sidebar-accent hover:text-sidebar-foreground/60 transition-colors disabled:pointer-events-none disabled:opacity-60"
+              >
+                <Pencil className="h-4 w-4 shrink-0" />
+                <span className="flex-1 text-left">{canEdit ? 'Edit menu' : 'Edit menu (not available)'}</span>
+              </button>
+            )
+            return canEdit ? button : <FastTooltip label={note}><span className="block w-full">{button}</span></FastTooltip>
+          })()}
         </div>
 
         {/* Footer */}
@@ -869,6 +669,28 @@ export function Sidebar({
           </div>
         </div>
       </aside>
+
+      {/* Name a new group / rename one */}
+      {naming && (
+        <GroupNameDialog
+          title={naming.kind === 'new' ? 'New group' : 'Rename group'}
+          initial={naming.kind === 'rename' ? nameOfGroup(naming.groupId) : ''}
+          submitLabel={naming.kind === 'new' ? 'Create' : 'Save'}
+          onSubmit={name => {
+            if (naming.kind === 'new') {
+              const made = createGroup(layout, name)
+              if (!made.ok || !made.layout || !made.id) return made.error ?? 'Could not make that group.'
+              commit(naming.pageId ? movePage(made.layout, naming.pageId, made.id) : made.layout)
+              return null
+            }
+            const renamed = renameGroup(layout, naming.groupId, name)
+            if (!renamed.ok || !renamed.layout) return renamed.error ?? 'Could not rename that group.'
+            commit(renamed.layout)
+            return null
+          }}
+          onClose={() => setNaming(null)}
+        />
+      )}
 
       {/* Change Password Dialog */}
       {passwordDialogOpen && (

@@ -1,13 +1,13 @@
 /**
- * Wiring guard for the left-menu ⋯ menu (dev job f3f3e237, step 1).
+ * Wiring guard for the left-menu ⋯ menu (dev job f3f3e237, step 1; moved to the shared row by dev job 45aa5872).
  *
  * The component has no DOM test (the unit suite runs in node), so these checks
  * pin the structural decisions the council reviews depended on — each one is a
  * way the feature silently breaks if someone "tidies" the code:
  *  - the button is a SIBLING of the nav <Link> (a button inside an anchor
  *    navigates away on click);
- *  - every menu item goes through the one SortableNavItem render site;
- *  - it is hidden in reorder mode (the drag grip owns that edge);
+ *  - every page goes through the ONE NavItemRow (main list, group panel, phone drawer), so every page gets the menu;
+ *  - it is not drawn while the menu is being edited (the drag grip owns that edge);
  *  - it is reachable on touch and by keyboard (no hover-only reveal).
  */
 
@@ -16,36 +16,42 @@ import { readFileSync } from "fs"
 import { join } from "path"
 
 const root = join(__dirname, "..", "..")
-const sidebar = readFileSync(join(root, "components/dashboard/sidebar.tsx"), "utf8")
-const menu = readFileSync(join(root, "components/dashboard/nav-item-menu.tsx"), "utf8")
+const read = (p: string) => readFileSync(join(root, p), "utf8")
+const sidebar = read("components/dashboard/sidebar.tsx")
+const groups = read("components/dashboard/menu-groups.tsx")
+const editor = read("components/dashboard/menu-editor.tsx")
+const rowFile = read("components/dashboard/nav-item-row.tsx")
+const menu = read("components/dashboard/nav-item-menu.tsx")
 
-function sortableItemBody(): string {
-  const start = sidebar.indexOf("function SortableNavItem(")
-  const end = sidebar.indexOf("function TeamNotifDot(")
+function rowBody(): string {
+  const start = rowFile.indexOf("export function NavItemRow(")
+  const end = rowFile.indexOf("export function TeamNotifDot(")
   expect(start).toBeGreaterThan(-1)
   expect(end).toBeGreaterThan(start)
-  return sidebar.slice(start, end)
+  return rowFile.slice(start, end)
 }
 
 describe("left menu ⋯ wiring", () => {
-  it("renders the menu inside SortableNavItem, after the nav Link closes (sibling, not child)", () => {
-    const body = sortableItemBody()
+  it("renders the menu inside NavItemRow, after the nav Link closes (sibling, not child)", () => {
+    const body = rowBody()
     const linkClose = body.indexOf("</Link>")
     const menuUse = body.indexOf("<NavItemMenu")
     expect(linkClose).toBeGreaterThan(-1)
     expect(menuUse).toBeGreaterThan(linkClose)
   })
 
-  it("does not render it in reorder (edit) mode", () => {
-    expect(sortableItemBody()).toMatch(/\{!editMode && <NavItemMenu/)
+  it("is not drawn while editing the menu (the editor has its own rows with a drag grip and no ⋯)", () => {
+    expect(editor).not.toContain("NavItemMenu")
+    expect(sidebar).toMatch(/editMode \? \(/)
+    expect(sidebar).toContain("<EditMenuTree")
   })
 
   it("passes the item's own address and name, and closes the mobile drawer", () => {
-    expect(sortableItemBody()).toMatch(/<NavItemMenu href=\{item\.href\} name=\{item\.name\} onNavigate=\{onMobileClose\} overlay=\{overlay\}/)
+    expect(rowBody()).toMatch(/<NavItemMenu href=\{item\.href\} name=\{item\.name\} onNavigate=\{onMobileClose\} overlay=\{overlay\}/)
   })
 
   it("floats over the row on mouse screens so names never lose width to a reserved slot (QA 2026-10-05)", () => {
-    const body = sortableItemBody()
+    const body = rowBody()
     // a row with the clickable Team Chat dot keeps a slot; every other row overlays
     expect(body).toMatch(/const overlay = !item\.dotBadge/)
     // both count badges step aside while the button is shown — via visibility, because the
@@ -56,19 +62,24 @@ describe("left menu ⋯ wiring", () => {
     expect(body).toMatch(/group-has-\[\[data-state=open\]\]:invisible/)
   })
 
-  it("has exactly one place that renders nav items, so every page gets the menu", () => {
-    const uses = sidebar.match(/<SortableNavItem\b/g) ?? []
-    expect(uses.length).toBe(1)
+  it("has exactly one component that draws a page row, so every page gets the menu wherever it sits", () => {
+    // the only place a page's own link is written
+    expect((rowFile.match(/<Link\s+href=\{item\.href\}/g) ?? []).length).toBe(1)
+    expect(sidebar).not.toMatch(/<Link\b/)
+    expect(groups).not.toMatch(/<Link\b/)
+    // main list (sidebar) and group panel / phone drawer (menu-groups) both draw it
+    expect((sidebar.match(/<NavItemRow\b/g) ?? []).length).toBe(1)
+    expect((groups.match(/<NavItemRow\b/g) ?? []).length).toBe(1)
   })
 
   it("lets long names shorten instead of wrapping next to the new button", () => {
-    const body = sortableItemBody()
+    const body = rowBody()
     expect(body).toMatch(/flex-1 min-w-0 truncate/)
     expect(body).toMatch(/flex-1 min-w-0 flex items-center/)
   })
 
   it("marks the row as a hover/focus group so the button can reveal itself", () => {
-    expect(sortableItemBody()).toMatch(/'group relative flex items-center/)
+    expect(rowBody()).toMatch(/"group relative flex items-center/)
   })
 })
 
@@ -100,6 +111,15 @@ describe("NavItemMenu component", () => {
 
   it("is portalled above the mobile drawer", () => {
     expect(menu).toContain("DropdownMenu.Portal")
-    expect(menu).toContain("z-[70]")
+    // above the group panel (z-[96]), which is above the Supabase incident bar (z-[95])
+    expect(menu).toContain("z-[100]")
+  })
+
+  it("offers 'Move to…' (groups, the main list, and a new group) only when the caller can move pages, and keeps focus out of the name box's way", () => {
+    expect(menu).toContain("move?: MoveMenu")
+    expect(menu).toMatch(/\{move && \(/)
+    expect(menu).toContain("Move to…")
+    expect(menu).toContain("New group…")
+    expect(menu).toContain("keepFocus")
   })
 })

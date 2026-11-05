@@ -1,17 +1,28 @@
 'use client'
 
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { MoreVertical, ExternalLink, Link2, AppWindow } from 'lucide-react'
+import { useRef } from 'react'
+import { MoreVertical, ExternalLink, Link2, AppWindow, FolderInput, ChevronRight, Check, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { absoluteNavUrl, isInternalNavHref } from '@/lib/nav/nav-link'
 import { cn } from '@/lib/utils'
 import { isWindowableUrl } from '@/lib/windows/window-model'
 import { requestOpenWindow, useWindowsAvailable } from '@/lib/windows/windows-context'
 
+/** "Move to…" in the ⋯ menu (dev job 45aa5872): where the page is now and what the person can do with it. */
+export interface MoveMenu {
+  /** 'root' = the main list, otherwise the id of the group the page sits in. */
+  current: string
+  groups: Array<{ id: string; name: string }>
+  onMove: (to: string) => void
+  onNewGroup: () => void
+}
+
 /**
  * The ⋯ button on every left-menu item (dev job f3f3e237, step 1).
  *
- * Two actions, the same on every page: "Open in new tab" and "Copy link".
+ * The same actions on every page: "Open in a window", "Open in new tab", "Copy link" — and (dev job 45aa5872) "Move to…", the
+ * easy way to put a page into a group or back in the main list without dragging.
  * Antonio's decisions (2026-10-05): the button goes on EVERY item; the browser's
  * own right-click is left alone.
  *
@@ -19,7 +30,7 @@ import { requestOpenWindow, useWindowsAvailable } from '@/lib/windows/windows-co
  * - It is a SIBLING of the item's <Link>, never inside it — a button inside an
  *   anchor would navigate away when clicked.
  * - The menu is portalled to <body>, so the narrow, scrollable sidebar can't
- *   clip it, and it sits above the mobile drawer (z-[70]).
+ *   clip it, and it sits above the mobile drawer (z-[100]).
  * - "Open in new tab" is a real <a target="_blank">, so the browser treats it
  *   as the user's own click (no popup blocker). How an installed (standalone)
  *   app window handles a new tab is UNVERIFIED — see docs/systems/pwa.md.
@@ -34,6 +45,8 @@ export function NavItemMenu({
   name,
   onNavigate,
   overlay = false,
+  move,
+  onOpenChange,
 }: {
   href: string
   name: string
@@ -46,9 +59,15 @@ export function NavItemMenu({
    * by a clickable control (the Team Chat dot).
    */
   overlay?: boolean
+  /** Adds "Move to…" (left out in places that cannot move pages). */
+  move?: MoveMenu
+  /** Lets a group flyout stay open while this menu is open. */
+  onOpenChange?: (open: boolean) => void
 }) {
   // Floating windows (step 5/6): only when the admin switch is on, and only for a real CRM page.
   const windowsAvailable = useWindowsAvailable()
+  // "New group…" opens a name box: Radix would hand focus back to the ⋯ button as the menu closes and steal it from the box.
+  const keepFocus = useRef(false)
   // A menu item pointing at anything but a normal CRM page path gets no menu.
   if (!isInternalNavHref(href)) return null
 
@@ -72,7 +91,7 @@ export function NavItemMenu({
     'flex items-center gap-2 px-3 py-2 text-sm text-zinc-800 cursor-pointer outline-none hover:bg-zinc-50 focus:bg-zinc-50'
 
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root onOpenChange={onOpenChange}>
       <DropdownMenu.Trigger asChild>
         <button
           type="button"
@@ -91,7 +110,13 @@ export function NavItemMenu({
           side="right"
           align="start"
           sideOffset={6}
-          className="z-[70] min-w-[180px] rounded-lg border border-zinc-200 bg-white py-1 shadow-lg"
+          className="z-[100] min-w-[180px] rounded-lg border border-zinc-200 bg-white py-1 shadow-lg"
+          onCloseAutoFocus={e => {
+            if (keepFocus.current) {
+              e.preventDefault()
+              keepFocus.current = false
+            }
+          }}
         >
           {windowsAvailable && isWindowableUrl(href) && (
             // Desktop only: a window is a frame over the page, which makes no sense on a phone.
@@ -122,6 +147,57 @@ export function NavItemMenu({
             <Link2 className="h-3.5 w-3.5 text-zinc-500" />
             Copy link
           </DropdownMenu.Item>
+          {move && (
+            <>
+              <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+              <DropdownMenu.Sub>
+                <DropdownMenu.SubTrigger className={cn(itemClass, 'justify-between data-[state=open]:bg-zinc-50')}>
+                  <span className="flex items-center gap-2">
+                    <FolderInput className="h-3.5 w-3.5 text-zinc-500" />
+                    Move to…
+                  </span>
+                  <ChevronRight className="h-3.5 w-3.5 text-zinc-400" />
+                </DropdownMenu.SubTrigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.SubContent
+                    sideOffset={4}
+                    className="z-[100] min-w-[170px] rounded-lg border border-zinc-200 bg-white py-1 shadow-lg"
+                  >
+                    {move.groups.map(g => (
+                      <DropdownMenu.Item
+                        key={g.id}
+                        disabled={move.current === g.id}
+                        className={cn(itemClass, 'justify-between data-[disabled]:cursor-default data-[disabled]:text-zinc-400')}
+                        onSelect={() => move.onMove(g.id)}
+                      >
+                        <span className="truncate">{g.name}</span>
+                        {move.current === g.id && <Check className="h-3.5 w-3.5 shrink-0" />}
+                      </DropdownMenu.Item>
+                    ))}
+                    <DropdownMenu.Item
+                      disabled={move.current === 'root'}
+                      className={cn(itemClass, 'justify-between data-[disabled]:cursor-default data-[disabled]:text-zinc-400')}
+                      onSelect={() => move.onMove('root')}
+                    >
+                      <span>Main list</span>
+                      {move.current === 'root' && <Check className="h-3.5 w-3.5 shrink-0" />}
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                    <DropdownMenu.Item
+                      className={itemClass}
+                      onSelect={() => {
+                        keepFocus.current = true
+                        move.onNewGroup()
+                      }}
+                    >
+                      <Plus className="h-3.5 w-3.5 text-zinc-500" />
+                      New group…
+                    </DropdownMenu.Item>
+                  </DropdownMenu.SubContent>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Sub>
+            </>
+          )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
