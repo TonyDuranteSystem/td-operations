@@ -25,7 +25,7 @@ const call = async (query = "") => {
 beforeEach(() => {
   h.user = { id: "u1", app_metadata: { role: "admin" } }
   h.features.mockReset()
-  h.features.mockResolvedValue({ addService: true, sendCheckBox: false })
+  h.features.mockResolvedValue({ sendCheckBox: true })
 })
 
 describe("offer-builder-features route — who may ask", () => {
@@ -52,10 +52,10 @@ describe("offer-builder-features route — who may ask", () => {
 })
 
 describe("offer-builder-features route — what it answers", () => {
-  it("answers exactly the two yes/no values, never cached", async () => {
+  it("answers exactly the yes/no value, never cached", async () => {
     const r = await call("lead_id=L1")
     expect(r.status).toBe(200)
-    expect(r.json).toEqual({ addService: true, sendCheckBox: false })
+    expect(r.json).toEqual({ sendCheckBox: true })
     expect(r.cache).toBe("no-store")
   })
   it("passes the screen's ids and token through, as given", async () => {

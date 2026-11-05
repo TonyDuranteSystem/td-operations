@@ -1,5 +1,5 @@
 /**
- * What the service editor does after Save (flexible-offer track, "add a service from the offer").
+ * What the service editor does after Save (flexible-offer track).
  *
  * Saving a NEW service writes the service row first and its steps and workflow after. When a later part
  * fails, the row already exists. The editor used to stay on its "new" page, so the next Save tried to
