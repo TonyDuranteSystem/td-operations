@@ -26,6 +26,8 @@ import { decodeHtmlEntities, displayNameFromHeader } from "@/lib/inbox/email-htm
 import { extractEmailAddress } from "@/lib/inbox/email-unread"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { allSettledBounded } from "@/lib/inbox/bounded-settled"
+import { alertNewEmails } from "@/lib/app/inbound-alerts"
+import { waitForPhoneLeg } from "@/lib/app/phone-leg"
 
 // email_index / gmail_watch_state columns are not in the generated Database
 // types yet (regenerated from production after the prod DDL). Same escape
@@ -168,6 +170,9 @@ export async function indexThread(
     .from("email_index")
     .upsert(rows, { onConflict: "mailbox,message_id" })
   if (error) throw new Error(`email_index upsert failed: ${error.message}`)
+  // TD Social phones: a NEW unread inbound message may buzz a phone. This runs AFTER the save and can never fail it (the doorway never throws and does nothing
+  // until the Apple key is set). An old thread re-saved by the webhook, the 10-minute job, a backfill or a re-index finds nothing recent and sends nothing.
+  await waitForPhoneLeg(alertNewEmails(mailbox, rows))
   return rows.length
 }
 
