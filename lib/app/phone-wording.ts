@@ -26,6 +26,8 @@ export interface WordingInput {
   name?: string | null
   /** true for a direct or group chat message (TD Talk's own flag) */
   dm?: boolean
+  /** the mailbox a new email arrived in ("support" or "antonio"; anything else is ignored) */
+  place?: string | null
 }
 
 export const NAME_MAX = 40
@@ -35,6 +37,8 @@ const GENERIC: PhoneAlertText = { title: "New notification", body: "" }
 /** the two prefixes the TD Talk send route puts in front of a body it builds itself (a file name, a card) when the person typed no text */
 const ATTACHMENT_MARK = String.fromCodePoint(0x1f4ce)
 const CARD_MARK = String.fromCodePoint(0x1f4c7)
+/** the only two mailboxes an email alert may name (a closed list: the value never comes from the mail itself) */
+const EMAIL_PLACES = ["support", "antonio"] as const
 
 /** The TD Social tab an alert belongs to (null = none). A person who muted that tab gets no phone alert for it. */
 export function phoneTabFor(kind: AlertKind): TabId | null {
@@ -47,6 +51,10 @@ export function phoneTabFor(kind: AlertKind): TabId | null {
     case "client_share_check":
     case "client_thread_message":
       return "portal"
+    case "whatsapp_message":
+      return "whatsapp"
+    case "email_message":
+      return "inbox"
     case "marketing_lead_chat":
     case "marketing_team_chat":
     case "marketing_lead_moved":
@@ -89,6 +97,12 @@ export function phoneWording(input: WordingInput): PhoneAlertText | null {
       return { title: `Chat: ${name || "a client"}`, body: "" }
     case "client_share_check":
       return { title: "A file was sent to a client", body: "" }
+    case "whatsapp_message":
+      return { title: name ? `WhatsApp · ${name}` : "New WhatsApp message", body: "" }
+    case "email_message": {
+      const place = (EMAIL_PLACES as readonly string[]).includes(input.place as string) ? (input.place as string) : null
+      return { title: name ? `Email · ${name}` : place ? `New email in ${place}` : "New email", body: "" }
+    }
     case "staff_note":
       return { title: "New staff note", body: "" }
     case "approval":

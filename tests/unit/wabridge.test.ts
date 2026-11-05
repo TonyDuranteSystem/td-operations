@@ -210,3 +210,29 @@ describe("normalizeBackfillItem (history download)", () => {
     expect(normalizeBackfillItem(item({ ts: "2031-01-01T00:00:00Z" }), NOW)!.createdAt).toBe(NOW.toISOString())
   })
 })
+
+describe("tsReal — is the message's time the provider's own? (a phone alert must never treat a defaulted 'now' as fresh)", () => {
+  it("a live message with a real, past time stamp is real", () => {
+    expect(ingest(msg({ timestamp: "2026-09-24T17:59:00Z" })).tsReal).toBe(true)
+  })
+
+  it("a missing, unreadable or non-text time stamp is not real (createdAt becomes 'now')", () => {
+    for (const timestamp of [undefined, null, "", "not a date", 1_800_000_000, {}]) {
+      const m = ingest(msg({ timestamp }))
+      expect(m.tsReal, String(timestamp)).toBe(false)
+      expect(m.createdAt).toBe(NOW.toISOString())
+    }
+  })
+
+  it("a time stamp more than five minutes in the future is not real; a little skew is", () => {
+    expect(ingest(msg({ timestamp: "2026-09-24T18:10:00Z" })).tsReal).toBe(false)
+    expect(ingest(msg({ timestamp: "2026-09-24T18:03:00Z" })).tsReal).toBe(true)
+  })
+
+  it("the history download says the same thing", () => {
+    const item = { id: "3EB0BBBB", chat: "393331234567", from_me: false, text: "Ciao" }
+    expect(normalizeBackfillItem({ ...item, ts: "2026-09-24T17:59:00Z" }, NOW)?.tsReal).toBe(true)
+    expect(normalizeBackfillItem({ ...item, ts: "garbage" }, NOW)?.tsReal).toBe(false)
+    expect(normalizeBackfillItem({ ...item }, NOW)?.tsReal).toBe(false)
+  })
+})

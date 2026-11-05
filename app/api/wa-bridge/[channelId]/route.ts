@@ -12,6 +12,8 @@ import {
 import { parseHeartbeat } from "@/lib/messaging/wabridge-health"
 import { emitUiEvent } from "@/lib/ui-events"
 import { isFreshInbound, inboundSignalPayload } from "@/lib/messaging/inbound-sound"
+import { alertNewWhatsApp } from "@/lib/app/inbound-alerts"
+import { waitForPhoneLeg } from "@/lib/app/phone-leg"
 import { parseReceiptEvent } from "@/lib/messaging/wabridge-receipts"
 import { parseReactionsBatch, mergeReactionResults } from "@/lib/messaging/wabridge-reactions"
 import { parseReactClaim, parseReactResult } from "@/lib/messaging/wabridge-react"
@@ -385,6 +387,7 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     let deduped = 0
     let skipped = 0
     let freshInbound = 0 // live catch-up only: NEW customer messages that should ring the CRM (never history, never our own)
+    const phoneAlerts: { groupId: string; message: WabridgeMessage }[] = [] // the same messages, for TD Social phones (one alert per chat is made from these)
     for (const raw of b.items) {
       const m = normalizeBackfillItem(raw, now)
       if (!m) {
@@ -395,15 +398,21 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
       if (r === "error") {
         // Items saved before the failure are real — wake the screens now: the Mac's retry will see them as deduped (inserted=0) and never signal.
         if (b.live === true && inserted > 0) await emitUiEvent("whatsapp", inboundSignalPayload(freshInbound))
+        if (b.live === true && phoneAlerts.length > 0) await waitForPhoneLeg(alertNewWhatsApp(phoneAlerts, now))
         return NextResponse.json({ error: "ingest failed" }, { status: 500 })
       }
       if (r === "inserted") {
         inserted++
-        if (b.live === true && isFreshInbound(m.direction, m.createdAt, now)) freshInbound++
+        if (b.live === true && isFreshInbound(m.direction, m.createdAt, now)) {
+          freshInbound++
+          const groupId = groupCache.get(m.remoteDigits)
+          if (groupId) phoneAlerts.push({ groupId, message: m })
+        }
       } else deduped++
     }
     // One signal per batch, and only for the live catch-up — a history download must not make every open Inbox refetch.
     if (b.live === true && inserted > 0) await emitUiEvent("whatsapp", inboundSignalPayload(freshInbound))
+    if (b.live === true && phoneAlerts.length > 0) await waitForPhoneLeg(alertNewWhatsApp(phoneAlerts, now))
     return NextResponse.json({ ok: true, inserted, deduped, skipped })
   }
 
@@ -435,10 +444,16 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     }
     return NextResponse.json({ ok: true, skipped: parsed.reason })
   }
-  const r = await ingest(channel.id, parsed.message, false, new Map())
+  const liveChats = new Map<string, string>()
+  const r = await ingest(channel.id, parsed.message, false, liveChats)
   if (r === "error") return NextResponse.json({ error: "ingest failed" }, { status: 500 })
   // a new message — open Inboxes refresh the list and the open chat within seconds; a fresh CUSTOMER message also rings (payload.inbound)
-  if (r === "inserted") await emitUiEvent("whatsapp", inboundSignalPayload(isFreshInbound(parsed.message.direction, parsed.message.createdAt, now) ? 1 : 0))
+  if (r === "inserted") {
+    await emitUiEvent("whatsapp", inboundSignalPayload(isFreshInbound(parsed.message.direction, parsed.message.createdAt, now) ? 1 : 0))
+    // and, for TD Social phones, one alert (never throws; it only does anything when the Apple key is set and TD Social is switched on)
+    const groupId = liveChats.get(parsed.message.remoteDigits)
+    if (groupId) await waitForPhoneLeg(alertNewWhatsApp([{ groupId, message: parsed.message }], now))
+  }
   return NextResponse.json(r === "inserted" ? { ok: true } : { ok: true, deduped: true })
 }
 
