@@ -27,6 +27,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
 import { logAction } from "@/lib/mcp/action-log"
 import { safeSend } from "@/lib/mcp/safe-send"
+import { markOfferSent } from "@/lib/offers/mark-sent"
 import { autoCreatePortalUser } from "@/lib/portal/auto-create"
 import { createWelcomeToken, findWelcomeTokenBySource } from "@/lib/portal/welcome-token"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
@@ -197,6 +198,7 @@ export async function publishOffer(
   const encodedRaw = Buffer.from(mimeParts.join("\r\n")).toString("base64url")
 
   // ─── 5. safeSend — email first, status updates after ───
+  let offerMarkedSent = false
   const result = await safeSend<{ id: string; threadId: string }>({
     idempotencyCheck: async () => {
       // The offer's own status is the only identity-correct guard against a
@@ -233,17 +235,18 @@ export async function publishOffer(
         },
       },
       {
+        // Only a still-draft offer is flipped, and a failed or skipped write is reported (see lib/offers/mark-sent.ts).
         name: "update_offer_status",
         fn: async () => {
-          await supabaseAdmin
-            .from("offers")
-            .update({ status: "sent" })
-            .eq("token", token)
+          await markOfferSent(token)
+          offerMarkedSent = true
         },
       },
       {
+        // The lead moves to "Offer Sent" only when the offer really did — never on top of a newer state.
         name: "update_lead_status",
         fn: async () => {
+          if (!offerMarkedSent) return
           if (offer.lead_id) {
             await supabaseAdmin
               .from("leads")
@@ -267,6 +270,11 @@ export async function publishOffer(
     }
   }
 
+  // A step that failed AFTER the email went out (the status write, tracking, the lead) used to be invisible. Say so.
+  for (const step of result.steps) {
+    if (step.status === "error") warnings.push(`The email went out, but "${step.step}" did not finish: ${step.error ?? "unknown error"}`)
+  }
+
   // ─── 6. Log to action_log ───
   logAction({
     actor: actor || "claude.ai",
@@ -283,6 +291,7 @@ export async function publishOffer(
       portal_created: isNewUser,
       gmail_message_id: result.sendResult?.id,
       tracking_id: trackingId,
+      ...(warnings.length > 0 ? { warnings } : {}),
     },
   })
 
