@@ -4,6 +4,8 @@ import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { Providers } from '@/components/providers'
 import { TalkShell } from '@/components/talk/talk-shell'
+import { getAppMode } from '@/lib/app-mode/server'
+import { AppModeProvider } from '@/components/app-mode/app-mode-provider'
 
 /**
  * TD Talk — the standalone Team Chat app (dev job c1e326dd; docs/systems/talk.md).
@@ -50,9 +52,14 @@ export default async function TalkLayout({ children }: { children: React.ReactNo
   if (!user) redirect('/login?next=%2Ftalk')
   if (!isDashboardUser(user)) redirect('/')
 
+  // Inside the TD Social phone app (dev job 2072bc3e, Step 1b) — a layout hint from the browser name, after the checks above.
+  const appMode = getAppMode()
+
   return (
     <Providers>
-      <TalkShell sandbox={process.env.SANDBOX_MODE === '1'}>{children}</TalkShell>
+      <AppModeProvider initial={appMode}>
+        <TalkShell sandbox={process.env.SANDBOX_MODE === '1'}>{children}</TalkShell>
+      </AppModeProvider>
     </Providers>
   )
 }

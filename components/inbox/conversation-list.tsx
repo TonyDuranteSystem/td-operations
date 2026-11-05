@@ -772,7 +772,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onFirstR
       {!isWhatsApp && !inTrash && onSelectMany && selectableIds.length > 0 && (
         <button
           onClick={() => onSelectMany(allSelected ? [] : selectableIds)}
-          className="flex items-center gap-2 w-full px-4 py-2 border-b bg-zinc-50/60 text-xs font-medium text-zinc-500 hover:bg-zinc-100 transition-colors"
+          className="app-hide flex items-center gap-2 w-full px-4 py-2 border-b bg-zinc-50/60 text-xs font-medium text-zinc-500 hover:bg-zinc-100 transition-colors"
         >
           {allSelected ? (
             <CheckSquare className="h-4 w-4 text-blue-500" />
@@ -829,7 +829,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onFirstR
                   e.stopPropagation()
                   onToggleSelect(conv.id)
                 }}
-                className="shrink-0 mt-0.5 p-0.5 rounded hover:bg-zinc-200 transition-colors"
+                className="app-hide shrink-0 mt-0.5 p-0.5 rounded hover:bg-zinc-200 transition-colors"
               >
                 {isChecked ? (
                   <CheckSquare className="h-4 w-4 text-blue-500" />
