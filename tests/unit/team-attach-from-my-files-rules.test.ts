@@ -87,6 +87,20 @@ describe("checkMyFileForChat", () => {
   })
 })
 
+describe("checkMyFileForChat — extra active content refused on this path only", () => {
+  it("svgz, xsl/xslt, mht/mhtml, hta, swf and lnk by name; xml, xsl and flash types by type", () => {
+    for (const [name, mimeType] of [["a.svgz", null], ["a.xsl", null], ["a.XSLT", "application/octet-stream"], ["a.mht", null], ["a.mhtml", null], ["a.hta", null], ["a.swf", null], ["a.lnk", null],
+      ["a.pdf", "text/xml"], ["a.pdf", "application/xml; charset=utf-8"], ["a.pdf", "text/xsl"], ["a.pdf", "application/x-shockwave-flash"]] as const) {
+      expect(checkMyFileForChat({ name, size: 10, mimeType }), `${name} ${mimeType}`).toMatch(/can't be sent in chat for security reasons/)
+    }
+  })
+  it("ordinary documents, images and archives still pass", () => {
+    for (const [name, mimeType] of [["a.pdf", "application/pdf"], ["b.docx", null], ["c.png", "image/png"], ["d.zip", "application/zip"], ["e.txt", "text/plain"], ["f.csv", "text/csv"]] as const) {
+      expect(checkMyFileForChat({ name, size: 10, mimeType }), name).toBeNull()
+    }
+  })
+})
+
 describe("object name helpers", () => {
   it("safeExtension keeps a short lower-case extension, else bin", () => {
     expect(safeExtension("Mockup.PDF")).toBe("pdf")
