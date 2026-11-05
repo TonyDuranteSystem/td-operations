@@ -46,7 +46,7 @@ describe("my_files_save — who may call, and that it is the only tool", () => {
     process.env.MY_FILES_DROP_ENABLED = "1"
     const caller = { method: "static", email: OWNER }
     for (const input of [
-      { name: "x.html", text: "<b>" }, { name: "x.md", subfolder: "../x", text: "a" }, { name: "x.md" },
+      { name: "x.js", text: "1" }, { name: "x.md", subfolder: "../x", text: "a" }, { name: "x.md" },
       { name: "x.md", text: "a", content_base64: "YQ==" }, { name: "x.pdf", text: "not a pdf" }, { name: "x.md", text: "a", caller_key: "bad key" },
     ]) {
       const r = await saveToMyFilesDrop(input, caller)

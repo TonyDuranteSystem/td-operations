@@ -40,6 +40,9 @@ export const DROP_TYPES: Record<string, string> = {
   txt: "text/plain",
   csv: "text/csv",
   json: "application/json",
+  // a saved web page (a mockup): safe to VIEW because the viewer shows it in a locked box (no cookies, no same-origin); stored as plain text/html
+  html: "text/html",
+  htm: "text/html",
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
@@ -47,7 +50,7 @@ export const DROP_TYPES: Record<string, string> = {
   webp: "image/webp",
 }
 const OOXML = new Set(["docx", "xlsx", "pptx"])
-const TEXT = new Set(["md", "txt", "csv", "json"])
+const TEXT = new Set(["md", "txt", "csv", "json", "html", "htm"])
 
 export const ALLOWED_EXTENSIONS_TEXT = Object.keys(DROP_TYPES).join(", ")
 
