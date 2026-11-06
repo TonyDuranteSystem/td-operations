@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Search, FileText, Plus, Send, Bell, Download, CheckCircle,
   ChevronRight, Clock, CreditCard, Receipt, History,
@@ -80,6 +80,7 @@ function csym(currency?: string) {
 
 export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, creditNotes, auditLog, paymentHistory }: Props) {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [search, setSearch] = useState('')
   const [showSection, setShowSection] = useState<'invoices' | 'statement' | 'credits' | 'payments' | 'audit'>('invoices')
   const [showNewInvoice, setShowNewInvoice] = useState(false)
@@ -148,7 +149,9 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
   }, [invoices, paymentHistory])
 
   function selectClient(id: string) {
-    router.push(`/finance?tab=clients&client=${id}`)
+    // Keep the department switch the person chose: picking a client must not silently go back to All.
+    const dept = searchParams.get('dept')
+    router.push(`/finance?tab=clients&client=${id}${dept ? `&dept=${encodeURIComponent(dept)}` : ''}`)
   }
 
   // Void / Reactivate open a preview dialog rather than acting on click.
@@ -269,8 +272,8 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
           <div className="flex items-center justify-center h-full text-muted-foreground">
             <div className="text-center">
               <Users className="w-12 h-12 mx-auto mb-3 opacity-40" />
-              <p className="text-lg font-medium">Select a client</p>
-              <p className="text-sm">Choose a client from the list to see their invoices</p>
+              <p className="text-lg font-medium">{selectedClientId ? 'No invoices for this client here' : 'Select a client'}</p>
+              <p className="text-sm">{selectedClientId ? 'This client has no invoices in the department you chose. Pick All to see them.' : 'Choose a client from the list to see their invoices'}</p>
             </div>
           </div>
         ) : (

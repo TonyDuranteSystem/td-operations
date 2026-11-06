@@ -14,6 +14,15 @@ import {
   type ProjectableFeed,
 } from '@/lib/finance/owner-ledger-projection'
 import { isCardFeeEnabled, getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
+import {
+  listDepartments,
+  applyDepartmentFilter,
+  resolveDepartmentFilter,
+  departmentFilterMatches,
+  buildDepartmentSwitches,
+  type DepartmentFilter,
+  type DepartmentSwitch,
+} from '@/lib/invoices/departments'
 import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
 import type { OpenInvoice, BankFeedRecord } from './bank-feed-tab'
@@ -25,7 +34,7 @@ export const dynamic = 'force-dynamic'
 export default async function FinancePage({
   searchParams,
 }: {
-  searchParams: { tab?: string; client?: string }
+  searchParams: { tab?: string; client?: string; dept?: string }
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -59,11 +68,45 @@ export default async function FinancePage({
   const selectedClientId = searchParams.client ?? null
 
   // ── Fetch all TD invoices from payments table (source of truth for TD billing) ──
-  const { data: invoiceSummary } = await supabaseAdmin
-    .from('payments')
-    .select('account_id, invoice_status, total, amount_paid, amount_due')
-    .not('invoice_status', 'is', null)
-    .not('invoice_status', 'in', '("Cancelled","Split")')
+  // Read in pages of 1000 (PostgREST's per-request ceiling) so the department counts and totals never silently stop at the first 1000 rows.
+  type SummaryRow = {
+    account_id: string | null
+    invoice_status: string | null
+    total: number | null
+    amount_paid: number | null
+    amount_due: number | null
+    department_entry_id: string | null
+  }
+  const invoiceSummary: SummaryRow[] = []
+  for (let from = 0; ; from += 1000) {
+    const { data: page, error: pageError } = await supabaseAdmin
+      .from('payments')
+      .select('account_id, invoice_status, total, amount_paid, amount_due, department_entry_id')
+      .not('invoice_status', 'is', null)
+      .not('invoice_status', 'in', '("Cancelled","Split")')
+      .order('id')
+      .range(from, from + 999)
+    // A failed slice must stop the screen, not quietly leave the totals and department counts short.
+    if (pageError) throw new Error(`Finance: could not read invoices (${pageError.message})`)
+    invoiceSummary.push(...((page ?? []) as SummaryRow[]))
+    if (!page || page.length < 1000) break
+  }
+
+  // ── Invoice departments (TD clients / TD Marketing / ...): a catalog, never hardcoded. ──
+  // A broken catalog must not take the whole Finance screen down: show everything, with no switches.
+  let departmentSwitches: DepartmentSwitch[] = []
+  let deptFilter: DepartmentFilter = { kind: 'all' }
+  try {
+    const departmentEntries = await listDepartments()
+    departmentSwitches = buildDepartmentSwitches(departmentEntries, invoiceSummary)
+    const referencedIds = new Set(invoiceSummary.map(i => i.department_entry_id).filter((x): x is string => !!x))
+    deptFilter = resolveDepartmentFilter(departmentEntries, searchParams.dept, referencedIds)
+  } catch (e) {
+    console.error('[finance] invoice departments unavailable, showing all invoices:', e instanceof Error ? e.message : e)
+  }
+  const activeDept = deptFilter.kind === 'all' ? null : (searchParams.dept ?? null)
+  // Applies the department filter to a payments query before it is awaited (so before any limit).
+  const applyDept = (query: unknown): void => applyDepartmentFilter(query, deptFilter)
 
   // Aggregate per account + track contact-only (unlinked) payments separately
   const emptyBucket = () => ({
@@ -71,26 +114,25 @@ export default async function FinancePage({
     invoice_count: 0, overdue_count: 0, has_partial: false,
   })
 
-  const clientMap: Record<string, ReturnType<typeof emptyBucket>> = {}
-  const unlinkedBucket = emptyBucket()
-
-  for (const inv of (invoiceSummary ?? [])) {
-    const bucket = inv.account_id
-      ? (clientMap[inv.account_id] ??= emptyBucket())
-      : unlinkedBucket
-
-    const status = inv.invoice_status ?? ''
-    bucket.invoice_count++
-    bucket.total_invoiced += Number(inv.total ?? 0)
-    bucket.total_paid += Number(inv.amount_paid ?? 0)
-    if (['Sent', 'Overdue', 'Partial'].includes(status)) {
-      bucket.outstanding += Number(inv.amount_due ?? inv.total ?? 0)
+  const aggregateByAccount = (rows: SummaryRow[]) => {
+    const map: Record<string, ReturnType<typeof emptyBucket>> = {}
+    const unlinked = emptyBucket()
+    for (const inv of rows) {
+      const bucket = inv.account_id ? (map[inv.account_id] ??= emptyBucket()) : unlinked
+      const status = inv.invoice_status ?? ''
+      bucket.invoice_count++
+      bucket.total_invoiced += Number(inv.total ?? 0)
+      bucket.total_paid += Number(inv.amount_paid ?? 0)
+      if (['Sent', 'Overdue', 'Partial'].includes(status)) {
+        bucket.outstanding += Number(inv.amount_due ?? inv.total ?? 0)
+      }
+      if (status === 'Overdue') {
+        bucket.overdue += Number(inv.amount_due ?? inv.total ?? 0)
+        bucket.overdue_count++
+      }
+      if (status === 'Partial') bucket.has_partial = true
     }
-    if (status === 'Overdue') {
-      bucket.overdue += Number(inv.amount_due ?? inv.total ?? 0)
-      bucket.overdue_count++
-    }
-    if (status === 'Partial') bucket.has_partial = true
+    return { map, unlinked }
   }
 
   // Get all accounts
@@ -99,29 +141,36 @@ export default async function FinancePage({
     .select('id, company_name')
     .order('company_name')
 
-  const clientList = (allAccounts ?? []).map(a => ({
-    id: a.id,
-    company_name: a.company_name,
-    ...(clientMap[a.id] ?? emptyBucket()),
-  }))
-
-  // Add "Individual / Unlinked" bucket if any contact-only payments exist
-  if (unlinkedBucket.invoice_count > 0) {
-    clientList.unshift({
-      id: '__unlinked__',
-      company_name: 'Individual / Unlinked',
-      ...unlinkedBucket,
-    })
+  const buildClientList = (rows: SummaryRow[], onlyWithInvoices: boolean) => {
+    const { map, unlinked } = aggregateByAccount(rows)
+    const list = (allAccounts ?? []).map(a => ({
+      id: a.id,
+      company_name: a.company_name,
+      ...(map[a.id] ?? emptyBucket()),
+    }))
+    // Add "Individual / Unlinked" bucket if any contact-only payments exist
+    if (unlinked.invoice_count > 0) {
+      list.unshift({ id: '__unlinked__', company_name: 'Individual / Unlinked', ...unlinked })
+    }
+    // With a department chosen, By Client lists only the clients that have an invoice in it.
+    return onlyWithInvoices ? list.filter(c => c.invoice_count > 0) : list
   }
+  // Overview + header numbers always cover BOTH departments; By Client follows the switch.
+  const clientListAll = buildClientList(invoiceSummary, false)
+  const clientList = deptFilter.kind === 'all'
+    ? clientListAll
+    : buildClientList(invoiceSummary.filter(i => departmentFilterMatches(deptFilter, i.department_entry_id)), true)
 
   // ── Fetch ALL invoices for flat list view (from payments) ──
-  const { data: allPaymentsFlat } = await supabaseAdmin
+  const flatQuery = supabaseAdmin
     .from('payments')
     .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, description, notes, message, account_id, contact_id, reminder_count, last_reminder_at, accounts:account_id(company_name, dunning_pause, dunning_pause_until), contacts:contact_id(full_name)')
     .not('invoice_status', 'is', null)
     .not('invoice_status', 'in', '("Cancelled","Split")')
     .order('issue_date', { ascending: false })
     .limit(500)
+  applyDept(flatQuery)
+  const { data: allPaymentsFlat } = await flatQuery
 
   // Per-invoice auto/manual reminder breakdown from the history log (Phase 2).
   // One grouped read; empty until reminders start flowing post-deploy.
@@ -204,6 +253,11 @@ export default async function FinancePage({
       payHistQuery.eq('account_id', selectedClientId)
       creditNoteQuery.eq('account_id', selectedClientId)
     }
+
+    // The department switch applies to the selected client's lists too.
+    applyDept(invoiceQuery)
+    applyDept(payHistQuery)
+    applyDept(creditNoteQuery)
 
     const [invRes, cnRes, auditRes, payRes] = await Promise.all([
       invoiceQuery,
@@ -505,12 +559,15 @@ export default async function FinancePage({
       <FinanceDashboard
         activeTab={activeTab}
         clientList={clientList}
+        clientListAll={clientListAll}
+        departmentSwitches={departmentSwitches}
+        activeDept={activeDept}
         selectedClientId={selectedClientId}
         clientInvoices={clientInvoices}
         clientCreditNotes={clientCreditNotes}
         clientAuditLog={clientAuditLog}
         clientPaymentHistory={clientPaymentHistory}
-        stats={{ totalOutstanding, totalOverdue, overdueCount, clientCount: clientList.filter(c => c.invoice_count > 0).length, cashThisMonth, avgDaysToPay }}
+        stats={{ totalOutstanding, totalOverdue, overdueCount, clientCount: clientListAll.filter(c => c.invoice_count > 0).length, cashThisMonth, avgDaysToPay }}
         agingBuckets={agingBuckets}
         recentAuditLog={recentAuditLog}
         // Cast: the `contacts:payments_contact_id_fkey(full_name)` embed on the matched invoice is

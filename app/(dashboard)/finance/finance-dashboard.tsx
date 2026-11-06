@@ -12,6 +12,7 @@ import { ExpensesTab, type TDExpenseRecord } from './expenses-tab'
 import { RecurringTab } from './recurring-tab'
 import type { RecurringTemplateListRow } from '@/app/(dashboard)/shared/recurring-invoice-actions'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import type { DepartmentSwitch } from '@/lib/invoices/departments'
 
 interface ClientSummary {
   id: string
@@ -27,7 +28,14 @@ interface ClientSummary {
 
 interface Props {
   activeTab: string
+  /** By Client list - follows the department switch. */
   clientList: ClientSummary[]
+  /** Every client, both departments - the Overview tab always covers everything. */
+  clientListAll: ClientSummary[]
+  /** The department switches (from the catalog) with how many invoices each holds; empty = no switches. */
+  departmentSwitches: DepartmentSwitch[]
+  /** The slug of the chosen department, or null for All. */
+  activeDept: string | null
   selectedClientId: string | null
   clientInvoices: Array<Record<string, unknown>>
   clientCreditNotes: Array<Record<string, unknown>>
@@ -65,7 +73,7 @@ const allTabs = [
 ]
 
 export function FinanceDashboard({
-  activeTab, clientList, selectedClientId,
+  activeTab, clientList, clientListAll, departmentSwitches, activeDept, selectedClientId,
   clientInvoices, clientCreditNotes, clientAuditLog, clientPaymentHistory,
   stats, agingBuckets, recentAuditLog, bankFeeds, bankOpenInvoices, bankFeedTotalCount,
   allInvoicesFlat, legacyPayments, tdExpenses, isAdmin, isOwner, cardFee, recurringTemplates,
@@ -82,6 +90,14 @@ export function FinanceDashboard({
     if (newTab !== 'clients') params.delete('client')
     router.push(`/finance?${params.toString()}`)
   }
+
+  function switchDept(slug: string | null) {
+    const params = new URLSearchParams(searchParams.toString())
+    if (slug) params.set('dept', slug)
+    else params.delete('dept')
+    router.push(`/finance?${params.toString()}`)
+  }
+  const totalInvoiceCount = departmentSwitches.reduce((n, d) => n + d.count, 0)
 
   return (
     <div className="flex flex-col h-full">
@@ -146,6 +162,31 @@ export function FinanceDashboard({
                 By Client
               </button>
             </div>
+            {departmentSwitches.length > 1 && (
+              <div className="flex flex-col gap-1 px-6 pt-3">
+                <div className="flex gap-2 overflow-x-auto" role="group" aria-label="Department">
+                  {[{ slug: null as string | null, label: 'All', count: totalInvoiceCount }, ...departmentSwitches].map(d => (
+                    <button
+                      key={d.slug ?? 'all'}
+                      onClick={() => switchDept(d.slug)}
+                      aria-pressed={activeDept === d.slug}
+                      className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors shrink-0 whitespace-nowrap ${
+                        activeDept === d.slug
+                          ? 'bg-foreground text-background border-foreground'
+                          : 'text-muted-foreground hover:bg-muted'
+                      }`}
+                    >
+                      {d.label} <span className="opacity-70">{d.count}</span>
+                    </button>
+                  ))}
+                </div>
+                {activeDept && (
+                  <p className="text-xs text-muted-foreground">
+                    Showing one department. The totals at the top and the Overview tab always include every department.
+                  </p>
+                )}
+              </div>
+            )}
             <div className="flex-1 overflow-hidden">
               {clientsView === 'all' ? (
                 <AllInvoicesTab invoices={allInvoicesFlat} legacyPayments={legacyPayments} isAdmin={isAdmin} />
@@ -182,7 +223,7 @@ export function FinanceDashboard({
           />
         )}
         {tab === 'overview' && (
-          <OverviewTab stats={stats} clientList={clientList} agingBuckets={agingBuckets} recentAuditLog={recentAuditLog} cardFee={cardFee} />
+          <OverviewTab stats={stats} clientList={clientListAll} agingBuckets={agingBuckets} recentAuditLog={recentAuditLog} cardFee={cardFee} />
         )}
       </div>
     </div>

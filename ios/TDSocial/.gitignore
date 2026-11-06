@@ -1,0 +1,6 @@
+.build/
+TDSocial.xcodeproj/
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
