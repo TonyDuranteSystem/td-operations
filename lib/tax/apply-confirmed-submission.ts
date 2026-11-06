@@ -2,7 +2,8 @@
  * Apply a CONFIRMED tax submission (Slice 2, piece 3).
  *
  * This is the work that used to run automatically on submit, now gated behind
- * the client's Confirm (review_status → confirmed). It RELEASES the submission
+ * the release of the submission (review_status → confirmed) — since 2026-11-06 that is STAFF approval
+ * (lib/tax/approve-submission.ts); the client's own Confirm step was removed. It RELEASES the submission
  * from the review block:
  *   • tax_returns        → data_received=true, status "Data Received"
  *   • service_deliveries → "Data Submitted" (45) advances to "Data Received" (50)
@@ -80,7 +81,7 @@ export async function applyConfirmedTaxSubmission(p: ApplyConfirmedParams): Prom
         from_stage: sd.stage,
         to_stage: "Data Received",
         advanced_at: now,
-        notes: `Client confirmed reviewed tax data (${p.actor})`,
+        notes: `Reviewed tax data released — approved (${p.actor})`,
       })
       // Direct write: skip_notify is intentional — this handler owns notifications
       // via emitClientChatEvent. Bypassing advanceStage also avoids double-triggering

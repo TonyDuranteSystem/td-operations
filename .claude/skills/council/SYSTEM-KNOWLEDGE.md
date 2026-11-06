@@ -1,4 +1,5 @@
 # SYSTEM-KNOWLEDGE — the System Counselor's index to the live business and system
+_Last verified: 2026-11-06c — Claude (dev job `6f555c9f`: the client no longer CONFIRMS their tax-return data — era marker added to §4; the old 'client presses Confirm after staff approve' step is retired)._
 _Last verified: 2026-11-06b — Claude (dev job `b9c074df`, child of `ade92cfb`: one playbook row added to §2 — which surface shows which email attachments and what decides "logo vs attachment"; the gap was reported by the Counselor's own drift check during the Worker attached-photo fix)._
 _Last verified: 2026-11-06 — Claude (dev job `2072bc3e`: TD Marketing / TD Social had no entry — one invariant added to §3: marketing logins are STRICT on the second sign-in step (one narrow review-practice-login exception) and new leads follow the one-active-team rule)._
 _Last verified: 2026-11-05 — Claude (dev job `f34c915d`: Claude can attach a file to a TD Talk / team-chat post — one playbook row added to §2; the old `portal_chat_attach_file` hand-off for team chat never worked)._
@@ -168,6 +169,7 @@ recurring annual services · one-time setup services · one-time-with-renewal (I
 **For the rest of a subsystem's history:** read the dated header block of its system doc, then the git log for those paths, then the dev board card. Do not guess.
 
 ---
+- **The client does NOT confirm their tax-return data any more (2026-11-06, Antonio — not one client ever pressed Confirm).** Staff APPROVAL releases the submission (review state → confirmed, tax record + job → Data Received, no client message); the 'Approved' → 'Confirmed' detour, `POST /api/portal/tax-confirm` and the banner's Confirm button are gone. A session that describes 'approve, then wait for the client to confirm' is describing the dead flow. Where to look: `docs/systems/tax-returns.md` (2026-11-06).
 
 ## 5. Wrong turns this seat exists to catch
 
