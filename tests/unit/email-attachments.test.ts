@@ -301,7 +301,7 @@ describe("referencedContentIds", () => {
   it("collects every cid the HTML displays — quoted, single-quoted and unquoted", () => {
     const html = '<img src="cid:a@x"><img src=\'cid:b@x\'><img src=cid:c@x>'
     const { cids, complete } = referencedContentIds(payloadOf([htmlPart(html)]))
-    expect([...cids].sort()).toEqual(["a@x", "b@x", "c@x"])
+    expect(Array.from(cids).sort()).toEqual(["a@x", "b@x", "c@x"])
     expect(complete).toBe(true)
   })
 
@@ -311,14 +311,14 @@ describe("referencedContentIds", () => {
       mimeType: "multipart/mixed",
       parts: [{ mimeType: "multipart/alternative", parts: [htmlPart('<img src="cid:deep@x">')] }],
     } as unknown as GmailAPIMessage["payload"]
-    expect([...referencedContentIds(nested).cids]).toEqual(["deep@x"])
+    expect(Array.from(referencedContentIds(nested).cids)).toEqual(["deep@x"])
 
     const single = {
       headers: [],
       mimeType: "text/html",
       body: { data: Buffer.from('<img src="cid:solo@x">').toString("base64url") },
     } as unknown as GmailAPIMessage["payload"]
-    expect([...referencedContentIds(single).cids]).toEqual(["solo@x"])
+    expect(Array.from(referencedContentIds(single).cids)).toEqual(["solo@x"])
   })
 
   it("returns nothing for a plain-text message or a payload with no parts", () => {
