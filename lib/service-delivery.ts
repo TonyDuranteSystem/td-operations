@@ -915,15 +915,24 @@ export async function advanceServiceDelivery(
   // Phase 3 (2026-05-11): skip the sync when the advance was triggered by
   // the tax-return tab — the tab already wrote tax_returns.status, syncing
   // back would overwrite the user's choice in a feedback loop.
+  // Which record: the one of the pipeline's OWN tax year (2026-11-05, Antonio: "next year the wording and the record must
+  // be right"). It used to be `new Date().getFullYear()` — the year the work is done in — so the 2025 returns were never
+  // updated and a 2026 record, when one existed, was stamped by mistake. See lib/tax/pick-tax-record.ts. When no record
+  // can be chosen the sync is skipped AND SAYS SO in auto_triggers (it never guesses a year).
   if (delivery.service_type === "Tax Return" && delivery.account_id && actor !== "tax-return-tab") {
     try {
-      const taxYear = new Date().getFullYear()
-      const { data: tr } = await supabaseAdmin
+      const { taxReturnYear } = await import("@/lib/flows/resolve-flows")
+      const { pickTaxRecordForPipeline } = await import("@/lib/tax/pick-tax-record")
+      const { data: taxRows, error: taxRowsErr } = await supabaseAdmin
         .from("tax_returns")
-        .select("id, status")
+        .select("id, status, tax_year")
         .eq("account_id", delivery.account_id)
-        .eq("tax_year", taxYear)
-        .maybeSingle()
+      if (taxRowsErr) throw new Error(taxRowsErr.message)
+      const picked = pickTaxRecordForPipeline(taxRows ?? [], taxReturnYear(delivery))
+      if (picked.kind === "none") {
+        autoTriggers.push(`Tax return NOT synced: ${picked.reason}`)
+      }
+      const tr = picked.kind === "record" ? picked.row : null
 
       if (tr) {
         const stageToStatus: Record<string, string> = {
@@ -937,7 +946,12 @@ export async function advanceServiceDelivery(
           "TR Filed": "TR Filed",
         }
         const newStatus = stageToStatus[targetStage.stage_name]
-        if (newStatus && newStatus !== tr.status) {
+        // A FILED record is never pulled back by a pipeline move (bug-hunter 2026-11-05): now that this sync reaches the
+        // real 2025 records, a stray drag on the tax board or a bulk move would otherwise flip a filed return — and its
+        // client's banner — back on. Reopening a filed return is a deliberate act in the Tax Returns tab.
+        if (newStatus && newStatus !== tr.status && tr.status === "TR Filed") {
+          autoTriggers.push(`Tax return NOT synced: the record is already TR Filed (reopen it in the Tax Returns tab if this move is meant to undo that)`)
+        } else if (newStatus && newStatus !== tr.status) {
           const trUpdates: Record<string, unknown> = { status: newStatus, updated_at: new Date().toISOString() }
 
           if (targetStage.stage_name === "Extension Requested") {

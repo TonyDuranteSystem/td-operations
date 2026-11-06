@@ -6,6 +6,8 @@ vi.mock('@/lib/supabase-admin', () => ({ supabaseAdmin: { from: vi.fn() } }))
 import {
   yearOf,
   deriveFlowYear,
+  taxReturnYear,
+  taxYearFromServiceName,
   flowStatusFromSd,
   buildFlowTopic,
   buildScheduledFlows,
@@ -60,6 +62,56 @@ describe('deriveFlowYear', () => {
   it('returns null when no date parses', () => {
     expect(deriveFlowYear({ due_date: null, stage_entered_at: null, created_at: null })).toBeNull()
   })
+  it('leaves every service other than Tax Return on the date year', () => {
+    expect(deriveFlowYear({ service_type: 'State Annual Report', due_date: '2026-11-15', stage_entered_at: null, created_at: '2026-01-02' })).toBe(2026)
+    expect(deriveFlowYear({ service_type: 'ITIN', due_date: null, stage_entered_at: '2026-06-01', created_at: '2026-01-02' })).toBe(2026)
+  })
+})
+
+describe('taxReturnYear / deriveFlowYear for a Tax Return', () => {
+  // Production 2026-11-05: all 232 Tax Return SDs have no deadline and were created in 2026 for tax year 2025.
+  it('is the year BEFORE the filing year: a pipeline created in 2026 is the 2025 return', () => {
+    expect(taxReturnYear({ due_date: null, stage_entered_at: '2026-10-07T15:55:54Z', created_at: '2026-03-05T10:00:00Z' })).toBe(2025)
+    expect(deriveFlowYear({ service_type: 'Tax Return', due_date: null, stage_entered_at: '2026-10-07T15:55:54Z', created_at: '2026-03-05T10:00:00Z' })).toBe(2025)
+  })
+  it('does not move when staff advance the job: stage_entered_at is only a fallback', () => {
+    expect(taxReturnYear({ due_date: null, stage_entered_at: '2027-01-10T00:00:00Z', created_at: '2026-03-05T10:00:00Z' })).toBe(2025)
+  })
+  it('uses the deadline when one is stored (April or October of the filing year)', () => {
+    expect(taxReturnYear({ due_date: '2026-04-15', stage_entered_at: null, created_at: '2026-03-05T10:00:00Z' })).toBe(2025)
+    expect(taxReturnYear({ due_date: '2026-10-15', stage_entered_at: null, created_at: null })).toBe(2025)
+  })
+  it('falls back to the last stage move, then to nothing', () => {
+    expect(taxReturnYear({ due_date: null, stage_entered_at: '2026-08-01T00:00:00Z', created_at: null })).toBe(2025)
+    expect(taxReturnYear({ due_date: null, stage_entered_at: null, created_at: null })).toBeNull()
+  })
+  it('builds the chat tab and workspace title "Tax Return 2025" for a 2025 return worked in 2026', () => {
+    const row = { service_type: 'Tax Return', due_date: null, stage_entered_at: '2026-10-07T15:55:54Z', created_at: '2026-03-05T10:00:00Z' }
+    expect(buildFlowTopic(row.service_type, deriveFlowYear(row))).toBe('Tax Return 2025')
+  })
+})
+
+describe('taxYearFromServiceName / a pipeline that states its own tax year', () => {
+  it('reads the year the creators write (year first, year last)', () => {
+    expect(taxYearFromServiceName('Tax Return 2025 - Financialot LLC (Final Return)')).toBe(2025)
+    expect(taxYearFromServiceName('Tax Return - Infinity Commerce Group LLC 2026')).toBe(2026)
+  })
+  it('never reads a year that belongs to the company name', () => {
+    expect(taxYearFromServiceName('Tax Return - Studio 2024 LLC')).toBeNull()
+    expect(taxYearFromServiceName('Tax Return 2025 - Studio 2024 LLC')).toBe(2025)
+    expect(taxYearFromServiceName('Tax Return')).toBeNull()
+    expect(taxYearFromServiceName(null)).toBeNull()
+    expect(taxYearFromServiceName('Annual Report 2026 - Acme LLC')).toBeNull()
+  })
+  it('a pipeline named for 2026 (the onboarding job) stays 2026 even though it was created in 2026', () => {
+    const row = { service_type: 'Tax Return', service_name: 'Tax Return - Solitude Consulting Llc 2026', due_date: null, stage_entered_at: '2026-10-07T00:00:00Z', created_at: '2026-08-13T00:00:00Z' }
+    expect(taxReturnYear(row)).toBe(2026)
+    expect(buildFlowTopic(row.service_type, deriveFlowYear(row))).toBe('Tax Return 2026')
+  })
+  it('the usual plain "Tax Return" name still falls back to the opening year minus one', () => {
+    const row = { service_type: 'Tax Return', service_name: 'Tax Return', due_date: null, stage_entered_at: '2026-10-07T00:00:00Z', created_at: '2026-03-20T00:00:00Z' }
+    expect(taxReturnYear(row)).toBe(2025)
+  })
 })
 
 describe('flowStatusFromSd', () => {
@@ -90,7 +142,8 @@ describe('buildFlowTopic', () => {
 
 describe('mapSdToFlow', () => {
   it('maps SD fields and derives year', () => {
-    const flow = mapSdToFlow(sd({ id: 'x', service_type: 'Tax Return', stage: 'Data Submitted', due_date: '2025-04-15' }), ACCOUNT)
+    // A Tax Return due in April 2026 is the 2025 return (the year is the TAX year).
+    const flow = mapSdToFlow(sd({ id: 'x', service_type: 'Tax Return', stage: 'Data Submitted', due_date: '2026-04-15' }), ACCOUNT)
     expect(flow).toMatchObject({
       flow_type: 'Tax Return',
       service_delivery_id: 'x',

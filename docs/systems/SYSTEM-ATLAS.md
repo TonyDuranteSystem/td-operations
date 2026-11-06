@@ -226,7 +226,7 @@ _Regenerated 2026-11-06. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [storage.md](storage.md) — CRM Storage _(verified 2026-11-06)_
 - [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-05)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-06)_
-- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-19)_
+- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-11-05)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-11-02)_
