@@ -6,10 +6,13 @@
  *
  *   1. SD-based by account_id (selectedAccountId is set): show button if
  *      any active service_delivery on that account has a wizard-eligible
- *      service_type.
+ *      service_type. Tax Return is the one CONDITIONAL type: on its own it
+ *      only counts while the tax wizard is actually open (see
+ *      taxReturnEntranceOpen below).
  *   2. SD-based by contact_id fallback (no selectedAccountId): show
  *      button if any active service_delivery linked only to the contact
- *      (account_id IS NULL) has a wizard-eligible service_type.
+ *      (account_id IS NULL) has a wizard-eligible service_type. Tax Return
+ *      is conditional here too (same rule as branch 1).
  *   3. Tier-based fallback for formation/onboarding clients (Commit C +
  *      Step 4 refactor): per SOP v7.2 Phase 0 (sop_runbooks bcf88e7e
  *      v7.2), payment does NOT create an account or SDs — those are
@@ -27,6 +30,7 @@ import {
   getPersonOwnedServiceTypes,
   PERSON_OWNED_WIZARD_TYPES,
 } from "@/lib/portal/wizard-map"
+import { resolveTaxWizardEligibility, taxWizardEntranceVisible } from "@/lib/tax/wizard-eligibility"
 
 export const WIZARD_SERVICE_TYPES = [
   "Company Formation",
@@ -54,6 +58,43 @@ const SIDEBAR_WIZARD_SERVICE_TYPES: string[] = (WIZARD_SERVICE_TYPES as readonly
   (t) => !(SIDEBAR_EXCLUDED_WIZARD_SERVICE_TYPES as readonly string[]).includes(t),
 )
 
+const TAX_RETURN_SERVICE_TYPE = "Tax Return"
+
+/**
+ * Tax Return is a CONDITIONAL sidebar trigger (Antonio, 2026-11-06 — Vairon
+ * Marketing LLC). A Tax Return SD stays `active` from the first installment
+ * until staff close it, long after the return is filed, so "an active Tax
+ * Return exists" is not "the client owes us the tax questionnaire": Vairon sat
+ * at "TR Filed" with nothing to fill in and still saw "Completa Registrazione".
+ * The tax wizard's own rule — the one resolver the wizard page, the submit route
+ * and the home cards already use — decides whether the entrance is offered.
+ */
+async function taxReturnEntranceOpen(accountId: string | null, contactId: string | null): Promise<boolean> {
+  try {
+    const gate = await resolveTaxWizardEligibility({ accountId, contactId })
+    return taxWizardEntranceVisible(gate)
+  } catch {
+    // A THROWN error shows the entrance (same fail-toward-showing rule as the
+    // closure card). Limit of this guard: the resolver itself swallows database
+    // errors (it reads only `data`), so a transient database error still hides
+    // the item for that page load — the home cards and the tax banner are
+    // separate requests and stay.
+    return true
+  }
+}
+
+/** Do these active, wizard-type SD rows mean the client still has a form to fill in? */
+async function activeSdsOweAForm(
+  rows: Array<{ service_type: string }> | null,
+  accountId: string | null,
+  contactId: string | null,
+): Promise<boolean> {
+  const types = (rows ?? []).map((r) => r.service_type)
+  if (types.some((t) => t !== TAX_RETURN_SERVICE_TYPE)) return true
+  if (types.includes(TAX_RETURN_SERVICE_TYPE)) return taxReturnEntranceOpen(accountId, contactId)
+  return false
+}
+
 export interface ComputeHasWizardPendingParams {
   contactId: string | null
   selectedAccountId: string
@@ -74,6 +115,8 @@ export async function computeHasWizardPending(
 ): Promise<boolean> {
   const { contactId, selectedAccountId, portalTier, onboardingOfferId } = params
 
+  // limit(10): one row per type is enough, but the check must see ALL the
+  // trigger types the client has (a Tax Return row must not hide a Formation one).
   if (selectedAccountId) {
     const { data } = await supabaseAdmin
       .from("service_deliveries")
@@ -81,8 +124,8 @@ export async function computeHasWizardPending(
       .eq("account_id", selectedAccountId)
       .in("status", ["active"])
       .in("service_type", SIDEBAR_WIZARD_SERVICE_TYPES)
-      .limit(1)
-    if ((data?.length ?? 0) > 0) return true
+      .limit(10)
+    if (await activeSdsOweAForm(data, selectedAccountId, contactId)) return true
   } else if (contactId) {
     const { data } = await supabaseAdmin
       .from("service_deliveries")
@@ -91,8 +134,8 @@ export async function computeHasWizardPending(
       .is("account_id", null)
       .in("status", ["active"])
       .in("service_type", SIDEBAR_WIZARD_SERVICE_TYPES)
-      .limit(1)
-    if ((data?.length ?? 0) > 0) return true
+      .limit(10)
+    if (await activeSdsOweAForm(data, null, contactId)) return true
   }
 
   // Contact-scoped fallback: a contact may be a managed-account holder AND also

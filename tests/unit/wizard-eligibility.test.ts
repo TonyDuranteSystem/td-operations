@@ -10,6 +10,7 @@ import { describe, it, expect } from "vitest"
 import {
   decideTaxWizardEligibility,
   taxWizardSurfaceVisible,
+  taxWizardEntranceVisible,
   CLOSED_REASON_COPY,
   type TaxWizardEligibilityInputs,
   type TaxWizardClosedReason,
@@ -247,6 +248,40 @@ describe("taxWizardSurfaceVisible — locked states keep the read-only view", ()
     [{ submissions: [sub({ review_status: "approved" })] }, true],                 // review → visible
   ])("case %#", (partial, visible) => {
     expect(taxWizardSurfaceVisible(decideTaxWizardEligibility(inputs(partial)))).toBe(visible)
+  })
+})
+
+describe("taxWizardEntranceVisible — the portal menu 'Complete Setup' entrance (Vairon, 2026-11-06)", () => {
+  it("Vairon Marketing LLC's exact shape: Tax Return filed, return row received, no submission → closed, NO entrance", () => {
+    const r = decideTaxWizardEligibility({
+      sds: [{ service_type: "Tax Return", stage: "TR Filed" }],
+      openReturns: [],
+      submissions: [],
+      formationDate: "2025-09-26",
+      accountless: false,
+    })
+    expect(r.mode).toBe("closed")
+    expect(r.reason).toBe("no_tax_return_open")
+    expect(taxWizardEntranceVisible(r)).toBe(false)
+  })
+
+  it.each([
+    // [label, partial inputs, entrance visible]
+    ["Extension Filed with an open row (stage is not Wizard Available) → hidden",
+      { sds: [{ service_type: "Tax Return", stage: "Extension Filed" }] }, false],
+    ["1st Installment Paid with an open row → hidden",
+      { sds: [{ service_type: "Tax Return", stage: "1st Installment Paid" }] }, false],
+    ["Data Received, no open row, one legacy submission with no review status → hidden",
+      { sds: [{ service_type: "Tax Return", stage: "Data Received" }], openReturns: [] as { id: string; tax_year: number }[], submissions: [sub({ review_status: null })] }, false],
+    ["company formed after the tax year → hidden", { formationDate: "2026-03-02" }, false],
+    ["Wizard Available with an open row → shown", {}, true],
+    ["client-editable review loop (approved) → shown", { submissions: [sub({ review_status: "approved" })] }, true],
+    ["locked review (under_review) keeps the read-only view, same as the wizard page → shown", { submissions: [sub({ review_status: "under_review" })] }, true],
+    ["locked review (confirmed) → shown", { submissions: [sub({ review_status: "confirmed" })] }, true],
+    ["standalone intake (accountless) → Company Information form → shown", { accountless: true }, true],
+    ["Company Data Pending stage → Company Information form → shown", { sds: [{ service_type: "Tax Return", stage: "Company Data Pending" }] }, true],
+  ])("%s", (_label, partial, visible) => {
+    expect(taxWizardEntranceVisible(decideTaxWizardEligibility(inputs(partial)))).toBe(visible)
   })
 })
 

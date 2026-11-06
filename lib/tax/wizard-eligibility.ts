@@ -284,6 +284,20 @@ export function taxWizardSurfaceVisible(e: TaxWizardEligibility): boolean {
   )
 }
 
+/**
+ * Should a client ENTRANCE (the portal menu's "Complete Setup" item) point at
+ * the wizard page for a tax return? Mirrors what the wizard page itself puts
+ * in front of the client: the tax questionnaire (open / review / the locked
+ * read-only view) or, for standalone intake, the Company Information form.
+ * A genuinely closed tax wizard (no open return, pre-wizard stage, company
+ * formed after the tax year) has nothing to show, so the entrance must not
+ * promise one — Vairon Marketing LLC kept "Completa Registrazione" for a return
+ * that was already filed.
+ */
+export function taxWizardEntranceVisible(e: TaxWizardEligibility): boolean {
+  return e.mode === "company_info" || taxWizardSurfaceVisible(e)
+}
+
 /** Human/actionable copy per closed reason, EN + IT, for R099-compliant
  * error bodies and UI states. Kept here so every surface says the same thing. */
 export const CLOSED_REASON_COPY: Record<TaxWizardClosedReason, { en: string; it: string }> = {
