@@ -76,10 +76,13 @@ export async function resolveClosureSubject(
     preferServiceDeliveryId?: string | null
   } = {},
 ): Promise<ClosureSubjectResolution> {
-  const { data: links } = await supabaseAdmin
+  // A failed read must NOT look like "this client has no closure": the wizard page now shows "no longer available" for that, and a dropped
+  // read error used to send a legitimate client to that dead end (bug hunt 2026-11-06). Throw: the page's error screen asks to try again.
+  const { data: links, error: linksErr } = await supabaseAdmin
     .from("account_contacts")
     .select("account_id")
     .eq("contact_id", contactId)
+  if (linksErr) throw new Error(`closure subject: could not read the client's companies: ${linksErr.message}`)
   const linkedAccountIds = (links ?? []).map((l) => l.account_id as string)
 
   const orFilters = [`and(account_id.is.null,contact_id.eq.${contactId})`]
@@ -87,13 +90,14 @@ export async function resolveClosureSubject(
     orFilters.push(`account_id.in.(${linkedAccountIds.join(",")})`)
   }
 
-  const { data: sds } = await supabaseAdmin
+  const { data: sds, error: sdsErr } = await supabaseAdmin
     .from("service_deliveries")
     .select("id, account_id, contact_id, created_at")
     .eq("service_type", "Company Closure")
     .eq("status", "active")
     .or(orFilters.join(","))
     .order("created_at", { ascending: false })
+  if (sdsErr) throw new Error(`closure subject: could not read the client's closures: ${sdsErr.message}`)
 
   const candidates = sds ?? []
   if (candidates.length === 0) {
