@@ -189,3 +189,7 @@
 [data-app-mode="true"] select { font-size: 16px !important; }
 [data-app-mode="true"] [contenteditable="true"] { font-size: 16px; }
 [data-app-mode="true"] { touch-action: manipulation; }
+
+/* TD Social phone app, Inbox and WhatsApp lists (slim top, 6 Nov 2026): while the search box is open, the filter chips and the "Include archived" switch sit on ONE slim
+   line under it, 36 px tall (not the 44 px a lone button gets). */
+[data-app-mode="true"] .app-slim-buttons button { min-height: 36px !important; }

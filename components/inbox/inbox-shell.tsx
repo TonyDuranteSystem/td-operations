@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { ArrowLeft, ChevronDown, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2, Send, Printer, ArchiveRestore, HelpCircle } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
@@ -54,7 +54,8 @@ import { openedConversation } from '@/lib/inbox/opened-conversation'
 import { insertLineBreaksForBlockTags } from '@/lib/inbox/email-html'
 import { pickNewestNonOwnMessage } from '@/lib/inbox/default-reply-target'
 import { inboxChannelFromParams } from '@/lib/nav/nav-active'
-import { AppListTitle } from '@/components/app-mode/app-you-button'
+import { AppListTitle, useYouBridge } from '@/components/app-mode/app-you-button'
+import { AppListControls } from './app-list-controls'
 
 const channelIcons: Record<InboxChannel, React.ElementType> = {
   gmail: Mail,
@@ -167,6 +168,9 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
   // Inside the TD Social phone app (dev job 2072bc3e, Step 1b) the Inbox is drawn for a phone: no channel buttons (the
   // app's tabs do that), a round Compose button, a folder picker, a short toolbar, no tours. The computer layout is untouched.
   const appMode = useAppMode()
+  // The slim top (title bar with the mailbox switch + ONE search/filter bar) needs the title bar, which only app 0.2.0+ can open ("You");
+  // an older build keeps the old rows. Same hook the title bar itself uses, so the two always agree.
+  const compactTop = useYouBridge()
   const [folderSheetOpen, setFolderSheetOpen] = useState(false)
   // Escape closes the Folders sheet
   useEffect(() => {
@@ -1402,10 +1406,74 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
     else setComposeMenuOpen(!composeMenuOpen)
   }
 
+  // The pieces of the Gmail search box that the computer row and the phone's slim bar (AppListControls) both draw: one definition each.
+  const searchKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') { setSuggestOpen(false); handleSearch() }
+    // Escape closes the dropdown first; a second press is the browser's.
+    if (e.key === 'Escape') setSuggestOpen(false)
+  }
+  const searchDropdown = suggestOpen ? (
+    <SearchSuggestDropdown
+      query={searchQuery}
+      mailbox={activeMailbox}
+      onClose={() => setSuggestOpen(false)}
+      onPick={(sug: SearchSuggestion) => {
+        setSuggestOpen(false)
+        setActiveChannel('gmail')
+        // Same minimal stub the ?thread= deep link opens with: the thread
+        // view fetches its own messages, the header just needs a subject
+        // and a name so it does not flash blank.
+        setSelected({
+          id: sug.id,
+          channel: 'gmail',
+          name: sug.sender || sug.senderEmail,
+          preview: '',
+          unread: 0, // opening marks it read (see openedConversation)
+          lastMessageAt: sug.date ?? '',
+          subject: sug.subject,
+        })
+      }}
+    />
+  ) : null
+  const scopeChip = searchActive ? (
+    <FastTooltip label={searchScope === 'all' ? 'Searching all mail (archived included) — click for inbox only' : 'Searching your inbox only — click to include archived mail'}>
+      <button
+        onClick={() => setSearchScope(s => (s === 'inbox' ? 'all' : 'inbox'))}
+        className={cn(
+          'px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap',
+          searchScope === 'all' ? 'bg-amber-100 text-amber-700' : 'text-zinc-400 hover:bg-zinc-100'
+        )}
+        aria-label={searchScope === 'all' ? 'Searching all mail (archived included) — click for inbox only' : 'Searching your inbox only — click to include archived mail'}
+      >
+        {searchScope === 'all' ? 'All mail' : 'Include archived'}
+      </button>
+    </FastTooltip>
+  ) : null
+
   return (
     <div className="flex flex-col h-full bg-white">
-      {/* TD Social phone app: the list screens get a title bar with the round "You" button (app 0.2.0+; renders nothing otherwise and on the computer) */}
-      {appMode && !selected && <AppListTitle title={isWhatsApp ? 'WhatsApp' : 'Inbox'} />}
+      {/* TD Social phone app: the list screens get a title bar with the round "You" button (app 0.2.0+; renders nothing otherwise and on the computer).
+          The Inbox's mailbox switch sits in it, beside the name, when the slim bar is on (compactTop). */}
+      {appMode && !selected && <AppListTitle title={isWhatsApp ? 'WhatsApp' : 'Inbox'}>
+        {!isWhatsApp && canUsePersonalMailbox && (
+          <div className="flex rounded-xl bg-zinc-100 p-0.5" role="group" aria-label="Mailbox">
+            {(['support', 'antonio'] as const).map(mb => (
+              <button
+                key={mb}
+                type="button"
+                aria-pressed={activeMailbox === mb}
+                onClick={() => { setActiveMailbox(mb); setSelected(null) }}
+                className={cn(
+                  'app-slim-line h-10 rounded-[10px] px-3 text-sm font-semibold transition-colors',
+                  activeMailbox === mb ? 'bg-blue-100 text-blue-700' : 'text-zinc-500'
+                )}
+              >
+                {mb === 'support' ? 'support@' : 'antonio@'}
+              </button>
+            ))}
+          </div>
+        )}
+      </AppListTitle>}
       {/* Header with channel tabs + compose button */}
       <div className={cn('flex items-center justify-between border-b bg-white', appMode && 'hidden')}>
         <InboxHeader
@@ -1528,7 +1596,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
       )}
 
       {/* Mailbox selector — Gmail only; antonio@ is personal (admin only) */}
-      {!isWhatsApp && canUsePersonalMailbox && (
+      {!isWhatsApp && canUsePersonalMailbox && !compactTop && (
         <div className={cn('flex items-center gap-1 px-4 py-1.5 border-b bg-zinc-50/50', appMode && selected && 'hidden')}>
           <span className="text-xs text-zinc-400 mr-2">Mailbox:</span>
           {(['support', 'antonio'] as const).map(mb => (
@@ -1548,8 +1616,28 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
         </div>
       )}
 
-      {/* Search bar + Read/Unread filter — Gmail only */}
-      {!isWhatsApp && (
+      {/* Search bar + Read/Unread filter — Gmail only. On the phone app's slim bar (compactTop) the bar below replaces this row. */}
+      {!isWhatsApp && compactTop && (
+        <AppListControls
+          hidden={!!selected}
+          folders={
+            <button type="button" onClick={() => setFolderSheetOpen(true)} className="inline-flex min-h-[44px] shrink-0 items-center gap-1 rounded-lg border border-zinc-200 bg-white px-2.5 text-sm font-medium text-zinc-700">
+              Folders <ChevronDown className="h-4 w-4" />
+            </button>
+          }
+          filter={unreadFilter}
+          onFilter={setUnreadFilter}
+          value={searchQuery}
+          onChange={v => { setSearchQuery(v); setSuggestOpen(true) }}
+          onFocus={() => setSuggestOpen(true)}
+          onKeyDown={searchKeyDown}
+          onClear={() => { clearSearch(); setSuggestOpen(false) }}
+          placeholder="Search emails... (from:, subject:, has:attachment)"
+          scope={scopeChip}
+          dropdown={searchDropdown}
+        />
+      )}
+      {!isWhatsApp && !compactTop && (
         <div className={cn('relative flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50', appMode && selected && 'hidden')}>
           {appMode && (
             <button type="button" onClick={() => setFolderSheetOpen(true)} className="inline-flex min-h-[44px] shrink-0 items-center gap-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700">
@@ -1562,37 +1650,11 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
             value={searchQuery}
             onChange={e => { setSearchQuery(e.target.value); setSuggestOpen(true) }}
             onFocus={() => setSuggestOpen(true)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') { setSuggestOpen(false); handleSearch() }
-              // Escape closes the dropdown first; a second press is the browser's.
-              if (e.key === 'Escape') setSuggestOpen(false)
-            }}
+            onKeyDown={searchKeyDown}
             placeholder="Search emails... (from:, subject:, has:attachment)"
             className="flex-1 text-sm bg-transparent outline-none placeholder:text-zinc-400"
           />
-          {suggestOpen && (
-            <SearchSuggestDropdown
-              query={searchQuery}
-              mailbox={activeMailbox}
-              onClose={() => setSuggestOpen(false)}
-              onPick={(sug: SearchSuggestion) => {
-                setSuggestOpen(false)
-                setActiveChannel('gmail')
-                // Same minimal stub the ?thread= deep link opens with: the thread
-                // view fetches its own messages, the header just needs a subject
-                // and a name so it does not flash blank.
-                setSelected({
-                  id: sug.id,
-                  channel: 'gmail',
-                  name: sug.sender || sug.senderEmail,
-                  preview: '',
-                  unread: 0, // opening marks it read (see openedConversation)
-                  lastMessageAt: sug.date ?? '',
-                  subject: sug.subject,
-                })
-              }}
-            />
-          )}
+          {searchDropdown}
           {searchActive && (
             <button onClick={clearSearch} className="p-0.5 rounded hover:bg-zinc-200 text-zinc-400">
               <X className="h-3.5 w-3.5" />
@@ -1601,20 +1663,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
           {/* Scope chip: search looks in the INBOX by default; this widens it
               to everything (archived included). Part of the list's identity —
               flipping it is a different list, new page 1. */}
-          {searchActive && (
-            <FastTooltip label={searchScope === 'all' ? 'Searching all mail (archived included) — click for inbox only' : 'Searching your inbox only — click to include archived mail'}>
-              <button
-                onClick={() => setSearchScope(s => (s === 'inbox' ? 'all' : 'inbox'))}
-                className={cn(
-                  'px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap',
-                  searchScope === 'all' ? 'bg-amber-100 text-amber-700' : 'text-zinc-400 hover:bg-zinc-100'
-                )}
-                aria-label={searchScope === 'all' ? 'Searching all mail (archived included) — click for inbox only' : 'Searching your inbox only — click to include archived mail'}
-              >
-                {searchScope === 'all' ? 'All mail' : 'Include archived'}
-              </button>
-            </FastTooltip>
-          )}
+          {scopeChip}
           <div className="flex items-center gap-0.5 border-l pl-2 ml-1">
             {(['all', 'unread', 'read'] as const).map(f => (
               <button
@@ -1645,7 +1694,18 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
           above (conversation-list.tsx applies it identically for both channels).
           Antonio, 2026-09-19: asked for a way to find a conversation by name/
           number, and to filter down to what's actually unread. */}
-      {isWhatsApp && (
+      {isWhatsApp && compactTop && (
+        <AppListControls
+          hidden={!!selected}
+          filter={unreadFilter}
+          onFilter={setUnreadFilter}
+          value={waSearchQuery}
+          onChange={setWaSearchQuery}
+          onClear={() => setWaSearchQuery('')}
+          placeholder="Search by name or phone number..."
+        />
+      )}
+      {isWhatsApp && !compactTop && (
         <div data-tour="wa-search" className={cn('relative flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50', appMode && selected && 'hidden')}>
           <Search className="h-4 w-4 text-zinc-400 shrink-0" />
           <input
