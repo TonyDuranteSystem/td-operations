@@ -95,6 +95,30 @@ export function referencedContentIds(
 }
 
 /**
+ * The attachment ids of the pictures the message's HTML displays — signature
+ * logos, icons, pasted images. These are embedded in the body, NOT files the
+ * sender attached, so every Worker surface leaves them out of "the attachments".
+ *
+ * Only an image whose cid the HTML references counts. If `referencedContentIds`
+ * could not see all the HTML (`complete` false) every Content-ID image is treated
+ * as embedded — the old, safe rule — and a warning leaves a trace, because that
+ * fallback hides a Gmail-attached photo from the Worker.
+ */
+export function embeddedImageAttachmentIds(
+  payload: GmailAPIMessage["payload"],
+  messageId = "?",
+): Set<string> {
+  const inlineImages = extractInlineImages(payload)
+  const { cids, complete } = referencedContentIds(payload)
+  if (!complete && inlineImages.length > 0) {
+    console.warn(`[email-attachments] an HTML part of message ${messageId} was not delivered inline; treating its Content-ID images as embedded`)
+  }
+  return new Set(
+    inlineImages.filter((i) => !complete || cids.has(i.contentId)).map((i) => i.attachmentId),
+  )
+}
+
+/**
  * Two different treatments, on purpose:
  *  - IMAGES are downloaded and attached to the user turn, so the worker simply
  *    SEES them. A tool it has to choose to call is a tool it will skip, and then
@@ -135,12 +159,7 @@ export async function harvestEmailAttachments(
     // proof: Gmail gives ordinary attached photos one too (`f_xxxx`), and a client's
     // screenshot attached that way is exactly what the staff member asks about —
     // so an image counts as embedded only when the body references its cid.
-    const { cids, complete } = referencedContentIds(m.payload)
-    const inlineIds = new Set(
-      extractInlineImages(m.payload)
-        .filter((i) => !complete || cids.has(i.contentId))
-        .map((i) => i.attachmentId),
-    )
+    const inlineIds = embeddedImageAttachmentIds(m.payload, m.id)
 
     for (const att of extractAttachments(m.payload)) {
       if (scanned >= MAX_EMAIL_ATTACHMENTS_SCANNED) break
