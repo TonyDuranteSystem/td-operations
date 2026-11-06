@@ -44,26 +44,28 @@ export function AppThreadActions({ plan, unread, starred, busy, handlers }: {
     return () => window.removeEventListener('keydown', onKey)
   }, [open])
   return (
-    <div className="ml-auto flex items-center gap-1" data-testid="app-thread-actions">
+    // its own full-width row under the title (the approved mockup's action row): Reply, Archive, Unread, Delete share the width
+    <div className="flex w-full basis-full items-stretch gap-1" data-testid="app-thread-actions">
       {plan.primary.map(key => {
         const run = handlers[key]
         if (!run) return null
         if (key === 'reply') {
           return (
-            <button key={key} type="button" onClick={run} className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-blue-50 px-3 text-sm font-medium text-blue-700 hover:bg-blue-100">
+            <button key={key} type="button" onClick={run} className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-50 px-3 text-sm font-semibold text-blue-700 hover:bg-blue-100">
               <Reply className="h-4 w-4" /> Reply
             </button>
           )
         }
         const spec = {
-          archive: { label: 'Archive', icon: <Archive className="h-5 w-5" />, cls: '' },
-          toggleRead: { label: unread ? 'Mark as read' : 'Mark as unread', icon: unread ? <MailOpen className="h-5 w-5" /> : <Mail className="h-5 w-5" />, cls: '' },
-          delete: { label: 'Delete (moves to Trash)', icon: <Trash2 className="h-5 w-5" />, cls: 'text-red-600' },
-          restore: { label: 'Restore to Inbox', icon: <ArchiveRestore className="h-5 w-5" />, cls: 'text-green-700' },
+          archive: { label: 'Archive', short: 'Archive', icon: <Archive className="h-5 w-5" />, cls: '' },
+          toggleRead: { label: unread ? 'Mark as read' : 'Mark as unread', short: unread ? 'Read' : 'Unread', icon: unread ? <MailOpen className="h-5 w-5" /> : <Mail className="h-5 w-5" />, cls: '' },
+          delete: { label: 'Delete (moves to Trash)', short: 'Delete', icon: <Trash2 className="h-5 w-5" />, cls: 'text-red-600' },
+          restore: { label: 'Restore to Inbox', short: 'Restore', icon: <ArchiveRestore className="h-5 w-5" />, cls: 'text-green-700' },
         }[key]
         return (
-          <button key={key} type="button" onClick={run} disabled={busy} aria-label={spec.label} className={cn(iconBtn, spec.cls)}>
+          <button key={key} type="button" onClick={run} disabled={busy} aria-label={spec.label} className={cn('flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 disabled:opacity-50', spec.cls)}>
             {spec.icon}
+            <span>{spec.short}</span>
           </button>
         )
       })}

@@ -272,11 +272,11 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
 
   if (!recordType) {
     return (
-      <div data-tour="wa-match-banner" className="px-4 py-1.5 bg-zinc-50 border-b flex items-center justify-between gap-2">
+      <div data-tour="wa-match-banner" className="app-tight px-4 py-1.5 bg-zinc-50 border-b flex items-center justify-between gap-2">
         <span className="text-xs text-zinc-500">No matching lead or client for this number.</span>
         <button
           onClick={() => setRecordType('lead')}
-          className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+          className="app-slim-line inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
         >
           <UserPlus className="h-3.5 w-3.5" />
           Save this number

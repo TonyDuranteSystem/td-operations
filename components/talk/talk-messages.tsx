@@ -377,7 +377,7 @@ export function TalkMessages({
           {groups.map(g => (
             <div key={g.key} className="space-y-1.5">
               <div className="sticky top-0 z-[1] flex justify-center py-1">
-                <span className="rounded-full bg-white/90 px-3 py-0.5 text-xs font-medium text-zinc-500 shadow-sm">{day(g.label, g.messages[0].created_at)}</span>
+                <span className="app-day-pill rounded-full bg-white/90 px-3 py-0.5 text-xs font-medium text-zinc-500 shadow-sm">{day(g.label, g.messages[0].created_at)}</span>
               </div>
               {g.messages.map(m => (
                 <Bubble key={m.id} m={m} mine={m.sender_id === meId} tick={m.sender_id === meId ? tickOf(m) : 'sent'} showSender={showSender} meId={meId} byId={byId}
