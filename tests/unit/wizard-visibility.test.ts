@@ -36,6 +36,9 @@ let sdFormationStageFixture: SDStageRow[] = []
  *  assert what the real DB query would filter on (the fixture router ignores it). */
 const serviceTypeInCalls: string[][] = []
 
+/** The row limit passed to every non-formation service_deliveries query, in call order. */
+const serviceDeliveriesLimitCalls: number[] = []
+
 // Track query shape so we can route the fixture per branch.
 let lastFromTable = ""
 let chainState: { isAccountQuery: boolean; isContactQuery: boolean; isFormationStageQuery: boolean } = {
@@ -65,8 +68,11 @@ vi.mock("@/lib/supabase-admin", () => ({
         }),
         is: vi.fn().mockReturnThis(),
         order: vi.fn().mockReturnThis(),
-        limit: vi.fn(() => {
+        limit: vi.fn((n?: number) => {
           if (lastFromTable === "service_deliveries") {
+            // Remember the row limit of the trigger-type query so a test can pin it
+            // (the stub returns the whole fixture whatever the limit says).
+            if (!chainState.isFormationStageQuery && typeof n === "number") serviceDeliveriesLimitCalls.push(n)
             const data = chainState.isFormationStageQuery
               ? sdFormationStageFixture
               : chainState.isAccountQuery
@@ -91,9 +97,26 @@ vi.mock("@/lib/supabase-admin", () => ({
   },
 }))
 
+// The tax wizard's own eligibility rule is decided elsewhere (and tested in
+// wizard-eligibility.test.ts). Here we only control ITS ANSWER, keeping the real
+// taxWizardEntranceVisible so the mapping from answer → "show the entrance" is
+// the production one.
+const resolveTaxMock = vi.fn()
+vi.mock("@/lib/tax/wizard-eligibility", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tax/wizard-eligibility")>()
+  return { ...actual, resolveTaxWizardEligibility: (...args: unknown[]) => resolveTaxMock(...args) }
+})
+
 import { computeHasWizardPending, SIDEBAR_EXCLUDED_WIZARD_SERVICE_TYPES } from "@/lib/portal/wizard-visibility"
+import type { TaxWizardEligibility, TaxWizardClosedReason } from "@/lib/tax/wizard-eligibility"
 
 beforeEach(() => {
+  // Default answer = "tax wizard closed". A test that expects the entrance to stay
+  // must SET an open answer; a forgotten mock can no longer pass by accident
+  // (an undefined answer used to throw inside the helper and fail open to true).
+  resolveTaxMock.mockReset()
+  resolveTaxMock.mockResolvedValue({ mode: "closed", taxYear: null, taxReturnId: null, submissionId: null, reason: "no_tax_return_open" })
+  serviceDeliveriesLimitCalls.length = 0
   sdAccountFixture = []
   sdContactFixture = []
   wizardProgressFixture = []
@@ -437,6 +460,105 @@ describe("computeHasWizardPending — submission-table fallback when wizard_prog
       portalTier: "active",
     })
     expect(result).toBe(true)
+  })
+})
+
+// ─── Tax Return is a CONDITIONAL trigger (Vairon Marketing LLC, 2026-11-06) ───
+//
+// An active Tax Return SD outlives the filing (Vairon sat at "TR Filed"), so its
+// mere existence must not light "Completa Registrazione". The tax wizard's own
+// resolver decides; these tests control only ITS answer.
+
+const taxAnswer = (over: Partial<TaxWizardEligibility>): TaxWizardEligibility => ({
+  mode: "closed", taxYear: null, taxReturnId: null, submissionId: null, reason: "no_tax_return_open", ...over,
+})
+const closedBecause = (reason: TaxWizardClosedReason) => taxAnswer({ mode: "closed", reason })
+
+describe("computeHasWizardPending — Tax Return follows the tax wizard's own eligibility rule", () => {
+  const vairon = { contactId: "contact-1", selectedAccountId: "acc-1", portalTier: "active" }
+
+  it("Vairon shape: active Tax Return SD, tax wizard closed (nothing owed) → NO sidebar entry", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }]
+    resolveTaxMock.mockResolvedValue(closedBecause("no_tax_return_open"))
+    expect(await computeHasWizardPending(vairon)).toBe(false)
+  })
+
+  it("pre-wizard stage (Extension Filed / 1st Installment Paid) → NO sidebar entry", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }]
+    resolveTaxMock.mockResolvedValue(closedBecause("pre_wizard_stage"))
+    expect(await computeHasWizardPending(vairon)).toBe(false)
+  })
+
+  it("tax wizard open → sidebar entry stays", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }]
+    resolveTaxMock.mockResolvedValue(taxAnswer({ mode: "open", reason: null, taxYear: 2025, taxReturnId: "tr-1" }))
+    expect(await computeHasWizardPending(vairon)).toBe(true)
+  })
+
+  it("client-editable review loop → sidebar entry stays", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }]
+    resolveTaxMock.mockResolvedValue(taxAnswer({ mode: "review", reason: null, taxYear: 2025, submissionId: "sub-1" }))
+    expect(await computeHasWizardPending(vairon)).toBe(true)
+  })
+
+  it.each(["under_review", "confirmed"] as const)(
+    "locked review (%s): nothing can be completed, so NO sidebar entry (the wizard page still shows the read-only view by its own links)",
+    async (reason) => {
+      sdAccountFixture = [{ service_type: "Tax Return" }]
+      resolveTaxMock.mockResolvedValue(closedBecause(reason))
+      expect(await computeHasWizardPending(vairon)).toBe(false)
+    },
+  )
+
+  it("standalone intake (company_info) → sidebar entry stays", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }]
+    resolveTaxMock.mockResolvedValue(taxAnswer({ mode: "company_info", reason: null }))
+    expect(await computeHasWizardPending(vairon)).toBe(true)
+  })
+
+  it("a closed tax wizard does NOT hide another form the client owes (Tax Return + Banking Fintech) — and the tax rule is not even consulted", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }, { service_type: "Banking Fintech" }]
+    resolveTaxMock.mockResolvedValue(closedBecause("no_tax_return_open"))
+    expect(await computeHasWizardPending(vairon)).toBe(true)
+    expect(resolveTaxMock).not.toHaveBeenCalled()
+  })
+
+  it("reads up to 10 trigger rows, so a Tax Return row cannot hide a Banking / Formation / ITIN row (bug-hunt finding 3)", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }, { service_type: "Banking Fintech" }]
+    await computeHasWizardPending(vairon)
+    expect(serviceDeliveriesLimitCalls).toEqual([10])
+  })
+
+  it("a tax rule that answers nothing useful never makes the entrance appear by accident (default mock = closed)", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }]
+    expect(await computeHasWizardPending(vairon)).toBe(false)
+  })
+
+  it("asks the rule about THIS company and THIS contact", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }]
+    resolveTaxMock.mockResolvedValue(closedBecause("no_tax_return_open"))
+    await computeHasWizardPending(vairon)
+    expect(resolveTaxMock).toHaveBeenCalledWith({ accountId: "acc-1", contactId: "contact-1" })
+  })
+
+  it("an unexpected failure of the tax rule never HIDES the entrance (fail toward showing)", async () => {
+    sdAccountFixture = [{ service_type: "Tax Return" }]
+    resolveTaxMock.mockRejectedValue(new Error("boom"))
+    expect(await computeHasWizardPending(vairon)).toBe(true)
+  })
+
+  it("no Tax Return SD → the tax rule is never consulted (no extra query for everyone else)", async () => {
+    sdAccountFixture = []
+    expect(await computeHasWizardPending(vairon)).toBe(false)
+    expect(resolveTaxMock).not.toHaveBeenCalled()
+  })
+
+  it("contact branch (no company selected): accountless Tax Return → asked with accountId null, intake keeps the entrance", async () => {
+    sdContactFixture = [{ service_type: "Tax Return" }]
+    resolveTaxMock.mockResolvedValue(taxAnswer({ mode: "company_info", reason: null }))
+    const result = await computeHasWizardPending({ contactId: "contact-1", selectedAccountId: "", portalTier: "active" })
+    expect(result).toBe(true)
+    expect(resolveTaxMock).toHaveBeenCalledWith({ accountId: null, contactId: "contact-1" })
   })
 })
 
