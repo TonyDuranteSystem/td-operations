@@ -2522,7 +2522,7 @@ export default function PortalChatsPage() {
         (selectedAccountId || selectedContactId || selectedThreadId) ? 'hidden lg:flex' : 'flex'
       )}>
         <div className="px-4 py-3 border-b">
-          <div className="flex items-center justify-between mb-2">
+          <div className={cn('flex items-center justify-between', !appMode && 'mb-2')}>
             <h1 className="flex items-center gap-1 text-lg font-semibold text-zinc-900">Portal Chats <HelpDot helpKey="chat.page_tabs" /></h1>
             <div className="flex items-center gap-1">
               <FastTooltip label={sidebarView === 'internal' ? 'New team discussion' : 'Start new chat with a client'}>
@@ -2569,8 +2569,8 @@ export default function PortalChatsPage() {
               <AppYouButton className="ml-1" />
             </div>
           </div>
-          {/* Sidebar tabs: Chats | Actions | Team */}
-          <div className="flex rounded-lg bg-zinc-100 p-0.5">
+          {/* Sidebar tabs: Chats | Actions | Team (not in the phone app: its Portal tab is client chats; Actions and Team stay on the computer, team talk is TD Talk) */}
+          <div className="app-hide flex rounded-lg bg-zinc-100 p-0.5">
             <button
               onClick={() => { setSidebarView('chats'); setSelectedThreadId(null) }}
               className={cn(

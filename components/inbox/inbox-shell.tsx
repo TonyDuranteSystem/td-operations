@@ -1907,6 +1907,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
                     plan={appThreadPlan({ channel: selected.channel, isTrash: selectedOrigin === trashViewKey, hasWhatsAppGroup: !!whatsappGroupId })}
                     unread={openUnread}
                     starred={!!selected.starred}
+                    compact={selected.channel === 'whatsapp'}
                     busy={emailActionMutation.isPending || restoreOpenMutation.isPending}
                     handlers={{
                       reply: handleReply,

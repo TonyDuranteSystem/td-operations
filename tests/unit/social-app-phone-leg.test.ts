@@ -9,6 +9,10 @@ import path from "node:path"
 const { live, startMock, sendNotification, listMembers } = vi.hoisted(() => ({ live: vi.fn(), startMock: vi.fn(), sendNotification: vi.fn(), listMembers: vi.fn() }))
 
 vi.mock("@/lib/app/send-to-phones", () => ({ sendToPhonesLive: live }))
+// The two senders' tests replace the phone leg's doorway with a spy. This is a normal hoisted mock for the whole file (set up before any import), NOT a vi.doMock
+// registered after vi.resetModules(): that late registration was missed now and then when the full suite ran under load (the spy was never called and the real
+// doorway ran instead), which turned CI red twice on 6 Nov 2026. The first describe below still tests the REAL doorway, taken with importActual.
+vi.mock("@/lib/app/phone-leg", async () => ({ ...(await vi.importActual<typeof import("@/lib/app/phone-leg")>("@/lib/app/phone-leg")), startPhoneLeg: startMock }))
 vi.mock("web-push", () => ({ default: { setVapidDetails: vi.fn(), sendNotification } }))
 vi.mock("@/lib/team/directory", () => ({ listTeamMembers: listMembers }))
 vi.mock("@/lib/supabase-admin", () => {
@@ -22,8 +26,11 @@ vi.mock("@/lib/supabase-admin", () => {
   return { supabaseAdmin: { from: () => ({ select: () => chain(), delete: () => ({ eq: () => Promise.resolve({ data: null, error: null }) }) }) } }
 })
 
-import { PHONE_WAIT_MS, startPhoneLeg, waitForPhoneLeg, type PhoneAlert } from "@/lib/app/phone-leg"
+import { PHONE_WAIT_MS, waitForPhoneLeg, type PhoneAlert } from "@/lib/app/phone-leg"
 import { marketingRecipientsFrom, staffRecipients, type MemberRow } from "@/lib/app/phone-recipients"
+
+// the REAL doorway (the mock above replaces only `startPhoneLeg`, and only for what the senders import)
+const { startPhoneLeg } = await vi.importActual<typeof import("@/lib/app/phone-leg")>("@/lib/app/phone-leg")
 
 const ROOT = path.resolve(__dirname, "../..")
 const A: PhoneAlert = { source: "staff", userIds: ["u1"], kind: "client_chat", title: "t", body: "b", dm: false }
@@ -78,9 +85,7 @@ describe("the two senders call the phone leg first, whatever the web side does",
     sendNotification.mockReset()
     sendNotification.mockResolvedValue({})
     process.env.VAPID_PUBLIC_KEY = "pub"; process.env.VAPID_PRIVATE_KEY = "priv"
-    vi.doMock("@/lib/app/phone-leg", async () => ({ ...(await vi.importActual<typeof import("@/lib/app/phone-leg")>("@/lib/app/phone-leg")), startPhoneLeg: startMock }))
   })
-  afterEach(() => { vi.doUnmock("@/lib/app/phone-leg") })
 
   it("staff: the phone leg gets the alert's facts and starts BEFORE the browser push", async () => {
     startMock.mockImplementation(() => { expect(sendNotification).not.toHaveBeenCalled(); return Promise.resolve() })

@@ -12,6 +12,8 @@ import { join } from "path"
 import {
   PhoneConvNav, PhoneViewStrip, PhoneReplyToLine, PhoneMoreSheet, PhoneReplyToSheet, PhonePlusSheet, PHONE_VIEW_LABELS,
 } from "@/components/portal-chats/app-phone-chrome"
+import { AppThreadActions } from "@/components/inbox/app-thread-actions"
+import { appThreadPlan } from "@/lib/inbox/app-thread-actions"
 
 const noop = () => undefined
 const html = (el: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(el)
@@ -135,5 +137,45 @@ describe("the Portal chats page: phone pieces only in the app, the computer layo
     expect(page).toContain("const leaveConversation = () => {")
     expect(page.match(/onBack=\{leaveConversation\}/g)?.length).toBe(1)
     expect(page).toMatch(/onClick=\{leaveConversation\}/)
+  })
+})
+
+describe("round two (5 Nov 2026, after the first real-phone look)", () => {
+  const waPlan = appThreadPlan({ channel: "whatsapp", isTrash: false, hasWhatsAppGroup: true })
+  const emailPlan = appThreadPlan({ channel: "gmail", isTrash: false, hasWhatsAppGroup: false })
+  const handlers = { reply: noop, archive: noop, toggleRead: noop, delete: noop, worker: noop, copyLink: noop, task: noop }
+  const render = (plan: typeof waPlan, compact: boolean) => html(createElement(AppThreadActions, { plan, unread: false, starred: false, busy: false, handlers, compact }))
+
+  it("a WhatsApp chat shows ONLY the menu button in the title row: no Reply row (it only scrolled to the box already on screen)", () => {
+    const out = render(waPlan, true)
+    expect(out).toContain("More actions")
+    expect(out).not.toContain("Reply")
+    expect(out).toContain("ml-auto")
+  })
+
+  it("an email keeps its full action row with Reply (there it opens the full reply screen)", () => {
+    const out = render(emailPlan, false)
+    for (const word of ["Reply", "Archive", "Unread", "Delete", "More actions"]) expect(out).toContain(word)
+    expect(out).toContain("basis-full")
+  })
+
+  const src = (p: string) => readFileSync(join(root, p), "utf8")
+  it("the Inbox shell asks for the compact menu on WhatsApp only", () => {
+    expect(src("components/inbox/inbox-shell.tsx")).toContain("compact={selected.channel === 'whatsapp'}")
+  })
+
+  it("the ID / tax-documents reminder leaves the WhatsApp screen in the app and sits under 'Attach a file'; the computer line stays", () => {
+    const wa = src("components/inbox/whatsapp-thread.tsx")
+    expect(wa).toMatch(/<p className="app-hide text-\[11px\] text-zinc-400 px-1">\s*Don&apos;t send ID or tax documents over WhatsApp/)
+    expect(wa).toContain("attachNote={isWabridgeLine ? \"Don't send ID or tax documents over WhatsApp — use the portal instead.\" : undefined}")
+    expect(src("components/portal-chats/app-phone-chrome.tsx")).toContain('data-testid="attach-note"')
+  })
+
+  it("the Portal list's Chats / Actions / Team switch is hidden in the app, never removed (the computer keeps it)", () => {
+    expect(page).toMatch(/<div className="app-hide flex rounded-lg bg-zinc-100 p-0\.5">/)
+    expect(page).toContain("setSidebarView('internal'); setSelectedAccountId(null)")
+    expect(page).toContain("setSidebarView('actions')")
+    // the 8 px gap that belonged to that row goes with it, in the app only (the computer keeps it)
+    expect(page).toContain("cn('flex items-center justify-between', !appMode && 'mb-2')")
   })
 })
