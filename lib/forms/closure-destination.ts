@@ -18,6 +18,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { resolveClosureFolder } from "@/lib/forms/closure-folder"
+import { parseStorageMarker } from "@/lib/crm-store/save-form"
 
 export interface CompanyCandidate {
   id: string
@@ -62,12 +63,18 @@ export function normalizeCompanyName(value: unknown): string {
  */
 export function matchTypedCompany(typed: { name?: unknown; ein?: unknown }, candidates: CompanyCandidate[]): CompanyMatch {
   const ein = digitsOnly(typed.ein)
+  const name = normalizeCompanyName(typed.name)
   if (ein.length === 9) {
     const hits = candidates.filter((c) => digitsOnly(c.ein_number) === ein)
-    if (hits.length === 1) return { status: "one", id: hits[0].id, by: "ein" }
+    if (hits.length === 1) {
+      // The EIN is exact and wins over a spelling of the name — EXCEPT when the name the client wrote is, word for word, ANOTHER of the person's
+      // companies (the wizard pre-fills the linked company's name AND EIN; changing only half of the pair must not file company B's papers under A).
+      const other = name ? candidates.filter((c) => c.id !== hits[0].id && normalizeCompanyName(c.company_name) === name) : []
+      if (other.length > 0) return { status: "ambiguous", ids: [hits[0].id, ...other.map((o) => o.id)] }
+      return { status: "one", id: hits[0].id, by: "ein" }
+    }
     if (hits.length > 1) return { status: "ambiguous", ids: hits.map((h) => h.id) }
   }
-  const name = normalizeCompanyName(typed.name)
   if (name) {
     const hits = candidates.filter((c) => normalizeCompanyName(c.company_name) === name)
     if (hits.length === 1) return { status: "one", id: hits[0].id, by: "name" }
@@ -87,25 +94,52 @@ export function decideClosureTarget(p: { linkedAccountId: string | null; match: 
   return { kind: "other_company", disagreement: match.status === "one" ? "match_not_linked" : null }
 }
 
-/** The folder name Antonio asked for: "Company closure_<company name>". */
+const FOLDER_PREFIX = "Company closure_"
+
+/**
+ * The folder name Antonio asked for: "Company closure_<company name>" — in a form the store accepts. The store refuses "/" , "\\" and control
+ * characters and anything over 255 characters (lib/crm-store/names.ts), and a refused name aborts the whole filing — "24/7 Rentals LLC" could
+ * never be filed. Same rule as `storeSafeFolderName` (lib/crm-store/formation-pilot.ts): those characters become "-".
+ */
 export function closureFolderName(llcName: unknown): string {
-  const name = String(llcName ?? "").trim()
-  return `Company closure_${name || "Unknown LLC"}`
+  // eslint-disable-next-line no-control-regex -- control characters are exactly what the store refuses
+  const safe = String(llcName ?? "").replace(/[\\/\u0000-\u001f\u007f]/g, "-").replace(/\s+/g, " ").trim()
+  return `${FOLDER_PREFIX}${safe || "Unknown LLC"}`.slice(0, 255).trimEnd()
+}
+
+/** True when two company names are the same company once case, punctuation and the legal-form word are ignored. */
+function sameCompanyName(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = normalizeCompanyName(a)
+  return x !== "" && x === normalizeCompanyName(b)
 }
 
 /** The plain-English line for staff when the two checks disagree. */
 export function disagreementText(d: ClosureDisagreement, names: { typed: string; linked: string | null; matched: string | null }): string {
   const typed = names.typed || "(nothing)"
+  const folder = closureFolderName(typed)
+  const linked = names.linked ?? "a company of ours"
+  // "which is X" would repeat itself when the client simply wrote the company's own name
+  const whichIs = (fallback: string) => (names.matched && !sameCompanyName(typed, names.matched) ? `which is ${names.matched}` : fallback)
   switch (d) {
     case "linked_no_match":
-      return `This closure is linked to ${names.linked ?? "a company of ours"}, but the client wrote "${typed}" and that matches none of the person's companies. The documents were filed in the person's folder "${closureFolderName(typed)}" — check which company is being closed.`
+      return `This closure is linked to ${linked}, but the client wrote "${typed}" and that matches none of the person's companies. The documents were filed in the person's folder "${folder}" — check which company is being closed.`
     case "linked_other":
-      return `This closure is linked to ${names.linked ?? "a company of ours"}, but the client wrote "${typed}", which matches ${names.matched ?? "a different company of ours"}. The documents were filed in the person's folder "${closureFolderName(typed)}" — check which company is being closed.`
+      return `This closure is linked to ${linked}, but the client wrote "${typed}", ${whichIs("one of the person's other companies")}. The documents were filed in the person's folder "${folder}" — check which company is being closed.`
     case "match_not_linked":
-      return `The client wrote "${typed}", which is ${names.matched ?? "one of our companies"}, but this closure is not linked to it. The documents were filed in the person's folder "${closureFolderName(typed)}" — check whether it is our company that is being closed.`
+      return `The client wrote "${typed}", ${whichIs("one of our companies")}, but this closure is not linked to it. The documents were filed in the person's folder "${folder}" — check whether it is our company that is being closed.`
     case "ambiguous":
-      return `The client wrote "${typed}" and it matches more than one company of the person's. The documents were filed in the person's folder "${closureFolderName(typed)}" — check which company is being closed.`
+      return `The client wrote "${typed}" and it matches more than one company of the person's. The documents were filed in the person's folder "${folder}" — check which company is being closed.`
   }
+}
+
+/**
+ * A correction must not change WHERE the package already is: the saver keeps a replayed package in the folder its summary was first filed in
+ * (lib/crm-store/save-form.ts), so a corrected company name must not make the job's note / the pinned plan name a folder that does not exist.
+ * `prior` is the folder name pinned by the first pass; it wins when both are person folders.
+ */
+export function keepFirstFolderName(prior: unknown, next: string | undefined): string | undefined {
+  if (!next) return next
+  return typeof prior === "string" && prior.startsWith(FOLDER_PREFIX) ? prior : next
 }
 
 export interface ClosureDestination {
@@ -116,6 +150,12 @@ export interface ClosureDestination {
   kind: ClosureTarget["kind"]
   /** the plain-English "check this" line for staff, or null when everything agreed */
   disagreement: string | null
+  /**
+   * The owner id the saver puts in the stored files' keys (`form-summary:<owner>:closure:<token>`): the person for "person-storage:…", the
+   * company for "account-storage:…" AND for a company that kept a Drive folder id (the saver then redirects the files into the company's
+   * storage — 262 of the 275 companies with live storage on production still have one). Used to find the files again; null = not a storage.
+   */
+  storageOwnerId: string | null
 }
 
 /** The person's companies plus the job's linked one, as comparable candidates. THROWS on a read error (the caller retries). */
@@ -152,8 +192,10 @@ export async function resolveClosureDestination(p: {
     const folderId = await resolveClosureFolder({ accountId: target.accountId, contactId: p.contactId, clientName: p.clientName })
     // The company has no storage of its own yet, so the answer is the PERSON's storage: keep the package tidy in its own folder instead of
     // mixing it into "Personal documents" (no disagreement — the company IS the one being closed).
-    if (folderId.startsWith("person-storage:")) return { folderId, storeRootSubFolder: closureFolderName(typedName), kind: "company", disagreement: null }
-    return { folderId, kind: "company", disagreement: null }
+    const marker = parseStorageMarker(folderId)
+    if (marker?.kind === "contact") return { folderId, storeRootSubFolder: closureFolderName(typedName), kind: "company", disagreement: null, storageOwnerId: marker.id }
+    // "account-storage:<id>" or the company's Drive folder id (which the saver turns into the company's storage): the company owns the files.
+    return { folderId, kind: "company", disagreement: null, storageOwnerId: target.accountId }
   }
 
   // Another company (or a disagreement): the PERSON's storage, never a company's.
@@ -166,5 +208,5 @@ export async function resolveClosureDestination(p: {
         matched: match.status === "one" ? nameOf(match.id) : null,
       })
     : null
-  return { folderId, storeRootSubFolder: closureFolderName(typedName), kind: "other_company", disagreement }
+  return { folderId, storeRootSubFolder: closureFolderName(typedName), kind: "other_company", disagreement, storageOwnerId: parseStorageMarker(folderId)?.id ?? null }
 }

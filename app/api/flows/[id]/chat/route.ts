@@ -99,7 +99,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     // service_delivery_id; matching on (topic + account) surfaces it here too.
     const { data: sd } = await supabaseAdmin
       .from('service_deliveries')
-      .select('id, service_type, account_id, contact_id, due_date, stage_entered_at, created_at')
+      .select('id, service_type, service_name, account_id, contact_id, due_date, stage_entered_at, created_at')
       .eq('id', serviceDeliveryId)
       .single()
 
@@ -214,7 +214,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // Resolve the flow's account + topic from the SD.
     const { data: sd, error: sdErr } = await supabaseAdmin
       .from('service_deliveries')
-      .select('id, service_type, account_id, contact_id, due_date, stage_entered_at, created_at')
+      .select('id, service_type, service_name, account_id, contact_id, due_date, stage_entered_at, created_at')
       .eq('id', serviceDeliveryId)
       .single()
     if (sdErr || !sd) {

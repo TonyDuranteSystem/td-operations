@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { resolveMfaGate, isWithinGrace } from '@/lib/auth/mfa-gate'
+import { resolveMfaGate, isWithinGrace, REVIEW_DEMO_MAX_DAYS } from '@/lib/auth/mfa-gate'
 import {
   signMfaRememberDevice,
   verifyMfaRememberDevice,
@@ -185,5 +185,49 @@ describe('backup codes', () => {
   it('different codes hash differently', () => {
     expect(hashBackupCode('AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-A'))
       .not.toBe(hashBackupCode('BBBBB-BBBBB-BBBBB-BBBBB-BBBBB-B'))
+  })
+})
+
+// The App Store review practice login (TD Social, 6 Nov 2026): the ONE exception to "marketing logins are strict".
+describe('resolveMfaGate — the App Store review practice login', () => {
+  const DAY = 86_400_000
+  const base = { subject: true, strict: true, exempt: false, hasVerifiedFactor: false, aal: 'aal1' as const, rememberedDevice: false, graceUntilRaw: undefined, now: NOW }
+  /** the login's app_metadata: a window from `from` days ago... to `until` days from now */
+  const win = (until: number, from = -1) => ({ role: 'marketing', review_demo_from: new Date(NOW + from * DAY).toISOString(), review_demo_until: new Date(NOW + until * DAY).toISOString() })
+  const live = win(30)
+
+  it('a marketing login with no authenticator inside a live window passes with its password alone', () => {
+    expect(resolveMfaGate({ ...base, reviewDemoMeta: live })).toBe('allow')
+  })
+  it('the same login without the flag is still sent to enrol (strict stays strict)', () => {
+    expect(resolveMfaGate({ ...base })).toBe('enroll')
+    for (const m of [undefined, null, {}, { role: 'marketing' }]) expect(resolveMfaGate({ ...base, reviewDemoMeta: m })).toBe('enroll')
+  })
+  it('an expired or not-yet-started window frees nothing', () => {
+    expect(resolveMfaGate({ ...base, reviewDemoMeta: win(-1, -10) })).toBe('enroll')
+    expect(resolveMfaGate({ ...base, reviewDemoMeta: win(0, -10) })).toBe('enroll')
+    expect(resolveMfaGate({ ...base, reviewDemoMeta: win(30, 2) })).toBe('enroll')
+  })
+  it('a window written longer than the ceiling is never honoured, now or later (a typo must not become a long password-only login)', () => {
+    expect(resolveMfaGate({ ...base, reviewDemoMeta: win(REVIEW_DEMO_MAX_DAYS + 5) })).toBe('enroll')
+    const far = win(365)
+    expect(resolveMfaGate({ ...base, reviewDemoMeta: far })).toBe('enroll')
+    expect(resolveMfaGate({ ...base, now: NOW + 300 * DAY, reviewDemoMeta: far })).toBe('enroll')
+    expect(resolveMfaGate({ ...base, reviewDemoMeta: win(REVIEW_DEMO_MAX_DAYS - 1) })).toBe('allow')
+  })
+  it('a deadline with no start date, and garbage values, fail closed', () => {
+    expect(resolveMfaGate({ ...base, reviewDemoMeta: { review_demo_until: new Date(NOW + 30 * DAY).toISOString() } })).toBe('enroll')
+    for (const bad of ['', 'soon', 'not a date', true, 1, {}, [], 'NaN']) {
+      expect(resolveMfaGate({ ...base, reviewDemoMeta: { review_demo_from: new Date(NOW - DAY).toISOString(), review_demo_until: bad } }), String(bad)).toBe('enroll')
+    }
+  })
+  it('a login that holds an authenticator is still challenged (the flag never weakens a protected account)', () => {
+    expect(resolveMfaGate({ ...base, hasVerifiedFactor: true, reviewDemoMeta: live })).toBe('verify')
+    expect(resolveMfaGate({ ...base, hasVerifiedFactor: true, aal: 'aal2', reviewDemoMeta: live })).toBe('allow')
+  })
+  it('staff and every other subject that is not strict ignore the flag (they keep their own rules)', () => {
+    expect(resolveMfaGate({ ...base, strict: false, reviewDemoMeta: live })).toBe('enroll')
+    expect(resolveMfaGate({ ...base, strict: undefined, reviewDemoMeta: live })).toBe('enroll')
+    expect(resolveMfaGate({ ...base, subject: false, strict: false, reviewDemoMeta: live })).toBe('allow')
   })
 })

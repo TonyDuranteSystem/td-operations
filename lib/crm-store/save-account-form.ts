@@ -235,13 +235,22 @@ async function closureDefaultDeps(): Promise<ClosureFilingDeps> {
  *   - the summary is saved but some uploaded file is missing/unreadable → file what exists, ONE alarm, reviewable.
  */
 export async function fileClosureSubmission(
-  sub: { id?: string; token: string; account_id: string | null; contact_id?: string | null; contact_name?: string | null; upload_paths: string[] | null; completed_at: string | null },
+  sub: {
+    id?: string; token: string; account_id: string | null; contact_id?: string | null; contact_name?: string | null; upload_paths: string[] | null; completed_at: string | null
+    /** the person's "Company closure_<name>" folder the wizard pinned this package to (lib/forms/closure-pinned-folder.ts), if it did */
+    filedInPersonFolder?: string | null
+  },
   submitted: Record<string, unknown>,
   companyName: string,
   route: string,
   deps?: ClosureFilingDeps,
 ): Promise<ClosureFilingOutcome> {
   const d = deps ?? (await closureDefaultDeps())
+  // The wizard deliberately kept this package with the PERSON (the name / EIN the client wrote did not match the company the job is linked
+  // to). Filing it again under that company would put another company's papers in its storage — the review must not undo that decision.
+  if (sub.account_id && sub.filedInPersonFolder) {
+    return { ok: true, lines: [`ℹ️ The wizard already filed this package in the person's folder "${sub.filedInPersonFolder}" (what the client wrote did not match the company this job is linked to), so it was NOT filed again in the company's storage. The form is marked reviewed.`], missingUploads: [] }
+  }
   let saved: SaveAccountFormResult
   if (!sub.account_id) {
     // A closure form with no company (a lead or a person who has no company record): a PERSON's package is filed in their own

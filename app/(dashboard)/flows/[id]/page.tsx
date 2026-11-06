@@ -31,7 +31,7 @@ export const dynamic = 'force-dynamic'
 export default async function FlowWorkspacePage({ params, searchParams }: { params: { id: string }; searchParams?: { guide?: string | string[] } }) {
   const { data: sd } = await supabaseAdmin
     .from('service_deliveries')
-    .select('id, service_type, stage, stage_order, status, assigned_to, due_date, stage_entered_at, created_at, account_id, contact_id')
+    .select('id, service_type, service_name, stage, stage_order, status, assigned_to, due_date, stage_entered_at, created_at, account_id, contact_id')
     .eq('id', params.id)
     .single()
 

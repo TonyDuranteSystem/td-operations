@@ -48,7 +48,7 @@ interface CommonRow {
 }
 
 /** Rebuild a pinned ArchivePlan from meta written at submission time, or null. */
-function pinnedPlan(meta: Record<string, unknown> | null | undefined): ArchivePlan | null {
+export function pinnedPlan(meta: Record<string, unknown> | null | undefined): ArchivePlan | null {
   const p = (meta ?? {})["pinned_plan"] as Partial<ArchivePlan> | undefined
   if (!p || typeof p.folderId !== "string" || !p.folderId) return null
   if (typeof p.bucket !== "string" || !p.bucket) return null
@@ -59,6 +59,9 @@ function pinnedPlan(meta: Record<string, unknown> | null | undefined): ArchivePl
     configKey: p.configKey,
     uploadPaths: Array.isArray(p.uploadPaths) ? p.uploadPaths.filter((x): x is string => typeof x === "string") : [],
     companyName: typeof p.companyName === "string" ? p.companyName : undefined,
+    // closure for "another company": the folder under the person's storage the package was pinned to (without it the retry filed the missing
+    // files at the top of Personal documents and split the package)
+    ...(typeof p.storeRootSubFolder === "string" && p.storeRootSubFolder ? { storeRootSubFolder: p.storeRootSubFolder } : {}),
   }
 }
 

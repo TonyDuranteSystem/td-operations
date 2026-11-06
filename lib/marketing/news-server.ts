@@ -25,7 +25,9 @@ const COLS = "id, team_id, title, body, title_it, body_it, link_key, audience, f
 const NEWS_CAP = 50
 
 /** The posts this person may read, newest first, each with whether he has not opened it yet. */
-export async function listNewsFor(ctx: Pick<MarketingContext, "team" | "user" | "permissions">): Promise<NewsItem[]> {
+export async function listNewsFor(ctx: Pick<MarketingContext, "team" | "user" | "permissions" | "reviewDemo">): Promise<NewsItem[]> {
+  // the App Store review practice login reads NO news: program-wide posts (no team) are written for the real teams, and the cap to chat + reading leads must not leak them
+  if (ctx.reviewDemo) return []
   try {
     const { data, error } = await db().from("marketing_news").select(COLS).eq("status", "posted")
       .or(`team_id.is.null,team_id.eq.${ctx.team.id}`).order("posted_at", { ascending: false }).limit(NEWS_CAP)
@@ -70,6 +72,7 @@ async function loadPeople(): Promise<Person[]> {
     const bundles = (await getMarketingSetting("permission_bundles", t.id)) as Record<string, string[]>
     for (const m of await listMembers(t.id)) {
       if (m.status !== "active" || !m.user_id) continue
+      if (m.review_demo) continue // the App Store review practice login is never a news reader or a news alert target
       out.push({ id: m.user_id as string, name: personName(m.email), email: m.email, teamId: t.id, perms: effectivePermissions({ memberRole: m.member_role as "owner" | "member", bundle: m.bundle, bundles, extra: m.permissions }) })
     }
   }

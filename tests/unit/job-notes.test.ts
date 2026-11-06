@@ -98,7 +98,8 @@ describe("the client chat", () => {
     const code = read("app/api/flows/[id]/chat/route.ts")
     // eslint-disable-next-line no-template-curly-in-string -- the literal text of the filter in the route
     expect(code).toContain("and(contact_id.eq.${contactId},account_id.is.null)")
-    expect(code).toContain("select('id, service_type, account_id, contact_id, due_date, stage_entered_at, created_at')")
+    // service_name rides along since 2026-11-05: a Tax Return pipeline that names its own tax year ("Tax Return - Co 2026") must give the right chat tab.
+    expect(code).toContain("select('id, service_type, service_name, account_id, contact_id, due_date, stage_entered_at, created_at')")
   })
   it("the chat window page uses the Calendar's guard and warns that messages go to the client", () => {
     const page = read("app/(dashboard)/flows/[id]/chat/page.tsx")
