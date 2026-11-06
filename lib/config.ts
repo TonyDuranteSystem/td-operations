@@ -35,6 +35,12 @@ export const CRM_BASE_URL = process.env.PUBLIC_CRM_BASE_URL || "https://crm.tony
 // Internal domain — OAuth issuer, QB callback, webhooks (exempt from domain check)
 export const INTERNAL_BASE_URL = "https://td-operations.vercel.app"
 
+// The free intro-call booking page a referred friend lands on (Antonio's Calendly account name + the
+// "Free meet&greet call" event slug). If the Calendly account is renamed the old address 404s and every
+// referral link dead-ends — that happened on 2026-11-01 (antoniodurante → antonionoeldurante). Change it
+// HERE only; tests/unit/referral-booking-url.test.ts fails if the old name comes back anywhere in code.
+export const CALENDLY_BOOKING_URL = "https://calendly.com/antonionoeldurante/free-meet-greet-call"
+
 // Tony Durante LLC — single source of truth for company info used in invoices, emails, PDFs
 export const TD_COMPANY = {
   name: "Tony Durante LLC",
