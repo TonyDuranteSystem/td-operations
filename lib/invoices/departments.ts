@@ -107,6 +107,16 @@ export function departmentFilterMatches(filter: DepartmentFilter, storedDepartme
   return storedDepartmentId === filter.id
 }
 
+/**
+ * Adds the department filter to a payments query builder IN PLACE (call it before the query is awaited, so it comes before any limit).
+ * Takes `unknown` and narrows inside: the joined selects make the real builder types too deep for TypeScript to compare.
+ */
+export function applyDepartmentFilter(query: unknown, filter: DepartmentFilter): void {
+  const q = query as { is: (c: string, v: null) => unknown; eq: (c: string, v: string) => unknown }
+  if (filter.kind === "default") q.is("department_entry_id", null)
+  else if (filter.kind === "department") q.eq("department_entry_id", filter.id)
+}
+
 export interface DepartmentSwitch {
   slug: string
   label: string

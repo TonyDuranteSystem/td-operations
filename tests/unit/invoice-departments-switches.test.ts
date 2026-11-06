@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from "vitest"
 import { readFileSync } from "node:fs"
-import { buildDepartmentSwitches, departmentFilterMatches, resolveDepartmentFilter } from "@/lib/invoices/departments"
+import { applyDepartmentFilter, buildDepartmentSwitches, departmentFilterMatches, resolveDepartmentFilter } from "@/lib/invoices/departments"
 
 const DEFAULT_ID = "11111111-1111-1111-1111-111111111111"
 const MARKETING_ID = "22222222-2222-2222-2222-222222222222"
@@ -57,6 +57,25 @@ describe("departmentFilterMatches", () => {
   })
 })
 
+describe("applyDepartmentFilter", () => {
+  const stub = () => {
+    const calls: Array<[string, string, unknown]> = []
+    return { calls, is: (c: string, v: null) => { calls.push(["is", c, v]) }, eq: (c: string, v: string) => { calls.push(["eq", c, v]) } }
+  }
+  it("all adds nothing", () => {
+    const q = stub(); applyDepartmentFilter(q, { kind: "all" })
+    expect(q.calls).toEqual([])
+  })
+  it("default keeps only invoices with nothing stored", () => {
+    const q = stub(); applyDepartmentFilter(q, { kind: "default" })
+    expect(q.calls).toEqual([["is", "department_entry_id", null]])
+  })
+  it("a department keeps only its own id", () => {
+    const q = stub(); applyDepartmentFilter(q, { kind: "department", id: MARKETING_ID })
+    expect(q.calls).toEqual([["eq", "department_entry_id", MARKETING_ID]])
+  })
+})
+
 describe("buildDepartmentSwitches", () => {
   const rows = [
     { department_entry_id: null }, { department_entry_id: null }, { department_entry_id: undefined },
@@ -97,6 +116,13 @@ describe("guard: the Finance page applies the department BEFORE the list is cut"
   })
   it("a broken catalog is caught and the screen falls back to showing everything", () => {
     expect(page).toMatch(/catch \(e\) \{\s*console\.error\('\[finance\] invoice departments unavailable/)
+  })
+  it("a failed slice of the all-invoices read stops the screen instead of leaving totals short", () => {
+    expect(page).toMatch(/if \(pageError\) throw new Error/)
+  })
+  it("a selected client hidden by the switch gets a message, not the plain prompt", () => {
+    const tab = readFileSync("app/(dashboard)/finance/clients-invoices-tab.tsx", "utf8")
+    expect(tab).toContain("No invoices for this client here")
   })
   it("the all-invoices read pages through 1000-row slices", () => {
     expect(page).toContain(".range(from, from + 999)")

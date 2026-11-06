@@ -16,6 +16,7 @@ import {
 import { isCardFeeEnabled, getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
 import {
   listDepartments,
+  applyDepartmentFilter,
   resolveDepartmentFilter,
   departmentFilterMatches,
   buildDepartmentSwitches,
@@ -78,13 +79,15 @@ export default async function FinancePage({
   }
   const invoiceSummary: SummaryRow[] = []
   for (let from = 0; ; from += 1000) {
-    const { data: page } = await supabaseAdmin
+    const { data: page, error: pageError } = await supabaseAdmin
       .from('payments')
       .select('account_id, invoice_status, total, amount_paid, amount_due, department_entry_id')
       .not('invoice_status', 'is', null)
       .not('invoice_status', 'in', '("Cancelled","Split")')
       .order('id')
       .range(from, from + 999)
+    // A failed slice must stop the screen, not quietly leave the totals and department counts short.
+    if (pageError) throw new Error(`Finance: could not read invoices (${pageError.message})`)
     invoiceSummary.push(...((page ?? []) as SummaryRow[]))
     if (!page || page.length < 1000) break
   }
@@ -102,14 +105,8 @@ export default async function FinancePage({
     console.error('[finance] invoice departments unavailable, showing all invoices:', e instanceof Error ? e.message : e)
   }
   const activeDept = deptFilter.kind === 'all' ? null : (searchParams.dept ?? null)
-  // Applies the department filter to a payments query (before any limit, so the filtered list is not cut short).
-  // The query builders change in place when a filter is added, so this needs no return value (and no deep generic typing).
-  // It takes `unknown` and narrows inside: the joined selects make the real builder types too deep for TypeScript to compare.
-  const applyDept = (query: unknown): void => {
-    const q = query as { is: (c: string, v: null) => unknown; eq: (c: string, v: string) => unknown }
-    if (deptFilter.kind === 'default') q.is('department_entry_id', null)
-    else if (deptFilter.kind === 'department') q.eq('department_entry_id', deptFilter.id)
-  }
+  // Applies the department filter to a payments query before it is awaited (so before any limit).
+  const applyDept = (query: unknown): void => applyDepartmentFilter(query, deptFilter)
 
   // Aggregate per account + track contact-only (unlinked) payments separately
   const emptyBucket = () => ({
