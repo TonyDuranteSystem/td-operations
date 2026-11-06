@@ -28,6 +28,9 @@ import { TalkComposer, type TalkComposerMode, type TalkSendInput } from '@/compo
 import { TalkMessageSheet } from '@/components/talk/talk-sheet'
 import { TalkVoiceSwitch, TalkVoiceWakeBar } from '@/components/talk/talk-voice'
 import { AppYouButton } from '@/components/app-mode/app-you-button'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
+import { useTalkViewerId } from '@/components/talk/talk-viewer'
+import { afterListChoice, earlyChatChoice, fastOpenEnabled, TalkSavedStore } from '@/lib/talk/talk-cache'
 import { TalkGroupInfo, TalkNewGroup } from '@/components/talk/talk-group-sheets'
 
 const LAST_OPENED_KEY = 'td-talk-last-chat'
@@ -46,6 +49,21 @@ function Avatar({ name, id, size = 'h-10 w-10 text-sm' }: { name: string; id: st
       {initials(name)}
     </span>
   )
+}
+
+/** What a chat's messages answer holds that the screen uses. */
+interface ChatAnswer {
+  messages?: TalkMessage[]
+  has_more?: boolean
+  peer_read_at?: string | null
+  peer_delivered_at?: string | null
+  members?: unknown
+  member_reads?: unknown
+  member_delivered?: unknown
+}
+
+function phoneStorage(): Storage | null {
+  try { return window.localStorage } catch { return null }
 }
 
 function readLastOpened(): string | null {
@@ -68,6 +86,19 @@ function writeLastOpened(id: string | null) {
 export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/talk` (the app) or `/td-talk` (the CRM tab) — the address it keeps the open chat in. */ base?: string } = {}) {
   const searchParams = useSearchParams()
   const urlThread = searchParams.get('thread')
+  // Inside the TD Social phone app TD Talk opens FAST (dev job 2072bc3e): it shows the chat list and chat saved on the phone at once and asks for
+  // the chat you were in together with the list. The CRM tab and a normal browser open the way they always did.
+  const appMode = useAppMode()
+  const viewerId = useTalkViewerId()
+  const fastOpen = fastOpenEnabled(appMode, base === TALK_BASE)
+  const storeRef = useRef<TalkSavedStore | null>(null)
+  const getStore = useCallback((): TalkSavedStore | null => {
+    if (!fastOpen || !viewerId) return null
+    if (!storeRef.current) storeRef.current = new TalkSavedStore(viewerId, phoneStorage())
+    return storeRef.current
+  }, [fastOpen, viewerId])
+  const [showingSaved, setShowingSaved] = useState(false)
+  const listConfirmedRef = useRef(false)
 
   const [threads, setThreads] = useState<TalkThread[]>([])
   const [members, setMembers] = useState<TalkMember[]>([])
@@ -140,23 +171,65 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
 
   // the unread count on the app icon and in the tab title — the standalone app only (the CRM tab has its own red dot in the menu)
   const unreadAll = unreadTotal(chats, selectedId, isBeingViewed())
-  useEffect(() => { if (base === TALK_BASE) applyUnreadIndicators(unreadAll) }, [unreadAll, base])
+  useEffect(() => { if (base === TALK_BASE && !showingSaved) applyUnreadIndicators(unreadAll) }, [unreadAll, base, showingSaved])
   useEffect(() => () => { if (base === TALK_BASE) clearUnreadIndicators() }, [base])
+
+  // puts a chat-list answer on screen: the server's, or (phone app) the copy saved last time while the server's is on its way
+  const applyList = useCallback((d: { threads?: unknown; members?: unknown; current_user_id?: unknown }) => {
+    setThreads((d.threads ?? []) as TalkThread[])
+    setMembers(((d.members ?? []) as Array<{ id: string; name: string }>).map(m => ({ id: m.id, name: m.name })))
+    const me = typeof d.current_user_id === 'string' ? d.current_user_id : null
+    setMeId(me)
+    meIdRef.current = me
+  }, [])
 
   const loadThreads = useCallback(async (): Promise<TalkThread[] | null> => {
     try {
       const r = await fetch('/api/team/threads')
       if (!r.ok) throw new Error('Could not load your chats.')
       const d = await r.json()
-      setThreads(d.threads ?? [])
+      applyList(d)
       reportDelivered(d.threads ?? []) // this device now HAS these messages: tell the sender (grey double tick)
-      setMembers((d.members ?? []).map((m: { id: string; name: string }) => ({ id: m.id, name: m.name })))
-      setMeId(d.current_user_id ?? null)
-      meIdRef.current = d.current_user_id ?? null
+      listConfirmedRef.current = true
+      setShowingSaved(false)
+      getStore()?.saveList(d)
       return d.threads ?? []
     } catch (e) {
       if (!initialisedRef.current) setBootError(e instanceof Error ? e.message : 'Could not load your chats.')
       return null
+    }
+  }, [applyList, getStore])
+
+  // puts a chat's messages answer on screen: the server's, or (phone app) the newest messages saved last time while the server's is on its way
+  const applyChat = useCallback((d: ChatAnswer, silent: boolean) => {
+    const incoming = (d.messages ?? []) as TalkMessage[]
+    // the live window slides forward when new messages arrive: what slid out must not fall into a gap between the older pages and the window
+    if (olderRef.current.length > 0) {
+      const slid = slidOutOfWindow(windowRef.current, incoming)
+      if (slid.length > 0) { olderRef.current = mergeEarlier(olderRef.current, slid); setOlder(olderRef.current) }
+    }
+    setMessages(prev => {
+      // MERGE, never replace: a poll that started before a send (or a realtime message) and answers after it would
+      // otherwise wipe that newer message until the next poll. Anything local that the snapshot does not have yet and
+      // is not older than the snapshot is kept (council finding, 2026-10-09).
+      const merged = mergeSnapshot(prev, incoming)
+      if (silent && messageSignature(merged) === messageSignature(prev)) return prev
+      return merged
+    })
+    // does the chat have messages older than the live window? (once older pages are loaded, their own answer rules)
+    if (olderRef.current.length === 0) setHasMore(d.has_more === true)
+    setPeerReadAt(d.peer_read_at ?? null)
+    setPeerDeliveredAt(d.peer_delivered_at ?? null)
+    if (Array.isArray(d.members)) setGroupMemberIds(d.members as string[])
+    if (Array.isArray(d.member_reads)) {
+      const map: Record<string, string> = {}
+      for (const r of d.member_reads as Array<{ user_id: string; last_read_at: string }>) map[r.user_id] = r.last_read_at
+      setMemberReads(map)
+    }
+    if (Array.isArray(d.member_delivered)) {
+      const dm: Record<string, string> = {}
+      for (const r of d.member_delivered as Array<{ user_id: string; delivered_at: string }>) dm[r.user_id] = r.delivered_at
+      setMemberDelivered(dm)
     }
   }, [])
 
@@ -170,41 +243,15 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
       const d = await r.json()
       if (selectedIdRef.current !== threadId) return // switched chats while loading
       if (opts.silent && seq !== changeSeqRef.current) return // a kept change was confirmed while this refresh was on its way: its answer is older than what is on screen; the next refresh brings the truth
-      const incoming = (d.messages ?? []) as TalkMessage[]
-      // the live window slides forward when new messages arrive: what slid out must not fall into a gap between the older pages and the window
-      if (olderRef.current.length > 0) {
-        const slid = slidOutOfWindow(windowRef.current, incoming)
-        if (slid.length > 0) { olderRef.current = mergeEarlier(olderRef.current, slid); setOlder(olderRef.current) }
-      }
-      setMessages(prev => {
-        // MERGE, never replace: a poll that started before a send (or a realtime message) and answers after it would
-        // otherwise wipe that newer message until the next poll. Anything local that the snapshot does not have yet and
-        // is not older than the snapshot is kept (council finding, 2026-10-09).
-        const merged = mergeSnapshot(prev, incoming)
-        if (opts.silent && messageSignature(merged) === messageSignature(prev)) return prev
-        return merged
-      })
-      // does the chat have messages older than the live window? (once older pages are loaded, their own answer rules)
-      if (olderRef.current.length === 0) setHasMore(d.has_more === true)
-      setPeerReadAt(d.peer_read_at ?? null)
-      setPeerDeliveredAt(d.peer_delivered_at ?? null)
-      if (Array.isArray(d.members)) setGroupMemberIds(d.members as string[])
-      if (Array.isArray(d.member_reads)) {
-        const map: Record<string, string> = {}
-        for (const r of d.member_reads as Array<{ user_id: string; last_read_at: string }>) map[r.user_id] = r.last_read_at
-        setMemberReads(map)
-      }
-      if (Array.isArray(d.member_delivered)) {
-        const dm: Record<string, string> = {}
-        for (const r of d.member_delivered as Array<{ user_id: string; delivered_at: string }>) dm[r.user_id] = r.delivered_at
-        setMemberDelivered(dm)
-      }
+      applyChat(d, !!opts.silent)
+      getStore()?.saveChat(threadId, d)
     } catch (e) {
-      if (!opts.silent) toast.error(e instanceof Error ? e.message : 'Could not load this chat.')
+      // before the real chat list is in, the chat shown early is a guess that may be gone: no error pop-up for a guess
+      if (!opts.silent && listConfirmedRef.current) toast.error(e instanceof Error ? e.message : 'Could not load this chat.')
     } finally {
       if (!opts.silent) setLoadingMsgs(false)
     }
-  }, [])
+  }, [applyChat, getStore])
 
   const select = useCallback((id: string | null) => {
     setSelectedId(id)
@@ -254,20 +301,44 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     go()
   }, [])
 
-  // first load: threads, then straight into a conversation
+  // first load: threads, then straight into a conversation. In the phone app the screen does not wait for the threads: it shows the copy saved last
+  // time at once (or, with no copy, asks for the chat you were in together with the list instead of after it); the real answer then corrects it.
   useEffect(() => {
     let cancelled = false
     ;(async () => {
+      const wanted = new URLSearchParams(window.location.search).get('thread')
+      let shown: string | null = null
+      if (fastOpen) {
+        const saved = getStore()?.read() ?? null
+        if (saved) {
+          applyList(saved.list)
+          initialisedRef.current = true // a failed refresh must not wipe what is on screen
+          setShowingSaved(true)
+          const id = startThreadId(chatThreads(saved.list.threads as TalkThread[]), { wanted, lastOpened: readLastOpened() })
+          if (id) {
+            select(id); shown = id
+            // a message link (?message=) loads the normal way: its jump needs the real window
+            if (saved.chat?.id === id && !pendingJumpRef.current) applyChat(saved.chat.payload as ChatAnswer, false)
+          }
+          setBooting(false)
+        } else {
+          const guess = earlyChatChoice(wanted, readLastOpened())
+          if (guess) { select(guess); shown = guess }
+        }
+      }
       const list = await loadThreads()
       if (cancelled || !list) { setBooting(false); return }
       initialisedRef.current = true
-      const all = chatThreads(list)
-      const first = startThreadId(all, { wanted: new URLSearchParams(window.location.search).get('thread'), lastOpened: readLastOpened() })
-      if (first) select(first)
+      const first = startThreadId(chatThreads(list), { wanted, lastOpened: readLastOpened() })
+      if (fastOpen) {
+        const action = afterListChoice(shown, first)
+        if (action === 'select') select(first)
+        else if (action === 'clear') select(null)
+      } else if (first) select(first)
       setBooting(false)
     })()
     return () => { cancelled = true }
-  }, [loadThreads, select])
+  }, [loadThreads, select, applyList, applyChat, getStore, fastOpen])
 
   // a tapped notification (or any link) while the app is open: go to that chat
   useEffect(() => {
