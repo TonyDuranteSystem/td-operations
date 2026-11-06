@@ -501,11 +501,14 @@ describe("computeHasWizardPending — Tax Return follows the tax wizard's own el
     expect(await computeHasWizardPending(vairon)).toBe(true)
   })
 
-  it("locked review (under_review) keeps the entrance, matching the wizard page's read-only view", async () => {
-    sdAccountFixture = [{ service_type: "Tax Return" }]
-    resolveTaxMock.mockResolvedValue(closedBecause("under_review"))
-    expect(await computeHasWizardPending(vairon)).toBe(true)
-  })
+  it.each(["under_review", "confirmed"] as const)(
+    "locked review (%s): nothing can be completed, so NO sidebar entry (the wizard page still shows the read-only view by its own links)",
+    async (reason) => {
+      sdAccountFixture = [{ service_type: "Tax Return" }]
+      resolveTaxMock.mockResolvedValue(closedBecause(reason))
+      expect(await computeHasWizardPending(vairon)).toBe(false)
+    },
+  )
 
   it("standalone intake (company_info) → sidebar entry stays", async () => {
     sdAccountFixture = [{ service_type: "Tax Return" }]

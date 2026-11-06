@@ -286,16 +286,21 @@ export function taxWizardSurfaceVisible(e: TaxWizardEligibility): boolean {
 
 /**
  * Should a client ENTRANCE (the portal menu's "Complete Setup" item) point at
- * the wizard page for a tax return? Mirrors what the wizard page itself puts
- * in front of the client: the tax questionnaire (open / review / the locked
- * read-only view) or, for standalone intake, the Company Information form.
- * A genuinely closed tax wizard (no open return, pre-wizard stage, company
- * formed after the tax year) has nothing to show, so the entrance must not
- * promise one — Vairon Marketing LLC kept "Completa Registrazione" for a return
- * that was already filed.
+ * the wizard page for a tax return? An entrance promises something to FILL IN,
+ * so it follows the portal home cards (open | review) plus standalone intake
+ * (company_info). A closed tax wizard (no open return, pre-wizard stage, company
+ * formed after the tax year) has nothing to fill in — Vairon Marketing LLC kept
+ * "Completa Registrazione" for a return that was already filed.
+ *
+ * The LOCKED read-only view (under_review / confirmed) is deliberately NOT an
+ * entrance: nothing can be completed there (wizard-submit answers 409), and since
+ * Part 2 (2026-11-06) staff Approve writes `confirmed` directly, so that state is
+ * where every approved return waits until the job is filed. The wizard page still
+ * renders the read-only view for it (taxWizardSurfaceVisible, unchanged) via its
+ * own links (tax banner Edit button, the company's service page, financials review).
  */
 export function taxWizardEntranceVisible(e: TaxWizardEligibility): boolean {
-  return e.mode === "company_info" || taxWizardSurfaceVisible(e)
+  return e.mode === "company_info" || e.mode === "open" || e.mode === "review"
 }
 
 /** Human/actionable copy per closed reason, EN + IT, for R099-compliant

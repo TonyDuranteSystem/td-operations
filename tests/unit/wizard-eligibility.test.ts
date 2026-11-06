@@ -276,8 +276,8 @@ describe("taxWizardEntranceVisible — the portal menu 'Complete Setup' entrance
     ["company formed after the tax year → hidden", { formationDate: "2026-03-02" }, false],
     ["Wizard Available with an open row → shown", {}, true],
     ["client-editable review loop (approved) → shown", { submissions: [sub({ review_status: "approved" })] }, true],
-    ["locked review (under_review) keeps the read-only view, same as the wizard page → shown", { submissions: [sub({ review_status: "under_review" })] }, true],
-    ["locked review (confirmed) → shown", { submissions: [sub({ review_status: "confirmed" })] }, true],
+    ["locked review (under_review): read-only page only, nothing to complete → hidden", { submissions: [sub({ review_status: "under_review" })] }, false],
+    ["locked review (confirmed) — where every approved return sits after Part 2 → hidden", { submissions: [sub({ review_status: "confirmed" })] }, false],
     ["standalone intake (accountless) → Company Information form → shown", { accountless: true }, true],
     ["Company Data Pending stage → Company Information form → shown", { sds: [{ service_type: "Tax Return", stage: "Company Data Pending" }] }, true],
   ])("%s", (_label, partial, visible) => {
