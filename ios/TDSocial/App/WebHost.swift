@@ -21,8 +21,12 @@ final class WebHost: NSObject, ObservableObject, WKNavigationDelegate, WKUIDeleg
     @Published var currentPath: String?
     var onFinish: (() -> Void)?
     private var observers: [NSKeyValueObservation] = []
+    /// this host's own page, and whether its first load has started (a tab that is not on screen waits: see TabLoading)
+    let path: String
+    private(set) var started = false
 
-    init(path: String) {
+    init(path: String, loadNow: Bool = true) {
+        self.path = path
         let cfg = WKWebViewConfiguration()
         cfg.websiteDataStore = WKWebsiteDataStore.default()
         cfg.applicationNameForUserAgent = "\(ServerRules.userAgentToken)\(AppConfig.version)"   // the one thing that switches the web screens into app mode
@@ -45,16 +49,20 @@ final class WebHost: NSObject, ObservableObject, WKNavigationDelegate, WKUIDeleg
             webView.observe(\.canGoBack, options: [.initial, .new]) { [weak self] web, _ in Task { @MainActor in self?.canGoBack = web.canGoBack } },
             webView.observe(\.url, options: [.initial, .new]) { [weak self] web, _ in Task { @MainActor in self?.currentPath = web.url?.path } },
         ]
-        load(path)
+        if loadNow { load(path) }
     }
+
+    /// starts the first load if it has not started (a tab that waited is opened, or its turn in the background came)
+    func startIfNeeded() { if !started { load(path) } }
 
     func load(_ path: String) {
         failed = false
+        started = true
         guard let url = URL(string: AppConfig.serverURL.absoluteString + path) else { return }
         webView.load(URLRequest(url: url))
     }
 
-    func reload() { failed = false; if webView.url == nil { load("/") } else { webView.reload() } }
+    func reload() { failed = false; if webView.url == nil { load(path) } else { webView.reload() } }   // a page that never loaded tries ITS OWN page again
 
     // MARK: navigation
 

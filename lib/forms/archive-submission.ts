@@ -155,6 +155,8 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
           bucket: plan.bucket,
           resolveBucket: recipe.resolveBucket,
           fileNameOf: recipe.fileNameOf?.(r),
+          // closure for "another company": the whole package goes in the person's "Company closure_<name>" folder (pinned, so a retry files in the SAME one)
+          storeRootSubFolder: plan.storeRootSubFolder,
           // ITIN is person-keyed: a person whose files live in the new storage gets the package there (no Drive folder)
           person: formType === "itin" && typeof r["contact_id"] === "string" ? { contactId: r["contact_id"] as string, viaAccountId: (r["account_id"] as string | null) ?? null, name: plan.companyName } : undefined,
         },

@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { Providers } from '@/components/providers'
 import { TalkShell } from '@/components/talk/talk-shell'
+import { TalkViewerProvider } from '@/components/talk/talk-viewer'
 import { getAppMode } from '@/lib/app-mode/server'
 import { AppModeProvider } from '@/components/app-mode/app-mode-provider'
 
@@ -58,7 +59,9 @@ export default async function TalkLayout({ children }: { children: React.ReactNo
   return (
     <Providers>
       <AppModeProvider initial={appMode}>
-        <TalkShell sandbox={process.env.SANDBOX_MODE === '1'}>{children}</TalkShell>
+        <TalkViewerProvider userId={user.id}>
+          <TalkShell sandbox={process.env.SANDBOX_MODE === '1'}>{children}</TalkShell>
+        </TalkViewerProvider>
       </AppModeProvider>
     </Providers>
   )

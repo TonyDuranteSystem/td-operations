@@ -47,6 +47,19 @@ export function comparableChatNames(
   return out
 }
 
+/**
+ * The name the "Save this number as…" form starts with (Antonio, 2026-11-06: the form opened blank although WhatsApp had already given the name).
+ * The phone-saved name wins, then the name the sender uses; junk (empty, bare numbers, our own business name, "TD Team") gives nothing.
+ * Only a starting value in an editable box — never saved without the person pressing Save.
+ */
+export function suggestedSaveName(
+  groupName: string | null | undefined,
+  senderNames: Array<string | null | undefined>,
+  externalGroupId?: string | null,
+): string | null {
+  return comparableChatNames(groupName, senderNames, externalGroupId)[0] ?? null
+}
+
 export const CONTACT_PHONE_SLOTS = ["phone", "phone_2", "phone_3", "phone_4"] as const
 export type ContactPhoneSlot = (typeof CONTACT_PHONE_SLOTS)[number]
 
