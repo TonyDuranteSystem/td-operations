@@ -27,13 +27,15 @@ const MORE: Record<AppMoreAction, { label: string; icon: ReactNode }> = {
 
 const iconBtn = 'flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-zinc-600 hover:bg-zinc-100 disabled:opacity-50'
 
-export function AppThreadActions({ plan, unread, starred, busy, handlers }: {
+export function AppThreadActions({ plan, unread, starred, busy, handlers, compact = false }: {
   plan: AppThreadPlan
   /** the open email is currently unread (the read/unread button shows the opposite action) */
   unread: boolean
   starred: boolean
   busy: boolean
   handlers: AppThreadHandlers
+  /** only the "…" menu, at the right end of the title row (a WhatsApp chat: Reply would just scroll to the message box that is already on screen) */
+  compact?: boolean
 }) {
   const [open, setOpen] = useState(false)
   // Escape closes the "…" menu (a phone with a keyboard attached, or a screen reader's escape gesture)
@@ -45,8 +47,8 @@ export function AppThreadActions({ plan, unread, starred, busy, handlers }: {
   }, [open])
   return (
     // its own full-width row under the title (the approved mockup's action row): Reply, Archive, Unread, Delete share the width
-    <div className="flex w-full basis-full items-stretch gap-1" data-testid="app-thread-actions">
-      {plan.primary.map(key => {
+    <div className={compact ? 'ml-auto flex items-center' : 'flex w-full basis-full items-stretch gap-1'} data-testid="app-thread-actions">
+      {!compact && plan.primary.map(key => {
         const run = handlers[key]
         if (!run) return null
         if (key === 'reply') {

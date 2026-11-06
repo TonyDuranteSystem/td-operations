@@ -176,13 +176,30 @@ struct YouView: View {
                             Button(AppConfig.say(.alertsTurnOn)) { Task { await model.turnOnAlerts() } }
                             Button(AppConfig.say(.alertsOpenSettings)) { model.openIPhoneSettings() }
                         }
-                        if let on = me.prefs.whatsapp {
-                            Toggle("WhatsApp", isOn: Binding(get: { on }, set: { v in Task { await model.setAlert("whatsapp", v) } }))
+                        // the one switch for everything: ON while any tab still alerts; turning it off mutes every tab, turning it on brings them all back
+                        Toggle(AppConfig.say(.allAlerts), isOn: Binding(
+                            get: { me.tabs.contains { !me.prefs.mutedTabs.contains($0.id) } },
+                            set: { v in Task { await model.setMute(me.tabs.map { $0.id }, !v) } }))
+                    }
+                    Section(header: Text(AppConfig.say(.alertsByTab))) {
+                        ForEach(me.tabs) { tab in
+                            Toggle(TabPath.shortLabel(for: tab.id, fallback: tab.label), isOn: Binding(
+                                get: { !me.prefs.mutedTabs.contains(tab.id) },
+                                set: { v in Task { await model.setMute([tab.id], !v) } }))
                         }
-                        ForEach((me.prefs.email ?? [:]).keys.sorted(), id: \.self) { box in
-                            Toggle("Email · \(box)@", isOn: Binding(get: { me.prefs.email?[box] ?? false }, set: { v in Task { await model.setAlert("email:\(box)", v) } }))
+                    }
+                    if me.prefs.whatsapp != nil || !(me.prefs.email ?? [:]).isEmpty {
+                        Section(header: Text(AppConfig.say(.alertsWhichMessages))) {
+                            if let on = me.prefs.whatsapp {
+                                Toggle("WhatsApp", isOn: Binding(get: { on }, set: { v in Task { await model.setAlert("whatsapp", v) } }))
+                            }
+                            ForEach((me.prefs.email ?? [:]).keys.sorted(), id: \.self) { box in
+                                Toggle("Email · \(box)@", isOn: Binding(get: { me.prefs.email?[box] ?? false }, set: { v in Task { await model.setAlert("email:\(box)", v) } }))
+                            }
                         }
-                        if !me.isMarketingOnly {
+                    }
+                    if !me.isMarketingOnly {
+                        Section {
                             Button("Send me a test alert") { Task { testSent = await model.sendTestAlert() } }
                             if let ok = testSent { Text(ok ? "Sent. It should arrive in a few seconds." : "Could not send the test.").font(.footnote).foregroundColor(.secondary) }
                         }

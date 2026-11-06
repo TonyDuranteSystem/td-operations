@@ -22,6 +22,24 @@ public struct AppPrefs: Codable, Equatable {
     /// present only when the person has the Inbox tab: one switch per mailbox they may open
     public let email: [String: Bool]?
     public init(mutedTabs: [String] = [], whatsapp: Bool? = nil, email: [String: Bool]? = nil) { self.mutedTabs = mutedTabs; self.whatsapp = whatsapp; self.email = email }
+
+    /// The same settings with these tabs muted (true) or brought back (false). The You screen shows a switch change at once with this,
+    /// before the server has confirmed it; the server's own answer replaces it a moment later.
+    public func settingMute(_ tabIds: [String], _ muted: Bool) -> AppPrefs {
+        var set = Set(mutedTabs)
+        for t in tabIds { if muted { set.insert(t) } else { set.remove(t) } }
+        return AppPrefs(mutedTabs: set.sorted(), whatsapp: whatsapp, email: email)
+    }
+
+    /// The same settings with one "which new messages alert you" switch changed: key is "whatsapp" or "email:<mailbox>" (as the server takes it).
+    public func settingAlert(_ key: String, _ on: Bool) -> AppPrefs {
+        if key == "whatsapp" { return AppPrefs(mutedTabs: mutedTabs, whatsapp: whatsapp == nil ? nil : on, email: email) }
+        if key.hasPrefix("email:"), var boxes = email {
+            boxes[String(key.dropFirst("email:".count))] = on
+            return AppPrefs(mutedTabs: mutedTabs, whatsapp: whatsapp, email: boxes)
+        }
+        return self
+    }
 }
 
 public struct AppMe: Codable, Equatable {
@@ -49,4 +67,9 @@ public struct AppMe: Codable, Equatable {
     }
 
     public var isMarketingOnly: Bool { loginKind == "marketing" }
+
+    /// The same answer with other alert settings (everything else untouched).
+    public func withPrefs(_ prefs: AppPrefs) -> AppMe {
+        AppMe(ok: ok, user: user, loginKind: loginKind, tabs: tabs, notSetUp: notSetUp, prefs: prefs, counts: counts, badge: badge)
+    }
 }

@@ -178,7 +178,7 @@ export function PhonePlusButton({ onClick }: { onClick: () => void }) {
   )
 }
 
-export function PhonePlusSheet({ open, onClose, onEmoji, onAttach, onAi, aiBusy, attachBusy }: {
+export function PhonePlusSheet({ open, onClose, onEmoji, onAttach, onAi, aiBusy, attachBusy, attachNote }: {
   open: boolean
   onClose: () => void
   onEmoji: () => void
@@ -186,12 +186,15 @@ export function PhonePlusSheet({ open, onClose, onEmoji, onAttach, onAi, aiBusy,
   onAi: () => void
   aiBusy: boolean
   attachBusy: boolean
+  /** a standing reminder shown right under "Attach a file", the moment it matters (WhatsApp: no ID or tax documents) */
+  attachNote?: string
 }) {
   const pick = (fn: () => void) => () => { onClose(); fn() }
   return (
     <BottomSheet open={open} onClose={onClose} title="Add to your message">
       <SheetRow label="Emoji" onClick={pick(onEmoji)} />
       <SheetRow label="Attach a file" disabled={attachBusy} onClick={pick(onAttach)} />
+      {attachNote && <p className="border-t border-zinc-100 bg-amber-50 px-5 py-2 text-sm text-amber-900" data-testid="attach-note">{attachNote}</p>}
       <SheetRow label="AI suggest a reply" disabled={aiBusy} onClick={pick(onAi)} />
     </BottomSheet>
   )

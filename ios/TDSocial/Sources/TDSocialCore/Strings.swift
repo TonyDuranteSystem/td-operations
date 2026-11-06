@@ -7,6 +7,7 @@ public enum Msg: CaseIterable {
     case alertsTitle, alertsBody, alertsTurnOn, alertsNotNow, alertsOffStrip, alertsOpenSettings
     case youTitle, signOut, signedOutSheet
     case back, fileNotOpened, ok
+    case allAlerts, alertsByTab, alertsWhichMessages
 }
 
 public enum Strings {
@@ -36,6 +37,9 @@ public enum Strings {
         case .back: return "Back"
         case .fileNotOpened: return "Couldn't open this file. Try again."
         case .ok: return "OK"
+        case .allAlerts: return "All alerts"
+        case .alertsByTab: return "Alerts by tab"
+        case .alertsWhichMessages: return "Which new messages alert you"
         }
     }
 
@@ -61,6 +65,9 @@ public enum Strings {
         case .back: return "Indietro"
         case .fileNotOpened: return "Impossibile aprire il file. Riprova."
         case .ok: return "Va bene"
+        case .allAlerts: return "Tutti gli avvisi"
+        case .alertsByTab: return "Avvisi per scheda"
+        case .alertsWhichMessages: return "Quali nuovi messaggi ti avvisano"
         }
     }
 }

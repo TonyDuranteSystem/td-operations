@@ -1163,6 +1163,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                 onAi={handleAi}
                 aiBusy={suggesting || audioNoteRecorder.isRecording}
                 attachBusy={!!file || audioNoteRecorder.isRecording}
+                attachNote={isWabridgeLine ? "Don't send ID or tax documents over WhatsApp — use the portal instead." : undefined}
               />
             )}
             {replyTo && (
@@ -1293,7 +1294,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
               </div>
             )}
             {isWabridgeLine && (
-              <p className="app-tight text-[11px] text-zinc-400 px-1">
+              <p className="app-hide text-[11px] text-zinc-400 px-1">
                 Don&apos;t send ID or tax documents over WhatsApp — use the portal instead.
               </p>
             )}

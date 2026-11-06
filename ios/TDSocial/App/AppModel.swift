@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
     private var hosts: [String: WebHost] = [:]
     private let monitor = NWPathMonitor()
     private var checking = false
+    private var prefsEdits = 0   // counts switch changes on the You screen; a check that began before one is out of date
     private let askedKey = "alertsAsked.\(AppConfig.bundleId)"
     private let tokenKey = "lastPushToken.\(AppConfig.bundleId)"
 
@@ -42,11 +43,14 @@ final class AppModel: ObservableObject {
 
     // MARK: who am I
 
-    func check() async {
-        if checking { return }
+    /// `force` runs even while another check is under way (after a switch change the screen must re-read the server, not wait for the next minute).
+    func check(force: Bool = false) async {
+        if checking && !force { return }
         checking = true
+        let editsAtStart = prefsEdits
         defer { checking = false }
         let r = await API.request("/api/marketing/app/me")
+        if editsAtStart != prefsEdits { return }   // a switch changed while this answer was on its way: that change re-reads after its own save
         switch SessionCheck.classify(status: r.status, body: r.body) {
         case .signedIn(let me): apply(me)
         case .needsSignIn: if screen != .signedOut { enterSignedOut() }
@@ -143,8 +147,20 @@ final class AppModel: ObservableObject {
     // MARK: the You screen
 
     func setAlert(_ key: String, _ on: Bool) async {
+        if let m = me { me = m.withPrefs(m.prefs.settingAlert(key, on)) }   // the switch moves at once
+        prefsEdits += 1
         _ = await API.request("/api/marketing/app/prefs", method: "PUT", json: ["alerts": [key: on]])
-        await check()
+        await check(force: true)   // the server's answer wins (a failed save puts the switch back)
+    }
+
+    /// Mute (true) or unmute (false) whole tabs: a muted tab sends no alert and is left out of the icon number (the server's own rule).
+    func setMute(_ tabIds: [String], _ muted: Bool) async {
+        var change: [String: Bool] = [:]
+        for t in tabIds { change[t] = muted }
+        if let m = me { me = m.withPrefs(m.prefs.settingMute(tabIds, muted)) }   // the switch moves at once
+        prefsEdits += 1
+        _ = await API.request("/api/marketing/app/prefs", method: "PUT", json: ["mute": change])
+        await check(force: true)   // the server's answer wins (a failed save puts the switch back)
     }
 
     func sendTestAlert() async -> Bool {
