@@ -120,7 +120,7 @@ function Field({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <p className="text-xs text-zinc-500 mb-0.5">{label}</p>
-      <p className="font-medium text-zinc-900">{value || '\u2014'}</p>
+      <p className="font-medium text-zinc-900 break-words">{value || '\u2014'}</p>
     </div>
   )
 }

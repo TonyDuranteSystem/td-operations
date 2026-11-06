@@ -25,7 +25,6 @@ import {
   FilePen,
   PlusCircle,
   Landmark,
-  Palette,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { InvoicesMenuCallout } from '@/components/portal/invoices-menu-callout'
@@ -92,43 +91,46 @@ interface NavItem {
   partnerOnly?: boolean // if true, only show for partner portal
   teamAdminOnly?: boolean // if true, only show when canManageTeam is true (Portal Team Access)
   hintKey?: string // if set, the info-popover text uses nav.hint.<hintKey> instead of deriving it from key
+  needsCompany?: boolean // if true, only show once the client has at least one company (account)
 }
 
-// (NavGroup interface removed in PR 2 Step 7 — sections are now hard-coded
-// rather than data-driven, since there are exactly two: Personal + Companies.)
-
-// PR 2 Step 7 (2026-05-05) — sidebar restructure per Antonio's architectural
-// model: contact is the home, personal stuff at top, companies nested below.
-// No "My Profile vs My Company" toggle. Multi-LLC clients still get a switcher
-// inside the Companies section.
-
-// Personal section — items scoped to the contact (the person).
+// Antonio 2026-11-05 — the menu is ONE flat list. The "Personale" / "Aziende" headings are gone (they were the
+// PR 2 Step 7 split of person vs company), and so are the Profilo and TD Communication entries (those pages still
+// exist; only the menu entry went — Profilo's personal details now live on Panoramica, and suspended clients can
+// still reach /portal/profile and /portal/settings). The order below is Antonio's. Each item keeps its own
+// show/hide rule (tier, invoice hub, teammate capabilities); `needsCompany` items appear only once the client has
+// a company. La Mia Azienda sits at the bottom of the list: it is the only menu route to the Services and
+// Deadlines pages now that those cards left Panoramica.
 //
-// Invoices placement (Antonio 2026-05-05): "Lorenzo is just an individual
-// that bought the formation to create a company. Lorenzo, as an individual,
-// will see the invoice for 2,500 that he paid to buy the formation service.
-// After the company is created, he will use the invoice system."
-//
-// So /portal/invoices link follows context:
-//   - No company yet → "Invoices" appears in Personal (Lorenzo sees his
-//     personal formation receipt). Inserted at render time, not in this
-//     array, because it depends on accounts.length.
-//   - Company exists → "Invoices" appears under Company (the full
-//     Sales/Expenses/Vendors invoicing system).
-const personalItems: NavItem[] = [
+// Invoices placement (Antonio 2026-05-05): "Lorenzo is just an individual that bought the formation to create a
+// company. Lorenzo, as an individual, will see the invoice for 2,500 that he paid to buy the formation service.
+// After the company is created, he will use the invoice system." So with NO company yet the same slot holds the
+// personal variant (personalInvoicesItem below); with a company it is the full invoicing system.
+const mainItems: NavItem[] = [
+  { key: 'nav.overview', href: '/portal', icon: LayoutDashboard },
   { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
-  { key: 'nav.requestService', href: '/portal/services/request', icon: PlusCircle },
-  // ITIN Documents — conditional on the contact having an active ITIN SD at
-  // "Client Signing" stage (Phase C, 2026-05-11). The page shows the generated
-  // W-7 + 1040-NR PDFs and the mailing instructions for the client to mail to
-  // Antonio's CAA office.
   { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
-  { key: 'nav.profile', href: '/portal/profile', icon: User },
+  // Customers page for companies WITHOUT the new invoices screen (the hub's Customers tab replaces it).
+  { key: 'nav.myClients', href: '/portal/customers', icon: Users, visibilityKey: 'customers', needsCompany: true },
+  // 'Clienti e Fatture' once the hub is on for the company, plain 'Fatture' otherwise (label chosen in renderNavItem).
+  { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt, visibilityKey: 'invoices', needsCompany: true },
+  { key: 'nav.documents', href: '/portal/documents', icon: FolderOpen, needsCompany: true },
+  { key: 'nav.team', href: '/portal/team', icon: Users, teamAdminOnly: true, needsCompany: true },
+  { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator', needsCompany: true },
+  // Sign Documents is deliberately NOT gated on data presence — see the
+  // nav.signDocuments branch in isItemVisible() below for why.
+  { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, needsCompany: true },
+  { key: 'nav.tdBilling', href: '/portal/billing', icon: CreditCard, visibilityKey: 'billing', needsCompany: true },
+  // Bank Applications — self-service guidance to open a business bank account
+  // (replaces the old Banking Fintech wizard/SD). Active company clients only.
+  { key: 'nav.bankApplications', href: '/portal/banks', icon: Landmark, needsCompany: true },
+  { key: 'nav.requestService', href: '/portal/services/request', icon: PlusCircle },
+  { key: 'nav.myCompany', href: '/portal/company', icon: Briefcase, needsCompany: true },
 ]
 
-// Invoices link for personal/individual context (no company yet). Inserted
-// into the Personal section's render output when showCompaniesSection is
-// false. Same href as the Company-section Invoices, but the page itself
+// Invoices link for personal/individual context (no company yet). Takes the
+// place of the 'nav.invoices' entry in mainItems when showCompaniesSection is
+// false. Same href as the company Invoices, but the page itself
 // already branches: with no account, /portal/invoices renders only the
 // Expenses tab with contact-scoped TD invoices (PR 2 Step 4).
 const personalInvoicesItem: NavItem = {
@@ -146,39 +148,6 @@ const tierTopItems: NavItem[] = [
   { key: 'nav.wizard', href: '/portal/wizard', icon: PenSquare, tierOnly: ['onboarding'], wizardDynamic: true },
 ]
 
-// Items nested under the Companies section header. Active-tier only — these
-// pages are account-scoped (read by selectedAccountId).
-//
-// `nav.businessSettings` was removed in PR 2 Step 7 — it pointed to
-// /portal/profile which is the SAME route as the new "Profile" item under
-// Personal. Two sidebar links to the same URL was confusing. The Profile
-// page already renders both personal info AND business settings (logo,
-// bank accounts, payment links) — one link covers both.
-const companyItems: NavItem[] = [
-  { key: 'nav.overview', href: '/portal', icon: LayoutDashboard },
-  { key: 'nav.myCompany', href: '/portal/company', icon: Briefcase },
-  { key: 'nav.team', href: '/portal/team', icon: Users, teamAdminOnly: true },
-  { key: 'nav.documents', href: '/portal/documents', icon: FolderOpen },
-  // Bank Applications — self-service guidance to open a business bank account
-  // (replaces the old Banking Fintech wizard/SD). Active company clients only.
-  { key: 'nav.bankApplications', href: '/portal/banks', icon: Landmark },
-  // Sign Documents is deliberately NOT gated on data presence — see the
-  // nav.signDocuments branch in isItemVisible() below for why.
-  { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine },
-  { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator' },
-  { key: 'nav.myClients', href: '/portal/customers', icon: Users, visibilityKey: 'customers' },
-  // Invoices belongs under Company per Antonio 2026-05-05 — it's the
-  // company's invoicing system (sales invoices to the client's customers
-  // + TD's expense invoices to the company). Hidden for no-company
-  // clients because the whole Companies section is hidden then.
-  { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt, visibilityKey: 'invoices' },
-  { key: 'nav.tdBilling', href: '/portal/billing', icon: CreditCard, visibilityKey: 'billing' },
-  // TD Communication — client-facing teaser for the upcoming branding service
-  // (logos, landing pages, brand identity). Static "Coming Soon" page for now.
-  // Active-tier only (formed companies); leads/onboarding don't see it. Gated
-  // via tierOnly through the generic isItemVisible path — no special case.
-  { key: 'nav.tdCommunication', href: '/portal/td-communication', icon: Palette, tierOnly: ['active'] },
-]
 
 // Partner-portal items shown only when isPartnerPortal(portalRole). Flat list,
 // not under any section header.
@@ -194,12 +163,6 @@ const bottomItems: NavItem[] = [
   { key: 'nav.guide', href: '/portal/guide', icon: BookOpen },
 ]
 
-// i18n fallback for section labels (used when no t() key exists yet).
-const SECTION_LABELS: Record<string, Record<string, string>> = {
-  'nav.section.personal': { en: 'Personal', it: 'Personale' },
-  'nav.section.companies': { en: 'Companies', it: 'Aziende' },
-  'nav.section.company': { en: 'Company', it: 'Azienda' },
-}
 
 
 export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, toSignCount = 0, unpaidInvoiceCount = 0, unseenReactionCount = 0, unseenReactionToken = '', accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, inProgressOnboardings = [], selectedOnboardingId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
@@ -217,7 +180,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     window.addEventListener('portal-reactions-seen', onSeen)
     return () => window.removeEventListener('portal-reactions-seen', onSeen)
   }, [])
-  const { t, locale } = useLocale()
+  const { t } = useLocale()
 
   // "NEW" badge on the Team nav item — shown to account-admins until they've seen
   // the Team Access announcement. Shares the home banner's localStorage key so the
@@ -389,12 +352,6 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   const fullName = String(meta.full_name ?? meta.display_name ?? '').trim()
   const displayName = fullName || user.email?.split('@')[0] || 'User'
 
-  // Locale-aware section labels — used by the Personal / Companies headers.
-  const personalLabel = SECTION_LABELS['nav.section.personal']?.[locale] ?? SECTION_LABELS['nav.section.personal']?.en ?? 'Personal'
-  const totalEntities = accounts.length + inProgress.length + inProgressOnboardings.length
-  const companiesLabel = (totalEntities > 1
-    ? SECTION_LABELS['nav.section.companies']
-    : SECTION_LABELS['nav.section.company'])?.[locale] ?? 'Companies'
   const loggedInAsLabel = t('sidebar.loggedInAs')
 
   const isPartner = isPartnerPortal(portalRole)
@@ -483,37 +440,14 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
   const visibleTierTop = tierTopItems.filter(isItemVisible)
   const visiblePartner = partnerItems.filter(isItemVisible)
-  // Company section visible only for non-partners with at least one account.
-  // Active-tier with no account (rare edge case) hides the section too.
+  // Company items need at least one account; active-tier with no account (rare edge case) hides them too.
   const showCompaniesSection = !isPartner && accounts.length > 0
-  const filteredCompanyItems = showCompaniesSection ? companyItems.filter(isItemVisible) : []
-  // Companies with the new invoices screen get it right under Overview so it is seen without scrolling.
-  const visibleCompanyItems = (() => {
-    if (!invoicesHubOn) return filteredCompanyItems
-    const inv = filteredCompanyItems.find(i => i.key === 'nav.invoices')
-    if (!inv) return filteredCompanyItems
-    const rest = filteredCompanyItems.filter(i => i !== inv)
-    const at = rest.findIndex(i => i.key === 'nav.overview')
-    rest.splice(at + 1, 0, inv)
-    return rest
-  })()
-
-  // Personal Invoices link is added when there's no company section
-  // (Antonio's model: Lorenzo as individual sees his personal formation
-  // invoice in Personal; after the company exists, the invoice system
-  // moves under Company).
-  const visiblePersonal = (() => {
-    const base = personalItems.filter(isItemVisible)
-    if (!isPartner && !showCompaniesSection) {
-      // Insert Invoices after Chat for visual grouping.
-      const chatIdx = base.findIndex(i => i.key === 'nav.chat')
-      const insertAt = chatIdx >= 0 ? chatIdx + 1 : 0
-      const next = base.slice()
-      next.splice(insertAt, 0, personalInvoicesItem)
-      return next
-    }
-    return base
-  })()
+  // The flat menu. With no company yet, the invoices slot holds the personal-receipts variant.
+  const visibleMain = isPartner
+    ? []
+    : mainItems
+        .map(item => (item.key === 'nav.invoices' && !showCompaniesSection ? personalInvoicesItem : item))
+        .filter(item => (!item.needsCompany || showCompaniesSection) && isItemVisible(item))
 
   // Each NavItem's `key` is already 'nav.xxx' — its hover/tap description
   // lives at the matching 'nav.hint.xxx' key by default. `hintKey` overrides
@@ -805,16 +739,10 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           {/* who don't yet have a company. */}
           {visibleTierTop.map(renderNavItem)}
 
-          {/* Personal section — always visible (chat / invoices / referrals / profile). */}
-          {/* Hidden for partners since their flow is different. */}
-          {!isPartner && visiblePersonal.length > 0 && (
-            <div className={visibleTierTop.length > 0 ? 'pt-3' : ''}>
-              <div className="px-3 py-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
-                {personalLabel}
-              </div>
-              <div className="space-y-0.5">
-                {visiblePersonal.map(renderNavItem)}
-              </div>
+          {/* The flat menu (Antonio 2026-11-05): one list, no section headings. Partners get their own list below. */}
+          {!isPartner && visibleMain.length > 0 && (
+            <div className={visibleTierTop.length > 0 ? 'pt-3 space-y-0.5' : 'space-y-0.5'}>
+              {visibleMain.map(renderNavItem)}
             </div>
           )}
 
@@ -825,19 +753,6 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             </div>
           )}
 
-          {/* Companies section — nested under Personal per Antonio's model.
-              The switcher itself now lives in the persistent top bar
-              (2026-08-20 redesign) — this is just the section's nav links. */}
-          {showCompaniesSection && visibleCompanyItems.length > 0 && (
-            <div className="pt-4">
-              <div className="px-3 py-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
-                {companiesLabel}
-              </div>
-              <div className="space-y-0.5 mt-1">
-                {visibleCompanyItems.map(renderNavItem)}
-              </div>
-            </div>
-          )}
 
           {/* Bottom items (Guide) */}
           <div className="pt-4">
@@ -845,7 +760,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           </div>
         </nav>
 
-        {/* Footer — Profile link removed (now in Personal section). Sign Out only. */}
+        {/* Footer — Sign Out only (Profilo left the menu; its personal details are on Panoramica). */}
         <div className="px-3 py-4 border-t">
           {/* Identity row — small, repeats the contact name as a visual reminder. */}
           <div className="flex items-center gap-3 px-3 py-2 text-sm text-zinc-500">
