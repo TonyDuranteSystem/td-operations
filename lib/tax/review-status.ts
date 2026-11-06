@@ -114,6 +114,19 @@ export function advancesServiceDelivery(status: ReviewStatus): boolean {
   return status === "confirmed"
 }
 
+/**
+ * Staff APPROVAL now releases the submission at once — the client's own "Confirm" step was removed (Antonio, 2026-11-06: no client
+ * ever pressed it). Approving a submission therefore writes `confirmed` directly, with the staff member as the actor. Which
+ * statuses may be approved: anything where staff are reviewing or the client is waiting on us — not a return the client is still
+ * editing (`revision_requested`, `reopened`), not one already released (`confirmed`), and not one that never entered the review loop (null).
+ * `approved` is allowed so a submission left there by the old two-step flow can still be released.
+ */
+const STAFF_APPROVABLE = new Set<ReviewStatus>(["submitted", "resubmitted", "under_review", "approved"])
+
+export function canStaffApprove(status: ReviewStatus | null): boolean {
+  return status !== null && STAFF_APPROVABLE.has(status)
+}
+
 export interface ReviewHistoryEntry {
   from: ReviewStatus | null
   to: ReviewStatus
@@ -133,13 +146,15 @@ export function buildReviewHistoryEntry(params: {
   at: string
   by: string
   note?: string
+  /** Who really drove the move, when it differs from the usual actor of `to` (staff approving a submission writes `confirmed`). */
+  actor?: "client" | "staff"
 }): ReviewHistoryEntry {
   const entry: ReviewHistoryEntry = {
     from: params.from,
     to: params.to,
     at: params.at,
     by: params.by,
-    actor: TRANSITION_ACTOR[params.to],
+    actor: params.actor ?? TRANSITION_ACTOR[params.to],
   }
   if (params.note && params.note.trim()) entry.note = params.note.trim()
   return entry

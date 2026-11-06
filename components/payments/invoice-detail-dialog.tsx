@@ -14,6 +14,7 @@ import {
 } from '@/app/(dashboard)/payments/invoice-actions'
 import { regenerateInvoice, getInvoiceWithItems } from '@/app/(dashboard)/shared/invoice-actions'
 import type { InvoiceItem } from '@/lib/schemas/invoice'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 
 interface InvoiceDetailDialogProps {
   open: boolean
@@ -460,8 +461,8 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
                         <tr key={i} className="border-b border-zinc-100">
                           <td className="py-1.5">{item.description}</td>
                           <td className="py-1.5 text-right text-zinc-500">{item.quantity}</td>
-                          <td className="py-1.5 text-right text-zinc-500">{item.unit_price < 0 ? '-' : ''}{formatCurrency(item.unit_price, payment?.amount_currency as string)}</td>
-                          <td className={cn('py-1.5 text-right font-medium', item.amount < 0 && 'text-purple-600')}>{item.amount < 0 ? '-' : ''}{formatCurrency(item.amount, payment?.amount_currency as string)}</td>
+                          <td className={cn('py-1.5 text-right text-zinc-500', KEEP_WHOLE)}>{item.unit_price < 0 ? '-' : ''}{formatCurrency(item.unit_price, payment?.amount_currency as string)}</td>
+                          <td className={cn('py-1.5 text-right font-medium', KEEP_WHOLE, item.amount < 0 && 'text-purple-600')}>{item.amount < 0 ? '-' : ''}{formatCurrency(item.amount, payment?.amount_currency as string)}</td>
                         </tr>
                       ))}
                     </tbody>

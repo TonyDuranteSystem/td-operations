@@ -1,6 +1,7 @@
 'use client'
 
 import { formatOwnerCurrency, type BalanceSheet, type BalanceSheetLine } from '@/lib/owner-finance'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 
 const money = (n: number, currency?: string | null) =>
   formatOwnerCurrency(n, currency, { minimumFractionDigits: 2 })
@@ -148,7 +149,7 @@ export function BalanceSheetTab({ bs }: BalanceSheetTabProps) {
           {bs.foreign.map(f => (
             <div key={`${f.label}-${f.currency}`} className="flex items-baseline justify-between gap-3 py-1 text-sm">
               <span className="text-zinc-600">{f.label}</span>
-              <span className="tabular-nums text-zinc-800">{money(f.amount, f.currency)}</span>
+              <span className={`tabular-nums text-zinc-800 ${KEEP_WHOLE}`}>{money(f.amount, f.currency)}</span>
             </div>
           ))}
         </div>

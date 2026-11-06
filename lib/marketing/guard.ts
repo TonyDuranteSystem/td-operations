@@ -12,8 +12,9 @@ import { VIEW_AS_COOKIE, parseViewAs, viewAsLabel, viewAsPermissions } from "@/l
 import { roleLabel } from "@/lib/marketing/permission-labels"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { decideMarketingAccess, type GuardMembership, type GuardTeam } from "@/lib/marketing/guard-rules"
+import { decideMarketingAccess, applyReviewDemo, type GuardMembership, type GuardTeam } from "@/lib/marketing/guard-rules"
 import { effectivePermissions, type MarketingPermission, hasPermission } from "@/lib/marketing/permissions"
+import { reviewDemoFlag, NO_REVIEW_DEMO, type ReviewDemoFlag } from "@/lib/auth/review-demo"
 import { getMarketingSetting } from "@/lib/marketing/settings"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the marketing tables are newer than the generated types
@@ -29,6 +30,8 @@ export interface MarketingContext {
   viewAs?: { label: string }
   /** set when the login is a CRM admin (Antonio) — in View as, or as a member of the team. He manages the team as the admin, not as an owner, so the owner-only rules (remove / pause / cancel an owner) let him through. */
   admin?: true
+  /** set only for the App Store review practice login (a live deadline): the chat shows it the setter's chat only (lib/marketing/lead-chat.ts `lanesFor`) */
+  reviewDemo?: true
 }
 
 export type GuardResult = { ok: true; ctx: MarketingContext } | { ok: false; status: 401 | 403; code: string; message: string }
@@ -63,15 +66,15 @@ export async function resolveMarketingContext(): Promise<GuardResult> {
     }
     // An admin who has been ADDED to a team as a member (the owner does it from CRM > Marketing > Teams) works as that member, with no "View as" step; "View as" above still wins when it is on.
     // If that is not possible (not a member, paused, team switched off) he gets the "View as" message, as before.
-    const own = await memberContext(user.id, user.email ?? null, "marketing")
+    const own = await memberContext(user.id, user.email ?? null, "marketing", NO_REVIEW_DEMO)
     if (own.ok) return { ok: true, ctx: { ...own.ctx, admin: true } }
     return { ok: false, status: 403, code: "ADMIN_NO_VIEW", message: "You are signed in as Antonio. Open CRM > Marketing > Teams and press \"View as\" to see a team's workspace." }
   }
-  return memberContext(user.id, user.email ?? null, role)
+  return memberContext(user.id, user.email ?? null, role, reviewDemoFlag(user.app_metadata, Date.now()))
 }
 
 /** The context of a person who is a member of a team: his membership, the team's status and his permissions. `role` is the login's role as the door rules see it (an admin who is a member is let through as "marketing"). */
-async function memberContext(userId: string, email: string | null, role: unknown): Promise<GuardResult> {
+async function memberContext(userId: string, email: string | null, role: unknown, reviewDemo: ReviewDemoFlag): Promise<GuardResult> {
   const { data: members } = await db().from("marketing_team_members")
     .select("team_id, member_role, status, bundle, permissions").eq("user_id", userId)
     // a login in several teams (Antonio, who can add himself to any) always lands in the same one: the team he joined first
@@ -87,6 +90,13 @@ async function memberContext(userId: string, email: string | null, role: unknown
   const permissions = effectivePermissions({
     memberRole: verdict.membership.member_role, bundle: verdict.membership.bundle, bundles, extra: verdict.membership.permissions,
   })
+  // The App Store review practice login (TD Social): refused once its deadline has passed, and while it is live never an owner and cut to chat + reading leads (guard-rules.ts `applyReviewDemo`).
+  // `reviewDemo` is REQUIRED on purpose: a caller that has no session (alerts, badges, the admin paths) must say NO_REVIEW_DEMO out loud.
+  const adj = applyReviewDemo(reviewDemo, verdict.membership, permissions)
+  if (adj.ok === false) return adj
+  if (adj.reviewDemo) {
+    return { ok: true, ctx: { user: { id: userId, email }, team: verdict.team, role: adj.role, membership: adj.membership, permissions: adj.permissions, reviewDemo: true } }
+  }
   return {
     ok: true,
     ctx: { user: { id: userId, email }, team: verdict.team, role: verdict.membership.member_role, membership: verdict.membership, permissions },
@@ -95,7 +105,7 @@ async function memberContext(userId: string, email: string | null, role: unknown
 
 /** The context of an admin login that has been added to a team as a member (no "View as" involved) — for the CRM menu's red number. Not ok when he is not a member. */
 export async function adminMemberContext(user: { id: string; email?: string | null }): Promise<GuardResult> {
-  const r = await memberContext(user.id, user.email ?? null, "marketing")
+  const r = await memberContext(user.id, user.email ?? null, "marketing", NO_REVIEW_DEMO)
   // He is the admin here exactly as in resolveMarketingContext (his own membership): without the flag the chat treated him as a team owner and handed him the setter's chat on his Home page and in his menu number (29 Oct 2026).
   return r.ok ? { ok: true, ctx: { ...r.ctx, admin: true } } : r
 }
@@ -105,7 +115,7 @@ export async function adminMemberContext(user: { id: string; email?: string | nu
  * is not an ACTIVE member of a LIVE team. `admin` marks a CRM admin who works as a member (the chat treats him differently from an owner), exactly as adminMemberContext does.
  */
 export async function memberContextForUser(user: { id: string; email?: string | null }, admin: boolean): Promise<GuardResult> {
-  const r = await memberContext(user.id, user.email ?? null, "marketing")
+  const r = await memberContext(user.id, user.email ?? null, "marketing", NO_REVIEW_DEMO)
   return r.ok && admin ? { ok: true, ctx: { ...r.ctx, admin: true } } : r
 }
 

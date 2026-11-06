@@ -205,6 +205,10 @@ const PUBLIC_PREFIXES = [
   // Offline fallback page — precached by the service workers at install time
   // (an authenticated-only page could not be cached by a fresh SW).
   '/offline',
+  // TD Social phone app, App Store pages (dev job 2072bc3e): the Privacy Policy and Support pages Apple links to. Plain
+  // read-only pages (app/privacy, app/support), no data, no login. No other route starts with these two words.
+  '/privacy',
+  '/support',
 ]
 
 function isPublicPath(pathname: string): boolean {
@@ -441,6 +445,8 @@ export async function middleware(request: NextRequest) {
         now: Date.now(),
         // Marketing logins never get the staff grace period or the owner exemption: second step from the first day.
         strict: isMarketingRole(role),
+        // The App Store review practice login: password-only inside a short window written by the service role (see lib/auth/review-demo.ts). Only read for a strict subject.
+        reviewDemoMeta: user.app_metadata,
       })
       if (verdict !== 'allow') {
         // Background fetches get machine-readable JSON, never redirect HTML

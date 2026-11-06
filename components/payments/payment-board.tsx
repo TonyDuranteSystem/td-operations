@@ -28,6 +28,7 @@ import { EditPaymentDialog } from '@/components/payments/edit-payment-dialog'
 import { CreatePaymentDialog } from '@/components/payments/create-payment-dialog'
 import { InvoiceDialog } from '@/components/shared/invoice-dialog'
 import { InvoiceDetailDialog } from '@/components/payments/invoice-detail-dialog'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 
 interface PaymentItem {
   id: string
@@ -433,7 +434,7 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
                       </Link>
                     ) : <span className="text-xs text-muted-foreground">\u2014</span>}
                   </div>
-                  <p className={cn('text-right font-medium hidden lg:block', p.invoice_status === 'Credit' && 'text-purple-600')}>
+                  <p className={cn('text-right font-medium hidden lg:block', KEEP_WHOLE, p.invoice_status === 'Credit' && 'text-purple-600')}>
                     {p.invoice_status === 'Credit' ? '-' : ''}{formatCurrency(Math.abs(Number(p.total ?? p.amount)), p.amount_currency)}
                   </p>
                   <div className="hidden lg:block text-xs">
