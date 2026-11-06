@@ -46,6 +46,7 @@ const mk = (over: Partial<FormStoreDeps> = {}) => {
     yearFolder: vi.fn(async (_t, y) => `year-${y}`),
     taxFolder: vi.fn(async () => "tax-folder"),
     subFolder: vi.fn(async (_o, kind, segs) => `${kind}/${segs.join("/")}`),
+    rootSubFolder: vi.fn(async (_o, name) => `root/${name}`),
     folderOfKey: vi.fn(async () => null),
     ...over,
   }
@@ -180,5 +181,38 @@ describe("saveFormToStore — lock, replay and custom keys for the Bank applicat
     const { deps, saved } = mk()
     await saveFormToStore(base({ summary: null, uploadPaths: ["a/passport_1.pdf"], callerKeyOf: (p, b) => `k:${p}:${b.length}` }), deps)
     expect(saved[0].callerKey).toBe("k:a/passport_1.pdf:1")
+  })
+})
+
+describe("saveFormToStore — a named folder directly under a PERSON's top folder (Company closure_<name>, Part B)", () => {
+  const person = { kind: "contact" as const, id: "c-1", ownerId: "owner-p" }
+  it("the summary and every upload go into that folder of the person's storage", async () => {
+    const { deps, saved } = mk()
+    await saveFormToStore(base({ target: person, subfolder: "1. Company", rootSubFolder: "Company closure_Italyflow LLC" }), deps)
+    expect(deps.rootSubFolder).toHaveBeenCalledWith("owner-p", "Company closure_Italyflow LLC")
+    expect(saved.map((x) => x.folderId)).toEqual(Array(3).fill("root/Company closure_Italyflow LLC"))
+  })
+  it("a package already (partly) filed stays together: the summary's folder is used, no new folder is made", async () => {
+    const { deps, saved } = mk({ folderOfKey: vi.fn(async () => "earlier-closure-folder") })
+    await saveFormToStore(base({ target: person, rootSubFolder: "Company closure_Italyflow LLC" }), deps)
+    expect(deps.rootSubFolder).not.toHaveBeenCalled()
+    expect(saved.map((x) => x.folderId)).toEqual(Array(3).fill("earlier-closure-folder"))
+  })
+  it("an unresolved folder ABORTS: nothing is filed in Personal documents", async () => {
+    const { deps, saved } = mk({ rootSubFolder: async () => { throw new Error("boom") } })
+    const r = await saveFormToStore(base({ target: person, rootSubFolder: "Company closure_X" }), deps)
+    expect(saved).toEqual([])
+    expect(r.errors[0]).toMatch(/aborted to avoid misfiling/)
+  })
+  it("a company storage ignores it (its layout uses the sub-folder path)", async () => {
+    const { deps } = mk()
+    await saveFormToStore(base({ rootSubFolder: "Company closure_X" }), deps)
+    expect(deps.rootSubFolder).not.toHaveBeenCalled()
+  })
+  it("without it nothing changes: the files go to the person's top folder of the matching kind", async () => {
+    const { deps, saved } = mk()
+    await saveFormToStore(base({ target: person }), deps)
+    expect(deps.rootSubFolder).not.toHaveBeenCalled()
+    expect(saved.map((x) => x.folderId)).toEqual([undefined, undefined, undefined])
   })
 })
