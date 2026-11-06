@@ -15,6 +15,7 @@ import {
   MAX_EMAIL_DOCUMENTS,
   MAX_EMAIL_ATTACHMENTS_SCANNED,
   attachmentRef,
+  referencedContentIds,
 } from "@/lib/inbox/email-attachments"
 import type { GmailAPIMessage } from "@/lib/gmail"
 
@@ -34,7 +35,29 @@ function inlinePart(filename: string, size: number, attachmentId: string) {
     body: { size, attachmentId },
   }
 }
-function msg(id: string, parts: Array<ReturnType<typeof part> | ReturnType<typeof inlinePart>>): GmailAPIMessage {
+/**
+ * A photo attached the ordinary way in Gmail. Gmail stamps a Content-ID
+ * (`f_xxxx`) on these too, but the HTML body never references it.
+ */
+function gmailAttachedPhoto(filename: string, size: number, attachmentId: string) {
+  return {
+    filename,
+    mimeType: "image/jpeg",
+    headers: [{ name: "Content-ID", value: `<f_${attachmentId}>` }],
+    body: { size, attachmentId },
+  }
+}
+/** A text/html part carrying the given markup, delivered inline the way Gmail does for normal-size bodies. */
+function htmlPart(html: string) {
+  return { mimeType: "text/html", body: { data: Buffer.from(html).toString("base64url") } }
+}
+type AnyPart =
+  | ReturnType<typeof part>
+  | ReturnType<typeof inlinePart>
+  | ReturnType<typeof gmailAttachedPhoto>
+  | ReturnType<typeof htmlPart>
+  | { mimeType: string; body: { attachmentId: string } }
+function msg(id: string, parts: AnyPart[]): GmailAPIMessage {
   return { id, payload: { headers: [], parts } } as unknown as GmailAPIMessage
 }
 
@@ -60,15 +83,107 @@ describe("harvestEmailAttachments", () => {
     expect(out.note).toContain(`${attachmentRef("a2")} — contract.pdf`)
   })
 
-  it("EXCLUDES inline images — the signature logos every corporate footer carries", async () => {
+  it("EXCLUDES images the body displays — the signature logos every corporate footer carries", async () => {
     const out = await harvestEmailAttachments(
-      [msg("m1", [inlinePart("logo.png", 60_000, "cid1"), part("shot.png", "image/png", 50_000, "a1")])],
+      [
+        msg("m1", [
+          htmlPart('<p>Thanks</p><img src="cid:cid1@mail">'),
+          inlinePart("logo.png", 60_000, "cid1"),
+          part("shot.png", "image/png", 50_000, "a1"),
+        ]),
+      ],
       MAILBOX,
     )
-    // The logo is 60KB — well over the size filter. Only the Content-ID header saves us.
+    // The logo is 60KB — well over the size filter. The body displaying it is what excludes it.
     expect(out.imageBlocks).toHaveLength(1)
     expect(out.note).toContain("shot.png")
     expect(out.note).not.toContain("logo.png")
+  })
+
+  it("regression (Prime Circle, 2026-11-06): READS a photo the client ATTACHED in Gmail — it carries a Content-ID (f_) the body never references", async () => {
+    const out = await harvestEmailAttachments(
+      [msg("m1", [htmlPart("<div>Kindly find attached a picture</div>"), gmailAttachedPhoto("WhatsApp Image.jpeg", 103_204, "att1")])],
+      MAILBOX,
+    )
+    expect(out.imageBlocks).toHaveLength(1)
+    expect(getGmailAttachment).toHaveBeenCalledTimes(1)
+    expect(out.note).toContain("WhatsApp Image.jpeg")
+  })
+
+  it("reads the attached photo but still skips the logo when one message has both", async () => {
+    const out = await harvestEmailAttachments(
+      [
+        msg("m1", [
+          htmlPart('<img src="cid:logo1@mail"><p>see attached</p>'),
+          inlinePart("logo.png", 60_000, "logo1"),
+          gmailAttachedPhoto("passport.jpg", 200_000, "att1"),
+        ]),
+      ],
+      MAILBOX,
+    )
+    expect(out.imageBlocks).toHaveLength(1)
+    expect(out.note).toContain("passport.jpg")
+    expect(out.note).not.toContain("logo.png")
+  })
+
+  it("recognises logos carried only by the HTML ALTERNATIVE of a plain-text-first email", async () => {
+    const out = await harvestEmailAttachments(
+      [
+        {
+          id: "m1",
+          payload: {
+            headers: [],
+            mimeType: "multipart/alternative",
+            parts: [
+              { mimeType: "text/plain", body: { data: Buffer.from("hello").toString("base64url") } },
+              {
+                mimeType: "multipart/related",
+                parts: [
+                  htmlPart('<img src="cid:logo1@mail">'),
+                  inlinePart("logo.png", 60_000, "logo1"),
+                ],
+              },
+            ],
+          },
+        } as unknown as GmailAPIMessage,
+      ],
+      MAILBOX,
+    )
+    expect(out.imageBlocks).toHaveLength(0)
+    expect(getGmailAttachment).not.toHaveBeenCalled()
+  })
+
+  it("reads a Content-ID image on an email with NO html part — nothing displays it, so it is a real attachment", async () => {
+    const out = await harvestEmailAttachments(
+      [msg("m1", [inlinePart("scan.png", 60_000, "cid9")])],
+      MAILBOX,
+    )
+    expect(out.imageBlocks).toHaveLength(1)
+    expect(out.note).toContain("scan.png")
+  })
+
+  it("stays SAFE when an HTML part was not delivered inline — cannot tell what the body shows, so every Content-ID image is still treated as embedded", async () => {
+    const out = await harvestEmailAttachments(
+      [
+        msg("m1", [
+          { mimeType: "text/html", body: { attachmentId: "html-too-big" } },
+          inlinePart("logo.png", 60_000, "cid1"),
+          gmailAttachedPhoto("photo.jpg", 120_000, "att1"),
+        ]),
+      ],
+      MAILBOX,
+    )
+    expect(out.imageBlocks).toHaveLength(0)
+    expect(getGmailAttachment).not.toHaveBeenCalled()
+  })
+
+  it("still skips a tiny attached image — the size floor is untouched", async () => {
+    const out = await harvestEmailAttachments(
+      [msg("m1", [htmlPart("<p>x</p>"), gmailAttachedPhoto("pixel.jpg", MIN_MEANINGFUL_IMAGE_BYTES - 1, "att1")])],
+      MAILBOX,
+    )
+    expect(out.imageBlocks).toHaveLength(0)
+    expect(getGmailAttachment).not.toHaveBeenCalled()
   })
 
   it("walks messages NEWEST-first, so an old thread's logos can't crowd out today's screenshot", async () => {
@@ -177,5 +292,50 @@ describe("harvestEmailAttachments", () => {
   it("handles a message with no payload", async () => {
     const out = await harvestEmailAttachments([{ id: "m1" } as unknown as GmailAPIMessage], MAILBOX)
     expect(out.pinned).toHaveLength(0)
+  })
+})
+
+describe("referencedContentIds", () => {
+  const payloadOf = (parts: AnyPart[]) => ({ headers: [], mimeType: "multipart/related", parts }) as GmailAPIMessage["payload"]
+
+  it("collects every cid the HTML displays — quoted, single-quoted and unquoted", () => {
+    const html = '<img src="cid:a@x"><img src=\'cid:b@x\'><img src=cid:c@x>'
+    const { cids, complete } = referencedContentIds(payloadOf([htmlPart(html)]))
+    expect([...cids].sort()).toEqual(["a@x", "b@x", "c@x"])
+    expect(complete).toBe(true)
+  })
+
+  it("finds cids in a nested multipart and in a single-part HTML message", () => {
+    const nested = {
+      headers: [],
+      mimeType: "multipart/mixed",
+      parts: [{ mimeType: "multipart/alternative", parts: [htmlPart('<img src="cid:deep@x">')] }],
+    } as unknown as GmailAPIMessage["payload"]
+    expect([...referencedContentIds(nested).cids]).toEqual(["deep@x"])
+
+    const single = {
+      headers: [],
+      mimeType: "text/html",
+      body: { data: Buffer.from('<img src="cid:solo@x">').toString("base64url") },
+    } as unknown as GmailAPIMessage["payload"]
+    expect([...referencedContentIds(single).cids]).toEqual(["solo@x"])
+  })
+
+  it("returns nothing for a plain-text message or a payload with no parts", () => {
+    expect(referencedContentIds(payloadOf([])).cids.size).toBe(0)
+    const text = { headers: [], mimeType: "text/plain", body: { data: Buffer.from("cid:not-a-reference").toString("base64url") } }
+    const r = referencedContentIds(text as unknown as GmailAPIMessage["payload"])
+    expect(r.cids.size).toBe(0)
+    expect(r.complete).toBe(true)
+  })
+
+  it("is incomplete when an HTML part has only an attachmentId (body too large to inline)", () => {
+    const r = referencedContentIds(payloadOf([{ mimeType: "text/html", body: { attachmentId: "big" } }]))
+    expect(r.complete).toBe(false)
+  })
+
+  it("does not count a cid mentioned in visible text — only src= references", () => {
+    const r = referencedContentIds(payloadOf([htmlPart("<p>see cid:f_abc for details</p>")]))
+    expect(r.cids.size).toBe(0)
   })
 })

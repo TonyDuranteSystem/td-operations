@@ -7,11 +7,13 @@
  */
 import { createHash } from "crypto"
 import {
+  decodeBase64Url,
   extractAttachments,
   extractInlineImages,
   getGmailAttachment,
   type GmailAPIMessage,
 } from "@/lib/gmail"
+import { rewriteCidSources } from "@/lib/inbox/email-html"
 import { buildImageBlock, MAX_IMAGE_BYTES } from "@/lib/ai-agent/attachment-reader"
 import type { WorkerImageBlock, PinnedEmailAttachment } from "@/lib/ai-agent/worker-tools"
 
@@ -49,6 +51,49 @@ export function attachmentRef(attachmentId: string): string {
   return `att_${createHash("sha1").update(attachmentId).digest("hex").slice(0, 8)}`
 }
 
+interface HtmlPartLike {
+  mimeType?: string
+  body?: { data?: string; attachmentId?: string }
+  parts?: HtmlPartLike[]
+}
+
+/**
+ * The Content-IDs a message's HTML actually DISPLAYS (`<img src="cid:…">`).
+ *
+ * A Content-ID on an image part does NOT mean "decoration": Gmail stamps one on
+ * ordinary ATTACHED photos too (`f_xxxx`). Only an image the HTML body shows is
+ * an embedded picture — a signature logo, an icon, a pasted image. Every HTML
+ * part is read (not just the preferred one), so a plain-text-first email whose
+ * HTML alternative carries the logos still has them recognised.
+ *
+ * `complete` is false when an HTML part's text was not delivered inline (Gmail
+ * returns only an attachmentId for a very large part). Then we cannot tell what
+ * the body shows, and the caller must keep treating every Content-ID image as
+ * embedded — the safe, pre-existing behaviour.
+ */
+export function referencedContentIds(
+  payload: GmailAPIMessage["payload"],
+): { cids: Set<string>; complete: boolean } {
+  const cids = new Set<string>()
+  let complete = true
+  const visit = (part: HtmlPartLike | undefined) => {
+    if (!part) return
+    if ((part.mimeType ?? "").toLowerCase() === "text/html") {
+      if (part.body?.data) {
+        rewriteCidSources(decodeBase64Url(part.body.data), (cid) => {
+          cids.add(cid)
+          return null
+        })
+      } else if (part.body?.attachmentId) {
+        complete = false
+      }
+    }
+    for (const sub of part.parts ?? []) visit(sub)
+  }
+  visit(payload as HtmlPartLike)
+  return { cids, complete }
+}
+
 /**
  * Two different treatments, on purpose:
  *  - IMAGES are downloaded and attached to the user turn, so the worker simply
@@ -84,10 +129,18 @@ export async function harvestEmailAttachments(
   for (const m of [...msgs].reverse()) {
     if (!m.payload) continue
 
-    // Parts carrying a Content-ID are inline images the HTML body references:
-    // signature logos, social icons, tracking pixels. extractAttachments cannot
-    // tell them apart from a real attachment, so exclude them explicitly.
-    const inlineIds = new Set(extractInlineImages(m.payload).map((i) => i.attachmentId))
+    // Images the HTML body DISPLAYS are embedded pictures: signature logos, social
+    // icons, tracking pixels. extractAttachments cannot tell them apart from a
+    // real attachment, so exclude them explicitly. A Content-ID on its own is not
+    // proof: Gmail gives ordinary attached photos one too (`f_xxxx`), and a client's
+    // screenshot attached that way is exactly what the staff member asks about —
+    // so an image counts as embedded only when the body references its cid.
+    const { cids, complete } = referencedContentIds(m.payload)
+    const inlineIds = new Set(
+      extractInlineImages(m.payload)
+        .filter((i) => !complete || cids.has(i.contentId))
+        .map((i) => i.attachmentId),
+    )
 
     for (const att of extractAttachments(m.payload)) {
       if (scanned >= MAX_EMAIL_ATTACHMENTS_SCANNED) break
