@@ -46,8 +46,11 @@ describe('callout under the invoices menu item', () => {
 })
 
 describe('menu position', () => {
-  it('moves the item right under Overview only when the hub rule lets this person in', () => {
-    expect(side).toMatch(/if \(!invoicesHubOn\) return filteredCompanyItems/)
-    expect(side).toMatch(/rest\.splice\(at \+ 1, 0, inv\)/)
+  it('sits in Antonio\'s flat order (2026-11-05): after Chat, Referral and the old Customers page, before Documents', () => {
+    // It used to jump to 2nd place under Overview when the hub was on; the menu is now one fixed list.
+    expect(side).not.toMatch(/rest\.splice\(at \+ 1, 0, inv\)/)
+    const keys = [...side.slice(side.indexOf('const mainItems: NavItem[] = ['), side.indexOf('\n]\n', side.indexOf('const mainItems'))).matchAll(/key: '(nav\.[A-Za-z]+)'/g)].map(m => m[1])
+    expect(keys.indexOf('nav.invoices')).toBeGreaterThan(keys.indexOf('nav.referrals'))
+    expect(keys.indexOf('nav.invoices')).toBeLessThan(keys.indexOf('nav.documents'))
   })
 })
