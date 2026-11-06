@@ -53,6 +53,8 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
   const [saving, setSaving] = useState(false)
   const [recordType, setRecordType] = useState<RecordType | null>(null)
   const [name, setName] = useState('')
+  // Once the person types (or clears) the box, the phone's name never overwrites it.
+  const [nameEdited, setNameEdited] = useState(false)
   const [accountQuery, setAccountQuery] = useState('')
   const [accountResults, setAccountResults] = useState<AccountSearchResult[]>([])
   const [selectedAccount, setSelectedAccount] = useState<{ id: string; name: string } | null>(null)
@@ -65,7 +67,7 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
   const [addingNewPerson, setAddingNewPerson] = useState(false)
   const [, bumpDismiss] = useState(0)
 
-  const { data, isLoading } = useQuery<{ match: ContactMatch | null; alreadyLinked: boolean; nameSuggestion?: NameSuggestion | null }>({
+  const { data, isLoading } = useQuery<{ match: ContactMatch | null; alreadyLinked: boolean; nameSuggestion?: NameSuggestion | null; suggestedName?: string | null }>({
     queryKey: ['whatsapp-contact-match', groupId],
     queryFn: () => fetch(`/api/inbox/whatsapp-new/match-contact?groupId=${encodeURIComponent(groupId)}`).then((r) => r.json()),
   })
@@ -74,12 +76,19 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
   useEffect(() => {
     setRecordType(null)
     setName('')
+    setNameEdited(false)
     setAccountQuery('')
     setAccountResults([])
     setSelectedAccount(null)
     setExistingContacts([])
     setAddingNewPerson(false)
   }, [groupId])
+
+  // Start the box with the name WhatsApp already gave (Antonio, 2026-11-06) — still editable, and never over something typed.
+  const suggestedName = data?.suggestedName ?? ''
+  useEffect(() => {
+    if (recordType && !nameEdited && suggestedName) setName(suggestedName)
+  }, [recordType, nameEdited, suggestedName])
 
   useEffect(() => {
     if (recordType !== 'contact-with-account' || accountQuery.trim().length < 2) {
@@ -390,7 +399,7 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
           <input
             type="text"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => { setNameEdited(true); setName(e.target.value) }}
             placeholder="Full name"
             className="w-full px-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
