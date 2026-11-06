@@ -29,6 +29,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWriteSafe } from "@/lib/db"
 import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
 import type { ClosureDestination } from "@/lib/forms/closure-destination"
+import type { FilingStep } from "@/lib/forms/file-form-package"
 import type { Json } from "@/lib/database.types"
 import { reportSystemError } from "@/lib/system-errors"
 import { decideClosureWhatsNew, shouldReportSwallowedResubmission } from "@/lib/portal/closure-whats-new"
@@ -137,11 +138,17 @@ export async function POST(req: NextRequest) {
     // Company Closure Part B (Antonio 2026-11-06): what the client WROTE (company name + EIN) decides where the package goes, checked against
     // the job's own company link (the submission's, else the named job's). Both agree on one of the person's companies -> that company's
     // storage; anything else -> the PERSON's storage, folder "Company closure_<name>" (a disagreement is never guessed — staff are told below).
+    const linkedAccountId = accountId ?? explicitJobAccountId
     let targetFolderId: string | null = null
     let destination: ClosureDestination | null = null
+    let filing: FilingStep | null = null
     try {
-      const { resolveClosureDestination } = await import("@/lib/forms/closure-destination")
-      destination = await resolveClosureDestination({ linkedAccountId: accountId ?? explicitJobAccountId, contactId, clientName, submittedData })
+      const { resolveClosureDestination, keepFirstFolderName } = await import("@/lib/forms/closure-destination")
+      destination = await resolveClosureDestination({ linkedAccountId, contactId, clientName, submittedData })
+      // A correction (the client re-sends) must not change where the package already is: the saver keeps it in the folder its summary was
+      // first filed in, so the folder name the first pass pinned wins — the job's note and the pinned plan then name the folder that exists.
+      const priorFolder = (sub.drive_archive_meta as { pinned_plan?: { storeRootSubFolder?: string } } | null)?.pinned_plan?.storeRootSubFolder
+      destination = { ...destination, storeRootSubFolder: keepFirstFolderName(priorFolder, destination.storeRootSubFolder) }
       targetFolderId = destination.folderId
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e)
@@ -152,7 +159,7 @@ export async function POST(req: NextRequest) {
     if (targetFolderId) {
       const { fileFormPackage } = await import("@/lib/forms/file-form-package")
       const { isWizardUploadPath } = await import("@/lib/portal/wizard-uploads")
-      results.push(await fileFormPackage({
+      filing = await fileFormPackage({
         route: "closure-form-completed", formType: "closure", submittedData, uploadPaths, accountId, contactId, personName: clientName,
         driveFolderId: targetFolderId,
         storeRootSubFolder: destination?.storeRootSubFolder,
@@ -160,7 +167,8 @@ export async function POST(req: NextRequest) {
         bucket: "closure-uploads",
         resolveBucket: (path) => (isWizardUploadPath(path) ? "onboarding-uploads" : "closure-uploads"),
         meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: llcName },
-      }))
+      })
+      results.push(filing)
 
       // Durable backstop (2026-07-26): the inline save above is best-effort (as are the review + MCP re-saves). Enqueue the
       // reliable archive job with the plan PINNED (the SAME destination we just resolved) so a slow/failed copy self-heals via
@@ -303,28 +311,55 @@ export async function POST(req: NextRequest) {
     // ---- STEP 3b: move the job on by itself (Company Closure Part B; Antonio 2026-11-05/06: "the job moves after the wizard") ----
     // The wizard IS the first step's whole job ("Data Collection" waits for the client). Only FROM that step: a job staff already moved, a
     // resubmission or a mechanical retry of this pass never re-advances or moves a job backwards. No auto-tasks — the job's current step on
-    // the Calendar IS the to-do. The client sees the normal step bell, exactly as for every other service.
+    // the Calendar IS the to-do. The client is told nothing about the move (Antonio 2026-11-06: no step notice).
+    // NOT for a job THIS wizard created (E2E QA 2026-11-06: a stale link to a cancelled closure created a brand-new job that jumped to the
+    // next step although nobody had paid for it): that job stays on Data Collection with the What's New note, for staff to check first.
     if (deliveryId) {
-      try {
-        const adv = await advanceStageIfAt({
-          delivery_id: deliveryId,
-          if_current_stage: "Data Collection",
-          target_stage: "State Compliance Check",
-          actor: "closure-form-completed",
-          notes: `Closure wizard ${token} received`,
-          skip_tasks: true,
-        })
-        if (adv.advanced) {
-          results.push({ step: "sd_advance", status: "ok", detail: `SD ${deliveryId} -> State Compliance Check` })
-        } else if (adv.current_stage === "Data Collection") {
-          // the gate matched but the move itself failed — an error step, so the job retries it
-          results.push({ step: "sd_advance", status: "error", detail: adv.result?.error || adv.reason })
-        } else {
-          // already moved forward (staff, an earlier pass, a resubmission): nothing to do
-          results.push({ step: "sd_advance", status: "skipped", detail: adv.reason })
+      if (sdWasNewlyCreated || sdCreatedFromThisSubmission) {
+        results.push({ step: "sd_advance", status: "skipped", detail: "This job was created by the wizard itself — left on Data Collection so staff check it first" })
+      } else {
+        try {
+          const adv = await advanceStageIfAt({
+            delivery_id: deliveryId,
+            if_current_stage: "Data Collection",
+            target_stage: "State Compliance Check",
+            actor: "closure-form-completed",
+            notes: `Closure wizard ${token} received`,
+            skip_tasks: true,
+            skip_notify: true,
+          })
+          if (adv.advanced) {
+            results.push({ step: "sd_advance", status: "ok", detail: `SD ${deliveryId} -> State Compliance Check` })
+          } else if (adv.current_stage === "Data Collection") {
+            // the gate matched but the move itself failed — an error step, so the job retries it
+            results.push({ step: "sd_advance", status: "error", detail: adv.result?.error || adv.reason })
+          } else {
+            // already moved forward (staff, an earlier pass, a resubmission): nothing to do
+            results.push({ step: "sd_advance", status: "skipped", detail: adv.reason })
+          }
+        } catch (e) {
+          results.push({ step: "sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
         }
+      }
+    }
+
+    // ---- STEP 3c: show the client's files on the JOB (E2E QA 2026-11-06: the job's Documents box said "0 documents" while the files sat in Storage) ----
+    // Staff-only rows (never shown to the client), no step stamp (so "Go Back" cannot delete them), idempotent.
+    if (deliveryId && filing?.status === "ok" && targetFolderId) {
+      try {
+        const { registerClosurePackageDocuments } = await import("@/lib/forms/closure-documents")
+        const reg = await registerClosurePackageDocuments({
+          storageOwnerId: destination?.storageOwnerId ?? null,
+          token,
+          contactId,
+          // a company is stamped on the files only when the package really is with that company (both checks agreed); otherwise the company's
+          // document list would show papers about another company
+          accountId: destination?.kind === "company" ? linkedAccountId : null,
+          serviceDeliveryId: deliveryId,
+        })
+        results.push({ step: "documents_register", status: "ok", detail: `${reg.registered} file(s) listed on the job` })
       } catch (e) {
-        results.push({ step: "sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        results.push({ step: "documents_register", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
     }
 
@@ -430,9 +465,9 @@ export async function POST(req: NextRequest) {
         llc_state: llcState === "N/A" ? null : llcState,
         is_resubmission: whatsNew.isResubmission,
       })
-      // A failed note is reported, never returned as "error": an "error" step
-      // fails the closure_setup job, and its retry re-sends the step-4 staff
-      // email — a notification hiccup must not duplicate that email.
+      // A failed note is reported (system_errors), not returned as "error". The old reason — a retry of the pass re-sent the step-4 staff email —
+      // is gone with the email; a retry would now only repeat idempotent steps, so this is a choice, not a necessity (the What's New note is the
+      // ONLY notification now: a failed one is still visible to staff in the error log).
       // missing_recipient is expected for a lead-only legacy submission (no
       // contact/account yet → no staff thread to post into); not an error.
       // Also report a resubmission whose old note could not be retired: the
@@ -513,13 +548,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ---- STEP 6: Update service delivery ----
-    // where the package went, in plain words, for the job's notes and the log
-    const filedWhere = !targetFolderId
+    // ---- STEP 6: notes on the job ----
+    // where the package went, in plain words — for the STAFF note and the log only
+    const filedWhere = !targetFolderId || filing?.status === "error"
       ? "(NOT filed — see the alarm)"
-      : destination?.storeRootSubFolder
-        ? `in the person's folder "${destination.storeRootSubFolder}"`
-        : "in the company's storage"
+      : filing?.status === "pending"
+        ? "(still being filed — the retry job finishes it)"
+        : destination?.storeRootSubFolder
+          ? `in the person's folder "${destination.storeRootSubFolder}"`
+          : "in the company's storage"
     if (deliveryId) {
       try {
         const { data: sd } = await supabaseAdmin
@@ -529,21 +566,40 @@ export async function POST(req: NextRequest) {
           .single()
 
         if (sd) {
-          await dbWriteSafe(
-            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw service_deliveries.update; extract to lib/operations/ per dev_task fda76fd3
-            supabaseAdmin
-              .from("service_deliveries")
-              .update({
-                notes: (sd.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Closure form completed. Data filed ${filedWhere}.${destination?.disagreement ? ` CHECK: ${destination.disagreement}` : ""}`,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", sd.id),
-            "service_deliveries.update"
-          )
+          // The job's `notes` are shown to the CLIENT (portal service page, Progress card): keep this line neutral — no folder names, no
+          // "check this" text (bug hunt 2026-11-06). Once per day, so a retry of the same pass does not repeat it.
+          const line = `${new Date().toISOString().split("T")[0]}: Closure form completed. Data filed.`
+          if (!(sd.notes || "").includes(line)) {
+            await dbWriteSafe(
+              // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw service_deliveries.update; extract to lib/operations/ per dev_task fda76fd3
+              supabaseAdmin
+                .from("service_deliveries")
+                .update({ notes: (sd.notes || "") + `\n${line}`, updated_at: new Date().toISOString() })
+                .eq("id", sd.id),
+              "service_deliveries.update"
+            )
+          }
           results.push({ step: "sd_update", status: "ok" })
         }
       } catch (e) {
         results.push({ step: "sd_update", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+
+      // The STAFF detail — where the package went, and the "check this" line when the two checks disagreed — goes to the Calendar's team notes
+      // (staff-only table, never shown to a client). Not repeated by a retry of the same pass.
+      try {
+        const body = `Closure wizard: package filed ${filedWhere}.${destination?.disagreement ? ` CHECK: ${destination.disagreement}` : ""}`
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_notes is not in the generated types yet (lib/job-notes/read.ts)
+        const notes = supabaseAdmin as any
+        const { data: same } = await notes.from("service_delivery_notes").select("id").eq("service_delivery_id", deliveryId).eq("body", body).limit(1)
+        if (!same || same.length === 0) {
+          const { error: noteErr } = await notes.from("service_delivery_notes").insert({ service_delivery_id: deliveryId, body, author_name: "Closure wizard" })
+          if (noteErr) throw new Error(noteErr.message)
+        }
+        results.push({ step: "staff_note", status: "ok" })
+      } catch (e) {
+        // a note must never fail the pass (its retry would only repeat idempotent steps): reported, not an error
+        results.push({ step: "staff_note", status: "skipped", detail: e instanceof Error ? e.message : String(e) })
       }
     }
 

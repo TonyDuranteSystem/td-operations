@@ -234,10 +234,12 @@ export const NOT_A_VOCABULARY = new Set([
   "marketing_team_members_member_role_check",
   "marketing_team_members_status_check",
   "marketing_teams_status_check",
-  // TEMPORARY (2026-11-06, CI "Lint + tests" red on PR 992, dev job 2072bc3e): the sandbox lacked the Marketing chat tables, so the existing migrations 20261023-2000 ...
-  // 20261029-2100 (all already run in production) were applied to it for the TD Social App Store practice login. Two more value lists came with them:
-  // `marketing_chat_threads.kind` (dm|group, written by lib/marketing/team-chat*.ts) and `marketing_tour_seen.status` (done|skipped). At the NEXT full
-  // `npm run snapshot:constraints`, MOVE each into CONSTRAINT_CONTRACTS with its code-side list and delete these lines.
+  // TEMPORARY (2026-11-06, CI "Sandbox still enforces what production enforces" red on every branch from ~15:30 UTC, found on PR 990, dev job be097205): the TD Marketing
+  // team chat and guided tours (migrations 20261024-2100 and 20261025-1500) exist in production AND now in the sandbox database. These 2 ARE value lists, not shape rules:
+  // `marketing_chat_threads.kind` dm|group (written only by lib/marketing/team-chat-server.ts) and `marketing_tour_seen.status` done|skipped (written only by markTourSeen in
+  // lib/marketing/tour-seen.ts). They are not in the committed PRODUCTION snapshot until it is next fully regenerated. At the NEXT full `npm run snapshot:constraints`,
+  // MOVE them into CONSTRAINT_CONTRACTS with their code-side lists and delete these lines.
+  // (The same two were hit again on PR 992, dev job 2072bc3e, when the existing Marketing chat migrations were applied to the sandbox for the TD Social practice login.)
   "marketing_chat_threads_kind_check",
   "marketing_tour_seen_status_check",
   // TEMPORARY (2026-10-12, CI "Sandbox still enforces what production enforces" went red on every build): these 13 ARE
