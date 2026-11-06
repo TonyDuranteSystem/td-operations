@@ -25,6 +25,7 @@ final class AppModel: ObservableObject {
     private let monitor = NWPathMonitor()
     private var checking = false
     private var prefsEdits = 0   // counts switch changes on the You screen; a check that began before one is out of date
+    private var warmed = false   // the waiting tabs' pages have been started (reset when the person signs out)
     private let askedKey = "alertsAsked.\(AppConfig.bundleId)"
     private let tokenKey = "lastPushToken.\(AppConfig.bundleId)"
 
@@ -74,21 +75,41 @@ final class AppModel: ObservableObject {
     private func enterSignedOut() {
         me = nil
         hosts.removeAll()
+        warmed = false
         signInHost = WebHost(path: TabPath.signInPath)
         signInHost.onFinish = { [weak self] in Task { @MainActor in await self?.check() } }
         screen = .signedOut
     }
 
+    /// Only the tab on screen starts loading when the app opens; the others wait (TabLoading) so the first screen has the phone's connection to itself.
     func host(for tabId: String) -> WebHost {
         if let h = hosts[tabId] { return h }
-        let h = WebHost(path: TabPath.path(for: tabId) ?? "/")
+        let first = TabLoading.loadsAtOnce(tabId: tabId, selected: selectedTab)
+        let h = WebHost(path: TabPath.path(for: tabId) ?? "/", loadNow: first)
+        if first {
+            // when the first page is in, the others start a moment later; if it never gets in, they start anyway after a while
+            h.onFinish = { [weak self] in Task { @MainActor in self?.scheduleWarming(after: TabLoading.warmDelay) } }
+            scheduleWarming(after: TabLoading.warmFallback)
+        }
         hosts[tabId] = h
         return h
+    }
+
+    /// starts the waiting tabs' pages in the background, once (the first call that fires wins)
+    private func scheduleWarming(after seconds: TimeInterval) {
+        if warmed { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard !warmed, screen == .ready else { return }
+            warmed = true
+            for id in TabLoading.warmOrder(tabs: me?.tabs.map { $0.id } ?? [], selected: selectedTab) { hosts[id]?.startIfNeeded() }
+        }
     }
 
     // MARK: tabs, alerts that arrive, the Inbox "seen" time
 
     func tabChanged() {
+        hosts[selectedTab]?.startIfNeeded()   // a tab that was still waiting starts the moment the person opens it
         if selectedTab == "inbox" { Task { await markInboxSeen() } }
     }
 
