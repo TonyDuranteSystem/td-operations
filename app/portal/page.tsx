@@ -6,6 +6,8 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalAccountDetail, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getFormationTracker, getInProgressFormations, getInProgressOnboardings, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
 import { buildFormationTrackerSteps } from '@/lib/portal/formation-progress'
 import { buildTrackerSteps } from '@/lib/tax/progress-tracker'
+import { hasTaxReturnToSign } from '@/lib/tax/flow-banner'
+import { getSignableDocuments } from '@/lib/portal/signable-documents'
 import { TaxProgressTracker } from '@/components/portal/tax-progress-tracker'
 import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
 import { PortalFlowStatusSection } from '@/components/portal/flow-status-section'
@@ -854,6 +856,19 @@ export default async function PortalDashboardPage() {
     ? buildTrackerSteps(await getTaxTrackerCatalogStages(), trackerTr.sd_stage, locale, trackerTr.review_status)
     : null
 
+  // Is a tax-return document really waiting for the client's signature? Asked only when a return sits at "TR Completed" (the one stage
+  // where the banner may say "Sign your tax return"), from the same list the Sign tab shows, so the banner can never send the client to
+  // sign something that is not there. A failed lookup means "nothing waiting" (the banner then says "Being prepared").
+  let taxSignatureWaiting = false
+  if (contactId && taxReturns.some(tr => tr.sd_stage === 'TR Completed')) {
+    try {
+      const docs = await getSignableDocuments({ selectedAccountId, contactId, userEmail: user.email, skipLegacyDrive: true })
+      taxSignatureWaiting = hasTaxReturnToSign(docs)
+    } catch (err) {
+      console.error('[portal] tax signature lookup failed:', err)
+    }
+  }
+
   // Pending member info request — separate to avoid TypeScript tuple depth limit
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: pendingMemberInfoRequest } = await (supabaseAdmin as any)
@@ -1038,12 +1053,12 @@ export default async function PortalDashboardPage() {
             taxYear={tr.tax_year}
             returnType={tr.return_type}
             reviewStatus={(tr.review_status as import('@/lib/tax/review-status').ReviewStatus | null) ?? undefined}
-            submissionId={tr.submission_id ?? null}
             confirmationAccepted={tr.confirmation_accepted ?? false}
             dataReceived={tr.data_received ?? false}
             sentToAccountant={tr.sent_to_accountant ?? false}
             showFinancialsLink={(tr.return_type === 'MMLLC' || tr.return_type === 'Corp') && tr.submission_id != null}
             sdStage={tr.sd_stage ?? null}
+            signatureWaiting={taxSignatureWaiting}
           />
         )
       })}

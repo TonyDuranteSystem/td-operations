@@ -39,6 +39,10 @@ export const PROTECTED_STAGE_NAMES: ProtectedStageName[] = [
     because: "it decides whether a one-time tax client's wizard opens",
   },
   {
+    name: "TR Completed",
+    because: "the client's tax banner only says \"Sign your tax return\" at this step (and the portal looks for a waiting signature only here)",
+  },
+  {
     name: "Company Data Pending",
     because: "the tax intake checks for it before asking a client for company details",
   },

@@ -20,6 +20,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { buildReviewHistoryEntry, type ReviewStatus } from "@/lib/tax/review-status"
 import { decideFlowRevision } from "@/lib/tax/flow-revision"
+import { pickTargetSubmission } from "@/lib/tax/pick-target-submission"
 import { TAX_WIZARD_SERVICE_TYPES } from "@/lib/tax/wizard-eligibility"
 
 export interface SyncTaxRevisionResult {
@@ -80,15 +81,9 @@ export async function syncTaxRevisionRequest(params: {
   if (subsRes.error) return { status: "error", detail: subsRes.error.message }
   if (openRes.error) return { status: "error", detail: openRes.error.message }
 
-  const allSubs = subsRes.data ?? []
-  const latestOf = <T extends { created_at: string }>(rows: T[]): T | null =>
-    rows.length === 0 ? null : rows.reduce((a, b) => (a.created_at >= b.created_at ? a : b))
-
+  // The same rule "Approve" uses (lib/tax/pick-target-submission.ts), so both buttons act on one row.
   const openYears = (openRes.data ?? []).map(r => r.tax_year as number)
-  const targetYear = openYears.length > 0 ? Math.min(...openYears) : null
-  const sub = targetYear !== null
-    ? latestOf(allSubs.filter(s => s.tax_year === targetYear))
-    : latestOf(allSubs)
+  const sub = pickTargetSubmission(subsRes.data ?? [], openYears)
 
   const current = (sub?.review_status ?? null) as ReviewStatus | null
   const decision = decideFlowRevision(current, !!sub)

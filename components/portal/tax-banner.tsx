@@ -1,10 +1,8 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { AlertTriangle, ArrowRight, CheckCircle, Clock, Pencil, Loader2 } from 'lucide-react'
+import { AlertTriangle, ArrowRight, CheckCircle, Clock, Pencil } from 'lucide-react'
 import type { ReviewStatus } from '@/lib/tax/review-status'
-import { flowStageBannerState } from '@/lib/tax/flow-banner'
+import { taxBannerFlowState, stageOwnsBanner } from '@/lib/tax/flow-banner'
 import { useLocale } from '@/lib/portal/use-locale'
 import { interpolateString } from '@/lib/template-interpolation'
 
@@ -13,8 +11,6 @@ interface TaxBannerProps {
   returnType: string | null
   /** New: fine-grained review sub-state from tax_return_submissions.review_status */
   reviewStatus?: ReviewStatus | null
-  /** New: submission id for the Confirm action */
-  submissionId?: string | null
   /** Whether the client has already clicked Confirm on their P&L + Balance
    *  Sheet — decides whether the submitted/resubmitted banner asks them to
    *  finish, or tells them they're done. */
@@ -27,6 +23,9 @@ interface TaxBannerProps {
   /** Flow-workspace SD stage (e.g. "Sent for Signature"). Drives the banner
    *  when there is no review_status — see lib/tax/flow-banner.ts. */
   sdStage?: string | null
+  /** A tax-return document is really waiting for the client's signature (the portal's own to-sign list). "Sign your tax return" is
+   *  only shown when this is true; otherwise a return at "TR Completed" shows "Being prepared". */
+  signatureWaiting?: boolean
 }
 
 const editHref = '/portal/wizard?type=tax'
@@ -44,68 +43,18 @@ function EditButton({ cta }: { cta: string }) {
   )
 }
 
-function ConfirmButton({
-  submissionId,
-  onConfirmed,
-}: {
-  submissionId: string
-  onConfirmed: () => void
-}) {
-  const { t } = useLocale()
-  const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle')
-  const [errMsg, setErrMsg] = useState<string | null>(null)
-
-  async function handleConfirm() {
-    setState('loading')
-    setErrMsg(null)
-    try {
-      const res = await fetch('/api/portal/tax-confirm', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ submission_id: submissionId }),
-      })
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
-        throw new Error((d as { error?: string }).error || t('taxBanner.errorRetry'))
-      }
-      onConfirmed()
-    } catch (err) {
-      setErrMsg(err instanceof Error && err.message ? err.message : t('taxBanner.errorRetry'))
-      setState('idle')
-    }
-  }
-
-  return (
-    <div className="flex flex-col items-end gap-1">
-      <button
-        onClick={handleConfirm}
-        disabled={state === 'loading'}
-        className="shrink-0 flex items-center gap-1.5 self-center rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
-      >
-        {state === 'loading' ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : (
-          <CheckCircle className="h-3.5 w-3.5" />
-        )}
-        {t('taxBanner.confirm')}
-      </button>
-      {errMsg && <p className="text-xs text-red-600">{errMsg}</p>}
-    </div>
-  )
-}
 
 export function TaxBanner({
   taxYear,
   returnType,
   reviewStatus,
-  submissionId,
   confirmationAccepted = false,
   dataReceived = false,
   sentToAccountant = false,
   showFinancialsLink = false,
   sdStage = null,
+  signatureWaiting = false,
 }: TaxBannerProps) {
-  const router = useRouter()
   const { t } = useLocale()
   const returnLabel = returnType || 'Tax Return'
   const y = String(taxYear)
@@ -119,8 +68,13 @@ export function TaxBanner({
     </a>
   ) : null
 
+  // The step the job is at in the workspace. Once the return is PAST the staff review (approved, being prepared, ready to sign,
+  // filed) that step — not the old review message from the client's form — decides what the client sees (lib/tax/flow-banner.ts).
+  const flowState = taxBannerFlowState(sdStage, signatureWaiting)
+  const stageDecides = stageOwnsBanner(flowState, reviewStatus)
+
   // ─── New review-status states ───
-  if (reviewStatus !== undefined && reviewStatus !== null) {
+  if (!stageDecides && reviewStatus !== undefined && reviewStatus !== null) {
     switch (reviewStatus) {
       case 'submitted':
       case 'resubmitted': {
@@ -268,12 +222,6 @@ export function TaxBanner({
                 {financialsLink}
               </div>
               <div className="shrink-0 flex items-center gap-2 self-center">
-                {submissionId && (
-                  <ConfirmButton
-                    submissionId={submissionId}
-                    onConfirmed={() => router.refresh()}
-                  />
-                )}
                 <EditButton cta={editCta} />
               </div>
             </div>
@@ -330,11 +278,9 @@ export function TaxBanner({
   }
 
   // ─── Flow-workspace SD-stage states ───
-  // Consulted ONLY after review_status (so production review_status clients are
-  // never affected) and before the legacy fallback. Fixes flow Tax Returns that
-  // have no review_status but a real SD stage (e.g. "Sent for Signature") and
-  // were wrongly showing the legacy "Edit submission" banner.
-  const flowState = sdStage ? flowStageBannerState(sdStage) : null
+  // Consulted after review_status (so a return still in the staff review, or sent back to the client, keeps its review message) —
+  // EXCEPT once the return is past the review (`stageDecides`, above) — and before the legacy fallback. Fixes flow Tax Returns that
+  // have no review_status but a real SD stage (e.g. "Data Received") and were wrongly showing the legacy "Edit submission" banner.
   if (flowState) {
     type Tone = 'amber' | 'blue' | 'emerald'
     const cfg: {
