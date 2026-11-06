@@ -1745,7 +1745,8 @@ async function gmailRead(p: any) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function gmailReadThread(p: any) {
-  const { gmailGet } = await import('@/lib/gmail')
+  const { gmailGet, extractAttachments } = await import('@/lib/gmail')
+  const { embeddedImageAttachmentIds } = await import('@/lib/inbox/email-attachments')
   const asUser = resolveMailbox(p.as_user) ?? undefined
 
   const thread = await gmailGet(`/threads/${p.thread_id}`, { format: 'full' }, asUser) as {
@@ -1775,6 +1776,17 @@ async function gmailReadThread(p: any) {
     if (!bodyText) bodyText = msg.snippet || ''
     if (bodyText.length > 3000) bodyText = bodyText.slice(0, 3000) + '\n...[truncated]'
 
+    // The files the sender attached (names/types/sizes only — no bytes), the same
+    // set staff see as chips: pictures the body itself displays (signature logos)
+    // are left out. Without this the worker has no way to tell from this tool that
+    // an email carries attachments, and answers "no attachments" about a screenshot.
+    const embedded = msg.payload ? embeddedImageAttachmentIds(msg.payload, msg.id) : new Set<string>()
+    const attachments = msg.payload
+      ? extractAttachments(msg.payload)
+          .filter((a) => !embedded.has(a.attachmentId))
+          .map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: a.size }))
+      : []
+
     return {
       id: msg.id,
       from: getHeader('From'),
@@ -1782,6 +1794,7 @@ async function gmailReadThread(p: any) {
       subject: getHeader('Subject'),
       date: getHeader('Date'),
       body: bodyText,
+      ...(attachments.length > 0 ? { attachments } : {}),
     }
   })
 
