@@ -10,14 +10,17 @@ import type { GraphLead } from "@/lib/marketing/meta-leads/map-lead"
 
 export const leadDb = (): Db => supabaseAdmin as unknown as Db
 
-/** The configured team if it exists, else the only ACTIVE team if there is exactly one, else nobody (Antonio assigns later). */
+/**
+ * The configured team if it exists and is not a test team, else the only ACTIVE real team if there is exactly one, else nobody (Antonio assigns later).
+ * A test team (`is_test`) never receives a real lead and is not counted, so a leftover active test team cannot leave real leads without a team.
+ */
 export async function resolveIntakeTeam(db: Db = leadDb()): Promise<string | null> {
   const configured = String((await getMarketingSetting("lead_intake_team_id")) ?? "")
   if (configured) {
-    const { data } = await db.from("marketing_teams").select("id").eq("id", configured).maybeSingle()
+    const { data } = await db.from("marketing_teams").select("id").eq("id", configured).eq("is_test", false).maybeSingle()
     if (data?.id) return data.id as string
   }
-  const { data } = await db.from("marketing_teams").select("id").eq("status", "active").limit(2)
+  const { data } = await db.from("marketing_teams").select("id").eq("status", "active").eq("is_test", false).limit(2)
   return Array.isArray(data) && data.length === 1 ? (data[0].id as string) : null
 }
 

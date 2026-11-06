@@ -102,7 +102,7 @@ export default async function AllLeadsPage({ searchParams }: { searchParams: Pro
                 {clientFlagText(selected.existing_client) && <p className="mt-3 rounded-lg bg-amber-50 p-2 text-sm text-amber-900">{clientFlagText(selected.existing_client)}</p>}
               </div>
 
-              {!selected.team_id && <AssignPanel leadId={selected.id} teams={teams.map(t => ({ id: t.id, name: t.name }))} />}
+              {!selected.team_id && <AssignPanel leadId={selected.id} teams={teams.filter(t => !t.is_test).map(t => ({ id: t.id, name: t.name }))} />}
 
               {selected.qualification && selected.qualification.length > 0 && (
                 <div className="rounded-xl border bg-white p-4 text-sm"><h3 className="text-sm font-semibold text-slate-600">What the setter confirmed on the call</h3>
