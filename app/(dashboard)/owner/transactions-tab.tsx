@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { applyVendorRulesTo, normalizeVendorKey, type VendorRule } from '@/lib/owner-vendor-match'
 import { formatOwnerCurrency, type OwnerTransaction, type OwnerCategory } from '@/lib/owner-finance'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 
 const CATEGORIES: OwnerCategory[] = ['income', 'cogs', 'expense', 'distribution', 'contribution', 'transfer', 'fee', 'conversion', 'refund', 'uncategorized']
 
@@ -498,7 +499,7 @@ export function TransactionsTab({ year, initialRows, initialTotal, focus, onBack
                   <> · balance {fmtRow(modal.tx.balance_after, modal.tx.currency)}</>
                 )}
               </span>
-              <span className={`text-sm font-semibold tabular-nums ${modal.tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
+              <span className={`text-sm font-semibold tabular-nums ${KEEP_WHOLE} ${modal.tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
                 {modal.tx.amount < 0 ? '-' : '+'}{fmtRow(modal.tx.amount, modal.tx.currency)}
               </span>
             </div>
@@ -809,7 +810,7 @@ export function TransactionsTab({ year, initialRows, initialTotal, focus, onBack
                   <div className="truncate font-medium text-zinc-800">{tx.counterparty ?? '—'}</div>
                   <div className="line-clamp-2 break-words text-xs leading-snug text-zinc-400">{tx.description}</div>
                 </td>
-                <td className={`px-3 py-2.5 text-right font-mono text-xs font-medium tabular-nums ${tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                <td className={`px-3 py-2.5 text-right font-mono text-xs font-medium tabular-nums ${KEEP_WHOLE} ${tx.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
                   {tx.amount < 0 ? '-' : '+'}{fmtRow(tx.amount, tx.currency)}
                 </td>
                 <td className="px-3 py-2.5">

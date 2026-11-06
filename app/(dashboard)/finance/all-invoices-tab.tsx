@@ -18,6 +18,7 @@ import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-di
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { LegacyPaymentsPanel, type LegacyPaymentRecord } from './legacy-payments-panel'
 import { EditInvoiceItemsDialog } from './edit-invoice-items-dialog'
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from '@/lib/ui/table-cells'
 
 const STATUS_COLORS: Record<string, string> = {
   Paid: 'bg-emerald-100 text-emerald-700',
@@ -578,7 +579,7 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
       {/* Table (md+) */}
       <div className="hidden md:block border rounded-lg overflow-auto max-h-[calc(100vh-320px)]">
         <table className="w-full min-w-[900px] text-sm">
-          <thead className="bg-muted/50 sticky top-0">
+          <thead className="bg-muted/50 sticky top-0 z-10">
             <tr>
               <th className="w-8 px-3 py-3">
                 {(() => {
@@ -601,26 +602,26 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
                   )
                 })()}
               </th>
-              <th className="text-left px-4 py-3 font-medium cursor-pointer select-none" onClick={() => toggleSort('invoice_number')}>
+              <th className={`text-left px-4 py-3 font-medium cursor-pointer select-none ${KEEP_WHOLE} ${pinHeadCell('start')}`} onClick={() => toggleSort('invoice_number')}>
                 Invoice # <SortIcon field="invoice_number" />
               </th>
               <th className="text-left px-4 py-3 font-medium cursor-pointer select-none" onClick={() => toggleSort('client')}>
                 Client <SortIcon field="client" />
               </th>
               <th className="text-left px-4 py-3 font-medium">Description</th>
-              <th className="text-right px-4 py-3 font-medium cursor-pointer select-none" onClick={() => toggleSort('total')}>
+              <th className={`text-right px-4 py-3 font-medium cursor-pointer select-none ${KEEP_WHOLE}`} onClick={() => toggleSort('total')}>
                 Amount <SortIcon field="total" />
               </th>
-              <th className="text-left px-4 py-3 font-medium cursor-pointer select-none" onClick={() => toggleSort('status')}>
+              <th className={`text-left px-4 py-3 font-medium cursor-pointer select-none ${KEEP_WHOLE}`} onClick={() => toggleSort('status')}>
                 Status <SortIcon field="status" />
               </th>
-              <th className="text-left px-4 py-3 font-medium cursor-pointer select-none" onClick={() => toggleSort('issue_date')}>
+              <th className={`text-left px-4 py-3 font-medium cursor-pointer select-none ${KEEP_WHOLE}`} onClick={() => toggleSort('issue_date')}>
                 Issue Date <SortIcon field="issue_date" />
               </th>
-              <th className="text-left px-4 py-3 font-medium cursor-pointer select-none" onClick={() => toggleSort('due_date')}>
+              <th className={`text-left px-4 py-3 font-medium cursor-pointer select-none ${KEEP_WHOLE}`} onClick={() => toggleSort('due_date')}>
                 Due / Paid <SortIcon field="due_date" />
               </th>
-              <th className="text-center px-4 py-3 font-medium">Actions</th>
+              <th className={`text-center px-4 py-3 font-medium ${KEEP_WHOLE} ${pinHeadCell('end')}`}>Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -640,7 +641,7 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
               return (
                 <tr
                   key={inv.id}
-                  className={`hover:bg-muted/30 transition-colors ${isOverdue ? 'bg-red-50/50' : ''}`}
+                  className={`group hover:bg-muted/30 transition-colors ${isOverdue ? 'bg-red-50/50' : ''}`}
                 >
                   <td className="w-8 px-3 py-3">
                     {REMINDABLE_STATUSES.has(inv.status) && (
@@ -652,7 +653,7 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
                       />
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className={`px-4 py-3 ${KEEP_WHOLE} ${pinBodyCell('start', isOverdue ? 'danger' : 'none')}`}>
                     <FastTooltip label="Open invoice PDF" align="left">
                       <a
                         href={`/api/invoices/${inv.id}/pdf`}
@@ -679,7 +680,7 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
                       {inv.description ? (inv.description.length > 60 ? inv.description.slice(0, 60) + '...' : inv.description) : '—'}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right font-medium tabular-nums">
+                  <td className={`px-4 py-3 text-right font-medium tabular-nums ${KEEP_WHOLE}`}>
                     {formatCurrency(Number(inv.total ?? 0), inv.currency || 'USD')}
                     {inv.status === 'Partial' && inv.amount_paid > 0 && (
                       <div className="text-xs text-emerald-600">
@@ -687,7 +688,7 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className={`px-4 py-3 ${KEEP_WHOLE}`}>
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[inv.status] ?? 'bg-zinc-100 text-zinc-600'}`}>
                       {inv.status}
                     </span>
@@ -717,13 +718,13 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground tabular-nums">
+                  <td className={`px-4 py-3 text-muted-foreground tabular-nums ${KEEP_WHOLE}`}>
                     {formatDate(inv.issue_date)}
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground tabular-nums">
+                  <td className={`px-4 py-3 text-muted-foreground tabular-nums ${KEEP_WHOLE}`}>
                     {inv.status === 'Paid' ? formatDate(inv.paid_date) : formatDate(inv.due_date)}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className={`px-4 py-3 ${KEEP_WHOLE} ${pinBodyCell('end', isOverdue ? 'danger' : 'none')}`}>
                     <InvoiceActions invoice={inv} />
                   </td>
                 </tr>
@@ -783,16 +784,14 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
 function ActionButton({ onClick, label, icon: Icon, color, hoverBg }: {
   onClick?: () => void; label: string; icon: typeof CheckCircle; color: string; hoverBg: string
 }) {
+  // The label is a FastTooltip (drawn outside the table), not a hidden box inside this cell: a hidden 350px-wide label centred on the
+  // right-most icon stuck out ~116px past the table and gave the scroll area a blank strip at its right end (dev job be097205).
   return (
-    <div className="relative group">
-      <button onClick={onClick} className={`p-1.5 rounded-md ${hoverBg} ${color} transition-colors`}>
+    <FastTooltip label={label} align="center">
+      <button onClick={onClick} aria-label={label} className={`p-1.5 rounded-md ${hoverBg} ${color} transition-colors`}>
         <Icon className="w-4 h-4" />
       </button>
-      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-zinc-900 text-white text-[10px] rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-        {label}
-        <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-zinc-900" />
-      </div>
-    </div>
+    </FastTooltip>
   )
 }
 

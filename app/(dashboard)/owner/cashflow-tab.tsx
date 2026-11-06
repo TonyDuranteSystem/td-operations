@@ -2,6 +2,7 @@
 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { formatOwnerCurrency, type MonthlyBreakdown, type CashPosition } from '@/lib/owner-finance'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const fmt = (n: number) => formatOwnerCurrency(n, 'USD', { maximumFractionDigits: 0 })
@@ -113,7 +114,7 @@ export function CashFlowTab({ year, monthly, cash }: CashFlowTabProps) {
                   <div className="text-sm font-medium text-zinc-800">{a.bank_name}{a.currency !== 'USD' ? ` (${a.currency})` : ''}</div>
                   <div className="text-xs text-zinc-400">As of {a.as_of}</div>
                 </div>
-                <div className="text-sm font-semibold tabular-nums text-zinc-900">{fmtIn(a.currency)(a.balance)}</div>
+                <div className={`text-sm font-semibold tabular-nums text-zinc-900 ${KEEP_WHOLE}`}>{fmtIn(a.currency)(a.balance)}</div>
               </div>
             ))}
           </div>

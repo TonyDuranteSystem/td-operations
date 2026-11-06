@@ -6,6 +6,7 @@ import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import { Landmark, RefreshCw, Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 
 interface PlaidAccount {
   account_id: string
@@ -281,7 +282,7 @@ export function ConnectBankPanel() {
                 {(conn.accounts ?? []).map(acc => (
                   <div key={acc.account_id} className="flex justify-between items-center text-xs">
                     <span className="text-zinc-500">{acc.name} •••• {acc.mask}</span>
-                    <span className="font-medium text-zinc-900">
+                    <span className={`font-medium text-zinc-900 ${KEEP_WHOLE}`}>
                       {acc.balances.current != null ? fmt(acc.balances.current, acc.balances.iso_currency_code) : '—'}
                     </span>
                   </div>
