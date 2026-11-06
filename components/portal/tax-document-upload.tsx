@@ -12,13 +12,15 @@ const MAX_SIZE_MB = 10
 interface TaxDocumentUploadProps {
   accountId: string
   taxYears: number[]
+  /** The year the box starts on (the open return's tax year — see lib/tax/upload-year-options.ts). */
+  defaultTaxYear?: number
 }
 
-export function TaxDocumentUpload({ accountId, taxYears }: TaxDocumentUploadProps) {
+export function TaxDocumentUpload({ accountId, taxYears, defaultTaxYear }: TaxDocumentUploadProps) {
   const router = useRouter()
   const { t } = useLocale()
   const fileRef = useRef<HTMLInputElement>(null)
-  const [taxYear, setTaxYear] = useState(taxYears[0]?.toString() ?? new Date().getFullYear().toString())
+  const [taxYear, setTaxYear] = useState((defaultTaxYear ?? taxYears[0] ?? new Date().getFullYear() - 1).toString())
   const [docType, setDocType] = useState('Receipt')
   const [files, setFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
