@@ -103,7 +103,7 @@ const WAVE2: Array<{ file: string; surface: "page" | "card"; end: boolean }> = [
 describe("Wave 2 tables follow the window", () => {
   for (const { file, surface, end } of WAVE2) {
     const src = read(file)
-    const pins = [...src.matchAll(/pin(Head|Body)Cell\(([^)]*)\)/g)].map((m) => ({ kind: m[1], args: m[2] }))
+    const pins = Array.from(src.matchAll(/pin(Head|Body)Cell\(([^)]*)\)/g), (m) => ({ kind: m[1], args: m[2] }))
 
     describe(file, () => {
       it("uses the shared rules", () => {
