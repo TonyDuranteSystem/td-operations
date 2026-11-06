@@ -234,6 +234,12 @@ export const NOT_A_VOCABULARY = new Set([
   "marketing_team_members_member_role_check",
   "marketing_team_members_status_check",
   "marketing_teams_status_check",
+  // TEMPORARY (2026-11-06, CI "Lint + tests" red on PR 992, dev job 2072bc3e): the sandbox lacked the Marketing chat tables, so the existing migrations 20261023-2000 ...
+  // 20261029-2100 (all already run in production) were applied to it for the TD Social App Store practice login. Two more value lists came with them:
+  // `marketing_chat_threads.kind` (dm|group, written by lib/marketing/team-chat*.ts) and `marketing_tour_seen.status` (done|skipped). At the NEXT full
+  // `npm run snapshot:constraints`, MOVE each into CONSTRAINT_CONTRACTS with its code-side list and delete these lines.
+  "marketing_chat_threads_kind_check",
+  "marketing_tour_seen_status_check",
   // TEMPORARY (2026-10-12, CI "Sandbox still enforces what production enforces" went red on every build): these 13 ARE
   // value lists, not shape rules — they were added by features shipped after the last full `npm run snapshot:constraints`
   // and were never registered. Checked against production 2026-10-12: it holds all of them EXCEPT the three pwa_events_*
