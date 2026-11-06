@@ -60,7 +60,7 @@ export async function approveAndApplyClosureReview(
   const { data: sub, error: subErr } = await supabaseAdmin
     .from("closure_submissions")
     .select(
-      "id, token, account_id, contact_id, lead_id, status, reviewed_at, submitted_data, upload_paths, completed_at, language",
+      "id, token, account_id, contact_id, lead_id, status, reviewed_at, submitted_data, upload_paths, completed_at, language, drive_archive_meta",
     )
     .eq("id", submission_id)
     .maybeSingle()
@@ -109,6 +109,7 @@ export async function approveAndApplyClosureReview(
   // The same rule as the MCP closure_form_review (fileClosureSubmission): the form is marked reviewed only when it was filed.
   // Nothing filed → the submission is left exactly as it was (still waiting) and the caller is told why.
   const { fileClosureSubmission } = await import("@/lib/crm-store/save-account-form")
+  const { pinnedPersonFolder } = await import("@/lib/forms/closure-pinned-folder")
   const outcome = await fileClosureSubmission(
     {
       id: sub.id,
@@ -117,6 +118,7 @@ export async function approveAndApplyClosureReview(
       contact_id: sub.contact_id ?? null,
       upload_paths: (sub.upload_paths as string[] | null) ?? [],
       completed_at: sub.completed_at,
+      filedInPersonFolder: pinnedPersonFolder(sub.drive_archive_meta),
     },
     submitted,
     companyName,

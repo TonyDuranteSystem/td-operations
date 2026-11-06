@@ -10,7 +10,7 @@ import { isOwnerRole, pickViewAsFallback } from '@/lib/portal/pick-view-as-conta
 import { getClientLoginContactIds, getClientLoginNeedsSetupIds } from '@/lib/portal/client-login-index'
 import { resolveAccountSigner } from '@/lib/members/resolve-signer'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
-import { resolveFlows } from '@/lib/flows/resolve-flows'
+import { resolveFlows, taxReturnYear } from '@/lib/flows/resolve-flows'
 import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
 import { TaxWorkspaceBanner } from '@/components/flows/tax-workspace-banner'
 import { OnboardingWorkspaceBanner } from '@/components/flows/onboarding-workspace-banner'
@@ -74,7 +74,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Services (from service_deliveries — source of truth)
     supabase
       .from('service_deliveries')
-      .select('id, service_name, service_type, stage, stage_order, status, start_date, end_date, notes, updated_at, account_id, contact_id')
+      .select('id, service_name, service_type, stage, stage_order, status, start_date, end_date, notes, updated_at, created_at, due_date, stage_entered_at, account_id, contact_id')
       .eq('account_id', params.id)
       .neq('status', 'cancelled')
       .order('updated_at', { ascending: false }),
@@ -533,10 +533,10 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   const taxSd = (servicesResult.data ?? []).find(
     (sd) => (sd.service_type === 'Tax Return' || sd.service_type === 'Tax Return Filing') && sd.status === 'active',
   )
-  const openTaxYear = ((taxReturnsResult.data ?? []) as Array<{ tax_year: number; data_received: boolean | null }>)
-    .filter((tr) => tr.data_received !== true)
-    .map((tr) => tr.tax_year)
-    .sort((a, b) => b - a)[0] ?? null
+  // The banner names the year of THIS pipeline (the same year the chat tab and the workspace title show). It used to be the
+  // newest tax record with data not received, so a company holding an open 2026 record beside its 2025 job saw "2026" here
+  // and "2025" in the workspace (bug-hunter 2026-11-05).
+  const openTaxYear = taxSd ? taxReturnYear(taxSd) : null
 
   // Onboarding workspace — a linked contact's submitted data awaiting review,
   // and/or a just-reviewed company (this one, or a SECOND one still pending

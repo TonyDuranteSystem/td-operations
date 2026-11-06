@@ -216,6 +216,12 @@ export async function POST(req: NextRequest) {
     }
     closureServiceDeliveryId = String(rawServiceDeliveryId)
   }
+  // E2E QA 2026-11-06: a stale link to a CANCELLED or finished closure opened the wizard with no closure named, and the send then created a
+  // brand-new closure job out of nothing. A portal closure is always sent FOR a named, still-active closure (the page names it) — anything
+  // else is refused with the same message as a closure that went away while the tab was open.
+  if (wizard_type === 'closure' && identity.kind === 'contact' && !closureServiceDeliveryId) {
+    return NextResponse.json({ error: 'This closure request is no longer available. Refresh the page and try again.' }, { status: 409 })
+  }
 
   // ─── 0. SYNCHRONOUS VALIDATION ───
   // Structural fix: validate at the route boundary so the client sees field

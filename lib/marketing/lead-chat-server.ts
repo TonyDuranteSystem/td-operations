@@ -66,7 +66,7 @@ export async function chatMembers(teamId: string): Promise<ChatMember[]> {
 }
 
 /** The lanes (the two chats of a lead) this person may use: a setter the setter lane, Antonio on his own login the owners lane, Rocco both; Antonio "viewing as" a role gets that role's lanes. */
-export const laneAccess = (ctx: MarketingContext): Lane[] => lanesFor({ permissions: ctx.permissions, admin: ctx.admin === true, viewAs: ctx.viewAs !== undefined })
+export const laneAccess = (ctx: MarketingContext): Lane[] => lanesFor({ permissions: ctx.permissions, admin: ctx.admin === true, viewAs: ctx.viewAs !== undefined, reviewDemo: ctx.reviewDemo === true })
 
 const firstName = (name: string): string => name.trim().split(/\s+/)[0] || name
 

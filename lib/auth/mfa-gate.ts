@@ -18,6 +18,8 @@
  *    persisted skip flag); enrolled users are always challenged.
  */
 
+import { reviewDemoState, REVIEW_DEMO_MAX_DAYS } from '@/lib/auth/review-demo'
+
 export type MfaVerdict = 'allow' | 'enroll' | 'verify'
 
 export interface MfaGateEnv {
@@ -54,7 +56,17 @@ export interface MfaGateEnv {
    * Absent = false = today's behaviour for every existing caller.
    */
   strict?: boolean
+  /**
+   * The login's `app_metadata`, for the ONE exception to "strict" (TD Social, App Store review, Antonio's word 6 Nov 2026): Apple's reviewer cannot use an authenticator,
+   * so a single PRACTICE login (invented content only; its access is also capped on every request, see lib/marketing/guard-rules.ts `applyReviewDemo`) may sign in with
+   * its password alone inside a short window (`review_demo_from` -> `review_demo_until`, see lib/auth/review-demo.ts). Only the service role can write `app_metadata`.
+   * Read only for a strict subject, only while the login holds no authenticator.
+   */
+  reviewDemoMeta?: unknown
 }
+
+// The review-demo flag lives in ONE pure module (lib/auth/review-demo.ts) shared with the Marketing guard; re-exported here for the gate's tests.
+export { REVIEW_DEMO_MAX_DAYS }
 
 /** Exported for tests + the enroll page's own "can I still skip?" check. */
 export function isWithinGrace(graceUntilRaw: string | undefined, now: number): boolean {
@@ -72,6 +84,10 @@ export function resolveMfaGate(env: MfaGateEnv): MfaVerdict {
   // weaken an account that is currently protected, and someone who exempted
   // themselves and forgot would believe they were covered.
   if (env.exempt && !env.strict && !env.hasVerifiedFactor) return 'allow'
+
+  // The App Store review practice login (see `reviewDemoMeta`): a marketing login with NO authenticator and a live, near deadline. A login that holds
+  // an authenticator is still challenged below (the flag never weakens a protected account), and staff ignore the flag entirely (they have their own rules).
+  if (env.strict && !env.hasVerifiedFactor && reviewDemoState(env.reviewDemoMeta, env.now) === 'live') return 'allow'
 
   if (env.hasVerifiedFactor) {
     // Enrolled: the challenge is never grace-exempt — an enrolled user who

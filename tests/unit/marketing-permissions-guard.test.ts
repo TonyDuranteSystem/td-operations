@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest"
 import {
   MARKETING_PERMISSIONS, effectivePermissions, canGrant, validatePermissionList, hasPermission, cleanPermissions,
+  REVIEW_DEMO_PERMISSIONS, capForReviewDemo,
 } from "@/lib/marketing/permissions"
-import { decideMarketingAccess, type GuardMembership, type GuardTeam } from "@/lib/marketing/guard-rules"
+import { decideMarketingAccess, applyReviewDemo, type GuardMembership, type GuardTeam } from "@/lib/marketing/guard-rules"
+import { lanesFor } from "@/lib/marketing/lead-chat"
 import { defaultForSetting } from "@/lib/marketing/settings-schema"
 
 const bundles = defaultForSetting("permission_bundles") as Record<string, string[]>
@@ -90,5 +92,73 @@ describe("the guard decision (checked on every request)", () => {
   })
   it("an unknown team status fails closed", () => {
     expect(decideMarketingAccess({ ...base, teams: [team({ status: "weird" })] }).ok).toBe(false)
+  })
+})
+
+describe("the App Store review practice login is capped to chat + reading leads", () => {
+  it("a flagged owner (who holds every permission) is cut down to exactly chat and leads.read", () => {
+    const all = effectivePermissions({ memberRole: "owner", bundles })
+    expect([...capForReviewDemo(all)].sort()).toEqual([...REVIEW_DEMO_PERMISSIONS].sort())
+  })
+  it("a flagged setter keeps chat and leads.read and loses calling, marking, whatsapp and the rest", () => {
+    const p = capForReviewDemo(effectivePermissions({ memberRole: "member", bundle: "setter", bundles }))
+    expect([...p].sort()).toEqual(["chat", "leads.read"])
+  })
+  it("the cap never adds a permission the login did not have", () => {
+    expect(capForReviewDemo([])).toEqual([])
+    expect(capForReviewDemo(["chat"])).toEqual(["chat"])
+  })
+  it("the cap holds no money, payment link, offer, file, call or team permission", () => {
+    for (const no of ["payment_links.create", "money.read", "offers.create", "documents", "documents.manage", "calls.host", "calls.recordings", "team.manage", "leads.call", "leads.mark", "leads.export", "leads.import", "leads.pick"]) {
+      expect(REVIEW_DEMO_PERMISSIONS as readonly string[], no).not.toContain(no)
+    }
+  })
+})
+
+describe("applyReviewDemo — what the guard does with the practice login", () => {
+  const ownerRow: GuardMembership = { team_id: "t1", member_role: "owner", status: "active", bundle: null, permissions: [] }
+  const allPerms = effectivePermissions({ memberRole: "owner", bundles })
+  it("live and tied to THIS team: an owner row becomes a member and keeps only chat + leads.read", () => {
+    const r = applyReviewDemo({ state: "live", team: "t1" }, ownerRow, allPerms)
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.role).toBe("member")
+      expect(r.membership.member_role).toBe("member")
+      expect([...r.permissions].sort()).toEqual(["chat", "leads.read"])
+      expect(r.reviewDemo).toBe(true)
+    }
+  })
+  it("live but tied to another team, or to none: refused (a flag put on a REAL team's login gives that person nothing)", () => {
+    for (const team of ["t2", null, ""]) {
+      const r = applyReviewDemo({ state: "live", team }, ownerRow, allPerms)
+      expect(r.ok, String(team)).toBe(false)
+      if (r.ok === false) { expect(r.status).toBe(403); expect(r.code).toBe("REVIEW_TEAM") }
+    }
+  })
+  it("lapsed: every request is refused (an expired practice login is dead, it cannot be revived by enrolling an authenticator)", () => {
+    const r = applyReviewDemo({ state: "lapsed", team: "t1" }, ownerRow, allPerms)
+    expect(r.ok).toBe(false)
+    if (r.ok === false) { expect(r.status).toBe(403); expect(r.code).toBe("REVIEW_ENDED") }
+  })
+  it("none: an ordinary login is passed through unchanged", () => {
+    const r = applyReviewDemo({ state: "none", team: null }, ownerRow, allPerms)
+    expect(r.ok).toBe(true)
+    if (r.ok) { expect(r.role).toBe("owner"); expect(r.membership).toBe(ownerRow); expect(r.permissions.length).toBe(allPerms.length); expect(r.reviewDemo).toBe(false) }
+    // a stray team value without a deadline does nothing either
+    const r2 = applyReviewDemo({ state: "none", team: "t1" }, ownerRow, allPerms)
+    expect(r2.ok && r2.role).toBe("owner")
+  })
+})
+
+describe("chat lanes: capping the practice login must never WIDEN what it sees", () => {
+  const all = effectivePermissions({ memberRole: "owner", bundles })
+  it("a practice login only ever gets the setter's chat, even with owner or non-setter permissions", () => {
+    expect(lanesFor({ permissions: all, admin: false, viewAs: false, reviewDemo: true })).toEqual(["setter"])
+    expect(lanesFor({ permissions: ["chat", "leads.read"], admin: false, viewAs: false, reviewDemo: true })).toEqual(["setter"])
+  })
+  it("everybody else is unchanged: an owner still gets both lanes, a setter only the setter lane", () => {
+    expect(lanesFor({ permissions: all, admin: false, viewAs: false })).toEqual(["owners", "setter"])
+    expect(lanesFor({ permissions: all, admin: false, viewAs: false, reviewDemo: false })).toEqual(["owners", "setter"])
+    expect(lanesFor({ permissions: effectivePermissions({ memberRole: "member", bundle: "setter", bundles }), admin: false, viewAs: false })).toEqual(["setter"])
   })
 })
