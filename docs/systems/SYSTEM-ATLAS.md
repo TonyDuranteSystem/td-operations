@@ -190,7 +190,7 @@ _Regenerated 2026-11-06. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-19)_
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-11-06)_
-- [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-11-05)_
+- [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-11-06)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-10-23)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
@@ -228,7 +228,7 @@ _Regenerated 2026-11-06. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-05)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-19)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
-- [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_
+- [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-11-06)_
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-11-02)_
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-11-05)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-10-01)_
