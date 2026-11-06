@@ -122,14 +122,7 @@ export async function POST(req: NextRequest) {
     clientName = clientName.trim() || token
 
     const llcName = String(submittedData.llc_name || "Unknown LLC")
-    const llcEin = String(submittedData.llc_ein || "N/A")
     const llcState = String(submittedData.llc_state || (sub as Record<string, unknown>).state || "N/A")
-    // llc_formation_year is the actual key both closure frontends write
-    // (lib/types/closure-form.ts, components/portal/wizard/wizard-configs.ts) —
-    // this read the wrong key for as long as this route has existed, so
-    // "Formation Year" has always shown N/A in every closure email/task.
-    const formationYear = String(submittedData.llc_formation_year || "N/A")
-    const taxFiled = String(submittedData.tax_returns_filed || "N/A")
 
     // ---- STEP 2: File the data PDF + uploads ----
     // Stop-Drive S1a: the "Leads/{client} - {llc} (Closure)" Drive folder is gone. A company that still has a Drive folder keeps
@@ -381,60 +374,13 @@ export async function POST(req: NextRequest) {
       results.push({ step: "destination_check", status: "skipped", detail: destination.disagreement })
     }
 
-    // ---- STEP 5: Create task for Luca (RESUBMISSION only) ----
-    // On a brand-new SD, createSD's own dispatch (step 3 above) already created
-    // a proper workflow task card for "Company Closure" — inserting this plain
-    // task unconditionally duplicated it. On a resubmission (existing SD, no
-    // fresh dispatch), this plain task remains the only staff signal, so it
-    // still fires there.
-    //
-    // dev job fbbf4abe (AI architect + Senior Engineer finding): "resubmission"
-    // used to mean only "the SD already existed" — but once a failed step
-    // correctly triggers a retry (the ok:false fix), an AUTOMATIC RETRY of the
-    // exact same content also hits this branch and creates a DUPLICATE task
-    // every time it retries. isGenuineChange distinguishes "the client
-    // actually corrected something" from "this is a mechanical retry of what
-    // was already processed" using the submission's own content hash
-    // (dedupeKey, computed once at wizard-submit and forwarded unchanged) —
-    // a real edit always hashes differently and still creates a task; an
-    // exact retry does not. No dedupeKey (the old emailed-link flow, which
-    // has no retry mechanism at all) preserves the original behavior exactly.
+    // ---- STEP 5: no plain "Start closure" to-do (Antonio, 2026-11-06) ----
+    // This step used to insert a plain To-Do for Luca on every resubmitted / existing job. Antonio decided everything happens in the
+    // Calendar: the job itself moves (step 3) and staff see it there, the What's New note (5b) and the staff-only team note (step 6)
+    // carry the news. `isGenuineChange` (the submission's own content hash, forwarded unchanged from wizard-submit) is still what
+    // tells a client's real correction apart from a mechanical retry of the same content, so 5b and the hash stamp keep using it.
     const isGenuineChange = !dedupeKey || sub.last_processed_hash !== dedupeKey
-    if (!sdWasNewlyCreated && isGenuineChange) {
-      try {
-        await dbWriteSafe(
-          // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw tasks.insert; extract to lib/operations/ per dev_task fda76fd3
-          supabaseAdmin
-            .from("tasks")
-            .insert({
-              task_title: `Start closure: ${llcName} (${llcState})`,
-              description: `Closure form completed for ${clientName}.\n\nLLC: ${llcName}\nState: ${llcState}\nEIN: ${llcEin}\nFormation: ${formationYear}\nTax Filed: ${taxFiled}\n\nSteps:\n1. State compliance check (outstanding taxes, fees, annual reports)\n2. Resolve any outstanding obligations\n3. Prepare Articles of Dissolution\n4. Mark this task as Done to advance pipeline`,
-              assigned_to: "Luca",
-              priority: "High",
-              category: "Filing",
-              status: "To Do",
-              due_date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-              delivery_id: deliveryId || null,
-              account_id: accountId || null,
-              contact_id: contactId || null,
-              created_by: "System",
-            }),
-          "tasks.insert"
-        )
-
-        results.push({ step: "luca_task", status: "ok", detail: `Task created. Delivery: ${deliveryId || "none"}` })
-      } catch (e) {
-        results.push({ step: "luca_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
-      }
-    } else {
-      results.push({
-        step: "luca_task",
-        status: "skipped",
-        detail: sdWasNewlyCreated
-          ? "createSD's own workflow dispatch already created a task for the new SD"
-          : "identical content already processed for this submission — not a genuine resubmission",
-      })
-    }
+    results.push({ step: "luca_task", status: "skipped", detail: "no plain to-do by design — the job moves in the Calendar" })
 
     // ---- STEP 5b: What's New note for staff (Antonio, 2026-09-24) ----
     // Closure submissions used to produce only the email + task above —
