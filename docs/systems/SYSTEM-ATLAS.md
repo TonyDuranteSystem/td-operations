@@ -189,15 +189,15 @@ _Regenerated 2026-11-06. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-10-20)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-19)_
-- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-11-03)_
+- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-11-06)_
 - [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-11-05)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-10-23)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-21)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-28)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-04)_
-- [formation.md](formation.md) — Company Formation _(verified 2026-11-04)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-06)_
+- [formation.md](formation.md) — Company Formation _(verified 2026-11-06)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-02)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-06)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-28)_
@@ -233,5 +233,5 @@ _Regenerated 2026-11-06. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-11-05)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-10-01)_
 - [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-10-23)_
-- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-10-22)_
+- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-11-06)_
 <!-- /GENERATED:deep-docs -->

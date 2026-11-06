@@ -36,6 +36,9 @@ import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
 import { filedName, filedLegalName, type NameCheck } from "@/lib/flows/name-checks"
 import { CHANGE_NAME_STAGES } from "@/lib/flows/change-name-stages"
+import { trackingStepsCrossed, trackingMissingMessage } from "@/lib/flows/tracking-gate"
+import { trackingNumberMissing } from "@/lib/operations/tracking-number-check"
+import { POINTER_WORKFLOW_SLUG_BY_SERVICE, mergeSdStageIntoTaskMeta } from "@/lib/tasks/sd-stage-sync"
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -329,24 +332,24 @@ export async function advanceServiceDelivery(
   // action button AND the flow Workspace stepper (moveServiceDeliveryToStage)
   // call for a forward move — a UI-only check would leave the stepper's
   // shortcut path unenforced.
+  // Any other service opts in from its own step screen: an irs_tracking_entry box with requiredToAdvance (Company
+  // Closure "IRS Closure", Antonio 2026-11-05) — read from the stage rows already loaded above, no extra query.
+  const trackingFromStage = currentOrder > 0 ? stages.find(s => s.stage_order === currentOrder) : undefined
+  // A step whose screen asks for the number is also crossed by a JUMP over it (step bar, a tool naming a later step), not only by leaving it —
+  // resolved from the step NAME like 4f, because the stored number is frequently NULL/stale (bug-hunter 2026-11-05).
+  const trackingFromOrder = stages.find(s => s.stage_name === delivery.stage)?.stage_order ?? (currentOrder > 0 ? currentOrder : undefined)
+  const trackingStepsLeft = trackingStepsCrossed(stages, trackingFromOrder, targetStage.stage_order)
   if (
-    delivery.service_type === "ITIN" &&
-    currentOrder > 0 &&
-    stages.find(s => s.stage_order === currentOrder)?.stage_name === "Submitted to IRS" &&
-    targetStage.stage_order > currentOrder
+    (currentOrder > 0 &&
+      targetStage.stage_order > currentOrder &&
+      delivery.service_type === "ITIN" &&
+      trackingFromStage?.stage_name === "Submitted to IRS") ||
+    trackingStepsLeft.length > 0
   ) {
-    // irs_shipment_tracking isn't in the generated types until Antonio promotes
-    // the migration to production (sandbox-only until then).
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: tracking } = await (supabaseAdmin as any)
-      .from("irs_shipment_tracking")
-      .select("tracking_number")
-      .eq("service_delivery_id", delivery_id)
-      .maybeSingle()
-    if (!tracking?.tracking_number) {
+    if (await trackingNumberMissing(delivery_id)) {
       return {
         success: false,
-        error: `Enter the IRS mailing tracking number before moving this case to "${targetStage.stage_name}".`,
+        error: trackingMissingMessage(targetStage.stage_name),
         from_stage: delivery.stage || "New",
         to_stage: targetStage.stage_name,
         to_order: targetStage.stage_order,
@@ -629,17 +632,13 @@ export async function advanceServiceDelivery(
   // stage. The workspace advances the SD through THIS function, a different path
   // from the workflow engine's chain.advance_sd_stage handler (which already
   // patches task_meta) — so without this the pointer task card showed a stale
-  // stage. Both formation_progress (Company Formation) and itin_review (ITIN)
-  // are read-only workspace pointers, so this only keeps their displayed stage
-  // honest. Best-effort: never fail the advance.
-  const POINTER_WORKFLOW_SLUG_BY_SERVICE: Record<string, string> = {
-    "Company Formation": "formation_progress",
-    "ITIN": "itin_review",
-  }
+  // stage. formation_progress (Company Formation) and itin_review (ITIN) are
+  // read-only workspace pointers; closure_progress (Company Closure) has buttons
+  // that are shown by the job's step — all three only need their stored stage
+  // kept honest (list: lib/tasks/sd-stage-sync.ts). Best-effort: never fail the advance.
   const pointerWorkflowSlug = POINTER_WORKFLOW_SLUG_BY_SERVICE[delivery.service_type]
   if (pointerWorkflowSlug) {
     try {
-      const { mergeSdStageIntoTaskMeta } = await import("@/lib/tasks/sd-stage-sync")
       const { data: wfTasks } = await supabaseAdmin
         .from("tasks")
         .select("id, task_meta")
