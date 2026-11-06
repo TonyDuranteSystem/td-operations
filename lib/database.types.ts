@@ -11017,6 +11017,7 @@ export type Database = {
           created_at: string
           created_by: string | null
           id: string
+          is_test: boolean
           name: string
           owner_user_id: string | null
           status: string
@@ -11026,6 +11027,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           id?: string
+          is_test?: boolean
           name: string
           owner_user_id?: string | null
           status?: string
@@ -11035,6 +11037,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           id?: string
+          is_test?: boolean
           name?: string
           owner_user_id?: string | null
           status?: string
