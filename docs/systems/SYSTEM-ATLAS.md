@@ -198,7 +198,7 @@ _Regenerated 2026-11-06. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-28)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-06)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-11-06)_
-- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-02)_
+- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-06)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-06)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-28)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-27)_
