@@ -3,8 +3,8 @@ export const dynamic = "force-dynamic"
 import Image from "next/image"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { RefCookie } from "@/components/referral/ref-cookie"
+import { buildReferralBookingUrl } from "@/lib/referral-utils"
 
-const CALENDLY_URL = "https://calendly.com/antoniodurante/free-meet-greet-call"
 const SITE_URL = "https://tonydurante.us"
 
 // DRAFT copy — Antonio edits. Lives here for the visual draft; moves to i18n keys next.
@@ -63,11 +63,7 @@ export default async function ReferralLandingPage({
   }
 
   // Calendly link carries the code so it returns in the booking webhook
-  const calendlyUrl = new URL(CALENDLY_URL)
-  calendlyUrl.searchParams.set("utm_source", "referral")
-  calendlyUrl.searchParams.set("utm_medium", "link")
-  calendlyUrl.searchParams.set("utm_campaign", code)
-  calendlyUrl.searchParams.set("a1", code) // hidden prefill fallback
+  const calendlyUrl = buildReferralBookingUrl(code)
 
   const headline = referrerFirst ? c.recommendedBy(referrerFirst) : c.recommendedGeneric
 
@@ -93,7 +89,7 @@ export default async function ReferralLandingPage({
         </p>
 
         <a
-          href={calendlyUrl.toString()}
+          href={calendlyUrl}
           className="mt-8 inline-flex w-full items-center justify-center rounded-xl bg-violet-600 px-6 py-3.5 text-base font-medium text-white shadow-sm transition-colors hover:bg-violet-700"
         >
           {c.cta}
