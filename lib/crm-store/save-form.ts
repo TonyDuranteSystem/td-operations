@@ -146,6 +146,8 @@ export interface FormStoreSpec {
   subPath?: string[]
   /** the template slug that LOCKS the last sub-folder (staff cannot rename, move or delete it) */
   subPathLock?: string
+  /** a folder directly under a PERSON's top folder ("Company closure_<name>"): made once, found after. Person storages only (Company Closure Part B). */
+  rootSubFolder?: string
   /** the idempotency key of one upload when it must not depend on the submission (default: `form-upload:<submissionKey>:<path>`) */
   callerKeyOf?: (path: string, bytes: Buffer) => string | undefined
 }
@@ -157,6 +159,8 @@ export interface FormStoreDeps {
   taxFolder: (ownerId: string) => Promise<string>
   /** the sub-folder chain inside the top folder of that kind (found or made) */
   subFolder: (ownerId: string, folderKind: string, segments: string[], lockSlug?: string) => Promise<string>
+  /** a folder directly under the owner's top folder (found or made) */
+  rootSubFolder: (ownerId: string, name: string) => Promise<string>
   /** the live file already saved under this key: its folder (a replay keeps the whole package together) */
   folderOfKey: (callerKey: string) => Promise<string | null>
 }
@@ -177,6 +181,13 @@ async function defaultDeps(): Promise<FormStoreDeps> {
       let id = await pilot.folderOfKind(ownerId, folderKind)
       for (let i = 0; i < segments.length; i++) id = await ensureChildFolder(id, segments[i], i === segments.length - 1 ? lockSlug : undefined)
       return id
+    },
+    rootSubFolder: async (ownerId, name) => {
+      const { data, error } = await db().from("store_folders").select("id").eq("owner_id", ownerId).is("parent_id", null).is("trashed_at", null).order("created_at").limit(1)
+      if (error) throw new Error(`store: could not read the top folder — ${error.message}`)
+      const rootId = ((data ?? [])[0]?.id as string | undefined) ?? null
+      if (!rootId) throw new Error("store: this storage has no top folder")
+      return ensureChildFolder(rootId, name)
     },
     folderOfKey: async (callerKey) => {
       const { data, error } = await db().from("store_files").select("folder_id").eq("caller_key", callerKey).is("trashed_at", null).limit(1)
@@ -210,6 +221,18 @@ export async function saveFormToStore(spec: FormStoreSpec, deps?: FormStoreDeps)
       folderId = earlier ?? (await d.subFolder(spec.target.ownerId, folderKind, spec.subPath, spec.subPathLock))
     } catch (e) {
       // never fall back to the top folder: abort so the durable job retries (same rule as the tax-year folder)
+      return { ...out, errors: [`Sub-folder unresolved (aborted to avoid misfiling): ${e instanceof Error ? e.message : String(e)}`] }
+    }
+  }
+
+  // a named folder directly under a PERSON's top folder (Company closure_<name>): the whole package goes in it
+  if (!folderId && spec.rootSubFolder && spec.target.kind === "contact") {
+    try {
+      // a package that was already (partly) filed — a replay of this submission — stays together in the folder its summary is in
+      const earlier = spec.summary ? await d.folderOfKey(spec.summary.callerKey) : null
+      folderId = earlier ?? (await d.rootSubFolder(spec.target.ownerId, spec.rootSubFolder))
+    } catch (e) {
+      // never fall back to Personal documents: abort so the durable job retries (same rule as the company sub-folder)
       return { ...out, errors: [`Sub-folder unresolved (aborted to avoid misfiling): ${e instanceof Error ? e.message : String(e)}`] }
     }
   }

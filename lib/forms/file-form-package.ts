@@ -36,6 +36,8 @@ export interface FileFormPackageInput extends FormStorageInput {
   driveFolderId?: string | null
   /** the name each stored upload gets (see memberAwareFileName) */
   fileNameOf?: (path: string) => string
+  /** closure only: when the package goes to the PERSON's storage, the folder directly under it ("Company closure_<name>") that holds the whole package */
+  storeRootSubFolder?: string
   /** stop waiting after this long (default 20 s): the route's own steps (email, task, delivery) must never be starved — the retry job finishes the filing */
   deadlineMs?: number
 }
@@ -86,7 +88,7 @@ async function fileFormPackageNow(i: FileFormPackageInput): Promise<FilingStep> 
       folder = dest.marker
     }
     const split = i.formType === "formation" ? splitMemberPassports(i.uploadPaths) : { forPrimary: i.uploadPaths, forMembers: [] as string[] }
-    const res = await saveFormToDrive(i.formType, i.submittedData, split.forPrimary, folder, i.meta, { bucket: i.bucket, resolveBucket: i.resolveBucket, fileNameOf: i.fileNameOf })
+    const res = await saveFormToDrive(i.formType, i.submittedData, split.forPrimary, folder, i.meta, { bucket: i.bucket, resolveBucket: i.resolveBucket, fileNameOf: i.fileNameOf, storeRootSubFolder: i.storeRootSubFolder })
     const problems = [
       res.summaryFileId ? null : "the summary PDF was not saved",
       res.failed.length ? `${res.failed.length} file(s) failed: ${res.failed.join("; ")}` : null,

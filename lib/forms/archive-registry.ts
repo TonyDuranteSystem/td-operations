@@ -18,7 +18,8 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { collectUploadPaths, isWizardUploadPath } from "@/lib/portal/wizard-uploads"
 import { resolveItinContactFolder, resolveItinClientName } from "@/lib/forms/itin-contact-folder"
-import { resolveClosureFolder, resolveClosureClientName } from "@/lib/forms/closure-folder"
+import { resolveClosureClientName } from "@/lib/forms/closure-folder"
+import { resolveClosureDestination } from "@/lib/forms/closure-destination"
 import { memberAwareFileName, splitMemberPassports } from "@/lib/forms/file-form-package"
 
 /** Everything the archival engine needs to write ONE submission's package. Either
@@ -36,6 +37,8 @@ export interface ArchivePlan {
   uploadPaths: string[]
   /** For the accountant-PDF filename slug. */
   companyName?: string
+  /** closure only: the folder directly under the PERSON's storage that holds the package ("Company closure_<name>"). Pinned so a retry files in the SAME folder. */
+  storeRootSubFolder?: string
 }
 
 export interface ArchiveRecipe {
@@ -233,17 +236,21 @@ const closureRecipe: ArchiveRecipe = {
       token: (row.token as string | null) ?? null,
     })
     const llcName = String(submittedData.llc_name || "Unknown LLC")
-    const folderId = await resolveClosureFolder({
-      accountId: (row.account_id as string | null) ?? null,
+    // Company Closure Part B: the wizard's company name + EIN decide company storage vs the person's "Company closure_<name>" folder.
+    // (This fallback only knows the submission's own company link; the completion route pins the plan with the job's link too.)
+    const dest = await resolveClosureDestination({
+      linkedAccountId: (row.account_id as string | null) ?? null,
       contactId: (row.contact_id as string | null) ?? null,
       clientName,
+      submittedData,
     })
     return {
-      folderId,
+      folderId: dest.folderId,
       bucket: "closure-uploads",
       configKey: "closure",
       uploadPaths: deriveUploadPaths(row.upload_paths, submittedData),
       companyName: llcName,
+      ...(dest.storeRootSubFolder ? { storeRootSubFolder: dest.storeRootSubFolder } : {}),
     }
   },
 }

@@ -5,11 +5,15 @@
  * Auto-chain per Company Closure SOP:
  *
  * 1. Validate submission
- * 2. File the data PDF + documents in the client's storage
- * 3. Send Luca detailed email with LLC details + specific next steps
- * 4. Create task for Luca: "Start closure compliance check" (linked to delivery_id)
- * 5. Ensure Service Delivery exists
- * 6. Update service delivery stage_history
+ * 2. File the data PDF + documents. WHERE is decided by what the client wrote in the wizard (company name + EIN) checked against the
+ *    job's own company link (lib/forms/closure-destination.ts): a company of ours -> that company's storage; another company -> the
+ *    person's storage, folder "Company closure_<name>" (Company Closure Part B, Antonio 2026-11-06).
+ * 3. Ensure Service Delivery exists
+ * 3b. Move the job from "Data Collection" to "State Compliance Check" by itself (only from Data Collection — never re-advances)
+ * 4. (no email to support any more — the What's New note is the only notification, Antonio 2026-11-05)
+ * 5. Create task for Luca on a genuine RESUBMISSION only
+ * 5b. What's New note for staff
+ * 6. Add a note on the service delivery
  * 7. Log everything (action_log)
  *
  * Body: { submission_id: string, token: string }
@@ -23,7 +27,8 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWriteSafe } from "@/lib/db"
-import { createSD } from "@/lib/operations/service-delivery"
+import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
+import type { ClosureDestination } from "@/lib/forms/closure-destination"
 import type { Json } from "@/lib/database.types"
 import { reportSystemError } from "@/lib/system-errors"
 import { decideClosureWhatsNew, shouldReportSwallowedResubmission } from "@/lib/portal/closure-whats-new"
@@ -77,10 +82,12 @@ export async function POST(req: NextRequest) {
     // server-verified explicit-id path can distinguish this; the legacy
     // account/contact-based lookup below has no id to check status against
     // and is left exactly as it was for the old emailed-link flow.
+    // The job's own explicit company link (when the caller names the job): the cross-check for where the package is filed.
+    let explicitJobAccountId: string | null = null
     if (explicitServiceDeliveryId) {
       const { data: explicitSd } = await supabaseAdmin
         .from("service_deliveries")
-        .select("id, status")
+        .select("id, status, account_id")
         .eq("id", explicitServiceDeliveryId)
         .maybeSingle()
       if (!explicitSd || explicitSd.status !== "active") {
@@ -89,6 +96,7 @@ export async function POST(req: NextRequest) {
           { status: 409 },
         )
       }
+      explicitJobAccountId = (explicitSd.account_id as string | null) ?? null
     }
 
     const results: Array<{ step: string; status: string; detail?: string }> = []
@@ -121,17 +129,20 @@ export async function POST(req: NextRequest) {
     // "Formation Year" has always shown N/A in every closure email/task.
     const formationYear = String(submittedData.llc_formation_year || "N/A")
     const taxFiled = String(submittedData.tax_returns_filed || "N/A")
-    const taxYears = String(submittedData.tax_returns_years || "N/A")
-    const registeredAgent = String(submittedData.registered_agent || "N/A")
 
     // ---- STEP 2: File the data PDF + uploads ----
     // Stop-Drive S1a: the "Leads/{client} - {llc} (Closure)" Drive folder is gone. A company that still has a Drive folder keeps
     // filing there (the storage gate inside saveFormToDrive redirects a switched one); everyone else is filed in their storage —
     // the company's if it has one, else the person's. Every missing file is an error step plus a staff alarm (fileFormPackage).
+    // Company Closure Part B (Antonio 2026-11-06): what the client WROTE (company name + EIN) decides where the package goes, checked against
+    // the job's own company link (the submission's, else the named job's). Both agree on one of the person's companies -> that company's
+    // storage; anything else -> the PERSON's storage, folder "Company closure_<name>" (a disagreement is never guessed — staff are told below).
     let targetFolderId: string | null = null
+    let destination: ClosureDestination | null = null
     try {
-      const { resolveClosureFolder } = await import("@/lib/forms/closure-folder")
-      targetFolderId = await resolveClosureFolder({ accountId, contactId, clientName })
+      const { resolveClosureDestination } = await import("@/lib/forms/closure-destination")
+      destination = await resolveClosureDestination({ linkedAccountId: accountId ?? explicitJobAccountId, contactId, clientName, submittedData })
+      targetFolderId = destination.folderId
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e)
       results.push({ step: "storage_save", status: "error", detail })
@@ -144,6 +155,7 @@ export async function POST(req: NextRequest) {
       results.push(await fileFormPackage({
         route: "closure-form-completed", formType: "closure", submittedData, uploadPaths, accountId, contactId, personName: clientName,
         driveFolderId: targetFolderId,
+        storeRootSubFolder: destination?.storeRootSubFolder,
         // two upload origins: the external form (closure-uploads) and the portal wizard (onboarding-uploads) — same rule as the archive recipe
         bucket: "closure-uploads",
         resolveBucket: (path) => (isWizardUploadPath(path) ? "onboarding-uploads" : "closure-uploads"),
@@ -165,6 +177,7 @@ export async function POST(req: NextRequest) {
             configKey: "closure",
             uploadPaths: deriveUploadPaths(uploadPaths, submittedData),
             companyName: llcName,
+            ...(destination?.storeRootSubFolder ? { storeRootSubFolder: destination.storeRootSubFolder } : {}),
           },
           createdBy: "closure_form_completed",
         })
@@ -287,56 +300,50 @@ export async function POST(req: NextRequest) {
       results.push({ step: "sd_check", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
-    // ---- STEP 4: Send Luca detailed email ----
-    try {
-      const { gmailPost } = await import("@/lib/gmail")
+    // ---- STEP 3b: move the job on by itself (Company Closure Part B; Antonio 2026-11-05/06: "the job moves after the wizard") ----
+    // The wizard IS the first step's whole job ("Data Collection" waits for the client). Only FROM that step: a job staff already moved, a
+    // resubmission or a mechanical retry of this pass never re-advances or moves a job backwards. No auto-tasks — the job's current step on
+    // the Calendar IS the to-do. The client sees the normal step bell, exactly as for every other service.
+    if (deliveryId) {
+      try {
+        const adv = await advanceStageIfAt({
+          delivery_id: deliveryId,
+          if_current_stage: "Data Collection",
+          target_stage: "State Compliance Check",
+          actor: "closure-form-completed",
+          notes: `Closure wizard ${token} received`,
+          skip_tasks: true,
+        })
+        if (adv.advanced) {
+          results.push({ step: "sd_advance", status: "ok", detail: `SD ${deliveryId} -> State Compliance Check` })
+        } else if (adv.current_stage === "Data Collection") {
+          // the gate matched but the move itself failed — an error step, so the job retries it
+          results.push({ step: "sd_advance", status: "error", detail: adv.result?.error || adv.reason })
+        } else {
+          // already moved forward (staff, an earlier pass, a resubmission): nothing to do
+          results.push({ step: "sd_advance", status: "skipped", detail: adv.reason })
+        }
+      } catch (e) {
+        results.push({ step: "sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
 
-      const emailBody = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">
-<h2>[TASK] New Closure Request - Data Received</h2>
-<p>The client <strong>${clientName}</strong> has submitted a company closure request.</p>
+    // ---- STEP 4: NO email to support any more (Antonio 2026-11-05: "the only notification is What's New") ----
+    // The detailed "[TASK] New Closure Request" email to support@ is gone; the What's New note (step 5b) and the job's own workspace carry
+    // everything. The step name is kept so the job's step list and the action log read the same as before.
+    results.push({ step: "luca_email", status: "skipped", detail: "No email to support any more — the What's New note is the only notification" })
 
-<h3>LLC Details</h3>
-<table style="border-collapse:collapse;width:100%">
-<tr><td style="padding:4px 8px;font-weight:bold">LLC Name:</td><td style="padding:4px 8px"><strong>${llcName}</strong></td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">EIN:</td><td style="padding:4px 8px">${llcEin}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">State:</td><td style="padding:4px 8px">${llcState}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Formation Year:</td><td style="padding:4px 8px">${formationYear}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Registered Agent:</td><td style="padding:4px 8px">${registeredAgent}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Tax Returns Filed:</td><td style="padding:4px 8px">${taxFiled}${taxFiled === "yes" ? ` (Years: ${taxYears})` : ""}</td></tr>
-</table>
-
-<h3>Documents Uploaded</h3>
-<p>${uploadPaths.length > 0 ? uploadPaths.map(p => p.split("/").pop()).join(", ") : "None"}</p>
-
-<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
-
-<h3>Next Steps (Company Closure SOP)</h3>
-<ol>
-<li>Verify the LLC details above are correct</li>
-<li><strong>State Compliance Check:</strong> Check outstanding taxes, unpaid fees, annual report status for ${llcState}</li>
-<li>Resolve any outstanding obligations before filing dissolution</li>
-<li>Prepare Articles of Dissolution (${llcState}) -- use <code>closure_prepare_documents(token="${token}", state="${llcState}")</code></li>
-${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be needed -- client says no tax returns were filed</strong></li>` : ""}
-</ol>
-
-<p style="font-size:12px;color:#6b7280">Form token: ${token} | Client: ${clientName} | LLC: ${llcName}</p>
-</div>`
-
-      const closureSubject = `[TASK] Closure request received - ${llcName} (${llcState})`
-      const encodedSubject = `=?utf-8?B?${Buffer.from(closureSubject).toString("base64")}?=`
-      const raw = Buffer.from(
-        `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
-        `To: support@tonydurante.us\r\n` +
-        `Subject: ${encodedSubject}\r\n` +
-        `MIME-Version: 1.0\r\n` +
-        `Content-Type: text/html; charset=utf-8\r\n\r\n` +
-        emailBody
-      ).toString("base64url")
-
-      await gmailPost("/messages/send", { raw })
-      results.push({ step: "luca_email", status: "ok", detail: "Detailed email sent to support@" })
-    } catch (e) {
-      results.push({ step: "luca_email", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    // When the wizard's company and the job's link disagree the package was filed in the person's folder (never a company's): tell staff
+    // what to check, with the same staff-visible channel this route already uses for "check for a duplicate".
+    if (destination?.disagreement) {
+      reportSystemError({
+        source: "server",
+        route: "/api/closure-form-completed",
+        method: "POST",
+        message: `closure form for ${clientName} (${llcName}): ${destination.disagreement}`,
+        context: { submission_id, delivery_id: deliveryId, contact_id: contactId },
+      }).catch(() => {})
+      results.push({ step: "destination_check", status: "skipped", detail: destination.disagreement })
     }
 
     // ---- STEP 5: Create task for Luca (RESUBMISSION only) ----
@@ -507,6 +514,12 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
     }
 
     // ---- STEP 6: Update service delivery ----
+    // where the package went, in plain words, for the job's notes and the log
+    const filedWhere = !targetFolderId
+      ? "(NOT filed — see the alarm)"
+      : destination?.storeRootSubFolder
+        ? `in the person's folder "${destination.storeRootSubFolder}"`
+        : "in the company's storage"
     if (deliveryId) {
       try {
         const { data: sd } = await supabaseAdmin
@@ -521,7 +534,7 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
             supabaseAdmin
               .from("service_deliveries")
               .update({
-                notes: (sd.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Closure form completed. Data filed. Luca notified.`,
+                notes: (sd.notes || "") + `\n${new Date().toISOString().split("T")[0]}: Closure form completed. Data filed ${filedWhere}.${destination?.disagreement ? ` CHECK: ${destination.disagreement}` : ""}`,
                 updated_at: new Date().toISOString(),
               })
               .eq("id", sd.id),
@@ -541,7 +554,7 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
           action_type: "closure_form_completed",
           table_name: "closure_submissions",
           record_id: submission_id,
-          summary: `Closure form completed: ${llcName} (${clientName}). Files saved, Luca notified.`,
+          summary: `Closure form completed: ${llcName} (${clientName}). Files ${filedWhere}; job moved on if it was waiting for the wizard.`,
           details: { token, lead_id: leadId, contact_id: contactId, account_id: accountId, results } as unknown as Json,
         }),
         "action_log.insert"
