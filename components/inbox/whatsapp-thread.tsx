@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { loadWhatsAppDraft, saveWhatsAppDraft } from '@/lib/messaging/whatsapp-draft'
 import { isJunkChatName } from '@/lib/messaging/chat-name'
+import { mediaCaption } from '@/lib/messaging/media-caption'
 import { decideAiApply } from '@/lib/inbox/whatsapp-ai-apply'
 import { splitReactions, PHONE_SIDE_LABEL } from '@/lib/messaging/wa-reactions-view'
 import { describePhoneReactionState, isPhoneReactionInFlight } from '@/lib/messaging/wabridge-react'
@@ -964,14 +965,19 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                     </div>
                   )}
                   {isImage && msg.media_url ? (
-                    <a href={msg.media_url} target="_blank" rel="noopener noreferrer">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={msg.media_url}
-                        alt={msg.content_text || 'Image'}
-                        className="max-w-full rounded-lg mb-1"
-                      />
-                    </a>
+                    <>
+                      <a href={msg.media_url} target="_blank" rel="noopener noreferrer">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={msg.media_url}
+                          alt={msg.content_text || 'Image'}
+                          className="max-w-full rounded-lg mb-1"
+                        />
+                      </a>
+                      {mediaCaption(msg.content_text) && (
+                        <p className="text-sm whitespace-pre-wrap break-words">{mediaCaption(msg.content_text)}</p>
+                      )}
+                    </>
                   ) : isVideo ? (
                     // Plays right in the chat — no second tab. preload=metadata so a chat with many videos
                     // does not download them all on open; the link under it is the fallback (and the download).
@@ -991,6 +997,9 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                       >
                         Open / download video
                       </a>
+                      {mediaCaption(msg.content_text) && (
+                        <p className="text-sm whitespace-pre-wrap break-words mt-1">{mediaCaption(msg.content_text)}</p>
+                      )}
                     </div>
                   ) : msg.content_type === 'voice' && msg.voice ? (
                     <WhatsAppVoiceNote messageId={msg.id} voice={msg.voice} />
@@ -1141,7 +1150,8 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
           conversation" popup: attach, AI Suggest, and a confirm step before
           sending, so replying from an open conversation isn't a different,
           thinner experience than starting one (Antonio, 2026-09-17). */}
-      <div className="border-t bg-white shrink-0">
+      {/* The footer can never be taller than the chat pane: it scrolls inside itself, and the confirm buttons stay pinned at its bottom (Antonio, 2026-11-06). */}
+      <div className="border-t bg-white shrink-0 max-h-[70%] overflow-y-auto">
         {notice && (
           <p className={cn('text-xs px-3 pt-2', notice.tone === 'warn' ? 'text-amber-700' : 'text-zinc-500')}>{notice.text}</p>
         )}
@@ -1309,7 +1319,8 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                 {data?.chat?.phone ? ` (${data.chat.phone})` : ''}
               </span>
             </p>
-            <div className="bg-zinc-50 rounded-lg p-3 text-sm whitespace-pre-wrap break-words">
+            {/* A long message must never push Edit / Confirm & Send off the bottom of the window (Antonio, 2026-11-06): the preview scrolls inside itself. */}
+            <div className="bg-zinc-50 rounded-lg p-3 text-sm whitespace-pre-wrap break-words max-h-[40vh] overflow-y-auto">
               {rewriting ? <span className="text-zinc-400">Rewriting…</span> : text || <span className="text-zinc-400">(no caption — just the attachment)</span>}
             </div>
             {file && (
@@ -1331,7 +1342,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
               </select>
               <span className="text-zinc-400">{rewriting ? 'rewriting…' : 'switching rewrites the message'}</span>
             </div>
-            <div className="flex justify-end gap-2 pt-1">
+            <div className="flex justify-end gap-2 pt-1 sticky bottom-0 bg-white">
               <button
                 onClick={() => setConfirming(false)}
                 disabled={rewriting}

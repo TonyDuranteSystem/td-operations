@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findContactByPhone } from "@/lib/messaging/contact-match"
 import { jidToE164 } from "@/lib/messaging/phone"
 import { findNameSuggestion } from "@/lib/messaging/name-suggestion"
+import { suggestedSaveName } from "@/lib/messaging/name-match"
 
 export const dynamic = "force-dynamic"
 
@@ -51,5 +52,19 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     console.warn("[match-contact] name suggestion failed:", err instanceof Error ? err.message : err)
   }
-  return NextResponse.json({ match: null, alreadyLinked: false, nameSuggestion })
+  // The name to start the save form with: the phone-saved name, else the sender's own WhatsApp name. A failed lookup only means a blank box.
+  let suggestedName: string | null = null
+  try {
+    const { data: msgs } = await supabaseAdmin
+      .from("messages")
+      .select("sender_name")
+      .eq("group_id", groupId)
+      .eq("direction", "inbound")
+      .order("created_at", { ascending: false })
+      .limit(20)
+    suggestedName = suggestedSaveName(group.group_name, (msgs ?? []).map((m) => m.sender_name), group.external_group_id)
+  } catch (err) {
+    console.warn("[match-contact] suggested name failed:", err instanceof Error ? err.message : err)
+  }
+  return NextResponse.json({ match: null, alreadyLinked: false, nameSuggestion, suggestedName })
 }
