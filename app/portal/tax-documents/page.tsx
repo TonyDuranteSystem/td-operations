@@ -6,6 +6,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalTaxReturns } from '@/lib/portal/queries'
 import { isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
 import { getHistoryCutoff } from '@/lib/portal/history-cutoff'
+import { uploadYearOptions } from '@/lib/tax/upload-year-options'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { FileText, CheckCircle2, Clock, AlertCircle, CalendarClock, Shield } from 'lucide-react'
@@ -30,9 +31,8 @@ export default async function TaxDocumentsPage() {
 
   // Fetch tax returns for year dropdown
   const taxReturns = await getPortalTaxReturns(selectedAccountId)
-  const taxYears = Array.from(new Set(taxReturns.map(tr => tr.tax_year).filter(Boolean))).sort((a, b) => b - a)
-  const currentYear = new Date().getFullYear()
-  if (!taxYears.includes(currentYear)) taxYears.unshift(currentYear)
+  // The list keeps the current year as a choice, but the box STARTS on the open return's tax year (lib/tax/upload-year-options.ts).
+  const { years: taxYears, defaultYear: defaultTaxYear } = uploadYearOptions(taxReturns, new Date().getFullYear())
 
   // Fetch previously uploaded tax documents
   const { data: uploadedDocsAll } = await supabaseAdmin
@@ -116,7 +116,7 @@ export default async function TaxDocumentsPage() {
       )}
 
       {/* Upload Section */}
-      <TaxDocumentUpload accountId={selectedAccountId} taxYears={taxYears} />
+      <TaxDocumentUpload key={selectedAccountId} accountId={selectedAccountId} taxYears={taxYears} defaultTaxYear={defaultTaxYear} />
 
       {/* Previously Uploaded */}
       <div className="bg-white rounded-xl border shadow-sm p-6">
