@@ -30,7 +30,7 @@ interface DataViewerProps {
  */
 export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
   const [submission, setSubmission] = useState<Submission | null>(null)
-  const [source, setSource] = useState<'formation' | 'tax'>('tax')
+  const [source, setSource] = useState<'formation' | 'tax' | 'closure'>('tax')
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -45,7 +45,7 @@ export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
         }
         if (!cancelled) {
           setSubmission((data.submission as Submission) ?? null)
-          setSource(data.source === 'formation' ? 'formation' : 'tax')
+          setSource(data.source === 'formation' ? 'formation' : data.source === 'closure' ? 'closure' : 'tax')
           setLoaded(true)
         }
       } catch (err) {
@@ -72,7 +72,7 @@ export function DataViewer({ serviceDeliveryId, label }: DataViewerProps) {
       )
     : submission?.submitted_data
   const groups: DataGroup[] = submission ? groupSubmittedData(dataForGroups) : []
-  const heading = label || (isFormation ? 'Formation Wizard Submission' : 'Submitted Tax Data')
+  const heading = label || (isFormation ? 'Formation Wizard Submission' : source === 'closure' ? 'Closure Wizard Answers' : 'Submitted Tax Data')
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4">

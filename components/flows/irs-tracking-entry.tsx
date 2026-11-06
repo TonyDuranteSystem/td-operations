@@ -13,6 +13,8 @@ const DISPLAY_TZ = 'America/New_York'
 
 interface IrsTrackingEntryProps {
   serviceDeliveryId: string
+  /** Replaces the sentence under the empty form (from the step's stage_layout) — the default says the client is told on delivery, true of ITIN only. */
+  helpText?: string
 }
 
 interface TrackingState {
@@ -40,7 +42,7 @@ const STATUS_LABEL: Record<string, string> = {
  * delivery automatically and tells the client; "Check now" (2026-09-17) runs that same
  * check immediately instead of waiting for the next scheduled pass.
  */
-export function IrsTrackingEntry({ serviceDeliveryId }: IrsTrackingEntryProps) {
+export function IrsTrackingEntry({ serviceDeliveryId, helpText }: IrsTrackingEntryProps) {
   const [courier, setCourier] = useState<string>('')
   const [trackingNumber, setTrackingNumber] = useState('')
   const [saved, setSaved] = useState<TrackingState | null>(null)
@@ -164,7 +166,7 @@ export function IrsTrackingEntry({ serviceDeliveryId }: IrsTrackingEntryProps) {
           ) : (
             <div className="space-y-3">
               <p className="text-sm text-zinc-500">
-                Required before this case can move to the next stage. The system checks daily and tells the client once it&apos;s confirmed delivered.
+                {helpText || 'Required before this case can move to the next stage. The system checks daily and tells the client once it’s confirmed delivered.'}
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <select

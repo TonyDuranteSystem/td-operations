@@ -12,11 +12,14 @@ import {
   ArrowRight,
 } from 'lucide-react'
 import type { StageAction } from '@/lib/flows/stage-layout'
+import { actionConfirmText } from '@/lib/flows/action-confirm'
 
 interface ActionButtonsProps {
   serviceDeliveryId: string
   /** Actions from stage_layout — bare keys ("approve") or advance_next objects. */
   actions?: StageAction[]
+  /** The job belongs to a company of ours — a button may then ask a different (stronger) question before acting. */
+  hasCompany?: boolean
 }
 
 type Variant = 'primary' | 'secondary'
@@ -90,6 +93,8 @@ interface ResolvedAction extends ActionConfig {
   /** Unique id for busy-state keying (advance_next entries share one key, so we
    *  suffix the target to disambiguate multiple on one stage). */
   uid: string
+  /** The question asked before acting (in the page, with Confirm / Cancel), or null = act at once. */
+  confirmText: string | null
 }
 
 /**
@@ -99,10 +104,10 @@ interface ResolvedAction extends ActionConfig {
  *    explicit target stage, with the layout-supplied label. Missing target → null.
  *  - { key:'<known>', label? } → ACTION_CONFIG entry, with optional label override.
  */
-function resolveAction(action: StageAction): ResolvedAction | null {
+function resolveAction(action: StageAction, hasCompany: boolean): ResolvedAction | null {
   if (typeof action === 'string') {
     const config = ACTION_CONFIG[action]
-    return config ? { ...config, uid: action } : null
+    return config ? { ...config, uid: action, confirmText: null } : null
   }
   if (action.key === 'advance_next') {
     if (!action.target) return null
@@ -113,26 +118,30 @@ function resolveAction(action: StageAction): ResolvedAction | null {
       busyLabel: 'Advancing…',
       icon: ArrowRight,
       variant: 'primary',
+      confirmText: actionConfirmText(action, hasCompany),
     }
   }
   const config = ACTION_CONFIG[action.key]
   if (!config) return null
-  return { ...config, uid: action.key, label: action.label ?? config.label }
+  return { ...config, uid: action.key, label: action.label ?? config.label, confirmText: actionConfirmText(action, hasCompany) }
 }
 
-export function ActionButtons({ serviceDeliveryId, actions }: ActionButtonsProps) {
+export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }: ActionButtonsProps) {
   const router = useRouter()
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [warning, setWarning] = useState<string | null>(null)
+  // the button whose question is showing ("are you sure" panel); an in-page panel, not window.confirm (blocked in some browsers)
+  const [askingUid, setAskingUid] = useState<string | null>(null)
 
   const resolved = (actions ?? [])
-    .map(resolveAction)
+    .map((a) => resolveAction(a, hasCompany))
     .filter((a): a is ResolvedAction => a !== null)
   if (resolved.length === 0) return null
 
   async function runAction(action: ResolvedAction) {
     if (busyKey) return
+    setAskingUid(null)
     setBusyKey(action.uid)
     setError(null)
     setWarning(null)
@@ -176,7 +185,7 @@ export function ActionButtons({ serviceDeliveryId, actions }: ActionButtonsProps
             <button
               key={action.uid}
               type="button"
-              onClick={() => runAction(action)}
+              onClick={() => (action.confirmText ? (setError(null), setAskingUid(action.uid)) : runAction(action))}
               disabled={disabled}
               data-guide-action={action.targetStage}
               className={`${base} ${styles}`}
@@ -187,6 +196,31 @@ export function ActionButtons({ serviceDeliveryId, actions }: ActionButtonsProps
           )
         })}
       </div>
+      {resolved.map((action) =>
+        askingUid === action.uid && action.confirmText ? (
+          <div key={`ask-${action.uid}`} className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+            <p>{action.confirmText}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => runAction(action)}
+                disabled={busyKey !== null}
+                className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400"
+              >
+                Yes, confirm
+              </button>
+              <button
+                type="button"
+                onClick={() => setAskingUid(null)}
+                disabled={busyKey !== null}
+                className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null,
+      )}
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       {warning && (
         <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">

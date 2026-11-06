@@ -149,7 +149,7 @@ function renderComponent(
     case 'members_panel':
       return <MembersPanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'irs_tracking_entry':
-      return <IrsTrackingEntry key={key} serviceDeliveryId={serviceDelivery.id} />
+      return <IrsTrackingEntry key={key} serviceDeliveryId={serviceDelivery.id} helpText={component.helpText} />
     case 'suite_panel':
       return <SuitePanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'esign_panel':
@@ -171,7 +171,7 @@ function renderComponent(
       return <FlowChat key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'action_buttons':
       return (
-        <ActionButtons key={key} serviceDeliveryId={serviceDelivery.id} actions={component.actions} />
+        <ActionButtons key={key} serviceDeliveryId={serviceDelivery.id} actions={component.actions} hasCompany={!!serviceDelivery.account_id} />
       )
     case 'notes':
       return <StubPanel key={key} type="notes" />

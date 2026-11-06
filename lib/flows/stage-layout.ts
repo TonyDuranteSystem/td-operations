@@ -58,8 +58,12 @@ export type StageComponentType = (typeof STAGE_COMPONENT_TYPES)[number]
  * ACTION_CONFIG (e.g. "start_review", "complete"), or an object for the generic
  * "advance_next" forward action which carries its own button label and an
  * explicit target stage to advance to.
+ *
+ * `confirm` makes the button ASK first (an in-page "are you sure" with this sentence, then Confirm / Cancel) instead of acting at once;
+ * `confirmCompany` is a different sentence used only when the job belongs to a company of ours (e.g. "this also closes the company").
+ * Neither = the button acts at once, as before (lib/flows/action-confirm.ts).
  */
-export type StageAction = string | { key: string; label?: string; target?: string }
+export type StageAction = string | { key: string; label?: string; target?: string; confirm?: string; confirmCompany?: string }
 
 export interface StageComponent {
   type: StageComponentType
@@ -91,6 +95,12 @@ export interface StageComponent {
   /** document_viewer: render with a collapse/expand toggle, starting collapsed.
    *  Absent/false = always-open list (original behavior, unchanged). */
   collapsible?: boolean
+  /** irs_tracking_entry: the job may not move FORWARD from this step until a tracking number is saved (lib/flows/tracking-gate.ts,
+   *  enforced in advanceServiceDelivery). Absent/false = the box is only an entry form. ITIN keeps its own older rule for "Submitted to IRS". */
+  requiredToAdvance?: boolean
+  /** irs_tracking_entry: replaces the help sentence under the box (the default says the client is told when the letter is delivered —
+   *  not true of every service). Text only. */
+  helpText?: string
 }
 
 /** One thing the workspace does when this box takes its file. `key` names an action Storage itself ALSO does for some types (STORAGE_OWN_ACTIONS). */
@@ -157,12 +167,14 @@ export function parseStorageHint(value: unknown): StageBoxStorageHint | undefine
 function parseStageAction(a: unknown): StageAction | null {
   if (typeof a === 'string') return a
   if (a && typeof a === 'object') {
-    const obj = a as { key?: unknown; label?: unknown; target?: unknown }
+    const obj = a as { key?: unknown; label?: unknown; target?: unknown; confirm?: unknown; confirmCompany?: unknown }
     if (typeof obj.key !== 'string') return null
     return {
       key: obj.key,
       ...(typeof obj.label === 'string' ? { label: obj.label } : {}),
       ...(typeof obj.target === 'string' ? { target: obj.target } : {}),
+      ...(typeof obj.confirm === 'string' && obj.confirm.trim() ? { confirm: obj.confirm } : {}),
+      ...(typeof obj.confirmCompany === 'string' && obj.confirmCompany.trim() ? { confirmCompany: obj.confirmCompany } : {}),
     }
   }
   return null
@@ -184,7 +196,7 @@ export function parseStageLayout(value: unknown): StageLayout | null {
     const comp = c as { type?: unknown; label?: unknown; url?: unknown; actions?: unknown }
     if (typeof comp.type !== 'string') continue
     if (!(STAGE_COMPONENT_TYPES as readonly string[]).includes(comp.type)) continue
-    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown; collapsible?: unknown; documentType?: unknown; storageHint?: unknown }
+    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown; collapsible?: unknown; documentType?: unknown; storageHint?: unknown; requiredToAdvance?: unknown; helpText?: unknown }
     components.push({
       type: comp.type as StageComponentType,
       label: typeof comp.label === 'string' ? resolveTokens(comp.label) : undefined,
@@ -198,6 +210,8 @@ export function parseStageLayout(value: unknown): StageLayout | null {
       documentType: typeof rawComp.documentType === 'string' && rawComp.documentType ? rawComp.documentType : undefined,
       storageHint: parseStorageHint(rawComp.storageHint),
       collapsible: typeof rawComp.collapsible === 'boolean' ? rawComp.collapsible : undefined,
+      requiredToAdvance: typeof rawComp.requiredToAdvance === 'boolean' ? rawComp.requiredToAdvance : undefined,
+      helpText: typeof rawComp.helpText === 'string' && rawComp.helpText.trim() ? resolveTokens(rawComp.helpText) : undefined,
     })
   }
   return {

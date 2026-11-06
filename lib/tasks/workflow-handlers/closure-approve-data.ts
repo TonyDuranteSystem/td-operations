@@ -25,6 +25,7 @@ import type { HandlerContext, HandlerResult, SideEffect, WorkflowHandler } from 
 /** Re-export the central client-safe schema for the workflow editor. */
 export { closureApproveDataParams as handlerParamsSchema } from "@/lib/tasks/handler-param-schemas"
 
+const FROM_STAGE = "Data Collection"
 const TARGET_STAGE = "State Compliance Check"
 
 export const closureApproveData: WorkflowHandler = async (
@@ -36,6 +37,33 @@ export const closureApproveData: WorkflowHandler = async (
       error: {
         code: "NO_DELIVERY",
         message: "closure.approve_data requires the task to have delivery_id (linked Company Closure SD)",
+      },
+      side_effects: [],
+    }
+  }
+
+  // ── Only from "Data Collection" ────────────────────────────────────
+  // The card's button list is filtered by the stage it last saw, and the workspace can move the job without this card (it is kept in step now,
+  // but a card open in another tab can still be stale). Moving to "State Compliance Check" from any later step would pull the job BACKWARD and
+  // tell the client it moved — so read the job's real step first and refuse, before anything is saved (bug-hunter 2026-11-05).
+  const { data: liveSd, error: liveSdErr } = await supabaseAdmin
+    .from("service_deliveries")
+    .select("stage")
+    .eq("id", ctx.task.delivery_id)
+    .maybeSingle()
+  if (liveSdErr || !liveSd) {
+    return {
+      success: false,
+      error: { code: "SD_LOOKUP_FAILED", message: liveSdErr?.message ?? "The Company Closure job linked to this card was not found." },
+      side_effects: [],
+    }
+  }
+  if (liveSd.stage !== FROM_STAGE) {
+    return {
+      success: false,
+      error: {
+        code: "WRONG_STAGE",
+        message: `This button is for "${FROM_STAGE}", but the job is now on "${liveSd.stage ?? "no step"}". Use the job's workspace to move it.`,
       },
       side_effects: [],
     }
