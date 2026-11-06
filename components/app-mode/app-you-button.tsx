@@ -3,7 +3,7 @@
 // The round "You" button of the TD Social phone app (approved mockup: the initials circle sits inside the top bar of each list screen).
 // It exists only inside the app, and only on app versions that can open the "You" screen from a page (0.2.0+, see lib/app-mode/app-version.ts);
 // older builds draw their own strip and this renders nothing. Tapping it asks the app to open its "You" screen (name, alert switches, sign out).
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { appHasYouBridge, initialsOf } from '@/lib/app-mode/app-version'
 
@@ -50,14 +50,22 @@ export function AppYouButton({ className = '' }: { className?: string }) {
   )
 }
 
-/** The top bar of the Inbox and WhatsApp list screens in the app: the screen's name and the round "You" button. Nothing on older app builds. */
-export function AppListTitle({ title }: { title: string }) {
+/** The top bar of the Inbox and WhatsApp list screens in the app: the screen's name and the round "You" button. Nothing on older app builds.
+ *  `children` sit between the name and the round button (the Inbox puts its mailbox switch there). */
+export function AppListTitle({ title, children }: { title: string; children?: ReactNode }) {
   const has = useYouBridge()
   if (!has) return null
   return (
-    <div className="flex h-12 shrink-0 items-center justify-between border-b bg-white px-4" data-testid="app-list-title">
+    <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b bg-white px-4" data-testid="app-list-title">
       <h1 className="text-lg font-semibold text-zinc-900">{title}</h1>
-      <AppYouButton />
+      {children ? (
+        <div className="flex min-w-0 items-center gap-2">
+          {children}
+          <AppYouButton />
+        </div>
+      ) : (
+        <AppYouButton />
+      )}
     </div>
   )
 }
