@@ -19,3 +19,15 @@ export function mergeSdStageIntoTaskMeta(
 ): Record<string, unknown> {
   return { ...(meta ?? {}), sd_stage: stage, workflow_state: stage }
 }
+
+/**
+ * Which workflow card follows each service's moves: the workspace advances a job through advanceServiceDelivery, so the card's stored stage is
+ * kept in step there (section 6b). Company Closure's card has buttons (not a read-only pointer), but its buttons are shown by the job's step,
+ * so it must follow every move too — otherwise three open closure cards sat on "Data Collection" after the workspace moved the job
+ * (bug-hunter 2026-11-05).
+ */
+export const POINTER_WORKFLOW_SLUG_BY_SERVICE: Record<string, string> = {
+  "Company Formation": "formation_progress",
+  "ITIN": "itin_review",
+  "Company Closure": "closure_progress",
+}

@@ -6,6 +6,8 @@
 import { syncSupabaseToAirtable } from "@/lib/sync-airtable"
 import { logAction } from "@/lib/mcp/action-log"
 import { syncPortalLoginEmail } from "@/lib/operations/portal-login-email"
+import { trackingStepsCrossed, trackingMissingMessage } from "@/lib/flows/tracking-gate"
+import { trackingNumberMissing } from "@/lib/operations/tracking-number-check"
 import { handNameEditProblem } from "@/lib/operations/account-name-change"
 import {
   setAccountRenewalDate,
@@ -59,7 +61,7 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
 // ─── Auto-advance pipeline when all stage tasks are Done ─────
-async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
+export async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
   // 1. Get the completed task
   const { data: task } = await supabaseAdmin
     .from("tasks")
@@ -113,6 +115,17 @@ async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
 
   const nextStage = stages.find(s => s.stage_order > delivery.stage_order!)
   if (!nextStage) return null
+
+  // 5b. This path writes the stage itself, so it must honour the same tracking-number lock as advanceServiceDelivery (step 4c): a step whose
+  // screen asks for the IRS tracking number cannot be left by closing its last to-do (bug-hunter 2026-11-05). The "needs a document" rule is
+  // enforced by the database itself, so it already holds here.
+  const fromStep = stages.find(s => s.stage_name === delivery.stage)
+  if (
+    trackingStepsCrossed(stages, fromStep?.stage_order ?? delivery.stage_order, nextStage.stage_order).length > 0 &&
+    (await trackingNumberMissing(delivery.id))
+  ) {
+    return `⚠️ All tasks for "${delivery.stage}" are done, but the case could not move to "${nextStage.stage_name}": ${trackingMissingMessage(nextStage.stage_name)}`
+  }
 
   // 6. Advance delivery (with optimistic lock on stage_order)
   const historyEntry = {

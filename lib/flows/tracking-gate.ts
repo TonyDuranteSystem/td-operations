@@ -18,3 +18,26 @@ export function trackingRequiredToAdvance(stageLayout: unknown): boolean {
 export function trackingMissingMessage(targetStageName: string): string {
   return `Enter the IRS mailing tracking number before moving this case to "${targetStageName}".`
 }
+
+interface TrackingStepLike {
+  stage_name: string
+  stage_order: number
+  stage_layout?: unknown
+}
+
+/**
+ * The steps a FORWARD move from `fromOrder` to `toOrder` leaves or jumps over whose screen insists on a saved tracking number — the same range the
+ * "needs a document" rule uses (from <= step < to), so a shortcut over the step (the step bar, a tool asking for a later step, the automatic
+ * move when a step's to-dos are done) cannot skip the lock (bug-hunter 2026-11-05). Going back, staying, or an unknown step crosses nothing.
+ */
+export function trackingStepsCrossed(
+  steps: TrackingStepLike[],
+  fromOrder: number | null | undefined,
+  toOrder: number | null | undefined,
+): string[] {
+  if (typeof fromOrder !== 'number' || typeof toOrder !== 'number' || toOrder <= fromOrder) return []
+  return steps
+    .filter((s) => s.stage_order >= fromOrder && s.stage_order < toOrder && trackingRequiredToAdvance(s.stage_layout))
+    .sort((a, b) => a.stage_order - b.stage_order)
+    .map((s) => s.stage_name)
+}

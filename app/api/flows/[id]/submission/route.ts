@@ -3,9 +3,11 @@
  * flow Workspace data_viewer component.
  *
  * Three sources, by service_type:
- *   - Company Closure → the newest finished `closure_submissions` row (the client's closure wizard), `source:'closure'`.
+ *   - Company Closure → the finished `closure_submissions` row (the client's closure wizard) that belongs to THIS job, `source:'closure'`.
  *     A job with a company is matched by account; a job with NO company (closing a company that is not ours) by contact
- *     with no account — the same matching closure-form-completed itself uses to find the job.
+ *     with no account — the same matching closure-form-completed itself uses to find the job. Which row is this job's: see
+ *     lib/flows/closure-answers.ts (its own wizard token, else the newest made since the job started and only if no other
+ *     closure is open in that scope, else nothing).
  *   - Company Formation → the latest `wizard_progress` row for the SD's
  *     contact (wizard_type='formation'). Formation SDs are CONTACT-scoped
  *     (account_id NULL until the company is materialized at Articles Received),
@@ -25,6 +27,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { pickClosureAnswers } from '@/lib/flows/closure-answers'
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await requireStaffRoute()
@@ -35,7 +38,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     // 1. Resolve the SD → service_type + scoping ids.
     const { data: sd, error: sdErr } = await supabaseAdmin
       .from('service_deliveries')
-      .select('id, service_type, account_id, contact_id')
+      .select('id, service_type, account_id, contact_id, created_at, source_closure_token')
       .eq('id', serviceDeliveryId)
       .single()
 
@@ -117,22 +120,44 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       })
     }
 
-    // 2c. Company Closure — the client's closure wizard answers.
+    // 2c. Company Closure — the client's closure wizard answers. WHICH wizard belongs to this job is decided by pickClosureAnswers
+    // (lib/flows/closure-answers.ts): the job's own wizard when it knows it, else the newest one made since the job started — and
+    // only when no other closure is open in the same scope; never just "the newest for this person" (another closure's answers).
     if (sd.service_type === 'Company Closure') {
       let q = supabaseAdmin
         .from('closure_submissions')
-        .select('submitted_data, status, completed_at, created_at')
+        .select('submitted_data, status, completed_at, created_at, token')
         .in('status', ['completed', 'reviewed'])
-      if (sd.account_id) q = q.eq('account_id', sd.account_id)
-      else if (sd.contact_id) q = q.eq('contact_id', sd.contact_id).is('account_id', null)
-      else return NextResponse.json({ success: true, source: 'closure', submission: null })
-      const { data: cs, error: csErr } = await q.order('created_at', { ascending: false }).limit(1).maybeSingle()
-      if (csErr) {
+      let others = supabaseAdmin
+        .from('service_deliveries')
+        .select('id')
+        .eq('service_type', 'Company Closure')
+        .eq('status', 'active')
+        .neq('id', sd.id)
+      if (sd.account_id) {
+        q = q.eq('account_id', sd.account_id)
+        others = others.eq('account_id', sd.account_id)
+      } else if (sd.contact_id) {
+        q = q.eq('contact_id', sd.contact_id).is('account_id', null)
+        others = others.eq('contact_id', sd.contact_id).is('account_id', null)
+      } else {
+        return NextResponse.json({ success: true, source: 'closure', submission: null })
+      }
+      const [{ data: rows, error: csErr }, { data: otherJobs, error: otherErr }] = await Promise.all([
+        q.order('created_at', { ascending: false }).limit(50),
+        others,
+      ])
+      if (csErr || otherErr) {
         return NextResponse.json(
-          { success: false, error: `Could not load the closure wizard: ${csErr.message}` },
+          { success: false, error: `Could not load the closure wizard: ${(csErr ?? otherErr)?.message}` },
           { status: 500 },
         )
       }
+      const cs = pickClosureAnswers({
+        job: { id: sd.id, created_at: sd.created_at, source_closure_token: sd.source_closure_token },
+        rows: rows ?? [],
+        otherOpenJobs: (otherJobs ?? []).map((o) => ({ id: o.id })),
+      })
       return NextResponse.json({
         success: true,
         source: 'closure',

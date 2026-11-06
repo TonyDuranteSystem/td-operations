@@ -39,6 +39,17 @@ export async function applyDeliveryConfirmation(
   row: { service_delivery_id: string; tracking_number: string },
   deliveredAt: string,
 ): Promise<ConfirmDeliveryResult> {
+  // Read what this step says to the client BEFORE recording the delivery. If that read fails we stop here, with nothing written: the daily check
+  // (or "Check now") simply tries again. Reading it afterwards used to swallow the error and fall through to the standard "Good news" message —
+  // wrong for a step that deliberately tells the client nothing (bug-hunter 2026-11-05).
+  const { data: stageCfg, error: stageCfgErr } = await db
+    .from('pipeline_stages')
+    .select('tracking_delivered_message, client_chat_topic')
+    .eq('service_type', sd.service_type)
+    .eq('stage_name', sd.stage || '')
+    .maybeSingle()
+  if (stageCfgErr) throw new Error(`stage settings read failed: ${stageCfgErr.message}`)
+
   const { data: confirmed, error: confirmErr } = await db
     .from('irs_shipment_tracking')
     .update({ delivered_at: deliveredAt })
@@ -48,13 +59,6 @@ export async function applyDeliveryConfirmation(
     .select()
   if (confirmErr) throw new Error(`delivered-confirm write failed: ${confirmErr.message}`)
   if (!confirmed?.length) return { justConfirmed: false }
-
-  const { data: stageCfg } = await db
-    .from('pipeline_stages')
-    .select('tracking_delivered_message, client_chat_topic')
-    .eq('service_type', sd.service_type)
-    .eq('stage_name', sd.stage || '')
-    .maybeSingle()
 
   const configured = stageCfg?.tracking_delivered_message as string | null | undefined
   // An EMPTY message (not null) is a deliberate "tell the client nothing" for that step — Company Closure's "Waiting for the IRS" (Antonio
