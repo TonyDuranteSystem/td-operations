@@ -239,6 +239,7 @@ export const NOT_A_VOCABULARY = new Set([
   // `marketing_chat_threads.kind` dm|group (written only by lib/marketing/team-chat-server.ts) and `marketing_tour_seen.status` done|skipped (written only by markTourSeen in
   // lib/marketing/tour-seen.ts). They are not in the committed PRODUCTION snapshot until it is next fully regenerated. At the NEXT full `npm run snapshot:constraints`,
   // MOVE them into CONSTRAINT_CONTRACTS with their code-side lists and delete these lines.
+  // (The same two were hit again on PR 992, dev job 2072bc3e, when the existing Marketing chat migrations were applied to the sandbox for the TD Social practice login.)
   "marketing_chat_threads_kind_check",
   "marketing_tour_seen_status_check",
   // TEMPORARY (2026-10-12, CI "Sandbox still enforces what production enforces" went red on every build): these 13 ARE

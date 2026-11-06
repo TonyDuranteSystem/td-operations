@@ -79,3 +79,13 @@ export function canGrant(g: GrantCheck): { ok: boolean; error?: string } {
   if (over.length) return { ok: false, error: `You cannot give what you do not have: ${over.join(", ")}.` }
   return { ok: true }
 }
+
+// ── the App Store review practice login (TD Social, Antonio's word 6 Nov 2026) ─────────────────────────────────────────────
+
+/** All a practice login may ever hold: read the leads and chat about them. Whatever its membership row says, it never gets more (no calls, payment links, money, files, team). */
+export const REVIEW_DEMO_PERMISSIONS: readonly MarketingPermission[] = ["chat", "leads.read"]
+
+/** The permissions a flagged practice login really gets: only what is in both its own list and `REVIEW_DEMO_PERMISSIONS`. */
+export function capForReviewDemo(perms: readonly MarketingPermission[]): MarketingPermission[] {
+  return perms.filter(p => REVIEW_DEMO_PERMISSIONS.includes(p))
+}
