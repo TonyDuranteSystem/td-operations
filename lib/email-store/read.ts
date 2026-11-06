@@ -47,6 +47,43 @@ export function resolveMessageIsHtml(storedIsHtml: boolean | null | undefined, b
   return storedIsHtml ?? STRUCTURAL_HTML_TAG.test(body)
 }
 
+/** The columns of a stored attachment row that decide whether the thread lists it as a file. */
+export interface StoredAttachmentRow {
+  gmail_attachment_id: string
+  filename: string | null
+  mime_type: string | null
+  size_bytes: number | null
+  is_inline: boolean
+  content_id: string | null
+}
+
+/**
+ * The files a stored message lists as attachments (the chips under the body).
+ *
+ * Mirrors the live-Gmail path (app/api/inbox/messages/[id]/route.ts): an image is
+ * hidden ONLY when the body already displays it (`usedInline`). `is_inline` +
+ * `content_id` alone does NOT mean "decoration": capture flags them from any image
+ * part carrying a Content-ID, and Gmail gives ordinary ATTACHED photos a
+ * Content-ID too (`f_xxxx`). Hiding every such row made real client photos vanish
+ * from the Inbox (Prime Circle, 2026-11-06, dev job ade92cfb). The one thing the
+ * live path also never lists is a part with no filename (extractAttachments needs
+ * one), so a nameless inline part stays hidden here as well.
+ */
+export function selectVisibleAttachments(
+  atts: StoredAttachmentRow[],
+  usedInline: ReadonlySet<string>,
+): Array<{ filename: string; mimeType: string; size: number; attachmentId: string }> {
+  return atts
+    .filter((a) => !usedInline.has(a.gmail_attachment_id))
+    .filter((a) => a.filename || !(a.is_inline && a.content_id))
+    .map((a) => ({
+      filename: a.filename || "attachment",
+      mimeType: a.mime_type || "application/octet-stream",
+      size: Number(a.size_bytes ?? 0),
+      attachmentId: a.gmail_attachment_id,
+    }))
+}
+
 /**
  * The whole thread from our store, or null if it isn't fully captured yet
  * (caller then falls back to live Gmail).
@@ -132,15 +169,7 @@ export async function loadStoredThread(
       })
     }
 
-    const visible = atts
-      .filter((a) => !usedInline.has(a.gmail_attachment_id))
-      .filter((a) => !a.is_inline || !a.content_id)
-      .map((a) => ({
-        filename: a.filename || "attachment",
-        mimeType: a.mime_type || "application/octet-stream",
-        size: Number(a.size_bytes ?? 0),
-        attachmentId: a.gmail_attachment_id,
-      }))
+    const visible = selectVisibleAttachments(atts, usedInline)
 
     // Mirrors the live-fetch path's inlineImages field (app/api/inbox/messages/
     // [id]/route.ts) so Forward behaves the same whether a thread is served
