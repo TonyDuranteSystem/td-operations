@@ -3,19 +3,17 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { filterByHistoryCutoff, isSettledPaymentStatus } from '@/lib/documents/history-cutoff'
-import { getHistoryView } from '@/lib/portal/history-cutoff'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getFormationTracker, getInProgressFormations, getInProgressOnboardings, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getFormationTracker, getInProgressFormations, getInProgressOnboardings, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
 import { buildFormationTrackerSteps } from '@/lib/portal/formation-progress'
 import { buildTrackerSteps } from '@/lib/tax/progress-tracker'
 import { TaxProgressTracker } from '@/components/portal/tax-progress-tracker'
 import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
 import { PortalFlowStatusSection } from '@/components/portal/flow-status-section'
 import { ActionItems } from '@/components/portal/action-items'
-import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User, ChevronRight, ListChecks, ShieldCheck, Package } from 'lucide-react'
+import { PersonalInfoCards } from '@/components/portal/personal-info-cards'
+import { getPersonalInfo } from '@/lib/portal/personal-info'
+import { Building2, Shield, MapPin, Calendar, FileText, Mail, Phone, User, ChevronRight, ListChecks, ShieldCheck, Package } from 'lucide-react'
 import Link from 'next/link'
-import { PaymentHistory } from '@/components/portal/payment-history'
-import { cn } from '@/lib/utils'
 import { t, getLocale, type Locale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import { cookies } from 'next/headers'
@@ -37,7 +35,7 @@ import { OfferBanner } from '@/components/portal/offer-banner'
 import { AnnouncementBanners, type PortalAnnouncement } from '@/components/portal/announcement-banners'
 import { APP_BASE_URL } from '@/lib/config'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
-import { differenceInDays, parseISO, format } from 'date-fns'
+import { parseISO, format } from 'date-fns'
 import { getRenewalBannerMinYear } from '@/lib/settings'
 
 function formatEin(ein: string | null): string {
@@ -52,23 +50,6 @@ function formatDate(d: string | null): string {
   } catch {
     return d
   }
-}
-
-const STATUS_COLORS: Record<string, string> = {
-  'Not Started': 'bg-zinc-100 text-zinc-600',
-  'In Progress': 'bg-blue-100 text-blue-700',
-  'Waiting Client': 'bg-amber-100 text-amber-700',
-  'Waiting Third Party': 'bg-orange-100 text-orange-700',
-  'Completed': 'bg-emerald-100 text-emerald-700',
-  'Cancelled': 'bg-zinc-100 text-zinc-500',
-  'active': 'bg-blue-100 text-blue-700',
-  'blocked': 'bg-red-100 text-red-700',
-  'completed': 'bg-emerald-100 text-emerald-700',
-  'cancelled': 'bg-zinc-100 text-zinc-500',
-  'Paid': 'bg-emerald-100 text-emerald-700',
-  'Due': 'bg-amber-100 text-amber-700',
-  'Overdue': 'bg-red-100 text-red-700',
-  'Pending': 'bg-amber-100 text-amber-700',
 }
 
 export default async function PortalDashboardPage() {
@@ -146,6 +127,19 @@ export default async function PortalDashboardPage() {
     </div>
   ) : null
 
+  // The person's own details (Antonio, 2026-11-05): "Informazioni Personali" with Modifica + the read-only
+  // passport/ITIN card, moved here from the Profilo page (its menu entry is gone). null for a team member (no
+  // contact). On every home-page branch below: the company-client page places them inside its own card grid,
+  // every other branch renders `personalCards` under its dashboard.
+  const personalInfo = await getPersonalInfo(contactId)
+  const personalCards = personalInfo ? (
+    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pt-0 sm:pt-0 lg:pt-0">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <PersonalInfoCards data={personalInfo} locale={locale} translations={translations} />
+      </div>
+    </div>
+  ) : null
+
   // Get selected account
   const cookieStore = cookies()
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
@@ -192,6 +186,7 @@ export default async function PortalDashboardPage() {
             sdStage={tracker?.currentStage ?? null}
             filedAt={tracker?.filedAt ?? null}
           />
+          {personalCards}
         </div>
       )
     }
@@ -264,6 +259,7 @@ export default async function PortalDashboardPage() {
             wizardSubmitted={wizardSubmitted}
             wizardReviewed={wizardReviewed}
           />
+          {personalCards}
         </>
       )
     }
@@ -423,6 +419,7 @@ export default async function PortalDashboardPage() {
               sdStage={tracker?.currentStage ?? null}
               filedAt={tracker?.filedAt ?? null}
             />
+            {personalCards}
           </div>
         )
       }
@@ -456,6 +453,7 @@ export default async function PortalDashboardPage() {
             sdStage={tracker?.currentStage ?? null}
             filedAt={tracker?.filedAt ?? null}
           />
+          {personalCards}
         </div>
       )
     }
@@ -593,6 +591,7 @@ export default async function PortalDashboardPage() {
           wizardSubmitted={wizardSubmitted}
           wizardReviewed={wizardReviewed}
         />
+        {personalCards}
       </>
     )
   }
@@ -667,6 +666,7 @@ export default async function PortalDashboardPage() {
           sdStage={tracker?.currentStage ?? null}
           filedAt={tracker?.filedAt ?? null}
         />
+        {personalCards}
       </div>
     )
   }
@@ -812,6 +812,7 @@ export default async function PortalDashboardPage() {
           wizardSubmitted={wizardSubmitted}
           wizardReviewed={wizardReviewed}
         />
+        {personalCards}
       </>
     )
   }
@@ -824,12 +825,8 @@ export default async function PortalDashboardPage() {
   const renewalBannerEnabled = currentYear >= renewalBannerMinYear
 
   // Fetch all data in parallel
-  const [account, services, deadlines, accountPayments, contactPayments, taxReturns, members, actionItems, profileBanner, renewalOffer] = await Promise.all([
+  const [account, taxReturns, members, actionItems, profileBanner, renewalOffer] = await Promise.all([
     getPortalAccountDetail(selectedAccountId),
-    getPortalServices(selectedAccountId),
-    getPortalDeadlines(selectedAccountId),
-    getPortalPayments(selectedAccountId),
-    contactId ? getPortalPaymentsByContact(contactId) : Promise.resolve([]),
     getPortalTaxReturns(selectedAccountId),
     getPortalMembers(selectedAccountId),
     getPortalActionItems(selectedAccountId, contactId || undefined),
@@ -883,7 +880,7 @@ export default async function PortalDashboardPage() {
 
   // Service Status — client-facing flow progress (Tax Return / Annual Report /
   // RA Renewal / CMRA) driven by active service_deliveries + per-stage
-  // client_label. Distinct from the services-table "Services" card below.
+  // client_label.
   const flows = await getPortalFlows(selectedAccountId, locale, contactId)
   // The dedicated Slice-5 Tax tracker (below) already renders the Tax Return
   // journey, so drop Tax Return from Service Status when it's showing to avoid
@@ -919,30 +916,7 @@ export default async function PortalDashboardPage() {
       </div>
     )
   }
-  const today = new Date().toISOString().split('T')[0]
-  const allServices = services
   const isMultiMember = account.entity_type?.toLowerCase().includes('multi') || members.length > 1
-
-  // PR 2 Step 4 — merge company-scoped + personal payments into one mixed
-  // list with a per-row scope label, mirroring the Expenses tab on
-  // /portal/invoices. Per Antonio's "he sees both" rule applied to the
-  // home-page PaymentHistory widget for active-tier clients.
-  const personalPaymentLabel = t('dashboard.personal', locale, translations)
-  const companyPaymentLabel = account.company_name ?? t('dashboard.company', locale, translations)
-  // A person who joined later sees SETTLED company payments only from their start date; what is still owed stays visible.
-  const payHistory = await getHistoryView(selectedAccountId, contactId, 'payment')
-  const visibleAccountPayments = filterByHistoryCutoff(accountPayments, payHistory.cutoff, contactId, p => ({
-    created_at: p.created_at,
-    opened: payHistory.opened.has(p.id) || !isSettledPaymentStatus(p.status),
-  }))
-  const payments = [
-    ...visibleAccountPayments.map(p => ({ ...p, scope_label: companyPaymentLabel })),
-    ...contactPayments.map(p => ({ ...p, scope_label: personalPaymentLabel })),
-  ].sort((a, b) => {
-    const ad = a.due_date ?? ''
-    const bd = b.due_date ?? ''
-    return bd.localeCompare(ad)
-  })
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
@@ -1137,6 +1111,10 @@ export default async function PortalDashboardPage() {
           </div>
         </div>
 
+        {/* The person's own details (Antonio, 2026-11-05): Informazioni Personali + the passport/ITIN card. The
+            personal card stands beside Info Azienda; the identity card tucks in under Info Azienda. */}
+        {personalInfo && <PersonalInfoCards data={personalInfo} locale={locale} translations={translations} rowSpan />}
+
         {/* Your Addresses Card — always shows all four, full width so the
             descriptions have room to breathe (Antonio, dev job 254834cc,
             2026-09-17: descriptions must stay full-length, not shortened;
@@ -1258,49 +1236,9 @@ export default async function PortalDashboardPage() {
           </div>
         )}
 
-        {/* Services Card */}
-        <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">
-            {t('dashboard.activeServices', locale, translations)} ({allServices.length})
-          </h2>
-          {allServices.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-zinc-400">
-              <CheckCircle2 className="h-8 w-8 mb-2" />
-              <p className="text-sm">{t('dashboard.noServices', locale, translations)}</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {allServices.map(s => (
-                <div key={s.id} className={cn('rounded-lg border p-3', s.blocked_waiting_external && 'border-red-200 bg-red-50/50')}>
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <span className="text-sm font-medium truncate">{s.service_name}</span>
-                    <span className={cn('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[s.status ?? ''] ?? 'bg-zinc-100')}>
-                      {s.status}
-                    </span>
-                  </div>
-                  <p className="text-xs text-zinc-500">{s.service_type}</p>
-                  {s.current_step != null && s.total_steps != null && (
-                    <div className="mt-2">
-                      <div className="flex items-center justify-between text-xs text-zinc-500 mb-1">
-                        <span>{t('dashboard.progress', locale, translations)}</span>
-                        <span>{s.current_step}/{s.total_steps}</span>
-                      </div>
-                      <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-blue-500 rounded-full transition-all"
-                          style={{ width: `${Math.min((s.current_step / s.total_steps) * 100, 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {s.current_stage && (
-                    <p className="text-xs text-zinc-400 mt-1">{t('dashboard.stage', locale, translations)}: {s.current_stage}</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        {/* The "Servizi Attivi", "Scadenze Imminenti", "Storico Pagamenti" and "Dichiarazioni Fiscali" cards left
+            this page on 2026-11-05 (Antonio). Their pages (/portal/services, /portal/deadlines, the invoices screen,
+            the tax tracker above) are untouched. */}
 
         {/* The "Partner Banks" box was retired 2026-07-27 (Antonio). It was a
             second, smaller bank list sitting alongside the dedicated Bank
@@ -1310,77 +1248,6 @@ export default async function PortalDashboardPage() {
             single client-facing surface; staff still see per-account click
             status on the account detail page. */}
 
-        {/* Upcoming Deadlines */}
-        <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.upcomingDeadlines', locale, translations)}</h2>
-          {deadlines.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-zinc-400">
-              <Calendar className="h-8 w-8 mb-2" />
-              <p className="text-sm">{t('dashboard.noDeadlines', locale, translations)}</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {deadlines.map(d => {
-                const daysUntil = differenceInDays(parseISO(d.due_date), parseISO(today))
-                const isOverdue = daysUntil < 0
-                return (
-                  <div key={d.id} className={cn(
-                    'flex items-center gap-3 p-2.5 rounded-lg text-sm',
-                    isOverdue ? 'bg-red-50' : daysUntil <= 7 ? 'bg-orange-50' : 'bg-yellow-50'
-                  )}>
-                    <Clock className={cn('h-4 w-4 shrink-0', isOverdue ? 'text-red-500' : 'text-orange-500')} />
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium truncate text-xs">{d.deadline_type}</p>
-                      <p className="text-xs text-zinc-500">{formatDate(d.due_date)}</p>
-                    </div>
-                    <span className={cn('text-xs font-medium', isOverdue ? 'text-red-600' : 'text-orange-600')}>
-                      {isOverdue ? `${Math.abs(daysUntil)}d overdue` : daysUntil === 0 ? 'Today' : `${daysUntil}d`}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Payment History */}
-        <PaymentHistory payments={payments} title={t('dashboard.paymentHistory', locale, translations)} />
-
-        {/* Tax Returns */}
-        {taxReturns.length > 0 && (
-          <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3 lg:col-span-2">
-            <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.taxReturns', locale, translations)}</h2>
-            <div className="space-y-2">
-              {taxReturns.map(tr => (
-                <div key={tr.id} className="flex flex-col sm:flex-row sm:items-center justify-between py-2 border-b last:border-b-0 text-sm gap-1 sm:gap-3">
-                  <div className="flex items-center gap-3">
-                    <span className="font-medium">{tr.tax_year}</span>
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">{tr.return_type}</span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                    <span className="text-xs text-zinc-500">{t('dashboard.deadline', locale, translations)}: {formatDate(tr.deadline)}</span>
-                    {tr.extension_filed && (() => {
-                      const resolvedIso = resolveExtensionDeadline(
-                        tr.extension_deadline,
-                        tr.tax_year,
-                        tr.return_type as Parameters<typeof resolveExtensionDeadline>[2],
-                      )
-                      const displayed = resolvedIso ? formatDeadlineForDisplay(resolvedIso, locale) : '\u2014'
-                      return (
-                        <span className="text-xs text-zinc-500">
-                          {t('dashboard.ext', locale, translations)}: {displayed}
-                        </span>
-                      )
-                    })()}
-                    <span className={cn('text-xs px-2 py-0.5 rounded-full', STATUS_COLORS[tr.status ?? ''] ?? 'bg-zinc-100')}>
-                      {tr.status}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   )
