@@ -943,6 +943,9 @@ export async function advanceServiceDelivery(
           "Data Received": "Data Received",
           "Sent to be filed": "Sent to Accountant",
           "TR Completed": "TR Completed - Awaiting Signature",
+          // The document is out with the client (item 5, 2026-11-06). "Signed" is deliberately NOT mapped: there is no "signed" tax status
+          // (a new status value would be a database change), so the record keeps "Awaiting Signature" until it is filed.
+          "Sent for Signature": "TR Completed - Awaiting Signature",
           "TR Filed": "TR Filed",
         }
         const newStatus = stageToStatus[targetStage.stage_name]

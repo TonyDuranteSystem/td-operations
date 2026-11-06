@@ -14,19 +14,19 @@
  *
  * The REAL Tax Return stages (production pipeline_stages, verified 2026-11-06): Company Data Pending · Paid - Awaiting Data · 1st
  * Installment Paid · Extension Filed · Awaiting 2nd Payment · 2nd Installment Paid · Wizard Available · Data Submitted · Under Review ·
- * Revision Requested · Approved · Confirmed · Data Received · Preparation · TR Completed ("Ready to Sign") · TR Filed · Terminated -
- * Non Payment. The names "Review Completed", "Tax Return Prepared", "Sent for Signature", "Signed", "Filed with IRS", "IRS Receipt
- * Uploaded" and "Completed" are NOT stages of that pipeline (the mapper knew 7 names the pipeline does not have and none of
- * Data Received / Preparation / TR Completed / TR Filed — so a client who had to sign was told "under review"). They stay mapped
- * because other pipelines or older rows may still carry them.
+ * Revision Requested · Approved · Confirmed · Data Received · Preparation · [Sent for Signature · Signed — added by the item-5 migration,
+ * 2026-11-06] · TR Completed (older, no longer a step the buttons lead into) · TR Filed · Terminated - Non Payment. The names "Review
+ * Completed", "Tax Return Prepared", "Filed with IRS", "IRS Receipt Uploaded" and "Completed" are NOT stages of that pipeline (the mapper
+ * once knew 7 names the pipeline does not have and none of the real ones — so a client who had to sign was told "under review"). They stay
+ * mapped because other pipelines or older rows may still carry them.
  */
 
 export type FlowBannerState =
   | 'complete_form' // Wizard Available — client must fill the tax wizard
   | 'under_review' // Data Submitted / Under Review — staff reviewing, no client action
-  | 'preparing' // Approved / Confirmed / Data Received / Preparation — approved, staff preparing the return
+  | 'preparing' // Approved / Confirmed / Data Received / Preparation / TR Completed — approved, staff preparing the return
   | 'revision_requested' // Revision Requested — client must edit & resubmit
-  | 'sign' // TR Completed — client signs at /portal/sign
+  | 'sign' // Sent for Signature — client signs at /portal/sign
   | 'signed' // Signed — signed, awaiting filing
   | 'filed' // TR Filed — filed
   | 'completed' // Completed — done
@@ -43,12 +43,12 @@ export function flowStageBannerState(sdStage: string | null | undefined): FlowBa
     case 'Confirmed':
     case 'Data Received':
     case 'Preparation':
+    case 'TR Completed': // the older "return ready" step: nothing is out for signature yet (the document is sent from "Preparation" now)
       return 'preparing'
     case 'Revision Requested':
       return 'revision_requested'
-    case 'TR Completed':
+    case 'Sent for Signature': // the document is out with the client (set when staff send it from the workspace)
     case 'Tax Return Prepared':
-    case 'Sent for Signature':
       return 'sign'
     case 'Signed':
       return 'signed'

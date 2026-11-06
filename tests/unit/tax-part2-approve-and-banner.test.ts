@@ -206,8 +206,9 @@ describe('client banner reads the real workspace steps', () => {
   it('Data Received / Preparation / Approved / Confirmed → being prepared', () => {
     for (const s of ['Data Received', 'Preparation', 'Approved', 'Confirmed']) expect(flowStageBannerState(s)).toBe('preparing')
   })
-  it('TR Completed → sign; TR Filed → filed', () => {
-    expect(flowStageBannerState('TR Completed')).toBe('sign')
+  it('Sent for Signature → sign; the older TR Completed → being prepared (nothing is out for signature yet); TR Filed → filed', () => {
+    expect(flowStageBannerState('Sent for Signature')).toBe('sign')
+    expect(flowStageBannerState('TR Completed')).toBe('preparing')
     expect(flowStageBannerState('TR Filed')).toBe('filed')
   })
   it('every real stage after the review maps; billing stages still fall through', () => {
@@ -216,8 +217,9 @@ describe('client banner reads the real workspace steps', () => {
     expect(flowStageBannerState('Terminated - Non Payment')).toBeNull()
   })
   it('"Sign your tax return" only when a document is really waiting; otherwise "being prepared"', () => {
-    expect(taxBannerFlowState('TR Completed', true)).toBe('sign')
-    expect(taxBannerFlowState('TR Completed', false)).toBe('preparing')
+    expect(taxBannerFlowState('Sent for Signature', true)).toBe('sign')
+    expect(taxBannerFlowState('Sent for Signature', false)).toBe('preparing') // e.g. the document was cancelled or expired
+    expect(taxBannerFlowState('TR Completed', true)).toBe('preparing')
     expect(taxBannerFlowState('Preparation', false)).toBe('preparing')
     expect(taxBannerFlowState('Wizard Available', false)).toBe('complete_form')
   })
@@ -270,9 +272,9 @@ describe('wiring', () => {
     expect(i18n).not.toContain('Clicca Conferma per finalizzare')
     expect(i18n).not.toContain('Hai confermato i tuoi dati per la {returnLabel}')
   })
-  it('the portal asks for a waiting signature only at "TR Completed", from the Sign tab\'s own list', () => {
+  it('the portal asks for a waiting signature only at "Sent for Signature", from the Sign tab\'s own list', () => {
     const page = read('app/portal/page.tsx')
-    expect(page).toContain("tr.sd_stage === 'TR Completed'")
+    expect(page).toContain('tr.sd_stage === TAX_RETURN_SIGN_STAGES.sent')
     expect(page).toContain('getSignableDocuments({ selectedAccountId')
     expect(page).toContain('signatureWaiting={taxSignatureWaiting}')
   })
