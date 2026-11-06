@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Send } from 'lucide-react'
 import { parseAllowlistInput } from '@/lib/messaging/wabridge-outbox'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
 
 type Mode = 'paused' | 'shadow' | 'live'
 
@@ -26,6 +27,7 @@ const HELP: Record<Mode, string> = {
  * Going LIVE needs an approved-numbers list first and asks for one extra click.
  */
 export function WhatsAppSendSwitch() {
+  const appMode = useAppMode()
   const [state, setState] = useState<SendState | null>(null)
   const [open, setOpen] = useState(false)
   const [confirmLive, setConfirmLive] = useState(false)
@@ -55,6 +57,9 @@ export function WhatsAppSendSwitch() {
   }, [state, open])
 
   if (!state) return null
+  // In the phone app the bar takes a whole row for nothing while replies really go out. It stays whenever they do NOT (Test mode / Paused), so a reply
+  // that is only recorded can never look sent. The computer always shows it.
+  if (appMode && state.mode === 'live') return null
 
   const save = async (payload: { mode?: Mode; allowlist?: string[] }) => {
     if (busy) return

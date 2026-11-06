@@ -755,9 +755,9 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onFirstR
   // (server + reconcile order pinned-first), so headers are pure rendering.
   const pinBandView = data?.origin?.view.kind === 'inbox' || data?.origin?.view.kind === 'label'
   const pinnedCount = pinBandView ? conversations.filter(c => c.starred === true).length : 0
-  const sectionHeader = (label: string, icon: 'pin' | 'mail') => (
+  const sectionHeader = (label: string, icon: 'pin' | 'mail' | 'chat') => (
     <div className="flex items-center gap-1.5 px-4 py-1.5 bg-zinc-50 border-b text-[11px] font-semibold uppercase tracking-wider text-zinc-400 select-none">
-      {icon === 'pin' ? <Star className="h-3 w-3 fill-amber-400 text-amber-400" /> : <Mail className="h-3 w-3" />}
+      {icon === 'pin' ? <Star className="h-3 w-3 fill-amber-400 text-amber-400" /> : icon === 'chat' ? <MessageSquare className="h-3 w-3" /> : <Mail className="h-3 w-3" />}
       {label}
     </div>
   )
@@ -796,7 +796,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onFirstR
             ? rowIdx === 0 && conv.starred
               ? sectionHeader(`Pinned (${pinnedCount})`, 'pin')
               : conv.starred !== true && (rowIdx === 0 || conversations[rowIdx - 1]?.starred === true)
-                ? sectionHeader('All email', 'mail')
+                ? (isWhatsApp ? sectionHeader('All chats', 'chat') : sectionHeader('All email', 'mail'))
                 : null
             : null
         return (

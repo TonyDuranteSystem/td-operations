@@ -181,3 +181,11 @@
 [data-app-mode="true"] .app-day-pill { background-color: #fff !important; }
 [data-app-mode="true"] .app-wa-composer { padding: 6px 8px; row-gap: 2px; }
 [data-app-mode="true"] .app-wa-composer > * + * { margin-top: 2px !important; }
+
+/* Pinch-zoom in the app (round two): the page's "no zoom" setting is lifted by AppModeProvider (lib/app-mode/zoom.ts). The iPhone also zooms in by itself
+   when you tap a box whose text is smaller than 16 px, so every typing box is 16 px in the app; double-tap zoom is off (pinch stays), so quick taps never zoom. */
+[data-app-mode="true"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="button"]):not([type="submit"]):not([type="color"]) { font-size: 16px !important; }
+[data-app-mode="true"] textarea { font-size: 16px !important; }
+[data-app-mode="true"] select { font-size: 16px !important; }
+[data-app-mode="true"] [contenteditable="true"] { font-size: 16px; }
+[data-app-mode="true"] { touch-action: manipulation; }

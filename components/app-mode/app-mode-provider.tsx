@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { AppModeContext } from '@/lib/app-mode/app-mode-context'
+import { applyPinchZoom } from '@/lib/app-mode/zoom'
 
 /**
  * Wraps a layout's content for the TD Social app (dev job 2072bc3e, Step 1b).
@@ -26,6 +27,15 @@ export function AppModeProvider({ initial, children }: { initial: boolean; child
     const root = document.documentElement
     root.setAttribute('data-app-mode', 'true')
     return () => root.removeAttribute('data-app-mode')
+  }, [appMode])
+  // Pinch-zoom is allowed inside the app (the pages' own "no zoom" setting is rewritten). Next puts the page's setting back when it changes
+  // page, so the head is watched and the rewrite is applied again; applying it twice changes nothing, so this cannot loop.
+  useEffect(() => {
+    if (!appMode) return
+    applyPinchZoom(document)
+    const watcher = new MutationObserver(() => { applyPinchZoom(document) })
+    watcher.observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['content'] })
+    return () => watcher.disconnect()
   }, [appMode])
   return (
     <AppModeContext.Provider value={appMode}>
