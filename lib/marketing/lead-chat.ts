@@ -176,7 +176,9 @@ export const LANES: readonly Lane[] = ["owners", "setter"]
 export const isLane = (v: unknown): v is Lane => v === "owners" || v === "setter"
 
 /** The lanes this person may read and write. `admin` = a CRM admin (Antonio); `viewAs` = he is previewing a role. */
-export function lanesFor(i: { permissions: readonly string[]; admin: boolean; viewAs: boolean }): Lane[] {
+export function lanesFor(i: { permissions: readonly string[]; admin: boolean; viewAs: boolean; reviewDemo?: boolean }): Lane[] {
+  // the App Store review practice login: capping its permissions must never WIDEN what it sees, so it only ever gets the setter's chat
+  if (i.reviewDemo) return ["setter"]
   if (isSetterOnly(i.permissions)) return ["setter"]
   if (i.admin && !i.viewAs) return ["owners"]
   return ["owners", "setter"]
