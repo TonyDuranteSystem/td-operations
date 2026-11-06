@@ -10,6 +10,7 @@ import { createRecurringInvoice } from '@/app/(dashboard)/shared/recurring-invoi
 import { INSTALLMENT_TYPES, type CreateInvoiceInput, type CreateCreditNoteInput, type InvoiceItem } from '@/lib/schemas/invoice'
 import { RECURRING_FREQUENCIES, type RecurringInvoiceFrequency, type CreateRecurringInvoiceInput } from '@/lib/schemas/recurring-invoice'
 import { getOfficeDateString } from '@/lib/portal/office-hours'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 
 const RECURRING_FREQUENCY_LABELS: Record<RecurringInvoiceFrequency, string> = {
   weekly: 'Weekly',
@@ -670,7 +671,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
                 )}
                 <div className="flex justify-between font-semibold border-t pt-1">
                   <span>Total</span>
-                  <span className={isCredit ? 'text-purple-600' : ''}>
+                  <span className={`${KEEP_WHOLE} ${isCredit ? 'text-purple-600' : ''}`}>
                     {isCredit ? '-' : ''}{currencySymbol}{Math.abs(total).toFixed(2)}
                   </span>
                 </div>

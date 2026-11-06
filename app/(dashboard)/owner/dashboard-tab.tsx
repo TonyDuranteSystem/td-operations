@@ -3,6 +3,7 @@
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { formatOwnerCurrency, type OwnerPnL, type PnLBlock, type CashPosition } from '@/lib/owner-finance'
 import { ConnectBankPanel } from './connect-bank-panel'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -103,7 +104,7 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
             {others.map(b => (
               <div key={b.currency} className="flex items-center justify-between text-sm">
                 <span className="text-zinc-600">{b.currency} — invoice income {fmtIn(b.currency)(b.invoice_income)}</span>
-                <span className="tabular-nums text-zinc-800">net {fmtIn(b.currency)(b.net_profit)}</span>
+                <span className={`tabular-nums text-zinc-800 ${KEEP_WHOLE}`}>net {fmtIn(b.currency)(b.net_profit)}</span>
               </div>
             ))}
           </div>
@@ -119,7 +120,7 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
             {cash.accounts.map(a => (
               <div key={`${a.bank_name}|${a.currency}`} className="flex items-center justify-between text-sm">
                 <span className="text-zinc-600">{a.bank_name}{a.currency !== 'USD' ? ` (${a.currency})` : ''}</span>
-                <span className="font-medium tabular-nums">{fmtIn(a.currency)(a.balance)}</span>
+                <span className={`font-medium tabular-nums ${KEEP_WHOLE}`}>{fmtIn(a.currency)(a.balance)}</span>
               </div>
             ))}
           </div>
@@ -139,7 +140,7 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
             {cash.liabilities.map(a => (
               <div key={`${a.bank_name}|${a.currency}`} className="flex items-center justify-between text-sm">
                 <span className="text-zinc-600">{a.bank_name}{a.currency !== 'USD' ? ` (${a.currency})` : ''}</span>
-                <span className="font-medium tabular-nums text-red-600">{fmtIn(a.currency)(a.balance)}</span>
+                <span className={`font-medium tabular-nums text-red-600 ${KEEP_WHOLE}`}>{fmtIn(a.currency)(a.balance)}</span>
               </div>
             ))}
           </div>

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { formatOwnerCurrency, type OwnerPnL, type PnLBlock } from '@/lib/owner-finance'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 
 const fmtIn = (currency: string) => (n: number) => formatOwnerCurrency(n, currency, { maximumFractionDigits: 0 })
 
@@ -306,11 +307,11 @@ function PnLRow({
   return (
     <tr className={highlight ? 'bg-zinc-50' : ''}>
       <td className={`px-4 py-1.5 ${indent ? 'pl-8' : ''} ${bold ? 'font-medium text-zinc-800' : 'text-zinc-600'}`}>{label}</td>
-      <td className={`px-4 py-1.5 text-right tabular-nums ${bold ? 'font-semibold' : ''} ${color}`}>{fmt(value)}</td>
+      <td className={`px-4 py-1.5 text-right tabular-nums ${KEEP_WHOLE} ${bold ? 'font-semibold' : ''} ${color}`}>{fmt(value)}</td>
       {prior !== undefined ? (
         <>
-          <td className="px-4 py-1.5 text-right tabular-nums text-zinc-400">{fmt(prior)}</td>
-          <td className={`px-4 py-1.5 text-right text-xs tabular-nums ${variancePct !== undefined && variancePct !== null ? (variancePct >= 0 ? 'text-green-600' : 'text-red-600') : 'text-zinc-400'}`}>
+          <td className={`px-4 py-1.5 text-right tabular-nums text-zinc-400 ${KEEP_WHOLE}`}>{fmt(prior)}</td>
+          <td className={`px-4 py-1.5 text-right text-xs tabular-nums ${KEEP_WHOLE} ${variancePct !== undefined && variancePct !== null ? (variancePct >= 0 ? 'text-green-600' : 'text-red-600') : 'text-zinc-400'}`}>
             {fmtPct(variancePct ?? null)}
           </td>
         </>

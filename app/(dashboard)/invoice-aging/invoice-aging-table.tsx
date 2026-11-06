@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import { cn } from '@/lib/utils'
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from '@/lib/ui/table-cells'
 
 interface AgingRow {
   id: string
@@ -99,13 +101,13 @@ export function InvoiceAgingTable({ rows }: { rows: AgingRow[] }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b bg-muted/50">
-              <th className="text-left px-4 py-3 font-medium">Client</th>
-              <th className="text-left px-4 py-3 font-medium">Invoice #</th>
-              <th className="text-right px-4 py-3 font-medium">Amount</th>
-              <th className="text-right px-4 py-3 font-medium">Balance</th>
-              <th className="text-left px-4 py-3 font-medium">Due Date</th>
-              <th className="text-right px-4 py-3 font-medium">Days Overdue</th>
-              <th className="text-left px-4 py-3 font-medium">Status</th>
+              <th className={`text-left px-4 py-3 font-medium ${pinHeadCell('start')}`}>Client</th>
+              <th className={`text-left px-4 py-3 font-medium ${KEEP_WHOLE}`}>Invoice #</th>
+              <th className={`text-right px-4 py-3 font-medium ${KEEP_WHOLE}`}>Amount</th>
+              <th className={`text-right px-4 py-3 font-medium ${KEEP_WHOLE}`}>Balance</th>
+              <th className={`text-left px-4 py-3 font-medium ${KEEP_WHOLE}`}>Due Date</th>
+              <th className={`text-right px-4 py-3 font-medium ${KEEP_WHOLE}`}>Days Overdue</th>
+              <th className={`text-left px-4 py-3 font-medium ${KEEP_WHOLE}`}>Status</th>
             </tr>
           </thead>
           <tbody>
@@ -113,15 +115,20 @@ export function InvoiceAgingTable({ rows }: { rows: AgingRow[] }) {
               <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No invoices found</td></tr>
             )}
             {filtered.map(row => (
-              <tr key={row.id} className={`border-b hover:bg-muted/30 ${agingColor(row.days_overdue, row.status)}`}>
-                <td className="px-4 py-3 font-medium">{row.company_name}</td>
-                <td className="px-4 py-3">{row.invoice_number}</td>
-                <td className="px-4 py-3 text-right">${Number(row.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                <td className="px-4 py-3 text-right font-medium">
+              <tr key={row.id} className={`group border-b hover:bg-muted/30 ${agingColor(row.days_overdue, row.status)}`}>
+                {/* The client is the one free-text column: it is cut with … (full name on hover) so it can never push the numbers apart.
+                    The row's own tint goes on the pinned cell too, because a pinned cell must be opaque; a hovered row drops its tint
+                    (hover:bg-muted/30 replaces it), so the pinned cell does the same. */}
+                <td className={cn('px-4 py-3 font-medium', pinBodyCell('start'), agingColor(row.days_overdue, row.status), 'group-hover:bg-background')}>
+                  <span className="block max-w-[16rem] truncate" title={row.company_name}>{row.company_name}</span>
+                </td>
+                <td className={`px-4 py-3 ${KEEP_WHOLE}`}>{row.invoice_number}</td>
+                <td className={`px-4 py-3 text-right ${KEEP_WHOLE}`}>${Number(row.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                <td className={`px-4 py-3 text-right font-medium ${KEEP_WHOLE}`}>
                   {row.status === 'Paid' ? '—' : `$${Number(row.amount_due ?? row.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
                 </td>
-                <td className="px-4 py-3">{row.due_date ?? '—'}</td>
-                <td className="px-4 py-3 text-right">
+                <td className={`px-4 py-3 ${KEEP_WHOLE}`}>{row.due_date ?? '—'}</td>
+                <td className={`px-4 py-3 text-right ${KEEP_WHOLE}`}>
                   {row.status === 'Paid' ? '—' : row.days_overdue > 0 ? (
                     <span className={row.days_overdue >= 60 ? 'text-red-600 font-bold' : row.days_overdue >= 30 ? 'text-orange-600 font-semibold' : 'text-yellow-600'}>
                       {row.days_overdue}d
@@ -130,7 +137,7 @@ export function InvoiceAgingTable({ rows }: { rows: AgingRow[] }) {
                     <span className="text-green-600">Current</span>
                   )}
                 </td>
-                <td className="px-4 py-3">{statusBadge(row.status)}</td>
+                <td className={`px-4 py-3 ${KEEP_WHOLE}`}>{statusBadge(row.status)}</td>
               </tr>
             ))}
           </tbody>
