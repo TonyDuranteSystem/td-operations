@@ -95,6 +95,18 @@ describe("closure-form-completed — Part B", () => {
     expect(stepOf(r.results, "luca_email")).toMatchObject({ status: "skipped" })
   })
 
+  it("creates NO plain 'Start closure' to-do on an existing job (Antonio, 2026-11-06 — everything happens in the Calendar)", async () => {
+    // the default setup is the case that used to insert it: a pre-existing job + a genuine (not retried) submission
+    const r = await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
+    expect(h.inserts.filter((i) => i.table === "tasks")).toEqual([])
+    expect(stepOf(r.results, "luca_task")).toMatchObject({ status: "skipped" })
+    // a real correction after a processed pass behaves the same: still no to-do
+    h.single.closure_submissions = { ...(h.single.closure_submissions as object), last_processed_hash: "old-hash" }
+    const again = await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1", dedupe_key: "new-hash" })
+    expect(h.inserts.filter((i) => i.table === "tasks")).toEqual([])
+    expect(stepOf(again.results, "luca_task")).toMatchObject({ status: "skipped" })
+  })
+
   it("files in the person's 'Company closure_<name>' folder and pins the SAME folder for the retry job", async () => {
     await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
     expect(h.filePackage).toHaveBeenCalledWith(expect.objectContaining({ driveFolderId: "person-storage:contact-1", storeRootSubFolder: "Company closure_Italyflow LLC" }))
