@@ -198,11 +198,11 @@ _Regenerated 2026-11-06. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-10-28)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-06)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-11-06)_
-- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-02)_
+- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-06)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-06)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-28)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-27)_
-- [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-05)_
+- [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-06)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-11-05)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-06)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-02)_
@@ -214,7 +214,7 @@ _Regenerated 2026-11-06. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-05)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-11-05)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-11-06)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-11-05)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-11-05)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
@@ -226,7 +226,7 @@ _Regenerated 2026-11-06. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [storage.md](storage.md) — CRM Storage _(verified 2026-11-06)_
 - [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-05)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-06)_
-- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-19)_
+- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-11-05)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-11-06)_

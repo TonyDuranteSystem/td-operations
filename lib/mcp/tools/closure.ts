@@ -345,8 +345,9 @@ Use gmail_send to send the link to the client after Antonio approves.`,
           // File the form data + uploads FIRST. The form is marked "reviewed" only when it was filed: a company that can receive
           // nothing, a company being moved, or a failed save leaves the form exactly as it was (still waiting for review).
           const { fileClosureSubmission } = await import("@/lib/crm-store/save-account-form")
+          const { pinnedPersonFolder } = await import("@/lib/forms/closure-pinned-folder")
           const outcome = await fileClosureSubmission(
-            { id: sub.id as string, token, account_id: sub.account_id, contact_id: (sub.contact_id as string | null) ?? null, upload_paths: (sub.upload_paths as string[] | null) ?? [], completed_at: sub.completed_at },
+            { id: sub.id as string, token, account_id: sub.account_id, contact_id: (sub.contact_id as string | null) ?? null, upload_paths: (sub.upload_paths as string[] | null) ?? [], completed_at: sub.completed_at, filedInPersonFolder: pinnedPersonFolder(sub.drive_archive_meta) },
             submitted,
             clientName || token,
             "mcp/closure_form_review",

@@ -445,6 +445,8 @@ export async function middleware(request: NextRequest) {
         now: Date.now(),
         // Marketing logins never get the staff grace period or the owner exemption: second step from the first day.
         strict: isMarketingRole(role),
+        // The App Store review practice login: password-only inside a short window written by the service role (see lib/auth/review-demo.ts). Only read for a strict subject.
+        reviewDemoMeta: user.app_metadata,
       })
       if (verdict !== 'allow') {
         // Background fetches get machine-readable JSON, never redirect HTML

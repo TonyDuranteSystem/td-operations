@@ -10,6 +10,7 @@ import { getMarketingSetting } from "@/lib/marketing/settings"
 import { canGrant, effectivePermissions, validatePermissionList, MARKETING_PERMISSIONS } from "@/lib/marketing/permissions"
 import { findMarketingAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { isSecureAdmin } from "@/lib/auth"
+import { reviewDemoState } from "@/lib/auth/review-demo"
 import {
   GENERIC_INVITE_ERROR, TRY_AGAIN_ERROR, WEAK_PASSWORD_ERROR, hashInviteToken, inviteExpiry, inviteUsable, isEmailTakenError, isOrphanMarketingLogin,
   isWeakPasswordError, newInviteToken, normalizeEmail, overInviteLimit, passwordProblem, plausibleToken,
@@ -150,8 +151,8 @@ export async function listMembers(teamId: string) {
     const u = await db().auth.admin.getUserById(r.user_id)
     const meta = (u?.data?.user?.user_metadata ?? {}) as { full_name?: unknown; name?: unknown }
     const named = typeof meta.full_name === "string" && meta.full_name.trim() ? meta.full_name.trim() : typeof meta.name === "string" && meta.name.trim() ? meta.name.trim() : null
-    // `full_name` = the name on the person's profile (the chat buttons use it); `is_admin` = a CRM admin (Antonio), who is not part of the setter's chat
-    out.push({ ...r, email: u?.data?.user?.email ?? null, last_sign_in_at: u?.data?.user?.last_sign_in_at ?? null, full_name: named, is_admin: u?.data?.user?.app_metadata?.role === "admin" })
+    // `full_name` = the name on the person's profile (the chat buttons use it); `is_admin` = a CRM admin (Antonio), who is not part of the setter's chat; `review_demo` = the App Store review practice login (it gets no news, no all-team alerts)
+    out.push({ ...r, email: u?.data?.user?.email ?? null, last_sign_in_at: u?.data?.user?.last_sign_in_at ?? null, full_name: named, is_admin: u?.data?.user?.app_metadata?.role === "admin", review_demo: reviewDemoState(u?.data?.user?.app_metadata, Date.now()) !== "none" })
   }
   return out
 }

@@ -98,11 +98,45 @@ export function yearOf(value: string | null | undefined): number | null {
 }
 
 /**
+ * The tax year a Tax Return SD is FOR. A return is filed the year after the year it covers (the
+ * 2025 returns were opened, worked and filed in 2026), so the year the SD lives in is the filing
+ * year and the tax year is one less. Antonio 2026-11-05: the client chat tab and the workspace
+ * said "Tax Return 2026" on 2025 returns because the year was read off the date the SD moved.
+ * The filing year comes from the deadline when one is stored, else from when the SD was created
+ * (stable — unlike stage_entered_at, which moves every time staff advance the job), else from the
+ * last stage move. Verified on production 2026-11-05: all 232 Tax Return SDs have no deadline and
+ * were created in 2026, and 221 of their companies hold a 2025 tax record.
+ */
+export function taxReturnYear(sd: Pick<SdRow, 'due_date' | 'stage_entered_at' | 'created_at'> & { service_name?: string | null }): number | null {
+  // A creator that KNOWS the tax year writes it into the name — read that first (bug-hunter 2026-11-05: the onboarding
+  // job makes "Tax Return - <company> 2026" for the CURRENT-year return, which "opened year - 1" would call 2025).
+  const named = taxYearFromServiceName(sd.service_name)
+  if (named != null) return named
+  const filingYear = yearOf(sd.due_date) ?? yearOf(sd.created_at) ?? yearOf(sd.stage_entered_at)
+  return filingYear ? filingYear - 1 : null
+}
+
+/**
+ * The tax year a Tax Return SD NAME states, for the two formats the creators write (the lib/installment-handler.ts and
+ * lib/operations/tax-return-sd-bridge.ts shape "Tax Return 2025 - <company>", the lib/jobs/handlers/onboarding-setup.ts
+ * shape "Tax Return - <company> 2026"). Anchored on purpose — a company name that itself contains a year ("Studio 2024 LLC")
+ * must never be read as the tax year — and anything else (the usual plain "Tax Return") returns null. Pure.
+ */
+export function taxYearFromServiceName(name: string | null | undefined): number | null {
+  const n = (name ?? '').trim()
+  const m = /^Tax Return (20\d{2}) - /.exec(n) ?? /^Tax Return - .+ (20\d{2})$/.exec(n)
+  return m ? Number(m[1]) : null
+}
+
+/**
  * Best-effort cycle year for a live SD. There is no `year` column, so we prefer
  * the most semantically meaningful date available: the deadline, then when the
  * SD entered its current stage, then creation. Returns null if none parse.
+ * A Tax Return SD is the exception: its year is the TAX year (see `taxReturnYear`), so pass the
+ * row with its `service_type`.
  */
-export function deriveFlowYear(sd: Pick<SdRow, 'due_date' | 'stage_entered_at' | 'created_at'>): number | null {
+export function deriveFlowYear(sd: Pick<SdRow, 'due_date' | 'stage_entered_at' | 'created_at'> & { service_type?: string | null; service_name?: string | null }): number | null {
+  if (sd.service_type === 'Tax Return') return taxReturnYear(sd)
   return yearOf(sd.due_date) ?? yearOf(sd.stage_entered_at) ?? yearOf(sd.created_at)
 }
 

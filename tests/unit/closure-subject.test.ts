@@ -15,6 +15,8 @@ let sdById: Record<string, { id: string; account_id: string | null; contact_id: 
 let accountRows: Record<string, { company_name: string; ein_number: string | null }> = {}
 let lastSdOrFilter: string | null = null
 let lastAccountContactsEq: string | null = null
+// a forced read error for the "a failed read is not 'no closure'" tests
+let forcedError: string | null = null
 
 // A minimal chainable, THENABLE query-builder stub. Real supabase-js query
 // builders are awaitable directly (no explicit terminal call needed) — some
@@ -23,7 +25,8 @@ let lastAccountContactsEq: string | null = null
 // .maybeSingle()/.order() explicitly. `resolve` is invoked lazily so it
 // always sees the FULL set of accumulated .eq() calls, regardless of which
 // path (bare await vs explicit terminal call) triggers it.
-function chainable(resolve: () => { data: unknown }, onEq?: (col: string, val: string) => void) {
+function chainable(resolveRaw: () => { data: unknown }, onEq?: (col: string, val: string) => void) {
+  const resolve = () => ({ ...resolveRaw(), error: forcedError ? { message: forcedError } : null })
   const obj = {
     eq: (col: string, val: string) => { onEq?.(col, val); return obj },
     or: (filter: string) => { lastSdOrFilter = filter; return obj },
@@ -103,6 +106,7 @@ describe("resolveClosureSubject", () => {
     sdRows = []
     sdById = {}
     accountRows = {}
+    forcedError = null
     lastSdOrFilter = null
     lastAccountContactsEq = null
   })
@@ -205,6 +209,20 @@ describe("resolveClosureSubject", () => {
     sdRows = []
     await resolveClosureSubject("contact-1")
     expect(lastSdOrFilter).toContain("contact_id.eq.contact-1")
+  })
+})
+
+describe("resolveClosureSubject — a failed read is NOT 'this client has no closure' (bug hunt 2026-11-06)", () => {
+  beforeEach(() => { accountContactsRows = []; sdRows = []; forcedError = null })
+
+  it("a read error THROWS (the page's error screen asks to try again) instead of returning 'none'", async () => {
+    forcedError = "connection reset"
+    await expect(resolveClosureSubject("c1")).rejects.toThrow(/closure subject: could not read/)
+  })
+
+  it("no error and no closure is still a plain 'none'", async () => {
+    forcedError = null
+    await expect(resolveClosureSubject("c1")).resolves.toMatchObject({ kind: "none" })
   })
 })
 

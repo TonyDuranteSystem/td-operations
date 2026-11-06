@@ -154,6 +154,9 @@ export type InvoiceReminderLogSource = "auto" | "manual"
 /** journal_entries.status — CHECK constraint */
 export type JournalEntriesStatus = "draft" | "posted" | "void"
 
+/** marketing_chat_threads.kind — CHECK constraint */
+export type MarketingChatThreadsKind = "dm" | "group"
+
 /** marketing_commission_terms.basis — CHECK constraint */
 export type MarketingCommissionTermsBasis = "amount_paid" | "net_of_fees"
 
@@ -183,6 +186,9 @@ export type MarketingTeamMembersStatus = "active" | "paused" | "removed"
 
 /** marketing_teams.status — CHECK constraint */
 export type MarketingTeamsStatus = "draft" | "active" | "paused"
+
+/** marketing_tour_seen.status — CHECK constraint */
+export type MarketingTourSeenStatus = "done" | "skipped"
 
 /** member_info_requests.status — CHECK constraint */
 export type MemberInfoRequestsStatus = "pending" | "submitted" | "applied" | "dismissed"

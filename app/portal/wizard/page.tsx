@@ -490,6 +490,9 @@ export default async function WizardPage({
   // in production). Rendered as a plain banner naming the count — see
   // wizard-client.tsx — rather than resolved without telling the client.
   let closureOtherPendingCount: number | null = null
+  // True when the client has NO active closure to fill in (a stale link to a cancelled / finished one): the page says so instead of
+  // showing a wizard whose send would be refused (E2E QA 2026-11-06).
+  let closureUnavailable = false
   if (wizardType === 'closure' && contactId) {
     // Which closure to open (council QA, 2026-09-24):
     //  - an explicit ?sd naming a closure whose form is still OWED (the home
@@ -525,7 +528,23 @@ export default async function WizardPage({
       // guessing the ambient account — contact-only, no company assumed.
       accountId = ''
       account = {}
+      closureUnavailable = true
     }
+  }
+
+  if (closureUnavailable) {
+    return (
+      <div className="px-4 py-6 lg:px-8">
+        <div className="mx-auto max-w-xl rounded-xl border border-zinc-200 bg-white p-8 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-2xl">📄</div>
+          <h2 className="mb-2 text-lg font-semibold text-zinc-900">{t('wizard.closureUnavailable', locale, translations)}</h2>
+          <p className="text-sm text-zinc-600">{t('wizard.closureUnavailableText', locale, translations)}</p>
+          <a href="/portal" className="mt-6 inline-block rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+            {t('wizard.backToPortal', locale, translations)}
+          </a>
+        </div>
+      </div>
+    )
   }
 
   // ── TAX WIZARD FINAL GATE — covers ?type=tax AND the offer-fallback path ──
