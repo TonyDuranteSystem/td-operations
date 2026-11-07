@@ -31,6 +31,7 @@ import { AppYouButton } from '@/components/app-mode/app-you-button'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { useTalkViewerId } from '@/components/talk/talk-viewer'
 import { afterListChoice, earlyChatChoice, fastOpenEnabled, TalkSavedStore } from '@/lib/talk/talk-cache'
+import { CHAT_LIST_URL, withUnreadCleared } from '@/lib/talk/chat-list-scope'
 import { TalkGroupInfo, TalkNewGroup } from '@/components/talk/talk-group-sheets'
 
 const LAST_OPENED_KEY = 'td-talk-last-chat'
@@ -185,7 +186,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
 
   const loadThreads = useCallback(async (): Promise<TalkThread[] | null> => {
     try {
-      const r = await fetch('/api/team/threads')
+      const r = await fetch(CHAT_LIST_URL)
       if (!r.ok) throw new Error('Could not load your chats.')
       const d = await r.json()
       applyList(d)
@@ -237,13 +238,17 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const loadMessages = useCallback(async (threadId: string, opts: { silent?: boolean } = {}) => {
     if (!opts.silent) setLoadingMsgs(true)
     const seq = changeSeqRef.current
+    const markReadQuery = isBeingViewed() ? '' : '?mark_read=0' // asked once: it decides both what the server is told and whether the list's number is cleared
+    const viewed = markReadQuery === ''
     try {
-      const r = await fetch(`/api/team/threads/${threadId}${isBeingViewed() ? '' : '?mark_read=0'}`)
+      const r = await fetch(`/api/team/threads/${threadId}${markReadQuery}`)
       if (!r.ok) throw new Error('Could not load this chat.')
       const d = await r.json()
       if (selectedIdRef.current !== threadId) return // switched chats while loading
       if (opts.silent && seq !== changeSeqRef.current) return // a kept change was confirmed while this refresh was on its way: its answer is older than what is on screen; the next refresh brings the truth
       applyChat(d, !!opts.silent)
+      // the server has just marked this chat read: its number on the list goes to 0 now, so "Back" does not show the old number until the next refresh
+      if (viewed) setThreads(prev => withUnreadCleared(prev, threadId))
       getStore()?.saveChat(threadId, d)
     } catch (e) {
       // before the real chat list is in, the chat shown early is a guess that may be gone: no error pop-up for a guess
@@ -273,7 +278,13 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     if (leavingLosesRecording(recordingRef.current)) { setLeaveAsk({ go }); return }
     go()
   }, [])
-  const requestSelect = useCallback((id: string | null) => { guardLeave(() => select(id)) }, [guardLeave, select])
+  // "Back" to the list also asks for a fresh list at once (numbers and previews of the chat just left), instead of waiting for the next 10 s refresh.
+  const requestSelect = useCallback((id: string | null) => {
+    guardLeave(() => {
+      select(id)
+      if (id === null) void loadThreads()
+    })
+  }, [guardLeave, select, loadThreads])
 
   // "Send it": the voice note is stopped and queued in the chat it was recorded in; only a note that really was kept lets the person leave. A note that could not be kept, or one that is slow,
   // keeps the person in the chat (leaving would lose it); a slow one is still saved here when it finishes.
@@ -369,6 +380,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
           // someone else's message in the chat I am looking at: it is read the moment it appears (never while hidden)
           if (m.sender_id !== meIdRef.current && isBeingViewed()) {
             void fetch(`/api/team/threads/${m.thread_id}/read`, { method: 'POST' }).catch(() => {})
+            setThreads(prev => withUnreadCleared(prev, m.thread_id)) // read the moment it appears: no old number on the list after "Back"
           }
         }
         refreshList()

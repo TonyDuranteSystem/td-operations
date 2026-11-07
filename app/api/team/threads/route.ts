@@ -5,7 +5,56 @@ import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
 import { listTeamMembers } from '@/lib/team/directory'
 import { everMentionedThreadIds } from '@/lib/team/chat-window-threads'
 import { lastMessagePreview } from '@/lib/talk/list-preview'
+import { chatRows, wantsChatsOnly } from '@/lib/talk/chat-list-scope'
+import { createTtlOnce } from '@/lib/ttl-once'
 import { NextResponse } from 'next/server'
+
+// The staff names only (TD Talk's light list): listing every auth user is the slowest single step, and a new teammate's name showing a minute late is harmless.
+// Used ONLY by the `?scope=chats` answer — the full answer below (and every other caller of listTeamMembers) stays live.
+const teamMembersOnce = createTtlOnce<Awaited<ReturnType<typeof listTeamMembers>>>(60_000)
+
+/** Groups: who is in each (the RPC already returned only the groups this person belongs to). Best-effort: a failure leaves the members off. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function attachGroupMembers(enriched: any[]) {
+  const groupIds = enriched.filter(t => t.thread_type === 'group').map(t => t.id as string)
+  if (groupIds.length === 0) return
+  try {
+    const byGroup = await groupMembersFor(groupIds)
+    for (const t of enriched) if (t.thread_type === 'group') t.members = byGroup[t.id] ?? []
+  } catch (e) {
+    console.error('team/threads: group members lookup failed', e)
+  }
+}
+
+/**
+ * Chat-list preview (TD Talk): the newest message that is still there, for each direct message and group (a handful of chats, one small query each, all at once).
+ * Best-effort like the lookups above: a failure only leaves the preview line empty.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function attachLatestPreviews(enriched: any[]) {
+  const chatIds = enriched.filter(t => t.thread_type === 'dm' || t.thread_type === 'group').map(t => t.id as string)
+  if (chatIds.length === 0) return
+  try {
+    const latest = await Promise.all(chatIds.map(async id => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabaseAdmin as any)
+        .from('internal_messages')
+        .select('message, attachments, sender_id')
+        .eq('thread_id', id)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+      return [id, data?.[0] ?? null] as const
+    }))
+    const byChat = new Map(latest)
+    for (const t of enriched) {
+      const row = byChat.get(t.id)
+      if (row) { t.last_message_preview = lastMessagePreview(row); t.last_message_sender_id = row.sender_id ?? null }
+    }
+  } catch (e) {
+    console.error('team/threads: chat preview lookup failed', e)
+  }
+}
 
 /**
  * GET /api/team/threads
@@ -13,8 +62,11 @@ import { NextResponse } from 'next/server'
  * the current user can see, with PER-USER unread counts (via get_team_threads),
  * plus the staff directory (for DMs + @mention autocomplete) and the caller's
  * identity. Staff-only.
+ *
+ * `?scope=chats` (TD Talk only) answers the same fields for direct messages and groups ONLY, with the independent lookups run side by side and
+ * without the ones only the other screens need (Later, read receipts, mentions). Anything else gets the full answer, unchanged.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || !isDashboardUser(user)) {
@@ -27,6 +79,23 @@ export async function GET() {
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  if (wantsChatsOnly(request.url)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chats = chatRows((threads ?? []) as any[]).map(t => ({ ...t, label: t.label ?? 'Thread' }))
+    const [, , members] = await Promise.all([
+      attachGroupMembers(chats),
+      attachLatestPreviews(chats),
+      teamMembersOnce.get(listTeamMembers),
+    ])
+    return NextResponse.json({
+      threads: chats,
+      members,
+      current_user_id: user.id,
+      current_user_name: getUserDisplayName(user),
+      is_admin: isAdmin(user),
+    })
   }
 
   // Labels come from the RPC itself (accounts/contacts/leads joined server-side,
@@ -157,46 +226,9 @@ export async function GET() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const t of enriched as any[]) t.ever_mentioned = t.thread_type === 'discussion' ? everMentionedSet.has(t.id) : null
 
-  // Groups: who is in each (the RPC already returned only the groups this person belongs to).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const groupIds = (enriched as any[]).filter(t => t.thread_type === 'group').map(t => t.id as string)
-  if (groupIds.length > 0) {
-    try {
-      const byGroup = await groupMembersFor(groupIds)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      for (const t of enriched as any[]) if (t.thread_type === 'group') t.members = byGroup[t.id] ?? []
-    } catch (e) {
-      console.error('team/threads: group members lookup failed', e)
-    }
-  }
-
-  // Chat-list preview (TD Talk): the newest message that is still there, for each direct message and group (a handful of chats, one small query each).
-  // Best-effort like the lookups above: a failure only leaves the preview line empty.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const chatIds = (enriched as any[]).filter(t => t.thread_type === 'dm' || t.thread_type === 'group').map(t => t.id as string)
-  if (chatIds.length > 0) {
-    try {
-      const latest = await Promise.all(chatIds.map(async id => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data } = await (supabaseAdmin as any)
-          .from('internal_messages')
-          .select('message, attachments, sender_id')
-          .eq('thread_id', id)
-          .is('deleted_at', null)
-          .order('created_at', { ascending: false })
-          .limit(1)
-        return [id, data?.[0] ?? null] as const
-      }))
-      const byChat = new Map(latest)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      for (const t of enriched as any[]) {
-        const row = byChat.get(t.id)
-        if (row) { t.last_message_preview = lastMessagePreview(row); t.last_message_sender_id = row.sender_id ?? null }
-      }
-    } catch (e) {
-      console.error('team/threads: chat preview lookup failed', e)
-    }
-  }
+  // Groups' members, then the chat-list previews (same code the light TD Talk answer above uses).
+  await attachGroupMembers(enriched)
+  await attachLatestPreviews(enriched)
 
   const members = await listTeamMembers()
 
