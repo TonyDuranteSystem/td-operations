@@ -15,6 +15,13 @@ describe("appVersionFromUserAgent", () => {
     expect(appVersionFromUserAgent(UA("0.2.0"))).toEqual([0, 2, 0])
     expect(appVersionFromUserAgent(UA("1.10.3"))).toEqual([1, 10, 3])
   })
+  it("reads a two-part version as the same version with a third number of 0 (the App Store's first version may be written 1.0)", () => {
+    expect(appVersionFromUserAgent(UA("1.0"))).toEqual([1, 0, 0])
+    expect(appVersionFromUserAgent(UA("1.0.0"))).toEqual([1, 0, 0])
+    expect(appVersionFromUserAgent(UA("0.2"))).toEqual([0, 2, 0])
+    expect(appHasYouBridge(UA("1.0"))).toBe(true) // version 1.0 must never lose the round "You" button
+    expect(appHasYouBridge(UA("1.0.0"))).toBe(true)
+  })
   it("is null for a normal browser, an empty value or a malformed token", () => {
     expect(appVersionFromUserAgent("Mozilla/5.0 (Macintosh) Safari/605.1.15")).toBeNull()
     expect(appVersionFromUserAgent("")).toBeNull()

@@ -65,9 +65,13 @@ app_files  = Dir['App/*.swift'].sort.map { |f| app_group.new_reference(File.base
 app_group.new_reference('Info.plist'); app_group.new_reference('TDSocial.entitlements')
 assets = app_group.new_reference('Assets.xcassets')
 assets.last_known_file_type = 'folder.assetcatalog'
+# Apple's privacy manifest (App Store submission): copied to the root of the app, where Apple looks for it
+privacy = app_group.new_reference('PrivacyInfo.xcprivacy')
+privacy.last_known_file_type = 'text.xml'
 
 app.add_file_references(core_files + app_files)
 app.resources_build_phase.add_file_reference(assets, true)
+app.resources_build_phase.add_file_reference(privacy, true)
 
 app.build_configurations.each do |c|
   cfg = CONFIGS[c.name]
