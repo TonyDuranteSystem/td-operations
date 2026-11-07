@@ -1,4 +1,4 @@
--- UNDO for 20261107-0100-tax-return-signed-fax-box.sql. Puts the "Signed" layout back to the item-5 version (the "Send Fax to IRS" link instead of the
+-- UNDO for 20261107-0200-tax-return-signed-fax-box.sql. Puts the "Signed" layout back to the item-5 version (the "Send Fax to IRS" link instead of the
 -- return fax box). Only fires on the exact new row (never overwrites a later edit). A fax already sent from the box stays on record; the box only
 -- disappears from the screen.
 

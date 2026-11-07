@@ -55,8 +55,8 @@ const read = (rel: string) => readFileSync(join(__dirname, rel), 'utf8')
 type Row = { stage_name: string; stage_order: number; stage_layout: unknown }
 const ROWS = JSON.parse(read('../fixtures/pipeline-tax-return-stages.json')) as Row[]
 const layoutOf = (stage: string) => parseStageLayout(ROWS.find((r) => r.stage_name === stage)!.stage_layout)!
-const up = read('../../scripts/migrations/20261107-0100-tax-return-signed-fax-box.sql')
-const undo = read('../../scripts/migrations/20261107-0100-tax-return-signed-fax-box.UNDO.sql')
+const up = read('../../scripts/migrations/20261107-0200-tax-return-signed-fax-box.sql')
+const undo = read('../../scripts/migrations/20261107-0200-tax-return-signed-fax-box.UNDO.sql')
 
 describe('the data change on "Signed" (migration + undo)', () => {
   it('"Signed" shows the signed-copy status, the return fax box, the documents, File with IRS (the fallback) and the chat — in that order', () => {
