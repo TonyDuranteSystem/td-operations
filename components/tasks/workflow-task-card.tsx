@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Clock, MoreHorizontal, ExternalLink } from 'lucide-react'
 import { ChatWithClientButton } from '@/components/tasks/task-card'
 import { cn } from '@/lib/utils'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 import { STATUS_COLORS } from '@/lib/constants'
 import { parseWorkflowSnapshot } from '@/lib/tasks/workflow-snapshot-schema'
 import { filterActionsByRole, filterActionsByStage, splitPrimary } from '@/lib/tasks/workflow-task-card-logic'
@@ -153,24 +154,25 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
       )}
     >
       {/* Top row: company + status badge */}
-      <div className="flex items-start justify-between gap-2 mb-1">
+      <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1 mb-1">
         <div className="flex items-center gap-2 flex-wrap">
           {task.company_name && (
             <span className="text-xs font-medium text-muted-foreground">{task.company_name}</span>
           )}
-          <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">
+          <span className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100 ${KEEP_WHOLE}`}>
             {snapshot.label_admin}
           </span>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
           {dueInfo?.overdue && (
-            <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-red-100 text-red-700">
+            <span className={`text-xs font-medium px-1.5 py-0.5 rounded bg-red-100 text-red-700 ${KEEP_WHOLE}`}>
               OVERDUE
             </span>
           )}
           <span
             className={cn(
               'text-xs px-1.5 py-0.5 rounded',
+              KEEP_WHOLE,
               STATUS_COLORS[task.priority] ?? 'bg-zinc-100 text-zinc-600',
             )}
           >
@@ -202,10 +204,10 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
       )}
 
       {/* Bottom row: assignee + state + actions */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground/70">{task.assigned_to}</span>
-          <span className="inline-flex items-center gap-1">{stateLabel}</span>
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <span className={cn('font-medium text-foreground/70', KEEP_WHOLE)}>{task.assigned_to}</span>
+          <span className={cn('inline-flex items-center gap-1', KEEP_WHOLE)}>{stateLabel}</span>
           {slaTier && (
             <span
               title={
@@ -215,6 +217,7 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
               }
               className={cn(
                 'text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded font-semibold',
+                KEEP_WHOLE,
                 slaTier === SLA_STATE.WARN
                   ? 'bg-yellow-100 text-yellow-800 border border-yellow-200'
                   : 'bg-red-100 text-red-700 border border-red-200',
@@ -227,6 +230,7 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
             <span
               className={cn(
                 'inline-flex items-center gap-1',
+                KEEP_WHOLE,
                 dueInfo.overdue ? 'text-red-600 font-medium' : '',
               )}
             >
@@ -236,7 +240,7 @@ function WorkflowTaskCardInner({ task, today, role }: Props) {
           )}
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
           <ChatWithClientButton accountId={task.account_id} contactId={task.contact_id} />
           {/* Workspace-pointer mode: a single link to the SD workspace (the
               control surface). No inline advance buttons. */}
