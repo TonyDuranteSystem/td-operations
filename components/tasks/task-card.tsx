@@ -8,6 +8,7 @@ import { STATUS_COLORS } from '@/lib/constants'
 import { updateTaskStatus, updateTaskPriority, updateTaskAssignee } from '@/app/(dashboard)/tasks/actions'
 import { TaskRowActions } from '@/components/tasks/task-row-actions'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 import { WorkflowTaskCard } from '@/components/tasks/workflow-task-card'
 import type { Task } from '@/lib/types'
 import type { CrmRole } from '@/lib/tasks/types'
@@ -105,29 +106,29 @@ function LegacyTaskCard({ task, today, onEdit }: { task: Task; today: string; on
       )}
     >
       {/* Top row: company + badges */}
-      <div className="flex items-start justify-between gap-2 mb-1">
+      <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1 mb-1">
         <div className="flex items-center gap-2 flex-wrap">
           {task.company_name && (
             <span className="text-xs font-medium text-muted-foreground">{task.company_name}</span>
           )}
           {task.category && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600">
+            <span className={`text-xs px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 ${KEEP_WHOLE}`}>
               {task.category}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
           {dueInfo?.overdue && (
-            <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-red-100 text-red-700">
+            <span className={`text-xs font-medium px-1.5 py-0.5 rounded bg-red-100 text-red-700 ${KEEP_WHOLE}`}>
               SCADUTO
             </span>
           )}
           {followUp && (
-            <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">
+            <span className={`text-xs font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 ${KEEP_WHOLE}`}>
               FOLLOW UP
             </span>
           )}
-          <span className={cn('text-xs px-1.5 py-0.5 rounded', STATUS_COLORS[task.priority] ?? 'bg-zinc-100 text-zinc-600')}>
+          <span className={cn('text-xs px-1.5 py-0.5 rounded', KEEP_WHOLE, STATUS_COLORS[task.priority] ?? 'bg-zinc-100 text-zinc-600')}>
             {task.priority}
           </span>
         </div>
@@ -167,14 +168,14 @@ function LegacyTaskCard({ task, today, onEdit }: { task: Task; today: string; on
       )}
 
       {/* Bottom row: assignee + SLA + actions */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground/70">{task.assigned_to}</span>
-          <span className={cn('inline-flex items-center gap-1', STATUS_COLORS[task.status] ?? '', 'bg-transparent')}>
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <span className={cn('font-medium text-foreground/70', KEEP_WHOLE)}>{task.assigned_to}</span>
+          <span className={cn('inline-flex items-center gap-1', KEEP_WHOLE, STATUS_COLORS[task.status] ?? '', 'bg-transparent')}>
             {task.status}
           </span>
           {dueInfo && (
-            <span className={cn('inline-flex items-center gap-1', dueInfo.overdue ? 'text-red-600 font-medium' : '')}>
+            <span className={cn('inline-flex items-center gap-1', KEEP_WHOLE, dueInfo.overdue ? 'text-red-600 font-medium' : '')}>
               <Clock className="h-3 w-3" />
               {dueInfo.text}
             </span>
@@ -182,7 +183,7 @@ function LegacyTaskCard({ task, today, onEdit }: { task: Task; today: string; on
         </div>
 
         {/* Quick actions */}
-        <div className="flex items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <FastTooltip label="Segna completato">
             <button
               onClick={handleComplete}

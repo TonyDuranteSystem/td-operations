@@ -2,11 +2,12 @@
 // Pure, so it is unit-tested without a phone. Used to show the round "You" button inside the list screens ONLY on app versions that can
 // open the "You" screen from a web page (0.2.0 and up); older builds still draw their own strip and need no button.
 
-const TOKEN = /TDSocial\/(\d+)\.(\d+)\.(\d+)/
+// "1.0" and "1.0.0" are the same version (the App Store's first version may be written either way); the third number is optional
+const TOKEN = /TDSocial\/(\d+)\.(\d+)(?:\.(\d+))?/
 
 export function appVersionFromUserAgent(ua: string | null | undefined): [number, number, number] | null {
   const m = typeof ua === 'string' ? TOKEN.exec(ua) : null
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)] : null
 }
 
 /** 0.2.0 is the first app build with no top strip and a web-to-app "open You" message. */

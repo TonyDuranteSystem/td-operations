@@ -10,7 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { readFileSync } from "fs"
 import { join } from "path"
 import {
-  TALK_CACHE_KEY, TALK_CACHE_KEEP_MESSAGES, TALK_CACHE_MAX_AGE_MS, TalkSavedStore, afterListChoice, earlyChatChoice, fastOpenEnabled,
+  TALK_CACHE_KEY, TALK_CACHE_KEEP_MESSAGES, TALK_CACHE_KEEP_CHATS, TALK_CACHE_MAX_BYTES, TALK_CACHE_CHAT_MAX_AGE_MS, TALK_CACHE_MAX_AGE_MS, TalkSavedStore, afterListChoice, earlyChatChoice, fastOpenEnabled,
   parseSaved, serializeSaved, trimChatPayload, type TalkSaved,
 } from "@/lib/talk/talk-cache"
 import { TalkViewerProvider, useTalkViewerId } from "@/components/talk/talk-viewer"
@@ -82,6 +82,89 @@ describe("parseSaved: only a good copy for THIS person is shown", () => {
     const out = parseSaved(raw, ME, NOW)
     expect(out?.chat).toBeNull()
     expect(out?.list.threads).toHaveLength(1)
+  })
+})
+
+describe("TalkSavedStore keeps several recent chats (dev job cf265457: opening a chat shows its saved messages at once)", () => {
+  const fresh = (t = NOW) => { const st = fakeStorage(); const store = new TalkSavedStore(ME, st, () => t); store.saveList(list); return { st, store } }
+  it("the chat loaded last is first, the ones before it are kept, each chat once", () => {
+    const { st, store } = fresh()
+    store.saveChat("a", { messages: msgs(2) }); store.saveChat("b", { messages: msgs(3) }); store.saveChat("a", { messages: msgs(4) })
+    const read = new TalkSavedStore(ME, st, () => NOW).read()
+    expect(read?.chat?.id).toBe("a")
+    expect((read?.chat?.payload.messages as unknown[]).length).toBe(4)
+    expect(read?.more?.map(c => c.id)).toEqual(["b"])
+  })
+  it("keeps at most TALK_CACHE_KEEP_CHATS chats; the least recently opened goes first", () => {
+    const { st, store } = fresh()
+    for (let i = 0; i < TALK_CACHE_KEEP_CHATS + 3; i++) store.saveChat(`c${i}`, { messages: msgs(1) })
+    const read = new TalkSavedStore(ME, st, () => NOW).read()
+    const ids = [read?.chat?.id, ...(read?.more ?? []).map(c => c.id)]
+    expect(ids).toHaveLength(TALK_CACHE_KEEP_CHATS)
+    expect(ids[0]).toBe(`c${TALK_CACHE_KEEP_CHATS + 2}`)
+    expect(ids).not.toContain("c0")
+  })
+  it("chatFor finds any kept chat and nothing else", () => {
+    const { store } = fresh()
+    store.saveChat("a", { messages: msgs(2) }); store.saveChat("b", { messages: msgs(3) })
+    expect(store.chatFor("a")?.id).toBe("a")
+    expect(store.chatFor("b")?.id).toBe("b")
+    expect(store.chatFor("zzz")).toBeNull()
+    expect(store.chatFor("")).toBeNull()
+  })
+  it("chatFor works on a copy read from the phone's storage, and survives a new chat list", () => {
+    const { st, store } = fresh()
+    store.saveChat("a", { messages: msgs(2) }); store.saveChat("b", { messages: msgs(3) })
+    const next = new TalkSavedStore(ME, st, () => NOW)
+    next.read()
+    expect(next.chatFor("a")?.id).toBe("a")
+    next.saveList({ ...list, threads: [{ id: "t9", thread_type: "dm" }] })
+    expect(next.chatFor("a")?.id).toBe("a") // a new list keeps every saved chat, not just the first
+    expect(next.chatFor("b")?.id).toBe("b")
+  })
+  it("a chat not refreshed for days is not shown (it could be days behind)", () => {
+    let t = NOW
+    const st = fakeStorage()
+    const store = new TalkSavedStore(ME, st, () => t)
+    store.saveList(list); store.saveChat("a", { messages: msgs(2) })
+    t += TALK_CACHE_CHAT_MAX_AGE_MS - 1000
+    expect(store.chatFor("a")?.id).toBe("a")
+    t += 2000
+    expect(store.chatFor("a")).toBeNull()
+  })
+  it("a copy saved before several chats were kept (one chat, no stamp) still opens", () => {
+    const st = fakeStorage()
+    st.data.set(TALK_CACHE_KEY, JSON.stringify(saved({ chat: { id: "old", payload: { messages: msgs(2) } } })))
+    const store = new TalkSavedStore(ME, st, () => NOW)
+    store.read()
+    expect(store.chatFor("old")?.id).toBe("old")
+  })
+  it("a refresh that changed nothing does not rewrite storage; a changed chat does", () => {
+    let t = NOW
+    const st = fakeStorage()
+    const store = new TalkSavedStore(ME, st, () => t)
+    store.saveList(list)
+    store.saveChat("a", { messages: msgs(3) })
+    const writes = st.calls.set
+    t += 10_000; store.saveChat("a", { messages: msgs(3) })
+    t += 10_000; store.saveChat("a", { messages: msgs(3) })
+    expect(st.calls.set).toBe(writes)
+    t += 10_000; store.saveChat("a", { messages: msgs(4) })
+    expect(st.calls.set).toBe(writes + 1)
+  })
+  it("stays under the storage budget by dropping the least recently opened chats, never the one opened last", () => {
+    const { st, store } = fresh()
+    const big = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `m${i}`, message: "x".repeat(4000), created_at: new Date(NOW - i * 1000).toISOString() }))
+    for (let i = 0; i < TALK_CACHE_KEEP_CHATS; i++) store.saveChat(`c${i}`, { messages: big(TALK_CACHE_KEEP_MESSAGES) })
+    const raw = st.data.get(TALK_CACHE_KEY) as string
+    expect(raw.length).toBeLessThanOrEqual(TALK_CACHE_MAX_BYTES)
+    const read = new TalkSavedStore(ME, st, () => NOW).read()
+    expect(read?.chat?.id).toBe(`c${TALK_CACHE_KEEP_CHATS - 1}`)
+    expect((read?.more ?? []).length).toBeLessThan(TALK_CACHE_KEEP_CHATS - 1)
+  })
+  it("saved chats are only ever shown: the store has no way to mark anything read", () => {
+    const src = readFileSync(join(process.cwd(), "lib/talk/talk-cache.ts"), "utf8")
+    expect(src).not.toMatch(/fetch\(|mark_read|\/read\b/)
   })
 })
 
@@ -229,7 +312,7 @@ describe("the TD Talk screen is wired as promised", () => {
     expect(app).toContain("if (!opts.silent && listConfirmedRef.current) toast.error(")
   })
   it("a message link (?message=) loads the normal way", () => {
-    expect(app).toContain("if (saved.chat?.id === id && !pendingJumpRef.current) applyChat(")
+    expect(app).toContain("if (savedChat && !pendingJumpRef.current) applyChat(")
   })
   it("both answers are saved when they arrive from the server, and only then", () => {
     expect(app).toContain("getStore()?.saveList(d)")

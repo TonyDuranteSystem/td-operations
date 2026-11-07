@@ -95,6 +95,8 @@ async function fileToStore(
       name: `${s.filePrefix}_${slug}.pdf`, bytes: s.bytes,
       documentType: input.formType === "formation" ? "formation_summary" : input.formType === "itin" ? "itin_application" : "other_document",
       callerKey: `form-summary:${target.id}:${input.formType}:${input.meta.token}`,
+      // a tax return's summary carries its tax year (the file is created with it; the store sets the year only when it creates a file)
+      periodYear: input.formType === "tax_return" && Number.isFinite(Number(input.meta.year)) && Number(input.meta.year) > 0 ? Number(input.meta.year) : null,
     } : null,
     uploadPaths: input.uploadPaths,
     bucketOf: (path) => (input.resolveBucket ? input.resolveBucket(path) : input.bucket || s.defaultBucket),

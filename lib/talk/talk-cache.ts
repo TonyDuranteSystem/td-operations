@@ -5,12 +5,20 @@
 // Safety rules (each pinned by tests/unit/talk-cache.test.ts):
 // - one saved copy per PERSON (the signed-in user's id): a copy saved for someone else is never shown and is replaced at the next save;
 // - a copy older than 14 days, damaged, or of an unknown shape is ignored;
-// - only the newest TALK_CACHE_KEEP_MESSAGES messages of ONE chat are kept (a chat is never stored whole);
+// - only the newest TALK_CACHE_KEEP_MESSAGES messages of each chat are kept (a chat is never stored whole), for the TALK_CACHE_KEEP_CHATS chats opened last
+//   (dev job cf265457: opening a chat shows its saved messages at once instead of a spinner; the server's answer replaces them a moment later);
+// - a saved chat is only ever shown, never acted on: it never marks anything read, never reports "delivered", never clears an unread number;
 // - the app's sign-out already erases all of the web view's saved data, so the copy goes with it.
 
 export const TALK_CACHE_KEY = 'td-talk-saved-v1'
 export const TALK_CACHE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
 export const TALK_CACHE_KEEP_MESSAGES = 60
+/** How many chats (the ones opened last) are kept. */
+export const TALK_CACHE_KEEP_CHATS = 6
+/** A phone's web storage holds about 5 MB for the whole site: the saved copy stays well under, dropping the least recently opened chats first. */
+export const TALK_CACHE_MAX_BYTES = 900_000
+/** A saved chat not refreshed for this long is not shown (its messages could be days behind); the chat just opens the normal way. */
+export const TALK_CACHE_CHAT_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
 const REFRESH_STAMP_MS = 6 * 60 * 60 * 1000
 
 /** What TD Talk's chat list answer holds that the screen uses (the rest of the answer is not kept). */
@@ -23,13 +31,18 @@ export interface SavedList {
 export interface SavedChat {
   id: string
   payload: Record<string, unknown>
+  /** when this chat was last refreshed from the server (absent on copies saved before several chats were kept) */
+  at?: number
 }
 export interface TalkSaved {
   v: 1
   userId: string
   savedAt: number
   list: SavedList
+  /** the chat opened last */
   chat: SavedChat | null
+  /** the chats opened before it, most recent first (absent on copies saved before several chats were kept) */
+  more?: SavedChat[]
 }
 
 /** Cut a chat answer to its newest `keep` messages. When something was cut, `has_more` is true so "Load earlier messages" stays available. */
@@ -41,6 +54,12 @@ export function trimChatPayload(payload: Record<string, unknown>, keep: number =
 
 function isObject(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x)
+}
+
+function asSavedChat(x: unknown): SavedChat | null {
+  if (!isObject(x) || typeof x.id !== 'string' || !isObject(x.payload) || !Array.isArray(x.payload.messages)) return null
+  const at = typeof x.at === 'number' && Number.isFinite(x.at) ? x.at : undefined
+  return at === undefined ? { id: x.id, payload: x.payload } : { id: x.id, payload: x.payload, at }
 }
 
 /** The saved copy for THIS person, or null (nothing saved, damaged, someone else's, too old, or not in the shape this code writes). */
@@ -57,11 +76,9 @@ export function parseSaved(raw: string | null, userId: string, now: number): Tal
   if (!isObject(list) || !Array.isArray(list.threads) || !Array.isArray(list.members)) return null
   const currentUserId = typeof list.current_user_id === 'string' ? list.current_user_id : null
   if (currentUserId && currentUserId !== userId) return null
-  let chat: SavedChat | null = null
-  if (isObject(d.chat) && typeof d.chat.id === 'string' && isObject(d.chat.payload) && Array.isArray(d.chat.payload.messages)) {
-    chat = { id: d.chat.id, payload: d.chat.payload }
-  }
-  return { v: 1, userId, savedAt, list: { threads: list.threads, members: list.members, current_user_id: currentUserId }, chat }
+  const chat = asSavedChat(d.chat)
+  const more = Array.isArray(d.more) ? d.more.map(asSavedChat).filter((c): c is SavedChat => c !== null) : []
+  return { v: 1, userId, savedAt, list: { threads: list.threads, members: list.members, current_user_id: currentUserId }, chat, ...(more.length ? { more } : {}) }
 }
 
 export function serializeSaved(s: TalkSaved): string {
@@ -97,21 +114,46 @@ export class TalkSavedStore {
   saveList(list: { threads?: unknown; members?: unknown; current_user_id?: unknown }): void {
     if (!Array.isArray(list.threads) || !Array.isArray(list.members)) return
     if (!this.loaded) this.read()
+    const prior = [this.current?.chat ?? null, ...(this.current?.more ?? [])].filter((c): c is SavedChat => c !== null)
+    const first = this.waitingChat ?? prior[0] ?? null
+    const rest = prior.filter(c => c.id !== first?.id).slice(0, TALK_CACHE_KEEP_CHATS - 1)
     this.write({
       v: 1, userId: this.userId, savedAt: this.clock(),
       list: { threads: list.threads, members: list.members, current_user_id: typeof list.current_user_id === 'string' ? list.current_user_id : null },
-      chat: this.waitingChat ?? this.current?.chat ?? null,
+      chat: first,
+      ...(rest.length ? { more: rest } : {}),
     })
     this.waitingChat = null
   }
 
-  /** Keeps the chat that is open (one at a time). A chat without its list would open to nothing, so one that arrives first waits for the list. */
+  /**
+   * Keeps the chat that was just loaded as the most recent one, and the chats opened before it (up to TALK_CACHE_KEEP_CHATS).
+   * A chat without its list would open to nothing, so one that arrives first waits for the list.
+   */
   saveChat(id: string, payload: Record<string, unknown>): void {
     if (!id || !Array.isArray(payload.messages)) return
     if (!this.loaded) this.read()
-    const chat = { id, payload: trimChatPayload(payload) }
+    const trimmed = trimChatPayload(payload)
+    const now = this.clock()
+    const prior = [this.current?.chat ?? null, ...(this.current?.more ?? [])].filter((c): c is SavedChat => c !== null)
+    // a refresh that changed nothing keeps its time stamp (so the copy is not rewritten every 10 seconds); a stamp is renewed every few hours so it never expires while the chat is in use
+    const same = prior.find(c => c.id === id)
+    const keepStamp = same?.at !== undefined && now - same.at < REFRESH_STAMP_MS && JSON.stringify(same.payload) === JSON.stringify(trimmed)
+    const chat: SavedChat = { id, payload: trimmed, at: keepStamp && same?.at !== undefined ? same.at : now }
     if (!this.current) { this.waitingChat = chat; return }
-    this.write({ ...this.current, savedAt: this.clock(), chat })
+    this.write({ ...this.current, savedAt: now, chat, more: prior.filter(c => c.id !== id).slice(0, TALK_CACHE_KEEP_CHATS - 1) })
+  }
+
+  /** The saved copy of one chat, or null (never saved, or not refreshed for days). Only for showing while the server's answer is on its way. */
+  chatFor(id: string): SavedChat | null {
+    if (!id) return null
+    if (!this.loaded) this.read()
+    const cur = this.current
+    if (!cur) return null
+    const found = [cur.chat, ...(cur.more ?? [])].find(c => c?.id === id) ?? null
+    if (!found) return null
+    if (found.at !== undefined && this.clock() - found.at > TALK_CACHE_CHAT_MAX_AGE_MS) return null
+    return found
   }
 
   clear(): void {
@@ -121,7 +163,8 @@ export class TalkSavedStore {
     try { this.storage?.removeItem(TALK_CACHE_KEY) } catch { /* nothing to do */ }
   }
 
-  private write(next: TalkSaved): void {
+  private write(requested: TalkSaved): void {
+    const next = fitToBudget(requested)
     this.current = next
     if (!this.storage) return
     try {
@@ -135,6 +178,17 @@ export class TalkSavedStore {
       this.lastWriteAt = now
     } catch { /* storage full or refused: skip */ }
   }
+}
+
+/** Drops the least recently opened chats until the saved copy fits the budget (the chat opened last is always kept). */
+function fitToBudget(s: TalkSaved): TalkSaved {
+  let more = s.more ?? []
+  let out: TalkSaved = s
+  while (more.length > 0 && serializeSaved(out).length > TALK_CACHE_MAX_BYTES) {
+    more = more.slice(0, -1)
+    out = { ...s, more }
+  }
+  return out
 }
 
 /** Which chat the screen should show right away, before the server has said which chats exist: the one a tap or link asked for, else the one open last time. */
