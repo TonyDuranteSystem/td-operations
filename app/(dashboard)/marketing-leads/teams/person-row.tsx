@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { ResetEmailPanel } from "./reset-email-panel"
+import { KEEP_WHOLE, pinBodyCell } from "@/lib/ui/table-cells"
 
 /**
  * One person in a team's People table, with the admin's "Reset password" (dev job 9aec66fa). Pressing it makes a one-time link; it is shown here once, Antonio copies it and sends it himself (it works
@@ -28,13 +29,13 @@ export function PersonRow({ teamId, userId, email, roleText, statusText, seenTex
   const expires = link ? new Date(link.expiresAt).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Rome" }) : ""
   return (
     <>
-      <tr>
-        <td className="py-2 pr-3 font-medium">{email}</td>
-        <td className="pr-3">{roleText}</td>
-        <td className="pr-3">{statusText}</td>
-        <td className="pr-3 text-slate-500">{seenText}</td>
-        <td className="text-right">
-          {canReset && <button type="button" className="rounded-lg border px-3 py-1.5 text-xs font-medium disabled:opacity-50" disabled={busy} onClick={reset} data-testid="admin-reset-password" aria-label={`Reset password for ${email}`}>Reset password</button>}
+      <tr className="group">
+        <td className={`py-2 pr-3 font-medium ${KEEP_WHOLE} ${pinBodyCell("start", "none", "card")}`}>{email}</td>
+        <td className={`pr-3 ${KEEP_WHOLE}`}>{roleText}</td>
+        <td className={`pr-3 ${KEEP_WHOLE}`}>{statusText}</td>
+        <td className={`pr-3 text-slate-500 ${KEEP_WHOLE}`}>{seenText}</td>
+        <td className={`pl-3 text-right ${pinBodyCell("end", "none", "card")}`}>
+          {canReset && <button type="button" className={`rounded-lg border px-3 py-1.5 text-xs font-medium disabled:opacity-50 ${KEEP_WHOLE}`} disabled={busy} onClick={reset} data-testid="admin-reset-password" aria-label={`Reset password for ${email}`}>Reset password</button>}
         </td>
       </tr>
       {(link || error || done) && (

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { Send, Mail, CheckCircle, AlertCircle, Loader2, Eye, RefreshCw, Globe } from 'lucide-react'
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from '@/lib/ui/table-cells'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface PortalAccount {
@@ -236,23 +237,23 @@ export default function PortalLaunchPage() {
           <table className="w-full min-w-[720px] text-sm">
             <thead>
               <tr className="border-b bg-zinc-50">
-                <th className="w-10 px-4 py-3"></th>
-                <th className="text-left px-4 py-3 font-medium text-zinc-600">Company</th>
-                <th className="text-left px-4 py-3 font-medium text-zinc-600">Contact</th>
-                <th className="text-left px-4 py-3 font-medium text-zinc-600">Email</th>
-                <th className="text-left px-4 py-3 font-medium text-zinc-600">Portal Since</th>
-                <th className="text-center px-4 py-3 font-medium text-zinc-600">Status</th>
+                <th className={`w-12 min-w-[3rem] px-4 py-3 ${pinHeadCell('start', 'zinc-50', 'card')}`}></th>
+                <th className={`text-left px-4 py-3 font-medium text-zinc-600 ${KEEP_WHOLE} ${pinHeadCell('start-after-select', 'zinc-50', 'card')}`}>Company</th>
+                <th className={`text-left px-4 py-3 font-medium text-zinc-600 ${KEEP_WHOLE}`}>Contact</th>
+                <th className={`text-left px-4 py-3 font-medium text-zinc-600 ${KEEP_WHOLE}`}>Email</th>
+                <th className={`text-left px-4 py-3 font-medium text-zinc-600 ${KEEP_WHOLE}`}>Portal Since</th>
+                <th className={`text-center px-4 py-3 font-medium text-zinc-600 ${KEEP_WHOLE}`}>Status</th>
               </tr>
             </thead>
             <tbody>
               {accounts.map(acc => (
                 <tr
                   key={acc.id}
-                  className={`border-b last:border-0 hover:bg-zinc-50 transition-colors ${
+                  className={`group border-b last:border-0 hover:bg-zinc-50 transition-colors ${
                     selected.has(acc.id) ? 'bg-blue-50' : ''
                   }`}
                 >
-                  <td className="px-4 py-3">
+                  <td className={`px-4 py-3 ${pinBodyCell('start', selected.has(acc.id) ? 'blue' : 'none', 'card')}`}>
                     <input
                       type="checkbox"
                       checked={selected.has(acc.id)}
@@ -261,13 +262,18 @@ export default function PortalLaunchPage() {
                       className="rounded border-zinc-300 text-blue-600 focus:ring-blue-500 disabled:opacity-30"
                     />
                   </td>
-                  <td className="px-4 py-3 font-medium text-zinc-900">{acc.company_name}</td>
-                  <td className="px-4 py-3 text-zinc-600">{acc.contact_name}</td>
-                  <td className="px-4 py-3 text-zinc-600">
+                  <td
+                    className={`px-4 py-3 font-medium text-zinc-900 max-w-[15rem] truncate ${pinBodyCell('start-after-select', selected.has(acc.id) ? 'blue' : 'none', 'card')}`}
+                    title={acc.company_name}
+                  >
+                    {acc.company_name}
+                  </td>
+                  <td className={`px-4 py-3 text-zinc-600 max-w-[12rem] truncate ${KEEP_WHOLE}`} title={acc.contact_name}>{acc.contact_name}</td>
+                  <td className={`px-4 py-3 text-zinc-600 max-w-[16rem] truncate ${KEEP_WHOLE}`} title={acc.contact_email ?? undefined}>
                     {acc.contact_email || <span className="text-red-400 text-xs">No email</span>}
                   </td>
-                  <td className="px-4 py-3 text-zinc-500">{acc.portal_created_date || '—'}</td>
-                  <td className="px-4 py-3 text-center">
+                  <td className={`px-4 py-3 text-zinc-500 ${KEEP_WHOLE}`}>{acc.portal_created_date || '—'}</td>
+                  <td className={`px-4 py-3 text-center ${KEEP_WHOLE}`}>
                     {acc.notified ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-50 text-green-700 text-xs font-medium">
                         <CheckCircle className="h-3 w-3" />

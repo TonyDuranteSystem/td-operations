@@ -14,13 +14,17 @@
 /** Never break this cell's text across lines. */
 export const KEEP_WHOLE = 'whitespace-nowrap'
 
-export type PinSide = 'start' | 'end'
+/**
+ * 'start' / 'end' = the left / right edge. 'start-after-select' = right after a 3rem (`w-12`) selection-checkbox column that is itself
+ * pinned with 'start' (Portal launch): the identifier column then sits next to the checkbox instead of on top of it.
+ */
+export type PinSide = 'start' | 'end' | 'start-after-select'
 
 /**
  * Row tint to mirror on a pinned body cell: 'danger' = the translucent red of an overdue row (a hovered row loses its tint, so this does too);
- * 'zinc' = the light grey of an opened (expanded) row.
+ * 'zinc' = the light grey of an opened (expanded) row; 'blue' = the light blue of a selected (ticked) row.
  */
-export type PinTint = 'none' | 'danger' | 'zinc'
+export type PinTint = 'none' | 'danger' | 'zinc' | 'blue'
 
 /**
  * What the table sits on. 'page' = straight on the page (`bg-background`); 'card' = inside a white card (`bg-white`, which the CRM dark mode
@@ -34,12 +38,13 @@ export type PinHeadTint = 'muted-50' | 'muted-40' | 'zinc-50' | 'gray-50' | 'sla
 const PIN_BASE = "sticky z-[1] before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:content-['']"
 const PIN_HOVER = "after:pointer-events-none after:absolute after:inset-0 after:-z-10 after:content-[''] after:bg-muted/30 after:opacity-0 group-hover:after:opacity-100"
 
-const EDGE: Record<PinSide, string> = { start: 'left-0', end: 'right-0' }
+const EDGE: Record<PinSide, string> = { start: 'left-0', end: 'right-0', 'start-after-select': 'left-12' }
 const SURFACE: Record<PinSurface, string> = { page: 'bg-background', card: 'bg-white' }
 const ROW_TINT: Record<PinTint, string> = {
   none: '',
   danger: 'before:bg-red-50/50 group-hover:before:opacity-0',
   zinc: 'before:bg-zinc-50',
+  blue: 'before:bg-blue-50',
 }
 const HEAD_TINT: Record<PinHeadTint, string> = {
   'muted-50': 'before:bg-muted/50',

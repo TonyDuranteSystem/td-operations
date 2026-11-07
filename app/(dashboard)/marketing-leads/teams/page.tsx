@@ -16,6 +16,7 @@ import { WorkspaceLink } from "./workspace-link"
 import { APP_BASE_URL } from "@/lib/config"
 import { ViewAsButtons } from "./view-as-buttons"
 import { viewAsOptions } from "@/lib/marketing/view-as"
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from "@/lib/ui/table-cells"
 
 export const dynamic = "force-dynamic"
 
@@ -65,7 +66,7 @@ export default async function MarketingTeamsPage() {
               <h3 className="text-sm font-semibold text-slate-600">People ({members.length})</h3>
               {members.length === 0 ? <p className="mt-1 text-sm text-slate-500">Nobody has joined yet.</p> : (
                 <div className="mt-2 overflow-x-auto"><table className="w-full text-left text-sm">
-                  <thead className="border-b text-xs text-slate-500"><tr><th className="py-2 pr-3">Person</th><th className="pr-3">Role</th><th className="pr-3">Status</th><th className="pr-3">Last seen</th><th className="text-right">Password</th></tr></thead>
+                  <thead className="border-b text-xs text-slate-500"><tr><th className={`py-2 pr-3 ${KEEP_WHOLE} ${pinHeadCell("start", "none", "card")}`}>Person</th><th className={`pr-3 ${KEEP_WHOLE}`}>Role</th><th className={`pr-3 ${KEEP_WHOLE}`}>Status</th><th className={`pr-3 ${KEEP_WHOLE}`}>Last seen</th><th className={`pl-3 text-right ${KEEP_WHOLE} ${pinHeadCell("end", "none", "card")}`}>Password</th></tr></thead>
                   <tbody className="divide-y">{members.map(m => (
                     <PersonRow key={m.user_id} teamId={t.id} userId={m.user_id} email={m.email ?? "Unknown login"}
                       roleText={m.is_admin === true ? "Owner" : m.member_role === "owner" ? "Team owner" : accessLabel(effectivePermissions({ memberRole: "member", bundle: m.bundle, bundles, extra: m.permissions }), bundles)}
@@ -81,9 +82,9 @@ export default async function MarketingTeamsPage() {
               <h3 className="text-sm font-semibold text-slate-600">Setters this month</h3>
               {rows.length === 0 ? <p className="mt-1 text-sm text-slate-500">No setters yet.</p> : (
                 <div className="mt-2 overflow-x-auto"><table className="w-full text-left text-sm">
-                  <thead className="border-b text-xs text-slate-500"><tr><th className="py-2 pr-3">Setter</th><th className="pr-3 text-right">Marked Good</th><th className="pr-3 text-right">Not in target</th><th className="pr-3 text-right">Call backs set</th><th className="text-right">Good rate</th></tr></thead>
+                  <thead className="border-b text-xs text-slate-500"><tr><th className={`py-2 pr-3 ${KEEP_WHOLE} ${pinHeadCell("start", "none", "card")}`}>Setter</th><th className={`pr-3 text-right ${KEEP_WHOLE}`}>Marked Good</th><th className={`pr-3 text-right ${KEEP_WHOLE}`}>Not in target</th><th className={`pr-3 text-right ${KEEP_WHOLE}`}>Call backs set</th><th className={`text-right ${KEEP_WHOLE}`}>Good rate</th></tr></thead>
                   <tbody className="divide-y">{rows.map(r => (
-                    <tr key={r.m.user_id}><td className="py-2 pr-3 font-medium">{r.m.email}</td><td className="pr-3 text-right font-mono tabular-nums">{r.good}</td><td className="pr-3 text-right font-mono tabular-nums">{r.nit}</td><td className="pr-3 text-right font-mono tabular-nums">{r.cb}</td><td className="text-right font-mono tabular-nums">{r.rate === null ? "—" : `${r.rate}%`}</td></tr>
+                    <tr key={r.m.user_id} className="group"><td className={`py-2 pr-3 font-medium ${KEEP_WHOLE} ${pinBodyCell("start", "none", "card")}`}>{r.m.email}</td><td className={`pr-3 text-right font-mono tabular-nums ${KEEP_WHOLE}`}>{r.good}</td><td className={`pr-3 text-right font-mono tabular-nums ${KEEP_WHOLE}`}>{r.nit}</td><td className={`pr-3 text-right font-mono tabular-nums ${KEEP_WHOLE}`}>{r.cb}</td><td className={`text-right font-mono tabular-nums ${KEEP_WHOLE}`}>{r.rate === null ? "—" : `${r.rate}%`}</td></tr>
                   ))}</tbody></table></div>
               )}
               <p className="mt-1 text-xs text-slate-400">Good rate = Good out of every lead the setter marked Good or Not in target. Calls themselves are not recorded yet.</p>
