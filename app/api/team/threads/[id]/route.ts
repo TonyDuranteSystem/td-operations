@@ -5,32 +5,14 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
 import { isValidWorkStatus } from '@/lib/team/workspace'
 import { resolveThreadTitle, threadStateIsMeaningful } from '@/lib/team/thread-title'
+import { withReplyPreviews } from '@/lib/team/reply-previews'
+import { buildTalkChatAnswer } from '@/lib/team/talk-chat-answer'
+import { parseChatView } from '@/lib/talk/chat-open-scope'
 import { NextRequest, NextResponse } from 'next/server'
 
 /** How many of the newest messages a chat opens with, and how many an "earlier messages" page adds (TD Talk's Load earlier button). */
 const WINDOW = 500
 const EARLIER_PAGE_DEFAULT = 200
-
-/** Adds the quoted-message preview to each message that is a reply (one query for all of them). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function withReplyPreviews(messages: any[]): Promise<any[]> {
-  const replyIds = Array.from(new Set(messages.filter(m => m.reply_to_id).map(m => m.reply_to_id)))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const parentMap = new Map<string, any>()
-  if (replyIds.length > 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: parents } = await (supabaseAdmin as any)
-      .from('internal_messages')
-      .select('id, message, sender_name, deleted_at')
-      .in('id', replyIds)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(parents ?? []).forEach((p: any) => parentMap.set(p.id, p))
-  }
-  return messages.map(m => ({
-    ...m,
-    reply_to_preview: m.reply_to_id ? (parentMap.get(m.reply_to_id) ?? null) : null,
-  }))
-}
 
 /**
  * GET /api/team/threads/[id]
@@ -46,6 +28,8 @@ async function withReplyPreviews(messages: any[]): Promise<any[]> {
  * has already fired by then, so the message is simply lost. Such a surface must
  * pass mark_read=0 and call POST .../read on a real human signal instead.
  * Default stays ON so every existing caller is byte-identical.
+ *
+ * `?view=talk&limit=<n>` (TD Talk only) answers with just what TD Talk's screen uses and the newest `n` messages (default 60) — see lib/talk/chat-open-scope.ts.
  */
 export async function GET(
   request: NextRequest,
@@ -57,6 +41,23 @@ export async function GET(
     return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
   }
   const { id: threadId } = await params
+
+  // TD Talk's light answer (`?view=talk`, dev job cf265457): only what its screen uses, the lookups side by side, the newest messages. See lib/talk/chat-open-scope.ts.
+  // Everything below this block is the default answer (CRM Team Chat, floating chat) and is unchanged.
+  const talkView = parseChatView(request.nextUrl.searchParams)
+  if (talkView && !request.nextUrl.searchParams.get('before')) {
+    const answer = await buildTalkChatAnswer(supabaseAdmin, {
+      threadId,
+      userId: user.id,
+      userName: getUserDisplayName(user),
+      isAdmin: isAdmin(user),
+      limit: talkView.limit,
+      markRead: request.nextUrl.searchParams.get('mark_read') !== '0',
+      deniedMessage: THREAD_DENIED_MESSAGE,
+      listGroupMemberIds,
+    })
+    return NextResponse.json(answer.body, { status: answer.status })
+  }
 
   const { data: thread } = await supabaseAdmin
     .from('internal_threads')
