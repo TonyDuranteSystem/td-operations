@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 import { retryActivation, repairSdContactId, repairAllSdContactIds, type BatchRepairResult } from '@/app/(dashboard)/client-health/actions'
 import { useRouter } from 'next/navigation'
 
@@ -176,14 +177,14 @@ export function ClientHealthDashboard({
                         {item.status}
                       </span>
                     </div>
-                    <div className="text-xs text-zinc-500 mt-1 space-x-2">
-                      <span>{item.client_email}</span>
+                    <div className="text-xs text-zinc-500 mt-1 flex flex-wrap gap-x-2">
+                      <span className={KEEP_WHOLE}>{item.client_email}</span>
                       <span>·</span>
-                      <span>{item.currency ?? ''} {item.amount?.toLocaleString() ?? '?'}</span>
+                      <span className={KEEP_WHOLE}>{item.currency ?? ''} {item.amount?.toLocaleString() ?? '?'}</span>
                       <span>·</span>
-                      <span>Confirmed: {item.payment_confirmed_at?.split('T')[0] ?? '?'}</span>
+                      <span className={KEEP_WHOLE}>Confirmed: {item.payment_confirmed_at?.split('T')[0] ?? '?'}</span>
                       <span>·</span>
-                      <span>{item.offer_token}</span>
+                      <span className={KEEP_WHOLE}>{item.offer_token}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -289,7 +290,7 @@ export function ClientHealthDashboard({
                       {item.company_name}
                     </Link>
                     <div className="text-xs text-zinc-500 mt-1">
-                      {item.entity_type ?? ''} · {item.status ?? ''} · {item.account_type ?? ''} · Created {item.created_at?.split('T')[0]}
+                      {item.entity_type ?? ''} · {item.status ?? ''} · {item.account_type ?? ''} · <span className={KEEP_WHOLE}>Created {item.created_at?.split('T')[0]}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -488,8 +489,10 @@ export function ClientHealthDashboard({
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-zinc-500 mt-1">
-                        {item.email ?? 'No email'} · Created {item.created_at?.split('T')[0]}
+                      <div className="text-xs text-zinc-500 mt-1 flex flex-wrap gap-x-2">
+                        <span className={KEEP_WHOLE}>{item.email ?? 'No email'}</span>
+                        <span>·</span>
+                        <span className={KEEP_WHOLE}>Created {item.created_at?.split('T')[0]}</span>
                       </div>
                     </div>
                     <Link

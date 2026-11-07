@@ -265,7 +265,7 @@ function KanbanView({
           const visibleItems = isDone && !doneExpanded ? col.items.slice(0, 10) : col.items
 
           return (
-            <div key={col.status} className="w-full md:w-80 md:flex-shrink-0">
+            <div key={col.status} className="w-full md:min-w-[16rem] md:max-w-[28rem] md:flex-1">
               {/* Column header */}
               <div className={cn('rounded-t-lg border-t-4 bg-white border border-b-0 px-3 py-2', cfg.headerBorder)}>
                 <div className="flex items-center justify-between">

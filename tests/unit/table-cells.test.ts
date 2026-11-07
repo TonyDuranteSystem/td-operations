@@ -72,11 +72,19 @@ describe("table cell helpers", () => {
     expect(pinBodyCell("start", "none", "card")).not.toContain("before:bg-zinc-50")
   })
 
+  it("a selected (ticked) row's blue is mirrored by the 'blue' tint, and a second pinned column sits after a 3rem selection column (Wave 3)", () => {
+    expect(pinBodyCell("start", "blue", "card")).toContain("before:bg-blue-50")
+    expect(pinBodyCell("start", "none", "card")).not.toContain("before:bg-blue-50")
+    expect(pinBodyCell("start-after-select", "none", "card")).toContain("left-12")
+    expect(pinBodyCell("start-after-select", "none", "card")).not.toContain("left-0")
+    expect(pinHeadCell("start-after-select", "zinc-50", "card")).toContain("left-12")
+  })
+
   it("every class is written out in full (Tailwind finds classes by scanning text, so none may be built dynamically)", () => {
     const src = read("lib/ui/table-cells.ts")
     for (const cls of [
-      "before:bg-red-50/50", "before:bg-muted/50", "before:bg-muted/40", "before:bg-zinc-50", "before:bg-gray-50", "before:bg-slate-50",
-      "group-hover:after:opacity-100", "left-0", "right-0", "bg-background", "bg-white",
+      "before:bg-red-50/50", "before:bg-muted/50", "before:bg-muted/40", "before:bg-zinc-50", "before:bg-gray-50", "before:bg-slate-50", "before:bg-blue-50",
+      "group-hover:after:opacity-100", "left-0", "left-12", "right-0", "bg-background", "bg-white",
     ]) {
       expect(src).toContain(cls)
     }
@@ -146,6 +154,83 @@ describe("Wave 2 tables follow the window", () => {
   it("Fax history gives its Status column room, so the long outcome text cannot stack letter by letter", () => {
     const src = read("app/(dashboard)/tools/fax/history/history-table.tsx")
     expect(src).toContain("min-w-[13rem]")
+  })
+})
+
+/**
+ * Wave 3: Portal launch and Marketing → Teams are real tables (pinned columns); Partners is a grid of whole-row links; Client health is a list of
+ * rows; Tasks is a board. Same promise for all: a date, an e-mail, an id or a status is never broken across two lines.
+ */
+describe("Wave 3 pages follow the window", () => {
+  it("Portal launch pins the tick box AND the company next to it, on the card, and keeps a ticked row's blue", () => {
+    const src = read("app/(dashboard)/portal-launch/page.tsx")
+    expect(src).toMatch(/from ['"]@\/lib\/ui\/table-cells['"]/)
+    expect(src).toContain("pinHeadCell('start', 'zinc-50', 'card')")
+    expect(src).toContain("pinHeadCell('start-after-select', 'zinc-50', 'card')")
+    expect(src).toMatch(/pinBodyCell\('start', selected\.has\(acc\.id\) \? 'blue' : 'none', 'card'\)/)
+    expect(src).toMatch(/pinBodyCell\('start-after-select', selected\.has\(acc\.id\) \? 'blue' : 'none', 'card'\)/)
+    expect(src).toContain("w-12 min-w-[3rem]") // the selection column is exactly the width the second pin offsets by
+    expect(src).toMatch(/<tr[\s\S]{0,80}?className=\{`group /)
+  })
+
+  it("Portal launch keeps the date, status, contact and e-mail whole, and lets only the long free text give way (truncate + title)", () => {
+    const src = read("app/(dashboard)/portal-launch/page.tsx")
+    expect(src).toMatch(/\$\{KEEP_WHOLE\}`\}>\{acc\.portal_created_date/)
+    expect(src).toContain("max-w-[15rem] truncate")
+    expect(src).toContain("max-w-[12rem] truncate")
+    expect(src).toContain("max-w-[16rem] truncate")
+    expect(src).toContain("title={acc.company_name}")
+  })
+
+  it("Marketing → Teams pins the person (and the Reset password column) in People, and the setter in Setters, on the card", () => {
+    const page = read("app/(dashboard)/marketing-leads/teams/page.tsx")
+    const row = read("app/(dashboard)/marketing-leads/teams/person-row.tsx")
+    expect(page).toContain('pinHeadCell("start", "none", "card")')
+    expect(page).toContain('pinHeadCell("end", "none", "card")')
+    expect(page).toContain('pinBodyCell("start", "none", "card")') // the Setter cell
+    expect(row).toContain('pinBodyCell("start", "none", "card")')
+    expect(row).toContain('pinBodyCell("end", "none", "card")')
+    expect(row).toMatch(/<tr className="group">/)
+    expect(row).toMatch(/Reset password<\/button>/)
+    expect(row).toMatch(/disabled:opacity-50 \$\{KEEP_WHOLE\}/) // the button label stays on one line
+  })
+
+  it("Partners: every row is its own grid, so its columns have FIXED minimums and the box scrolls instead of squeezing", () => {
+    const src = read("app/(dashboard)/partners/page.tsx")
+    const cols = /const PARTNER_COLS = '([^']+)'/.exec(src)
+    expect(cols).not.toBeNull()
+    expect(cols![1]).toContain("minmax(14rem,1fr)")
+    expect(cols![1]).toContain("minmax(10rem,1fr)")
+    expect(cols![1]).toContain("minmax(11rem,1fr)")
+    expect((src.match(/\$\{PARTNER_COLS\}/g) ?? []).length).toBe(2) // the header and the rows share the same columns
+    expect(src).not.toContain("md:grid-cols-[1fr,1fr") // the old squeezable columns are gone
+    expect(src).toContain("overflow-x-auto")
+    expect(src).not.toMatch(/rounded-lg border overflow-hidden/)
+    expect(src).toContain("md:min-w-[62rem]") // 14+10+11 rem + 120+120+100 px + gaps + padding
+    expect(src).toMatch(/\$\{KEEP_WHOLE\} \$\{STATUS_COLORS/) // the status chip stays whole
+  })
+
+  it("Client health: the line under a name is a wrapping row of whole pieces (an offer token split at its hyphens)", () => {
+    const src = read("components/audit/client-health-dashboard.tsx")
+    expect(src).toMatch(/from '@\/lib\/ui\/table-cells'/)
+    expect(src).toContain('<span className={KEEP_WHOLE}>{item.client_email}</span>')
+    expect(src).toContain('<span className={KEEP_WHOLE}>{item.offer_token}</span>')
+    expect(src).toContain("mt-1 flex flex-wrap gap-x-2")
+    expect(src).not.toContain("mt-1 space-x-2")
+  })
+
+  it("Tasks: board columns share the window (a 16rem minimum, no fixed 20rem), and card labels stay whole", () => {
+    const board = read("components/tasks/task-kanban.tsx")
+    expect(board).toContain("md:min-w-[16rem] md:max-w-[28rem] md:flex-1")
+    expect(board).not.toContain("md:w-80")
+    for (const file of ["components/tasks/task-card.tsx", "components/tasks/workflow-task-card.tsx"]) {
+      const card = read(file)
+      expect(card, file).toMatch(/from '@\/lib\/ui\/table-cells'/)
+      expect((card.match(/KEEP_WHOLE/g) ?? []).length, file).toBeGreaterThanOrEqual(6)
+      expect(card, file).not.toContain("flex items-center gap-1 shrink-0") // the badge group used to overflow a narrow card
+      expect(card, file).toContain("ml-auto flex flex-wrap items-center justify-end gap-1")
+      expect(card, file).toContain("flex flex-wrap items-center justify-between gap-x-2 gap-y-1")
+    }
   })
 })
 
