@@ -32,6 +32,7 @@ import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { useTalkViewerId } from '@/components/talk/talk-viewer'
 import { afterListChoice, earlyChatChoice, fastOpenEnabled, TalkSavedStore } from '@/lib/talk/talk-cache'
 import { CHAT_LIST_URL, withUnreadCleared } from '@/lib/talk/chat-list-scope'
+import { chatOpenLimit, withChatView } from '@/lib/talk/chat-open-scope'
 import { TalkGroupInfo, TalkNewGroup } from '@/components/talk/talk-group-sheets'
 
 const LAST_OPENED_KEY = 'td-talk-last-chat'
@@ -241,7 +242,9 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     const markReadQuery = isBeingViewed() ? '' : '?mark_read=0' // asked once: it decides both what the server is told and whether the list's number is cleared
     const viewed = markReadQuery === ''
     try {
-      const r = await fetch(`/api/team/threads/${threadId}${markReadQuery}`)
+      // TD Talk's own, lighter answer (newest messages only, no Threads-panel work) — see lib/talk/chat-open-scope.ts
+      const limit = chatOpenLimit(windowRef.current.length, !!pendingJumpRef.current)
+      const r = await fetch(`/api/team/threads/${threadId}${withChatView(markReadQuery, limit)}`)
       if (!r.ok) throw new Error('Could not load this chat.')
       const d = await r.json()
       if (selectedIdRef.current !== threadId) return // switched chats while loading
@@ -258,6 +261,10 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     }
   }, [applyChat, getStore])
 
+  // the store is looked at when a chat is chosen, without making `select` change every time it is created
+  const getStoreRef = useRef(getStore)
+  getStoreRef.current = getStore
+
   const select = useCallback((id: string | null) => {
     setSelectedId(id)
     setMessages([])
@@ -265,13 +272,17 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     setPeerReadAt(null)
     setSheetMsg(null); setMode(null); setSearchOpen(false); setSearchQ(''); setHighlightId(null)
     setGroupInfoOpen(false); setNewGroupOpen(false); setGroupMemberIds([]); setMemberReads({})
+    // phone app: a chat opened before shows its saved messages at once and the server's answer replaces them a moment later (dev job cf265457).
+    // Saved messages are only shown: nothing here marks anything read or tells a sender "delivered". A message link (?message=) loads the normal way: its jump needs the real window.
+    const savedChat = id ? getStoreRef.current()?.chatFor(id) ?? null : null
+    if (savedChat && !pendingJumpRef.current) applyChat(savedChat.payload as ChatAnswer, false)
     writeLastOpened(id)
     try {
       // The open chat lives in the address (?thread=…): a refresh reopens it, and the pop-up rule ("silent only for
       // the chat you are looking at") reads it.
       window.history.replaceState(null, '', id ? `${base}?thread=${id}` : base)
     } catch { /* ignore */ }
-  }, [base])
+  }, [base, applyChat])
 
   // Every way out of the open chat goes through here: with a recording in progress the person is asked first (Send it / Throw it away / Keep recording).
   const guardLeave = useCallback((go: () => void) => {
@@ -327,9 +338,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
           setShowingSaved(true)
           const id = startThreadId(chatThreads(saved.list.threads as TalkThread[]), { wanted, lastOpened: readLastOpened() })
           if (id) {
-            select(id); shown = id
-            // a message link (?message=) loads the normal way: its jump needs the real window
-            if (saved.chat?.id === id && !pendingJumpRef.current) applyChat(saved.chat.payload as ChatAnswer, false)
+            select(id); shown = id // select shows this chat's saved messages at once
           }
           setBooting(false)
         } else {
