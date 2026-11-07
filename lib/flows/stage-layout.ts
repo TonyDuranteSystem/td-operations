@@ -47,6 +47,8 @@ export const STAGE_COMPONENT_TYPES = [
   // E-sign (the esign_* engine) of a form for THIS delivery: prepare it, see its status; the delivery
   // moves on by itself when the client has signed (lib/esign/delivery-advance.ts).
   'esign_panel',
+  // Tax Return "Signed": fax the signed return to the IRS (single-member LLCs) and let the delivery check file the job (lib/fax/return-fax*.ts).
+  'return_fax_panel',
   // Company Change Name, "Update our records": the one button that renames the company and moves its old folders (lib/operations/change-name-apply.ts).
   'apply_name_panel',
 ] as const

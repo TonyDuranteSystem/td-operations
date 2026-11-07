@@ -23,6 +23,7 @@ import { SuitePanel } from './suite-panel'
 import { IrsTrackingEntry } from './irs-tracking-entry'
 import { ClosureWrapupPanel } from './closure-wrapup-panel'
 import { EsignPanel } from './esign-panel'
+import { ReturnFaxPanel } from './return-fax-panel'
 import { esignDocName } from '@/lib/flows/esign-doc-name'
 import { ApplyNamePanel } from './apply-name-panel'
 
@@ -171,6 +172,8 @@ function renderComponent(
           docName={esignDocName(component.rename, { company_name: account.company_name, year: flowYear })}
         />
       )
+    case 'return_fax_panel':
+      return <ReturnFaxPanel key={key} serviceDeliveryId={serviceDelivery.id} account={account} serviceType={serviceDelivery.service_type} />
     case 'apply_name_panel':
       return <ApplyNamePanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'closure_wrapup':
