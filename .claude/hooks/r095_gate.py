@@ -28,9 +28,11 @@ DESIGN (council-reviewed, 2 passes, plan v2.1)
   two) and the gate blocks at >= 2 deduped technical tokens.
 - Skips: user's prompt is itself technical (paths / SQL / code fence), or
   explicitly requests citations (English + Italian).
-- The rewrite instruction RELOCATES references to a Technical details footer;
-  it never asks to delete facts, citations, or client-facing links — keeping
-  it consistent with the r093 verifier's "cite the source" order.
+- The block text tells the session the user ALREADY read the reply, so it
+  sends a SHORT plain version (not a full second copy — 2026-11-06). It
+  RELOCATES references to a Technical details footer; it never asks to delete
+  citations or client-facing links (a draft/offer link is repeated in full) —
+  keeping it consistent with the r093 verifier's "reply with ONLY the fix".
 
 FAIL-OPEN: any error exits 0. KILL SWITCH: R095_GATE_OFF=1.
 """
@@ -258,14 +260,16 @@ def main():
         "🔴 R095 PLAIN-ENGLISH GATE — your reply body contains raw technical "
         "references Antonio asked you to keep out of the explanation:\n\n  "
         + "\n  ".join(f"- {t}" for t in tokens)
-        + "\n\nREWRITE the reply now:\n"
-        "1. The body must read in plain English — say what each reference MEANS "
-        "instead of naming it (\"the file that builds invoices\", \"the change "
-        "shipped earlier today\").\n"
-        "2. MOVE the technical references into a short 'Technical details' "
-        "footer at the END of the reply. Do NOT delete facts, citations, "
-        "links, or anything client-facing — relocate them.\n"
-        "3. Keep the answer itself and its meaning unchanged."
+        + "\n\nThe user has ALREADY read your reply, so do NOT send the whole "
+        "thing again. Reply once more, SHORT:\n"
+        "1. Give the key point in a few plain-English sentences — say what each "
+        "reference MEANS instead of naming it (\"the file that builds "
+        "invoices\", \"the change shipped earlier today\").\n"
+        "2. Put the technical references in a short 'Technical details' footer "
+        "at the END of the reply. Do NOT delete citations or links — relocate "
+        "them. If the reply held a draft, an offer link, or anything "
+        "client-facing, repeat that part in full.\n"
+        "3. Do not mention this check."
     )
     print(json.dumps({"decision": "block", "reason": reason}))
     sys.exit(0)
