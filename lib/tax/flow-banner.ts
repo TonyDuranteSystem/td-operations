@@ -8,20 +8,27 @@
  * "Edit submission" banner regardless of where the SD actually is.
  *
  * This pure mapper classifies the SD's flow stage into a client-facing banner
- * state. It is consulted ONLY after review_status (so production clients with a
- * review_status are never affected) and before the legacy fallback. Returns null
- * for stages it doesn't own (early/billing stages, unknown names) so the banner
- * degrades to existing behaviour.
+ * state. It is consulted after review_status — EXCEPT once the return is past the review (see `stageOwnsBanner`) — and before the
+ * legacy fallback. Returns null for stages it doesn't own (early/billing stages, unknown names) so the banner degrades to existing
+ * behaviour.
+ *
+ * The REAL Tax Return stages (production pipeline_stages, verified 2026-11-06): Company Data Pending · Paid - Awaiting Data · 1st
+ * Installment Paid · Extension Filed · Awaiting 2nd Payment · 2nd Installment Paid · Wizard Available · Data Submitted · Under Review ·
+ * Revision Requested · Approved · Confirmed · Data Received · Preparation · [Sent for Signature · Signed — added by the item-5 migration,
+ * 2026-11-06] · TR Completed (older, no longer a step the buttons lead into) · TR Filed · Terminated - Non Payment. The names "Review
+ * Completed", "Tax Return Prepared", "Filed with IRS", "IRS Receipt Uploaded" and "Completed" are NOT stages of that pipeline (the mapper
+ * once knew 7 names the pipeline does not have and none of the real ones — so a client who had to sign was told "under review"). They stay
+ * mapped because other pipelines or older rows may still carry them.
  */
 
 export type FlowBannerState =
   | 'complete_form' // Wizard Available — client must fill the tax wizard
   | 'under_review' // Data Submitted / Under Review — staff reviewing, no client action
-  | 'preparing' // Review Completed — approved, staff preparing the return
+  | 'preparing' // Approved / Confirmed / Data Received / Preparation / TR Completed — approved, staff preparing the return
   | 'revision_requested' // Revision Requested — client must edit & resubmit
-  | 'sign' // Tax Return Prepared / Sent for Signature — client signs at /portal/sign
+  | 'sign' // Sent for Signature — client signs at /portal/sign
   | 'signed' // Signed — signed, awaiting filing
-  | 'filed' // Filed with IRS / IRS Receipt Uploaded — filed
+  | 'filed' // TR Filed — filed
   | 'completed' // Completed — done
 
 export function flowStageBannerState(sdStage: string | null | undefined): FlowBannerState | null {
@@ -32,14 +39,20 @@ export function flowStageBannerState(sdStage: string | null | undefined): FlowBa
     case 'Under Review':
       return 'under_review'
     case 'Review Completed':
+    case 'Approved':
+    case 'Confirmed':
+    case 'Data Received':
+    case 'Preparation':
+    case 'TR Completed': // the older "return ready" step: nothing is out for signature yet (the document is sent from "Preparation" now)
       return 'preparing'
     case 'Revision Requested':
       return 'revision_requested'
+    case 'Sent for Signature': // the document is out with the client (set when staff send it from the workspace)
     case 'Tax Return Prepared':
-    case 'Sent for Signature':
       return 'sign'
     case 'Signed':
       return 'signed'
+    case 'TR Filed':
     case 'Filed with IRS':
     case 'IRS Receipt Uploaded':
       return 'filed'
@@ -52,7 +65,45 @@ export function flowStageBannerState(sdStage: string | null | undefined): FlowBa
   }
 }
 
+/**
+ * The state the client's banner shows for a stage. "Sign your tax return" is only true when a document is really waiting for the
+ * client's signature: at "TR Completed" the return can be ready on our side with nothing sent yet, and a client told to sign
+ * something that is not there is worse than "being prepared". `signatureWaiting` comes from the portal's own list of documents to sign.
+ */
+export function taxBannerFlowState(sdStage: string | null | undefined, signatureWaiting: boolean): FlowBannerState | null {
+  const state = flowStageBannerState(sdStage)
+  if (state === 'sign' && !signatureWaiting) return 'preparing'
+  return state
+}
+
+/** A banner state that belongs to a return already PAST the staff review (preparing, signing, filed, done). */
+export function isPostReviewBannerState(state: FlowBannerState | null): boolean {
+  return state === 'preparing' || state === 'sign' || state === 'signed' || state === 'filed' || state === 'completed'
+}
+
+/**
+ * Once a return is past the review, the workspace step decides what the client sees — NOT the old review message from the client's
+ * form (which, for "confirmed", used to say "you've confirmed your data" — a button nobody presses any more). Only when the review
+ * state asks nothing of the client (none, approved, confirmed) — a return staff re-opened for edits, or sent back for changes,
+ * must still show the client its edit message, whatever stage the job sits at.
+ */
+export function stageOwnsBanner(state: FlowBannerState | null, reviewStatus: string | null | undefined): boolean {
+  if (!isPostReviewBannerState(state)) return false
+  return reviewStatus == null || reviewStatus === 'approved' || reviewStatus === 'confirmed'
+}
+
 /** Whether a banner state carries a client action (link/button) vs. status-only. */
 export function flowBannerHasAction(state: FlowBannerState): boolean {
   return state === 'complete_form' || state === 'revision_requested' || state === 'sign'
+}
+
+/**
+ * Is one of the client's documents-to-sign the tax return itself? The portal lists e-sign envelopes and signature requests by
+ * document name ("Tax Return 2025 - Co", "Form 1120 2025 - Co - To Sign", Form 8879, 5472); a lease or an operating agreement waiting
+ * for the same client must not turn the tax banner into "sign your tax return".
+ */
+export function hasTaxReturnToSign(docs: ReadonlyArray<{ type: string; status: string; documentName?: string | null }>): boolean {
+  return docs.some(
+    (d) => d.type === 'document' && d.status !== 'signed' && /tax return|form\s*(1120|1065|8879|5472)|\b(1120|1065|8879|5472)\b/i.test(d.documentName ?? ''),
+  )
 }

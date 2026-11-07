@@ -5,6 +5,7 @@ import { isSecureAdmin } from "@/lib/auth"
 import { leadDb } from "@/lib/marketing/meta-leads/service"
 import { eventText, formatWhen, type StageOption } from "@/lib/marketing/lead-view"
 import { getMarketingSetting } from "@/lib/marketing/settings"
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from "@/lib/ui/table-cells"
 
 export const dynamic = "force-dynamic"
 
@@ -35,12 +36,12 @@ export default async function MarketingAuditPage({ searchParams }: { searchParam
       {shown.length === 0 ? <p className="rounded-xl border bg-white p-5 text-sm text-slate-600">Nothing has happened yet. Every pick, Good, Not in target, call back, note and assignment will appear here.</p> : (
         <div className="overflow-x-auto rounded-xl border bg-white">
           <table className="w-full text-left text-sm">
-            <thead className="border-b bg-slate-50 text-xs text-slate-500"><tr><th className="px-3 py-2">When</th><th className="px-3 py-2">Who</th><th className="px-3 py-2">Lead</th><th className="px-3 py-2">What</th></tr></thead>
+            <thead className="border-b bg-slate-50 text-xs text-slate-500"><tr><th className={`px-3 py-2 ${pinHeadCell("start", "slate-50", "card")}`}>When</th><th className={`px-3 py-2 ${KEEP_WHOLE}`}>Who</th><th className="px-3 py-2">Lead</th><th className="px-3 py-2">What</th></tr></thead>
             <tbody className="divide-y">
               {shown.map(e => (
-                <tr key={e.id}>
-                  <td className="whitespace-nowrap px-3 py-2 text-slate-500">{formatWhen(e.created_at)}</td>
-                  <td className="px-3 py-2">{e.actor === "system" ? <span className="text-slate-400">System</span> : e.actor}</td>
+                <tr key={e.id} className="group">
+                  <td className={`px-3 py-2 text-slate-500 ${KEEP_WHOLE} ${pinBodyCell("start", "none", "card")}`}>{formatWhen(e.created_at)}</td>
+                  <td className={`px-3 py-2 ${KEEP_WHOLE}`}>{e.actor === "system" ? <span className="text-slate-400">System</span> : e.actor}</td>
                   <td className="px-3 py-2"><Link className="underline" href={`/marketing-leads/leads?lead=${e.lead_id}`}>{name.get(e.lead_id) ?? "Lead"}</Link></td>
                   <td className="px-3 py-2">{eventText(e.kind, e.data, stages, reasons)}</td>
                 </tr>

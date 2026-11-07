@@ -65,5 +65,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     await db.from("esign_envelopes").update({ status: "sent", updated_at: new Date().toISOString() }).eq("id", id)
   }
 
+  // The document is out. An envelope prepared from a job's own workspace panel carries that job: it moves to its "sent" step (Tax Return:
+  // "Sent for Signature", without a second client message — the invite above is the one). Pressing Send again retries a move that failed;
+  // a job already past the step is left alone. Best-effort and self-reporting: it never fails the send. (Tax Return plan item 5, 2026-11-06.)
+  try {
+    const { advanceDeliveryAfterEsignSent } = await import("@/lib/esign/delivery-advance")
+    await advanceDeliveryAfterEsignSent(id)
+  } catch {
+    // advanceDeliveryAfterEsignSent reports its own failures; this guard only keeps the send's answer intact
+  }
+
   return NextResponse.json({ ok: true, emailed, portal, undeliverable })
 }

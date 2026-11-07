@@ -6,7 +6,9 @@
  * New card buttons (Slice 4 UI) post here.
  *
  *   start_review     submitted | resubmitted → under_review
- *   approve          under_review            → approved      (client may Confirm)
+ *   approve          under_review (also submitted / resubmitted / approved) → confirmed — approval RELEASES the submission;
+ *                    the client is NOT asked to confirm (that step was removed 2026-11-06). Shared with the workspace's Approve
+ *                    button: lib/tax/approve-submission.ts.
  *   request_changes  under_review            → revision_requested  (note required)
  *   reopen           confirmed               → reopened      (unlocks for edits)
  *
@@ -22,12 +24,13 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isDashboardUser, getUserDisplayName } from "@/lib/auth"
 import { canTransition, buildReviewHistoryEntry, type ReviewStatus } from "@/lib/tax/review-status"
+import { approveTaxSubmission } from "@/lib/tax/approve-submission"
 
 type Action = "start_review" | "approve" | "request_changes" | "reopen"
 
 const ACTION_TARGET: Record<Action, ReviewStatus> = {
   start_review: "under_review",
-  approve: "approved",
+  approve: "confirmed", // handled by approveTaxSubmission below (release), never by the generic path
   request_changes: "revision_requested",
   reopen: "reopened",
 }
@@ -36,8 +39,6 @@ function clientNotice(action: Action, note: string | undefined): string | null {
   switch (action) {
     case "request_changes":
       return `Our team reviewed your tax submission and needs a change: ${note}\n\nPlease open the portal, edit your tax information, and resubmit.`
-    case "approve":
-      return `Good news — your tax data has been reviewed. Please open the portal and click Confirm to finalize.`
     case "reopen":
       return `We've reopened your tax submission so you can make edits. Please review and resubmit when ready.`
     default:
@@ -82,6 +83,37 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "A note is required when requesting changes." }, { status: 400 })
   }
 
+  // Approve = release (the client's Confirm step was removed, 2026-11-06). One shared helper, also used by the workspace's Approve button.
+  if (action === "approve") {
+    const result = await approveTaxSubmission({ submissionId: submission_id, by: getUserDisplayName(user) })
+    switch (result.status) {
+      case "approved":
+      case "already_released":
+        return NextResponse.json({
+          success: true,
+          review_status: "confirmed",
+          already_released: result.status === "already_released",
+          apply: result.apply ?? null,
+          client_notified: null,
+        })
+      case "no_submission":
+        return NextResponse.json({ error: "Submission not found" }, { status: 404 })
+      case "conflict":
+        return NextResponse.json(
+          { error: "This submission was just changed by someone else — refresh and try again.", review_status: result.from ?? null },
+          { status: 409 },
+        )
+      case "not_in_review":
+      case "not_approvable":
+        return NextResponse.json(
+          { error: `Cannot approve from "${result.from ?? "(none)"}".`, review_status: result.from ?? null },
+          { status: 409 },
+        )
+      default:
+        return NextResponse.json({ error: `Could not approve: ${result.detail ?? result.status}` }, { status: 500 })
+    }
+  }
+
   const target = ACTION_TARGET[action]
 
   const { data: sub } = await supabaseAdmin
@@ -122,7 +154,7 @@ export async function POST(req: NextRequest) {
 
   // Resolve the open What's New card on terminal-for-this-round actions so a
   // re-submission raises a fresh one (emitActionNeeded skips while one is open).
-  if (action === "approve" || action === "request_changes" || action === "reopen") {
+  if (action === "request_changes" || action === "reopen") {
     await supabaseAdmin
       .from("message_actions")
       .update({ resolved_at: now })
@@ -130,32 +162,24 @@ export async function POST(req: NextRequest) {
       .is("resolved_at", null)
   }
 
-  // Client-facing notice. request_changes and approve BLOCK the review loop on
-  // a client action (edit+resubmit / click Confirm), so they dispatch the full
-  // action-required package (clickable chat + immediate email + bell/push,
-  // Phase C 2026-07-02 — was chat-only, silent unless the client happened to
-  // open the portal). reopen keeps the original chat-only notice.
+  // Client-facing notice. request_changes BLOCKS the review loop on a client
+  // action (edit+resubmit), so it dispatches the full action-required package
+  // (clickable chat + immediate email + bell/push, Phase C 2026-07-02 — was
+  // chat-only, silent unless the client happened to open the portal). reopen
+  // keeps the original chat-only notice. (approve never gets here: it asks
+  // nothing of the client any more.)
   let clientNotified: unknown = null
-  if (sub.account_id && (action === "request_changes" || action === "approve")) {
+  if (sub.account_id && action === "request_changes") {
     const { notifyClientActionRequired } = await import("@/lib/portal/action-required")
     const staffNote = note?.trim() ?? ""
     const dispatch = await notifyClientActionRequired({
       account_id: sub.account_id,
       contact_id: (sub.contact_id as string | null) ?? null,
-      title:
-        action === "request_changes"
-          ? { en: "Changes needed on your tax submission", it: "Modifiche richieste alla tua dichiarazione" }
-          : { en: "Please confirm your reviewed tax data", it: "Conferma i tuoi dati fiscali verificati" },
-      message:
-        action === "request_changes"
-          ? {
-              en: `Our team reviewed your tax submission and needs a change: ${staffNote}\n\nPlease open your portal, edit your tax information, and resubmit.`,
-              it: `Il nostro team ha revisionato la tua dichiarazione e serve una modifica: ${staffNote}\n\nAccedi al portale, correggi le informazioni fiscali e reinvia.`,
-            }
-          : {
-              en: "Good news — your tax data has been reviewed. Please open your portal and click Confirm to finalize.",
-              it: "Buone notizie — i tuoi dati fiscali sono stati verificati. Accedi al portale e clicca Conferma per finalizzare.",
-            },
+      title: { en: "Changes needed on your tax submission", it: "Modifiche richieste alla tua dichiarazione" },
+      message: {
+        en: `Our team reviewed your tax submission and needs a change: ${staffNote}\n\nPlease open your portal, edit your tax information, and resubmit.`,
+        it: `Il nostro team ha revisionato la tua dichiarazione e serve una modifica: ${staffNote}\n\nAccedi al portale, correggi le informazioni fiscali e reinvia.`,
+      },
       link: "/portal",
     })
     clientNotified = dispatch

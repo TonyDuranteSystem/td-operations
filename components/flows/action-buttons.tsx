@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import type { StageAction } from '@/lib/flows/stage-layout'
 import { actionConfirmText } from '@/lib/flows/action-confirm'
+import { actionTargetStage } from '@/lib/flows/action-target'
 
 interface ActionButtonsProps {
   serviceDeliveryId: string
@@ -25,8 +26,6 @@ interface ActionButtonsProps {
 type Variant = 'primary' | 'secondary'
 
 interface ActionConfig {
-  /** Stage to advance to via /api/flows/[id]/advance. */
-  targetStage: string
   label: string
   busyLabel: string
   icon: React.ComponentType<{ className?: string }>
@@ -34,45 +33,43 @@ interface ActionConfig {
 }
 
 /**
- * stage_layout action key → stage transition. Each button POSTs to
- * /api/flows/[id]/advance with the target stage; advanceServiceDelivery owns the
+ * stage_layout action key → button look. Each button POSTs to
+ * /api/flows/[id]/advance with its target stage; advanceServiceDelivery owns the
  * side effects (stage_history, status/completion, portal notify). Unknown keys
  * are ignored so adding new actions to a layout never breaks the render.
+ *
+ * WHERE the button goes is `actionTargetStage` (lib/flows/action-target.ts): the stage layout's own `target` first, a fallback per key
+ * second. It used to be hard-coded here with stage names the Tax Return pipeline does not have.
  *
  * Tax Return review/filing actions plus the AR/RA "complete" → "Closed" action
  * (the original behavior, preserved).
  */
 const ACTION_CONFIG: Record<string, ActionConfig> = {
   start_review: {
-    targetStage: 'Under Review',
     label: 'Start Review',
     busyLabel: 'Starting…',
     icon: PlayCircle,
     variant: 'primary',
   },
   approve: {
-    targetStage: 'Review Completed',
     label: 'Approve',
     busyLabel: 'Approving…',
     icon: CheckCircle2,
     variant: 'primary',
   },
   request_changes: {
-    targetStage: 'Revision Requested',
     label: 'Request Changes',
     busyLabel: 'Requesting…',
     icon: RotateCcw,
     variant: 'secondary',
   },
   file_with_irs: {
-    targetStage: 'Filed with IRS',
     label: 'File with IRS',
     busyLabel: 'Filing…',
     icon: Landmark,
     variant: 'primary',
   },
   mark_completed: {
-    targetStage: 'Completed',
     label: 'Mark as Completed',
     busyLabel: 'Completing…',
     icon: Flag,
@@ -80,7 +77,6 @@ const ACTION_CONFIG: Record<string, ActionConfig> = {
   },
   // AR / RA recurring renewal flows — original behavior.
   complete: {
-    targetStage: 'Closed',
     label: 'Mark as Completed',
     busyLabel: 'Completing…',
     icon: CheckCircle2,
@@ -90,6 +86,8 @@ const ACTION_CONFIG: Record<string, ActionConfig> = {
 
 /** A render-ready action with a unique id, resolved label, and target stage. */
 interface ResolvedAction extends ActionConfig {
+  /** Stage to advance to via /api/flows/[id]/advance. */
+  targetStage: string
   /** Unique id for busy-state keying (advance_next entries share one key, so we
    *  suffix the target to disambiguate multiple on one stage). */
   uid: string
@@ -102,12 +100,13 @@ interface ResolvedAction extends ActionConfig {
  *  - string → looked up in ACTION_CONFIG (fixed transitions). Unknown → null.
  *  - { key:'advance_next', label, target } → a generic forward button to an
  *    explicit target stage, with the layout-supplied label. Missing target → null.
- *  - { key:'<known>', label? } → ACTION_CONFIG entry, with optional label override.
+ *  - { key:'<known>', label?, target? } → ACTION_CONFIG look, the layout's target (else the key's fallback), optional label override.
  */
 function resolveAction(action: StageAction, hasCompany: boolean): ResolvedAction | null {
   if (typeof action === 'string') {
     const config = ACTION_CONFIG[action]
-    return config ? { ...config, uid: action, confirmText: null } : null
+    const targetStage = actionTargetStage(action)
+    return config && targetStage ? { ...config, targetStage, uid: action, confirmText: null } : null
   }
   if (action.key === 'advance_next') {
     if (!action.target) return null
@@ -122,8 +121,9 @@ function resolveAction(action: StageAction, hasCompany: boolean): ResolvedAction
     }
   }
   const config = ACTION_CONFIG[action.key]
-  if (!config) return null
-  return { ...config, uid: action.key, label: action.label ?? config.label, confirmText: actionConfirmText(action, hasCompany) }
+  const targetStage = actionTargetStage(action.key, action.target)
+  if (!config || !targetStage) return null
+  return { ...config, targetStage, uid: action.key, label: action.label ?? config.label, confirmText: actionConfirmText(action, hasCompany) }
 }
 
 export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }: ActionButtonsProps) {

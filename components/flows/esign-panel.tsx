@@ -11,15 +11,23 @@ interface EsignPanelProps {
   companyName: string | null
   /** Button label from the stage layout (default "Prepare the form for signature"). */
   label?: string
+  /** Heading of the panel (default "Form for the client to sign"). Tax Return: "Return for the client to sign". */
+  title?: string
+  /** The sentence under the heading, from the stage layout (`helpText`). Default: the Company Change Name wording. */
+  helpText?: string
+  /** The document's default name in the e-sign editor. Default: "Company name change form — <company>". Tax Return: "Tax Return 2025 - <company>". */
+  docName?: string
+  /** Status only: no button to prepare another document (used on the step after the signature). */
+  readOnly?: boolean
 }
 
 /**
- * E-sign of a form for THIS delivery (Company Change Name: the state's name-change form the client signs).
+ * E-sign of a form for THIS delivery (Company Change Name: the state's name-change form the client signs; Tax Return: the prepared return).
  * Staff prepare it in the e-sign editor (opened with the company, the client and this delivery already
- * linked), and see here whether it was sent and signed. When the client has signed, the delivery moves
- * to the next step by itself (lib/esign/delivery-advance.ts) — nothing to press.
+ * linked), and see here whether it was sent and signed. The delivery moves on by itself (lib/esign/delivery-advance.ts):
+ * when the document is SENT for the services that have a "sent" step (Tax Return) and when the client has SIGNED — nothing to press.
  */
-export function EsignPanel({ serviceDeliveryId, accountId, contactId, companyName, label }: EsignPanelProps) {
+export function EsignPanel({ serviceDeliveryId, accountId, contactId, companyName, label, title, helpText, docName, readOnly }: EsignPanelProps) {
   const [envelopes, setEnvelopes] = useState<EsignEnvelopeRow[]>([])
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -45,18 +53,23 @@ export function EsignPanel({ serviceDeliveryId, accountId, contactId, companyNam
   if (accountId) params.set('account', accountId)
   if (contactId) params.set('contact', contactId)
   params.set('sd', serviceDeliveryId)
-  if (companyName) params.set('name', `Company name change form — ${companyName}`)
+  const defaultName = docName || (companyName ? `Company name change form — ${companyName}` : null)
+  if (defaultName) params.set('name', defaultName)
   const editorHref = `/tools/esign/new?${params.toString()}`
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4">
       <div className="mb-3 flex items-center gap-2">
         <FileSignature className="h-4 w-4 text-zinc-400" />
-        <h3 className="text-sm font-semibold text-zinc-900">Form for the client to sign</h3>
+        <h3 className="text-sm font-semibold text-zinc-900">{title || 'Form for the client to sign'}</h3>
       </div>
       <p className="mb-3 text-sm text-zinc-500">
-        Fill in the state&apos;s name-change form with the confirmed name, upload it in the signing editor, place the signature field and send it.
-        The job moves on by itself when the client has signed.
+        {helpText ?? (
+          <>
+            Fill in the state&apos;s name-change form with the confirmed name, upload it in the signing editor, place the signature field and send it.
+            The job moves on by itself when the client has signed.
+          </>
+        )}
       </p>
 
       {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
@@ -88,16 +101,18 @@ export function EsignPanel({ serviceDeliveryId, accountId, contactId, companyNam
         </ul>
       )}
 
-      <a
-        href={editorHref}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
-      >
-        <ExternalLink className="h-4 w-4" />
-        {label || 'Prepare the form for signature'}
-      </a>
-      <button onClick={load} className="ml-2 text-xs text-zinc-500 hover:text-zinc-800 hover:underline">Refresh status</button>
+      {!readOnly && (
+        <a
+          href={editorHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          <ExternalLink className="h-4 w-4" />
+          {label || 'Prepare the form for signature'}
+        </a>
+      )}
+      <button onClick={load} className={`${readOnly ? '' : 'ml-2 '}text-xs text-zinc-500 hover:text-zinc-800 hover:underline`}>Refresh status</button>
     </div>
   )
 }
