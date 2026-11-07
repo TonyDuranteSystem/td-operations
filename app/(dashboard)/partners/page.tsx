@@ -5,8 +5,13 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { PartnersHeader } from './components/partners-header'
 import { labelForServiceStatic } from '@/lib/services'
+import { KEEP_WHOLE } from '@/lib/ui/table-cells'
 
 export const dynamic = 'force-dynamic'
+
+// Every row is its own grid, so the columns need FIXED minimums (a plain 1fr is "as small as its longest word", which differs row by row:
+// one row squeezed Contact to 45px while the next one did not). The box scrolls sideways below this width instead of squeezing.
+const PARTNER_COLS = 'md:grid-cols-[minmax(14rem,1fr),minmax(10rem,1fr),120px,120px,minmax(11rem,1fr),100px]'
 
 export default async function PartnersPage() {
   const supabase = createClient()
@@ -42,8 +47,9 @@ export default async function PartnersPage() {
     <div className="p-6 lg:p-8 space-y-6">
       <PartnersHeader count={partners?.length ?? 0} />
 
-      <div className="bg-white rounded-lg border overflow-hidden">
-        <div className="hidden md:grid md:grid-cols-[1fr,1fr,120px,120px,1fr,100px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+      <div className="bg-white rounded-lg border overflow-x-auto">
+        <div className="md:min-w-[62rem]">
+        <div className={`hidden md:grid ${PARTNER_COLS} gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider`}>
           <span>Partner</span>
           <span>Contact</span>
           <span>Model</span>
@@ -58,21 +64,21 @@ export default async function PartnersPage() {
             <Link
               key={p.id}
               href={`/partners/${p.id}`}
-              className="grid grid-cols-1 md:grid-cols-[1fr,1fr,120px,120px,1fr,100px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center"
+              className={`grid grid-cols-1 ${PARTNER_COLS} gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center`}
             >
-              <div>
+              <div className="min-w-0">
                 <div className="font-medium text-sm">{p.partner_name}</div>
-                {p.partner_email && <div className="text-xs text-muted-foreground">{p.partner_email}</div>}
+                {p.partner_email && <div className="text-xs text-muted-foreground truncate" title={p.partner_email}>{p.partner_email}</div>}
               </div>
               <div className="text-sm text-muted-foreground">{contact?.full_name ?? '—'}</div>
-              <div className="text-xs text-muted-foreground capitalize">{p.commission_model?.replace('_', ' ') ?? '—'}</div>
+              <div className={`text-xs text-muted-foreground capitalize ${KEEP_WHOLE}`}>{p.commission_model?.replace('_', ' ') ?? '—'}</div>
               <div className="text-sm font-medium">{clientCount}</div>
               <div className="flex flex-wrap gap-1">
                 {(p.agreed_services ?? []).map((s: string) => (
-                  <span key={s} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600">{labelForServiceStatic(s)}</span>
+                  <span key={s} className={`text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 ${KEEP_WHOLE}`}>{labelForServiceStatic(s)}</span>
                 ))}
               </div>
-              <span className={`text-xs font-medium px-2 py-0.5 rounded-full w-fit ${STATUS_COLORS[p.status] ?? 'bg-zinc-100 text-zinc-600'}`}>
+              <span className={`text-xs font-medium px-2 py-0.5 rounded-full w-fit ${KEEP_WHOLE} ${STATUS_COLORS[p.status] ?? 'bg-zinc-100 text-zinc-600'}`}>
                 {p.status}
               </span>
             </Link>
@@ -81,6 +87,7 @@ export default async function PartnersPage() {
         {(partners ?? []).length === 0 && (
           <div className="p-8 text-center text-sm text-muted-foreground">No partners found</div>
         )}
+        </div>
       </div>
     </div>
   )

@@ -45,8 +45,9 @@ export async function assignLeadToTeam(db: Db, leadId: string, teamId: string, a
   if (!lead) return { ok: false, status: 404, error: "Lead not found." }
   if (lead.team_id) return { ok: false, status: 409, error: "This lead already belongs to a team." }
   if (!/^[0-9a-f-]{36}$/i.test(teamId)) return { ok: false, status: 400, error: "Pick a team." }
-  const { data: team } = await db.from("marketing_teams").select("id, name, status").eq("id", teamId).maybeSingle()
+  const { data: team } = await db.from("marketing_teams").select("id, name, status, is_test").eq("id", teamId).maybeSingle()
   if (!team) return { ok: false, status: 400, error: "Team not found." }
+  if (team.is_test) return { ok: false, status: 400, error: "That is a test team. It cannot be given real leads." }
   const upd = await db.from("marketing_leads").update({ team_id: team.id, updated_at: new Date().toISOString() }).eq("id", leadId).is("team_id", null).select("id")
   if (upd.error) return { ok: false, status: 500, error: "Could not save. Please try again." }
   if (!upd.data || upd.data.length === 0) return { ok: false, status: 409, error: "This lead was just given to a team. Reload the page." }
