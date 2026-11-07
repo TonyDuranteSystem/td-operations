@@ -220,7 +220,7 @@ _Regenerated 2026-11-07. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-04)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
-- [social-app.md](social-app.md) — TD Social (iPhone app) — "app mode" on the web side _(verified 2026-11-06)_
+- [social-app.md](social-app.md) — TD Social (iPhone app) — "app mode" on the web side _(verified 2026-11-07)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-11-05)_
 - [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-04)_
 - [storage.md](storage.md) — CRM Storage _(verified 2026-11-06)_
