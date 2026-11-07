@@ -68,9 +68,9 @@ describe('the three steps of the signing journey', () => {
     expect(b.confirm).toMatch(/only if the client signed outside the system/)
   })
 
-  it('"Signed": status-only panel (no second document to prepare), the fax panel and File with IRS — which asks first and goes to TR Filed', () => {
+  it('"Signed": status-only panel (no second document to prepare), the return fax box (item 6) and File with IRS — which asks first and goes to TR Filed', () => {
     const comps = layoutOf('Signed').components
-    expect(comps.map((c) => c.type)).toEqual(['esign_panel', 'document_viewer', 'action_buttons', 'fax_irs', 'chat'])
+    expect(comps.map((c) => c.type)).toEqual(['esign_panel', 'return_fax_panel', 'document_viewer', 'action_buttons', 'chat'])
     expect(comps.find((c) => c.type === 'esign_panel')!.readOnly).toBe(true)
     const [b] = comps.find((c) => c.type === 'action_buttons')!.actions! as Array<{ key: string; target: string; confirm: string }>
     expect(b).toMatchObject({ key: 'file_with_irs', target: 'TR Filed' })
@@ -170,10 +170,15 @@ describe('the data change (migration + undo)', () => {
     }
   })
 
-  it('the layouts the INSERTs write are exactly the dumped ones', () => {
+  it('the layouts the INSERTs write are exactly the dumped ones — except "Signed", which item 6 changed on purpose (see tax-return-fax-from-workspace.test.ts)', () => {
     for (const b of blocks) {
       const name = /SELECT p\.service_type, \d+, '([^']+)'/.exec(b)![1]
       const json = /'(\{"components": [\s\S]*?\})'::jsonb/.exec(b)![1].replace(/''/g, "'")
+      if (name === 'Signed') {
+        // as written here: the plain fax link; the dump holds the later item-6 layout (the return fax box instead)
+        expect((JSON.parse(json).components as Array<{ type: string }>).map((c) => c.type)).toEqual(['esign_panel', 'document_viewer', 'action_buttons', 'fax_irs', 'chat'])
+        continue
+      }
       expect(ROWS.find((r) => r.stage_name === name)!.stage_layout).toEqual(JSON.parse(json))
     }
   })

@@ -17,6 +17,8 @@ export const TAX_RETURN_SIGN_STAGES = {
   returnCompleted: 'TR Completed',
   /** the document is out with the client */
   sent: 'Sent for Signature',
-  /** the client has signed; staff fax the signed return to the IRS and file it */
+  /** the client has signed; staff fax the signed return to the IRS (the fax box, item 6) and the job is filed by itself once the fax is delivered */
   signed: 'Signed',
+  /** filed with the IRS: the fax was delivered (or staff pressed "File with IRS"); the tax record and the client's banner follow */
+  filed: 'TR Filed',
 } as const

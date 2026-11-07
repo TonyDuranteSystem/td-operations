@@ -173,6 +173,52 @@ describe('checkSs4Fax — WHEN it applies (Antonio: only a fax for a client\'s c
   })
 })
 
+describe('checkSs4Fax — a TAX RETURN fax from the workspace is not an SS-4 panel send (plan item 6)', () => {
+  const RETURN_FAX = '8558877737'
+  const returnInput = (o: Partial<Ss4FaxInput> = {}) =>
+    input({ faxno: RETURN_FAX, panelServiceDeliveryId: 'sd-1', fileName: 'Tax Return 2025 - Tanto per LLC - Signed.pdf', ...o })
+
+  it('goes ahead even when the company\'s SS-4 records are wrong — and never reads the company records or the PDF as an SS-4', async () => {
+    fx.sd = { account_id: ACC, service_type: 'Tax Return' }
+    fx.agent = { state: 'WY', county: 'Sheridan' }
+    fx.ss4 = { county_and_state: 'Sheridan County, Wyoming' }
+    const r = await checkSs4Fax(returnInput({ bytes: await plainPdf('Form 1120 signed') }))
+    expect(r.ok).toBe(true)
+    expect(fx.queried).toEqual(['service_deliveries']) // the job type is the ONLY lookup
+  })
+
+  it('the same send from a COMPANY FORMATION job is still the SS-4 panel (checked, refused when the state is wrong)', async () => {
+    fx.sd = { account_id: ACC, service_type: 'Company Formation' }
+    fx.agent = { state: 'WY', county: 'Sheridan' }
+    const r = await checkSs4Fax(returnInput({ faxno: IRS, fileName: 'Form SS-4 - Tanto per LLC - For IRS.pdf' }))
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('in Wyoming')
+  })
+
+  it('a job with no readable type keeps the old behaviour (counts as the SS-4 panel: fails closed)', async () => {
+    fx.sd = { account_id: ACC }
+    fx.agent = { state: 'WY', county: 'Sheridan' }
+    expect((await checkSs4Fax(returnInput())).ok).toBe(false)
+  })
+
+  it('a tax-return job that cannot be read refuses the fax (503, never passes)', async () => {
+    fx.sd = { account_id: ACC, service_type: 'Tax Return' }
+    fx.fail.sd = true
+    const r = await checkSs4Fax(returnInput())
+    expect(r.ok).toBe(false)
+    expect(r.status).toBe(503)
+  })
+
+  it('a real SS-4 aimed at an IRS EIN line from a tax-return job is STILL checked (the number rule is untouched)', async () => {
+    fx.sd = { account_id: ACC, service_type: 'Tax Return' }
+    fx.agent = { state: 'WY', county: 'Sheridan' }
+    fx.ss4 = { county_and_state: 'Sheridan County, Wyoming' }
+    const r = await checkSs4Fax(returnInput({ faxno: IRS, bytes: await ss4Pdf('Sheridan County, Wyoming'), chosenCompanyAccountId: ACC }))
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('in Wyoming')
+  })
+})
+
 describe('checkSs4Fax — tying the fax to the client\'s company', () => {
   it('an SS-4 to the IRS with NO company is refused with the "choose the company" sentence (an upload with "don\'t save")', async () => {
     const r = await checkSs4Fax(input({}))

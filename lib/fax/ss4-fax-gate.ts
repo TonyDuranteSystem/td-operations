@@ -49,8 +49,30 @@ export interface Ss4FaxVerdict {
   error?: string
 }
 
+/**
+ * Jobs whose workspace faxes something to the IRS that is NOT an SS-4 (the Tax Return "Signed" fax box, plan item 6, 2026-11-07). A send that
+ * carries such a job's id is not the SS-4 panel, so it is never read as an SS-4 and never asked about the company's registered agent. Any other
+ * job type keeps the old behaviour (a send from a job box counts as the SS-4 panel), so an unknown type still fails closed.
+ */
+export const NON_SS4_PANEL_SERVICE_TYPES: ReadonlySet<string> = new Set(['Tax Return'])
+
 export async function checkSs4Fax(input: Ss4FaxInput): Promise<Ss4FaxVerdict> {
-  const fromPanel = !!input.panelServiceDeliveryId
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabaseAdmin as any
+  let fromPanel = !!input.panelServiceDeliveryId
+  let accountId: string | null = null
+
+  if (fromPanel) {
+    const sd = await db.from('service_deliveries').select('account_id, service_type').eq('id', input.panelServiceDeliveryId).maybeSingle()
+    if (sd.error) return { ok: false, status: 503, error: READ_ERROR_SENTENCE }
+    const jobType = (sd.data?.service_type as string | null | undefined) ?? null
+    if (jobType && NON_SS4_PANEL_SERVICE_TYPES.has(jobType)) {
+      fromPanel = false // a tax return fax is not an SS-4 panel send
+    } else {
+      accountId = (sd.data?.account_id as string | null | undefined) ?? null
+    }
+  }
+
   // A fax to anyone but an IRS EIN line is not for a client's company: never checked, never asks for anything.
   if (!fromPanel && !isIrsEinFaxNumber(input.faxno)) return { ok: true }
 
@@ -59,15 +81,6 @@ export async function checkSs4Fax(input: Ss4FaxInput): Promise<Ss4FaxVerdict> {
   // an IRS fax that is not an SS-4 (a letter, a form 8832 …) has nothing to check
   if (!isSs4) return { ok: true }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = supabaseAdmin as any
-  let accountId: string | null = null
-
-  if (fromPanel) {
-    const sd = await db.from('service_deliveries').select('account_id').eq('id', input.panelServiceDeliveryId).maybeSingle()
-    if (sd.error) return { ok: false, status: 503, error: READ_ERROR_SENTENCE }
-    accountId = (sd.data?.account_id as string | null | undefined) ?? null
-  }
   if (!accountId) accountId = input.documentRow?.account_id ?? null
   if (!accountId && input.storeFileId && UUID.test(input.storeFileId)) {
     const f = await db.from('store_files').select('owner_id').eq('id', input.storeFileId).maybeSingle()
