@@ -8,6 +8,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import { isOwnerRole, pickViewAsFallback } from '@/lib/portal/pick-view-as-contact'
 import { getClientLoginContactIds, getClientLoginNeedsSetupIds } from '@/lib/portal/client-login-index'
+import { dropSupersededDrafts } from '@/lib/portal/wizard-progress-write'
 import { resolveAccountSigner } from '@/lib/members/resolve-signer'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { resolveFlows, taxReturnYear } from '@/lib/flows/resolve-flows'
@@ -243,13 +244,14 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     }
   }
 
-  const allWizardEntries = (wizardProgressResult.data ?? []) as Array<{
+  // A draft left behind by a sent wizard (a racing second save) is not listed twice (lib/portal/wizard-progress-write.ts).
+  const allWizardEntries = dropSupersededDrafts((wizardProgressResult.data ?? []) as Array<{
     status: string
     current_step: number
     wizard_type: string
     updated_at: string
     data: Record<string, unknown> | null
-  }>
+  }>)
 
   // Merge canonical "data received" signals from the domain tables into the
   // wizard-card feed. The Client Wizard Submissions card used to read only
