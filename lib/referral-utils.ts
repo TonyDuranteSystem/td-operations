@@ -3,6 +3,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js"
+import { CALENDLY_BOOKING_URL } from "@/lib/config"
 
 // Base prices for commission calculation (EUR)
 export const BASE_PRICES = {
@@ -10,6 +11,21 @@ export const BASE_PRICES = {
   MMLLC: 3000,
   DE_FL_SURCHARGE: 300,
 } as const
+
+/**
+ * The booking link the referral landing page (app/invitation/[code]) sends a visitor to.
+ * The referral code rides in utm_campaign (the real carrier — lib/calendly/parse-invitee.ts reads
+ * tracking.utm_campaign from the booking webhook) and in a1 (hidden prefill fallback), so the
+ * booking comes back attributed to the referrer.
+ */
+export function buildReferralBookingUrl(code: string): string {
+  const url = new URL(CALENDLY_BOOKING_URL)
+  url.searchParams.set("utm_source", "referral")
+  url.searchParams.set("utm_medium", "link")
+  url.searchParams.set("utm_campaign", code)
+  url.searchParams.set("a1", code)
+  return url.toString()
+}
 
 /**
  * Generate a unique referral code from a contact's full name.

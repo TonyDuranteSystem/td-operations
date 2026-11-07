@@ -39,6 +39,10 @@ export const PROTECTED_STAGE_NAMES: ProtectedStageName[] = [
     because: "it decides whether a one-time tax client's wizard opens",
   },
   {
+    name: "TR Completed",
+    because: "the client's tax banner only says \"Sign your tax return\" at this step (and the portal looks for a waiting signature only here)",
+  },
+  {
     name: "Company Data Pending",
     because: "the tax intake checks for it before asking a client for company details",
   },
@@ -65,7 +69,9 @@ export const PROTECTED_STAGE_NAMES: ProtectedStageName[] = [
   { name: "Data Submitted", because: "the tax board groups deliveries by it" },
   { name: "Revision Requested", because: "a client resubmit moves the delivery off it by name back into review" },
   { name: "Articles Received", because: "the formation flow advances through it by name" },
-  { name: "Sent for Signature", because: "the signature flow matches it by name" },
+  { name: "Sent for Signature", because: "the signature flow matches it by name — sending a tax return for signature from the workspace moves the job onto it, and the client's banner and the Sign check read it" },
+  { name: "Signed", because: "the e-sign completion moves a signed tax return onto it by name, and the client's banner reads it" },
+  { name: "Preparation", because: "the tax return's prepared-return upload and the send-for-signature move match it by name" },
   { name: "Sent to be filed", because: "the tax filing flow matches it by name" },
   { name: "TR Filed", because: "the tax filing flow matches it by name" },
   { name: "Extension Requested", because: "the extension flow matches it by name" },
