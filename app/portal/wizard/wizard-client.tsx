@@ -4,6 +4,8 @@ import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
 import { WizardShell, type WizardStep } from '@/components/portal/wizard/wizard-shell'
 import { WizardField, type FieldConfig } from '@/components/portal/wizard/wizard-field'
+import { ReviewNote, FLAGGED_FIELD_CLASS } from '@/components/portal/wizard/review-note'
+import { resolveClientLabel } from '@/lib/tax/review-labels'
 import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
 import { useLocale } from '@/lib/portal/use-locale'
 import { createClient } from '@/lib/supabase/client'
@@ -113,6 +115,8 @@ interface WizardClientProps {
    *  unannounced if it ever does. Names the count of OTHER pending closures
    *  besides the one this form is showing. */
   closureOtherPendingCount?: number | null
+  /** Tax only: what our team asked the client to fix when they pressed Request Changes (dev job 7df278cd) — a note next to the answers it is about, by the answer's own key, plus an optional overall message. Null/absent = nothing was written. */
+  reviewRequests?: { message: string | null; notes: Record<string, string> } | null
 }
 
 // isFieldVisible lives in lib/portal/wizard-money.ts (dev job 89195c68) so
@@ -318,6 +322,7 @@ export function WizardClient({
   configOverride,
   closureServiceDeliveryId = null,
   closureOtherPendingCount = null,
+  reviewRequests = null,
 }: WizardClientProps) {
   // Any language beyond en/it (dev job 12cab351) — see the identical
   // comment in wizard-field.tsx. Layered UNDER the existing it/en choice,
@@ -753,6 +758,31 @@ export function WizardClient({
     else window.scrollTo({ top: 0, behavior: 'smooth' })
     setScrollToKey(null)
   }, [scrollToKey, currentStep])
+
+  // Requests our team wrote next to answers (tax review, dev job 7df278cd): a note under each flagged answer, and a list at the top
+  // whose lines jump to the answer. Empty for every other wizard and for a tax submission nobody asked changes on.
+  const reviewNotes = reviewRequests?.notes ?? {}
+  const hasReviewRequests = Object.keys(reviewNotes).length > 0 || !!reviewRequests?.message
+  const noteFor = (key: string): string | undefined => reviewNotes[key]
+  const noteHeading = pickText('Our request', 'La nostra richiesta') ?? 'Our request'
+  // The form's own label when this step set knows the answer; otherwise the questionnaire-wide label (a request can name an answer
+  // this entity type's form does not show — still read it as words, never as the raw key).
+  const requestLabel = (key: string): string => {
+    const own = labelForKey(key)
+    if (own === key) return resolveClientLabel(key, locale)
+    // a member's or a bank account's answer carries its number, so "City" of member 2 is never read as member 1's
+    const row = /^(member|bank_accounts)_(\d+)_/.exec(key)
+    if (!row) return own
+    const what = row[1] === 'member' ? pickText('Member', 'Membro') : pickText('Bank account', 'Conto bancario')
+    return `${own} (${what} ${Number(row[2]) + 1})`
+  }
+  const goToReviewKey = (key: string) => {
+    let owner = stepIndexForKey(steps, fields, key)
+    // a member's own answers (member_1_member_city) live on the members step, which keeps them outside `fields`
+    if (owner < 0 && /^member_\d+_/.test(key)) owner = steps.findIndex((st) => st.id === 'members')
+    if (owner >= 0) setCurrentStep(owner)
+    setScrollToKey(key)
+  }
 
   // Compute the step's errors and PUBLISH them (highlight + summary). Returns
   // true when the step is BLOCKED (has errors). Used by forward navigation and
@@ -1344,8 +1374,39 @@ export function WizardClient({
         </div>
       )}
 
+      {/* Our team asked for changes: what to fix, answer by answer (dev job 7df278cd) */}
+      {hasReviewRequests && (
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-4 mb-4" data-testid="wizard-review-requests">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="text-sm w-full">
+              <p className="font-semibold text-amber-900">
+                {pickText('Our team asked for changes', 'Il nostro team ha richiesto modifiche')}
+              </p>
+              {reviewRequests?.message && <p className="text-amber-800 mt-1 whitespace-pre-line">{reviewRequests.message}</p>}
+              {Object.keys(reviewNotes).length > 0 && (
+                <>
+                  <p className="text-amber-800 mt-1">
+                    {pickText('Fix the marked answers, then resubmit. Tap one to go to it.', 'Correggi le risposte segnate, poi reinvia. Tocca una voce per andarci.')}
+                  </p>
+                  <ul className="mt-2 space-y-1">
+                    {Object.entries(reviewNotes).map(([key, note]) => (
+                      <li key={key}>
+                        <button type="button" onClick={() => goToReviewKey(key)} className="text-left text-amber-900 hover:underline">
+                          <span className="font-medium">{requestLabel(key)}</span>: {note}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Re-submit mode banner */}
-      {isResubmitMode && (
+      {isResubmitMode && !hasReviewRequests && (
         <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
           <Pencil className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
           <div className="text-sm">
@@ -1479,7 +1540,7 @@ export function WizardClient({
                     return resolved === field.conditional.value
                   })
                   .map(field => (
-                    <div key={`${idx}_${field.name}`} data-field-key={`member_${idx}_${field.name}`} className={field.type === 'select' || field.type === 'textarea' || field.type === 'file' ? 'md:col-span-2' : ''}>
+                    <div key={`${idx}_${field.name}`} data-field-key={`member_${idx}_${field.name}`} className={`${field.type === 'select' || field.type === 'textarea' || field.type === 'file' ? 'md:col-span-2' : ''} ${noteFor(`member_${idx}_${field.name}`) ? FLAGGED_FIELD_CLASS : ''}`}>
                       <WizardField
                         field={field}
                         value={formData[`member_${idx}_${field.name}`] ?? ''}
@@ -1488,6 +1549,7 @@ export function WizardClient({
                         locale={locale}
                         error={errorFor(`member_${idx}_${field.name}`)}
                       />
+                      {noteFor(`member_${idx}_${field.name}`) && <ReviewNote note={noteFor(`member_${idx}_${field.name}`)!} heading={noteHeading} />}
                     </div>
                   ))}
               </div>
@@ -1645,7 +1707,7 @@ export function WizardClient({
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           {field.repeaterFields?.map(rf => (
-                            <div key={`${rf.name}-${repeaterVersion[field.name] ?? 0}`} data-field-key={`${field.name}_${idx}_${rf.name}`} className={rf.type === 'textarea' || rf.type === 'file' ? 'md:col-span-2' : ''}>
+                            <div key={`${rf.name}-${repeaterVersion[field.name] ?? 0}`} data-field-key={`${field.name}_${idx}_${rf.name}`} className={`${rf.type === 'textarea' || rf.type === 'file' ? 'md:col-span-2' : ''} ${noteFor(`${field.name}_${idx}_${rf.name}`) ? FLAGGED_FIELD_CLASS : ''}`}>
                               <WizardField
                                 field={rf}
                                 value={formData[`${field.name}_${idx}_${rf.name}`] ?? ''}
@@ -1661,6 +1723,7 @@ export function WizardClient({
                                   handleFileUpload(`${field.name}_${idx}_${name}`, file, onProgress)}
                                 locale={locale}
                               />
+                              {noteFor(`${field.name}_${idx}_${rf.name}`) && <ReviewNote note={noteFor(`${field.name}_${idx}_${rf.name}`)!} heading={noteHeading} />}
                             </div>
                           ))}
                         </div>
@@ -1742,7 +1805,7 @@ export function WizardClient({
               }
               // ── Regular field ────────────────────────────────────────
               return (
-                <div key={field.name} data-field-key={field.name} className={field.type === 'textarea' || field.type === 'checkbox' ? 'md:col-span-2' : ''}>
+                <div key={field.name} data-field-key={field.name} className={`${field.type === 'textarea' || field.type === 'checkbox' ? 'md:col-span-2' : ''} ${noteFor(field.name) ? FLAGGED_FIELD_CLASS : ''}`}>
                   <WizardField
                     field={{ ...field, prefilled: !!prefillData[field.name] }}
                     value={formData[field.name] ?? ''}
@@ -1752,6 +1815,7 @@ export function WizardClient({
                     locale={locale}
                     error={errorFor(field.name)}
                   />
+                  {noteFor(field.name) && <ReviewNote note={noteFor(field.name)!} heading={noteHeading} />}
                   {/* High-stakes confirmation: show an amber warning when the
                       field's value matches its configured warningOnValue (e.g.
                       a "No" to the related-party question → $25k IRS penalty). */}

@@ -17,8 +17,8 @@
  *   - everything else → the newest `tax_return_submissions` row for the SD's
  *     account (Tax Return review stages), `source:'tax'`.
  *
- * GET → { success, source, submission: { entity_type, tax_year, review_status,
- *         created_at, submitted_data } | null }
+ * GET → { success, source, submission: { id?, entity_type, tax_year, review_status,
+ *         created_at, submitted_data } | null, review?: { writable, draft, last_round } }  (review: tax source only)
  * [id] = service_delivery_id. Read-only.
  */
 
@@ -28,6 +28,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { pickClosureAnswers } from '@/lib/flows/closure-answers'
+import { loadTargetTaxSubmission } from '@/lib/tax/target-submission'
+import { answerOutcomes, canWriteReviewRequests, latestRound, parseReviewRequests } from '@/lib/tax/review-requests'
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await requireStaffRoute()
@@ -179,21 +181,58 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ success: true, source: 'tax', submission: null })
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('tax_return_submissions')
-      .select('entity_type, tax_year, review_status, created_at, submitted_data')
-      .eq('account_id', sd.account_id)
-      .order('created_at', { ascending: false })
-      .limit(1)
-
-    if (error) {
-      return NextResponse.json(
-        { success: false, error: `Could not load submission: ${error.message}` },
-        { status: 500 },
-      )
+    // The SAME submission Request Changes / Approve act on and the client's form re-opens (target rule), not just "the newest":
+    // the answers staff read, the requests they write next to them and the form the client edits are always ONE row.
+    const loaded = await loadTargetTaxSubmission(sd.account_id)
+    if (loaded.ok === false) {
+      if (loaded.reason === 'error') {
+        return NextResponse.json(
+          { success: false, error: `Could not load submission: ${loaded.detail}` },
+          { status: 500 },
+        )
+      }
+      return NextResponse.json({ success: true, source: 'tax', submission: null })
     }
+    const sub = loaded.sub
 
-    return NextResponse.json({ success: true, source: 'tax', submission: data?.[0] ?? null })
+    // Requests staff wrote next to answers: the unsent draft, and (once Request Changes was pressed) the newest round with what the
+    // client did about each one. While the client is still editing (revision_requested) every request is simply "sent".
+    const rr = parseReviewRequests(sub.review_requests)
+    const last = latestRound(rr)
+    const waiting = sub.review_status === 'revision_requested'
+    return NextResponse.json({
+      success: true,
+      source: 'tax',
+      submission: {
+        id: sub.id,
+        entity_type: sub.entity_type,
+        tax_year: sub.tax_year,
+        review_status: sub.review_status,
+        created_at: sub.created_at,
+        submitted_data: sub.submitted_data,
+      },
+      review: {
+        writable: canWriteReviewRequests(sub.review_status),
+        draft: rr.draft,
+        last_round: last
+          ? {
+              sent_at: last.sent_at,
+              by: last.by,
+              message: last.message,
+              waiting,
+              requests: answerOutcomes(last, sub.submitted_data).map((q) => ({
+                key: q.key,
+                label: q.label,
+                group: q.group,
+                note: q.note,
+                was: q.was,
+                now: q.now,
+                outcome: q.outcome,
+              })),
+            }
+          : null,
+      },
+    })
   } catch (e) {
     return NextResponse.json(
       { success: false, error: e instanceof Error ? e.message : String(e) },

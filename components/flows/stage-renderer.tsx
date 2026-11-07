@@ -73,6 +73,7 @@ function renderComponent(
   account: WorkspaceAccount,
   secondInstallment?: WorkspaceInvoice | null,
   flowYear?: number | null,
+  requestsEnabled?: boolean,
 ) {
   // Keyed by stage too, not just type+index: a stage advance is a server-side
   // soft refresh (router.refresh()), not a full page reload, so same-position
@@ -120,7 +121,7 @@ function renderComponent(
         />
       )
     case 'data_viewer':
-      return <DataViewer key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
+      return <DataViewer key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} requestsEnabled={requestsEnabled} />
     case 'signature_send':
       return <SignatureSend key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'signature_status':
@@ -211,10 +212,16 @@ export function StageRenderer({ layout, serviceDelivery, account, secondInstallm
     )
   }
 
+  // The answers get a pencil next to each one only on a step that has a Request Changes button (the review step): that is where
+  // staff decide, so that is where a request next to an answer makes sense.
+  const requestsEnabled = components.some(
+    (c) => c.type === 'action_buttons' && (c.actions ?? []).some((a) => (typeof a === 'string' ? a : a.key) === 'request_changes'),
+  )
+
   return (
     <div className="space-y-4">
       {layout?.description && <p className="text-sm text-zinc-500">{layout.description}</p>}
-      {components.map((c, i) => renderComponent(c, i, serviceDelivery, account, secondInstallment, flowYear))}
+      {components.map((c, i) => renderComponent(c, i, serviceDelivery, account, secondInstallment, flowYear, requestsEnabled))}
       {addUpload && <RequiredDocumentUpload serviceDelivery={serviceDelivery} account={account} />}
     </div>
   )

@@ -19607,6 +19607,7 @@ export type Database = {
           prefilled_data: Json | null
           prior_return_extracted: Json | null
           review_history: Json
+          review_requests: Json | null
           review_status: string | null
           reviewed_at: string | null
           reviewed_by: string | null
@@ -19641,6 +19642,7 @@ export type Database = {
           prefilled_data?: Json | null
           prior_return_extracted?: Json | null
           review_history?: Json
+          review_requests?: Json | null
           review_status?: string | null
           reviewed_at?: string | null
           reviewed_by?: string | null
@@ -19675,6 +19677,7 @@ export type Database = {
           prefilled_data?: Json | null
           prior_return_extracted?: Json | null
           review_history?: Json
+          review_requests?: Json | null
           review_status?: string | null
           reviewed_at?: string | null
           reviewed_by?: string | null

@@ -26,6 +26,7 @@ import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { listQuestions } from '@/lib/td-communication/questions-queries'
 import { buildTdCommWizardConfig, type TdCommWizardConfig } from '@/lib/td-communication/question-to-field'
 import { isClientEditable, type ReviewStatus } from '@/lib/tax/review-status'
+import { latestRound, parseReviewRequests } from '@/lib/tax/review-requests'
 import { identifyFormation, isFormationWizardEditable } from '@/lib/portal/formation-resubmit-gate'
 import { resolveClosureSubject } from '@/lib/portal/closure-subject'
 import { getPendingClosures, type PendingClosure } from '@/lib/portal/pending-closures'
@@ -850,6 +851,25 @@ export default async function WizardPage({
     isLocked = rs !== null && !isClientEditable(rs)
   }
 
+  // Tax review requests (dev job 7df278cd): when our team pressed Request Changes with notes written next to answers, the client's
+  // form shows each note under the answer it is about. Only while the submission is open for the client's edits for that round
+  // (revision_requested); a locked or released one shows nothing. Same account-wide lookup the lock above uses.
+  let reviewRequests: { message: string | null; notes: Record<string, string> } | null = null
+  if (wizardType === 'tax' && accountId) {
+    const { data: rr } = await supabaseAdmin
+      .from('tax_return_submissions')
+      .select('review_requests')
+      .eq('account_id', accountId)
+      .eq('review_status', 'revision_requested')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const round = rr ? latestRound(parseReviewRequests(rr.review_requests)) : null
+    if (round && (round.requests.length > 0 || round.message)) {
+      reviewRequests = { message: round.message, notes: Object.fromEntries(round.requests.map((q) => [q.key, q.note])) }
+    }
+  }
+
   // For submitted FORMATION wizards: the same idea, keyed on how far the
   // formation itself has got (dev job ca788354, Antonio's ruling 2026-08-10).
   // Editable until we begin work — a client fixing a wrong passport or date
@@ -1424,6 +1444,7 @@ export default async function WizardPage({
           locale={locale}
           initialSubmitStatus={wizardSubmitStatus}
           isLocked={isLocked}
+          reviewRequests={reviewRequests}
           itinCount={itinCount}
           bankGuides={bankGuides}
           institutions={institutions}
