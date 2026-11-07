@@ -47,6 +47,8 @@ export const STAGE_COMPONENT_TYPES = [
   // E-sign (the esign_* engine) of a form for THIS delivery: prepare it, see its status; the delivery
   // moves on by itself when the client has signed (lib/esign/delivery-advance.ts).
   'esign_panel',
+  // Tax Return "Signed": fax the signed return to the IRS (single-member LLCs) and let the delivery check file the job (lib/fax/return-fax*.ts).
+  'return_fax_panel',
   // Company Change Name, "Update our records": the one button that renames the company and moves its old folders (lib/operations/change-name-apply.ts).
   'apply_name_panel',
 ] as const
@@ -101,6 +103,11 @@ export interface StageComponent {
   /** irs_tracking_entry: replaces the help sentence under the box (the default says the client is told when the letter is delivered —
    *  not true of every service). Text only. */
   helpText?: string
+  /** esign_panel: the panel's heading (default "Form for the client to sign"). Text only. With `helpText` (the sentence under it) and `rename`
+   *  (the document's default name in the e-sign editor, tokens {company_name} and {year}) the same panel serves any service by data. */
+  title?: string
+  /** esign_panel: show the signing status only — no button to prepare another document (a step AFTER the signature, where only the signed copy matters). */
+  readOnly?: boolean
 }
 
 /** One thing the workspace does when this box takes its file. `key` names an action Storage itself ALSO does for some types (STORAGE_OWN_ACTIONS). */
@@ -196,7 +203,7 @@ export function parseStageLayout(value: unknown): StageLayout | null {
     const comp = c as { type?: unknown; label?: unknown; url?: unknown; actions?: unknown }
     if (typeof comp.type !== 'string') continue
     if (!(STAGE_COMPONENT_TYPES as readonly string[]).includes(comp.type)) continue
-    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown; collapsible?: unknown; documentType?: unknown; storageHint?: unknown; requiredToAdvance?: unknown; helpText?: unknown }
+    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown; collapsible?: unknown; documentType?: unknown; storageHint?: unknown; requiredToAdvance?: unknown; helpText?: unknown; title?: unknown; readOnly?: unknown }
     components.push({
       type: comp.type as StageComponentType,
       label: typeof comp.label === 'string' ? resolveTokens(comp.label) : undefined,
@@ -212,6 +219,8 @@ export function parseStageLayout(value: unknown): StageLayout | null {
       collapsible: typeof rawComp.collapsible === 'boolean' ? rawComp.collapsible : undefined,
       requiredToAdvance: typeof rawComp.requiredToAdvance === 'boolean' ? rawComp.requiredToAdvance : undefined,
       helpText: typeof rawComp.helpText === 'string' && rawComp.helpText.trim() ? resolveTokens(rawComp.helpText) : undefined,
+      title: typeof rawComp.title === 'string' && rawComp.title.trim() ? resolveTokens(rawComp.title) : undefined,
+      readOnly: typeof rawComp.readOnly === 'boolean' ? rawComp.readOnly : undefined,
     })
   }
   return {

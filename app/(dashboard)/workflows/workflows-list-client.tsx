@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { Plus, AlertCircle } from "lucide-react"
 import type { CatalogEntry } from "@/lib/catalog/framework"
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from "@/lib/ui/table-cells"
 
 interface Props {
   entries: CatalogEntry[]
@@ -38,12 +39,12 @@ export function WorkflowsListClient({ entries }: Props) {
         <table className="w-full min-w-[720px] text-sm">
           <thead className="bg-zinc-50 text-zinc-600 text-xs uppercase tracking-wide">
             <tr>
-              <th className="text-left px-4 py-2">Slug</th>
+              <th className={`text-left px-4 py-2 ${pinHeadCell("start", "zinc-50", "card")}`}>Slug</th>
               <th className="text-left px-4 py-2">Label</th>
-              <th className="text-left px-4 py-2">Status</th>
+              <th className={`text-left px-4 py-2 ${KEEP_WHOLE}`}>Status</th>
               <th className="text-left px-4 py-2">Trigger</th>
-              <th className="text-left px-4 py-2">Actions</th>
-              <th className="text-left px-4 py-2">Updated</th>
+              <th className={`text-left px-4 py-2 ${KEEP_WHOLE}`}>Actions</th>
+              <th className={`text-left px-4 py-2 ${KEEP_WHOLE}`}>Updated</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100">
@@ -84,19 +85,19 @@ function WorkflowRow({ entry }: { entry: CatalogEntry }) {
   const updatedAt = entry.updated_at ? new Date(entry.updated_at).toLocaleString() : "—"
 
   return (
-    <tr className="hover:bg-zinc-50">
-      <td className="px-4 py-2 font-mono text-xs text-zinc-700">
+    <tr className="group hover:bg-zinc-50">
+      <td className={`px-4 py-2 font-mono text-xs text-zinc-700 ${KEEP_WHOLE} ${pinBodyCell("start", "none", "card")}`}>
         <Link href={`/workflows/${entry.slug}`} className="text-blue-700 hover:underline">
           {entry.slug}
         </Link>
       </td>
       <td className="px-4 py-2 text-zinc-900">{label}</td>
-      <td className="px-4 py-2">
+      <td className={`px-4 py-2 ${KEEP_WHOLE}`}>
         <StatusBadge status={entry.status} />
       </td>
       <td className="px-4 py-2 text-zinc-700">{triggerSummary}</td>
-      <td className="px-4 py-2 text-zinc-700">{actions}</td>
-      <td className="px-4 py-2 text-zinc-500 text-xs">{updatedAt}</td>
+      <td className={`px-4 py-2 text-zinc-700 ${KEEP_WHOLE}`}>{actions}</td>
+      <td className={`px-4 py-2 text-zinc-500 text-xs ${KEEP_WHOLE}`}>{updatedAt}</td>
     </tr>
   )
 }

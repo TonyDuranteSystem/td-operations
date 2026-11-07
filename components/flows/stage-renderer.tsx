@@ -23,6 +23,8 @@ import { SuitePanel } from './suite-panel'
 import { IrsTrackingEntry } from './irs-tracking-entry'
 import { ClosureWrapupPanel } from './closure-wrapup-panel'
 import { EsignPanel } from './esign-panel'
+import { ReturnFaxPanel } from './return-fax-panel'
+import { esignDocName } from '@/lib/flows/esign-doc-name'
 import { ApplyNamePanel } from './apply-name-panel'
 
 interface StageRendererProps {
@@ -36,6 +38,8 @@ interface StageRendererProps {
    * added, so a job can never be stuck on a step that demands a document nobody can upload.
    */
   needsDocument?: boolean
+  /** The year the job is for (Tax Return: the tax year, as the page title shows it) — the {year} of an e-sign panel's document name. */
+  flowYear?: number | null
 }
 
 /** The standard upload box added to a "needs a document" step whose layout has none (N1a C2). */
@@ -68,6 +72,7 @@ function renderComponent(
   serviceDelivery: WorkspaceServiceDelivery,
   account: WorkspaceAccount,
   secondInstallment?: WorkspaceInvoice | null,
+  flowYear?: number | null,
 ) {
   // Keyed by stage too, not just type+index: a stage advance is a server-side
   // soft refresh (router.refresh()), not a full page reload, so same-position
@@ -161,8 +166,14 @@ function renderComponent(
           contactId={serviceDelivery.contact_id ?? null}
           companyName={account.company_name}
           label={component.label}
+          title={component.title}
+          helpText={component.helpText}
+          readOnly={component.readOnly}
+          docName={esignDocName(component.rename, { company_name: account.company_name, year: flowYear })}
         />
       )
+    case 'return_fax_panel':
+      return <ReturnFaxPanel key={key} serviceDeliveryId={serviceDelivery.id} account={account} serviceType={serviceDelivery.service_type} />
     case 'apply_name_panel':
       return <ApplyNamePanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'closure_wrapup':
@@ -185,7 +196,7 @@ function renderComponent(
  * layout (e.g. CMRA, not yet migrated), degrades to a default Overview panel so
  * the Workspace is never blank.
  */
-export function StageRenderer({ layout, serviceDelivery, account, secondInstallment, needsDocument }: StageRendererProps) {
+export function StageRenderer({ layout, serviceDelivery, account, secondInstallment, needsDocument, flowYear }: StageRendererProps) {
   const components = layout?.components ?? []
   const addUpload = !!needsDocument && !components.some(c => c.type === 'document_upload')
 
@@ -203,7 +214,7 @@ export function StageRenderer({ layout, serviceDelivery, account, secondInstallm
   return (
     <div className="space-y-4">
       {layout?.description && <p className="text-sm text-zinc-500">{layout.description}</p>}
-      {components.map((c, i) => renderComponent(c, i, serviceDelivery, account, secondInstallment))}
+      {components.map((c, i) => renderComponent(c, i, serviceDelivery, account, secondInstallment, flowYear))}
       {addUpload && <RequiredDocumentUpload serviceDelivery={serviceDelivery} account={account} />}
     </div>
   )

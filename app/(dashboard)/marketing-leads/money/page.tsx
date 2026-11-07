@@ -8,6 +8,7 @@ import { listTeamSales } from "@/lib/marketing/sales-server"
 import { canPayOut, formatMoney, payoutTotals, saleStatusLabel, sellerPaidInOtherCurrency, totalsByCurrency } from "@/lib/marketing/sales"
 import { formatWhen } from "@/lib/marketing/lead-view"
 import { SaleActions, TermsForm } from "./money-controls"
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from "@/lib/ui/table-cells"
 
 export const dynamic = "force-dynamic"
 
@@ -106,18 +107,18 @@ export default async function MarketingMoneyAdmin({ searchParams }: { searchPara
           <h2 className="text-sm font-semibold text-slate-600">Sales</h2>
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-slate-500"><tr><th className="py-2 pr-4">Date</th><th className="pr-4">Lead</th><th className="pr-4">Kind</th><th className="pr-4">Amount</th><th className="pr-4">Seller</th><th className="pr-4">TD</th><th className="pr-4">Lead payment status</th><th>Actions</th></tr></thead>
+              <thead className="text-xs uppercase tracking-wide text-slate-500"><tr><th className={`py-2 pr-4 ${KEEP_WHOLE}`}>Date</th><th className={`pr-4 ${pinHeadCell("start", "none", "card")}`}>Lead</th><th className={`pr-4 ${KEEP_WHOLE}`}>Kind</th><th className={`pr-4 ${KEEP_WHOLE}`}>Amount</th><th className={`pr-4 ${KEEP_WHOLE}`}>Seller</th><th className={`pr-4 ${KEEP_WHOLE}`}>TD</th><th className="pr-4">Lead payment status</th><th className={`pl-2 ${pinHeadCell("end", "none", "card")}`}>Actions</th></tr></thead>
               <tbody className="divide-y">
                 {sales.map(s => (
-                  <tr key={s.id} className="align-top">
-                    <td className="py-2 pr-4 text-slate-500">{formatWhen(s.paid_at ?? s.created_at)}</td>
-                    <td className="pr-4">{names.get(s.lead_id) ?? "Lead"}<span className="block text-xs text-slate-400">by {s.created_by}</span></td>
-                    <td className="pr-4">{kindLabel(s.kind)}</td>
-                    <td className="pr-4 font-medium">{formatMoney(s.amount_cents, s.currency)}</td>
-                    <td className="pr-4">{s.status === "refunded" ? "—" : s.seller_cents === null ? <span className="text-amber-800">Terms not set</span> : sellerMoney(s.seller_cents, s.currency)}</td>
-                    <td className="pr-4">{s.status === "refunded" ? "—" : s.td_cents === null ? "—" : formatMoney(s.td_cents, s.currency)}</td>
+                  <tr key={s.id} className="group align-top">
+                    <td className={`py-2 pr-4 text-slate-500 ${KEEP_WHOLE}`}>{formatWhen(s.paid_at ?? s.created_at)}</td>
+                    <td className={`pr-4 ${pinBodyCell("start", "none", "card")}`}>{names.get(s.lead_id) ?? "Lead"}<span className="block text-xs text-slate-400">by {s.created_by}</span></td>
+                    <td className={`pr-4 ${KEEP_WHOLE}`}>{kindLabel(s.kind)}</td>
+                    <td className={`pr-4 font-medium ${KEEP_WHOLE}`}>{formatMoney(s.amount_cents, s.currency)}</td>
+                    <td className={`pr-4 ${KEEP_WHOLE}`}>{s.status === "refunded" ? "—" : s.seller_cents === null ? <span className="text-amber-800">Terms not set</span> : sellerMoney(s.seller_cents, s.currency)}</td>
+                    <td className={`pr-4 ${KEEP_WHOLE}`}>{s.status === "refunded" ? "—" : s.td_cents === null ? "—" : formatMoney(s.td_cents, s.currency)}</td>
                     <td className="pr-4">{saleStatusLabel(s)}{s.paid_out_at && <span className="block text-xs text-slate-400">{formatWhen(s.paid_out_at)} · {s.paid_out_reference}</span>}</td>
-                    <td><SaleActions saleId={s.id} canApplyTerms={s.status === "paid" && s.seller_cents === null} canPayOut={canPayOut(s)} /></td>
+                    <td className={`pl-2 ${KEEP_WHOLE} ${pinBodyCell("end", "none", "card")}`}><SaleActions saleId={s.id} canApplyTerms={s.status === "paid" && s.seller_cents === null} canPayOut={canPayOut(s)} /></td>
                   </tr>
                 ))}
               </tbody>

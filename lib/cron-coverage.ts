@@ -71,6 +71,8 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // fail-closed; see lib/tax/irs-fx-import.ts.
   "/api/cron/irs-fx-rates": "0 7 2 * *",
   "/api/cron/faxage-ss4-confirm": "0 */2 * * *",
+  // Tax Return fax delivery check (plan item 6, 2026-11-07) — a delivered return fax saves its receipt and files the job.
+  "/api/cron/return-fax-confirm": "*/10 * * * *",
   "/api/cron/portal-digest": "*/5 * * * *",
   "/api/cron/plaid-sync": "0 */6 * * *",
   "/api/cron/mercury-sync": "*/15 * * * *",

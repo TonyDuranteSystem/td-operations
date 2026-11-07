@@ -124,7 +124,8 @@ describe('Panoramica (company-client page)', () => {
   })
 
   it('shows the personal cards under EVERY other dashboard (formation, welcome / lead / onboarding)', () => {
-    const dashboards = (home.match(/^\s*<(FormationDashboard|WelcomeDashboard)$/gm) ?? []).length
+    // the "your company has been closed" card (Company Closure Part C) is a dashboard of its own for a client with no company left
+    const dashboards = (home.match(/^\s*<(FormationDashboard|WelcomeDashboard)$/gm) ?? []).length + (home.match(/^\s*<ClosedCompanyCard /gm) ?? []).length
     const placed = (home.match(/^\s*\{personalCards\}$/gm) ?? []).length
     expect(dashboards).toBeGreaterThanOrEqual(7)
     expect(placed).toBe(dashboards)

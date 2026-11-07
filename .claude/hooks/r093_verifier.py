@@ -455,15 +455,28 @@ def main():
         "• narrow_negative → widen the query to match your claim's scope (the "
         "PERSON, not just the company; every relevant place) before concluding "
         "anything is absent.\n"
-        "Do not simply restate your previous answer; fix the specific items "
-        "above and tell the user what changed. Put source references (file "
-        "paths, table.column, commits) in a short 'Technical details' footer; "
-        "keep the reply body in plain English (R095)."
+        "The user has ALREADY read your previous answer, so do NOT write it "
+        "again or re-summarize it — reply with ONLY the fix, short and plain: "
+        "if a fact they already read was wrong, say in one or two sentences "
+        "what is corrected; if a draft, email, offer or number you showed was "
+        "wrong, re-send ONLY that corrected draft or number in full, marked as "
+        "replacing the earlier one; if your answer still stands after "
+        "re-checking, say in one short line what you re-checked and what it "
+        "showed. Do not narrate this audit. Put source "
+        "references (file paths, table.column, commits) in a short 'Technical "
+        "details' footer; keep the reply body in plain English (R095)."
     )
     log(
         "decision_block",
         count=len(violations),
         issues=[str(v.get("issue", "")) for v in violations if isinstance(v, dict)],
+        # Claim text (truncated) so a dismissed flag can later be judged real or
+        # a false alarm — counts alone could not tell (2026-11-06 review).
+        claims=[
+            str(v.get("claim", "")).strip()[:160]
+            for v in violations[:12]
+            if isinstance(v, dict)
+        ],
     )
     print(json.dumps({"decision": "block", "reason": reason}))
     sys.exit(0)

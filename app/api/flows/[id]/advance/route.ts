@@ -10,7 +10,9 @@
  * jumping straight to "Closed" from an intermediate receipt stage) rather than
  * a single next-stage hop.
  *
- * Body: { target_stage: string }
+ * Body: { target_stage: string, skip_company_close?: true }
+ *   skip_company_close — Company Closure only: finish the job WITHOUT closing the company (the question offers it when the client
+ *   wrote a different company in the wizard than the one the job is linked to).
  * [id] = service_delivery_id.
  */
 
@@ -20,7 +22,9 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { advanceServiceDelivery } from '@/lib/service-delivery'
 import { syncTaxRevisionRequest } from '@/lib/tax/sync-flow-revision'
+import { approveTaxSubmission, approvalNeedsWarning, type ApproveTaxSubmissionResult } from '@/lib/tax/approve-submission'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await requireStaffRoute()
@@ -48,9 +52,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       )
     }
 
+    // Tax Return "Approve": note where the job was BEFORE the move, to know afterwards whether this move released a reviewed submission
+    // (the review block is stage_order 45-49; "Data Received" is 50).
+    const { data: before } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('service_type, stage_order')
+      .eq('id', serviceDeliveryId)
+      .maybeSingle()
+
     const result = await advanceServiceDelivery({
       delivery_id: serviceDeliveryId,
       target_stage: targetStage,
+      skip_company_close: body.skip_company_close === true,
       formation_date: formationDate,
       entity_type: entityType,
       actor: 'flow-action',
@@ -87,6 +100,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
     }
 
+    // Tax Return "Approve" (Under Review → Data Received): approving IS the release now — the client's Confirm step was removed
+    // (Antonio, 2026-11-06). Lock the reviewed submission and finish the tax record, the same as the What's New card's Approve does.
+    // Best-effort: a failure must not undo the move the staff member saw succeed, but it is shown (below).
+    let approval: ApproveTaxSubmissionResult | null = null
+    const fromOrder = before?.stage_order ?? 0
+    if (before?.service_type === 'Tax Return' && result.to_stage === 'Data Received' && fromOrder >= 45 && fromOrder < 50) {
+      try {
+        approval = await approveTaxSubmission({ serviceDeliveryId, by: 'flow-action' })
+      } catch (approveErr) {
+        console.error('[flows/advance] tax approval release failed (non-fatal):', approveErr)
+        approval = { status: 'error', detail: approveErr instanceof Error ? approveErr.message : String(approveErr) }
+      }
+    }
+
     // Surface to staff when the client was NOT actually unlocked. The stage
     // moved regardless (best-effort sync), so a silent failure would leave staff
     // believing the client can edit when he cannot. 'written' (just unlocked)
@@ -101,6 +128,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           : "Heads up: the client's tax form was not unlocked for editing. Press Request Changes again, or check the submission."
     }
 
+    if (approval && approvalNeedsWarning(approval.status)) {
+      warning =
+        approval.status === 'not_approvable'
+          ? "Moved to Data Received, but the client's tax form was NOT released: the client is still editing it (changes were requested). Check the submission before preparing the return."
+          : "Moved to Data Received, but the client's tax form could not be released automatically. Open the tax submission (What's New card) and approve it there."
+    }
+
     // Company-Formation materialization: deterministic failures already refuse
     // the advance up-front, so a failure here is a transient runtime error —
     // the stage moved but NO account exists. Surface it loudly (the old
@@ -111,6 +145,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       warning = `The stage moved, but the company record was NOT created: ${mat.error} Fix the cause, go back one stage, and advance again.`
     }
 
+    // Company Closure: the job finished, but a step of closing the company failed — say so (it used to report success while the
+    // company stayed open). Company Closure Part C, dev job a6bbea09.
+    const closureProblems = (result.auto_triggers ?? []).filter((t: string) => t.startsWith('Closure problem: '))
+    if (closureProblems.length > 0) {
+      warning = `The job finished, but closing the company did not fully work: ${closureProblems.map((t: string) => t.slice('Closure problem: '.length)).join(' · ')}. Check the company before relying on it.`
+    }
+
     return NextResponse.json({
       success: true,
       to_stage: result.to_stage,
@@ -118,6 +159,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       auto_triggers: result.auto_triggers,
       materialization: result.materialization ?? null,
       revision_sync: revisionSync,
+      approval_release: approval,
       warning,
     })
   } catch (e) {
