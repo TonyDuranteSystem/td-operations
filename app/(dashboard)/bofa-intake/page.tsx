@@ -16,6 +16,7 @@ import { useSearchParams } from "next/navigation"
 import { BOFA_TEXT_FIELDS } from "@/lib/bofa-intake/schema"
 import { BOFA_SHIPPING_FIELDS } from "@/lib/bofa-intake/shipping"
 import { REVIEW_STATE_TEXT, canMarkReviewed, canSendBack, canSubmit, canUndoSendBack, isStaleSending, reviewState, sendMayHaveGoneOut } from "@/lib/bofa-intake/review-state"
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from "@/lib/ui/table-cells"
 
 type LinkStatus = "pending" | "opened" | "completed" | "revoked"
 interface LinkRow {
@@ -388,15 +389,15 @@ function BofaIntakeInner() {
         <table className="w-full text-sm">
           <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
             <tr>
-              <th className="p-3 font-medium">Partner</th>
+              <th className={`p-3 font-medium ${pinHeadCell('start', 'muted-40')}`}>Partner</th>
               <th className="p-3 font-medium">Shared with (client)</th>
-              <th className="p-3 font-medium">Status</th>
-              <th className="p-3 font-medium">Created</th>
-              <th className="p-3 font-medium">Opened</th>
-              <th className="p-3 font-medium">Submitted</th>
+              <th className={`p-3 font-medium ${KEEP_WHOLE}`}>Status</th>
+              <th className={`p-3 font-medium ${KEEP_WHOLE}`}>Created</th>
+              <th className={`p-3 font-medium ${KEEP_WHOLE}`}>Opened</th>
+              <th className={`p-3 font-medium ${KEEP_WHOLE}`}>Submitted</th>
               <th className="p-3 font-medium">Saved in Storage</th>
               <th className="p-3 font-medium">Review / sent to the bank contact</th>
-              <th className="p-3 font-medium">Actions</th>
+              <th className={`p-3 font-medium ${KEEP_WHOLE} ${pinHeadCell('end', 'muted-40')}`}>Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -404,8 +405,8 @@ function BofaIntakeInner() {
               <tr><td className="p-4 text-muted-foreground" colSpan={9}>No links yet. Make one from the Forms page.</td></tr>
             )}
             {links.map((l) => (
-              <tr key={l.id} className="align-top">
-                <td className="p-3 min-w-[90px]">
+              <tr key={l.id} className="group align-top">
+                <td className={`p-3 min-w-[90px] ${pinBodyCell('start')}`}>
                   {l.partner_name ? <span className="font-medium">{l.partner_name}</span> : <span className="text-muted-foreground">No partner (direct)</span>}
                   {l.replaces_id && <span className="block text-xs text-purple-700 mt-1">Replaces an earlier application</span>}
                 </td>
@@ -420,12 +421,12 @@ function BofaIntakeInner() {
                   )}
                 </td>
                 <td className="p-3"><span className={`text-xs rounded px-2 py-0.5 whitespace-nowrap ${STATUS_CLS[l.status]}`}>{STATUS_TEXT[l.status]}</span></td>
-                <td className="p-3 min-w-[110px]">{fmt(l.created_at)}</td>
-                <td className="p-3 min-w-[110px]">{fmt(l.opened_at)}</td>
-                <td className="p-3 min-w-[110px]">{fmt(l.completed_at)}</td>
+                <td className={`p-3 ${KEEP_WHOLE}`}>{fmt(l.created_at)}</td>
+                <td className={`p-3 ${KEEP_WHOLE}`}>{fmt(l.opened_at)}</td>
+                <td className={`p-3 ${KEEP_WHOLE}`}>{fmt(l.completed_at)}</td>
                 <td className="p-3 min-w-[150px]">{storageCell(l)}</td>
                 <td className="p-3 min-w-[200px]">{reviewCell(l, links)}</td>
-                <td className="p-3">
+                <td className={`p-3 ${KEEP_WHOLE} ${pinBodyCell('end')}`}>
                   <div className="flex flex-col gap-1 items-start">
                     {l.status === "completed" && <button className="text-xs underline" onClick={() => openDetail(l.id)}>View answers and documents</button>}
                     {reviewButtons(l)}

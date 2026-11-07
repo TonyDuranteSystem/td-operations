@@ -48,12 +48,104 @@ describe("table cell helpers", () => {
     expect(pinHeadCell("end")).toContain("right-0")
   })
 
+  it("a pinned cell paints the surface its table sits on: the page by default, a white card when asked (Wave 2)", () => {
+    expect(pinBodyCell("start")).toContain("bg-background")
+    expect(pinBodyCell("start", "none", "page")).toContain("bg-background")
+    const card = pinBodyCell("start", "none", "card")
+    expect(card).toContain("bg-white")
+    expect(card).not.toContain("bg-background") // in dark mode the two differ: a mismatch would show as a patch
+    expect(pinHeadCell("end", "zinc-50", "card")).toContain("bg-white")
+    expect(pinHeadCell("end", "zinc-50", "card")).not.toContain("bg-background")
+  })
+
+  it("a pinned header cell carries the tint of the header it sits in (none = just the surface)", () => {
+    expect(pinHeadCell("start", "muted-40")).toContain("before:bg-muted/40")
+    expect(pinHeadCell("start", "zinc-50")).toContain("before:bg-zinc-50")
+    expect(pinHeadCell("start", "gray-50")).toContain("before:bg-gray-50")
+    expect(pinHeadCell("start", "slate-50")).toContain("before:bg-slate-50")
+    expect(pinHeadCell("start", "none", "card")).not.toContain("before:bg-")
+    expect(pinHeadCell("start", "none", "card")).toContain("bg-white")
+  })
+
+  it("an opened (expanded) row's grey is mirrored by the 'zinc' tint", () => {
+    expect(pinBodyCell("start", "zinc", "card")).toContain("before:bg-zinc-50")
+    expect(pinBodyCell("start", "none", "card")).not.toContain("before:bg-zinc-50")
+  })
+
   it("every class is written out in full (Tailwind finds classes by scanning text, so none may be built dynamically)", () => {
     const src = read("lib/ui/table-cells.ts")
-    for (const cls of ["before:bg-red-50/50", "before:bg-muted/50", "group-hover:after:opacity-100", "left-0", "right-0"]) {
+    for (const cls of [
+      "before:bg-red-50/50", "before:bg-muted/50", "before:bg-muted/40", "before:bg-zinc-50", "before:bg-gray-50", "before:bg-slate-50",
+      "group-hover:after:opacity-100", "left-0", "right-0", "bg-background", "bg-white",
+    ]) {
       expect(src).toContain(cls)
     }
     expect(src).not.toMatch(/`[^`]*\$\{[^}]*\}[^`]*(bg|left|right)-/)
+  })
+})
+
+/**
+ * Wave 2: nine more tables. Each one keeps its identifier column pinned (and its Actions column, where it has one), keeps dates, amounts and
+ * chips whole, and pins with the SAME surface as the box around it (a white card in dark mode is not the page colour).
+ */
+const WAVE2: Array<{ file: string; surface: "page" | "card"; end: boolean }> = [
+  { file: "app/(dashboard)/bofa-intake/page.tsx", surface: "page", end: true },
+  { file: "app/(dashboard)/marketing-leads/money/page.tsx", surface: "card", end: true },
+  { file: "app/(dashboard)/cases/page.tsx", surface: "card", end: false },
+  { file: "app/(dashboard)/catalog/catalog-client.tsx", surface: "card", end: true },
+  { file: "app/(dashboard)/team-management/page.tsx", surface: "card", end: true },
+  { file: "app/(dashboard)/referrals/referrals-dashboard.tsx", surface: "card", end: false },
+  { file: "app/(dashboard)/workflows/workflows-list-client.tsx", surface: "card", end: false },
+  { file: "app/(dashboard)/tools/fax/history/history-table.tsx", surface: "card", end: true },
+  { file: "app/(dashboard)/marketing-leads/audit/page.tsx", surface: "card", end: false },
+]
+
+describe("Wave 2 tables follow the window", () => {
+  for (const { file, surface, end } of WAVE2) {
+    const src = read(file)
+    const pins = Array.from(src.matchAll(/pin(Head|Body)Cell\(([^)]*)\)/g), (m) => ({ kind: m[1], args: m[2] }))
+
+    describe(file, () => {
+      it("uses the shared rules", () => {
+        expect(src).toMatch(/from ["']@\/lib\/ui\/table-cells["']/)
+        expect((src.match(/KEEP_WHOLE/g) ?? []).length).toBeGreaterThanOrEqual(4) // import + at least 3 cells keep their text whole
+      })
+
+      it("pins its identifier column in the header and in the rows", () => {
+        expect(pins.some((p) => p.kind === "Head" && /["']start["']/.test(p.args))).toBe(true)
+        expect(pins.some((p) => p.kind === "Body" && /["']start["']/.test(p.args))).toBe(true)
+      })
+
+      it(end ? "pins its Actions column too" : "has no Actions column to pin", () => {
+        const hasEnd = pins.some((p) => /["']end["']/.test(p.args))
+        expect(hasEnd).toBe(end)
+        if (end) {
+          expect(pins.some((p) => p.kind === "Head" && /["']end["']/.test(p.args))).toBe(true)
+          expect(pins.some((p) => p.kind === "Body" && /["']end["']/.test(p.args))).toBe(true)
+        }
+      })
+
+      it(`pins on the ${surface} surface, never the other one`, () => {
+        for (const p of pins) {
+          if (surface === "card") expect(p.args).toMatch(/["']card["']/)
+          else expect(p.args).not.toMatch(/["']card["']/)
+        }
+      })
+
+      it("rows carry `group` so the hover tint follows the row", () => {
+        expect(src).toMatch(/<tr[\s\S]{0,160}?\bgroup\b/)
+      })
+    })
+  }
+
+  it("Team management keeps a name whole (a hyphenated name used to split at the hyphen)", () => {
+    const src = read("app/(dashboard)/team-management/page.tsx")
+    expect(src).toMatch(/px-4 py-3 \$\{KEEP_WHOLE\} \$\{pinBodyCell\('start', 'none', 'card'\)\}/)
+  })
+
+  it("Fax history gives its Status column room, so the long outcome text cannot stack letter by letter", () => {
+    const src = read("app/(dashboard)/tools/fax/history/history-table.tsx")
+    expect(src).toContain("min-w-[13rem]")
   })
 })
 

@@ -8,6 +8,7 @@ import type { ReferralRow } from './page'
 import { AddReferralModal } from './add-referral-modal'
 import { IssueCreditAction } from './issue-credit-action'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from '@/lib/ui/table-cells'
 
 interface Props {
   referrals: ReferralRow[]
@@ -208,13 +209,13 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
               <thead>
                 <tr className="border-b bg-zinc-50/50">
                   <th className="w-8 px-2 py-2.5" />
-                  <th className="text-left px-5 py-2.5 font-medium text-zinc-500">Referrer</th>
+                  <th className={`text-left px-5 py-2.5 font-medium text-zinc-500 ${pinHeadCell('start', 'zinc-50', 'card')}`}>Referrer</th>
                   <th className="text-left px-5 py-2.5 font-medium text-zinc-500">Referred</th>
-                  <th className="text-left px-5 py-2.5 font-medium text-zinc-500">Type</th>
-                  <th className="text-left px-5 py-2.5 font-medium text-zinc-500">Status</th>
-                  <th className="text-right px-5 py-2.5 font-medium text-zinc-500">Commission</th>
-                  <th className="text-right px-5 py-2.5 font-medium text-zinc-500">Paid</th>
-                  <th className="text-left px-5 py-2.5 font-medium text-zinc-500">Date</th>
+                  <th className={`text-left px-5 py-2.5 font-medium text-zinc-500 ${KEEP_WHOLE}`}>Type</th>
+                  <th className={`text-left px-5 py-2.5 font-medium text-zinc-500 ${KEEP_WHOLE}`}>Status</th>
+                  <th className={`text-right px-5 py-2.5 font-medium text-zinc-500 ${KEEP_WHOLE}`}>Commission</th>
+                  <th className={`text-right px-5 py-2.5 font-medium text-zinc-500 ${KEEP_WHOLE}`}>Paid</th>
+                  <th className={`text-left px-5 py-2.5 font-medium text-zinc-500 ${KEEP_WHOLE}`}>Date</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -230,20 +231,20 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
                     <>
                       <tr
                         key={r.id}
-                        className={cn('cursor-pointer transition-colors', isExpanded ? 'bg-zinc-50' : 'hover:bg-zinc-50/50')}
+                        className={cn('group cursor-pointer transition-colors', isExpanded ? 'bg-zinc-50' : 'hover:bg-zinc-50/50')}
                         onClick={() => toggleExpand(r.id)}
                       >
                         <td className="px-2 py-3 text-zinc-400">
                           {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                         </td>
-                        <td className="px-5 py-3">
+                        <td className={cn('px-5 py-3', pinBodyCell('start', isExpanded ? 'zinc' : 'none', 'card'))}>
                           <div className="font-medium text-zinc-900">{r.referrer_name || '—'}</div>
-                          {r.referrer_code && <div className="text-xs text-zinc-400">{r.referrer_code}</div>}
+                          {r.referrer_code && <div className={`text-xs text-zinc-400 ${KEEP_WHOLE}`}>{r.referrer_code}</div>}
                         </td>
                         <td className="px-5 py-3">
                           <div className="text-zinc-900">{displayReferred}</div>
                         </td>
-                        <td className="px-5 py-3">
+                        <td className={`px-5 py-3 ${KEEP_WHOLE}`}>
                           {tp ? (
                             <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', tp.color)}>
                               {tp.label}
@@ -252,7 +253,7 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
                             <span className="text-xs text-zinc-400">—</span>
                           )}
                         </td>
-                        <td className="px-5 py-3">
+                        <td className={`px-5 py-3 ${KEEP_WHOLE}`}>
                           <div className="flex items-center gap-2">
                             <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', s.color)}>
                               {s.label}
@@ -263,19 +264,19 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
                             )}
                           </div>
                         </td>
-                        <td className="px-5 py-3 text-right">
+                        <td className={`px-5 py-3 text-right ${KEEP_WHOLE}`}>
                           {r.commission_amount
                             ? <span className="font-medium">{cur}{Number(r.commission_amount).toLocaleString()}</span>
                             : <span className="text-zinc-400">TBD</span>
                           }
                         </td>
-                        <td className="px-5 py-3 text-right">
+                        <td className={`px-5 py-3 text-right ${KEEP_WHOLE}`}>
                           {totalPaid > 0
                             ? <span className="font-medium text-emerald-600">{cur}{totalPaid.toLocaleString()}</span>
                             : <span className="text-zinc-400">{cur}0</span>
                           }
                         </td>
-                        <td className="px-5 py-3 text-zinc-500">
+                        <td className={`px-5 py-3 text-zinc-500 ${KEEP_WHOLE}`}>
                           {r.created_at?.slice(0, 10)}
                         </td>
                       </tr>

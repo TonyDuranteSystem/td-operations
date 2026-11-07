@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from '@/lib/ui/table-cells'
 
 interface TeamUser {
   id: string
@@ -375,18 +376,18 @@ export default function TeamManagementPage() {
           <table className="w-full min-w-[720px]">
             <thead>
               <tr className="border-b border-zinc-200 bg-zinc-50">
-                <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">Name</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">Email</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">Role</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">Status</th>
-                <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">Last Login</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">Actions</th>
+                <th className={`text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider ${pinHeadCell('start', 'zinc-50', 'card')}`}>Name</th>
+                <th className={`text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider ${KEEP_WHOLE}`}>Email</th>
+                <th className={`text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider ${KEEP_WHOLE}`}>Role</th>
+                <th className={`text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider ${KEEP_WHOLE}`}>Status</th>
+                <th className={`text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider ${KEEP_WHOLE}`}>Last Login</th>
+                <th className={`text-right px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider ${pinHeadCell('end', 'zinc-50', 'card')}`}>Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100">
               {users.map(u => (
                 <tr key={u.id} className={`group hover:bg-zinc-50 ${u.disabled ? 'opacity-50' : ''}`}>
-                  <td className="px-4 py-3">
+                  <td className={`px-4 py-3 ${KEEP_WHOLE} ${pinBodyCell('start', 'none', 'card')}`}>
                     {editingNameId === u.id ? (
                       <span className="flex items-center gap-1.5">
                         <input
@@ -434,13 +435,13 @@ export default function TeamManagementPage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className={`px-4 py-3 ${KEEP_WHOLE}`}>
                     <span className="text-sm text-zinc-600 flex items-center gap-1.5">
                       <Mail className="h-3.5 w-3.5 text-zinc-400" />
                       {u.email}
                     </span>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className={`px-4 py-3 ${KEEP_WHOLE}`}>
                     {editingId === u.id ? (
                       <div className="flex items-center gap-1">
                         <select
@@ -474,7 +475,7 @@ export default function TeamManagementPage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className={`px-4 py-3 ${KEEP_WHOLE}`}>
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                       u.disabled
                         ? 'bg-red-100 text-red-800'
@@ -483,7 +484,7 @@ export default function TeamManagementPage() {
                       {u.disabled ? 'Disabled' : 'Active'}
                     </span>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className={`px-4 py-3 ${KEEP_WHOLE}`}>
                     <span className="text-sm text-zinc-500 flex items-center gap-1.5">
                       <Clock className="h-3.5 w-3.5 text-zinc-400" />
                       {u.last_sign_in_at
@@ -491,7 +492,7 @@ export default function TeamManagementPage() {
                         : 'Never'}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className={`px-4 py-3 text-right ${KEEP_WHOLE} ${pinBodyCell('end', 'none', 'card')}`}>
                     <div className="flex items-center justify-end gap-1">
                       {/* Reset password: new temporary password, emailed and shown once. */}
                       <FastTooltip label="Reset password (new temporary password)">
