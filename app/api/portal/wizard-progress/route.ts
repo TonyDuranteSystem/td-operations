@@ -14,6 +14,7 @@ import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { formationLeadOwned, formationOfferOwned, onboardingOfferOwned } from '@/lib/portal/formation-lead-access'
 import { verifyClosureServiceDelivery } from '@/lib/portal/closure-subject'
+import { createOrReuseWizardProgress } from '@/lib/portal/wizard-progress-write'
 
 /**
  * Re-prove that the logged-in identity owns a lead-scoped wizard_progress row
@@ -181,24 +182,20 @@ export async function POST(req: NextRequest) {
         closureServiceDeliveryId = String(rawServiceDeliveryId)
       }
 
-      const { data: created, error } = await supabaseAdmin
-        .from('wizard_progress')
-        .insert({
-          wizard_type,
-          current_step: current_step ?? 0,
-          data: data || {},
-          account_id: account_id || null,
-          contact_id: contact_id || null,
-          lead_id: lead_id || null,
-          offer_id: offer_id || null,
-          service_delivery_id: closureServiceDeliveryId,
-          status: 'in_progress',
-        })
-        .select('id')
-        .single()
-
-      if (error) throw error
-      return NextResponse.json({ id: created.id, created: true })
+      // One open draft per wizard: a second save that leaves before the first answer arrives reuses the draft instead of
+      // creating a twin (lib/portal/wizard-progress-write.ts; Company Closure Part C).
+      const draft = await createOrReuseWizardProgress(
+        {
+          wizardType: wizard_type,
+          accountId: account_id || null,
+          contactId: contact_id || null,
+          leadId: lead_id || null,
+          offerId: offer_id || null,
+          serviceDeliveryId: closureServiceDeliveryId,
+        },
+        { currentStep: current_step ?? 0, data: data || {} },
+      )
+      return NextResponse.json({ id: draft.id, created: draft.created })
     }
   } catch (err) {
     console.error('[wizard-progress] Error:', err)

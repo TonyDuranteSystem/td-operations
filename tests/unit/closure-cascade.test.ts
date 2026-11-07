@@ -22,9 +22,17 @@ describe("buildClosureFollowUpCards", () => {
       "[CLOSURE] Remove RA on Harbor Compliance",
       "[CLOSURE] Cancel CMRA mailing address / lease if active",
       "[CLOSURE] Stop the yearly renewals (RA + annual report)",
-      "[CLOSURE] Cancel QB recurring invoices",
-      "[CLOSURE] Email client -- closure complete",
     ])
+  })
+
+  it("never creates the QuickBooks or the closing-email to-do any more (QuickBooks is decommissioned; no closing e-mail — Antonio 2026-11-05)", () => {
+    for (const wrapUp of [true, false]) {
+      for (const lease of [true, false]) {
+        const t = titles(buildClosureFollowUpCards([], wrapUp, lease)).join(" | ")
+        expect(t).not.toMatch(/QB|QuickBooks/i)
+        expect(t).not.toMatch(/Email client/i)
+      }
+    }
   })
 
   it("does not repeat a chore that is recorded Done (stored title carries the service-name prefix)", () => {
@@ -56,15 +64,12 @@ describe("buildClosureFollowUpCards", () => {
       ], true),
     )
     expect(t).not.toContain("[CLOSURE] Remove RA on Harbor Compliance")
-    expect(t).toHaveLength(4)
+    expect(t).toHaveLength(2)
   })
 
-  it("all three chores done → only the two long-standing follow-ups remain", () => {
+  it("all three chores done → no follow-up is left", () => {
     const done = CLOSURE_CHORES.map(c => ({ task_title: `[Company Closure - Acme LLC] ${c.stepTitle}`, status: "Done" }))
-    expect(titles(buildClosureFollowUpCards(done, true))).toEqual([
-      "[CLOSURE] Cancel QB recurring invoices",
-      "[CLOSURE] Email client -- closure complete",
-    ])
+    expect(titles(buildClosureFollowUpCards(done, true))).toEqual([])
   })
 
   it("every card is complete (title, description, priority, category)", () => {
@@ -78,15 +83,19 @@ describe("buildClosureFollowUpCards", () => {
 })
 
 describe("switched off until the Wrap-up step exists", () => {
-  const legacy = [
-    "[CLOSURE] Remove RA on Harbor Compliance",
-    "[CLOSURE] Cancel QB recurring invoices",
-    "[CLOSURE] Email client -- closure complete",
-  ]
-  it("with no Wrap-up step the closure creates exactly the follow-ups it always created, whatever the job's to-dos say", () => {
+  const legacy = ["[CLOSURE] Remove RA on Harbor Compliance"]
+  it("with no Wrap-up step the closure creates the Harbor follow-up only, whatever the job's to-dos say", () => {
     expect(titles(buildClosureFollowUpCards([], false))).toEqual(legacy)
     const allDone = CLOSURE_CHORES.map(c => ({ task_title: `[X] ${c.stepTitle}`, status: "Done" }))
     expect(titles(buildClosureFollowUpCards(allDone, false))).toEqual(legacy)
+  })
+
+  it("a company that has a mailing-address lease also gets the lease follow-up (and only then)", () => {
+    expect(titles(buildClosureFollowUpCards([], false, true))).toEqual([
+      "[CLOSURE] Remove RA on Harbor Compliance",
+      "[CLOSURE] Cancel CMRA mailing address / lease",
+    ])
+    expect(titles(buildClosureFollowUpCards([], false, false))).toEqual(legacy)
   })
 
   it("the legacy Harbor follow-up is word for word what the closure created before this change", () => {
@@ -123,9 +132,9 @@ describe("kept in step with the rest", () => {
     expect(protectedStageReason(WRAP_UP_STAGE_NAME)).toBeTruthy()
   })
 
-  it("the closing clean-up reads the job's own to-dos BEFORE the sweep that marks them Done", () => {
-    const src = readFileSync(join(ROOT, "lib/service-delivery.ts"), "utf8")
-    const section = src.slice(src.indexOf("// 14. Company Closure"), src.indexOf("// 15. Action log"))
+  it("the closing clean-up reads the job's own to-dos BEFORE the sweep that closes them (lib/operations/close-company.ts)", () => {
+    const src = readFileSync(join(ROOT, "lib/operations/close-company.ts"), "utf8")
+    const section = src.slice(src.indexOf("export async function applyCompanyClosure"))
     const readAt = section.indexOf(`select("task_title, status")`)
     const sweepAt = section.indexOf("updateTasksBulk")
     const cardsAt = section.indexOf("buildClosureFollowUpCards(jobTasks,")
