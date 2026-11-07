@@ -93,6 +93,16 @@ interface ResolvedAction extends ActionConfig {
   uid: string
   /** The question asked before acting (in the page, with Confirm / Cancel), or null = act at once. */
   confirmText: string | null
+  /** The question is the "this closes the company" one: it also shows WHICH company and what goes with it (the closing brief). */
+  askBrief: boolean
+}
+
+/** What the closing question shows under its sentence (GET /api/flows/[id]/closing-brief). */
+interface ClosingBriefView {
+  headline: string
+  lines: string[]
+  /** the wizard named a different company than the one the job is linked to — shown in red, and "finish without closing" is offered */
+  warning: string | null
 }
 
 /**
@@ -106,7 +116,7 @@ function resolveAction(action: StageAction, hasCompany: boolean): ResolvedAction
   if (typeof action === 'string') {
     const config = ACTION_CONFIG[action]
     const targetStage = actionTargetStage(action)
-    return config && targetStage ? { ...config, targetStage, uid: action, confirmText: null } : null
+    return config && targetStage ? { ...config, targetStage, uid: action, confirmText: null, askBrief: false } : null
   }
   if (action.key === 'advance_next') {
     if (!action.target) return null
@@ -118,12 +128,13 @@ function resolveAction(action: StageAction, hasCompany: boolean): ResolvedAction
       icon: ArrowRight,
       variant: 'primary',
       confirmText: actionConfirmText(action, hasCompany),
+      askBrief: hasCompany && !!action.confirmCompany,
     }
   }
   const config = ACTION_CONFIG[action.key]
   const targetStage = actionTargetStage(action.key, action.target)
   if (!config || !targetStage) return null
-  return { ...config, targetStage, uid: action.key, label: action.label ?? config.label, confirmText: actionConfirmText(action, hasCompany) }
+  return { ...config, targetStage, uid: action.key, label: action.label ?? config.label, confirmText: actionConfirmText(action, hasCompany), askBrief: hasCompany && !!action.confirmCompany }
 }
 
 export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }: ActionButtonsProps) {
@@ -133,13 +144,31 @@ export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }
   const [warning, setWarning] = useState<string | null>(null)
   // the button whose question is showing ("are you sure" panel); an in-page panel, not window.confirm (blocked in some browsers)
   const [askingUid, setAskingUid] = useState<string | null>(null)
+  // the closing brief of the question that is showing: undefined = not asked / not needed, 'loading', or the lines (null = could not be read)
+  const [brief, setBrief] = useState<ClosingBriefView | 'loading' | null | undefined>(undefined)
 
   const resolved = (actions ?? [])
     .map((a) => resolveAction(a, hasCompany))
     .filter((a): a is ResolvedAction => a !== null)
   if (resolved.length === 0) return null
 
-  async function runAction(action: ResolvedAction) {
+  /** Open the question; for the "closes the company" one, also read which company and what goes with it. */
+  async function askQuestion(action: ResolvedAction) {
+    setError(null)
+    setAskingUid(action.uid)
+    if (!action.askBrief) { setBrief(undefined); return }
+    setBrief('loading')
+    try {
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/closing-brief`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not read the company.')
+      setBrief(data.brief ? { headline: data.headline, lines: data.lines ?? [], warning: data.warning ?? null } : null)
+    } catch {
+      setBrief(null)
+    }
+  }
+
+  async function runAction(action: ResolvedAction, opts?: { skipCompanyClose?: boolean }) {
     if (busyKey) return
     setAskingUid(null)
     setBusyKey(action.uid)
@@ -149,7 +178,7 @@ export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }
       const res = await fetch(`/api/flows/${serviceDeliveryId}/advance`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_stage: action.targetStage }),
+        body: JSON.stringify({ target_stage: action.targetStage, ...(opts?.skipCompanyClose ? { skip_company_close: true } : {}) }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
@@ -185,7 +214,7 @@ export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }
             <button
               key={action.uid}
               type="button"
-              onClick={() => (action.confirmText ? (setError(null), setAskingUid(action.uid)) : runAction(action))}
+              onClick={() => (action.confirmText ? askQuestion(action) : runAction(action))}
               disabled={disabled}
               data-guide-action={action.targetStage}
               className={`${base} ${styles}`}
@@ -200,15 +229,41 @@ export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }
         askingUid === action.uid && action.confirmText ? (
           <div key={`ask-${action.uid}`} className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
             <p>{action.confirmText}</p>
+            {action.askBrief && brief === 'loading' && <p className="mt-2 text-amber-700">Checking the company…</p>}
+            {action.askBrief && brief && brief !== 'loading' && (
+              <div className="mt-2">
+                <p className="font-semibold">{brief.headline}</p>
+                {brief.lines.length > 0 && (
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                    {brief.lines.map((line) => <li key={line}>{line}</li>)}
+                  </ul>
+                )}
+                {brief.warning && (
+                  <p className="mt-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-red-800">
+                    <span className="font-semibold">Check before you answer:</span> {brief.warning}
+                  </p>
+                )}
+              </div>
+            )}
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => runAction(action)}
-                disabled={busyKey !== null}
+                disabled={busyKey !== null || (action.askBrief && brief === 'loading')}
                 className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400"
               >
                 Yes, confirm
               </button>
+              {action.askBrief && brief && brief !== 'loading' && brief.warning && (
+                <button
+                  type="button"
+                  onClick={() => runAction(action, { skipCompanyClose: true })}
+                  disabled={busyKey !== null}
+                  className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed"
+                >
+                  Finish the job without closing the company
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setAskingUid(null)}

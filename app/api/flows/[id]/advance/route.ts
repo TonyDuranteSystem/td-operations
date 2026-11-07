@@ -10,7 +10,9 @@
  * jumping straight to "Closed" from an intermediate receipt stage) rather than
  * a single next-stage hop.
  *
- * Body: { target_stage: string }
+ * Body: { target_stage: string, skip_company_close?: true }
+ *   skip_company_close — Company Closure only: finish the job WITHOUT closing the company (the question offers it when the client
+ *   wrote a different company in the wizard than the one the job is linked to).
  * [id] = service_delivery_id.
  */
 
@@ -61,6 +63,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const result = await advanceServiceDelivery({
       delivery_id: serviceDeliveryId,
       target_stage: targetStage,
+      skip_company_close: body.skip_company_close === true,
       formation_date: formationDate,
       entity_type: entityType,
       actor: 'flow-action',
@@ -140,6 +143,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const mat = result.materialization
     if (mat && mat.error) {
       warning = `The stage moved, but the company record was NOT created: ${mat.error} Fix the cause, go back one stage, and advance again.`
+    }
+
+    // Company Closure: the job finished, but a step of closing the company failed — say so (it used to report success while the
+    // company stayed open). Company Closure Part C, dev job a6bbea09.
+    const closureProblems = (result.auto_triggers ?? []).filter((t: string) => t.startsWith('Closure problem: '))
+    if (closureProblems.length > 0) {
+      warning = `The job finished, but closing the company did not fully work: ${closureProblems.map((t: string) => t.slice('Closure problem: '.length)).join(' · ')}. Check the company before relying on it.`
     }
 
     return NextResponse.json({
