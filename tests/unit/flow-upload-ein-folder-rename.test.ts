@@ -15,6 +15,8 @@ const { MovingError } = vi.hoisted(() => ({ MovingError: class MovingError exten
 let sdRow: Record<string, unknown> | null
 let accountRow: Record<string, unknown> | null
 let companyState: "drive" | "store"
+// Company Closure Part C (job a6bbea09): what the route's "open an open company's storage" step does in this scenario (true = it opens one and the company turns to "store")
+let openStorageResult = false
 let driveMode: "forbid" | "record"
 let removedPaths: string[]
 let ensuredPersons: string[]
@@ -104,6 +106,11 @@ vi.mock("@/lib/google-drive", async () => {
 
 vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: vi.fn(async () => { if (stateThrows) throw new Error("lookup down"); return companyState }), liveOwnerOfContact: vi.fn(async () => (ensuredPersons.length > 0 ? "person-owner" : null)) }))
 
+vi.mock("@/lib/crm-store/no-storage", async (orig) => {
+  const real = await orig<typeof import("@/lib/crm-store/no-storage")>()
+  return { ...real, openStorageForOpenCompany: vi.fn(async () => { if (openStorageResult) { companyState = "store"; return true } return false }) }
+})
+
 vi.mock("@/lib/crm-store/formation-pilot", () => ({
   pilotSaveFormationUpload: vi.fn(async () => ({ status: "not_pilot" })),
   FORMATION_UPLOAD_TYPES: {},
@@ -166,6 +173,7 @@ const EIN_BODY = {
 beforeEach(() => {
   delete process.env.SANDBOX_MODE
   companyState = "store"
+  openStorageResult = false
   driveMode = "forbid"
   removedPaths = []
   ensuredPersons = []
@@ -232,7 +240,17 @@ describe("EIN letter upload — storage filing + auto-rename (route E2E)", () =>
     expect(driveCalls).toEqual([])
   })
 
-  it("Scenario 6 — a company with NO storage and no folder: one plain sentence (409), nothing saved, no document row, stage not advanced, zero Drive calls, staged file removed", async () => {
+  it("Scenario 6o — an OPEN company with no storage and no folder: its storage is opened and the file lands in it (a closure step is not stranded — Company Closure Part C)", async () => {
+    companyState = "drive"
+    openStorageResult = true
+    accountRow = { company_name: "Acme Holdings LLC", entity_type: null, status: "Active", drive_folder_id: null, gdrive_folder_url: null }
+    const res = await call(EIN_BODY)
+    expect(res.status).toBe(200)
+    expect(saveCalls).toHaveLength(1)
+    expect(driveCalls).toEqual([])
+  })
+
+  it("Scenario 6 — a company with NO storage and no folder whose storage could not be opened: one plain sentence (409), nothing saved, no document row, stage not advanced, zero Drive calls, staged file removed", async () => {
     companyState = "drive"
     accountRow = { company_name: "Acme Holdings LLC", entity_type: null, status: "Active", drive_folder_id: null, gdrive_folder_url: null }
     const res = await call(EIN_BODY)
