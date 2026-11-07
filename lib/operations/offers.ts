@@ -28,6 +28,7 @@ import { normalizeFormationState } from "@/lib/formation/states"
 import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operations/credit-netting"
 import { resolveCreditSubject, subjectForDisplay, type CreditSubject } from "@/lib/operations/credit-subject"
 import { parsePriceQuirk, resolveOfferCurrency, ambiguousDotPrices } from "@/lib/offers/compute-offer-totals"
+import { duplicateOfferScope } from "@/lib/offers/duplicate-scope"
 import { signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
 import { validatePackages } from "@/lib/offers/package-pick"
 import type { Json } from "@/lib/database.types"
@@ -682,13 +683,10 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         .not("status", "in", '("expired","completed")')
         .neq("contract_type", "renewal")
         .limit(1)
-      if (effectiveLeadId) {
-        dupQuery.eq("lead_id", effectiveLeadId)
-      } else if (effectiveAccountId) {
-        dupQuery.eq("account_id", effectiveAccountId)
-      } else if (params.contact_id) {
-        dupQuery.eq("contact_id", params.contact_id)
-        if (params.contract_type) dupQuery.eq("contract_type", params.contract_type)
+      const dupScope = duplicateOfferScope({ leadId: effectiveLeadId, accountId: effectiveAccountId, contactId: params.contact_id, contractType: params.contract_type })
+      if (dupScope) {
+        dupQuery.eq(dupScope.column, dupScope.value)
+        if (dupScope.contractType) dupQuery.eq("contract_type", dupScope.contractType)
       }
       const { data: existing } = await dupQuery.maybeSingle()
       if (existing) {

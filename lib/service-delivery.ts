@@ -31,9 +31,8 @@ import { formationStateForClient } from "@/lib/formation/state-lookup"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { stageCompletesService } from "@/lib/services/done-step"
 import { stageNotificationText } from "@/lib/services/step-settings"
-import { buildClosureFollowUpCards, WRAP_UP_STAGE_NAME, type ClosureStepTask } from "@/lib/services/closure-cascade"
+import { WRAP_UP_STAGE_NAME } from "@/lib/services/closure-cascade"
 import { logAction } from "@/lib/mcp/action-log"
-import { ACCOUNT_STATUS } from "@/lib/constants"
 import { filedName, filedLegalName, type NameCheck } from "@/lib/flows/name-checks"
 import { CHANGE_NAME_STAGES } from "@/lib/flows/change-name-stages"
 import { trackingStepsCrossed, trackingMissingMessage } from "@/lib/flows/tracking-gate"
@@ -53,6 +52,11 @@ export interface AdvanceStageParams {
    * clients. Does NOT affect stage_history / action_log / tax_returns sync.
    */
   skip_notify?: boolean
+  /**
+   * Company Closure only: finish the job WITHOUT closing the company (the finishing step normally does). Used when the
+   * client wrote a different company in the wizard than the one the job is linked to and staff chose not to close the linked one.
+   */
+  skip_company_close?: boolean
   notes?: string
   actor?: string // "crm-tracker" | "mcp" | etc.
   /**
@@ -182,7 +186,7 @@ export async function clientStageLabelFor(
 export async function advanceServiceDelivery(
   params: AdvanceStageParams,
 ): Promise<AdvanceStageResult> {
-  const { delivery_id, target_stage, skip_tasks = false, skip_notify = false, notes, actor = "system" } = params
+  const { delivery_id, target_stage, skip_tasks = false, skip_notify = false, skip_company_close = false, notes, actor = "system" } = params
 
   // 1. Get current delivery
   const { data: delivery, error: dErr } = await supabaseAdmin
@@ -1436,97 +1440,27 @@ export async function advanceServiceDelivery(
     }
   }
 
-  // 14. Company Closure — cancel all active services, deactivate account
+  // 14. Company Closure — close the company (cancel its other services, deadlines and unpaid invoices, close its to-dos, set it
+  //     to Closed, turn its portal off). The whole step lives in lib/operations/close-company.ts: idempotent (a company already
+  //     Closed is left alone), every write checked, and a failed step is reported (a "Closure problem:" line the screen shows as a
+  //     warning) instead of success. `skip_company_close` = the staff member finished the job WITHOUT closing the company
+  //     (the question offers it when the client wrote a different company than the one the job is linked to).
   if (
     delivery.service_type === "Company Closure" &&
     targetStage.stage_name === "Closing" &&
     delivery.account_id
   ) {
-    // Read the job's own to-dos FIRST: the clean-up below marks every open to-do of the account Done, and a Wrap-up chore
-    // nobody did must not vanish in that sweep (it comes back as a follow-up to-do, see closure-cascade.ts).
-    let jobTasks: ClosureStepTask[] = []
-    try {
-      const { data: jt } = await supabaseAdmin.from("tasks").select("task_title, status").eq("delivery_id", delivery_id)
-      jobTasks = (jt ?? []) as ClosureStepTask[]
-    } catch {
-      /* could not read them → every chore gets its follow-up (the safe direction) */
-    }
-
-    try {
-      const { data: activeSds } = await supabaseAdmin
-        .from("service_deliveries")
-        .select("id, service_type")
-        .eq("account_id", delivery.account_id)
-        .eq("status", "active")
-        .neq("id", delivery_id)
-
-      if (activeSds?.length) {
-        for (const sd of activeSds) {
-          await dbWriteSafe(
-            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-            supabaseAdmin
-              .from("service_deliveries")
-              .update({ status: "cancelled", updated_at: new Date().toISOString() })
-              .eq("id", sd.id),
-            "service_deliveries.update"
-          )
-        }
-        autoTriggers.push(`Cancelled ${activeSds.length} active SDs: ${activeSds.map(s => s.service_type).join(", ")}`)
-      }
-
-      await dbWriteSafe(
-        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-        supabaseAdmin
-          .from("accounts")
-          .update({ status: "Closed" satisfies (typeof ACCOUNT_STATUS)[number], portal_account: false, updated_at: new Date().toISOString() })
-          .eq("id", delivery.account_id),
-        "accounts.update"
-      )
-      autoTriggers.push("Account → Closed, portal deactivated")
-
-      const { data: openTasks } = await supabaseAdmin
-        .from("tasks")
-        .select("id")
-        .eq("account_id", delivery.account_id)
-        .in("status", ["To Do", "In Progress", "Waiting"])
-
-      if (openTasks?.length) {
-        const { updateTasksBulk } = await import("@/lib/operations/task")
-        await updateTasksBulk({
-          account_id: delivery.account_id,
-          status_in: ["To Do", "In Progress", "Waiting"],
-          patch: { status: "Done" },
-          actor: "system:sd-closure",
-          summary: `Auto-closed ${openTasks.length} open task(s) for account closure`,
-        })
-        autoTriggers.push(`Closed ${openTasks.length} open tasks`)
-      }
-    } catch (closureErr) {
-      autoTriggers.push(`Closure auto-cleanup failed: ${closureErr instanceof Error ? closureErr.message : String(closureErr)}`)
-    }
-
-    // The follow-up to-dos in their own block, so a failure above cannot hide them and a failure here is reported as such.
-    try {
-      const cards = buildClosureFollowUpCards(jobTasks, stages.some(st => st.stage_name === WRAP_UP_STAGE_NAME))
-      const { error: cardsErr } = await dbWriteSafe(
-        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-        supabaseAdmin.from("tasks").insert(
-          cards.map(c => ({
-            task_title: c.task_title,
-            description: c.description,
-            assigned_to: "Luca", priority: c.priority, category: c.category, status: "To Do" as const,
-            account_id: delivery.account_id, delivery_id, created_by: "System",
-          }))
-        ),
-        "tasks.insert"
-      )
-      if (cardsErr) {
-        autoTriggers.push(`Closure follow-up to-dos NOT created: ${cardsErr}`)
-      } else {
-        autoTriggers.push(`Created ${cards.length} closure to-dos: ${cards.map(c => c.task_title.replace("[CLOSURE] ", "")).join("; ")}`)
-      }
-    } catch (cardsErr) {
-      autoTriggers.push(`Closure follow-up to-dos NOT created: ${cardsErr instanceof Error ? cardsErr.message : String(cardsErr)}`)
+    if (skip_company_close) {
+      autoTriggers.push("Company left open — the job was finished without closing it")
+    } else {
+      const { applyCompanyClosure } = await import("@/lib/operations/close-company")
+      const closure = await applyCompanyClosure({
+        accountId: delivery.account_id,
+        deliveryId: delivery_id,
+        wrapUpStepExists: stages.some(st => st.stage_name === WRAP_UP_STAGE_NAME),
+      })
+      autoTriggers.push(...closure.lines)
+      for (const problem of closure.problems) autoTriggers.push(`Closure problem: ${problem}`)
     }
   }
 

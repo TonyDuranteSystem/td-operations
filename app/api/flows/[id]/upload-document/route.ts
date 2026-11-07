@@ -271,6 +271,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     //    A company with no storage gets one plain sentence (3b below); a flow with no company yet keeps the file in the bucket.
     let routed: { pointer: string } | null = null
     if (pilot.status !== 'saved' && accountId) {
+      // An OPEN company with no storage and no folder (made by "place client", an old import…) is not a dead end: its storage is
+      // opened here so this very upload can land in it. Before this, the state's confirmation of a closure for such a company was
+      // refused with "no document storage", the step needs that document, and the job could never move on (Company Closure
+      // Part C, dev job a6bbea09). Closed / Cancelled companies and the four frozen on their old Drive folder are untouched.
+      try {
+        const { openStorageForOpenCompany } = await import('@/lib/crm-store/no-storage')
+        await openStorageForOpenCompany(accountId)
+      } catch (e) {
+        return NextResponse.json({ success: false, detail: `Could not open this company's storage: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 })
+      }
       const { companyDocState } = await import('@/lib/crm-store/switched-drive-guard')
       if ((await companyDocState(accountId)) !== 'drive') {
         const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')

@@ -54,6 +54,22 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
 }
 
 /**
+ * The names of the companies this person is linked to that are now CLOSED. A closed company is hidden from the portal
+ * (getPortalAccounts), so this is how the home page can still say "your company has been closed" (lib/portal/closed-company.ts).
+ */
+export async function getClosedCompanyNames(contactId: string): Promise<string[]> {
+  const { data: links } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId)
+  if (!links || links.length === 0) return []
+  const { data } = await supabaseAdmin
+    .from('accounts')
+    .select('company_name')
+    .in('id', links.map(l => l.account_id))
+    .eq('status', 'Closed')
+    .order('company_name')
+  return (data ?? []).map(a => a.company_name as string).filter(Boolean)
+}
+
+/**
  * A switchable entity in the per-company chat chooser (2026-06-24).
  *  - 'company'  → a real account (its shared thread).
  *  - 'formation'→ an in-progress formation (no account yet) → personal-scope view.

@@ -28,6 +28,7 @@ import { createClient } from '@/lib/supabase/server'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { pickChatSenderName } from '@/lib/portal/chat-sender-name'
+import { pickChatContact } from '@/lib/flows/chat-contact'
 import { deriveFlowYear, buildFlowTopic } from '@/lib/flows/resolve-flows'
 import { chooseFlowMessageTopic } from '@/lib/flows/flow-chat-topic'
 import { openTopicsOf } from '@/lib/portal/chat-topics'
@@ -223,15 +224,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     // Stamp the message to a contact so it lands in the client's contact-scoped
     // portal thread (same resolution as the portal chat route / MCP tool).
+    // On a company with several members the message goes to the person who bought the service (the job's own contact),
+    // then the primary member — not to whoever the database listed first (lib/flows/chat-contact.ts; Company Closure Part C).
     let contactId: string | null = null
     if (sd.account_id) {
-      const { data: link } = await supabaseAdmin
+      const { data: links } = await supabaseAdmin
         .from('account_contacts')
-        .select('contact_id')
+        .select('contact_id, is_primary, ended_at')
         .eq('account_id', sd.account_id)
-        .limit(1)
-        .maybeSingle()
-      contactId = link?.contact_id ?? null
+        .order('is_primary', { ascending: false })
+        .order('contact_id')
+      contactId = pickChatContact({ jobContactId: (sd.contact_id as string | null) ?? null, links: links ?? [] })
     }
     // Contact-scoped SDs (in-progress formations, account_id NULL) carry the
     // contact directly — without this the message stamps contact_id=null and
