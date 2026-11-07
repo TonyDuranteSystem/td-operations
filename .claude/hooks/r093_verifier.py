@@ -455,10 +455,13 @@ def main():
         "• narrow_negative → widen the query to match your claim's scope (the "
         "PERSON, not just the company; every relevant place) before concluding "
         "anything is absent.\n"
-        "Do not simply restate your previous answer; fix the specific items "
-        "above and tell the user what changed. Put source references (file "
-        "paths, table.column, commits) in a short 'Technical details' footer; "
-        "keep the reply body in plain English (R095)."
+        "The user has ALREADY read your previous answer, so do NOT write it "
+        "again or re-summarize it — reply with ONLY the fix, short and plain: "
+        "if a fact they already read was wrong, say in one or two sentences "
+        "what is corrected; if your answer still stands after re-checking, say "
+        "so in one short line. Do not narrate this audit. Put source "
+        "references (file paths, table.column, commits) in a short 'Technical "
+        "details' footer; keep the reply body in plain English (R095)."
     )
     log(
         "decision_block",
