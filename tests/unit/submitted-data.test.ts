@@ -3,6 +3,7 @@ import {
   humanizeKey,
   formatValue,
   groupSubmittedData,
+  describeAnswerKey,
 } from '@/lib/flows/submitted-data'
 
 describe('humanizeKey', () => {
@@ -61,9 +62,9 @@ describe('groupSubmittedData', () => {
     expect(titles).toEqual(['Company', 'Owner', 'US Activity', 'Tax Questions'])
     // Section prefixes stripped from labels
     const owner = groups.find((g) => g.title === 'Owner')!
-    expect(owner.fields[0]).toEqual({ label: 'First Name', value: 'Jane' })
+    expect(owner.fields[0]).toEqual({ label: 'First Name', value: 'Jane', key: 'owner_first_name' })
     const tax = groups.find((g) => g.title === 'Tax Questions')!
-    expect(tax.fields[0]).toEqual({ label: 'Digital Assets', value: 'No' })
+    expect(tax.fields[0]).toEqual({ label: 'Digital Assets', value: 'No', key: 'comp_digital_assets' })
   })
 
   it('groups indexed entities into per-index cards and strips the redundant base prefix', () => {
@@ -76,14 +77,14 @@ describe('groupSubmittedData', () => {
     })
     const member1 = groups.find((g) => g.title === 'Member 1')!
     expect(member1.fields).toEqual([
-      { label: 'First Name', value: 'Jane' },
-      { label: 'Last Name', value: 'Doe' },
+      { label: 'First Name', value: 'Jane', key: 'member_0_member_first_name' },
+      { label: 'Last Name', value: 'Doe', key: 'member_0_member_last_name' },
     ])
     expect(groups.find((g) => g.title === 'Member 2')).toBeTruthy()
     const bank = groups.find((g) => g.title === 'Bank Account 1')!
     expect(bank.fields).toEqual([
-      { label: 'Bank Name', value: 'Wise' },
-      { label: 'Statements', value: '1 file' },
+      { label: 'Bank Name', value: 'Wise', key: 'bank_accounts_0_bank_name' },
+      { label: 'Statements', value: '1 file', key: 'bank_accounts_0_statements' },
     ])
   })
 
@@ -100,5 +101,26 @@ describe('groupSubmittedData', () => {
     const groups = groupSubmittedData({ company_name: 'Acme', phone: '' })
     const company = groups.find((g) => g.title === 'Company')!
     expect(company.fields.map((f) => f.label)).toEqual(['Company Name'])
+  })
+})
+
+describe('describeAnswerKey — where one answer sits on the review screen', () => {
+  it('names a flat answer by its section and label (prefix stripped)', () => {
+    expect(describeAnswerKey('comp_foreign_accounts_over_10k')).toEqual({ group: 'Tax Questions', label: 'Foreign Accounts Over 10k' })
+    expect(describeAnswerKey('owner_first_name')).toEqual({ group: 'Owner', label: 'First Name' })
+    expect(describeAnswerKey('us_rental_property')).toEqual({ group: 'US Activity', label: 'Rental Property' })
+    expect(describeAnswerKey('company_name')).toEqual({ group: 'Company', label: 'Company Name' })
+  })
+
+  it('names an indexed answer by its numbered card (index is zero-based in the key, one-based on screen)', () => {
+    expect(describeAnswerKey('bank_accounts_1_bank_name')).toEqual({ group: 'Bank Account 2', label: 'Bank Name' })
+    expect(describeAnswerKey('member_0_member_first_name')).toEqual({ group: 'Member 1', label: 'First Name' })
+  })
+
+  it('agrees with groupSubmittedData for every key it shows (one naming, two users)', () => {
+    const data = { company_name: 'A', owner_dob: '1', comp_debt_changes: 'No', member_1_member_city: 'X', bank_accounts_0_statements: ['a/b.csv'] }
+    for (const g of groupSubmittedData(data)) {
+      for (const f of g.fields) expect(describeAnswerKey(f.key)).toEqual({ group: g.title, label: f.label })
+    }
   })
 })
