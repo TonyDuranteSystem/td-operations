@@ -63,7 +63,7 @@ describe("tax archive job", () => {
     expect(typeof (state.saves[0].resolveBucket as (p: string) => string)).toBe("function")
     expect(marker("tax_return_submissions")).toBeDefined() // the durable "filed" marker
     // where it was filed is MERGED into the row's record (never a copy that could drop the sweep's alert flag)
-    const m = state.merged.find((x) => x.table === "tax_return_submissions")!
+    const m = state.merged.find((x) => x.table === "tax_return_submissions" && x.patch.filed_in)!
     expect(m.patch.filed_in).toBe("storage")
     expect(m.patch.drive_folder_id).toBeNull()
   })
@@ -80,7 +80,7 @@ describe("tax archive job", () => {
     const { archiveTaxSubmission } = await import("@/lib/tax/archive-submission")
     await expect(archiveTaxSubmission("ts-1")).rejects.toThrow(/nowhere to archive/)
     expect(marker("tax_return_submissions")).toBeUndefined()
-    const attempt = state.merged.find((x) => x.table === "tax_return_submissions")!
+    const attempt = state.merged.find((x) => x.table === "tax_return_submissions" && x.patch.attempts)!
     expect(attempt.patch.attempts).toBe(1)
     expect(String(attempt.patch.last_error)).toContain("no storage and no folder")
   })

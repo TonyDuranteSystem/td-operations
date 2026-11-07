@@ -135,7 +135,7 @@ export interface FormStoreSpec {
   /** the Drive sub-folder name the form type used ("3. Tax", "1. Company", "ITIN" …) */
   subfolder: string
   year?: string | number | null
-  summary: { name: string; bytes: Buffer | null; documentType: string | null; callerKey: string } | null
+  summary: { name: string; bytes: Buffer | null; documentType: string | null; callerKey: string; periodYear?: number | null } | null
   uploadPaths: string[]
   bucketOf: (path: string) => string
   /** unique per submission: the same key on a retry makes new VERSIONS, never copies */
@@ -153,7 +153,7 @@ export interface FormStoreSpec {
 }
 
 export interface FormStoreDeps {
-  saveFile: (p: { ownerId: string; folderKind: string; folderId?: string; name: string; bytes: Buffer; mimeType: string | null; documentType: string | null; callerKey: string }) => Promise<WriteResult>
+  saveFile: (p: { ownerId: string; folderKind: string; folderId?: string; name: string; bytes: Buffer; mimeType: string | null; documentType: string | null; callerKey: string; periodYear?: number | null }) => Promise<WriteResult>
   download: (bucket: string, path: string) => Promise<{ bytes: Buffer; mimeType: string | null } | null>
   yearFolder: (taxFolderId: string, year: string) => Promise<string>
   taxFolder: (ownerId: string) => Promise<string>
@@ -249,7 +249,7 @@ export async function saveFormToStore(spec: FormStoreSpec, deps?: FormStoreDeps)
 
   if (spec.summary?.bytes) {
     try {
-      const w = await saveFile({ ownerId: spec.target.ownerId, folderKind, folderId, name: spec.summary.name, bytes: spec.summary.bytes, mimeType: "application/pdf", documentType: spec.summary.documentType, callerKey: spec.summary.callerKey })
+      const w = await saveFile({ ownerId: spec.target.ownerId, folderKind, folderId, name: spec.summary.name, bytes: spec.summary.bytes, mimeType: "application/pdf", documentType: spec.summary.documentType, callerKey: spec.summary.callerKey, periodYear: spec.summary.periodYear ?? null })
       // a store POINTER, never the raw id: callers hand this to code that expects a Drive id or a pointer
       const { storePointer } = await import("./document-pointer")
       out.summaryFileId = storePointer(w.fileId)

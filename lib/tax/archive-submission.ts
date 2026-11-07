@@ -17,15 +17,22 @@
  *  - Marker set ONLY on FULL success: summary saved AND zero failed AND zero
  *    errors. Partial/misfiled leaves drive_archived_at NULL so the sweep re-runs.
  *  - Idempotent: already-archived → no-op; saveFormToDrive upserts by stable name.
+ *  - One save per client submit (dev job 7df278cd): the time printed on the PDF is pinned to the answers it was made for
+ *    (lib/tax/save-stamp.ts, shared with the setup job's own copy), so a retry of the same answers makes the same file (the store
+ *    answers "unchanged", never a pointless new version); and the marker is only
+ *    set if the answers are STILL the ones that were saved (a client who resubmitted meanwhile gets a fresh save, never a stale mark).
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { saveFormForAccount } from "@/lib/crm-store/save-account-form"
 import { mergeArchiveMeta } from "@/lib/archive/meta-merge"
 import { isWizardUploadPath } from "@/lib/portal/wizard-uploads"
+import { answersFingerprint } from "@/lib/tax/answers-fingerprint"
+import { ANSWERS_CHANGED_MESSAGE } from "@/lib/tax/save-state"
+import { pinnedSubmitStamp } from "@/lib/tax/save-stamp"
 
 export interface ArchiveResult {
-  status: "archived" | "already_archived" | "no_submission"
+  status: "archived" | "already_archived" | "no_submission" | "nothing_to_file"
   submissionId: string
   copied?: number
   skipped?: number
@@ -84,6 +91,9 @@ export async function archiveTaxSubmission(submissionId: string): Promise<Archiv
     : []
   const nowIso = new Date().toISOString()
   const priorAttempts = Number((s.drive_archive_meta ?? {})["attempts"]) || 0
+  // The time on the PDF: pinned to these answers (stored, so the setup job's own copy takes the same one) and reused by every retry.
+  const fp = answersFingerprint(s.submitted_data, uploadPaths)
+  const stamp = await pinnedSubmitStamp(submissionId, s)
 
   let saved: Awaited<ReturnType<typeof saveFormForAccount>>
   try {
@@ -94,19 +104,31 @@ export async function archiveTaxSubmission(submissionId: string): Promise<Archiv
       uploadPaths,
       meta: {
         token: s.token,
-        submittedAt: nowIso,
+        submittedAt: stamp.at,
         companyName: acc.company_name ?? undefined,
         year: s.tax_year ?? undefined, // pinned — never a calendar guess
       },
       resolveBucket: bucketForTaxUploadPath,
     })
   } catch (e) {
-    await recordAttempt(submissionId, priorAttempts + 1, `save threw: ${e instanceof Error ? e.message : String(e)}`, null)
+    await recordAttempt(submissionId, priorAttempts + 1, `save threw: ${e instanceof Error ? e.message : String(e)}`, null, stamp)
     throw e
   }
   if (saved.route === "none") {
+    // A finished (Closed / Cancelled) company has no place a NEW file may go and needs none: nothing to file is not a failure.
+    // The marker is set (so the sweep never chases it) and the meta says why — the same rule the closure form follows.
+    let finished = false
+    try {
+      finished = await (await import("@/lib/crm-store/no-storage")).accountIsFinished(s.account_id)
+    } catch { /* unknown → treated as not finished: the job then fails loudly below */ }
+    if (finished) {
+      const { error: nothingErr } = await supabaseAdmin.from("tax_return_submissions").update({ drive_archived_at: nowIso } as never).eq("id", submissionId)
+      if (nothingErr) throw new Error(`archive: nothing to file, but the marker could not be set (retryable): ${nothingErr.message}`)
+      await mergeArchiveMeta("tax_return_submissions", submissionId, { filed_in: "nothing", last_error: null, last_attempt_at: nowIso, stamp }).catch((e) => console.error("[archive-submission] nothing to file; meta could not be merged (non-fatal):", e))
+      return { status: "nothing_to_file", submissionId }
+    }
     const why = `company ${s.account_id} (${acc.company_name ?? "?"}) has no storage and no folder — there is nowhere to archive its tax package`
-    await recordAttempt(submissionId, priorAttempts + 1, why, null)
+    await recordAttempt(submissionId, priorAttempts + 1, why, null, stamp)
     throw new Error(`archive: ${why}`)
   }
   const result = saved.result
@@ -121,8 +143,23 @@ export async function archiveTaxSubmission(submissionId: string): Promise<Archiv
       result.failed.length ? `${result.failed.length} file(s) failed: ${result.failed.join("; ")}` : null,
       result.errors.length ? `errors: ${result.errors.join("; ")}` : null,
     ].filter(Boolean).join(" | ")
-    await recordAttempt(submissionId, priorAttempts + 1, detail || "unknown partial failure", result)
+    await recordAttempt(submissionId, priorAttempts + 1, detail || "unknown partial failure", result, stamp)
     throw new Error(`archive: ${submissionId} not fully archived (retryable) — ${detail}`)
+  }
+
+  // The client may have resubmitted while this ran: then what was saved is the OLD answers. Do NOT mark it saved — fail so the job
+  // runs again on the new answers (a resubmit also clears the marker and queues a fresh save; this closes the gap in between).
+  const { data: again, error: againErr } = await supabaseAdmin
+    .from("tax_return_submissions")
+    .select("submitted_data, upload_paths")
+    .eq("id", submissionId)
+    .maybeSingle()
+  if (againErr) throw new Error(`archive: could not re-check the answers before marking the save done (retryable): ${againErr.message}`)
+  const againRow = again as { submitted_data: unknown; upload_paths: unknown } | null
+  const againPaths = Array.isArray(againRow?.upload_paths) ? (againRow!.upload_paths as unknown[]).filter((p): p is string => typeof p === "string") : []
+  if (!againRow || answersFingerprint(againRow.submitted_data, againPaths) !== fp) {
+    await recordAttempt(submissionId, priorAttempts + 1, `save stale: ${ANSWERS_CHANGED_MESSAGE}`, result, null)
+    throw new Error(`archive: ${submissionId} — ${ANSWERS_CHANGED_MESSAGE} (retryable)`)
   }
 
   // Success — set the marker (this is what the sweep keys on). The record of where it filed is MERGED into the meta (never a whole
@@ -136,6 +173,9 @@ export async function archiveTaxSubmission(submissionId: string): Promise<Archiv
     attempts: priorAttempts + 1,
     last_attempt_at: nowIso,
     last_error: null,
+    failed: [],
+    errors: [],
+    stamp,
     summary_file_id: result.summaryFileId,
     copied: result.copied,
     skipped: result.skipped,
@@ -151,6 +191,7 @@ async function recordAttempt(
   attempts: number,
   lastError: string,
   result: { copied: string[]; failed: string[]; errors: string[] } | null,
+  stamp: { fp: string; at: string } | null,
 ): Promise<void> {
   try {
     await mergeArchiveMeta("tax_return_submissions", submissionId, {
@@ -160,6 +201,8 @@ async function recordAttempt(
       copied: result?.copied ?? [],
       failed: result?.failed ?? [],
       errors: result?.errors ?? [],
+      // a stamp is kept only for the answers it was made for; a stale save keeps none (the next run pins a new one)
+      ...(stamp ? { stamp } : { stamp: null }),
     })
   } catch (e) {
     console.error("[archive-submission] failed to record attempt meta (non-fatal):", e)

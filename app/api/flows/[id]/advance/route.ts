@@ -24,6 +24,8 @@ import { advanceServiceDelivery } from '@/lib/service-delivery'
 import { syncTaxRevisionRequest } from '@/lib/tax/sync-flow-revision'
 import { approveTaxSubmission, approvalNeedsWarning, type ApproveTaxSubmissionResult } from '@/lib/tax/approve-submission'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { createClient } from '@/lib/supabase/server'
+import { getUserDisplayName } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -107,7 +109,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const fromOrder = before?.stage_order ?? 0
     if (before?.service_type === 'Tax Return' && result.to_stage === 'Data Received' && fromOrder >= 45 && fromOrder < 50) {
       try {
-        approval = await approveTaxSubmission({ serviceDeliveryId, by: 'flow-action' })
+        // The approval is recorded under the staff member's name (the saved-file panel says "approved by <name>"); an unreadable
+        // identity falls back to the old marker, which the panel shows without a name.
+        let approver = 'flow-action'
+        try {
+          const { data: { user } } = await createClient().auth.getUser()
+          if (user) approver = getUserDisplayName(user) || approver
+        } catch { /* keep the fallback */ }
+        approval = await approveTaxSubmission({ serviceDeliveryId, by: approver })
       } catch (approveErr) {
         console.error('[flows/advance] tax approval release failed (non-fatal):', approveErr)
         approval = { status: 'error', detail: approveErr instanceof Error ? approveErr.message : String(approveErr) }
