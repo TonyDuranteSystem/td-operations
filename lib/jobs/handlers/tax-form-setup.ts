@@ -384,6 +384,16 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
 
       if (acc?.drive_folder_id) {
         const { saveFormToDrive } = await import("@/lib/form-to-drive")
+        // ONE time on the PDF per submit, shared with the durable save job (dev job 7df278cd): the same answers make the same file, so
+        // this inline copy and the durable job's copy never leave two versions that differ only in the time they print.
+        let stampAt = now
+        if (p.submission_id) {
+          try {
+            stampAt = (await (await import("@/lib/tax/save-stamp")).pinnedSubmitStamp(p.submission_id)).at
+          } catch (e) {
+            console.error("[tax_form_setup] could not take the pinned PDF time (using this run's time):", e)
+          }
+        }
         // Best-effort archival, time-boxed: copying many files to Drive can be
         // slow (or hang in sandbox where Drive is mocked). If it overruns, the
         // catch below records it and the job completes anyway — ingestion was
@@ -395,7 +405,7 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
           acc.drive_folder_id,
           {
             token: p.token,
-            submittedAt: now,
+            submittedAt: stampAt,
             companyName,
             // No calendar guess: an unpinned year files the package under a
             // fabricated Drive year folder (silent-2025 class). Undated root

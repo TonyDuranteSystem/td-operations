@@ -6,8 +6,10 @@
  * re-submit, the backstop, and the sweep can never pile up duplicate archive
  * jobs or race two writers into the same Drive folder:
  *   1. Already archived (drive_archived_at set) → nothing to do.
- *   2. A non-failed archive job already exists for this submission → skip.
- * A FAILED job is not counted, so a genuinely-failed submission is retryable.
+ *   2. An archive job for this submission is WAITING or RUNNING → skip.
+ * Only a waiting or running job counts. A FINISHED job does not: a client who resubmits changed answers clears the marker and
+ * needs a new save, and the finished job from the first submit must not block it (dev job 7df278cd). A FAILED job is not counted
+ * either, so a genuinely-failed submission is retryable.
  *
  * DIRECT insert (not enqueueJobs) — this is called from the wizard-submit
  * REQUEST path, so it must leave no dangling triggerWorker() promise that
@@ -37,12 +39,12 @@ export async function enqueueTaxArchiveJob(params: {
 
   const accountId = params.accountId ?? (sub as { account_id?: string | null }).account_id ?? null
 
-  // Idempotency: skip if a non-failed archive job for this submission exists.
+  // Idempotency: skip if an archive job for this submission is already waiting or running.
   const { data: existing } = await supabaseAdmin
     .from("job_queue")
     .select("id, payload")
     .eq("job_type", "archive_tax_submission")
-    .neq("status", "failed")
+    .in("status", ["pending", "processing"])
 
   const already = (existing ?? []).some(
     r => (r.payload as { submission_id?: string } | null)?.submission_id === submissionId,

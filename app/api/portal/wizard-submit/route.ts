@@ -41,6 +41,7 @@ import {
   type TaxWizardClosedReason,
 } from '@/lib/tax/wizard-eligibility'
 import { buildReviewHistoryEntry, type ReviewStatus } from '@/lib/tax/review-status'
+import { answersFingerprint } from '@/lib/tax/answers-fingerprint'
 import { verifyClosureServiceDelivery } from '@/lib/portal/closure-subject'
 import { reportSystemError } from '@/lib/system-errors'
 import { markWizardProgressSubmitted } from '@/lib/portal/wizard-progress-write'
@@ -453,7 +454,7 @@ export async function POST(req: NextRequest) {
         const nowIso = new Date().toISOString()
         const { data: curSub, error: curErr } = await supabaseAdmin
           .from('tax_return_submissions')
-          .select('id, token, review_status, review_history, upload_paths')
+          .select('id, token, review_status, review_history, upload_paths, submitted_data')
           .eq('id', taxEligibility.submissionId)
           .single()
         if (curErr || !curSub) {
@@ -482,9 +483,20 @@ export async function POST(req: NextRequest) {
           : []
         const mergedUploadPaths = Array.from(new Set([...priorExternalPaths, ...uploadPaths]))
 
+        // One save of the questionnaire per submit (dev job 7df278cd): when the client's answers or files CHANGED, the copy saved
+        // in the company's storage is no longer current, so the "saved" marker is cleared in the SAME write and the save job
+        // (queued below) files the new answers as the next version. Nothing changed → the marker stays and no new version is made.
+        const answersChanged =
+          answersFingerprint(curSub.submitted_data, curSub.upload_paths) !== answersFingerprint(data, mergedUploadPaths)
+
         const { error: updErr } = await supabaseAdmin
           .from('tax_return_submissions')
-          .update({ submitted_data: data, upload_paths: mergedUploadPaths, updated_at: nowIso })
+          .update({
+            submitted_data: data,
+            upload_paths: mergedUploadPaths,
+            updated_at: nowIso,
+            ...(answersChanged ? { drive_archived_at: null } : {}),
+          })
           .eq('id', curSub.id)
         if (updErr) {
           console.error('[wizard-submit] Review-mode submission update failed:', updErr.message)
@@ -492,6 +504,16 @@ export async function POST(req: NextRequest) {
             { error: `Failed to save submission: ${updErr.message}` },
             { status: 500 },
           )
+        }
+        if (answersChanged) {
+          // fresh tries and a fresh stuck-row alert for the new round (best effort: the sweep and the panel also read the marker)
+          try {
+            const { mergeArchiveMeta } = await import('@/lib/archive/meta-merge')
+            const { SAVE_RESET_META } = await import('@/lib/tax/save-state')
+            await mergeArchiveMeta('tax_return_submissions', curSub.id, { ...SAVE_RESET_META })
+          } catch (e) {
+            console.error('[wizard-submit] Could not reset the save record for the resubmitted answers (non-fatal):', e)
+          }
         }
         submissionId = curSub.id
         submissionToken = curSub.token

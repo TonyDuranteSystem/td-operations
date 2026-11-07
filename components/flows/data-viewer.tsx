@@ -7,6 +7,7 @@ import { FORMATION_NAME_KEYS } from '@/lib/flows/formation-names'
 import { formatUploadDate } from '@/lib/flows/workspace-format'
 import { REVIEW_REQUESTS_CHANGED_EVENT } from '@/lib/flows/review-requests-event'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { TaxSavePanel } from './tax-save-panel'
 
 interface Submission {
   id?: string
@@ -163,6 +164,9 @@ export function DataViewer({ serviceDeliveryId, label, requestsEnabled = false }
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
+
+      {/* An approved tax questionnaire: is it saved in Storage (dev job 7df278cd, Shipment 2) */}
+      {!error && source === 'tax' && submission?.review_status === 'confirmed' && <TaxSavePanel serviceDeliveryId={serviceDeliveryId} />}
 
       {!error && !loaded && (
         <p className="flex items-center gap-1.5 text-sm text-zinc-400">

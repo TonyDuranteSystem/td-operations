@@ -254,7 +254,8 @@ describe('wiring', () => {
     expect(card).not.toContain('click Confirm')
     expect(card).not.toContain('Please confirm your reviewed tax data')
     const adv = read('app/api/flows/[id]/advance/route.ts')
-    expect(adv).toContain("approveTaxSubmission({ serviceDeliveryId, by: 'flow-action' })")
+    expect(adv).toContain('approveTaxSubmission({ serviceDeliveryId, by: approver })')
+    expect(adv).toContain("let approver = 'flow-action'")
     expect(adv).toMatch(/result\.to_stage === 'Data Received' && fromOrder >= 45 && fromOrder < 50/)
   })
   it('the client Confirm route and button are gone', () => {
