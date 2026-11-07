@@ -149,6 +149,10 @@
       "schedule": "0 */2 * * *"
     },
     {
+      "path": "/api/cron/return-fax-confirm",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/cron/portal-digest",
       "schedule": "*/5 * * * *"
     },

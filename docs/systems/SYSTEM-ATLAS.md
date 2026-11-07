@@ -195,8 +195,8 @@ _Regenerated 2026-11-07. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-10-23)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-11-06)_
-- [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-11-06)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-06)_
+- [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-11-07)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-07)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-11-06)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-06)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-06)_
@@ -220,13 +220,13 @@ _Regenerated 2026-11-07. Every subsystem doc under `docs/systems/` (55 docs), wi
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-04)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
-- [social-app.md](social-app.md) — TD Social (iPhone app) — "app mode" on the web side _(verified 2026-11-06)_
+- [social-app.md](social-app.md) — TD Social (iPhone app) — "app mode" on the web side _(verified 2026-11-07)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-11-05)_
 - [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-04)_
 - [storage.md](storage.md) — CRM Storage _(verified 2026-11-06)_
 - [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-05)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-06)_
-- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-11-06)_
+- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-11-07)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-11-06)_
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-11-06)_

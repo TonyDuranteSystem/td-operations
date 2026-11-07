@@ -19,6 +19,8 @@ export interface MarketingTeam {
   name: string
   owner_user_id: string | null
   status: TeamStatus
+  /** A test team never receives a real lead (intake skips it, assigning refuses it). */
+  is_test: boolean
   created_by: string | null
   created_at: string
   updated_at: string
@@ -122,6 +124,10 @@ export async function setMarketingSetting(input: {
   const parsed = parseSettingValue(input.key, input.value)
   if (parsed.ok === false) return fail(parsed.error)
   const teamId = input.teamId ?? null
+  if (input.key === "lead_intake_team_id" && typeof parsed.value === "string" && parsed.value) {
+    const { data: chosen } = await db().from("marketing_teams").select("is_test").eq("id", parsed.value).maybeSingle()
+    if (chosen?.is_test) return fail("That is a test team. Real leads cannot be sent to it.")
+  }
   const existing = await db().from("marketing_settings").select("id").eq("key", input.key).filter("team_id", teamId === null ? "is" : "eq", teamId).maybeSingle()
   const now = new Date().toISOString()
   const write = existing.data?.id
