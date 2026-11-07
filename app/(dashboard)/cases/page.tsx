@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { getCaseViewRows, type CasePhase, type CaseViewRow } from "@/lib/case-view/queries"
 import { RefreshCw, AlertTriangle, RotateCcw } from "lucide-react"
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from "@/lib/ui/table-cells"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -186,28 +187,28 @@ export default async function CasesPage({
         <table className="w-full min-w-[880px] text-sm">
           <thead>
             <tr className="border-b border-zinc-200 bg-zinc-50">
-              <th className="px-4 py-2.5 text-left">
+              <th className={`px-4 py-2.5 text-left ${pinHeadCell("start", "zinc-50", "card")}`}>
                 <SortLink col="company_name" label="Account" current={sortKey} dir={sortDir} phase={phaseFilter} renewal={renewalFilter ? "1" : ""} closure={closureFilter ? "1" : ""} />
               </th>
-              <th className="px-4 py-2.5 text-left">
+              <th className={`px-4 py-2.5 text-left ${KEEP_WHOLE}`}>
                 <SortLink col="case_phase" label="Phase" current={sortKey} dir={sortDir} phase={phaseFilter} renewal={renewalFilter ? "1" : ""} closure={closureFilter ? "1" : ""} />
               </th>
-              <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-zinc-400">
+              <th className={`px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-zinc-400 ${KEEP_WHOLE}`}>
                 In Phase
               </th>
-              <th className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-zinc-400">
+              <th className={`px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-zinc-400 ${KEEP_WHOLE}`}>
                 Services
               </th>
-              <th className="px-4 py-2.5 text-right">
+              <th className={`px-4 py-2.5 text-right ${KEEP_WHOLE}`}>
                 <SortLink col="overdue_invoice_count" label="Overdue" current={sortKey} dir={sortDir} phase={phaseFilter} renewal={renewalFilter ? "1" : ""} closure={closureFilter ? "1" : ""} />
               </th>
-              <th className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-zinc-400">
+              <th className={`px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-zinc-400 ${KEEP_WHOLE}`}>
                 Exceptions
               </th>
-              <th className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-zinc-400">
+              <th className={`px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-zinc-400 ${KEEP_WHOLE}`}>
                 Unread
               </th>
-              <th className="px-4 py-2.5 text-right">
+              <th className={`px-4 py-2.5 text-right ${KEEP_WHOLE}`}>
                 <SortLink col="last_activity_at" label="Last Activity" current={sortKey} dir={sortDir} phase={phaseFilter} renewal={renewalFilter ? "1" : ""} closure={closureFilter ? "1" : ""} />
               </th>
             </tr>
@@ -233,7 +234,7 @@ export default async function CasesPage({
 function CaseRow({ row }: { row: CaseViewRow }) {
   return (
     <tr className="hover:bg-zinc-50 transition-colors group">
-      <td className="px-4 py-3">
+      <td className={`px-4 py-3 ${pinBodyCell("start", "none", "card")}`}>
         <Link
           href={`/accounts/${row.account_id}`}
           className="font-medium text-zinc-900 group-hover:text-blue-700 transition-colors"
@@ -241,7 +242,7 @@ function CaseRow({ row }: { row: CaseViewRow }) {
           {row.company_name}
         </Link>
       </td>
-      <td className="px-4 py-3">
+      <td className={`px-4 py-3 ${KEEP_WHOLE}`}>
         <div className="flex items-center gap-1.5">
           <span
             className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ring-1 ${PHASE_BADGE[row.case_phase]}`}
@@ -258,27 +259,27 @@ function CaseRow({ row }: { row: CaseViewRow }) {
           )}
         </div>
       </td>
-      <td className="px-4 py-3 text-zinc-500 text-xs">
+      <td className={`px-4 py-3 text-zinc-500 text-xs ${KEEP_WHOLE}`}>
         {daysSince(row.case_phase_entered_at)}
       </td>
-      <td className="px-4 py-3 text-right tabular-nums text-zinc-600">
+      <td className={`px-4 py-3 text-right tabular-nums text-zinc-600 ${KEEP_WHOLE}`}>
         {row.active_service_count || "—"}
       </td>
-      <td className="px-4 py-3 text-right tabular-nums">
+      <td className={`px-4 py-3 text-right tabular-nums ${KEEP_WHOLE}`}>
         {row.overdue_invoice_count > 0 ? (
           <span className="font-semibold text-red-600">{row.overdue_invoice_count}</span>
         ) : (
           <span className="text-zinc-300">—</span>
         )}
       </td>
-      <td className="px-4 py-3 text-right tabular-nums">
+      <td className={`px-4 py-3 text-right tabular-nums ${KEEP_WHOLE}`}>
         {row.open_exception_count > 0 ? (
           <span className="font-semibold text-amber-600">{row.open_exception_count}</span>
         ) : (
           <span className="text-zinc-300">—</span>
         )}
       </td>
-      <td className="px-4 py-3 text-right tabular-nums">
+      <td className={`px-4 py-3 text-right tabular-nums ${KEEP_WHOLE}`}>
         {row.unread_thread_count > 0 ? (
           <span className="font-semibold text-blue-600">{row.unread_thread_count}</span>
         ) : (

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Loader2, FileText, RefreshCw, Download, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from '@/lib/ui/table-cells'
 
 export interface FaxHistoryRow {
   id: string
@@ -145,23 +146,23 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
       <table className="w-full min-w-[720px] text-sm">
         <thead>
           <tr className="border-b bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500">
-            <th className="px-4 py-3 font-medium">Date</th>
+            <th className={`px-4 py-3 font-medium ${pinHeadCell('start', 'zinc-50', 'card')}`}>Date</th>
             <th className="px-4 py-3 font-medium">Recipient</th>
             <th className="px-4 py-3 font-medium">Document</th>
             <th className="px-4 py-3 font-medium">Reason</th>
             <th className="px-4 py-3 font-medium">Status</th>
-            <th className="px-4 py-3 font-medium text-right">Receipt</th>
+            <th className={`px-4 py-3 font-medium text-right ${KEEP_WHOLE} ${pinHeadCell('end', 'zinc-50', 'card')}`}>Receipt</th>
           </tr>
         </thead>
         <tbody>
           {rows.map(row => {
             const st = row.jobId ? statuses[row.jobId] : undefined
             return (
-              <tr key={row.id} className="border-b last:border-0 hover:bg-zinc-50/60">
-                <td className="px-4 py-3 whitespace-nowrap text-zinc-700">{fmtDate(row.createdAt)}</td>
+              <tr key={row.id} className="group border-b last:border-0 hover:bg-zinc-50/60">
+                <td className={`px-4 py-3 text-zinc-700 ${KEEP_WHOLE} ${pinBodyCell('start', 'none', 'card')}`}>{fmtDate(row.createdAt)}</td>
                 <td className="px-4 py-3">
                   <div className="font-medium text-zinc-800">{row.recipName || '—'}</div>
-                  <div className="text-xs text-zinc-500 font-mono">{row.faxno}</div>
+                  <div className={`text-xs text-zinc-500 font-mono ${KEEP_WHOLE}`}>{row.faxno}</div>
                 </td>
                 <td className="px-4 py-3">
                   {row.documentId ? (
@@ -191,13 +192,13 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
                     {row.reason || <span className="text-zinc-400">—</span>}
                   </span>
                 </td>
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 min-w-[13rem]">
                   {row.claim ? (
                     resolved[row.id] ? (
                       <span className="text-xs text-zinc-600">{resolved[row.id] === 'sent' ? 'Marked as sent. Reload to see it listed.' : 'Marked as not sent.'}</span>
                     ) : (
                       <div className="space-y-1.5">
-                        <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                        <span className={`inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 ${KEEP_WHOLE}`}>
                           {row.claim === 'sending' ? 'Sending…' : 'Outcome unknown — check Faxage'}
                         </span>
                         {row.claim === 'unknown' && (
@@ -225,7 +226,7 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
                     if (isTerminal && st?.status) {
                       return (
                         <div className="space-y-0.5">
-                          <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[st.status]}`}>
+                          <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${KEEP_WHOLE} ${STATUS_STYLES[st.status]}`}>
                             {STATUS_LABEL[st.status]}
                           </span>
                           {meta}
@@ -239,7 +240,7 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
                       <div className="space-y-1">
                         {st?.status === 'pending' && (
                           <div className="space-y-0.5">
-                            <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES.pending}`}>
+                            <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${KEEP_WHOLE} ${STATUS_STYLES.pending}`}>
                               {STATUS_LABEL.pending}
                             </span>
                             {meta}
@@ -257,7 +258,7 @@ export function FaxHistoryTable({ rows }: { rows: FaxHistoryRow[] }) {
                     )
                   })()}
                 </td>
-                <td className="px-4 py-3 text-right">
+                <td className={`px-4 py-3 text-right ${KEEP_WHOLE} ${pinBodyCell('end', 'none', 'card')}`}>
                   {row.jobId ? (
                     <a
                       href={`/api/tools/fax/receipt/${encodeURIComponent(row.jobId)}`}

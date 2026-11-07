@@ -4,6 +4,7 @@ import { useState, useTransition } from "react"
 import { Plus, Pencil, Tag, ArchiveX, RotateCcw, Loader2, X, AlertTriangle } from "lucide-react"
 import { toast } from "sonner"
 import { FastTooltip } from "@/components/ui/fast-tooltip"
+import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from "@/lib/ui/table-cells"
 import type { CatalogEntry, CatalogPendingReview } from "@/lib/catalog/framework"
 import {
   addCatalogEntry,
@@ -100,20 +101,20 @@ export function CatalogClient({ catalogId, entries, pending }: Props) {
         <table className="w-full min-w-[720px] text-sm">
           <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide">
             <tr>
-              <th className="px-3 py-2 text-left">Slug</th>
+              <th className={`px-3 py-2 text-left ${pinHeadCell("start", "gray-50", "card")}`}>Slug</th>
               <th className="px-3 py-2 text-left">Display Name</th>
-              <th className="px-3 py-2 text-left">Status</th>
+              <th className={`px-3 py-2 text-left ${KEEP_WHOLE}`}>Status</th>
               <th className="px-3 py-2 text-left">Tags</th>
               <th className="px-3 py-2 text-left">Translations</th>
-              <th className="px-3 py-2 text-right">Actions</th>
+              <th className={`px-3 py-2 text-right ${pinHeadCell("end", "gray-50", "card")}`}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {entries.map((e) => (
-              <tr key={e.id} className="border-t hover:bg-gray-50">
-                <td className="px-3 py-2 font-mono text-xs">{e.slug}</td>
+              <tr key={e.id} className="group border-t hover:bg-gray-50">
+                <td className={`px-3 py-2 font-mono text-xs ${KEEP_WHOLE} ${pinBodyCell("start", "none", "card")}`}>{e.slug}</td>
                 <td className="px-3 py-2">{e.display_name}</td>
-                <td className="px-3 py-2">
+                <td className={`px-3 py-2 ${KEEP_WHOLE}`}>
                   <StatusBadge status={e.status} />
                 </td>
                 <td className="px-3 py-2">
@@ -126,7 +127,7 @@ export function CatalogClient({ catalogId, entries, pending }: Props) {
                 <td className="px-3 py-2">
                   <TranslationFlags entry={e} />
                 </td>
-                <td className="px-3 py-2 text-right whitespace-nowrap">
+                <td className={`px-3 py-2 text-right ${KEEP_WHOLE} ${pinBodyCell("end", "none", "card")}`}>
                   <FastTooltip label="Rename">
                     <button
                       onClick={() => setMode({ kind: "rename", entry: e })}
@@ -189,21 +190,21 @@ export function CatalogClient({ catalogId, entries, pending }: Props) {
             <table className="w-full min-w-[560px] text-sm">
               <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide">
                 <tr>
-                  <th className="px-3 py-2 text-left">Submitted Value</th>
-                  <th className="px-3 py-2 text-left">Source</th>
-                  <th className="px-3 py-2 text-left">Created</th>
-                  <th className="px-3 py-2 text-right">Actions</th>
+                  <th className={`px-3 py-2 text-left ${pinHeadCell("start", "gray-50", "card")}`}>Submitted Value</th>
+                  <th className={`px-3 py-2 text-left ${KEEP_WHOLE}`}>Source</th>
+                  <th className={`px-3 py-2 text-left ${KEEP_WHOLE}`}>Created</th>
+                  <th className={`px-3 py-2 text-right ${pinHeadCell("end", "gray-50", "card")}`}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {pending.map((p) => (
-                  <tr key={p.id} className="border-t hover:bg-gray-50">
-                    <td className="px-3 py-2 font-mono text-xs">{p.submitted_value}</td>
-                    <td className="px-3 py-2 text-xs text-gray-600">{p.source}</td>
-                    <td className="px-3 py-2 text-xs text-gray-500">
+                  <tr key={p.id} className="group border-t hover:bg-gray-50">
+                    <td className={`px-3 py-2 font-mono text-xs ${pinBodyCell("start", "none", "card")}`}>{p.submitted_value}</td>
+                    <td className={`px-3 py-2 text-xs text-gray-600 ${KEEP_WHOLE}`}>{p.source}</td>
+                    <td className={`px-3 py-2 text-xs text-gray-500 ${KEEP_WHOLE}`}>
                       {new Date(p.created_at).toLocaleDateString()}
                     </td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <td className={`px-3 py-2 text-right ${KEEP_WHOLE} ${pinBodyCell("end", "none", "card")}`}>
                       <button
                         onClick={() => setPendingMode({ kind: "alias", row: p })}
                         className="px-2 py-1 text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 rounded mr-1"

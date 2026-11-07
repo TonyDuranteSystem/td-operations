@@ -16,21 +16,46 @@ export const KEEP_WHOLE = 'whitespace-nowrap'
 
 export type PinSide = 'start' | 'end'
 
-/** Row tint to mirror on a pinned body cell: 'danger' = the translucent red of an overdue row (a hovered row loses its tint, so this does too). */
-export type PinTint = 'none' | 'danger'
+/**
+ * Row tint to mirror on a pinned body cell: 'danger' = the translucent red of an overdue row (a hovered row loses its tint, so this does too);
+ * 'zinc' = the light grey of an opened (expanded) row.
+ */
+export type PinTint = 'none' | 'danger' | 'zinc'
 
-const PIN_BASE = "sticky z-[1] bg-background before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:content-['']"
+/**
+ * What the table sits on. 'page' = straight on the page (`bg-background`); 'card' = inside a white card (`bg-white`, which the CRM dark mode
+ * maps to the card colour). A pinned cell must paint the SAME surface as the box around the table, or it shows as a patch in dark mode.
+ */
+export type PinSurface = 'page' | 'card'
+
+/** The header row's own tint, so a pinned header cell matches the rest of the header. */
+export type PinHeadTint = 'muted-50' | 'muted-40' | 'zinc-50' | 'gray-50' | 'slate-50' | 'none'
+
+const PIN_BASE = "sticky z-[1] before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:content-['']"
 const PIN_HOVER = "after:pointer-events-none after:absolute after:inset-0 after:-z-10 after:content-[''] after:bg-muted/30 after:opacity-0 group-hover:after:opacity-100"
 
 const EDGE: Record<PinSide, string> = { start: 'left-0', end: 'right-0' }
-
-/** A body cell that stays put while the table scrolls sideways. */
-export function pinBodyCell(side: PinSide, tint: PinTint = 'none'): string {
-  const rowTint = tint === 'danger' ? 'before:bg-red-50/50 group-hover:before:opacity-0' : ''
-  return [PIN_BASE, EDGE[side], rowTint, PIN_HOVER].filter(Boolean).join(' ')
+const SURFACE: Record<PinSurface, string> = { page: 'bg-background', card: 'bg-white' }
+const ROW_TINT: Record<PinTint, string> = {
+  none: '',
+  danger: 'before:bg-red-50/50 group-hover:before:opacity-0',
+  zinc: 'before:bg-zinc-50',
+}
+const HEAD_TINT: Record<PinHeadTint, string> = {
+  'muted-50': 'before:bg-muted/50',
+  'muted-40': 'before:bg-muted/40',
+  'zinc-50': 'before:bg-zinc-50',
+  'gray-50': 'before:bg-gray-50',
+  'slate-50': 'before:bg-slate-50',
+  none: '', // a header with no tint of its own: the pinned cell just paints the surface
 }
 
-/** A header cell that stays put while the table scrolls sideways (the header row itself is `bg-muted/50`). */
-export function pinHeadCell(side: PinSide): string {
-  return [PIN_BASE, EDGE[side], 'before:bg-muted/50'].join(' ')
+/** A body cell that stays put while the table scrolls sideways. */
+export function pinBodyCell(side: PinSide, tint: PinTint = 'none', surface: PinSurface = 'page'): string {
+  return [PIN_BASE, SURFACE[surface], EDGE[side], ROW_TINT[tint], PIN_HOVER].filter(Boolean).join(' ')
+}
+
+/** A header cell that stays put while the table scrolls sideways (default: the Finance header, `bg-muted/50` on the page). */
+export function pinHeadCell(side: PinSide, headTint: PinHeadTint = 'muted-50', surface: PinSurface = 'page'): string {
+  return [PIN_BASE, SURFACE[surface], EDGE[side], HEAD_TINT[headTint]].filter(Boolean).join(' ')
 }
