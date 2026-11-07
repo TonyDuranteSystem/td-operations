@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   CheckCircle2,
@@ -14,6 +14,7 @@ import {
 import type { StageAction } from '@/lib/flows/stage-layout'
 import { actionConfirmText } from '@/lib/flows/action-confirm'
 import { actionTargetStage } from '@/lib/flows/action-target'
+import { REVIEW_REQUESTS_CHANGED_EVENT } from '@/lib/flows/review-requests-event'
 
 interface ActionButtonsProps {
   serviceDeliveryId: string
@@ -147,9 +148,39 @@ export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }
   // the closing brief of the question that is showing: undefined = not asked / not needed, 'loading', or the lines (null = could not be read)
   const [brief, setBrief] = useState<ClosingBriefView | 'loading' | null | undefined>(undefined)
 
+  // Requests staff wrote next to answers (review screen) but have not sent: "Request Changes (2)", and Approve asks first.
+  const hasRequestChanges = (actions ?? []).some((a) => (typeof a === 'string' ? a : a.key) === 'request_changes')
+  const [requestCount, setRequestCount] = useState(0)
+  useEffect(() => {
+    if (!hasRequestChanges) return
+    let cancelled = false
+    fetch(`/api/flows/${serviceDeliveryId}/review-notes`, { cache: 'no-store' })
+      .then((r) => r.json().catch(() => ({})))
+      .then((d) => { if (!cancelled && d?.success && typeof d.count === 'number') setRequestCount(d.count) })
+      .catch(() => { /* the count is a convenience; the button still works without it */ })
+    const onChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ serviceDeliveryId?: string; count?: number }>).detail
+      if (detail?.serviceDeliveryId === serviceDeliveryId && typeof detail.count === 'number') setRequestCount(detail.count)
+    }
+    window.addEventListener(REVIEW_REQUESTS_CHANGED_EVENT, onChanged)
+    return () => {
+      cancelled = true
+      window.removeEventListener(REVIEW_REQUESTS_CHANGED_EVENT, onChanged)
+    }
+  }, [hasRequestChanges, serviceDeliveryId])
+
   const resolved = (actions ?? [])
     .map((a) => resolveAction(a, hasCompany))
     .filter((a): a is ResolvedAction => a !== null)
+    .map((a) => {
+      if (requestCount <= 0) return a
+      if (a.uid === 'request_changes') return { ...a, label: `${a.label} (${requestCount})` }
+      if (a.uid === 'approve') {
+        const n = requestCount === 1 ? '1 request' : `${requestCount} requests`
+        return { ...a, confirmText: `You wrote ${n} next to the client's answers that ${requestCount === 1 ? 'has' : 'have'} not been sent. Approve anyway? Approving locks the answers and ${requestCount === 1 ? 'it' : 'they'} will not be sent.` }
+      }
+      return a
+    })
   if (resolved.length === 0) return null
 
   /** Open the question; for the "closes the company" one, also read which company and what goes with it. */

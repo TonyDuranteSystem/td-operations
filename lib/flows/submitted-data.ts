@@ -18,6 +18,8 @@
 export interface DataField {
   label: string
   value: string
+  /** The answer's own key in the saved submission (e.g. `comp_foreign_accounts`, `bank_accounts_1_bank_name`). Carried so a staff request can point at exactly one answer. */
+  key: string
 }
 
 export interface DataGroup {
@@ -84,6 +86,22 @@ const FLAT_SECTION_ORDER = ['Company', 'Owner']
 const FLAT_SECTION_ORDER_TAIL = ['US Activity', 'Tax Questions']
 
 /**
+ * Where one answer sits on the review screen: its card title and its label — the same naming `groupSubmittedData` shows, so a request
+ * written next to an answer can later be listed ("Tax Questions · Foreign Accounts Over 10k") without re-deriving the grouping.
+ */
+export function describeAnswerKey(key: string): { group: string; label: string } {
+  const m = INDEXED_RE.exec(key)
+  if (m) {
+    const base = m[1]
+    let field = m[3]
+    if (field.startsWith(base + '_')) field = field.slice(base.length + 1)
+    return { group: `${humanizeKey(singularize(base))} ${Number(m[2]) + 1}`, label: humanizeKey(field) }
+  }
+  const { section, strip } = sectionFor(key)
+  return { group: section, label: humanizeKey(strip && key.startsWith(strip) ? key.slice(strip.length) : key) }
+}
+
+/**
  * Group a flat `submitted_data` dict into ordered, display-ready sections.
  * Order: Company, Owner, then per-index entity cards (members, bank accounts…),
  * then US Activity, Tax Questions. Empty values and empty groups are dropped.
@@ -109,14 +127,14 @@ export function groupSubmittedData(data: Record<string, unknown> | null | undefi
       if (!entities.has(base)) entities.set(base, new Map())
       const byIndex = entities.get(base)!
       if (!byIndex.has(index)) byIndex.set(index, [])
-      byIndex.get(index)!.push({ label: humanizeKey(field), value })
+      byIndex.get(index)!.push({ label: humanizeKey(field), value, key })
       continue
     }
 
     const { section, strip } = sectionFor(key)
     const label = humanizeKey(strip && key.startsWith(strip) ? key.slice(strip.length) : key)
     if (!flatSections.has(section)) flatSections.set(section, [])
-    flatSections.get(section)!.push({ label, value })
+    flatSections.get(section)!.push({ label, value, key })
   }
 
   const groups: DataGroup[] = []

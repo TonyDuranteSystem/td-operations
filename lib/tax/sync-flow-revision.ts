@@ -20,8 +20,18 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { buildReviewHistoryEntry, type ReviewStatus } from "@/lib/tax/review-status"
 import { decideFlowRevision } from "@/lib/tax/flow-revision"
-import { pickTargetSubmission } from "@/lib/tax/pick-target-submission"
+import { loadTargetTaxSubmission } from "@/lib/tax/target-submission"
 import { TAX_WIZARD_SERVICE_TYPES } from "@/lib/tax/wizard-eligibility"
+import {
+  appendRound,
+  buildClientMessage,
+  buildRound,
+  hasDraftToSend,
+  parseReviewRequests,
+  roundHistoryNote,
+  type ReviewRound,
+} from "@/lib/tax/review-requests"
+import { resolveClientLabel } from "@/lib/tax/review-labels"
 
 export interface SyncTaxRevisionResult {
   status:
@@ -37,6 +47,8 @@ export interface SyncTaxRevisionResult {
   submissionId?: string
   from?: ReviewStatus | null
   clientNotified?: boolean
+  /** how many answers carried a written request in this press (0 = the usual general notice) */
+  requestsSent?: number
   detail?: string
 }
 
@@ -60,62 +72,61 @@ export async function syncTaxRevisionRequest(params: {
   if (!sd.account_id) return { status: "no_account" }
 
   // 2. Pick the SAME submission the wizard gate will let the client edit, so the
-  //    button, the gate, the page prefill and the lock all act on ONE row.
-  //    Mirrors decideTaxWizardEligibility's target rule exactly: when an OPEN
-  //    tax_returns row exists, the target is the OLDEST open year's latest
-  //    submission (back-filing collects oldest first); with no open row, it's the
-  //    latest submission overall. Blindly taking the newest row would unlock a
-  //    different tax year than the client edits (cross-year contamination for a
-  //    returning client with two submissions). (bug-hunter #3, 2026-07-24.)
-  const [subsRes, openRes] = await Promise.all([
-    supabaseAdmin
-      .from("tax_return_submissions")
-      .select("id, contact_id, tax_year, review_status, review_history, created_at")
-      .eq("account_id", sd.account_id),
-    supabaseAdmin
-      .from("tax_returns")
-      .select("tax_year")
-      .eq("account_id", sd.account_id)
-      .eq("data_received", false),
-  ])
-  if (subsRes.error) return { status: "error", detail: subsRes.error.message }
-  if (openRes.error) return { status: "error", detail: openRes.error.message }
+  //    button, the gate, the page prefill, the lock AND the review screen's written
+  //    requests all act on ONE row (the rule lives in loadTargetTaxSubmission —
+  //    see lib/tax/pick-target-submission.ts for why newest-row is wrong).
+  const loaded = await loadTargetTaxSubmission(sd.account_id)
+  if (loaded.ok === false) {
+    return loaded.reason === "error"
+      ? { status: "error", detail: loaded.detail }
+      : { status: loaded.reason === "no_account" ? "no_account" : "no_submission" }
+  }
+  const sub = loaded.sub
 
-  // The same rule "Approve" uses (lib/tax/pick-target-submission.ts), so both buttons act on one row.
-  const openYears = (openRes.data ?? []).map(r => r.tax_year as number)
-  const sub = pickTargetSubmission(subsRes.data ?? [], openYears)
-
-  const current = (sub?.review_status ?? null) as ReviewStatus | null
-  const decision = decideFlowRevision(current, !!sub)
+  const current = (sub.review_status ?? null) as ReviewStatus | null
+  const decision = decideFlowRevision(current, true)
   if (!decision.ok) {
-    return { status: decision.reason ?? "error", submissionId: sub?.id, from: current }
+    return { status: decision.reason ?? "error", submissionId: sub.id, from: current }
   }
 
   // 3. Write review_status + a truthful history round. Pin the prior value so a
   //    concurrent transition (What's New button, a resubmit) can't be clobbered.
+  //    When staff wrote requests next to answers (the review screen's pencils), they
+  //    become ONE round here — each answer remembered as it is now, the draft emptied —
+  //    and go out to the client with the notice. With nothing written this is the
+  //    exact same write as before.
   const now = new Date().toISOString()
-  const history = Array.isArray(sub!.review_history) ? sub!.review_history : []
+  const history = Array.isArray(sub.review_history) ? [...sub.review_history] : []
+  const stored = parseReviewRequests(sub.review_requests)
+  const round: ReviewRound | null = hasDraftToSend(stored)
+    ? buildRound({ draft: stored.draft, submittedData: sub.submitted_data, by, at: now })
+    : null
   history.push(
     buildReviewHistoryEntry({
       from: decision.from ?? null,
       to: "revision_requested",
       at: now,
       by,
-      note: note ?? "Changes requested from the flow workspace",
+      note: note ?? (round ? roundHistoryNote(round) : "Changes requested from the flow workspace"),
     }),
   )
 
   let upd = supabaseAdmin
     .from("tax_return_submissions")
-    .update({ review_status: "revision_requested", review_history: history, updated_at: now })
-    .eq("id", sub!.id)
+    .update({
+      review_status: "revision_requested",
+      review_history: history,
+      updated_at: now,
+      ...(round ? { review_requests: appendRound(stored, round) as never } : {}),
+    })
+    .eq("id", sub.id)
   // NULL and a concrete prior value need different guards (`.is` vs `.eq`).
   upd = current === null ? upd.is("review_status", null) : upd.eq("review_status", current)
   const { data: updated, error: updErr } = await upd.select("id")
-  if (updErr) return { status: "error", submissionId: sub!.id, detail: updErr.message }
+  if (updErr) return { status: "error", submissionId: sub.id, detail: updErr.message }
   if (!updated || updated.length === 0) {
     // Someone moved review_status between our read and write — don't force it.
-    return { status: "conflict", submissionId: sub!.id, from: current }
+    return { status: "conflict", submissionId: sub.id, from: current }
   }
 
   // 4. Resolve any open What's New card so the client's resubmit raises a fresh
@@ -123,7 +134,7 @@ export async function syncTaxRevisionRequest(params: {
   await supabaseAdmin
     .from("message_actions")
     .update({ resolved_at: now })
-    .eq("source_ref", `tax_submission:${sub!.id}`)
+    .eq("source_ref", `tax_submission:${sub.id}`)
     .is("resolved_at", null)
 
   // 5. Notify the client in their own language (chat + email + bell). Best-effort
@@ -133,20 +144,22 @@ export async function syncTaxRevisionRequest(params: {
     const { notifyClientActionRequired } = await import("@/lib/portal/action-required")
     await notifyClientActionRequired({
       account_id: sd.account_id,
-      contact_id: (sub!.contact_id as string | null) ?? null,
+      contact_id: sub.contact_id ?? null,
       title: {
         en: "Changes needed on your tax submission",
         it: "Modifiche richieste alla tua dichiarazione",
       },
-      message: note
-        ? {
-            en: `Our team reviewed your tax submission and needs a change: ${note}\n\nPlease open your portal, edit your tax information, and resubmit.`,
-            it: `Il nostro team ha revisionato la tua dichiarazione e serve una modifica: ${note}\n\nAccedi al portale, correggi le informazioni fiscali e reinvia.`,
-          }
-        : {
-            en: "Our team needs a change on your tax submission. Please open your portal, edit your tax information, and resubmit.",
-            it: "Il nostro team ha bisogno di una modifica alla tua dichiarazione. Accedi al portale, correggi le informazioni fiscali e reinvia.",
-          },
+      message: round
+        ? buildClientMessage(round, (q, locale) => resolveClientLabel(q.key, locale))
+        : note
+          ? {
+              en: `Our team reviewed your tax submission and needs a change: ${note}\n\nPlease open your portal, edit your tax information, and resubmit.`,
+              it: `Il nostro team ha revisionato la tua dichiarazione e serve una modifica: ${note}\n\nAccedi al portale, correggi le informazioni fiscali e reinvia.`,
+            }
+          : {
+              en: "Our team needs a change on your tax submission. Please open your portal, edit your tax information, and resubmit.",
+              it: "Il nostro team ha bisogno di una modifica alla tua dichiarazione. Accedi al portale, correggi le informazioni fiscali e reinvia.",
+            },
       // Distinct from the generic "/portal" tax notices (approve / What's New) so
       // the 10-minute action-required dedup — keyed on (type, link, contact) —
       // can never silently drop this "edit your data" message when another tax
@@ -161,8 +174,9 @@ export async function syncTaxRevisionRequest(params: {
 
   return {
     status: "written",
-    submissionId: sub!.id,
+    submissionId: sub.id,
     from: decision.from,
     clientNotified,
+    requestsSent: round ? round.requests.length : 0,
   }
 }
