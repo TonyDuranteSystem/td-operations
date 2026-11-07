@@ -9,8 +9,12 @@
  * That sweep must never swallow a chore nobody did. So just before it runs, the job's own to-dos are read, and every chore
  * that is NOT recorded Done comes back as a "[CLOSURE]" follow-up to-do. This also covers a job that skipped Wrap-up
  * altogether (moved straight to Closing, or advanced with the step to-dos switched off): it has no chore to-dos, so all
- * three come back. The QuickBooks and "email the client" to-dos are the long-standing ones and are unchanged.
- * All of this applies only once the Wrap-up step exists; before that the closure behaves exactly as it always did.
+ * three come back.
+ * The QuickBooks to-do ("cancel QB recurring invoices") and the "email the client — closure complete" to-do are GONE (Company
+ * Closure Part C, dev job a6bbea09): QuickBooks is decommissioned, and Antonio decided the client gets no closing e-mail
+ * (2026-11-05). What is left is the Registered Agent chore on Harbor (always — it is the one thing nothing else tracks), plus the
+ * mailing-address lease chore ONLY when the company really has a lease (`hasLease`), so a closure no longer leaves a lease billing.
+ * The Wrap-up step itself is still dormant until its migration runs.
  *
  * Pure — no database. The titles below are the to-do titles of the Wrap-up step (pipeline_stages.auto_tasks, set by
  * scripts/migrations/20261015-1200-closure-wrapup-step.sql; tests/unit/closure-cascade.test.ts keeps the two in step).
@@ -58,21 +62,13 @@ export const CLOSURE_CHORES: readonly ClosureChore[] = [
   },
 ]
 
-/** The long-standing follow-ups, always created after a closure (unchanged by the Wrap-up step). */
-const ALWAYS_CARDS: readonly ClosureFollowUpCard[] = [
-  {
-    task_title: "[CLOSURE] Cancel QB recurring invoices",
-    description: "Company closure. Check QuickBooks for any recurring invoices and cancel them.",
-    priority: "Normal",
-    category: "Payment",
-  },
-  {
-    task_title: "[CLOSURE] Email client -- closure complete",
-    description: "All closure steps done. Send confirmation email to client that their LLC has been dissolved.",
-    priority: "Normal",
-    category: "Client Communication",
-  },
-]
+/** The follow-up for a company that has a mailing-address lease (the CMRA): without it the lease keeps billing and the suite stays taken. */
+const LEASE_CARD: ClosureFollowUpCard = {
+  task_title: "[CLOSURE] Cancel CMRA mailing address / lease",
+  description: "Company closure. This company has a mailing-address lease — cancel it so it stops billing and the suite goes back to the pool.",
+  priority: "Normal",
+  category: "Filing",
+}
 
 /** The bit of a to-do the decision needs. */
 export interface ClosureStepTask {
@@ -99,25 +95,26 @@ function choreRecordedDone(chore: ClosureChore, jobTasks: readonly ClosureStepTa
 
 /**
  * The follow-up to-dos to create when a closure job's company is closed.
- * @param jobTasks the closure job's own to-dos, read BEFORE the sweep that marks every open to-do Done.
+ * @param jobTasks the closure job's own to-dos, read BEFORE the sweep that closes the company's open to-dos.
  *   Pass an empty list when they could not be read: every chore then gets its follow-up (the safe direction).
  * @param wrapUpStepExists whether the Company Closure step list contains the "Wrap-up" step. The step is switched on by
- *   running scripts/migrations/20261015-1200-closure-wrapup-step.sql; until then this returns EXACTLY the three
- *   follow-ups the closure always created (Harbor, QuickBooks, email the client), so shipping this code changes nothing.
+ *   running scripts/migrations/20261015-1200-closure-wrapup-step.sql; until then only the Harbor follow-up is created
+ *   (plus the lease follow-up when the company has a lease).
+ * @param hasLease the company has a mailing-address lease (signed / viewed / sent). Only used while the Wrap-up step does not
+ *   exist: once it does, its own "Cancel CMRA/lease if active" chore covers the lease.
  */
-export function buildClosureFollowUpCards(jobTasks: readonly ClosureStepTask[], wrapUpStepExists: boolean): ClosureFollowUpCard[] {
+export function buildClosureFollowUpCards(jobTasks: readonly ClosureStepTask[], wrapUpStepExists: boolean, hasLease = false): ClosureFollowUpCard[] {
   const harbor = CLOSURE_CHORES[0]
   if (!wrapUpStepExists) {
     return [
       { task_title: harbor.cardTitle, description: harbor.cardDescription, priority: harbor.priority, category: harbor.category },
-      ...ALWAYS_CARDS,
+      ...(hasLease ? [LEASE_CARD] : []),
     ]
   }
-  const chores = CLOSURE_CHORES.filter(c => !choreRecordedDone(c, jobTasks)).map(c => ({
+  return CLOSURE_CHORES.filter(c => !choreRecordedDone(c, jobTasks)).map(c => ({
     task_title: c.cardTitle,
     description: c.cardDescription,
     priority: c.priority,
     category: c.category,
   }))
-  return [...chores, ...ALWAYS_CARDS]
 }
