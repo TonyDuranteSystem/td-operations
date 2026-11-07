@@ -39,12 +39,14 @@ describe('the Tax Return layouts', () => {
     expect(boxes[0]).toMatchObject({ label: 'Upload Prepared Tax Return', folder: '3. Tax', autoAdvance: false, documentType: 'tax_return' })
   })
 
-  it('"Return ready" is its own button, goes to the real next step, and asks first (the client is told "Ready to Sign")', () => {
-    const [b] = layoutOf('Preparation').components.find((c) => c.type === 'action_buttons')!.actions! as Array<{ key: string; label: string; target: string; confirm: string }>
-    expect(b.key).toBe('advance_next')
-    expect(b.target).toBe('TR Completed')
-    expect(TAX_ROWS.some((r) => r.stage_name === b.target)).toBe(true)
-    expect(b.confirm).toMatch(/send it for signature first/)
+  it('"Preparation" sends the return for signature through the e-sign panel (item 5 replaced the item-4 "Return ready" button): no forward button, the panel does it', () => {
+    const comps = layoutOf('Preparation').components
+    expect(comps.some((c) => c.type === 'action_buttons')).toBe(false)
+    const panel = comps.find((c) => c.type === 'esign_panel')!
+    expect(panel).toMatchObject({ label: 'Send the return for signature', title: 'Return for the client to sign', rename: 'Tax Return {year} - {company_name}' })
+    expect(panel.readOnly).toBeUndefined()
+    // the panel sits AFTER the upload box: the file first, then the signing
+    expect(comps.findIndex((c) => c.type === 'esign_panel')).toBeGreaterThan(comps.findIndex((c) => c.type === 'document_upload'))
   })
 
   it('the preparer sees the client\'s answers on this step too', () => {
@@ -127,10 +129,11 @@ describe('the data change (migration + undo)', () => {
   const up = read('../../scripts/migrations/20261106-2300-tax-return-prepared-return-box-at-preparation.sql')
   const undo = read('../../scripts/migrations/20261106-2300-tax-return-prepared-return-box-at-preparation.UNDO.sql')
 
-  it('the dumped layouts are exactly what the migration writes', () => {
-    const re = /SET stage_layout = '(.*?)'::jsonb\s*\nWHERE service_type = 'Tax Return' AND stage_name = '([^']+)'/gs
+  it('the dumped layouts are exactly what the migrations write (a later migration — item 5\'s — overrides the earlier one for "Preparation")', () => {
+    const re = /SET stage_layout = '([\s\S]*?)'::jsonb\s*\nWHERE service_type = 'Tax Return' AND stage_name = '([^']+)'/g
     const written: Record<string, unknown> = {}
-    for (const m of Array.from(up.matchAll(re))) written[m[2]] = JSON.parse(m[1].replace(/''/g, "'"))
+    const item5 = read('../../scripts/migrations/20261106-2330-tax-return-send-for-signature-steps.sql')
+    for (const sql of [up, item5]) for (const m of Array.from(sql.matchAll(re))) written[m[2]] = JSON.parse(m[1].replace(/''/g, "'"))
     expect(Object.keys(written).sort()).toEqual(['Data Received', 'Preparation'])
     for (const stage of Object.keys(written)) expect(TAX_ROWS.find((r) => r.stage_name === stage)!.stage_layout).toEqual(written[stage])
   })

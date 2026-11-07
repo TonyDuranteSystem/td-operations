@@ -376,6 +376,7 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
         account={account}
         secondInstallment={secondInstallment}
         needsDocument={currentStageRow?.requires_document_to_advance === true}
+        flowYear={year}
       />
 
       {/* The step-by-step guide: only when the pop-up "Open the workspace" opened the case (?guide=<document type>) for a document the step table
