@@ -135,11 +135,14 @@ async function readContacts(ids: string[]): Promise<Map<string, { full_name: str
 /** The people this chat's attachments can belong to: the company's INDIVIDUAL members that resolve to a contact — or, in a person's own thread, that person. */
 async function loadPeople(row: MessageRow): Promise<PeopleResult> {
   const byContact = new Map<string, { name: string; alt: string[] }>()
+  const unlinked: string[] = []
   if (row.account_id) {
     const { resolveAccountMembersForChat } = await import("@/lib/portal/addressed-to")
     const options = await resolveAccountMembersForChat(row.account_id)
     for (const o of options) {
-      if (!o.resolvable || !o.contactId || o.isCompanyMember) continue
+      if (o.isCompanyMember) continue
+      // a person member with no contact of their own (and no e-mail that points to exactly one contact) cannot be offered: say so instead of leaving them out silently
+      if (!o.resolvable || !o.contactId) { if (o.name) unlinked.push(o.name); continue }
       const prev = byContact.get(o.contactId)
       if (prev) { if (o.name && prev.alt.indexOf(o.name) === -1) prev.alt.push(o.name) } else byContact.set(o.contactId, { name: o.name, alt: [] })
     }
@@ -153,10 +156,11 @@ async function loadPeople(row: MessageRow): Promise<PeopleResult> {
   }
   const ids = Array.from(byContact.keys())
   const scope = row.account_id ? "company" : "person"
-  if (ids.length === 0) return { people: [], scope, notOffered: [] }
+  const notOffered: string[] = []
+  if (unlinked.length > 0) notOffered.push(`${unlinked.join(", ")} ${unlinked.length === 1 ? "has" : "have"} no contact record linked to the member row — not offered; link the member's contact first.`)
+  if (ids.length === 0) return { people: [], scope, notOffered }
   const contacts = await readContacts(ids)
   const people: Person[] = []
-  const notOffered: string[] = []
   for (const id of ids) {
     const c = contacts.get(id)
     if (!c) continue
@@ -326,9 +330,11 @@ async function fileBelongsTo(fileId: string, contactId: string): Promise<"yes" |
 
 /** The name of ANOTHER contact whose record already holds this ITIN (a cheap net for a letter put on the wrong person); "error" when that could not be checked. */
 async function otherHolderOfItin(itin: string, contactId: string): Promise<string | null | "error"> {
-  const { data, error } = await db().from("contacts").select("full_name").in("itin_number", [itin, itin.replace(/\D/g, ""), itin.replace(/-/g, " ")]).neq("id", contactId).limit(1)
+  // compared on the DIGITS: records hold the number as 999-99-9999, 999999999, "999 99 9999" and one older "999-999999" — a list of spellings would miss the next odd one
+  const digits = itin.replace(/\D/g, "")
+  const { data, error } = await db().from("contacts").select("full_name, itin_number").ilike("itin_number", `%${digits.slice(-4)}%`).neq("id", contactId).limit(50)
   if (error) return "error"
-  const row = ((data ?? []) as Array<{ full_name: string | null }>)[0]
+  const row = ((data ?? []) as Array<{ full_name: string | null; itin_number: string | null }>).find((r) => (r.itin_number ?? "").replace(/\D/g, "") === digits)
   return row ? (row.full_name || "another contact") : null
 }
 
@@ -421,7 +427,7 @@ async function saveOne(row: MessageRow, atts: ChatAttachment[], pr: PeopleResult
   const done = { itinWritten: false, issueDateWritten: false, issueDateCleared: false }
   const logAudit = async (extra: Record<string, unknown> = {}) => {
     const { error: logErr } = await db().from("action_log").insert({
-      actor: "crm-admin", action_type: "chat_attachment_saved_to_storage", table_name: "store_files", record_id: `store:${saved.fileId}`, account_id: row.account_id ?? linkedAccountId,
+      actor: "crm-admin", action_type: "chat_attachment_saved_to_storage", table_name: "store_files", record_id: `store:${saved.fileId}`, account_id: row.account_id ?? linkedAccountId, contact_id: person.contactId,
       summary: `Chat attachment saved to Storage as ITIN Letter for ${person.name}`,
       details: { message_id: row.id, attachment_index: input.index, contact_id: person.contactId, status: saved.status, client: input.client, by: actorId, ...extra },
     })
@@ -529,7 +535,7 @@ async function saveOne(row: MessageRow, atts: ChatAttachment[], pr: PeopleResult
       try {
         const { notifyClientsOfNewDocument } = await import("@/lib/portal/document-alerts")
         const n = await notifyClientsOfNewDocument(saved.documentRowId, { chat: false })
-        if (n.notified) ok(`Shown in ${person.name}'s portal and a notification was created there for ${person.name} (no chat message).`)
+        if (n.notified) ok(`Shown in ${person.name}'s portal and a notification was created there for ${person.name} (no chat message). A short email summary may follow within a few minutes.`)
         else if (n.reason === "already_notified") ok(`Shown in ${person.name}'s portal. ${person.name} was already notified about this document earlier — nothing new was sent.`)
         else {
           partial = true

@@ -26,7 +26,7 @@ vi.mock("@/lib/supabase-admin", () => {
     const run = () => (h.handler ? h.handler(table, ops) : { rows: [] })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const b: any = {}
-    for (const m of ["select", "eq", "neq", "in", "like", "is", "not", "or", "order", "limit", "update", "range"]) b[m] = (...a: unknown[]) => { ops.push({ m, a }); return b }
+    for (const m of ["select", "eq", "neq", "in", "like", "ilike", "is", "not", "or", "order", "limit", "update", "range"]) b[m] = (...a: unknown[]) => { ops.push({ m, a }); return b }
     b.insert = (row: Record<string, unknown>) => { h.inserts.push({ table, row }); const r = run(); return Promise.resolve({ data: null, error: r.error ?? null }) }
     const one = () => { const r = run(); return Promise.resolve({ data: r.rows?.[0] ?? null, error: r.error ?? null }) }
     b.maybeSingle = one
@@ -101,6 +101,8 @@ const state = {
   deleted: false,
   noRowsMessage: false,
   other: null as string | null | "error",
+  /** how the other holder stored the ITIN (null = the ITIN that was asked about, dashed) */
+  otherItin: null as string | null,
   /** answers for the successive "is this ITIN on another contact?" questions (used first); then `other` */
   otherSeq: [] as Array<string | null | "error">,
   saved: [] as Array<{ id: string; name: string; state: string; caller_key: string }>,
@@ -122,9 +124,10 @@ function handler(table: string, ops: Op[]): { rows?: unknown[]; error?: unknown 
   }
   if (table === "members") return { rows: [] }
   if (table === "contacts") {
-    if (has("in", "itin_number")) {
+    if (has("ilike", "itin_number")) {
       const answer = state.otherSeq.length > 0 ? (state.otherSeq.shift() as string | null | "error") : state.other
-      return answer === "error" ? { error: { message: "boom" } } : { rows: answer ? [{ full_name: answer }] : [] }
+      const last4 = String(ops.find((o) => o.m === "ilike")?.a[1] ?? "").replace(/%/g, "")
+      return answer === "error" ? { error: { message: "boom" } } : { rows: answer ? [{ full_name: answer, itin_number: state.otherItin ?? `900-70-${last4}` }] : [] }
     }
     state.contactReads++
     if (state.failContactReadAt && state.contactReads === state.failContactReadAt) return { error: { message: "read failed" } }
@@ -158,7 +161,7 @@ beforeEach(() => {
       { id: "c2", name: "John Example", itin: null, issue: null, dob: "1985-06-09" },
     ] as Person[],
     attachments: [{ url: URL0, name: "scan.pdf", size: 1000, mime_type: "application/pdf" }, { url: URL1, name: "letter", size: 12, mime_type: "application/octet-stream" }],
-    deleted: false, noRowsMessage: false, other: null, otherSeq: [], saved: [], owner: "yes", folder: "ITIN", visible: false, visibleReadFails: false, linksFail: false, failContactReadAt: 0, contactReads: 0,
+    deleted: false, noRowsMessage: false, other: null, otherItin: null, otherSeq: [], saved: [], owner: "yes", folder: "ITIN", visible: false, visibleReadFails: false, linksFail: false, failContactReadAt: 0, contactReads: 0,
   })
   vi.mocked(resolveAccountMembersForChat).mockResolvedValue([
     { memberId: "m1", name: "Jane Sample", contactId: "c1", isCompanyMember: false, isPrimary: true, resolvable: true },
@@ -418,6 +421,19 @@ describe("saveChatAttachmentsToStorage — what is written on the contact", () =
     expect(noteTexts(r).join(" | ")).toMatch(/could not be written/)
   })
 
+  it("the holder check compares DIGITS: another contact who holds the ITIN in an older spelling (999-999999) is still found; a different ITIN with the same last four is not a holder", async () => {
+    state.other = "John Example"
+    state.otherItin = "900-701234"
+    expect(await saveOne({ itin: "900-70-1234" })).toMatchObject({ ok: false, itinHeldBy: "John Example" })
+    state.otherItin = "901-54-1234"
+    expect(await saveOne({ itin: "900-70-1234" })).toMatchObject({ ok: true })
+  })
+
+  it("every saved file is also logged against the PERSON (so it shows on the contact's own activity tab)", async () => {
+    await saveOne({ itin: "900-70-1234" })
+    expect(h.inserts.find((i) => i.table === "action_log")?.row).toMatchObject({ action_type: "chat_attachment_saved_to_storage", contact_id: "c1" })
+  })
+
   it("the question is asked only when the ITIN would really be written: a record that already holds this ITIN saves the file", async () => {
     state.people[0].itin = "900-70-1234"
     state.other = "John Example"
@@ -497,6 +513,7 @@ describe("saveChatAttachmentsToStorage — the client", () => {
     expect(notifyClientsOfNewDocument).toHaveBeenCalledWith("doc-1", { chat: false })
     expect(r.partial).toBe(false)
     expect(noteTexts(r).join(" ")).toMatch(/a notification was created there for Jane Sample \(no chat message\)/)
+    expect(noteTexts(r).join(" ")).toMatch(/A short email summary may follow within a few minutes/)
   })
 
   it("'already notified earlier' is a plain note, not a failure", async () => {
@@ -741,6 +758,16 @@ describe("readChatAttachmentsForCard", () => {
     expect(items[0].candidates).toEqual([])
     expect(items[0].proposedContactId).toBeNull()
     expect(items[0].ownerReason).toMatch(/Gaia Suriano is linked to Jane Sample's contact record, but the names do not match/)
+  })
+
+  it("a person member with no contact of their own is SAID, not silently left out", async () => {
+    vi.mocked(resolveAccountMembersForChat).mockResolvedValueOnce([
+      { memberId: "m1", name: "Jane Sample", contactId: "c1", isCompanyMember: false, isPrimary: true, resolvable: true },
+      { memberId: "m8", name: "Anna Unlinked", contactId: null, isCompanyMember: false, isPrimary: false, resolvable: false },
+    ])
+    const items = await read()
+    expect(items[0].candidates.map((c) => c.contactId)).toEqual(["c1"])
+    expect(items[0].ownerReason).toMatch(/Anna Unlinked has no contact record linked to the member row — not offered/)
   })
 
   it("a RELATIVE who shares the family name (and the e-mail, so the same contact) is not the same person: his letter does not make Jane 'named'", async () => {
