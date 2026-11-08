@@ -62,6 +62,7 @@ let sdRow: SDRow | null = null
 let stagesRows: StageRow[] = []
 let acctRow: Record<string, unknown> | null = null
 let deletedDocs: { id: string }[] | null = []
+let deletedTracking: { id: string }[] | null = null
 
 let capturedSDUpdate: { patch: Record<string, unknown> | null } = { patch: null }
 let capturedDocMatch: Record<string, unknown> | null = null
@@ -73,6 +74,7 @@ function resolveFor(table: string, op: string) {
   if (table === "pipeline_stages") return { data: stagesRows, error: null }
   if (table === "documents") return { data: deletedDocs, error: null }
   if (table === "accounts") return { data: acctRow, error: null }
+  if (table === "irs_shipment_tracking") return { data: deletedTracking, error: null }
   return { data: null, error: null }
 }
 
@@ -124,6 +126,7 @@ beforeEach(() => {
   stagesRows = []
   acctRow = null
   deletedDocs = []
+  deletedTracking = null
   capturedSDUpdate = { patch: null }
   capturedDocMatch = null
   updateAccount.mockResolvedValue({ success: true, outcome: "updated" })
@@ -390,5 +393,39 @@ describe("revertServiceDelivery", () => {
     const res = await revertServiceDelivery({ delivery_id: "sd-1" })
     expect(res.outcome).toBe("error")
     expect(capturedSDUpdate.patch).toBeNull()
+  })
+
+  it("says out loud when the step back deleted the saved IRS tracking number (production test 2026-11-07: it used to vanish with no word)", async () => {
+    sdRow = { id: "sd-1", service_type: "Company Closure", service_name: "Closure", stage: "Waiting for the IRS", status: "active", account_id: "acct-1", contact_id: null, stage_history: [], end_date: null }
+    stagesRows = [{ stage_name: "IRS Closure", stage_order: 4 }, { stage_name: "Waiting for the IRS", stage_order: 5 }]
+    deletedTracking = [{ id: "trk-1" }]
+    const res = await revertServiceDelivery({ delivery_id: "sd-1", actor: "flow-action" })
+    expect(res.success).toBe(true)
+    expect((res.warnings ?? []).join(" ")).toContain("saved IRS tracking number was removed")
+  })
+
+  it("no tracking number to delete -> no such warning", async () => {
+    sdRow = { id: "sd-1", service_type: "Company Closure", service_name: "Closure", stage: "Waiting for the IRS", status: "active", account_id: "acct-1", contact_id: null, stage_history: [], end_date: null }
+    stagesRows = [{ stage_name: "IRS Closure", stage_order: 4 }, { stage_name: "Waiting for the IRS", stage_order: 5 }]
+    deletedTracking = []
+    const res = await revertServiceDelivery({ delivery_id: "sd-1", actor: "flow-action" })
+    expect((res.warnings ?? []).join(" ")).not.toContain("tracking number")
+  })
+
+  it("going back from a finished closure job says the company STAYS Closed (it is not reopened)", async () => {
+    sdRow = { id: "sd-1", service_type: "Company Closure", service_name: "Closure", stage: "Closing", status: "completed", account_id: "acct-1", contact_id: null, stage_history: [], end_date: "2026-11-07" }
+    stagesRows = [{ stage_name: "Waiting for the IRS", stage_order: 5 }, { stage_name: "Closing", stage_order: 6 }]
+    acctRow = { status: "Closed" }
+    const res = await revertServiceDelivery({ delivery_id: "sd-1", actor: "flow-action" })
+    expect(res.success).toBe(true)
+    expect((res.warnings ?? []).join(" ")).toContain("The company stays Closed")
+  })
+
+  it("an OPEN company behind a closure job at Closing gets no such warning", async () => {
+    sdRow = { id: "sd-1", service_type: "Company Closure", service_name: "Closure", stage: "Closing", status: "completed", account_id: "acct-1", contact_id: null, stage_history: [], end_date: "2026-11-07" }
+    stagesRows = [{ stage_name: "Waiting for the IRS", stage_order: 5 }, { stage_name: "Closing", stage_order: 6 }]
+    acctRow = { status: "Active" }
+    const res = await revertServiceDelivery({ delivery_id: "sd-1", actor: "flow-action" })
+    expect((res.warnings ?? []).join(" ")).not.toContain("stays Closed")
   })
 })

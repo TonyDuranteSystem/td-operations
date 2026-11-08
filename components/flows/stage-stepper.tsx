@@ -9,6 +9,9 @@ import {
 } from 'lucide-react'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { FLOW_DOC_UPLOADED_EVENT, type FlowDocUploadedDetail } from './document-upload'
+import { ClosingQuestion } from './closing-question'
+import { STEP_BAR_CLOSE_QUESTION } from '@/lib/closure/closing-step'
+import { FLOW_TRACKING_SAVED_EVENT, type FlowTrackingSavedDetail } from '@/lib/flows/tracking-saved-event'
 
 export interface StepperStage {
   stage_name: string
@@ -40,6 +43,9 @@ interface StageStepperProps {
   currentStage: string | null
   /** SD id — enables clicking a stage to move the SD there. */
   serviceDeliveryId: string
+  /** The name of the step whose forward move CLOSES a company (Company Closure with a company: "Closing"), else null. Moving there asks the
+   *  in-page "this closes the company" question — which company, what goes with it — instead of the bare browser prompt. */
+  closesCompanyAt?: string | null
 }
 
 /**
@@ -54,10 +60,12 @@ interface StageStepperProps {
  * backward → deletes the re-opened stages' documents + undoes the renewal bump)
  * via moveServiceDeliveryToStage. Surfaces the server's real error (R099).
  */
-export function StageStepper({ stages, currentStage, serviceDeliveryId }: StageStepperProps) {
+export function StageStepper({ stages, currentStage, serviceDeliveryId, closesCompanyAt = null }: StageStepperProps) {
   const router = useRouter()
   const [busyStage, setBusyStage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // the step whose "this closes the company" question is open
+  const [askingStage, setAskingStage] = useState<StepperStage | null>(null)
 
   // A refusal ("A document must be uploaded on …") is stale once a document is uploaded for this job or the job has
   // moved — clear it then, instead of leaving the red line on screen until the next click (N1a C2).
@@ -66,11 +74,20 @@ export function StageStepper({ stages, currentStage, serviceDeliveryId }: StageS
       const detail = (e as CustomEvent<FlowDocUploadedDetail>).detail
       if (!detail || detail.serviceDeliveryId === serviceDeliveryId) setError(null)
     }
+    function onTrackingSaved(e: Event) {
+      const detail = (e as CustomEvent<FlowTrackingSavedDetail>).detail
+      if (!detail || detail.serviceDeliveryId === serviceDeliveryId) setError(null)
+    }
     window.addEventListener(FLOW_DOC_UPLOADED_EVENT, onUploaded)
-    return () => window.removeEventListener(FLOW_DOC_UPLOADED_EVENT, onUploaded)
+    window.addEventListener(FLOW_TRACKING_SAVED_EVENT, onTrackingSaved)
+    return () => {
+      window.removeEventListener(FLOW_DOC_UPLOADED_EVENT, onUploaded)
+      window.removeEventListener(FLOW_TRACKING_SAVED_EVENT, onTrackingSaved)
+    }
   }, [serviceDeliveryId])
   useEffect(() => {
     setError(null)
+    setAskingStage(null)
   }, [currentStage])
 
   const sorted = [...stages].sort(
@@ -83,18 +100,33 @@ export function StageStepper({ stages, currentStage, serviceDeliveryId }: StageS
     return <div className="text-xs text-zinc-500">No stages configured for this flow.</div>
   }
 
-  async function moveTo(stage: StepperStage) {
+  function moveTo(stage: StepperStage) {
     if (busyStage || stage.stage_name === currentStage) return
+    // A forward move that CLOSES the company asks the real question in the page (which company, what goes with it); everything else keeps the
+    // simple browser prompt.
+    if (closesCompanyAt && stage.stage_name === closesCompanyAt && stage.stage_order > (sorted[currentIdx]?.stage_order ?? -1)) {
+      setError(null)
+      setAskingStage(stage)
+      return
+    }
     const confirmed = window.confirm(`Move to ${stage.stage_name}?`)
     if (!confirmed) return
+    void doMove(stage)
+  }
 
+  async function doMove(stage: StepperStage, opts?: { skipCompanyClose?: boolean; companyCloseConfirmed?: boolean }) {
+    setAskingStage(null)
     setBusyStage(stage.stage_name)
     setError(null)
     try {
       const res = await fetch(`/api/flows/${serviceDeliveryId}/set-stage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_stage: stage.stage_name }),
+        body: JSON.stringify({
+          target_stage: stage.stage_name,
+          ...(opts?.skipCompanyClose ? { skip_company_close: true } : {}),
+          ...(opts?.companyCloseConfirmed ? { company_close_confirmed: true } : {}),
+        }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
@@ -166,6 +198,15 @@ export function StageStepper({ stages, currentStage, serviceDeliveryId }: StageS
           )
         })}
       </div>
+      {askingStage && (
+        <ClosingQuestion
+          serviceDeliveryId={serviceDeliveryId}
+          question={STEP_BAR_CLOSE_QUESTION}
+          busy={busyStage !== null}
+          onConfirm={(o) => void doMove(askingStage, { skipCompanyClose: o?.skipCompanyClose, companyCloseConfirmed: true })}
+          onCancel={() => setAskingStage(null)}
+        />
+      )}
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
     </div>
   )

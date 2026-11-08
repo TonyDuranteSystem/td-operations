@@ -70,6 +70,14 @@ const LEASE_CARD: ClosureFollowUpCard = {
   category: "Filing",
 }
 
+/** The prefix every follow-up to-do made by `buildClosureFollowUpCards` carries in its title. */
+const FOLLOW_UP_PREFIX = "[CLOSURE] "
+
+/** True for a to-do made as a closure follow-up (Harbor RA, lease…): real work still to do, never to be auto-completed with the job. */
+export function isClosureFollowUpTitle(title: string | null | undefined): boolean {
+  return (title ?? "").startsWith(FOLLOW_UP_PREFIX)
+}
+
 /** The bit of a to-do the decision needs. */
 export interface ClosureStepTask {
   task_title: string | null

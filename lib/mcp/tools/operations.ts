@@ -901,8 +901,9 @@ export function registerOperationsTools(server: McpServer) {
       skip_tasks: z.boolean().optional().default(false).describe("Skip auto-task creation (default: false)"),
       skip_notify: z.boolean().optional().default(false).describe("Suppress client-facing notifications (portal notification, push, email). Use for bulk reconcile/backfill so correcting many SDs does not spam clients (default: false)."),
       notes: z.string().optional().describe("Notes about why this stage was advanced"),
+      confirm_company_close: z.boolean().optional().default(false).describe("Company Closure ONLY: moving a closure job that has a company to its last step ('Closing') CLOSES THE COMPANY (cancels its other services, deadlines and unpaid invoices, turns the portal off). It is refused unless this is true — set it only after the person in charge has seen which company and what goes with it (the workspace finish button shows that; GET /api/flows/<id>/closing-brief reads it). Default false."),
     },
-    async ({ delivery_id, target_stage, skip_tasks, skip_notify, notes }) => {
+    async ({ delivery_id, target_stage, skip_tasks, skip_notify, notes, confirm_company_close }) => {
       try {
         const { advanceServiceDelivery } = await import("@/lib/service-delivery")
         const result = await advanceServiceDelivery({
@@ -911,6 +912,7 @@ export function registerOperationsTools(server: McpServer) {
           skip_tasks,
           skip_notify,
           notes,
+          company_close_confirmed: confirm_company_close,
           actor: "mcp",
         })
 

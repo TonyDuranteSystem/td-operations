@@ -13,6 +13,7 @@ const h = vi.hoisted(() => {
     failOn: new Set<string>(),
     deactivated: [] as string[],
     tierSyncs: [] as string[],
+    logged: [] as Array<Record<string, unknown>>,
   }
   function from(table: string) {
     const q = { op: "select" as "select" | "update" | "insert", patch: {} as Row, rows: [] as Row[], filters: [] as Array<(r: Row) => boolean>, head: false, count: false }
@@ -81,6 +82,20 @@ vi.mock("@/lib/operations/sync-tier", () => ({
   }),
 }))
 
+vi.mock("@/lib/portal/td-invoice", () => ({
+  syncTDInvoiceStatus: vi.fn(async (id: string, status: string) => {
+    if (h.state.failOn.has("mirror:status")) throw new Error("boom mirror:status")
+    h.state.log.push(`mirror.status ${id} ${status}`)
+  }),
+}))
+vi.mock("@/lib/portal/td-invoice-mirror", () => ({
+  syncTDInvoiceMirror: vi.fn(async (id: string) => {
+    h.state.log.push(`mirror.sync ${id}`)
+    return { changed: true }
+  }),
+}))
+vi.mock("@/lib/mcp/action-log", () => ({ logAction: vi.fn((p: Record<string, unknown>) => { h.state.logged.push(p) }) }))
+
 import { applyCompanyClosure, readClosingBrief } from "@/lib/operations/close-company"
 
 const ACC = "acc-1"
@@ -99,9 +114,9 @@ function seed(over: Partial<Record<string, Row[]>> = {}) {
     ],
     deadlines: [{ id: "d1", account_id: ACC, status: "Pending" }, { id: "d2", account_id: ACC, status: "Filed" }, { id: "d3", account_id: "other-acc", status: "Pending" }],
     payments: [
-      { id: "p1", account_id: ACC, status: "Pending", amount: 120, amount_currency: "USD" },
-      { id: "p2", account_id: ACC, status: "Overdue", amount: 80, amount_currency: "EUR" },
-      { id: "p3", account_id: ACC, status: "Paid", amount: 300, amount_currency: "EUR" },
+      { id: "p1", account_id: ACC, status: "Pending", invoice_status: "Draft", invoice_number: "INV-000001", amount: 120, amount_due: 120, amount_paid: 0, amount_currency: "USD", idempotency_key: "k1" },
+      { id: "p2", account_id: ACC, status: "Overdue", invoice_status: "Sent", invoice_number: "INV-000002", amount: 80, amount_due: 80, amount_paid: 0, amount_currency: "EUR", idempotency_key: "k2" },
+      { id: "p3", account_id: ACC, status: "Paid", invoice_status: "Paid", amount: 300, amount_due: 0, amount_paid: 300, amount_currency: "EUR" },
     ],
     tasks: [
       { id: "t-own", account_id: ACC, delivery_id: JOB, status: "To Do", task_title: "Company Closure card" },
@@ -117,6 +132,7 @@ function seed(over: Partial<Record<string, Row[]>> = {}) {
   h.state.failOn = new Set()
   h.state.deactivated = []
   h.state.tierSyncs = []
+  h.state.logged = []
 }
 
 const idx = (needle: string) => h.state.log.findIndex((l) => l.startsWith(needle))
@@ -203,12 +219,63 @@ describe("applyCompanyClosure", () => {
   it("a step that fails is REPORTED, does not stop the others, and the company is still closed", async () => {
     h.state.failOn.add("payments:update")
     const r = await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false })
-    expect(r.problems.join(" ")).toContain("could not cancel the company's unpaid invoices")
+    expect(r.problems.join(" ")).toContain("could not cancel invoice INV-000001")
     expect(r.problems.join(" ")).toContain("boom payments:update")
     expect(tableRow("payments", "p1").status).toBe("Pending") // not silently reported as cancelled
     expect(tableRow("deadlines", "d1").status).toBe("Cancelled")
     expect(tableRow("accounts", ACC).status).toBe("Closed")
     expect(r.lines.join(" | ")).not.toContain("unpaid invoice")
+  })
+
+  it("cancels an unpaid invoice the way Finance's Void does: both status columns, the numbering slot freed, the client's copy rebuilt, the before-state recorded", async () => {
+    const r = await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false })
+    expect(r.problems).toEqual([])
+    for (const id of ["p1", "p2"]) {
+      expect(tableRow("payments", id)).toMatchObject({ status: "Cancelled", invoice_status: "Cancelled", idempotency_key: null })
+      expect(h.state.log).toContain(`mirror.status ${id} Cancelled`)
+      expect(h.state.log).toContain(`mirror.sync ${id}`)
+    }
+    // a paid invoice is not touched, and its client copy is not rebuilt
+    expect(tableRow("payments", "p3")).toMatchObject({ status: "Paid", invoice_status: "Paid" })
+    expect(h.state.log).not.toContain("mirror.sync p3")
+    // "Reactivate" in Finance reads pre_void_state back from the action log
+    const p1 = h.state.logged.find((l) => l.record_id === "p1")
+    expect(p1).toMatchObject({ table_name: "payments", details: { pre_void_state: { status: "Pending", invoice_status: "Draft", amount_due: 120, amount_paid: 0 } } })
+  })
+
+  it("a credit note is not voided like an invoice, even if it carries an open status", async () => {
+    tableRow("payments", "p2").invoice_status = "Credit"
+    await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false })
+    expect(tableRow("payments", "p2")).toMatchObject({ status: "Overdue", invoice_status: "Credit" })
+    expect(h.state.log).not.toContain("mirror.sync p2")
+  })
+
+  it("an invoice whose client copy could not be updated stays cancelled, and says so", async () => {
+    h.state.failOn.add("mirror:status")
+    const r = await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false })
+    expect(tableRow("payments", "p1")).toMatchObject({ status: "Cancelled", invoice_status: "Cancelled" })
+    expect(r.problems.join(" ")).toContain("INV-000001 is cancelled but the client's copy of it could not be updated")
+  })
+
+  it("an unconfirmed bank-feed suggestion no longer points at a cancelled invoice; a confirmed match is left alone", async () => {
+    seed({ td_bank_feeds: [{ id: "f1", matched_payment_id: "p1", status: "suggested", match_confidence: 0.6 }, { id: "f2", matched_payment_id: "p2", status: "matched", match_confidence: 1 }] })
+    await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false })
+    expect(tableRow("td_bank_feeds", "f1")).toMatchObject({ matched_payment_id: null, match_confidence: null })
+    expect(tableRow("td_bank_feeds", "f2")).toMatchObject({ matched_payment_id: "p2", status: "matched" })
+  })
+
+  it("finishing again after a Go Back does NOT tick the open Harbor follow-up Done — it is real work nobody did yet", async () => {
+    seed({
+      tasks: [
+        { id: "t-harbor", account_id: ACC, delivery_id: JOB, status: "To Do", task_title: "[CLOSURE] Remove RA on Harbor Compliance" },
+        { id: "t-own", account_id: ACC, delivery_id: JOB, status: "To Do", task_title: "Company Closure card" },
+      ],
+    })
+    tableRow("accounts", ACC).status = "Closed"
+    const r = await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false })
+    expect(r.alreadyClosed).toBe(true)
+    expect(tableRow("tasks", "t-harbor").status).toBe("To Do")
+    expect(tableRow("tasks", "t-own").status).toBe("Done")
   })
 
   it("when the company itself cannot be set to Closed it says so, creates no follow-ups and recomputes no levels", async () => {
