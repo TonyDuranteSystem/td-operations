@@ -8,7 +8,7 @@
 export interface AppMenuItem { key: string; path: string; label: string }
 
 /** Screens whose own heading is hidden in the app and drawn in the top row instead. Grows as screens are dressed for the app. */
-export const TITLE_IN_ROW: readonly string[] = []
+export const TITLE_IN_ROW: readonly string[] = ['/portal/chat']
 
 function pathOnly(href: string): string {
   const i = href.search(/[?#]/)
