@@ -49,7 +49,8 @@ describe('menu position', () => {
   it('sits in Antonio\'s flat order (2026-11-05): after Chat, Referral and the old Customers page, before Documents', () => {
     // It used to jump to 2nd place under Overview when the hub was on; the menu is now one fixed list.
     expect(side).not.toMatch(/rest\.splice\(at \+ 1, 0, inv\)/)
-    const keys = [...side.slice(side.indexOf('const mainItems: NavItem[] = ['), side.indexOf('\n]\n', side.indexOf('const mainItems'))).matchAll(/key: '(nav\.[A-Za-z]+)'/g)].map(m => m[1])
+    const rules = readFileSync('lib/portal/nav-rules.ts', 'utf8')
+    const keys = [...rules.slice(rules.indexOf('const MAIN_NAV_ITEMS: PortalNavItemDef[] = ['), rules.indexOf('\n]\n', rules.indexOf('const MAIN_NAV_ITEMS'))).matchAll(/key: '(nav\.[A-Za-z]+)'/g)].map(m => m[1])
     expect(keys.indexOf('nav.invoices')).toBeGreaterThan(keys.indexOf('nav.referrals'))
     expect(keys.indexOf('nav.invoices')).toBeLessThan(keys.indexOf('nav.documents'))
   })
