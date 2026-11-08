@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 import {
   CheckCircle2,
   Loader2,
@@ -215,7 +216,12 @@ export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }
       }
       // The action succeeded, but a follow-on step (e.g. unlocking the client's
       // tax form) may need staff attention — show it without blocking.
-      if (typeof data.warning === 'string' && data.warning) setWarning(data.warning)
+      if (typeof data.warning === 'string' && data.warning) {
+        setWarning(data.warning)
+        // The refresh below moves the job to its next step, where this button is gone — and the inline line with it (live test 2026-11-08: a closing
+        // problem flashed and vanished). A toast outlives the refresh; the server also wrote the closing problems on the job.
+        toast.warning(data.warning, { duration: 30000 })
+      }
       router.refresh()
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not perform this action.')

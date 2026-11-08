@@ -23,6 +23,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { advanceServiceDelivery } from '@/lib/service-delivery'
+import { closureProblemWarning } from '@/lib/closure/closing-step'
 import { syncTaxRevisionRequest } from '@/lib/tax/sync-flow-revision'
 import { approveTaxSubmission, approvalNeedsWarning, type ApproveTaxSubmissionResult } from '@/lib/tax/approve-submission'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
@@ -159,10 +160,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     // Company Closure: the job finished, but a step of closing the company failed — say so (it used to report success while the
     // company stayed open). Company Closure Part C, dev job a6bbea09.
-    const closureProblems = (result.auto_triggers ?? []).filter((t: string) => t.startsWith('Closure problem: '))
-    if (closureProblems.length > 0) {
-      warning = `The job finished, but closing the company did not fully work: ${closureProblems.map((t: string) => t.slice('Closure problem: '.length)).join(' · ')}. Check the company before relying on it.`
-    }
+    const closureWarning = closureProblemWarning(result.auto_triggers)
+    if (closureWarning) warning = closureWarning
 
     return NextResponse.json({
       success: true,

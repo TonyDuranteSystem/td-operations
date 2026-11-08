@@ -27,6 +27,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { advanceServiceDelivery } from "@/lib/service-delivery"
 import { revertServiceDelivery } from "@/lib/operations/service-delivery"
+import { closureProblemWarning } from "@/lib/closure/closing-step"
 
 export interface MoveStageParams {
   delivery_id: string
@@ -62,6 +63,11 @@ export interface MoveStageResult {
   documents_deleted?: number
   /** Backward: a +1-year renewal-date bump was undone leaving "Closed". */
   renewal_date_reverted?: boolean
+  /** Backward: what the steps back did besides moving — the deleted IRS tracking number, a company that stays Closed. The step bar shows them
+   *  (it dropped them: a move back over a saved tracking number deleted it without a word — live test 2026-11-08). */
+  warnings?: string[]
+  /** Forward: set when finishing a Company Closure job did not fully close the company (the "Closure problem:" lines), else null. */
+  warning?: string | null
   error?: string
 }
 
@@ -167,6 +173,7 @@ export async function moveServiceDeliveryToStage(
       to_order: adv.to_order,
       completed: adv.is_completed,
       created_tasks: adv.created_tasks,
+      warning: closureProblemWarning(adv.auto_triggers),
     }
   }
 
@@ -174,6 +181,7 @@ export async function moveServiceDeliveryToStage(
   let currentName: string | null = sd.stage
   let documentsDeleted = 0
   let renewalReverted = false
+  const warnings: string[] = []
   const maxSteps = stages.length + 1 // bound: cannot exceed the pipeline length
 
   for (let i = 0; i < maxSteps; i++) {
@@ -193,6 +201,7 @@ export async function moveServiceDeliveryToStage(
     }
     documentsDeleted += r.documents_deleted ?? 0
     if (r.renewal_date_reverted) renewalReverted = true
+    for (const w of r.warnings ?? []) if (!warnings.includes(w)) warnings.push(w)
     currentName = r.to_stage ?? null
   }
 
@@ -219,5 +228,6 @@ export async function moveServiceDeliveryToStage(
     to_order: target.stage_order,
     documents_deleted: documentsDeleted,
     renewal_date_reverted: renewalReverted,
+    ...(warnings.length > 0 ? { warnings } : {}),
   }
 }

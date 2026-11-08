@@ -917,7 +917,8 @@ export function registerOperationsTools(server: McpServer) {
         })
 
         if (!result.success) {
-          return { content: [{ type: "text" as const, text: `⚠️ ${result.error}` }] }
+          const { COMPANY_CLOSE_NOT_CONFIRMED, COMPANY_CLOSE_TOOL_HINT } = await import("@/lib/closure/closing-step")
+          return { content: [{ type: "text" as const, text: `⚠️ ${result.error}${result.error === COMPANY_CLOSE_NOT_CONFIRMED ? COMPANY_CLOSE_TOOL_HINT : ""}` }] }
         }
 
         const statusIcon = result.failed_tasks.length > 0 ? "⚠️" : "✅"

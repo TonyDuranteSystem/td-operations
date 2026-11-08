@@ -376,6 +376,7 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
           currentStage={serviceDelivery.stage}
           serviceDeliveryId={serviceDelivery.id}
           closesCompanyAt={movingClosesCompany({ serviceType: sd.service_type, targetStage: CLOSING_STEP_NAME, hasCompany: !!sd.account_id }) ? CLOSING_STEP_NAME : null}
+          backWarnings={goBackExtras}
         />
       </div>
 

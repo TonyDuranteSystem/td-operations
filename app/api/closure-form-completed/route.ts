@@ -35,7 +35,7 @@ import type { FilingStep } from "@/lib/forms/file-form-package"
 import type { Json } from "@/lib/database.types"
 import { reportSystemError } from "@/lib/system-errors"
 import { decideClosureWhatsNew, shouldReportSwallowedResubmission } from "@/lib/portal/closure-whats-new"
-import { wizardMoveNote, wizardAlreadyMovedJob, decideWizardMove } from "@/lib/closure/wizard-move-guard"
+import { wizardMoveNote, wizardAlreadyMovedJob, decideWizardMove, CHECK_CLEARED_MARKER } from "@/lib/closure/wizard-move-guard"
 
 export async function POST(req: NextRequest) {
   const passStartedAt = new Date()
@@ -559,6 +559,16 @@ export async function POST(req: NextRequest) {
         if (!same || same.length === 0) {
           const { error: noteErr } = await notes.from("service_delivery_notes").insert({ service_delivery_id: deliveryId, body, author_name: "Closure wizard" })
           if (noteErr) throw new Error(noteErr.message)
+        }
+        // The client's answers name the right company now: a CHECK line left by an earlier, wrong submission is stale — supersede it, or the
+        // finish question keeps showing the old red warning (production 2026-11-08).
+        if (!destination?.disagreement) {
+          const { checkNoteFrom } = await import("@/lib/operations/close-company")
+          const { data: checks } = await notes.from("service_delivery_notes").select("body").eq("service_delivery_id", deliveryId).ilike("body", "%CHECK%").order("created_at", { ascending: false }).limit(10)
+          if (checkNoteFrom((checks ?? []) as Array<{ body: string | null }>)) {
+            const { error: clearErr } = await notes.from("service_delivery_notes").insert({ service_delivery_id: deliveryId, body: `Closure wizard: ${CHECK_CLEARED_MARKER} the client now wrote ${llcName}, which matches the company this job is linked to.`, author_name: "Closure wizard" })
+            if (clearErr) throw new Error(clearErr.message)
+          }
         }
         results.push({ step: "staff_note", status: "ok" })
       } catch (e) {

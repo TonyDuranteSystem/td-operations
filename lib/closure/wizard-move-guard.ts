@@ -13,6 +13,13 @@
  * Pure — no database.
  */
 
+/**
+ * Written into the job's staff notes when the client's corrected answers name the right company again: it supersedes an earlier "CHECK:" note,
+ * so the finish question stops showing the old red warning (seen live on production 2026-11-08: the corrected name matched, the warning stayed).
+ * Deliberately has NO colon right after "CHECK" so it is never read as a CHECK line itself.
+ */
+export const CHECK_CLEARED_MARKER = "CHECK cleared:"
+
 /** The note the wizard's move writes into the step history; it names the submission and (when known) the content that caused it. */
 export function wizardMoveNote(token: string, contentHash: string | null | undefined): string {
   return contentHash ? `Closure wizard ${token} received [${contentHash}]` : `Closure wizard ${token} received`
