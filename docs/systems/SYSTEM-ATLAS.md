@@ -128,7 +128,7 @@ Every system listed above now has a deep doc under `docs/systems/`, each written
 
 ## Appendix D — Guardrail rules
 <!-- GENERATED:rules -->
-_Regenerated 2026-11-08 from the R-rule list in CLAUDE.md — **43 rules**, highest is R114._
+_Regenerated 2026-11-08 from the R-rule list in CLAUDE.md — **44 rules**, highest is R115._
 
 - **R005** — td-operations.vercel.app is INTERNAL: NEVER send this domain to clients. {file:lib/config.ts}
 - **R012** — All client-facing URLs MUST use APP_BASE_URL from {file:lib/config.ts} — never hardcode domains; the .husky/pre-push hook blocks hardcoded domains.
@@ -173,6 +173,7 @@ _Regenerated 2026-11-08 from the R-rule list in CLAUDE.md — **43 rules**, high
 - **R112** — DEV-TRACKER BOARD DISCIPLINE (2026-07-11). Every Claude Code session that does dev work (feature/bug/refactor/etc.) MUST be tied to exactly ONE dev job in dev_tasks — the durable, compaction-proof record shown on the /dev-board board (per-c …_(truncated — read the full rule in CLAUDE.md)_
 - **R113** — ASK THE SYSTEM COUNSELOR FIRST, ON EVERY INVESTIGATION (2026-08-02). Before forming a theory about any investigation — bug, "how does X work", audit, or a feature touching an existing flow — consult the system-counselor subagent FIRST, in c …_(truncated — read the full rule in CLAUDE.md)_
 - **R114** — ATTACHING A FILE TO A TD TALK / TEAM-CHAT POST (2026-11-05, PRs #960 + #965, dev job f34c915d). …_(truncated — read the full rule in CLAUDE.md)_
+- **R115** — PRODUCTION BUILD ≠ DEV SERVER (2026-11-08, dev job 7303c42c). Unit tests, next dev and the sandbox (a local dev server) run the source as written; PRODUCTION runs Next 14's minified SWC build on Node 24, and that build can change code. …_(truncated — read the full rule in CLAUDE.md)_
 <!-- /GENERATED:rules -->
 
 ## Appendix E — Subsystem deep docs
