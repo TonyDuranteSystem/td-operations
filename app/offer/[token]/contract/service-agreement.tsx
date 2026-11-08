@@ -7,7 +7,7 @@ import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/
 import { computeOfferTotals } from '@/lib/offers/compute-offer-totals'
 import { buildAnnualMaintenanceWording } from '@/lib/offers/annual-maintenance-wording'
 import type { Offer } from '@/lib/types/offer'
-import { contractVersionLabel } from '@/lib/offers/contract-version'
+import { contractVersionLabel, portalChatVoiceWording, type PortalChatVoiceWording } from '@/lib/offers/contract-version'
 import { contractWordingFor, ContractNotReady } from './standalone-service-agreement'
 import { InlineText, AgreementBody } from '@/components/contracts/agreement-body'
 import { euroBankAddress } from '@/lib/offers/bank-address'
@@ -202,6 +202,8 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
   const services = Array.isArray(offer.services) ? offer.services : []
   const selectedSet = new Set(Array.isArray((offer as any).selected_services) ? (offer as any).selected_services : [])
   const offerContractType = (offer as any).contract_type || 'onboarding'
+  // The two Portal Chat lines of the contract follow the offer's own version stamp: an offer that already existed keeps its old wording (see lib/offers/contract-version.ts).
+  const voiceWording = portalChatVoiceWording((offer as { contract_version?: string | null }).contract_version)
   // WS-A3 site #7: setup fee from THE offer amount engine, multi-contract
   // filtering preserved (this agreement covers only its own contract type).
   // The symbol still comes from this component's own price-string sniffing —
@@ -588,7 +590,7 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
         </table>
 
         {/* LEGAL SECTIONS 1-24 — Same as MSA */}
-        <LegalSections isOnboarding={isOnboarding} />
+        <LegalSections isOnboarding={isOnboarding} wording={voiceWording} />
 
         {/* MSA SIGNATURES */}
         <div className="contract-sig-section">
@@ -684,7 +686,7 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
               <li><strong>Compliance</strong> &mdash; Professional firms are required to track and archive all client communications.</li>
               <li><strong>Organization</strong> &mdash; Documents, messages, signatures, and forms are linked to your profile. No files lost.</li>
               <li><strong>Faster responses</strong> &mdash; The team sees which matter the message relates to.</li>
-              <li><strong>Voice dictation</strong> &mdash; Press the microphone icon, dictate your message. The portal transcribes automatically.</li>
+              <li><strong>{voiceWording.bulletTitle}</strong> &mdash; {voiceWording.bulletBody}</li>
             </ul>
           </div>
 
@@ -907,7 +909,7 @@ function FormRow({ label, required, invalid, children }: { label: string; requir
 // Legal Sections 1-24 — identical to MSA. The isOnboarding flag swaps a few
 // formation-flavored clauses (§1 purpose, §2 scope, §3 client responsibilities)
 // for management-flavored equivalents when the contract covers an existing LLC.
-function LegalSections({ isOnboarding }: { isOnboarding: boolean }) {
+function LegalSections({ isOnboarding, wording }: { isOnboarding: boolean; wording: PortalChatVoiceWording }) {
   return (
     <div id="legal-sections">
       <div className="contract-section"><h3>1. Purpose &amp; Structure</h3>
@@ -930,7 +932,7 @@ function LegalSections({ isOnboarding }: { isOnboarding: boolean }) {
 
       <div className="contract-section"><h3>4. Communication &amp; Business Hours</h3>
         <div className="contract-subsection"><h4>4.1 Business Hours</h4><p>The Consulting Firm operates <strong>Monday through Friday, 8:00 AM to 3:00 PM Eastern Time (ET)</strong>, excluding U.S. federal holidays (&ldquo;Business Hours&rdquo;). Client communications received outside of Business Hours will be addressed on the next business day.</p></div>
-        <div className="contract-subsection"><h4>4.2 Communication Channels</h4><p>Official communications between the Parties shall be conducted via:</p><ul><li><strong>Email:</strong> Primary channel for all business correspondence</li><li><strong>Client Portal Chat:</strong> For operational questions, updates, and day-to-day communication. Available at portal.tonydurante.us with voice dictation support</li></ul><p>The Consulting Firm shall use reasonable efforts to respond within <strong>two (2) business days</strong>.</p></div>
+        <div className="contract-subsection"><h4>4.2 Communication Channels</h4><p>Official communications between the Parties shall be conducted via:</p><ul><li><strong>Email:</strong> Primary channel for all business correspondence</li><li><strong>Client Portal Chat:</strong> For operational questions, updates, and day-to-day communication. Available at portal.tonydurante.us with {wording.clauseSupport}</li></ul><p>The Consulting Firm shall use reasonable efforts to respond within <strong>two (2) business days</strong>.</p></div>
         <div className="contract-subsection"><h4>4.3 Scheduled Calls</h4><p>Scheduled video or phone calls are available <strong>only when strictly necessary</strong>. A fee of <strong>$197.00 per call</strong> may apply for non-essential calls.</p></div></div>
 
       <div className="contract-section"><h3>5. Fees &amp; Payment</h3>
