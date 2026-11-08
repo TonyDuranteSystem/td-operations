@@ -9,6 +9,10 @@ const q = vi.hoisted(() => ({
   jobs: [] as Array<{ id: string; payload: unknown }>,
   inCalls: [] as unknown[][],
   inserted: [] as unknown[],
+  /** a database error to return for the submission read / the waiting-jobs read / the insert */
+  subError: null as string | null,
+  jobsError: null as string | null,
+  insertError: null as string | null,
 }))
 
 vi.mock("@/lib/supabase-admin", () => ({
@@ -19,9 +23,9 @@ vi.mock("@/lib/supabase-admin", () => ({
       chain.eq = () => chain
       chain.neq = () => chain
       chain.in = (...a: unknown[]) => { q.inCalls.push(a); return chain }
-      chain.maybeSingle = () => Promise.resolve({ data: table === "tax_return_submissions" ? q.sub : null, error: null })
-      chain.insert = (row: unknown) => { q.inserted.push(row); return Promise.resolve({ error: null }) }
-      chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ data: q.jobs, error: null }).then(resolve)
+      chain.maybeSingle = () => Promise.resolve(q.subError && table === "tax_return_submissions" ? { data: null, error: { message: q.subError } } : { data: table === "tax_return_submissions" ? q.sub : null, error: null })
+      chain.insert = (row: unknown) => { q.inserted.push(row); return Promise.resolve({ error: q.insertError ? { message: q.insertError } : null }) }
+      chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve(q.jobsError ? { data: null, error: { message: q.jobsError } } : { data: q.jobs, error: null }).then(resolve)
       return chain
     },
   },
@@ -32,6 +36,9 @@ beforeEach(() => {
   q.jobs = []
   q.inCalls.length = 0
   q.inserted.length = 0
+  q.subError = null
+  q.jobsError = null
+  q.insertError = null
 })
 
 describe("enqueueTaxArchiveJob", () => {
@@ -67,6 +74,26 @@ describe("enqueueTaxArchiveJob", () => {
     expect((await enqueueTaxArchiveJob({ submissionId: "ts-1" })).status).toBe("already_archived")
     q.sub = null
     expect((await enqueueTaxArchiveJob({ submissionId: "ts-1" })).status).toBe("no_submission")
+    expect(q.inserted).toHaveLength(0)
+  })
+  // A failed read is not "no such submission", and a failed insert is not "queued": the callers catch a throw, and used to be told "enqueued" for a save that was never queued.
+  it("a failed insert THROWS instead of reporting a queued save", async () => {
+    q.insertError = "connection reset"
+    const { enqueueTaxArchiveJob } = await import("@/lib/tax/archive-enqueue")
+    await expect(enqueueTaxArchiveJob({ submissionId: "ts-1" })).rejects.toThrow(/could not queue the save job: connection reset/)
+  })
+
+  it("a failed read of the submission THROWS (it is not 'no submission')", async () => {
+    q.subError = "timeout"
+    const { enqueueTaxArchiveJob } = await import("@/lib/tax/archive-enqueue")
+    await expect(enqueueTaxArchiveJob({ submissionId: "ts-1" })).rejects.toThrow(/submission read failed: timeout/)
+    expect(q.inserted).toHaveLength(0)
+  })
+
+  it("a failed read of the waiting jobs THROWS and queues nothing (it could be hiding a job that is already waiting)", async () => {
+    q.jobsError = "timeout"
+    const { enqueueTaxArchiveJob } = await import("@/lib/tax/archive-enqueue")
+    await expect(enqueueTaxArchiveJob({ submissionId: "ts-1" })).rejects.toThrow(/job list read failed: timeout/)
     expect(q.inserted).toHaveLength(0)
   })
 })

@@ -11,7 +11,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { mergeArchiveMeta } from "@/lib/archive/meta-merge"
-import { answersFingerprint } from "@/lib/tax/answers-fingerprint"
+import { answersFingerprint, sameSubmittedAnswers } from "@/lib/tax/answers-fingerprint"
 import { readSaveMeta } from "@/lib/tax/save-state"
 
 export interface SubmitStamp {
@@ -55,4 +55,17 @@ export async function pinnedSubmitStamp(submissionId: string, row?: StampRow, no
   const { data: again } = await supabaseAdmin.from("tax_return_submissions").select("drive_archive_meta").eq("id", submissionId).maybeSingle()
   const stored = readSaveMeta((again as { drive_archive_meta?: unknown } | null)?.drive_archive_meta).stamp
   return stored && stored.fp === fp ? stored : picked.stamp
+}
+
+/**
+ * A background job started from one submit carries its OWN copy of the answers. If the client has resubmitted since, the record holds
+ * newer answers and that copy is out of date: filing it would print the old answers under the new answers' pinned time (and the
+ * resubmit's own job files the new ones anyway). True only when the record was read and differs; an unreadable record is NOT "stale"
+ * (the caller then does what it always did).
+ */
+export async function payloadIsStale(submissionId: string, payloadData: unknown, payloadUploadPaths: unknown): Promise<boolean> {
+  const { data, error } = await supabaseAdmin.from("tax_return_submissions").select("submitted_data, upload_paths").eq("id", submissionId).maybeSingle()
+  if (error || !data) return false
+  const row = data as unknown as { submitted_data: unknown; upload_paths: unknown }
+  return !sameSubmittedAnswers(payloadData, payloadUploadPaths, row.submitted_data, row.upload_paths)
 }

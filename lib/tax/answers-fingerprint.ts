@@ -9,6 +9,7 @@
  */
 
 import { createHash } from "node:crypto"
+import { isWizardUploadPath } from "@/lib/portal/wizard-uploads"
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical)
@@ -24,4 +25,15 @@ export function answersFingerprint(submittedData: unknown, uploadPaths: unknown)
   const paths = Array.isArray(uploadPaths) ? uploadPaths.filter((p): p is string => typeof p === "string").slice().sort() : []
   const body = JSON.stringify({ d: canonical(submittedData ?? {}), u: paths })
   return createHash("sha1").update(body).digest("hex")
+}
+
+/**
+ * Do two copies of a WIZARD submission hold the same answers and the same wizard files? Used by a background job that carries its own
+ * copy of the answers (the setup job's payload) to ask "is this still what the record says?". Files that did not come from the wizard
+ * (the legacy external form's) are left out of the comparison: the record carries them forward on a resubmit but the payload never
+ * lists them, so counting them would call a current payload stale.
+ */
+export function sameSubmittedAnswers(aData: unknown, aPaths: unknown, bData: unknown, bPaths: unknown): boolean {
+  const wizardOnly = (p: unknown) => (Array.isArray(p) ? p.filter((x): x is string => typeof x === "string" && isWizardUploadPath(x)) : [])
+  return answersFingerprint(aData, wizardOnly(aPaths)) === answersFingerprint(bData, wizardOnly(bPaths))
 }
