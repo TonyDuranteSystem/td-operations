@@ -4362,7 +4362,7 @@ export default function PortalChatsPage() {
                                 )
                               })}
                               {/* a client's attachments can be filed in Storage from here: the card reads them, proposes whose they are and where, and saves only what staff confirm (dev job fb49265a) */}
-                              {msg.sender_type === 'client' && (
+                              {msg.sender_type === 'client' && atts.some((a) => !isVoiceAttachment(a)) && (
                                 <button
                                   type="button"
                                   onClick={() => setSaveCardMessageId(msg.id)}

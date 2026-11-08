@@ -191,7 +191,7 @@ function ItemSection({ item, form, setForm, locked, saving, result, resultFor }:
                   <span>{c.label}</span>
                 </label>
               ))}
-              <p className="text-[11px] text-zinc-500">A chat message is never sent for a personal paper — the company chat is read by every member. A notification goes to that person only.</p>
+              <p className="text-[11px] text-zinc-500">A chat message is never sent for a personal paper — the company chat is read by every member. A notification goes to that person only (and they may also get a short email a few minutes later). An ITIN and date written on the record show in the client&apos;s Profile page whatever you choose here.</p>
             </fieldset>
 
             {blockers.length > 0 && !locked && (

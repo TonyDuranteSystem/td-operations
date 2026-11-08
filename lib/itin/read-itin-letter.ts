@@ -43,7 +43,6 @@ export interface ItinLetterReading {
 }
 
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
-const MONTH_RE = "(January|February|March|April|May|June|July|August|September|October|November|December)"
 /** the first notices were issued with the program in 1996; an earlier date is a date of birth or a misread */
 const EARLIEST_NOTICE = "1996-01-01"
 
@@ -148,7 +147,10 @@ function labelBefore(text: string, index: number): "notice" | "birth" | null {
 }
 
 function findDates(text: string): DateHit[] {
-  const re = new RegExp(`\\b${MONTH_RE}\\s*(\\d{1,2})\\s*([,.]?)\\s*(\\d{4})\\b`, "gi")
+  // A regex LITERAL, made fresh on every call (the `g` flag keeps a position). Do NOT build this from a template string with the month list
+  // interpolated: Next's production minifier folds such a string and turns the word boundary `\\b` into a backspace character, so on PRODUCTION no
+  // date at all was found while every test and the dev server read it fine (2026-11-08). tests/unit/read-itin-letter-production-build.test.ts guards this.
+  const re = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s*(\d{1,2})\s*([,.]?)\s*(\d{4})\b/gi
   const hits: DateHit[] = []
   let m: RegExpExecArray | null
   while ((m = re.exec(text)) !== null) {
