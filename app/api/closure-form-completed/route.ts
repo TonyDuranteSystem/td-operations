@@ -9,7 +9,9 @@
  *    job's own company link (lib/forms/closure-destination.ts): a company of ours -> that company's storage; another company -> the
  *    person's storage, folder "Company closure_<name>" (Company Closure Part B, Antonio 2026-11-06).
  * 3. Ensure Service Delivery exists
- * 3b. Move the job from "Data Collection" to "State Compliance Check" by itself (only from Data Collection — never re-advances)
+ * 3b. Move the job from "Data Collection" to "State Compliance Check" by itself (only from Data Collection — never re-advances; not when the
+ *     wizard created the job, not when the client wrote another company than the job's, not twice for the same submission content —
+ *     lib/closure/wizard-move-guard.ts)
  * 4. (no email to support any more — the What's New note is the only notification, Antonio 2026-11-05)
  * 5. Create task for Luca on a genuine RESUBMISSION only
  * 5b. What's New note for staff
@@ -33,6 +35,7 @@ import type { FilingStep } from "@/lib/forms/file-form-package"
 import type { Json } from "@/lib/database.types"
 import { reportSystemError } from "@/lib/system-errors"
 import { decideClosureWhatsNew, shouldReportSwallowedResubmission } from "@/lib/portal/closure-whats-new"
+import { wizardMoveNote, wizardAlreadyMovedJob, decideWizardMove, CHECK_CLEARED_MARKER } from "@/lib/closure/wizard-move-guard"
 
 export async function POST(req: NextRequest) {
   const passStartedAt = new Date()
@@ -307,9 +310,24 @@ export async function POST(req: NextRequest) {
     // the Calendar IS the to-do. The client is told nothing about the move (Antonio 2026-11-06: no step notice).
     // NOT for a job THIS wizard created (E2E QA 2026-11-06: a stale link to a cancelled closure created a brand-new job that jumped to the
     // next step although nobody had paid for it): that job stays on Data Collection with the What's New note, for staff to check first.
+    // Also NOT when the company the client wrote is not the one the job is linked to (E2E QA 2026-11-07: a corrected form for one company sent
+    // through the person's OTHER open closure moved THAT job forward), and NOT a second time for the same submission content (a retry after
+    // staff pressed Go Back undid it one second later). lib/closure/wizard-move-guard.ts.
     if (deliveryId) {
-      if (sdWasNewlyCreated || sdCreatedFromThisSubmission) {
-        results.push({ step: "sd_advance", status: "skipped", detail: "This job was created by the wizard itself — left on Data Collection so staff check it first" })
+      const moveNote = wizardMoveNote(token, dedupeKey)
+      let alreadyMoved = false
+      if (!(sdWasNewlyCreated || sdCreatedFromThisSubmission)) {
+        const { data: hist, error: histErr } = await supabaseAdmin.from("service_deliveries").select("stage_history").eq("id", deliveryId).maybeSingle()
+        // unreadable → treat as "already moved": a missed move is visible to staff and cheap, an undone Go Back is not
+        alreadyMoved = histErr ? true : wizardAlreadyMovedJob((hist as { stage_history?: unknown } | null)?.stage_history, moveNote)
+      }
+      const decision = decideWizardMove({
+        createdByWizard: sdWasNewlyCreated || sdCreatedFromThisSubmission,
+        companyDisagreement: destination?.disagreement ?? null,
+        alreadyMovedForThisContent: alreadyMoved,
+      })
+      if (!decision.move) {
+        results.push({ step: "sd_advance", status: "skipped", detail: decision.reason ?? undefined })
       } else {
         try {
           const adv = await advanceStageIfAt({
@@ -317,7 +335,7 @@ export async function POST(req: NextRequest) {
             if_current_stage: "Data Collection",
             target_stage: "State Compliance Check",
             actor: "closure-form-completed",
-            notes: `Closure wizard ${token} received`,
+            notes: moveNote,
             skip_tasks: true,
             skip_notify: true,
           })
@@ -541,6 +559,20 @@ export async function POST(req: NextRequest) {
         if (!same || same.length === 0) {
           const { error: noteErr } = await notes.from("service_delivery_notes").insert({ service_delivery_id: deliveryId, body, author_name: "Closure wizard" })
           if (noteErr) throw new Error(noteErr.message)
+        }
+        // The client's answers name the right company now: a CHECK line left by an earlier, wrong submission is stale — supersede it, or the
+        // finish question keeps showing the old red warning (production 2026-11-08). Its own try: a failure here must not turn the note above into "skipped".
+        if (!destination?.disagreement) {
+          try {
+            const { checkNoteFrom } = await import("@/lib/operations/close-company")
+            const { data: checks } = await notes.from("service_delivery_notes").select("body").eq("service_delivery_id", deliveryId).ilike("body", "%CHECK%").order("created_at", { ascending: false }).limit(10)
+            if (checkNoteFrom((checks ?? []) as Array<{ body: string | null }>)) {
+              const { error: clearErr } = await notes.from("service_delivery_notes").insert({ service_delivery_id: deliveryId, body: `Closure wizard: ${CHECK_CLEARED_MARKER} the client now wrote ${llcName}, which matches the company this job is linked to.`, author_name: "Closure wizard" })
+              if (clearErr) throw new Error(clearErr.message)
+            }
+          } catch (e) {
+            results.push({ step: "check_cleared", status: "skipped", detail: e instanceof Error ? e.message : String(e) })
+          }
         }
         results.push({ step: "staff_note", status: "ok" })
       } catch (e) {

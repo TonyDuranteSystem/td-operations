@@ -20,7 +20,7 @@ const h = vi.hoisted(() => ({
 vi.mock("@/lib/supabase-admin", () => {
   const builder = (table: string): unknown => {
     const b: Record<string, unknown> = {}
-    for (const m of ["select", "eq", "neq", "is", "or", "not", "limit", "order", "in", "delete"]) b[m] = () => b
+    for (const m of ["select", "eq", "neq", "is", "or", "not", "limit", "order", "in", "delete", "ilike"]) b[m] = () => b
     b.insert = (row: unknown) => { h.inserts.push({ table, row }); return b }
     b.update = (row: unknown) => { h.updates.push({ table, row }); return b }
     b.single = async () => ({ data: h.single[table] ?? null, error: null })
@@ -273,6 +273,19 @@ describe("closure-form-completed — Part B", () => {
     expect(stepOf(r.results, "staff_note")).toMatchObject({ status: "skipped", detail: expect.stringContaining("notes table unavailable") })
     expect(stepOf(r.results, "whats_new")).toBeDefined()
     expect(stepOf(r.results, "sd_advance")).toMatchObject({ status: "ok" })
+  })
+
+  it("a CORRECTED submission (the answers match now) writes a 'CHECK cleared' note when an earlier CHECK line is still the newest — the finish question stops showing the old warning", async () => {
+    h.list.service_delivery_notes = [{ id: "n-1", body: "Closure wizard: package filed. CHECK: linked to A, client wrote B." }]
+    await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
+    const cleared = h.inserts.find((i) => i.table === "service_delivery_notes" && String((i.row as { body: string }).body).includes("CHECK cleared:"))
+    expect(cleared).toBeDefined()
+    expect((cleared!.row as { author_name: string }).author_name).toBe("Closure wizard")
+  })
+
+  it("no 'CHECK cleared' note when no CHECK line was ever raised", async () => {
+    await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
+    expect(h.inserts.some((i) => i.table === "service_delivery_notes" && String((i.row as { body: string }).body).includes("CHECK cleared:"))).toBe(false)
   })
 
   it("the happy path writes one staff note (author 'Closure wizard') and reports it ok", async () => {

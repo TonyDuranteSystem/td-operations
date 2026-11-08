@@ -148,6 +148,8 @@ export interface SaveForContactInput {
   folderKind?: "personal" | "itin"
   /** a changed copy of a locked (signed) file is saved as a replacement file instead of being refused — see replacement.ts */
   replaceIfLocked?: boolean
+  /** false = the caller key already identifies these exact bytes: a file that exists under it is left as it is (never given a new version). Default true. */
+  contentChanged?: boolean
   row?: Partial<Omit<DocumentsRow, "file_name" | "mime_type" | "file_size" | "portal_visible" | "account_id" | "contact_id">>
 }
 
@@ -189,6 +191,7 @@ export async function saveDocumentForContact(input: SaveForContactInput, deps?: 
     documentType: typeFor(input.documentType, input.portalVisible), callerKey: input.callerKey, published: input.portalVisible ?? false, actor: input.actor ?? null,
     skipAnalysis: true, // a person's own documents are never queued for the AI file reader
     ...(input.replaceIfLocked ? { replaceIfLocked: true } : {}),
+    ...(input.contentChanged === false ? { contentChanged: false } : {}),
   })
   let w
   try {
@@ -200,7 +203,8 @@ export async function saveDocumentForContact(input: SaveForContactInput, deps?: 
   }
   const listed = await d.upsertRow(w.fileId, {
     ...(input.row ?? {}),
-    file_name: input.name, mime_type: input.mimeType, file_size: input.bytes.length,
+    // the name the store really gave the file: on a name clash it adds " (2)", and the CRM list, the portal and the client's notice must say the same
+    file_name: w.name || input.name, mime_type: input.mimeType, file_size: input.bytes.length,
     account_id: input.accountId ?? null, contact_id: input.contactId,
     portal_visible: input.portalVisible ?? false,
   }, w.status)

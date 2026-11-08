@@ -32,6 +32,7 @@ import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { stageCompletesService } from "@/lib/services/done-step"
 import { stageNotificationText } from "@/lib/services/step-settings"
 import { WRAP_UP_STAGE_NAME } from "@/lib/services/closure-cascade"
+import { movingClosesCompany, COMPANY_CLOSE_NOT_CONFIRMED } from "@/lib/closure/closing-step"
 import { logAction } from "@/lib/mcp/action-log"
 import { filedName, filedLegalName, type NameCheck } from "@/lib/flows/name-checks"
 import { CHANGE_NAME_STAGES } from "@/lib/flows/change-name-stages"
@@ -57,6 +58,11 @@ export interface AdvanceStageParams {
    * client wrote a different company in the wizard than the one the job is linked to and staff chose not to close the linked one.
    */
   skip_company_close?: boolean
+  /**
+   * Company Closure only: the "this closes the company" question (which company, what goes with it) was shown and answered yes.
+   * Without it — or `skip_company_close` — a move to the last step is REFUSED, so no door (step bar, tool, card) closes a company unasked.
+   */
+  company_close_confirmed?: boolean
   notes?: string
   actor?: string // "crm-tracker" | "mcp" | etc.
   /**
@@ -186,7 +192,7 @@ export async function clientStageLabelFor(
 export async function advanceServiceDelivery(
   params: AdvanceStageParams,
 ): Promise<AdvanceStageResult> {
-  const { delivery_id, target_stage, skip_tasks = false, skip_notify = false, skip_company_close = false, notes, actor = "system" } = params
+  const { delivery_id, target_stage, skip_tasks = false, skip_notify = false, skip_company_close = false, company_close_confirmed = false, notes, actor = "system" } = params
 
   // 1. Get current delivery
   const { data: delivery, error: dErr } = await supabaseAdmin
@@ -594,6 +600,28 @@ export async function advanceServiceDelivery(
           }
         }
       }
+    }
+  }
+
+  // 4h. Closing the company is asked first (production end-to-end test 2026-11-07, dev job eaa4747e): a move to the last step of a Company
+  // Closure job that has a company closes that company, so every caller must say the question was answered (or that the company is
+  // left open). The step bar, the MCP tool and the to-do card used to close it with no question at all. lib/closure/closing-step.ts.
+  if (
+    movingClosesCompany({ serviceType: delivery.service_type, targetStage: targetStage.stage_name, hasCompany: !!delivery.account_id }) &&
+    !skip_company_close &&
+    !company_close_confirmed
+  ) {
+    return {
+      success: false,
+      error: COMPANY_CLOSE_NOT_CONFIRMED,
+      from_stage: delivery.stage || "New",
+      to_stage: targetStage.stage_name,
+      to_order: targetStage.stage_order,
+      total_stages: stages.length,
+      is_completed: false,
+      created_tasks: [],
+      failed_tasks: [],
+      auto_triggers: [],
     }
   }
 
@@ -1461,6 +1489,16 @@ export async function advanceServiceDelivery(
       })
       autoTriggers.push(...closure.lines)
       for (const problem of closure.problems) autoTriggers.push(`Closure problem: ${problem}`)
+      // The warning on screen goes away with the next refresh (the finish button unmounts, the step bar never showed it) and the action log
+      // keeps no problems — so write them on the job too, where staff look (bug-hunt 2026-11-08, dev job eaa4747e). Never fails the move.
+      if (closure.problems.length > 0) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_notes is not in the generated types yet (lib/job-notes/read.ts)
+          await (supabaseAdmin as any).from("service_delivery_notes").insert({ service_delivery_id: delivery_id, body: `CLOSURE PROBLEM: closing the company did not fully work — ${closure.problems.join(" · ")}`, author_name: "Closing step" })
+        } catch {
+          /* a note must never fail the move */
+        }
+      }
     }
   }
 

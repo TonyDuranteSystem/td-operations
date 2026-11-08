@@ -38,6 +38,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const result = await moveServiceDeliveryToStage({
       delivery_id: params.id,
       target_stage: targetStage,
+      // Company Closure: the step bar asks "this closes the company" in the page first and sends one of these (lib/closure/closing-step.ts)
+      skip_company_close: body.skip_company_close === true,
+      company_close_confirmed: body.company_close_confirmed === true,
       actor: 'flow-stepper',
       notes: `Moved to "${targetStage}" via flow Workspace stepper`,
     })
@@ -64,6 +67,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       completed: result.completed ?? false,
       documents_deleted: result.documents_deleted ?? 0,
       renewal_date_reverted: result.renewal_date_reverted ?? false,
+      // what a move back did besides moving (deleted tracking number, company stays Closed) and, going forward, a closing that did not fully work
+      warnings: result.warnings ?? [],
+      warning: result.warning ?? null,
     })
   } catch (e) {
     return NextResponse.json(

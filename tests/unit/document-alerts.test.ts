@@ -163,6 +163,85 @@ describe('notifyClientsOfNewDocument', () => {
   })
 })
 
+describe('notifyClientsOfNewDocument — an honest result (bug hunt 2026-11-07)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(getAppSetting).mockResolvedValue(true)
+  })
+  const personalDoc = { id: 'd', file_name: 'ITIN.pdf', account_id: 'acct-1', contact_id: 'c-1', category: 2, portal_visible: true, notify_client: true, client_notified_at: null }
+
+  it('a notification that could NOT be created is not "notified": the mark is given back so a retry can really send it', async () => {
+    const docs = chain({ single: personalDoc, updated: { id: 'd' } })
+    mockTables({ documents: docs, contacts: chain({ single: { language: 'en' } }) })
+    vi.mocked(createPortalNotification).mockResolvedValueOnce({ error: 'insert failed' })
+    const r = await notifyClientsOfNewDocument('d', { chat: false })
+    expect(r).toEqual({ notified: false, reason: 'send_failed' })
+    // the claim (client_notified_at = a time) was followed by a release (client_notified_at = null)
+    const updates = (docs.update as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as { client_notified_at: string | null })
+    expect(updates).toHaveLength(2)
+    expect(typeof updates[0].client_notified_at).toBe('string')
+    expect(updates[1].client_notified_at).toBeNull()
+  })
+
+  it('a notification that WAS created is still "notified" (a result without an error, or no result at all, is a success)', async () => {
+    mockTables({ documents: chain({ single: personalDoc, updated: { id: 'd' } }), contacts: chain({ single: { language: 'en' } }) })
+    vi.mocked(createPortalNotification).mockResolvedValueOnce({ error: null })
+    expect(await notifyClientsOfNewDocument('d', { chat: false })).toEqual({ notified: true })
+    mockTables({ documents: chain({ single: personalDoc, updated: { id: 'd' } }), contacts: chain({ single: { language: 'en' } }) })
+    expect(await notifyClientsOfNewDocument('d', { chat: false })).toEqual({ notified: true })
+  })
+
+  it('a claim that FAILS (a database error) is "claim_failed", not a race — and nothing is sent', async () => {
+    const docs = chain({ single: personalDoc })
+    ;(docs.single as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => Promise.resolve({ data: personalDoc, error: null })) // the select
+      .mockImplementationOnce(() => Promise.resolve({ data: null, error: { code: '57014', message: 'timeout' } })) // the claim update
+    mockTables({ documents: docs })
+    const r = await notifyClientsOfNewDocument('d', { chat: false })
+    expect(r).toEqual({ notified: false, reason: 'claim_failed' })
+    expect(createPortalNotification).not.toHaveBeenCalled()
+  })
+
+  it('a notice that THROWS is handled like one that fails: the mark is given back, nothing escapes', async () => {
+    const docs = chain({ single: personalDoc, updated: { id: 'd' } })
+    mockTables({ documents: docs, contacts: chain({ single: { language: 'en' } }) })
+    vi.mocked(createPortalNotification).mockRejectedValueOnce(new Error('push exploded'))
+    expect(await notifyClientsOfNewDocument('d', { chat: false })).toEqual({ notified: false, reason: 'send_failed' })
+    const updates = (docs.update as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as { client_notified_at: string | null })
+    expect(updates[updates.length - 1].client_notified_at).toBeNull()
+  })
+
+  it('if the mark cannot be given back either, the answer says so ("send_failed_stuck") — a retry would be told "already notified"', async () => {
+    const docs = chain({ single: personalDoc, updated: { id: 'd' } })
+    // the second update (the release) resolves with a database error
+    let updateCalls = 0
+    ;(docs.update as ReturnType<typeof vi.fn>).mockImplementation(() => { updateCalls++; return docs })
+    docs.then = (resolve: (v: { data: unknown[]; error: { message: string } | null }) => unknown) => resolve({ data: [], error: updateCalls >= 2 ? { message: 'release failed' } : null })
+    mockTables({ documents: docs, contacts: chain({ single: { language: 'en' } }) })
+    vi.mocked(createPortalNotification).mockResolvedValueOnce({ error: 'insert failed' })
+    expect(await notifyClientsOfNewDocument('d', { chat: false })).toEqual({ notified: false, reason: 'send_failed_stuck' })
+  })
+
+  it('claim and release are both scoped to THIS document (.eq id) — a release never clears another document', async () => {
+    const docs = chain({ single: personalDoc, updated: { id: 'd' } })
+    mockTables({ documents: docs, contacts: chain({ single: { language: 'en' } }) })
+    vi.mocked(createPortalNotification).mockResolvedValueOnce({ error: 'insert failed' })
+    await notifyClientsOfNewDocument('d', { chat: false })
+    const idScopes = (docs.eq as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === 'id' && c[1] === 'd')
+    expect(idScopes.length).toBeGreaterThanOrEqual(3) // the read, the claim and the release
+  })
+
+  it('losing the claim to another request (no row, PGRST116) is still "race_lost"', async () => {
+    const docs = chain({ single: personalDoc })
+    ;(docs.single as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => Promise.resolve({ data: personalDoc, error: null }))
+      .mockImplementationOnce(() => Promise.resolve({ data: null, error: { code: 'PGRST116', message: 'no rows' } }))
+    mockTables({ documents: docs })
+    expect(await notifyClientsOfNewDocument('d', { chat: false })).toEqual({ notified: false, reason: 'race_lost' })
+    expect(createPortalNotification).not.toHaveBeenCalled()
+  })
+})
+
 describe('getNewDocumentIds', () => {
   beforeEach(() => vi.clearAllMocks())
 

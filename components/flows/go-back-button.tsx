@@ -4,11 +4,14 @@ import { toast } from 'sonner'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, Loader2 } from 'lucide-react'
+import { useGoBackWarnings } from './use-go-back-warnings'
 
 interface GoBackButtonProps {
   serviceDeliveryId: string
   /** Label of the stage we'd return to, for the button copy (optional). */
   previousStageLabel?: string | null
+  /** Things this particular Go Back also does or does not do, added to the question (e.g. "also deletes the saved IRS tracking number"). */
+  extraWarnings?: string[]
 }
 
 /**
@@ -21,15 +24,17 @@ interface GoBackButtonProps {
  * so it never competes with the primary stage action. Surfaces the server's
  * real error (R099) rather than a generic message.
  */
-export function GoBackButton({ serviceDeliveryId, previousStageLabel }: GoBackButtonProps) {
+export function GoBackButton({ serviceDeliveryId, previousStageLabel, extraWarnings }: GoBackButtonProps) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // the page's lines + the tracking-number line when a number was saved after the page loaded (no reload needed)
+  const warnings = useGoBackWarnings(serviceDeliveryId, extraWarnings)
 
   async function handleGoBack() {
     if (busy) return
     const confirmed = window.confirm(
-      'Are you sure? This will delete any documents uploaded at this stage and go back to the previous step.',
+      ['Are you sure? This will delete any documents uploaded at this stage and go back to the previous step.', ...warnings].join('\n\n'),
     )
     if (!confirmed) return
 
@@ -49,6 +54,9 @@ export function GoBackButton({ serviceDeliveryId, previousStageLabel }: GoBackBu
       router.refresh()
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not go back.')
+    } finally {
+      // The button stays mounted when the step before still has a step before it: without this it kept saying "Going back…" and stayed
+      // disabled after the move had worked (production end-to-end test 2026-11-07).
       setBusy(false)
     }
   }

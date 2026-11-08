@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Truck, Loader2, CheckCircle2, AlertCircle, AlertTriangle, RefreshCw } from 'lucide-react'
 import { COURIERS, courierTrackingUrl } from '@/lib/flows/courier'
+import { FLOW_TRACKING_SAVED_EVENT, type FlowTrackingSavedDetail } from '@/lib/flows/tracking-saved-event'
 
 // TD's business timezone (Largo, FL — Eastern), matching lib/portal/office-hours.ts's
 // OFFICE_TZ. delivered_at now carries the carrier's real timestamp (2026-09-16 fix) — a
@@ -85,6 +86,7 @@ export function IrsTrackingEntry({ serviceDeliveryId, helpText }: IrsTrackingEnt
       }
       setSaved(data.tracking)
       setEditing(false)
+      window.dispatchEvent(new CustomEvent<FlowTrackingSavedDetail>(FLOW_TRACKING_SAVED_EVENT, { detail: { serviceDeliveryId } }))
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not save the tracking number.')
     } finally {

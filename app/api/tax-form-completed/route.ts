@@ -6,7 +6,7 @@
  *
  * 1. Update contact (only changed fields)
  * 2. Check passport for one-time customers
- * 3. Send detailed email to team (support@)
+ * 3. (removed 2026-11-08) email to the team — staff see the What's New note
  * 4. Update tax_returns status -> Data Received
  * 5. Advance SD -> Data Received
  * 6. Save complete data PDF + uploads to Drive (3. Tax/{year}/)
@@ -29,8 +29,6 @@ import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { advanceStageIfAt } from "@/lib/operations/service-delivery"
 import { dispatchWorkflowForFormCompletion } from "@/lib/tasks/dispatch-workflow-for-event"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
-import { APP_BASE_URL } from "@/lib/config"
-import { emitActionNeeded } from "@/lib/notifications/act-event"
 import { emitClientChatEvent } from "@/lib/portal/chat-events"
 import { buildReviewHistoryEntry, type ReviewStatus } from "@/lib/tax/review-status"
 import { resolveLocale, WIZARD_SUBMITTED_MESSAGE } from "@/lib/jobs/wizard-failure-notify"
@@ -174,61 +172,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ─── 1. DETAILED EMAIL TO TEAM ───
-    try {
-      const { gmailPost } = await import("@/lib/gmail")
-
-      const { data: fullSubEmail } = await supabaseAdmin
-        .from("tax_return_submissions")
-        .select("submitted_data, upload_paths")
-        .eq("id", submission_id)
-        .single()
-
-      const sd = (fullSubEmail?.submitted_data || {}) as Record<string, unknown>
-      const uploads = (fullSubEmail?.upload_paths || []) as string[]
-
-      const emailBody = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">
-<h2>[TASK] Tax Form Completed - ${companyName} (${sub.tax_year})</h2>
-<p>Client <strong>${companyName}</strong> has submitted the tax data collection form for ${sub.tax_year}.</p>
-
-<table style="border-collapse:collapse;width:100%">
-<tr><td style="padding:4px 8px;font-weight:bold">Entity type:</td><td style="padding:4px 8px">${sub.entity_type}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Revenue reported:</td><td style="padding:4px 8px">${sd.total_revenue || sd.gross_revenue || "N/A"}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Expenses reported:</td><td style="padding:4px 8px">${sd.total_expenses || "N/A"}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Bank accounts used:</td><td style="padding:4px 8px">${sd.bank_accounts_used || sd.banks_used || "N/A"}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Documents uploaded:</td><td style="padding:4px 8px">${uploads.length} files</td></tr>
-</table>
-
-<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
-
-<h3>Next Steps (per Tax Return SOP v4.0)</h3>
-<ol>
-<li>Review data: <code>tax_form_review(token="${sub.token}")</code></li>
-<li>If complete, apply changes: <code>tax_form_review(token="${sub.token}", apply_changes=true)</code></li>
-${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>⚠ Statements are NOT auto-ingested on this (external form) path — ingest deliberately: <code>bank_statement_process(account_id="${sub.account_id}", tax_year=${sub.tax_year})</code>, then review: <code>bank_statement_review(account_id="${sub.account_id}")</code></li>
-<li>Generate P&L: <code>bank_statement_pnl(account_id="${sub.account_id}", tax_year=${sub.tax_year})</code></li>` : ""}
-<li>Check if 2nd installment is paid (Stage 6 gate) — the return stays gated until it is</li>
-</ol>
-
-<p style="font-size:12px;color:#6b7280">Token: ${sub.token} | Admin: ${APP_BASE_URL}/tax-form/${sub.token}?preview=td</p>
-</div>`
-
-      const taxSubject = `[TASK] Tax Form Completed - ${companyName} (${sub.tax_year})`
-      const encodedSubject = `=?utf-8?B?${Buffer.from(taxSubject).toString("base64")}?=`
-      const raw = Buffer.from(
-        `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
-        `To: support@tonydurante.us\r\n` +
-        `Subject: ${encodedSubject}\r\n` +
-        `MIME-Version: 1.0\r\n` +
-        `Content-Type: text/html; charset=utf-8\r\n\r\n` +
-        emailBody
-      ).toString("base64url")
-
-      await gmailPost("/messages/send", { raw })
-      results.push({ step: "email_notification", status: "ok", detail: `Detailed email sent to support@ (team)` })
-    } catch (e) {
-      results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
-    }
+    // ─── 1. (REMOVED 2026-11-08) EMAIL TO THE TEAM ───
+    // Antonio: "there is no email ... everything must be in the Calendar in What's New". Staff are told only by the What's New note below.
 
     // ─── 2. UPDATE SERVICE DELIVERY HISTORY ───
     if (sub.account_id) {
@@ -449,15 +394,7 @@ ${(sub.entity_type === "MMLLC" || sub.entity_type === "Corp") ? `<li>⚠ Stateme
         results.push({ step: "review_status", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
 
-      if (sub.account_id) {
-        const card = await emitActionNeeded({
-          event: "tax_wizard_submitted",
-          account_id: sub.account_id,
-          contact_id: sub.contact_id,
-          source_ref: `tax_submission:${submission_id}`,
-        })
-        results.push({ step: "staff_card", status: card.created ? "ok" : "skipped", detail: card.reason ?? "What's New card created" })
-      }
+      // No To-Do board card any more (Antonio 2026-11-08: "to-do board is not used. we use What's new"): the What's New note below is the staff signal.
       if (sub.contact_id || sub.account_id) {
         const locale = await resolveLocale(sub.contact_id ?? null, sub.account_id ?? null)
         // A non-null prior review_status means this row already went through

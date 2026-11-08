@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import type { Offer } from '@/lib/types/offer'
-import { contractVersionLabel } from '@/lib/offers/contract-version'
+import { contractVersionLabel, portalChatVoiceWording, type PortalChatVoiceWording } from '@/lib/offers/contract-version'
 import StandaloneServiceAgreement, { contractWordingFor, ContractNotReady } from './standalone-service-agreement'
 import { isStandaloneAgreementType, isCustomContractType, type ShortContractType } from '@/lib/offers/standalone-contract-types'
 import { InlineText, AgreementBody } from '@/components/contracts/agreement-body'
@@ -991,6 +991,8 @@ export default function ContractPage() {
   // Services list — filter by contract_type for multi-contract support
   const selectedSvcSet = new Set(Array.isArray((offer as any).selected_services) ? (offer as any).selected_services : [])
   const offerContractType = (offer as any).contract_type || 'formation'
+  // The two Portal Chat lines of the contract follow the offer's own version stamp: an offer that already existed keeps its old wording (see lib/offers/contract-version.ts).
+  const voiceWording = portalChatVoiceWording((offer as { contract_version?: string | null }).contract_version)
   const allServices = Array.isArray(offer.services) ? offer.services : []
 
   // Main contract services — matching offer contract_type or no contract_type specified
@@ -1096,7 +1098,7 @@ export default function ContractPage() {
         </table>
 
         {/* LEGAL SECTIONS 1-24 */}
-        <LegalSections />
+        <LegalSections wording={voiceWording} />
 
         {/* EXHIBIT A */}
         <div className="contract-section" style={{ marginTop: 36 }}>
@@ -1165,7 +1167,7 @@ export default function ContractPage() {
           </ol>
         </div>
 
-        <ClientPortalSection />
+        <ClientPortalSection wording={voiceWording} />
 
         <div className="contract-section"><h3>Estimated Timeline</h3>
           <table className="contract-key-terms">
@@ -1383,7 +1385,7 @@ function FormRow({ label, required, invalid, children }: { label: string; requir
 }
 
 // Client Portal Section — included in SOW for formation + onboarding contracts
-function ClientPortalSection() {
+function ClientPortalSection({ wording }: { wording: PortalChatVoiceWording }) {
   return (
     <div className="contract-section">
       <h3>Client Portal</h3>
@@ -1419,7 +1421,7 @@ function ClientPortalSection() {
           <li><strong>Compliance</strong> &mdash; Professional firms are required to track and archive all client communications.</li>
           <li><strong>Organization</strong> &mdash; Documents, messages, signatures, and forms are linked to your profile. No files lost.</li>
           <li><strong>Faster responses</strong> &mdash; The team sees which matter the message relates to.</li>
-          <li><strong>Voice dictation</strong> &mdash; Press the microphone icon, dictate your message. The portal transcribes automatically.</li>
+          <li><strong>{wording.bulletTitle}</strong> &mdash; {wording.bulletBody}</li>
         </ul>
       </div>
 
@@ -1437,7 +1439,7 @@ function ClientPortalSection() {
 }
 
 // Legal Sections 1-24 (static contract text)
-function LegalSections() {
+function LegalSections({ wording }: { wording: PortalChatVoiceWording }) {
   return (
     <div id="legal-sections">
       <div className="contract-section"><h3>1. Purpose &amp; Structure</h3>
@@ -1456,7 +1458,7 @@ function LegalSections() {
 
       <div className="contract-section"><h3>4. Communication &amp; Business Hours</h3>
         <div className="contract-subsection"><h4>4.1 Business Hours</h4><p>The Consulting Firm operates <strong>Monday through Friday, 8:00 AM to 3:00 PM Eastern Time (ET)</strong>, excluding U.S. federal holidays (&ldquo;Business Hours&rdquo;). Client communications received outside of Business Hours will be addressed on the next business day.</p></div>
-        <div className="contract-subsection"><h4>4.2 Communication Channels</h4><p>Official communications between the Parties shall be conducted via:</p><ul><li><strong>Email:</strong> Primary channel for all business correspondence</li><li><strong>Client Portal Chat:</strong> For operational questions, updates, and day-to-day communication. Available at portal.tonydurante.us with voice dictation support</li></ul><p>The Consulting Firm shall use reasonable efforts to respond within <strong>two (2) business days</strong>.</p></div>
+        <div className="contract-subsection"><h4>4.2 Communication Channels</h4><p>Official communications between the Parties shall be conducted via:</p><ul><li><strong>Email:</strong> Primary channel for all business correspondence</li><li><strong>Client Portal Chat:</strong> For operational questions, updates, and day-to-day communication. Available at portal.tonydurante.us with {wording.clauseSupport}</li></ul><p>The Consulting Firm shall use reasonable efforts to respond within <strong>two (2) business days</strong>.</p></div>
         <div className="contract-subsection"><h4>4.3 Scheduled Calls</h4><p>Scheduled video or phone calls are available <strong>only when strictly necessary</strong>. A fee of <strong>$197.00 per call</strong> may apply for non-essential calls.</p></div></div>
 
       <div className="contract-section"><h3>5. Fees &amp; Payment</h3>

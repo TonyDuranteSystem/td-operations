@@ -3,6 +3,7 @@ import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } fro
 import { InfoPanel } from './info-panel'
 import { DocumentUpload } from './document-upload'
 import { DocumentViewer } from './document-viewer'
+import { CLOSURE_DOCUMENTS_EMPTY_TEXT } from '@/lib/closure/closing-step'
 import { ExternalLinkCard } from './external-link'
 import { ActionButtons } from './action-buttons'
 import { DataViewer } from './data-viewer'
@@ -118,6 +119,9 @@ function renderComponent(
           serviceDeliveryId={serviceDelivery.id}
           label={component.label}
           collapsible={component.collapsible}
+          {...(serviceDelivery.service_type === 'Company Closure'
+            ? { emptyText: CLOSURE_DOCUMENTS_EMPTY_TEXT, pollWhileEmptyMs: 20000 }
+            : {})}
         />
       )
     case 'data_viewer':

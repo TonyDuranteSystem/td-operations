@@ -15,7 +15,7 @@ import { useTalkI18n } from '@/components/talk/talk-i18n'
 const repairAsked = new Set<string>()
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export function VoiceNote({ messageId, index, url, transcript: saved, flat, flattenedAt, tone = 'light', onBroken, eager = false, apiBase = '/api/team/messages' }: {
+export function VoiceNote({ messageId, index, url, transcript: saved, flat, flattenedAt, tone = 'light', onBroken, eager = false, apiBase = '/api/team/messages', repair = true, downloadable = false, hideDownload = false }: {
   messageId: string
   index: number
   url: string
@@ -30,6 +30,12 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
   onBroken?: () => void
   /** Where the repair and "Show text" calls go: `<apiBase>/<message id>/flatten|transcribe`. Team Chat / TD Talk by default; the marketing lead chat passes its own. */
   apiBase?: string
+  /** false = this chat has no repair route (the client-portal chat): the note is played as it is stored and the repair call is never made. TD Talk / Team Chat / marketing leave it on. */
+  repair?: boolean
+  /** true = a "Download" link under the player. Staff screens only (Portal Chats, the contact chat); the client never gets it. */
+  downloadable?: boolean
+  /** true = the browser's own "Download" item in the player's ⋮ menu is switched off too. The client-portal chat: clients listen, they cannot save. It hides the option; the file itself is still an ordinary web address. */
+  hideDownload?: boolean
 }) {
   const { t } = useTalkI18n()
   const [fetched, setFetched] = useState<VoiceTranscript | null>(null)
@@ -43,12 +49,12 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
   // opened the server converts it in place (keeping the original) and marks it; after that nobody asks again.
   useEffect(() => {
     const key = `${messageId}:${index}`
-    if (flat || repairAsked.has(key) || !UUID.test(messageId)) return
+    if (!repair || flat || repairAsked.has(key) || !UUID.test(messageId)) return
     repairAsked.add(key)
     fetch(`${apiBase}/${messageId}/flatten`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ index }),
     }).then(r => r.json()).then(d => { if (d?.ok && d.flattened_at) setRepairedAt(d.flattened_at as string) }).catch(() => {})
-  }, [messageId, index, flat, apiBase])
+  }, [messageId, index, flat, apiBase, repair])
   // a new address after the repair makes the browser load the corrected file instead of its cached copy
   const latest = repairedAt ?? flattenedAt ?? null
   // the corrected address is only swapped in while the note is idle: swapping it mid-play (or right as someone taps play)
@@ -93,7 +99,7 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
   return (
     <div className="flex flex-col gap-1" data-testid="voice-note">
       <audio
-        ref={audioRef} controls preload={near ? (eager ? 'auto' : 'metadata') : 'none'} src={src} className="h-10 w-60 max-w-full" onError={onBroken}
+        ref={audioRef} controls controlsList={hideDownload ? 'nodownload' : undefined} preload={near ? (eager ? 'auto' : 'metadata') : 'none'} src={src} className="h-10 w-60 max-w-full" onError={onBroken}
         onPlay={e => stopPlayingAudio(e.currentTarget)} onEnded={swapIfIdle} data-testid="talk-voice-note"
       />
       <button
@@ -106,6 +112,9 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
         {busy && <Loader2 className="h-3 w-3 animate-spin" />}
         {busy ? t('Reading the voice note…') : transcript && open ? t('Hide text') : t('Show text')}
       </button>
+      {downloadable && (
+        <a href={url} download target="_blank" rel="noopener noreferrer" data-testid="voice-download" className={`self-start text-xs underline ${muted}`}>{t('Download')}</a>
+      )}
       {error && <p className="text-xs text-red-600" data-testid="voice-text-error">{error}</p>}
       {transcript && open && (
         <div className={`rounded-lg px-2 py-1.5 text-sm ${tone === 'dark' ? 'bg-white/10' : 'bg-zinc-100'}`} data-testid="voice-text">

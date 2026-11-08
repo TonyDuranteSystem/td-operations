@@ -15,8 +15,12 @@ export interface ClosingBrief {
   /** the company's other open services (active / on hold / blocked), excluding this job */
   openServices: Array<{ type: string; status: string }>
   pendingDeadlines: number
-  /** unpaid invoices (Pending / Overdue) that will be cancelled, grouped by currency */
+  /** unpaid invoices (Pending / Overdue, nothing received) that will be cancelled, grouped by currency — what is still OWED, not the full amount */
   unpaid: { count: number; totals: Record<string, number> }
+  /** invoices with money already received: NOT cancelled by closing — staff settle or refund them by hand (lib/closure/closing-payments.ts) */
+  partPaid?: Array<{ invoice: string; paid: number; owed: number; currency: string }>
+  /** unused credit notes (a client credit, a negative amount): not invoices, NOT cancelled, grouped by currency */
+  credits?: { count: number; totals: Record<string, number> }
   /** open to-dos of the company other than this job's own */
   openTasks: number
   /** people still linked to the company: they lose their portal access to it */
@@ -54,6 +58,13 @@ export function closingBriefLines(b: ClosingBrief): string[] {
   if (b.unpaid.count > 0) {
     const sums = Object.entries(b.unpaid.totals).map(([cur, amt]) => money(cur, amt)).join(" + ")
     lines.push(`${plural(b.unpaid.count, "unpaid invoice", "unpaid invoices")}${sums ? ` (${sums})` : ""} will be cancelled — collect first if it is still owed.`)
+  }
+  for (const p of b.partPaid ?? []) {
+    lines.push(`Invoice ${p.invoice} is part-paid (${money(p.currency, p.paid)} of ${money(p.currency, Math.round((p.paid + p.owed) * 100) / 100)} received, ${money(p.currency, p.owed)} still owed) — it will NOT be cancelled: settle or refund it by hand.`)
+  }
+  if (b.credits && b.credits.count > 0) {
+    const sums = Object.entries(b.credits.totals).map(([cur, amt]) => money(cur, amt)).join(" + ")
+    lines.push(`${plural(b.credits.count, "unused credit note", "unused credit notes")}${sums ? ` (${sums})` : ""} ${b.credits.count === 1 ? "stays" : "stay"} on the account — a credit is not an invoice, so closing does not cancel it.`)
   }
   if (b.pendingDeadlines > 0) lines.push(`${plural(b.pendingDeadlines, "upcoming deadline", "upcoming deadlines")} will be cancelled.`)
   if (b.openTasks > 0) lines.push(`${plural(b.openTasks, "open to-do", "open to-dos")} of the company will be cancelled.`)

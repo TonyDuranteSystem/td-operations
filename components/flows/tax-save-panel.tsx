@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle2, FolderOpen, Info, Loader2, RotateCw } from 'lucide-react'
 
 /**
@@ -50,13 +50,16 @@ export function TaxSavePanel({ serviceDeliveryId }: { serviceDeliveryId: string 
   const [view, setView] = useState<SaveView | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'save' | 'hidden' | 'visible' | null>(null)
-  const autoStarted = useRef(false)
-  const polls = useRef(0)
+  // the panel starts the save by itself ONCE per open; what it renders afterwards depends on it, so it is state (not a ref)
+  const [autoTried, setAutoTried] = useState(false)
+  // how many times a running save was checked; at MAX_POLLS the panel stops waiting and offers Retry saving
+  const [polls, setPolls] = useState(0)
 
   const run = useCallback(
     async (body: Record<string, unknown>, what: 'save' | 'hidden' | 'visible') => {
       setBusy(what)
       setError(null)
+      setPolls(0)
       try {
         setView(await call(serviceDeliveryId, body))
       } catch (e) {
@@ -79,28 +82,33 @@ export function TaxSavePanel({ serviceDeliveryId }: { serviceDeliveryId: string 
 
   // the approved copy is not in Storage yet and nothing is running: start the save (once per open; a failed save waits for Retry)
   useEffect(() => {
-    if (view?.state.state === 'not_saved' && !autoStarted.current) {
-      autoStarted.current = true
+    if (view?.state.state === 'not_saved' && !autoTried) {
+      setAutoTried(true)
       void run({ action: 'save' }, 'save')
     }
-  }, [view, run])
+  }, [view, autoTried, run])
 
   // a save is running somewhere (the background job): check again until it ends
   useEffect(() => {
     if (view?.state.state !== 'saving' || busy) return
-    if (polls.current >= MAX_POLLS) return
+    if (polls >= MAX_POLLS) return
     const t = setTimeout(() => {
-      polls.current += 1
+      setPolls((n) => n + 1)
       call(serviceDeliveryId).then(setView).catch(() => { /* keep showing "saving"; the next check may work */ })
     }, POLL_MS)
     return () => clearTimeout(t)
-  }, [view, busy, serviceDeliveryId])
+  }, [view, busy, polls, serviceDeliveryId])
 
   if (!view) {
     return error ? <p className="mb-3 text-xs text-red-600" data-testid="tax-save-error">{error}</p> : null
   }
   const st = view.state
   if (st.state === 'not_released') return null
+
+  // Two ways the panel would otherwise wait forever, with no way out: the save never started (the request failed or was cut short and
+  // nothing is queued), or a save has been "running" longer than the panel is willing to wait. Both offer Retry saving.
+  const notStarted = st.state === 'not_saved' && autoTried && busy === null
+  const stalled = st.state === 'saving' && polls >= MAX_POLLS && busy === null
 
   const approvedLine = view.approved ? `approved ${day(view.approved.at)}${view.approved.by ? ` by ${view.approved.by}` : ''}` : 'approved'
 
@@ -162,12 +170,35 @@ export function TaxSavePanel({ serviceDeliveryId }: { serviceDeliveryId: string 
         </div>
       )}
 
-      {(st.state === 'saving' || st.state === 'not_saved') && (
+      {(st.state === 'saving' || st.state === 'not_saved') && !notStarted && !stalled && (
         <div className="flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
           <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-blue-600" />
           <div>
             <p className="font-semibold">Approved. Saving the answers in Storage…</p>
             <p className="mt-0.5 text-xs text-blue-800">The answers are locked. This takes a few seconds; you can keep working.</p>
+          </div>
+        </div>
+      )}
+
+      {(notStarted || stalled) && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" data-testid={notStarted ? 'tax-save-not-started' : 'tax-save-stalled'}>
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold">{notStarted ? 'Approved, but the save did not start' : 'Approved. Saving is taking longer than usual'}</p>
+              <p className="mt-1 text-xs text-amber-800">Press Retry saving to try now. The approval is not undone.</p>
+            </div>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2 pl-7">
+            <button
+              type="button"
+              onClick={() => void run({ action: 'save' }, 'save')}
+              className="inline-flex items-center gap-1.5 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700"
+              data-testid="tax-save-retry"
+            >
+              <RotateCw className="h-3.5 w-3.5" />
+              Retry saving
+            </button>
           </div>
         </div>
       )}
@@ -182,7 +213,7 @@ export function TaxSavePanel({ serviceDeliveryId }: { serviceDeliveryId: string 
               <p className="mt-0.5 text-xs"><b>What to do:</b> {st.fix}</p>
               <p className="mt-1 text-xs text-amber-800">
                 Tried {st.attempts} {st.attempts === 1 ? 'time' : 'times'}.{' '}
-                {st.retrying ? 'The system keeps trying by itself.' : 'The system stopped trying by itself; the team was alerted.'} The approval is not undone.
+                {st.retrying ? 'The system will try again shortly.' : 'The system is not trying again by itself. Press Retry saving.'} The approval is not undone.
               </p>
             </div>
           </div>

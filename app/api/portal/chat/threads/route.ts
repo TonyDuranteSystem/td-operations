@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
+import { fillVoiceListPreviews } from '@/lib/portal/chat-voice'
 import { summarizeOverdue, type OverduePaymentRow, type OverdueSummary } from '@/lib/billing/overdue'
 import { NextResponse } from 'next/server'
 
@@ -224,7 +225,17 @@ export async function GET() {
         : (r.contact_id ? (overdueByContact[r.contact_id] ?? null) : null)) as OverdueSummary | null,
     }))
 
-    return NextResponse.json(threads)
+    // A last message that is only a voice note has no words, so the list row would be an empty line: look the wordless ones up and say "Voice note"
+    // (the database function sends the words only; this keeps the fix in one place without touching it).
+    const wordlessAt = Array.from(new Set(threads.filter(t => !t.last_message.trim() && t.last_message_at).map(t => t.last_message_at)))
+    if (wordlessAt.length === 0) return NextResponse.json(threads)
+    const { data: wordless } = await supabaseAdmin
+      .from('portal_messages')
+      .select('created_at, attachments')
+      .in('created_at', wordlessAt)
+      .is('deleted_at', null)
+      .eq('message', '')
+    return NextResponse.json(fillVoiceListPreviews(threads, wordless ?? []))
   }
 
   return NextResponse.json([])

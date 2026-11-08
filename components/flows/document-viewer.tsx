@@ -22,6 +22,10 @@ interface DocumentViewerProps {
   /** Render with a collapse/expand toggle, starting collapsed. Absent/false =
    *  always-open, no toggle (original behavior, unchanged). */
   collapsible?: boolean
+  /** Replaces "No documents uploaded yet" (e.g. Company Closure: the client's files can still be arriving a few minutes after the form is sent). */
+  emptyText?: string
+  /** While the list is empty, look again every this many milliseconds (at most 30 times) — so files that arrive later show up without a reload. */
+  pollWhileEmptyMs?: number
 }
 
 /**
@@ -31,7 +35,7 @@ interface DocumentViewerProps {
  * state shows "No documents uploaded yet". Surfaces the server's real error on
  * failure (R099) rather than a generic message.
  */
-export function DocumentViewer({ serviceDeliveryId, label, collapsible }: DocumentViewerProps) {
+export function DocumentViewer({ serviceDeliveryId, label, collapsible, emptyText, pollWhileEmptyMs }: DocumentViewerProps) {
   const [documents, setDocuments] = useState<FlowDocument[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState(!!collapsible)
@@ -69,6 +73,20 @@ export function DocumentViewer({ serviceDeliveryId, label, collapsible }: Docume
     window.addEventListener(FLOW_DOC_UPLOADED_EVENT, onUploaded)
     return () => window.removeEventListener(FLOW_DOC_UPLOADED_EVENT, onUploaded)
   }, [serviceDeliveryId, load])
+
+  // An empty list is looked at again from time to time when the caller says files may still be arriving (Company Closure, production test 2026-11-07:
+  // the client's files showed up ~5 minutes after the form was sent, with the job already on the next step and the box saying "none").
+  const emptyNow = documents !== null && documents.length === 0
+  useEffect(() => {
+    if (!pollWhileEmptyMs || !emptyNow) return
+    let tries = 0
+    const timer = setInterval(() => {
+      tries += 1
+      if (tries > 30) { clearInterval(timer); return }
+      load()
+    }, pollWhileEmptyMs)
+    return () => clearInterval(timer)
+  }, [pollWhileEmptyMs, emptyNow, load])
 
   const count = documents?.length ?? 0
 
@@ -110,7 +128,7 @@ export function DocumentViewer({ serviceDeliveryId, label, collapsible }: Docume
       )}
 
       {!collapsed && !error && documents !== null && documents.length === 0 && (
-        <p className="text-sm text-zinc-500">No documents uploaded yet</p>
+        <p className="text-sm text-zinc-500">{emptyText || 'No documents uploaded yet'}</p>
       )}
 
       {!collapsed && !error && documents !== null && documents.length > 0 && (

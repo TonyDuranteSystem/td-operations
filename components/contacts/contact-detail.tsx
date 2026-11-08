@@ -60,6 +60,8 @@ import { isUnresolvedPersonalDocument } from '@/lib/documents/visibility-guard'
 import { format, parseISO } from 'date-fns'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry, ChatAttachment } from '@/lib/types'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
+import { VoiceNote } from '@/components/team-chat/voice-note'
+import { isVoiceAttachment } from '@/lib/portal/chat-voice'
 import { FlowChips } from '@/components/flows/flow-chips'
 import type { ResolvedFlow } from '@/lib/flows/resolve-flows'
 
@@ -1972,6 +1974,10 @@ function ChatTab({
                           return (
                             <div className="mt-1 space-y-1">
                               {atts.map((att, i) => (
+                                msg.attachments?.length && isVoiceAttachment(att) ? (
+                                  // a voice note plays right here with "Show text" (dev job 753b2909)
+                                  <VoiceNote key={i} messageId={msg.id} index={i} url={att.url} transcript={att.transcript} flat={att.flat} flattenedAt={att.flattened_at} apiBase="/api/portal/chat/message" repair={false} downloadable />
+                                ) : (
                                 <a
                                   key={i}
                                   href={att.url}
@@ -1983,6 +1989,7 @@ function ChatTab({
                                   <span className="truncate max-w-[200px]">{att.name}</span>
                                   {att.size && <span className="text-zinc-400">({formatFileSize(att.size)})</span>}
                                 </a>
+                                )
                               ))}
                             </div>
                           )

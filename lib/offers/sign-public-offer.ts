@@ -31,7 +31,7 @@ import {
   isOwnSignedPdfPath,
   SIGNABLE_OFFER_STATUSES,
 } from '@/lib/offers/public-signing'
-import { CURRENT_CONTRACT_VERSION } from '@/lib/offers/contract-version'
+import { CURRENT_CONTRACT_VERSION, versionSignedFor } from '@/lib/offers/contract-version'
 
 export interface SignDeps {
   storageObjectExists: (bucket: string, path: string) => Promise<boolean>
@@ -153,8 +153,9 @@ function buildRow(
     signed_at: now.toISOString(),
     pdf_path: pdfPath,
     status: 'signed',
-    // N0b: the version of the text the client signed — the page renders today's text.
-    contract_version: CURRENT_CONTRACT_VERSION,
+    // N0b: the version of the text the client signed. An offer contract shows the wording of the version the offer was sent with, so that is the version
+    // recorded; a renewal agreement has no stored version and its text is the same in every version, so it records today's.
+    contract_version: kind === 'renewal' ? CURRENT_CONTRACT_VERSION : versionSignedFor(offer?.contract_version),
   }
 }
 

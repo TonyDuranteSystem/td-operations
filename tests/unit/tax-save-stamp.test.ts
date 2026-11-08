@@ -124,3 +124,54 @@ describe("both writers use it", () => {
     expect(src).toMatch(/callerKey: `form-summary:\$\{switched\.id\}:\$\{formType\}:\$\{meta\.token\}`, periodYear:/)
   })
 })
+
+// ─── A background job's own copy of the answers can be OLD (dev job 7df278cd, follow-up) ───────────────────────────────────────────
+describe("sameSubmittedAnswers", () => {
+  it("same answers and files = same, whatever the order", async () => {
+    const { sameSubmittedAnswers } = await import("@/lib/tax/answers-fingerprint")
+    expect(sameSubmittedAnswers({ a: 1, b: 2 }, ["tax/x/1.pdf", "tax/x/2.pdf"], { b: 2, a: 1 }, ["tax/x/2.pdf", "tax/x/1.pdf"])).toBe(true)
+  })
+  it("a changed answer or a changed wizard file = different", async () => {
+    const { sameSubmittedAnswers } = await import("@/lib/tax/answers-fingerprint")
+    expect(sameSubmittedAnswers({ a: "No" }, ["tax/x/1.pdf"], { a: "Yes" }, ["tax/x/1.pdf"])).toBe(false)
+    expect(sameSubmittedAnswers({ a: "No" }, ["tax/x/1.pdf"], { a: "No" }, ["tax/x/2.pdf"])).toBe(false)
+    expect(sameSubmittedAnswers({ a: "No" }, ["tax/x/1.pdf"], { a: "No" }, [])).toBe(false)
+  })
+  it("a file from the OLD external form (not a wizard path) is not counted: the record carries it forward, the payload never lists it", async () => {
+    const { sameSubmittedAnswers } = await import("@/lib/tax/answers-fingerprint")
+    expect(sameSubmittedAnswers({ a: "No" }, ["tax/x/1.pdf"], { a: "No" }, ["external/legacy.pdf", "tax/x/1.pdf"])).toBe(true)
+  })
+})
+
+describe("payloadIsStale", () => {
+  it("the record still holds what the job was started with → not stale (the job files as before)", async () => {
+    const { payloadIsStale } = await import("@/lib/tax/save-stamp")
+    s.row = { submitted_data: { a: "No" }, upload_paths: ["tax/x/1.pdf", "external/legacy.pdf"], drive_archive_meta: {} }
+    expect(await payloadIsStale("ts-1", { a: "No" }, ["tax/x/1.pdf"])).toBe(false)
+  })
+  it("the client resubmitted other answers since → stale (the old job must not file the old answers)", async () => {
+    const { payloadIsStale } = await import("@/lib/tax/save-stamp")
+    s.row = { submitted_data: { a: "Yes" }, upload_paths: ["tax/x/1.pdf"], drive_archive_meta: {} }
+    expect(await payloadIsStale("ts-1", { a: "No" }, ["tax/x/1.pdf"])).toBe(true)
+  })
+  it("the client swapped a file since → stale", async () => {
+    const { payloadIsStale } = await import("@/lib/tax/save-stamp")
+    s.row = { submitted_data: { a: "No" }, upload_paths: ["tax/x/2.pdf"], drive_archive_meta: {} }
+    expect(await payloadIsStale("ts-1", { a: "No" }, ["tax/x/1.pdf"])).toBe(true)
+  })
+  it("a record that cannot be read, or is gone, is NOT called stale (nothing is skipped on a guess)", async () => {
+    const { payloadIsStale } = await import("@/lib/tax/save-stamp")
+    s.readError = "db down"
+    expect(await payloadIsStale("ts-1", { a: "No" }, [])).toBe(false)
+    s.readError = null
+    s.row = null
+    expect(await payloadIsStale("ts-1", { a: "No" }, [])).toBe(false)
+  })
+  it("the setup job asks before it files its inline copy, and says so in its steps", () => {
+    const src = readFileSync("lib/jobs/handlers/tax-form-setup.ts", "utf8")
+    expect(src).toContain("payloadIsStale(p.submission_id, sd, uploadPaths)")
+    expect(src).toMatch(/if \(payloadStale\) \{\s*result\.steps\.push\(step\("drive_save", "skipped"/)
+    // the check comes BEFORE the pinned time is taken and before anything is filed
+    expect(src.indexOf("payloadIsStale(p.submission_id")).toBeLessThan(src.indexOf("pinnedSubmitStamp(p.submission_id)"))
+  })
+})
