@@ -200,7 +200,8 @@ export async function saveDocumentForContact(input: SaveForContactInput, deps?: 
   }
   const listed = await d.upsertRow(w.fileId, {
     ...(input.row ?? {}),
-    file_name: input.name, mime_type: input.mimeType, file_size: input.bytes.length,
+    // the name the store really gave the file: on a name clash it adds " (2)", and the CRM list, the portal and the client's notice must say the same
+    file_name: w.name || input.name, mime_type: input.mimeType, file_size: input.bytes.length,
     account_id: input.accountId ?? null, contact_id: input.contactId,
     portal_visible: input.portalVisible ?? false,
   }, w.status)
