@@ -41,6 +41,7 @@ import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/pl
 import { FileManager } from './file-manager'
 import { MoveToStorePanel } from '@/components/storage/move-to-store-panel'
 import { AccountDocumentsList } from './account-documents-list'
+import { StoreBusyScope, STORE_BUSY_HINT } from './store-busy'
 import { CorrespondenceUpload } from './correspondence-upload'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
 import { AccountJourney } from './account-journey'
@@ -710,6 +711,8 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
   const tabParam = searchParams.get('tab')
   const initialTab = tabParam && TABS.some(t => t.key === tabParam) ? tabParam : 'overview'
   const [activeTab, setActiveTab] = useState(initialTab)
+  // an upload / group action is running in the Documents tab's storage screen: leaving the tab would close it mid-way
+  const [storeBusy, setStoreBusy] = useState(false)
   const [showOADialog, setShowOADialog] = useState(false)
   const [showLeaseDialog, setShowLeaseDialog] = useState(false)
   const [showSS4Dialog, setShowSS4Dialog] = useState(false)
@@ -997,14 +1000,16 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
                          tab.key === 'tax' ? taxReturns.length :
                          tab.key === 'documents' ? documents.length : null
             return (
+              <FastTooltip key={tab.key} label={storeBusy && activeTab !== tab.key ? STORE_BUSY_HINT : ''}>
               <button
-                key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
+                disabled={storeBusy && activeTab !== tab.key}
+                aria-label={storeBusy && activeTab !== tab.key ? `${tab.label} — ${STORE_BUSY_HINT}` : undefined}
                 className={cn(
-                  'flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
+                  'flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50',
                   activeTab === tab.key
                     ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-muted-foreground hover:text-foreground hover:border-zinc-300'
+                    : 'border-transparent text-muted-foreground hover:text-foreground hover:border-zinc-300 disabled:hover:text-muted-foreground disabled:hover:border-transparent'
                 )}
               >
                 <Icon className="h-4 w-4" />
@@ -1015,6 +1020,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
                   </span>
                 )}
               </button>
+              </FastTooltip>
             )
           })}
         </div>
@@ -1041,6 +1047,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         <TaxTab taxReturns={taxReturns} today={today} />
       )}
       {activeTab === 'documents' && (
+        <StoreBusyScope busy={storeBusy} setBusy={setStoreBusy}>
         <div className="space-y-4">
           {/* owners only, pilot environment only — renders nothing elsewhere */}
           <MoveToStorePanel accountId={account.id} />
@@ -1057,6 +1064,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
           />
           <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={true} hasStoreRows={(documents ?? []).some((d: { drive_file_id: string | null }) => (d.drive_file_id ?? '').startsWith('store:'))} />
         </div>
+        </StoreBusyScope>
       )}
       {activeTab === 'emails' && (
         // All Gmail with this client: auto-matched (their contact addresses)
