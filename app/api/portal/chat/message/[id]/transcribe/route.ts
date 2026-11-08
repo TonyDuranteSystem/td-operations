@@ -22,7 +22,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  // TD staff only — isDashboardUser lets every non-client login in (a managed partner, a marketing login); those must not open a client's message
+  // TD staff or a client — isDashboardUser lets every non-client login in (a managed partner, a marketing login); those must not open a client's message
   const isStaff = isStaffUser(user)
   const isClient = (user.app_metadata as Record<string, unknown> | undefined)?.role === 'client'
   if (!isStaff && !isClient) return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
