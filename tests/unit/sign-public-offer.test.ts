@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { signPublicOffer, signRenewalAgreement, type SignDeps } from '@/lib/offers/sign-public-offer'
+import { CURRENT_CONTRACT_VERSION } from '@/lib/offers/contract-version'
 
 function world(opts: {
   status?: string
@@ -73,7 +74,18 @@ describe('signing an offer on the server', () => {
     let row: Record<string, unknown> | null = null
     const deps = { ...w.deps, insertContract: async (r: Record<string, unknown>) => { row = r; return { id: 'c1', error: null } } }
     await signPublicOffer({ offer: w.offer, fields: {}, pdfPath: PDF }, deps)
+    // this fixture offer has no version stamp: it was shown the old wording, so the first version is recorded
     expect(row).toMatchObject({ contract_version: '2026-09-30', status: 'signed' })
+  })
+
+  it('records the version the OFFER carries — an old offer signed today is still recorded as the old version', async () => {
+    for (const v of ['2026-09-30', '2026-11-08']) {
+      const w = world()
+      let row: Record<string, unknown> | null = null
+      const deps = { ...w.deps, insertContract: async (r: Record<string, unknown>) => { row = r; return { id: 'c1', error: null } } }
+      await signPublicOffer({ offer: { ...w.offer, contract_version: v }, fields: {}, pdfPath: PDF }, deps)
+      expect(row, v).toMatchObject({ contract_version: v })
+    }
   })
 
   it('an onboarding / standalone contract only flips the status', async () => {
@@ -183,6 +195,14 @@ describe('signing a renewal agreement on the server', () => {
     expect(r.error).toBeNull()
     expect(r.alreadySigned).toBe(true)
     expect(w.log).toEqual(['agreement-followup renewal-mario-2027'])
+  })
+
+  it('a renewal agreement has no stored version (its text is the same in every version): it records today\'s', async () => {
+    const w = world()
+    let row: Record<string, unknown> | null = null
+    const deps = { ...w.deps, insertContract: async (r: Record<string, unknown>) => { row = r; return { id: 'c1', error: null } } }
+    await signRenewalAgreement({ agreement, fields: {}, pdfPath: RPDF }, deps)
+    expect(row).toMatchObject({ contract_version: CURRENT_CONTRACT_VERSION })
   })
 
   it('refuses without an uploaded PDF', async () => {
