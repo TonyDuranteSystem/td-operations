@@ -45,6 +45,8 @@ import {
   visibleMainItems,
   visiblePartnerItems,
   visibleTierTopItems,
+  navLabelKey,
+  resolveNavHref,
   type NavRuleContext,
   type PortalNavItemDef,
 } from '@/lib/portal/nav-rules'
@@ -359,51 +361,10 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
         : (isSignItem && toSignCount > 0 ? toSignCount
           : (isBillingItem && unpaidInvoiceCount > 0 ? unpaidInvoiceCount : 0)))
 
-    // Context-aware label for the wizard nav item.
-    // The tab serves two purposes depending on the client's stage:
-    //   - formation / onboarding tier → company data collection ("Complete Setup")
-    //   - active tier with a Banking Fintech SD → bank account application ("Bank Applications")
-    // Italian had a single static label ("Completa Registrazione") that made sense
-    // for onboarding but was invisible to banking clients searching for "bank applications".
-    let navLabel = item.key === 'nav.invoices' && invoiceHubNamed ? t('nav.invoicesHub') : t(item.key)
-    if (item.key === 'nav.wizard') {
-      // The wizard is the formation/onboarding data-collection step. Banking is
-      // no longer a wizard — it's the dedicated /portal/banks "Bank Applications"
-      // item below — so this label is always "Complete Setup".
-      navLabel = t('sidebar.completeSetup')
-    }
-    if (item.key === 'nav.bankApplications') {
-      navLabel = t('sidebar.bankApplications')
-    }
-
-    // The wizard link itself must carry which onboarding it's for, the same
-    // way the payment-time notification and the reminder cron were fixed to
-    // (dev job bc2a8f7f, corrected 2026-09-21 to key on the OFFER, not a
-    // lead — a returning client's second+ onboarding has no lead at all).
-    // Without it, a returning client with an existing account who's mid-way
-    // through a SECOND onboarding gets sent to a bare /portal/wizard, which
-    // silently falls through to their EXISTING account instead of the one
-    // they're actually switched to here.
-    let navHref = item.href
-    if (item.key === 'nav.wizard' && selectedOnboardingId) {
-      const selected = inProgressOnboardings.find(o => o.id === selectedOnboardingId)
-      if (selected?.offerId) navHref = `/portal/wizard?type=onboarding&offer=${encodeURIComponent(selected.offerId)}`
-    } else if (item.key === 'nav.wizard' && selectedFormationId) {
-      // Same fix, the formation side — this half was missing entirely: a
-      // client with a SECOND, brand-new company mid-formation (selected via
-      // the switcher) clicking Complete Setup fell through to a bare
-      // /portal/wizard with no ?lead=, which lets the wizard page's own
-      // no-hint fallback pick a DIFFERENT pending wizard type for this
-      // contact (e.g. a leftover ITIN application) instead of formation —
-      // found live 2026-09-22 testing against a fixture with both an
-      // in-progress formation and a stale contact-scoped ITIN service.
-      const selected = inProgress.find(f => f.id === selectedFormationId)
-      // A first-time client's real lead keeps its proven path; an existing
-      // client's new company has no lead, so it is anchored on its offer
-      // (workspace-only plan S1, dev job 9d34e750).
-      if (selected?.leadId) navHref = `/portal/wizard?type=formation&lead=${encodeURIComponent(selected.leadId)}`
-      else if (selected?.offerId) navHref = `/portal/wizard?type=formation&offer=${encodeURIComponent(selected.offerId)}`
-    }
+    // The label and the link come from the shared rules (lib/portal/nav-rules.ts), so the iPhone client app names and
+    // points every entry exactly the way this menu does. The wizard link carries WHICH onboarding / formation it is for.
+    const navLabel = t(navLabelKey(item, { invoicesHubOn: invoiceHubNamed }))
+    const navHref = resolveNavHref(item, { selectedOnboardingId, selectedFormationId, inProgress, inProgressOnboardings })
 
     // NavItemHint renders a real <button> (for its "i" popover) — nesting a
     // button inside this row's <Link> is invalid HTML (interactive content

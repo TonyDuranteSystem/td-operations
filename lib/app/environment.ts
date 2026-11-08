@@ -39,6 +39,21 @@ export function appServerEnv(supabaseUrl: string | null | undefined): AppServerE
   return "unknown"
 }
 
+/**
+ * The CLIENT iPhone app (MyLLC Manager 2.0, dev job 056a70d0). It ships as the next version of the existing App Store record
+ * "MyLLC Manager", so the production id is that record's own. The sandbox id has no App Store record (simulator / cable only), the
+ * same arrangement as TD Social's sandbox flavour. A server accepts only its own id: a sandbox build can never register on production.
+ */
+export const CLIENT_APP_BUNDLE_IDS: Readonly<Record<"production" | "sandbox", string>> = {
+  production: "com.tonydurante.myllcmanager",
+  sandbox: "com.tonydurante.myllcmanager.sandbox",
+}
+
+/** The one client-app bundle id this server accepts, or null when the server cannot tell what it is. */
+export function allowedClientBundleId(env: AppServerEnv): string | null {
+  return env === "unknown" ? null : CLIENT_APP_BUNDLE_IDS[env]
+}
+
 /** The one bundle id this server accepts, or null when the server cannot tell what it is. */
 export function allowedBundleId(env: AppServerEnv): string | null {
   return env === "unknown" ? null : TD_SOCIAL_BUNDLE_IDS[env]

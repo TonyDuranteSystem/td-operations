@@ -10,7 +10,7 @@
  * Icons stay in the sidebar (a React concern), keyed by the item's `key`.
  */
 
-import type { PortalNavVisibility } from '@/lib/portal/queries'
+import type { PortalNavVisibility, InProgressFormation, InProgressOnboarding } from '@/lib/portal/queries'
 import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
 import { hubAccess } from '@/lib/portal/invoice-hub'
 import { hasCapability, teammateNavCapability, type TeamCapability } from '@/lib/portal/team/capabilities'
@@ -208,4 +208,47 @@ export function visibleMainItems(ctx: NavRuleContext): PortalNavItemDef[] {
   return MAIN_NAV_ITEMS
     .map(item => (item.key === 'nav.invoices' && !companies ? PERSONAL_INVOICES_NAV_ITEM : item))
     .filter(item => (!item.needsCompany || companies) && isNavItemVisible(item, ctx))
+}
+
+/**
+ * Which text key names an entry in the menu (the caller turns it into words in the person's language).
+ *   - the invoices entry is "Customers & Invoices" once the invoices hub is on for the company, plain "Invoices" otherwise;
+ *   - the wizard entry is always "Complete Setup" (the formation/onboarding data-collection step; banking is no longer a
+ *     wizard, it is the dedicated Bank Applications entry);
+ *   - Bank Applications has its own label so a client searching for "bank applications" finds it.
+ */
+export function navLabelKey(item: Pick<PortalNavItemDef, 'key'>, opts: { invoicesHubOn: boolean }): string {
+  if (item.key === 'nav.wizard') return 'sidebar.completeSetup'
+  if (item.key === 'nav.bankApplications') return 'sidebar.bankApplications'
+  if (item.key === 'nav.invoices' && opts.invoicesHubOn) return 'nav.invoicesHub'
+  return item.key
+}
+
+/**
+ * Where an entry points. The wizard link must carry WHICH formation or onboarding it is for, the same way the payment-time
+ * notification and the reminder cron do (dev job bc2a8f7f, corrected 2026-09-21 to key on the OFFER, not a lead: a returning
+ * client's second onboarding has no lead at all). Without it a returning client with an existing account who is mid-way through a
+ * SECOND onboarding (or a second, brand-new company being formed) is sent to a bare /portal/wizard, which silently falls
+ * through to their EXISTING account or a different pending wizard type. A first-time client's real lead keeps its proven path; an
+ * existing client's new company has no lead, so it is anchored on its offer (workspace-only plan S1, dev job 9d34e750).
+ */
+export function resolveNavHref(
+  item: Pick<PortalNavItemDef, 'key' | 'href'>,
+  sel: {
+    selectedOnboardingId?: string
+    selectedFormationId?: string
+    inProgress: InProgressFormation[]
+    inProgressOnboardings: InProgressOnboarding[]
+  },
+): string {
+  let href = item.href
+  if (item.key === 'nav.wizard' && sel.selectedOnboardingId) {
+    const selected = sel.inProgressOnboardings.find(o => o.id === sel.selectedOnboardingId)
+    if (selected?.offerId) href = `/portal/wizard?type=onboarding&offer=${encodeURIComponent(selected.offerId)}`
+  } else if (item.key === 'nav.wizard' && sel.selectedFormationId) {
+    const selected = sel.inProgress.find(f => f.id === sel.selectedFormationId)
+    if (selected?.leadId) href = `/portal/wizard?type=formation&lead=${encodeURIComponent(selected.leadId)}`
+    else if (selected?.offerId) href = `/portal/wizard?type=formation&offer=${encodeURIComponent(selected.offerId)}`
+  }
+  return href
 }
