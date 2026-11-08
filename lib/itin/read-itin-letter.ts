@@ -303,17 +303,38 @@ function readNameOnLetter(text: string): string | null {
   return null
 }
 
-const strip = (s: string): string => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase()
+/** Letters that do not break into a base letter and an accent: written the way an English letter spells them ("Paweł" → "pawel"). */
+const FOLDED_LETTERS: Record<string, string> = { "ł": "l", "ø": "o", "đ": "d", "ð": "d", "ß": "ss", "æ": "ae", "œ": "oe", "ı": "i", "ħ": "h", "þ": "th" }
 
-/** The words of a name (case and accents ignored, one-letter words dropped). */
+// built from strings: the project's TypeScript target does not allow the unicode flag in a regex LITERAL
+const ACCENT_MARKS = new RegExp("\\p{M}", "gu")
+const NOT_A_LETTER_OR_DIGIT = new RegExp("[^\\p{L}\\p{N}]+", "u")
+
+const strip = (s: string): string => s.normalize("NFKD").replace(ACCENT_MARKS, "").toLowerCase().replace(/[łøđðßæœıħþ]/g, (c) => FOLDED_LETTERS[c] ?? c)
+
+/** The words of a name (case and accents ignored, one-letter words dropped). Any alphabet counts: a name in Cyrillic or Greek still has words. */
 export function nameWords(fullName: string | null | undefined): string[] {
-  return strip(fullName ?? "").split(/[^a-z0-9]+/).filter((w) => w.length >= 2)
+  return strip(fullName ?? "").split(NOT_A_LETTER_OR_DIGIT).filter((w) => w.length >= 2)
 }
 
-/** Could these two spellings be the SAME person? True when they share at least one whole word ("Pete Papik" / "Peter Papik"); false for two different people. */
-export function namesShareAWord(a: string | null | undefined, b: string | null | undefined): boolean {
+/**
+ * Could these two spellings be the SAME person? Used where two records are tied together by an e-mail address, so two people (a married
+ * couple, a parent and a child) can end up on one contact. Sharing a family name is NOT enough ("Mary Smith" / "John Smith" are two people):
+ *  - two or more words in common → yes ("Biagio Amato" / "Amato Biagio", "Mark Eke" / "Mark Botond Eke");
+ *  - exactly one in common → yes only when the FIRST names are spellings of one another ("Pete Papik" / "Peter Papik", "Giulia" / "Giuliana Maria Rossi");
+ *  - a name of one word only, or nothing in common → only when the two are identical.
+ */
+export function namesCouldBeSamePerson(a: string | null | undefined, b: string | null | undefined): boolean {
+  const wa = nameWords(a)
   const wb = nameWords(b)
-  return nameWords(a).some((w) => wb.indexOf(w) !== -1)
+  if (wa.length === 0 || wb.length === 0) return false
+  if (wa.length < 2 || wb.length < 2) return wa.join(" ") === wb.join(" ")
+  const shared = wa.filter((w) => wb.indexOf(w) !== -1)
+  if (shared.length >= 2) return true
+  if (shared.length === 0) return false
+  const fa = wa[0]
+  const fb = wb[0]
+  return fa === fb || (Math.min(fa.length, fb.length) >= 3 && (fa.indexOf(fb) === 0 || fb.indexOf(fa) === 0))
 }
 
 /**
@@ -325,7 +346,7 @@ export function personNamedInText(text: string, fullName: string | null | undefi
   if (words.length < 2) return null
   // the IRS's own return address ("Austin, TX 78714-9342") is on every notice: its city must never count as somebody's name
   const hay = strip(text).replace(/\baustin,?\s+tx\b\s*\d{5}(-\d{4})?/g, " ")
-  const has = (w: string) => new RegExp(`(^|[^a-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`).test(hay)
+  const has = (w: string) => new RegExp(`(^|[^\\p{L}\\p{N}])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\p{L}\\p{N}]|$)`, "u").test(hay)
   return has(words[0]) && has(words[words.length - 1])
 }
 

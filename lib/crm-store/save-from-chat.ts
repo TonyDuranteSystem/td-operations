@@ -18,7 +18,7 @@
 import { createHash } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { PORTAL_BASE_URL } from "@/lib/config"
-import { readItinLetter, formatItin, isValidItin, checkIssueDate, normalizeLetterText, namesShareAWord } from "@/lib/itin/read-itin-letter"
+import { readItinLetter, formatItin, isValidItin, checkIssueDate, normalizeLetterText, namesCouldBeSamePerson } from "@/lib/itin/read-itin-letter"
 import {
   assetsPathOfUrl, attachmentDirAllowed, candidateNamedIn, chatAttachmentsOf, chatSaveCallerKey, chatSaveKeyPrefix, claimedSizeProblem, contactOfChatSaveKey, decideItinWrite, defaultLetterName,
   extForMime, fileNameHasTaxNumber, MAX_CARD_ITEMS, proposeOwner, READABLE_MAX_BYTES, sniffReadableMime, visibilityPlan, withoutKnownExtension,
@@ -163,9 +163,10 @@ async function loadPeople(row: MessageRow): Promise<PeopleResult> {
     const m = byContact.get(id) as { name: string; alt: string[] }
     const memberNames = [m.name, ...m.alt].filter(Boolean)
     // A member is linked to a contact by id — or, when the member row has no contact, by EMAIL. Two people who share an email would be
-    // taken for one: a member whose name has nothing in common with the contact's own is NOT that contact (never offered as them, never an alternative spelling).
-    const same = c.full_name ? memberNames.filter((n) => namesShareAWord(n, c.full_name)) : memberNames
-    const other = c.full_name ? memberNames.filter((n) => !namesShareAWord(n, c.full_name)) : []
+    // taken for one: a member who is not a spelling of the contact's own name is NOT that contact (never offered as them, never an alternative spelling).
+    // A family name alone is not enough — a wife and a husband share one, and one e-mail.
+    const same = c.full_name ? memberNames.filter((n) => namesCouldBeSamePerson(n, c.full_name)) : memberNames
+    const other = c.full_name ? memberNames.filter((n) => !namesCouldBeSamePerson(n, c.full_name)) : []
     if (other.length > 0) notOffered.push(`${other.join(", ")} is linked to ${c.full_name}'s contact record, but the names do not match — not offered; fix the member's contact link first.`)
     if (memberNames.length > 0 && same.length === 0) continue
     const name = c.full_name || same[0] || "Member"
@@ -354,6 +355,8 @@ async function saveOne(row: MessageRow, atts: ChatAttachment[], pr: PeopleResult
     itin = formatItin(input.itin)
   }
   if (input.issueDate && !itin) return refuse("Enter the ITIN together with its date, or clear the date.")
+  // "I checked: same person" was given for ONE ITIN — if the digits were changed after it, the tick counts for nothing
+  const holderOk = input.itinHolderOk && !!itin && !!input.itinHolderFor && input.itinHolderFor.replace(/\D/g, "") === itin.replace(/\D/g, "")
   if (input.issueDate) {
     // against the date of birth the CRM holds AND the one the reader saw on this letter (the CRM's is often empty)
     for (const dob of [record.dateOfBirth, input.letterDateOfBirth]) {
@@ -369,12 +372,12 @@ async function saveOne(row: MessageRow, atts: ChatAttachment[], pr: PeopleResult
 
   // This ITIN is already on ANOTHER contact's record: the letter is probably on the wrong person. Asked BEFORE the file is filed (so a wrong pick
   // leaves no stray copy), and only when the ITIN would really be written. A duplicate contact of the same person is let through when staff say so.
-  if (itin && !input.itinHolderOk) {
+  if (itin && !holderOk) {
     const early = decideItinWrite({ existingItin: record.itin, existingIssueDate: record.issueDate, newItin: itin, newDate: input.issueDate, replace: input.replaceItin })
     if (early.writeItin) {
       const holder = await otherHolderOfItin(itin, person.contactId)
       if (holder === "error") return refuse("Could not check whether this ITIN is already on another person's record — nothing was saved. Please try again.")
-      if (holder) return { ...refuse(`This ITIN is already on ${holder}'s record, so nothing was saved. Check whose letter this is. If ${holder} and ${person.name} are the same person (two contact records), tick "I checked" and save again.`), itinHeldBy: holder }
+      if (holder) return { ...refuse(`This ITIN is already on ${holder}'s record, so nothing was saved. Check whose letter this is. If ${holder} and ${person.name} are the same person (two contact records), tick "I checked" and save again.`), itinHeldBy: holder, itinHeldItin: itin }
     }
   }
 
@@ -403,6 +406,9 @@ async function saveOne(row: MessageRow, atts: ChatAttachment[], pr: PeopleResult
       contactId: person.contactId, name: fileName, bytes, mimeType: mime, documentType: ITIN_LETTER_TYPE, callerKey,
       accountId: linkedAccountId, viaAccountId: row.account_id ?? linkedAccountId, contactName: person.name,
       portalVisible: false, actor: actorId, folderKind: "itin",
+      // the key already says WHICH bytes these are (message + the file's fingerprint + the person): a copy that is already there is never
+      // overwritten with the chat's original, even when staff have since put a newer version of it in Storage
+      contentChanged: false,
       row: { document_type_name: "ITIN Letter", category: 2, category_name: "Contacts", status: "classified" },
     })
   } catch (e) {
@@ -446,13 +452,16 @@ async function saveOne(row: MessageRow, atts: ChatAttachment[], pr: PeopleResult
     warn("The file is saved, but the record could not be read again, so the ITIN was NOT written — press Save again to retry.")
   } else {
     decision = decideItinWrite({ existingItin: before.itin, existingIssueDate: before.issueDate, newItin: itin, newDate: input.issueDate, replace: input.replaceItin })
-    if (decision.note) {
-      // "kept, not written" is not a success: staff gave a value and it is NOT on the record — amber, and the card stays open so "replace" can be ticked.
-      // A cleared old date is a to-do (the record now has NO issue date), so it is amber too — saving again with the new date fills it.
-      if (decision.kept || decision.clearDate) { partial = true; warn(decision.note) } else ok(decision.note)
+    // "kept, not written" is not a success: staff gave a value and it is NOT on the record — amber, and the card stays open so "replace" can be ticked.
+    // The line about a CLEARED old date waits until the clearing has really happened (below): the write may be refused or fail.
+    if (decision.note && !decision.clearDate) {
+      if (decision.kept) { partial = true; warn(decision.note) } else ok(decision.note)
     }
+    // The ITIN on this letter is not the one the record holds, and staff did not say "replace": the letter may belong to somebody else.
+    // It is then never shown to — or announced to — the person it was filed under.
+    if (itin && before.itin && !decision.writeItin && before.itin.replace(/\D/g, "") !== itin.replace(/\D/g, "")) itinBlocked = true
     // the same question again as a net (the record may have changed since the first answer); skipped when staff already said "I checked"
-    if (decision.writeItin && itin && !input.itinHolderOk) {
+    if (decision.writeItin && itin && !holderOk) {
       const other = await otherHolderOfItin(itin, person.contactId)
       if (other === "error") {
         itinBlocked = true
@@ -475,6 +484,8 @@ async function saveOne(row: MessageRow, atts: ChatAttachment[], pr: PeopleResult
         done.issueDateWritten = decision.writeDate
         done.issueDateCleared = decision.clearDate && !decision.writeDate
         ok(`${decision.writeItin ? "ITIN" : "Issue date"}${decision.writeItin && decision.writeDate ? " and issue date" : ""} saved on ${person.name}'s record${w.itin_renewal_date ? ` (renewal ${w.itin_renewal_date})` : ""}.`)
+        // the old date really is gone now: a to-do (the record has NO issue date), so amber — saving again with the new date fills it
+        if (done.issueDateCleared && decision.note) { partial = true; warn(decision.note) }
       } catch (e) {
         partial = true
         warn(`The file is saved, but the ITIN could not be written on the record (${e instanceof Error ? e.message : "error"}) — you can press Save again to retry, or enter it on the contact.`)
@@ -495,7 +506,9 @@ async function saveOne(row: MessageRow, atts: ChatAttachment[], pr: PeopleResult
   } else if (plan.show && itinBlocked) {
     // the ITIN check says this letter may belong to somebody else: it must not be shown to — or announced to — the person it was filed under
     partial = true
-    warn(`NOT shown to ${person.name}: the ITIN check above says this letter may belong to somebody else. Check whose letter it is first.`)
+    warn(wasVisible
+      ? `Left as it is: this file is already visible to ${person.name}, but the ITIN check above says this letter may belong to somebody else. This card never hides a file — hide it in Storage if that is wrong. No notification was sent.`
+      : `NOT shown to ${person.name}: the ITIN check above says this letter may belong to somebody else. Check whose letter it is first (or tick "replace" if the ITIN on the record is the wrong one).`)
   } else if (!plan.show) {
     if (wasVisible) warn(`Left as it is: this file is already visible to ${person.name}. This card never hides a file — hide it in Storage if that is wrong. No notification was sent.`)
     else ok("Kept hidden from the client. No notification was sent.")
