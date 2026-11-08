@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'fs'
 import {
   VOICE_PREVIEW,
   chatPreviewText,
@@ -231,5 +232,35 @@ describe('fillVoiceListPreviews (the staff list row for a voice-only last messag
   it('a row with words never changes even if a voice note shares its moment', () => {
     const out = fillVoiceListPreviews(rows, [{ created_at: t2, attachments: [{ url: 'https://x/n.m4a', mime_type: 'audio/mp4' }] }])
     expect(out[1].last_message).toBe('Hello')
+  })
+})
+
+// The client may listen to a voice note but is given no way to save it (Antonio 2026-11-08). The project has no jsdom to render the
+// player, so these guard the source: the portal chat asks for "no download", the staff screens keep the Download link.
+describe('voice note download: staff only', () => {
+  const read = (p: string) => readFileSync(p, 'utf8')
+  const player = read('components/team-chat/voice-note.tsx')
+  const usage = (src: string) => src.match(/<VoiceNote[^>]*?\/>/gs) ?? []
+
+  it('the client portal chat switches the download off and shows no Download link', () => {
+    const calls = usage(read('components/portal/portal-chat.tsx'))
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toContain('hideDownload')
+    expect(calls[0]).not.toContain('downloadable')
+  })
+
+  it('the player turns the browser download item off only when asked (TD Talk and the marketing chat keep it)', () => {
+    expect(player).toContain("controlsList={hideDownload ? 'nodownload' : undefined}")
+    expect(player).toContain('hideDownload = false')
+    expect(player).toContain('downloadable = false')
+  })
+
+  it.each(['app/(dashboard)/portal-chats/page.tsx', 'components/contacts/contact-detail.tsx'])('%s (staff) still shows the Download link', file => {
+    const calls = usage(read(file)).filter(c => c.includes('apiBase="/api/portal/chat/message"'))
+    expect(calls.length).toBeGreaterThan(0)
+    for (const c of calls) {
+      expect(c).toContain('downloadable')
+      expect(c).not.toContain('hideDownload')
+    }
   })
 })
