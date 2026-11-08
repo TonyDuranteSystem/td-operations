@@ -290,6 +290,8 @@ export interface SaveItemInput {
   replaceItin: boolean
   /** staff checked that this ITIN, already on ANOTHER contact's record, really is this person's (a duplicate contact) — the answer to `itinHeldBy` */
   itinHolderOk: boolean
+  /** the ITIN that tick was given for (the one named by `itinHeldItin`): a tick only counts for THAT ITIN — if staff change the digits afterwards it counts for nothing */
+  itinHolderFor: string | null
   /** the date of birth the READER saw on this letter — a second guard (the CRM's own date of birth is often empty). The card sends it only when it was read clearly. */
   letterDateOfBirth: string | null
 }
@@ -309,6 +311,8 @@ export interface SaveItemResult {
   keptNeedsReplace?: boolean
   /** NOTHING was saved: this ITIN is already on another contact's record (the name). The card asks "I checked" and saves again with `itinHolderOk`. */
   itinHeldBy?: string
+  /** the ITIN (formatted) that `itinHeldBy` is about — the "I checked" tick is given for this one ITIN only */
+  itinHeldItin?: string
   /** plain-words lines for the card: what was saved, what was written on the contact, what the client sees */
   notes: ResultNote[]
 }
@@ -332,6 +336,7 @@ export function parseSaveItems(body: unknown): SaveItemInput[] | null {
       client: parseClientChoice(r.client),
       replaceItin: r.replaceItin === true,
       itinHolderOk: r.itinHolderOk === true,
+      itinHolderFor: typeof r.itinHolderFor === "string" && r.itinHolderFor.trim() ? r.itinHolderFor.trim() : null,
       letterDateOfBirth: typeof r.letterDateOfBirth === "string" && /^\d{4}-\d{2}-\d{2}$/.test(r.letterDateOfBirth) ? r.letterDateOfBirth : null,
     })
   }

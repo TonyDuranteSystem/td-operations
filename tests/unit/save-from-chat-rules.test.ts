@@ -279,13 +279,13 @@ describe("decideItinWrite — never replaces what the record holds RIGHT NOW wit
 })
 
 describe("parseSaveItems — the browser's request, cleaned", () => {
-  const ok = { index: 0, contactId: "c1", fileName: " n.pdf ", itin: " 900-70-1234 ", issueDate: "2025-10-07", client: "show_silent", replaceItin: true, itinHolderOk: true, letterDateOfBirth: "1990-03-03" }
+  const ok = { index: 0, contactId: "c1", fileName: " n.pdf ", itin: " 900-70-1234 ", issueDate: "2025-10-07", client: "show_silent", replaceItin: true, itinHolderOk: true, itinHolderFor: " 900-70-1234 ", letterDateOfBirth: "1990-03-03" }
   it("cleans a good request", () => {
-    expect(parseSaveItems({ items: [ok] })).toEqual([{ index: 0, contactId: "c1", fileName: " n.pdf ", itin: "900-70-1234", issueDate: "2025-10-07", client: "show_silent", replaceItin: true, itinHolderOk: true, letterDateOfBirth: "1990-03-03" }])
+    expect(parseSaveItems({ items: [ok] })).toEqual([{ index: 0, contactId: "c1", fileName: " n.pdf ", itin: "900-70-1234", issueDate: "2025-10-07", client: "show_silent", replaceItin: true, itinHolderOk: true, itinHolderFor: "900-70-1234", letterDateOfBirth: "1990-03-03" }])
   })
   it("blank ITIN/date become null; an unknown client choice becomes hidden; replace needs an exact true; a bad letter date of birth is dropped", () => {
-    const r = parseSaveItems({ items: [{ index: 1, contactId: "c2", itin: "  ", issueDate: "", client: "everyone", replaceItin: "yes", itinHolderOk: "yes", letterDateOfBirth: "05/05/1998" }] })
-    expect(r).toEqual([{ index: 1, contactId: "c2", fileName: "", itin: null, issueDate: null, client: "hidden", replaceItin: false, itinHolderOk: false, letterDateOfBirth: null }])
+    const r = parseSaveItems({ items: [{ index: 1, contactId: "c2", itin: "  ", issueDate: "", client: "everyone", replaceItin: "yes", itinHolderOk: "yes", itinHolderFor: 5, letterDateOfBirth: "05/05/1998" }] })
+    expect(r).toEqual([{ index: 1, contactId: "c2", fileName: "", itin: null, issueDate: null, client: "hidden", replaceItin: false, itinHolderOk: false, itinHolderFor: null, letterDateOfBirth: null }])
   })
   it("refuses a missing list, an empty list, too many, a bad index, an index past the card's limit, the same attachment twice and a missing person", () => {
     expect(parseSaveItems(null)).toBeNull()

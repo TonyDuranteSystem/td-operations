@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { readItinLetter, isValidItin, formatItin, isValidItinMiddle, checkIssueDate, personNamedInText, namesShareAWord } from "@/lib/itin/read-itin-letter"
+import { readItinLetter, isValidItin, formatItin, isValidItinMiddle, checkIssueDate, personNamedInText, namesCouldBeSamePerson, nameWords } from "@/lib/itin/read-itin-letter"
 
 // MADE-UP letters (no real person, no real number). They copy the SHAPE and the scan noise of two real IRS notices:
 //  - "CP565A": loose notice-date line (no label), "Date of Birth:" at the top right, the date of birth printed again in the table;
@@ -341,17 +341,43 @@ describe("personNamedInText — whose letter is it", () => {
   })
 })
 
-describe("namesShareAWord — could two spellings be the same person", () => {
-  it("shares a whole word → possibly the same person; nothing in common → two different people", () => {
-    expect(namesShareAWord("Pete Papik", "Peter Papik")).toBe(true)
-    expect(namesShareAWord("Giulia Rossi", "Giuliana Maria Rossi")).toBe(true)
-    expect(namesShareAWord("JOSÉ Álvarez", "Jose Alvarez")).toBe(true)
-    expect(namesShareAWord("Gaia Suriano", "Auralba Grifa")).toBe(false)
-    expect(namesShareAWord("Radomir Knapec", "Peter Papik")).toBe(false)
+describe("namesCouldBeSamePerson — could two spellings be the same person", () => {
+  it("two words in common, or the same first name spelled longer or shorter → the same person", () => {
+    expect(namesCouldBeSamePerson("Pete Papik", "Peter Papik")).toBe(true)
+    expect(namesCouldBeSamePerson("Giulia Rossi", "Giuliana Maria Rossi")).toBe(true)
+    expect(namesCouldBeSamePerson("JOSÉ Álvarez", "Jose Alvarez")).toBe(true)
+    expect(namesCouldBeSamePerson("Amato Biagio", "Biagio Amato")).toBe(true)
+    expect(namesCouldBeSamePerson("Mark Eke", "Mark Botond Eke")).toBe(true)
+    expect(namesCouldBeSamePerson("Nemeskeri Peter Marton", "Peter Marton Nemeskeri")).toBe(true)
   })
-  it("empty or one-letter words never match", () => {
-    expect(namesShareAWord("", "Peter Papik")).toBe(false)
-    expect(namesShareAWord(null, "Peter Papik")).toBe(false)
-    expect(namesShareAWord("J Q", "Q J")).toBe(false)
+  it("a family name alone is NOT enough: a wife and a husband (one e-mail, one surname) are two people", () => {
+    expect(namesCouldBeSamePerson("Mary Smith", "John Smith")).toBe(false)
+    expect(namesCouldBeSamePerson("Anna Rossi", "Marco Rossi")).toBe(false)
+    // a first name that merely STARTS the same is not a spelling of it when it is too short to say anything
+    expect(namesCouldBeSamePerson("Al Smith", "Alan Smith")).toBe(false)
+  })
+  it("nothing in common → two different people", () => {
+    expect(namesCouldBeSamePerson("Gaia Suriano", "Auralba Grifa")).toBe(false)
+    expect(namesCouldBeSamePerson("Radomir Knapec", "Peter Papik")).toBe(false)
+  })
+  it("empty or one-letter words never match; a one-word name matches only itself", () => {
+    expect(namesCouldBeSamePerson("", "Peter Papik")).toBe(false)
+    expect(namesCouldBeSamePerson(null, "Peter Papik")).toBe(false)
+    expect(namesCouldBeSamePerson("J Q", "Q J")).toBe(false)
+    expect(namesCouldBeSamePerson("Smith", "John Smith")).toBe(false)
+    expect(namesCouldBeSamePerson("J Smith", "Mary Smith")).toBe(false)
+    expect(namesCouldBeSamePerson("Madonna", "madonna")).toBe(true)
+  })
+  it("names in other alphabets still have words: the same Cyrillic name is the same person, a different one is not", () => {
+    expect(nameWords("Иван Петров")).toEqual(["иван", "петров"])
+    expect(namesCouldBeSamePerson("Иван Петров", "Петров Иван")).toBe(true)
+    expect(namesCouldBeSamePerson("Иван Петров", "Мария Петрова")).toBe(false)
+    expect(namesCouldBeSamePerson("王伟", "王伟")).toBe(true)
+  })
+  it("letters that do not split into base + accent are spelled as an English letter spells them", () => {
+    expect(nameWords("Paweł Nowak")).toEqual(["pawel", "nowak"])
+    expect(nameWords("Søren Jørgensen")).toEqual(["soren", "jorgensen"])
+    expect(namesCouldBeSamePerson("Søren Jørgensen", "Soren Jorgensen")).toBe(true)
+    expect(personNamedInText("PAWEL NOWAK\n12 MAIN ST", "Paweł Nowak")).toBe(true)
   })
 })

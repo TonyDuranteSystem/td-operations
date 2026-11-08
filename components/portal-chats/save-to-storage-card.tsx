@@ -58,8 +58,9 @@ function ItemSection({ item, form, setForm, locked, saving, result, resultFor }:
   const savedNowFor = result?.ok ? resultFor : null
   const savedElsewhere = item.candidates.filter((c) => c.contactId !== form.contactId && (c.alreadySaved || c.contactId === savedNowFor))
   // the server stopped because the ITIN is on another contact's record: the "I checked" tick belongs to the person that answer was about
-  const holderAsked = !!result?.itinHeldBy && resultFor === form.contactId
   const itinTyped = form.itin.trim()
+  // ...and about THAT ITIN: once the digits are changed the question is gone (a new ITIN is checked afresh by the server)
+  const holderAsked = !!result?.itinHeldBy && resultFor === form.contactId && !!result.itinHeldItin && normDigits(result.itinHeldItin) === normDigits(itinTyped)
   const sameItin = !!cand?.existingItin && !!itinTyped && normDigits(cand.existingItin) === normDigits(itinTyped)
   const diffItin = !!cand?.existingItin && !!itinTyped && !sameItin
   // a held issue date also needs "replace" when the record has NO ITIN number yet (the server keeps it and says so)
@@ -143,7 +144,7 @@ function ItemSection({ item, form, setForm, locked, saving, result, resultFor }:
               <p className="text-xs font-semibold text-zinc-700">What was read from the letter</p>
               <div>
                 <div className="flex items-center justify-between gap-2"><label className="text-xs font-medium text-zinc-600" htmlFor={`itin-${item.index}`}>ITIN</label><StatusBadge f={item.itin} checked={form.itinChecked || itinTyped !== (item.itin?.value ?? '')} /></div>
-                <input id={`itin-${item.index}`} value={form.itin} disabled={disabled} onChange={(e) => set({ itin: e.target.value })} placeholder="9XX-XX-XXXX" className="w-full rounded-md border border-zinc-300 px-2 py-1.5 font-mono text-sm" data-testid={`save-card-itin-${item.index}`} />
+                <input id={`itin-${item.index}`} value={form.itin} disabled={disabled} onChange={(e) => set({ itin: e.target.value, holderChecked: false })} placeholder="9XX-XX-XXXX" className="w-full rounded-md border border-zinc-300 px-2 py-1.5 font-mono text-sm" data-testid={`save-card-itin-${item.index}`} />
                 <Evidence f={item.itin} />
                 {item.itin?.status === 'unsure' && item.itin.value === itinTyped && (
                   <label className="mt-1 flex items-center gap-1.5 text-xs text-amber-800"><input type="checkbox" checked={form.itinChecked} disabled={disabled} onChange={(e) => set({ itinChecked: e.target.checked })} /> I checked the ITIN against the scan</label>
@@ -282,7 +283,7 @@ export function SaveToStorageCard({ messageId, onClose }: { messageId: string; o
         messageId: data.messageId,
         items: included.map((it) => {
           const f = forms[it.index]
-          return { index: it.index, contactId: f.contactId, fileName: f.fileName, itin: f.itin.trim() || null, issueDate: f.issueDate || null, client: f.client, replaceItin: f.replaceItin, itinHolderOk: f.holderChecked, letterDateOfBirth: trustedLetterDateOfBirth(it) }
+          return { index: it.index, contactId: f.contactId, fileName: f.fileName, itin: f.itin.trim() || null, issueDate: f.issueDate || null, client: f.client, replaceItin: f.replaceItin, itinHolderOk: f.holderChecked, itinHolderFor: f.holderChecked ? results[it.index]?.itinHeldItin ?? null : null, letterDateOfBirth: trustedLetterDateOfBirth(it) }
         }),
       }
       const res = await fetch('/api/crm-store/save-from-chat/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })

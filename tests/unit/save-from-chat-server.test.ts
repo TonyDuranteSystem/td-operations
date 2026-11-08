@@ -142,7 +142,7 @@ function handler(table: string, ops: Op[]): { rows?: unknown[]; error?: unknown 
 }
 
 function input(over: Partial<SaveItemInput> = {}): SaveItemInput {
-  return { index: 0, contactId: "c1", fileName: "", itin: null, issueDate: null, client: "hidden", replaceItin: false, itinHolderOk: false, letterDateOfBirth: null, ...over }
+  return { index: 0, contactId: "c1", fileName: "", itin: null, issueDate: null, client: "hidden", replaceItin: false, itinHolderOk: false, itinHolderFor: null, letterDateOfBirth: null, ...over }
 }
 const noteTexts = (r: { notes: Array<{ text: string; level: string }> }) => r.notes.map((n) => `${n.level === "warn" ? "[WARN] " : ""}${n.text}`)
 
@@ -196,6 +196,11 @@ describe("saveChatAttachmentsToStorage — the file", () => {
     expect(call.callerKey).toMatch(new RegExp(`^chat-attachment:${MSG}:[0-9a-f]{64}:c1$`))
     expect(call.callerKey).not.toMatch(/scan/i)
     expect(call.name).toBe("ITIN Letter - Jane Sample.pdf")
+  })
+
+  it("a copy that is already in Storage is never given the chat's original as a new version: the save says the content is not changed", async () => {
+    await saveOne()
+    expect(vi.mocked(saveDocumentForContact).mock.calls[0][0]).toMatchObject({ contentChanged: false })
   })
 
   it("the same attachment for ANOTHER person is another key (so another file) — never the first person's", async () => {
@@ -362,7 +367,7 @@ describe("saveChatAttachmentsToStorage — what is written on the contact", () =
   it("an ITIN already on ANOTHER person's record: NOTHING is saved (no stray copy), the answer names who holds it, and no client step runs", async () => {
     state.other = "John Example"
     const r = await saveOne({ itin: "900-70-1234", client: "show_notify" })
-    expect(r).toMatchObject({ ok: false, itinHeldBy: "John Example" })
+    expect(r).toMatchObject({ ok: false, itinHeldBy: "John Example", itinHeldItin: "900-70-1234" })
     expect(r.error).toMatch(/already on John Example's record, so nothing was saved/)
     expect(r.error).toMatch(/tick "I checked"/)
     expect(saveDocumentForContact).not.toHaveBeenCalled()
@@ -373,11 +378,44 @@ describe("saveChatAttachmentsToStorage — what is written on the contact", () =
 
   it("…and when staff say 'I checked' (a duplicate contact of the same person) the file is saved, the ITIN written and the client step runs", async () => {
     state.other = "John Example"
-    const r = await saveOne({ itin: "900-70-1234", client: "show_notify", itinHolderOk: true })
+    const r = await saveOne({ itin: "900-70-1234", client: "show_notify", itinHolderOk: true, itinHolderFor: "900-70-1234" })
     expect(r).toMatchObject({ ok: true, partial: false })
     expect(saveDocumentForContact).toHaveBeenCalledTimes(1)
     expect(writeITINFields).toHaveBeenCalledWith("c1", { itin_number: "900-70-1234" })
     expect(notifyClientsOfNewDocument).toHaveBeenCalledTimes(1)
+  })
+
+  it("the 'I checked' tick counts for the ITIN it was given for ONLY: the digits changed afterwards (or no ITIN named) and the question is asked again, nothing saved", async () => {
+    state.other = "John Example"
+    const changed = await saveOne({ itin: "900-70-5678", itinHolderOk: true, itinHolderFor: "900-70-1234" })
+    expect(changed).toMatchObject({ ok: false, itinHeldBy: "John Example", itinHeldItin: "900-70-5678" })
+    const unnamed = await saveOne({ itin: "900-70-1234", itinHolderOk: true, itinHolderFor: null })
+    expect(unnamed).toMatchObject({ ok: false, itinHeldBy: "John Example" })
+    expect(saveDocumentForContact).not.toHaveBeenCalled()
+    expect(writeITINFields).not.toHaveBeenCalled()
+    // the same ITIN typed with other separators is still the same ITIN
+    const same = await saveOne({ itin: "900 70 1234", itinHolderOk: true, itinHolderFor: "900-70-1234" })
+    expect(same).toMatchObject({ ok: true })
+  })
+
+  it("the line 'the old date was cleared' appears only once the clearing has really happened — a net that blocks the write leaves no such line", async () => {
+    state.people[0].itin = "901-54-5678"
+    state.people[0].issue = "2020-01-01"
+    state.otherSeq = [null, "John Example"]
+    const r = await saveOne({ itin: "900-70-1234", replaceItin: true })
+    expect(writeITINFields).not.toHaveBeenCalled()
+    expect(state.people[0].issue).toBe("2020-01-01")
+    expect(noteTexts(r).join(" | ")).not.toMatch(/cleared/)
+    expect(noteTexts(r).join(" | ")).toMatch(/already on John Example's record, so it was NOT written/)
+  })
+
+  it("…and a write that throws leaves no 'cleared' line either", async () => {
+    state.people[0].itin = "901-54-5678"
+    state.people[0].issue = "2020-01-01"
+    vi.mocked(writeITINFields).mockRejectedValueOnce(new Error("db down"))
+    const r = await saveOne({ itin: "900-70-1234", replaceItin: true })
+    expect(noteTexts(r).join(" | ")).not.toMatch(/cleared/)
+    expect(noteTexts(r).join(" | ")).toMatch(/could not be written/)
   })
 
   it("the question is asked only when the ITIN would really be written: a record that already holds this ITIN saves the file", async () => {
@@ -495,6 +533,42 @@ describe("saveChatAttachmentsToStorage — the client", () => {
     expect(notifyClientsOfNewDocument).not.toHaveBeenCalled()
     expect(r.partial).toBe(true)
     expect(noteTexts(r).join(" ")).toMatch(/stays hidden: This document is staff-only/)
+  })
+
+  it("a record that holds a DIFFERENT ITIN (no 'replace'): the letter may be somebody else's, so it is NOT shown and NOT announced, whatever was chosen", async () => {
+    state.people[0].itin = "901-54-5678"
+    for (const client of ["show_silent", "show_notify"] as const) {
+      const r = await saveOne({ itin: "900-70-1234", client })
+      expect(r).toMatchObject({ ok: true, partial: true })
+      expect(noteTexts(r).join(" | ")).toMatch(/\[WARN\] NOT shown to Jane Sample/)
+    }
+    expect(setClientVisibility).not.toHaveBeenCalled()
+    expect(notifyClientsOfNewDocument).not.toHaveBeenCalled()
+  })
+
+  it("…with 'replace' ticked the ITIN is written and the client choice runs as usual", async () => {
+    state.people[0].itin = "901-54-5678"
+    const r = await saveOne({ itin: "900-70-1234", replaceItin: true, client: "show_notify" })
+    expect(r.partial).toBe(false)
+    expect(setClientVisibility).toHaveBeenCalledTimes(1)
+    expect(notifyClientsOfNewDocument).toHaveBeenCalledTimes(1)
+  })
+
+  it("the SAME ITIN already on the record (only the date kept) is not a doubt about whose letter it is: the client choice runs", async () => {
+    state.people[0].itin = "900-70-1234"
+    state.people[0].issue = "2020-01-01"
+    await saveOne({ itin: "900-70-1234", issueDate: "2025-10-07", client: "show_silent" })
+    expect(setClientVisibility).toHaveBeenCalledTimes(1)
+  })
+
+  it("a file that is ALREADY visible is not called 'NOT shown': the line says it is visible and was left as it is, and nobody is notified", async () => {
+    state.visible = true
+    state.people[0].itin = "901-54-5678"
+    const r = await saveOne({ itin: "900-70-1234", client: "show_notify" })
+    const texts = noteTexts(r).join(" | ")
+    expect(texts).toMatch(/\[WARN\] Left as it is: this file is already visible to Jane Sample, but the ITIN check above/)
+    expect(texts).not.toMatch(/NOT shown/)
+    expect(notifyClientsOfNewDocument).not.toHaveBeenCalled()
   })
 
   it("'hidden' on a file that is already visible changes nothing and says so (this card never hides a file)", async () => {
@@ -667,6 +741,29 @@ describe("readChatAttachmentsForCard", () => {
     expect(items[0].candidates).toEqual([])
     expect(items[0].proposedContactId).toBeNull()
     expect(items[0].ownerReason).toMatch(/Gaia Suriano is linked to Jane Sample's contact record, but the names do not match/)
+  })
+
+  it("a RELATIVE who shares the family name (and the e-mail, so the same contact) is not the same person: his letter does not make Jane 'named'", async () => {
+    vi.mocked(resolveAccountMembersForChat).mockResolvedValueOnce([
+      { memberId: "m1", name: "Jane Sample", contactId: "c1", isCompanyMember: false, isPrimary: true, resolvable: true },
+      { memberId: "m9", name: "Peter Sample", contactId: "c1", isCompanyMember: false, isPrimary: false, resolvable: true },
+    ])
+    ocrLetterFor("PETER SAMPLE")
+    const items = await read()
+    expect(items[0].candidates.map((c) => c.contactId)).toEqual(["c1"])
+    expect(items[0].candidates[0].namedInLetter).toBe(false)
+    expect(items[0].proposedContactId).toBeNull()
+    expect(items[0].ownerReason).toMatch(/Peter Sample is linked to Jane Sample's contact record, but the names do not match/)
+  })
+
+  it("a member whose name is in another alphabet is still offered when it is the contact's own name (it used to have no words at all)", async () => {
+    state.people[0].name = "Иван Петров"
+    vi.mocked(resolveAccountMembersForChat).mockResolvedValueOnce([
+      { memberId: "m1", name: "Иван Петров", contactId: "c1", isCompanyMember: false, isPrimary: true, resolvable: true },
+    ])
+    const items = await read()
+    expect(items[0].candidates.map((c) => c.contactId)).toEqual(["c1"])
+    expect(items[0].ownerReason).not.toMatch(/not offered/)
   })
 
   it("another spelling of the SAME person is still kept (shares a word): 'Jane A. Sample' on the member row, 'Jane Sample' on the contact", async () => {

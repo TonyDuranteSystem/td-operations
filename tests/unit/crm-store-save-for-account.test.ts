@@ -155,6 +155,14 @@ describe("saveDocumentForContact — the ITIN folder", () => {
     await saveDocumentForContact(doc, deps)
     expect(upsertRow).toHaveBeenCalledWith(FILE, expect.objectContaining({ file_name: "W-7_X (2).pdf" }), "created")
   })
+  it("'these exact bytes' (contentChanged: false) reaches the store so an existing copy is left alone; by default nothing is passed", async () => {
+    const save = vi.fn(async () => ({ status: "unchanged", fileId: FILE }))
+    const deps = { liveOwnerOfContact: async () => "person-owner", save: save as unknown as SaveDeps["save"], upsertRow: (async () => ({ id: "row", inserted: false })) as unknown as SaveDeps["upsertRow"], pointer: (id: string) => `store:${id}` }
+    await saveDocumentForContact({ ...doc, contentChanged: false }, deps)
+    expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ contentChanged: false }))
+    await saveDocumentForContact(doc, deps)
+    expect((save.mock.calls[1] as unknown[])[0]).not.toHaveProperty("contentChanged")
+  })
   it("any other error is not swallowed", async () => {
     const save = vi.fn(async () => { throw new Error("disk full") })
     const deps = { liveOwnerOfContact: async () => "person-owner", save: save as unknown as SaveDeps["save"], upsertRow: (async () => ({ id: "row", inserted: true })) as unknown as SaveDeps["upsertRow"], pointer: (id: string) => `store:${id}` }
