@@ -15,7 +15,7 @@ import { useTalkI18n } from '@/components/talk/talk-i18n'
 const repairAsked = new Set<string>()
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export function VoiceNote({ messageId, index, url, transcript: saved, flat, flattenedAt, tone = 'light', onBroken, eager = false, apiBase = '/api/team/messages', repair = true, downloadable = false }: {
+export function VoiceNote({ messageId, index, url, transcript: saved, flat, flattenedAt, tone = 'light', onBroken, eager = false, apiBase = '/api/team/messages', repair = true, downloadable = false, hideDownload = false }: {
   messageId: string
   index: number
   url: string
@@ -32,8 +32,10 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
   apiBase?: string
   /** false = this chat has no repair route (the client-portal chat): the note is played as it is stored and the repair call is never made. TD Talk / Team Chat / marketing leave it on. */
   repair?: boolean
-  /** true = a "Download" link under the player, for the client-portal chat where an old or foreign audio file (a WhatsApp .opus, a Firefox .webm) may not play in this browser. */
+  /** true = a "Download" link under the player. Staff screens only (Portal Chats, the contact chat); the client never gets it. */
   downloadable?: boolean
+  /** true = the browser's own "Download" item in the player's ⋮ menu is switched off too. The client-portal chat: clients listen, they cannot save. It hides the option; the file itself is still an ordinary web address. */
+  hideDownload?: boolean
 }) {
   const { t } = useTalkI18n()
   const [fetched, setFetched] = useState<VoiceTranscript | null>(null)
@@ -97,7 +99,7 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
   return (
     <div className="flex flex-col gap-1" data-testid="voice-note">
       <audio
-        ref={audioRef} controls preload={near ? (eager ? 'auto' : 'metadata') : 'none'} src={src} className="h-10 w-60 max-w-full" onError={onBroken}
+        ref={audioRef} controls controlsList={hideDownload ? 'nodownload' : undefined} preload={near ? (eager ? 'auto' : 'metadata') : 'none'} src={src} className="h-10 w-60 max-w-full" onError={onBroken}
         onPlay={e => stopPlayingAudio(e.currentTarget)} onEnded={swapIfIdle} data-testid="talk-voice-note"
       />
       <button
