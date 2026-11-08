@@ -38,6 +38,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const result = await moveServiceDeliveryToStage({
       delivery_id: params.id,
       target_stage: targetStage,
+      // Company Closure: the step bar asks "this closes the company" in the page first and sends one of these (lib/closure/closing-step.ts)
+      skip_company_close: body.skip_company_close === true,
+      company_close_confirmed: body.company_close_confirmed === true,
       actor: 'flow-stepper',
       notes: `Moved to "${targetStage}" via flow Workspace stepper`,
     })

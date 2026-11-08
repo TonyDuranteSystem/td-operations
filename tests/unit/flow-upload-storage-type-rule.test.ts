@@ -9,6 +9,8 @@ const fx = vi.hoisted(() => ({
   staff: true,
   resolved: { ok: true, slug: 'itin_letter' } as { ok: true; slug: string | null } | { ok: false; error: string },
   boxDefault: 'itin_letter' as string | null,
+  lockProblem: null as string | null,
+  lockCalls: [] as Array<Record<string, unknown>>,
   resolveCalls: [] as Array<Record<string, unknown>>,
   removed: [] as string[],
   downloads: [] as string[],
@@ -20,6 +22,7 @@ vi.mock('@/lib/auth/require-staff-route', () => ({
 vi.mock('@/lib/flows/flow-upload-type', () => ({
   resolveFlowUploadType: async (input: Record<string, unknown>) => { fx.resolveCalls.push(input); return fx.resolved },
   boxDefaultType: async () => fx.boxDefault,
+  lockedStepUploadProblem: async (input: Record<string, unknown>) => { fx.lockCalls.push(input); return fx.lockProblem },
 }))
 vi.mock('@/lib/supabase-admin', () => ({
   supabaseAdmin: {
@@ -46,7 +49,7 @@ const req = (body: Record<string, unknown>) => new NextRequest('http://localhost
 const call = (body: Record<string, unknown>) => upload(req(body), { params: { id: 'sd-1' } })
 const BODY = { storage_path: 'flow-uploads/sd-1/1_letter.pdf', file_name: 'letter.pdf', mime_type: 'application/pdf', flow_stage: 'ITIN Approved' }
 
-beforeEach(() => { fx.staff = true; fx.boxDefault = 'itin_letter'; fx.resolved = { ok: true, slug: 'itin_letter' }; fx.resolveCalls = []; fx.removed = []; fx.downloads = [] })
+beforeEach(() => { fx.staff = true; fx.boxDefault = 'itin_letter'; fx.resolved = { ok: true, slug: 'itin_letter' }; fx.resolveCalls = []; fx.removed = []; fx.downloads = []; fx.lockProblem = null; fx.lockCalls = [] })
 
 describe('POST /api/flows/[id]/upload-document — the document type follows the Storage rule', () => {
   it('a refused type -> 400 with the plain sentence, NOTHING downloaded, the staged file removed', async () => {
@@ -54,6 +57,18 @@ describe('POST /api/flows/[id]/upload-document — the document type follows the
     const res = await call({ ...BODY, document_type: 'made_up' })
     expect(res.status).toBe(400)
     expect(await res.json()).toEqual({ success: false, detail: 'Choose a document type from the list.' })
+    expect(fx.downloads).toEqual([])
+    expect(fx.removed).toEqual([BODY.storage_path])
+  })
+
+  it('a LOCKED step refuses a file of the wrong type (production test 2026-11-07: an unrelated "Other document" opened the lock) -> 400 with the sentence, NOTHING downloaded, the staged file removed', async () => {
+    fx.lockProblem = 'This step stays locked until the Certificate of Dissolution is uploaded, so only that kind of file is accepted here.'
+    fx.resolved = { ok: true, slug: 'other_document' }
+    const res = await call({ ...BODY, flow_stage: 'State Dissolution Filing', document_type: 'other_document' })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.detail).toContain('only that kind of file')
+    expect(fx.lockCalls[0]).toMatchObject({ stageName: 'State Dissolution Filing', chosenSlug: 'other_document' })
     expect(fx.downloads).toEqual([])
     expect(fx.removed).toEqual([BODY.storage_path])
   })

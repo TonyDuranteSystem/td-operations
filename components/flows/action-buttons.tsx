@@ -15,6 +15,9 @@ import type { StageAction } from '@/lib/flows/stage-layout'
 import { actionConfirmText } from '@/lib/flows/action-confirm'
 import { actionTargetStage } from '@/lib/flows/action-target'
 import { REVIEW_REQUESTS_CHANGED_EVENT } from '@/lib/flows/review-requests-event'
+import { ClosingQuestion } from '@/components/flows/closing-question'
+import { FLOW_DOC_UPLOADED_EVENT, type FlowDocUploadedDetail } from '@/components/flows/document-upload'
+import { FLOW_TRACKING_SAVED_EVENT, type FlowTrackingSavedDetail } from '@/lib/flows/tracking-saved-event'
 
 interface ActionButtonsProps {
   serviceDeliveryId: string
@@ -98,14 +101,6 @@ interface ResolvedAction extends ActionConfig {
   askBrief: boolean
 }
 
-/** What the closing question shows under its sentence (GET /api/flows/[id]/closing-brief). */
-interface ClosingBriefView {
-  headline: string
-  lines: string[]
-  /** the wizard named a different company than the one the job is linked to — shown in red, and "finish without closing" is offered */
-  warning: string | null
-}
-
 /**
  * Resolve a stage_layout action into a render-ready button.
  *  - string → looked up in ACTION_CONFIG (fixed transitions). Unknown → null.
@@ -145,8 +140,21 @@ export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }
   const [warning, setWarning] = useState<string | null>(null)
   // the button whose question is showing ("are you sure" panel); an in-page panel, not window.confirm (blocked in some browsers)
   const [askingUid, setAskingUid] = useState<string | null>(null)
-  // the closing brief of the question that is showing: undefined = not asked / not needed, 'loading', or the lines (null = could not be read)
-  const [brief, setBrief] = useState<ClosingBriefView | 'loading' | null | undefined>(undefined)
+
+  // A refusal ("A document must be uploaded…", "Save the tracking number…") is stale once the document is uploaded or the number saved — drop the
+  // red line then instead of leaving it until the next click (production end-to-end test 2026-11-07).
+  useEffect(() => {
+    function clearIfMine(e: Event) {
+      const detail = (e as CustomEvent<FlowDocUploadedDetail | FlowTrackingSavedDetail>).detail
+      if (!detail || detail.serviceDeliveryId === serviceDeliveryId) setError(null)
+    }
+    window.addEventListener(FLOW_DOC_UPLOADED_EVENT, clearIfMine)
+    window.addEventListener(FLOW_TRACKING_SAVED_EVENT, clearIfMine)
+    return () => {
+      window.removeEventListener(FLOW_DOC_UPLOADED_EVENT, clearIfMine)
+      window.removeEventListener(FLOW_TRACKING_SAVED_EVENT, clearIfMine)
+    }
+  }, [serviceDeliveryId])
 
   // Requests staff wrote next to answers (review screen) but have not sent: "Request Changes (2)", and Approve asks first.
   const hasRequestChanges = (actions ?? []).some((a) => (typeof a === 'string' ? a : a.key) === 'request_changes')
@@ -183,23 +191,13 @@ export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }
     })
   if (resolved.length === 0) return null
 
-  /** Open the question; for the "closes the company" one, also read which company and what goes with it. */
-  async function askQuestion(action: ResolvedAction) {
+  /** Open the question. The "closes the company" one reads which company and what goes with it itself (components/flows/closing-question.tsx). */
+  function askQuestion(action: ResolvedAction) {
     setError(null)
     setAskingUid(action.uid)
-    if (!action.askBrief) { setBrief(undefined); return }
-    setBrief('loading')
-    try {
-      const res = await fetch(`/api/flows/${serviceDeliveryId}/closing-brief`)
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data.success) throw new Error(data.error || 'Could not read the company.')
-      setBrief(data.brief ? { headline: data.headline, lines: data.lines ?? [], warning: data.warning ?? null } : null)
-    } catch {
-      setBrief(null)
-    }
   }
 
-  async function runAction(action: ResolvedAction, opts?: { skipCompanyClose?: boolean }) {
+  async function runAction(action: ResolvedAction, opts?: { skipCompanyClose?: boolean; companyCloseConfirmed?: boolean }) {
     if (busyKey) return
     setAskingUid(null)
     setBusyKey(action.uid)
@@ -209,7 +207,7 @@ export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }
       const res = await fetch(`/api/flows/${serviceDeliveryId}/advance`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_stage: action.targetStage, ...(opts?.skipCompanyClose ? { skip_company_close: true } : {}) }),
+        body: JSON.stringify({ target_stage: action.targetStage, ...(opts?.skipCompanyClose ? { skip_company_close: true } : {}), ...(opts?.companyCloseConfirmed ? { company_close_confirmed: true } : {}) }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
@@ -258,53 +256,38 @@ export function ActionButtons({ serviceDeliveryId, actions, hasCompany = false }
       </div>
       {resolved.map((action) =>
         askingUid === action.uid && action.confirmText ? (
-          <div key={`ask-${action.uid}`} className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
-            <p>{action.confirmText}</p>
-            {action.askBrief && brief === 'loading' && <p className="mt-2 text-amber-700">Checking the company…</p>}
-            {action.askBrief && brief && brief !== 'loading' && (
-              <div className="mt-2">
-                <p className="font-semibold">{brief.headline}</p>
-                {brief.lines.length > 0 && (
-                  <ul className="mt-1 list-disc space-y-0.5 pl-5">
-                    {brief.lines.map((line) => <li key={line}>{line}</li>)}
-                  </ul>
-                )}
-                {brief.warning && (
-                  <p className="mt-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-red-800">
-                    <span className="font-semibold">Check before you answer:</span> {brief.warning}
-                  </p>
-                )}
-              </div>
-            )}
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => runAction(action)}
-                disabled={busyKey !== null || (action.askBrief && brief === 'loading')}
-                className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400"
-              >
-                Yes, confirm
-              </button>
-              {action.askBrief && brief && brief !== 'loading' && brief.warning && (
+          action.askBrief ? (
+            <ClosingQuestion
+              key={`ask-${action.uid}`}
+              serviceDeliveryId={serviceDeliveryId}
+              question={action.confirmText}
+              busy={busyKey !== null}
+              onConfirm={(o) => runAction(action, { skipCompanyClose: o?.skipCompanyClose, companyCloseConfirmed: true })}
+              onCancel={() => setAskingUid(null)}
+            />
+          ) : (
+            <div key={`ask-${action.uid}`} className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+              <p>{action.confirmText}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => runAction(action, { skipCompanyClose: true })}
+                  onClick={() => runAction(action)}
                   disabled={busyKey !== null}
-                  className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed"
+                  className="inline-flex cursor-pointer items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400"
                 >
-                  Finish the job without closing the company
+                  Yes, confirm
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setAskingUid(null)}
-                disabled={busyKey !== null}
-                className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed"
-              >
-                Cancel
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setAskingUid(null)}
+                  disabled={busyKey !== null}
+                  className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
-          </div>
+          )
         ) : null,
       )}
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}

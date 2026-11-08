@@ -34,6 +34,9 @@ export interface MoveStageParams {
   target_stage: string
   actor?: string
   notes?: string
+  /** Company Closure only — passed to the forward advance (see AdvanceStageParams): finish without closing the company / the closing question was answered yes. */
+  skip_company_close?: boolean
+  company_close_confirmed?: boolean
 }
 
 export interface MoveStageResult {
@@ -139,6 +142,8 @@ export async function moveServiceDeliveryToStage(
       target_stage: target.stage_name,
       actor,
       notes: params.notes,
+      skip_company_close: params.skip_company_close,
+      company_close_confirmed: params.company_close_confirmed,
     })
     if (!adv.success) {
       return {
