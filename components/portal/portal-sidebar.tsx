@@ -36,9 +36,18 @@ import { GlobalSearch } from '@/components/shared/global-search'
 import { NavItemHint } from './nav-item-hint'
 import type { PortalAccount } from '@/lib/types'
 import type { PortalNavVisibility, InProgressFormation, InProgressOnboarding } from '@/lib/portal/queries'
-import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
+import { isPartnerPortal } from '@/lib/portal/tier-config'
 import { hubAccess } from '@/lib/portal/invoice-hub'
-import { hasCapability, teammateNavCapability, type TeamCapability } from '@/lib/portal/team/capabilities'
+import type { TeamCapability } from '@/lib/portal/team/capabilities'
+import {
+  BOTTOM_NAV_ITEMS,
+  showCompaniesSection as navShowsCompanies,
+  visibleMainItems,
+  visiblePartnerItems,
+  visibleTierTopItems,
+  type NavRuleContext,
+  type PortalNavItemDef,
+} from '@/lib/portal/nav-rules'
 
 interface PortalSidebarProps {
   user: { email?: string; user_metadata?: { full_name?: string } }
@@ -80,88 +89,35 @@ interface PortalSidebarProps {
   teammateCapabilities?: Record<string, boolean>
 }
 
-// Nav items organized into collapsible groups
-interface NavItem {
-  key: string
-  href: string
-  icon: typeof LayoutDashboard
-  visibilityKey?: keyof PortalNavVisibility // if set, item only shows when this flag is true
-  tierOnly?: string[] // if set, only show for these tiers
-  wizardDynamic?: boolean // if true, also show when hasWizardPending is true
-  partnerOnly?: boolean // if true, only show for partner portal
-  teamAdminOnly?: boolean // if true, only show when canManageTeam is true (Portal Team Access)
-  hintKey?: string // if set, the info-popover text uses nav.hint.<hintKey> instead of deriving it from key
-  needsCompany?: boolean // if true, only show once the client has at least one company (account)
+// The menu entries, their order and who sees each one live in lib/portal/nav-rules.ts (shared with the client app's
+// server answer, so the website and the app can never disagree). This file only adds the icons.
+type NavItem = PortalNavItemDef & { icon: typeof LayoutDashboard }
+
+const NAV_ICONS: Record<string, typeof LayoutDashboard> = {
+  'nav.overview': LayoutDashboard,
+  'nav.chat': MessageCircle,
+  'nav.referrals': Share2,
+  'nav.myClients': Users,
+  'nav.invoices': Receipt,
+  'nav.documents': FolderOpen,
+  'nav.team': Users,
+  'nav.generateDocuments': FilePen,
+  'nav.signDocuments': PenLine,
+  'nav.tdBilling': CreditCard,
+  'nav.bankApplications': Landmark,
+  'nav.requestService': PlusCircle,
+  'nav.myCompany': Briefcase,
+  'nav.offer': FileText,
+  'nav.wizard': PenSquare,
+  'nav.partnerClients': Building2,
+  'nav.partnerReferrals': Share2,
+  'nav.partnerNewRequest': PlusCircle,
+  'nav.partnerInvoices': Receipt,
+  'nav.guide': BookOpen,
 }
+const withIcon = (def: PortalNavItemDef): NavItem => ({ ...def, icon: NAV_ICONS[def.key] })
 
-// Antonio 2026-11-05 — the menu is ONE flat list. The "Personale" / "Aziende" headings are gone (they were the
-// PR 2 Step 7 split of person vs company), and so are the Profilo and TD Communication entries (those pages still
-// exist; only the menu entry went — Profilo's personal details now live on Panoramica, and suspended clients can
-// still reach /portal/profile and /portal/settings). The order below is Antonio's. Each item keeps its own
-// show/hide rule (tier, invoice hub, teammate capabilities); `needsCompany` items appear only once the client has
-// a company. La Mia Azienda sits at the bottom of the list: it is the only menu route to the Services and
-// Deadlines pages now that those cards left Panoramica.
-//
-// Invoices placement (Antonio 2026-05-05): "Lorenzo is just an individual that bought the formation to create a
-// company. Lorenzo, as an individual, will see the invoice for 2,500 that he paid to buy the formation service.
-// After the company is created, he will use the invoice system." So with NO company yet the same slot holds the
-// personal variant (personalInvoicesItem below); with a company it is the full invoicing system.
-const mainItems: NavItem[] = [
-  { key: 'nav.overview', href: '/portal', icon: LayoutDashboard },
-  { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle },
-  { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
-  // Customers page for companies WITHOUT the new invoices screen (the hub's Customers tab replaces it).
-  { key: 'nav.myClients', href: '/portal/customers', icon: Users, visibilityKey: 'customers', needsCompany: true },
-  // 'Clienti e Fatture' once the hub is on for the company, plain 'Fatture' otherwise (label chosen in renderNavItem).
-  { key: 'nav.invoices', href: '/portal/invoices', icon: Receipt, visibilityKey: 'invoices', needsCompany: true },
-  { key: 'nav.documents', href: '/portal/documents', icon: FolderOpen, needsCompany: true },
-  { key: 'nav.team', href: '/portal/team', icon: Users, teamAdminOnly: true, needsCompany: true },
-  { key: 'nav.generateDocuments', href: '/portal/documents/generate', icon: FilePen, visibilityKey: 'documentGenerator', needsCompany: true },
-  // Sign Documents is deliberately NOT gated on data presence — see the
-  // nav.signDocuments branch in isItemVisible() below for why.
-  { key: 'nav.signDocuments', href: '/portal/sign', icon: PenLine, needsCompany: true },
-  { key: 'nav.tdBilling', href: '/portal/billing', icon: CreditCard, visibilityKey: 'billing', needsCompany: true },
-  // Bank Applications — self-service guidance to open a business bank account
-  // (replaces the old Banking Fintech wizard/SD). Active company clients only.
-  { key: 'nav.bankApplications', href: '/portal/banks', icon: Landmark, needsCompany: true },
-  { key: 'nav.requestService', href: '/portal/services/request', icon: PlusCircle },
-  { key: 'nav.myCompany', href: '/portal/company', icon: Briefcase, needsCompany: true },
-]
-
-// Invoices link for personal/individual context (no company yet). Takes the
-// place of the 'nav.invoices' entry in mainItems when showCompaniesSection is
-// false. Same href as the company Invoices, but the page itself
-// already branches: with no account, /portal/invoices renders only the
-// Expenses tab with contact-scoped TD invoices (PR 2 Step 4).
-const personalInvoicesItem: NavItem = {
-  key: 'nav.invoices', href: '/portal/invoices', icon: Receipt,
-  // Distinct hint text — this branch renders only the Expenses tab for a
-  // no-company client (see comment above), not the company's sales-invoicing
-  // system the shared 'nav.invoices' hint describes.
-  hintKey: 'invoicesPersonal',
-}
-
-// Tier-specific items shown above the Personal section (CTAs the client hits
-// before they have a company). Lead → Offer; Onboarding → Wizard.
-const tierTopItems: NavItem[] = [
-  { key: 'nav.offer', href: '/portal/offer', icon: FileText, tierOnly: ['lead'] },
-  { key: 'nav.wizard', href: '/portal/wizard', icon: PenSquare, tierOnly: ['onboarding'], wizardDynamic: true },
-]
-
-
-// Partner-portal items shown only when isPartnerPortal(portalRole). Flat list,
-// not under any section header.
-const partnerItems: NavItem[] = [
-  { key: 'nav.partnerClients', href: '/portal/partner/clients', icon: Building2, partnerOnly: true },
-  { key: 'nav.partnerReferrals', href: '/portal/partner/referrals', icon: Share2, partnerOnly: true },
-  { key: 'nav.partnerNewRequest', href: '/portal/partner/new-request', icon: PlusCircle, partnerOnly: true },
-  { key: 'nav.partnerInvoices', href: '/portal/partner/invoices', icon: Receipt, partnerOnly: true },
-  { key: 'nav.chat', href: '/portal/chat', icon: MessageCircle, partnerOnly: true },
-]
-
-const bottomItems: NavItem[] = [
-  { key: 'nav.guide', href: '/portal/guide', icon: BookOpen },
-]
+const bottomItems: NavItem[] = BOTTOM_NAV_ITEMS.map(withIcon)
 
 
 
@@ -356,103 +312,29 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
   const isPartner = isPartnerPortal(portalRole)
 
-  // Standard visibility filter — same logic the previous structure used,
-  // just factored so it can run against any item array.
-  const isItemVisible = (item: NavItem): boolean => {
-    if (item.teamAdminOnly) return canManageTeam
-    // Teammate (Portal Team Access): nav is governed solely by granted capabilities.
-    if (isTeammate) {
-      const cap = teammateNavCapability(item.key)
-      if (cap === null) return false
-      if (cap === 'always') return true
-      // The hub's Customers tab replaces the separate "My clients" page for a team member who can open the hub.
-      if (item.key === 'nav.myClients' && hubRule.customers && hubRule.setup) return false
-      return hasCapability(teammateCapabilities as Partial<Record<TeamCapability, boolean>>, cap)
-    }
-    if (item.partnerOnly) return isPartner
-
-    if (isPartner) {
-      if (item.tierOnly) return false
-      if (['nav.myCompany', 'nav.documents', 'nav.tdBilling', 'nav.signDocuments', 'nav.invoices', 'nav.myClients', 'nav.businessSettings'].includes(item.key)) return false
-      if (item.key === 'nav.referrals') return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
-      return true
-    }
-
-    if (item.key === 'nav.tdBilling') {
-      if (!isTierFeatureVisible(portalTier || null, 'billing', accountType, portalRole)) return false
-      return navVisibility?.billing ?? false
-    }
-
-    if (item.key === 'nav.myCompany') {
-      return isTierFeatureVisible(portalTier || null, 'services', accountType, portalRole)
-    }
-
-    // Bank Applications — only once the company is fully formed (EIN received →
-    // active tier). A formation-tier client (EIN pending) can't open an account
-    // yet, so the entry stays hidden until then.
-    if (item.key === 'nav.bankApplications') {
-      return (portalTier || 'lead') === 'active'
-    }
-
-    if (item.key === 'nav.referrals') {
-      return isTierFeatureVisible(portalTier || null, 'referralManagement', accountType, portalRole)
-    }
-
-    // Sign Documents — tier-gated ONLY, never gated on "does this client have a
-    // pending document right now". Antonio, 2026-07-22: "this tab must be there
-    // even though there is nothing. It doesn't make sense to have a tab that
-    // disappears if there is no document, or if there is a document."
-    //
-    // The old navVisibility.pendingSignatures gate was wrong in four independent
-    // ways (found via Lorenzo Cassi, who was told "go to Sign Documents" and had
-    // no such entry):
-    //   1. STALE — computed once per full page load in the portal ROOT layout, so
-    //      a client who generated their own OA mid-session never saw the entry
-    //      appear. This was the reported bug.
-    //   2. FAIL-CLOSED — a transient DB error made the count 0, silently hiding
-    //      the only route to the client's signable documents.
-    //   3. INCOMPLETE — it counted 3 document families (OA/lease/SS-4) while
-    //      /portal/sign renders 7 (also MSA, Form 8832, signature_requests such
-    //      as the 8879, and e-sign envelopes). A client whose only pending item
-    //      was an 8879 could not reach the page from the nav at all.
-    //   4. MISMATCHED — it counted ALL rows per family; the page renders only the
-    //      NEWEST row per family, so the two could disagree in either direction.
-    // And the mirror-image failure: once a client SIGNED everything, the count
-    // went to zero and the entry vanished — taking away the route to their own
-    // signed documents.
-    //
-    // A stable, always-present entry deletes all of that and makes support
-    // instructions true. The page owns the empty state (it already had a
-    // bilingual "No documents to sign").
-    if (item.key === 'nav.signDocuments') {
-      return isTierFeatureVisible(portalTier || null, 'pendingSignatures', accountType, portalRole)
-    }
-
-    if (item.visibilityKey) {
-      if (!isTierFeatureVisible(portalTier || null, item.visibilityKey, accountType, portalRole)) return false
-      return navVisibility?.[item.visibilityKey] ?? false
-    }
-
-    if (!item.tierOnly) return true
-    if (item.wizardDynamic && hasWizardPending) return true
-    return item.tierOnly.includes(portalTier || 'lead')
+  // Who sees what: the shared rule in lib/portal/nav-rules.ts (the iPhone client app asks the server the same question).
+  const navCtx: NavRuleContext = {
+    navVisibility,
+    portalTier,
+    accountType,
+    portalRole,
+    hasWizardPending,
+    canManageTeam,
+    isTeammate,
+    teammateCapabilities,
+    hasCompany: accounts.length > 0,
   }
-
-  const visibleTierTop = tierTopItems.filter(isItemVisible)
-  const visiblePartner = partnerItems.filter(isItemVisible)
+  const visibleTierTop = visibleTierTopItems(navCtx).map(withIcon)
+  const visiblePartner = visiblePartnerItems(navCtx).map(withIcon)
   // Company items need at least one account; active-tier with no account (rare edge case) hides them too.
-  const showCompaniesSection = !isPartner && accounts.length > 0
+  const showCompaniesSection = navShowsCompanies(navCtx)
   // The flat menu. With no company yet, the invoices slot holds the personal-receipts variant.
-  const visibleMain = isPartner
-    ? []
-    : mainItems
-        .map(item => (item.key === 'nav.invoices' && !showCompaniesSection ? personalInvoicesItem : item))
-        .filter(item => (!item.needsCompany || showCompaniesSection) && isItemVisible(item))
+  const visibleMain = visibleMainItems(navCtx).map(withIcon)
 
   // Each NavItem's `key` is already 'nav.xxx' — its hover/tap description
   // lives at the matching 'nav.hint.xxx' key by default. `hintKey` overrides
   // that when the same key renders two different contexts with different
-  // real behavior (e.g. the no-company Invoices item — see personalInvoicesItem).
+  // real behavior (e.g. the no-company Invoices item — see PERSONAL_INVOICES_NAV_ITEM in lib/portal/nav-rules.ts).
   // The Invoices item is renamed 'Customers & Invoices' once the hub is on for the company (clients only).
   const invoiceHubNamed = invoicesHubOn
   const navHintText = (item: NavItem) =>

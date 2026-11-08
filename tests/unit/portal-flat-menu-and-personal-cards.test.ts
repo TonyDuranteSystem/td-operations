@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
 import { t } from '@/lib/portal/i18n'
+import { visibleMainItems } from '@/lib/portal/nav-rules'
 import {
   buildEditorData,
   buildIdentityCard,
@@ -18,12 +19,20 @@ import {
 } from '@/lib/portal/personal-info'
 
 const side = readFileSync('components/portal/portal-sidebar.tsx', 'utf8')
+// The menu lists moved out of the sidebar into the shared rules module (2026-11-08, client iPhone app step 1).
+const rules = readFileSync('lib/portal/nav-rules.ts', 'utf8')
+const LIST_NAMES: Record<string, string> = {
+  mainItems: 'MAIN_NAV_ITEMS',
+  tierTopItems: 'TIER_TOP_NAV_ITEMS',
+  partnerItems: 'PARTNER_NAV_ITEMS',
+  bottomItems: 'BOTTOM_NAV_ITEMS',
+}
 const home = readFileSync('app/portal/page.tsx', 'utf8')
 const cards = readFileSync('components/portal/personal-info-cards.tsx', 'utf8')
 
-/** The `key:` of every entry of one top-level `const <name>: NavItem[] = [ ... ]` block, in order. */
+/** The `key:` of every entry of one exported `const <NAME>: PortalNavItemDef[] = [ ... ]` block, in order. */
 function navKeys(source: string, listName: string): string[] {
-  const start = source.indexOf(`const ${listName}: NavItem[] = [`)
+  const start = source.indexOf(`const ${LIST_NAMES[listName]}: PortalNavItemDef[] = [`)
   expect(start, `${listName} not found`).toBeGreaterThan(-1)
   const end = source.indexOf('\n]\n', start)
   return [...source.slice(start, end).matchAll(/key: '(nav\.[A-Za-z]+)'/g)].map(m => m[1])
@@ -31,7 +40,7 @@ function navKeys(source: string, listName: string): string[] {
 
 describe('the menu is one flat list in Antonio\'s order', () => {
   it('lists the items in the agreed order, with Apertura Conto Bancario above Richiedi un Servizio and La Mia Azienda last', () => {
-    expect(navKeys(side, 'mainItems')).toEqual([
+    expect(navKeys(rules, 'mainItems')).toEqual([
       'nav.overview',
       'nav.chat',
       'nav.referrals',
@@ -50,10 +59,12 @@ describe('the menu is one flat list in Antonio\'s order', () => {
 
   it('has no Profilo and no TD Communication entry anywhere in the menu', () => {
     for (const list of ['mainItems', 'tierTopItems', 'partnerItems', 'bottomItems']) {
-      const keys = navKeys(side, list)
+      const keys = navKeys(rules, list)
       expect(keys).not.toContain('nav.profile')
       expect(keys).not.toContain('nav.tdCommunication')
     }
+    expect(rules).not.toContain("href: '/portal/profile'")
+    expect(rules).not.toContain("href: '/portal/td-communication'")
     expect(side).not.toContain("href: '/portal/profile'")
     expect(side).not.toContain("href: '/portal/td-communication'")
   })
@@ -67,7 +78,7 @@ describe('the menu is one flat list in Antonio\'s order', () => {
   })
 
   it('Panoramica is open to everyone (no company needed); every company page item needs a company', () => {
-    const block = side.slice(side.indexOf('const mainItems: NavItem[] = ['), side.indexOf('\n]\n', side.indexOf('const mainItems')))
+    const block = rules.slice(rules.indexOf('const MAIN_NAV_ITEMS: PortalNavItemDef[] = ['), rules.indexOf('\n]\n', rules.indexOf('const MAIN_NAV_ITEMS')))
     expect(block).toMatch(/key: 'nav\.overview'[^\n]*\}/)
     expect(block.match(/key: 'nav\.overview'[^\n]*/)![0]).not.toContain('needsCompany')
     for (const k of ['nav.chat', 'nav.referrals', 'nav.requestService']) {
@@ -79,12 +90,16 @@ describe('the menu is one flat list in Antonio\'s order', () => {
   })
 
   it('with no company yet the invoices slot holds the personal-receipts variant', () => {
-    expect(side).toMatch(/item\.key === 'nav\.invoices' && !showCompaniesSection \? personalInvoicesItem : item/)
+    // Behaviour, not text: a client with no company gets the invoices entry with the personal hint.
+    const noCompany = visibleMainItems({ hasCompany: false, portalTier: 'lead' }).find(i => i.key === 'nav.invoices')
+    expect(noCompany?.hintKey).toBe('invoicesPersonal')
+    const withCompany = visibleMainItems({ hasCompany: true, portalTier: 'active', navVisibility: { invoices: true } as never }).find(i => i.key === 'nav.invoices')
+    expect(withCompany?.hintKey).toBeUndefined()
   })
 
   it('keeps the tier calls to action (offer for leads, complete-setup for onboarding) and Guida', () => {
-    expect(navKeys(side, 'tierTopItems')).toEqual(['nav.offer', 'nav.wizard'])
-    expect(navKeys(side, 'bottomItems')).toEqual(['nav.guide'])
+    expect(navKeys(rules, 'tierTopItems')).toEqual(['nav.offer', 'nav.wizard'])
+    expect(navKeys(rules, 'bottomItems')).toEqual(['nav.guide'])
   })
 })
 
