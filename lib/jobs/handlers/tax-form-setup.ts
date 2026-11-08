@@ -26,7 +26,6 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
-import { emitActionNeeded } from "@/lib/notifications/act-event"
 import { emitClientChatEvent } from "@/lib/portal/chat-events"
 import { buildReviewHistoryEntry, type ReviewStatus } from "@/lib/tax/review-status"
 import { resolveLocale, WIZARD_SUBMITTED_MESSAGE } from "@/lib/jobs/wizard-failure-notify"
@@ -506,51 +505,10 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
   // enqueued in step 6 (and synchronously at wizard-submit). Statements that
   // exist only on Drive are a staff decision now, never an automatic ingest.
 
-  // ─── 8. DETAILED EMAIL TO TEAM ───
-  try {
-    const { gmailPost } = await import("@/lib/gmail")
-
-    const emailBody = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a">
-<h2>[TASK] Tax Form Completed (Portal) - ${companyName}${taxYear ? ` (${taxYear})` : ""}</h2>
-<p>Client <strong>${companyName}</strong> submitted the tax data collection form via the client portal.</p>
-
-<table style="border-collapse:collapse;width:100%">
-<tr><td style="padding:4px 8px;font-weight:bold">Entity type:</td><td style="padding:4px 8px">${entityType}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Tax year:</td><td style="padding:4px 8px">${taxYear || "N/A"}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Revenue reported:</td><td style="padding:4px 8px">${sd.total_revenue || sd.gross_revenue || "N/A"}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Expenses reported:</td><td style="padding:4px 8px">${sd.total_expenses || "N/A"}</td></tr>
-<tr><td style="padding:4px 8px;font-weight:bold">Documents uploaded:</td><td style="padding:4px 8px">${uploadPaths.length} files</td></tr>
-</table>
-
-<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
-
-<h3>Next Steps (per Tax Return SOP)</h3>
-<ol>
-<li>Review data: <code>tax_form_review(token="${p.token}")</code></li>
-<li>If complete, apply changes: <code>tax_form_review(token="${p.token}", apply_changes=true)</code></li>
-${(entityType === "MMLLC" || entityType === "Corp") ? `<li>Bank statements auto-parsed. Review: <code>bank_statement_review(account_id="${p.account_id}")</code></li>
-<li>Generate P&L: <code>bank_statement_pnl(account_id="${p.account_id}", tax_year=${taxYear})</code></li>` : ""}
-<li>Check if 2nd installment is paid (Stage 6 gate) — the return stays gated until it is</li>
-</ol>
-
-<p style="font-size:12px;color:#6b7280">Token: ${p.token} | Admin: ${APP_BASE_URL}/tax-form/${p.token}?preview=td</p>
-</div>`
-
-    const raw = Buffer.from(
-      `From: Tony Durante CRM <support@tonydurante.us>\r\n` +
-      `To: support@tonydurante.us\r\n` +
-      // R041: RFC 2047 base64 encoding — companyName can carry non-ASCII.
-      `Subject: =?utf-8?B?${Buffer.from(`[TASK] Tax Form Completed (Portal) - ${companyName}${taxYear ? ` (${taxYear})` : ""}`).toString("base64")}?=\r\n` +
-      `MIME-Version: 1.0\r\n` +
-      `Content-Type: text/html; charset=utf-8\r\n\r\n` +
-      emailBody
-    ).toString("base64url")
-
-    await gmailPost("/messages/send", { raw })
-    result.steps.push(step("email_notification", "ok", `Detailed email sent to support@`))
-  } catch (e) {
-    result.steps.push(step("email_notification", "error", e instanceof Error ? e.message : String(e)))
-  }
+  // ─── 8. (REMOVED 2026-11-08) EMAIL TO THE TEAM ───
+  // Antonio: "there is no email ... everything must be in the Calendar in What's New until we build the Tax Return card".
+  // Staff are told ONLY by the What's New note in step 10. No email to support@ and no To-Do board card. (The staff-run apply_changes action
+  // further down still sends its own notice; that is a different action.)
 
   await updateJobProgress(job.id, result)
 
@@ -610,17 +568,8 @@ ${(entityType === "MMLLC" || entityType === "Corp") ? `<li>Bank statements auto-
     }
   }
 
-  // ─── 10. NOTIFY — staff "What's New" card + client portal message ───
-  // Both helpers are non-fatal + idempotent by contract.
-  if (p.account_id && p.submission_id) {
-    const card = await emitActionNeeded({
-      event: "tax_wizard_submitted",
-      account_id: p.account_id,
-      contact_id: p.contact_id,
-      source_ref: `tax_submission:${p.submission_id}`,
-    })
-    result.steps.push(step("staff_card", card.created ? "ok" : "skipped", card.reason ?? "What's New card created"))
-  }
+  // ─── 10. NOTIFY — the staff What's New note (the ONLY staff signal) ───
+  // Idempotent by contract. No To-Do board card any more (Antonio 2026-11-08: "to-do board is not used. we use What's new").
   if (p.submission_id && (p.contact_id || p.account_id)) {
     const locale = await resolveLocale(p.contact_id ?? null, p.account_id ?? null)
     // A non-null prior review_status means this row already went through this
