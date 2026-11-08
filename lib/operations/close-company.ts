@@ -7,10 +7,11 @@
  *      a held tax return or a blocked renewal lived on for a company that no longer exists) — through `deactivateSD`, which also
  *      stamps the end date and clears a renewal date so the nightly cron does not re-create it;
  *   2. cancels the company's pending deadlines (a renewal reminder for a closed company is noise);
- *   3. cancels the company's unpaid invoices (Pending / Overdue) — the same default the manual "Closed" status change has always had;
+ *   3. cancels the company's unpaid invoices (Pending / Overdue) — the same default the manual "Closed" status change has always had,
+ *      done the way Finance's Void does it (both status columns, the client's copy rebuilt, the before-state recorded for "Reactivate");
  *      the question shows them first so staff can collect before saying yes. Paid invoices are never touched;
- *   4. closes the company's open to-dos: this job's own as Done, every other as CANCELLED (they were never done — marking them Done
- *      made unrelated work look completed);
+ *   4. closes the company's open to-dos: this job's own as Done (except its "[CLOSURE]" follow-up cards, which are real work still to do),
+ *      every other as CANCELLED (they were never done — marking them Done made unrelated work look completed);
  *   5. sets the company to Closed, turns its portal off, marks its portal level inactive and recomputes every linked person's level
  *      (the manual status change did all of it; the job's last step left the level at "active");
  *   6. leaves the follow-up to-dos (lib/services/closure-cascade.ts): the Registered Agent on Harbor, and the lease when there is one.
@@ -25,7 +26,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { buildClosureFollowUpCards, type ClosureStepTask } from "@/lib/services/closure-cascade"
+import { buildClosureFollowUpCards, isClosureFollowUpTitle, type ClosureStepTask } from "@/lib/services/closure-cascade"
 import type { ClosingBrief } from "@/lib/closure/closing-brief"
 
 const OPEN_SERVICE = ["active", "on_hold", "blocked"] as const
@@ -160,25 +161,72 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
     fail("could not cancel the company's deadlines", e)
   }
 
-  // 3. unpaid invoices
+  // 3. unpaid invoices — cancelled the way Finance's "Void" does it (production end-to-end test 2026-11-07: only `status` was set, so the
+  //    invoice still read "Draft" and the client's copy still demanded the full amount): status AND invoice status, the numbering slot
+  //    freed, the client's copy rebuilt, the before-state recorded so "Reactivate" can restore it exactly, a stale bank-feed suggestion cleared.
   try {
-    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { data, error } = await supabaseAdmin.from("payments").update({ status: "Cancelled" }).eq("account_id", accountId).in("status", ["Pending", "Overdue"]).select("amount, amount_currency")
+    const { data, error } = await supabaseAdmin
+      .from("payments")
+      .select("id, invoice_number, status, invoice_status, amount, amount_currency, amount_due, amount_paid, paid_date, credit_remaining")
+      .eq("account_id", accountId)
+      .in("status", ["Pending", "Overdue"])
     if (error) throw new Error(error.message)
-    if (data?.length) {
-      const totals = Object.entries(money(data as Array<{ amount: number | string | null; amount_currency: string | null }>)).map(([c, a]) => `${a} ${c}`).join(" + ")
-      lines.push(`Cancelled ${data.length} unpaid invoice${data.length === 1 ? "" : "s"} (${totals})`)
+    const { capturePreVoidState } = await import("@/lib/billing/invoice-reactivate")
+    const { syncTDInvoiceStatus } = await import("@/lib/portal/td-invoice")
+    const { syncTDInvoiceMirror } = await import("@/lib/portal/td-invoice-mirror")
+    const { logAction } = await import("@/lib/mcp/action-log")
+    const cancelled: Array<{ amount: number | string | null; amount_currency: string | null }> = []
+    const cancelledIds: string[] = []
+    for (const p of (data ?? []) as Array<Row & { id: string; invoice_number: string | null; invoice_status: string | null; amount: number | string | null; amount_currency: string | null }>) {
+      if (p.invoice_status === "Credit") continue // a credit note is not voided like an invoice (Finance refuses it too)
+      const label = p.invoice_number || p.id
+      const before = capturePreVoidState(p as unknown as Parameters<typeof capturePreVoidState>[0])
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+      const { data: voided, error: vErr } = await supabaseAdmin
+        .from("payments")
+        .update({ status: "Cancelled", invoice_status: "Cancelled", idempotency_key: null, updated_at: new Date().toISOString() })
+        .eq("id", p.id)
+        .in("status", ["Pending", "Overdue"]) // paid in the meantime → left alone
+        .select("id")
+      if (vErr) { fail(`could not cancel invoice ${label}`, vErr.message); continue }
+      if (!voided?.length) continue
+      cancelled.push(p)
+      cancelledIds.push(p.id)
+      try {
+        await syncTDInvoiceStatus(p.id, "Cancelled")
+        await syncTDInvoiceMirror(p.id)
+      } catch (e) {
+        fail(`invoice ${label} is cancelled but the client's copy of it could not be updated`, e)
+      }
+      logAction({
+        actor: "system:sd-closure",
+        action_type: "update",
+        table_name: "payments",
+        record_id: p.id,
+        summary: `Invoice ${label} cancelled — the company was closed (closure job finished)`,
+        // read back by Finance's Reactivate — keep the key name
+        details: { pre_void_state: before, reason: "company-closed" },
+      })
+    }
+    if (cancelledIds.length) {
+      // an unconfirmed bank-feed suggestion must not keep pointing at a cancelled invoice (a confirmed match is left as it is)
+      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+      const { error: fErr } = await supabaseAdmin.from("td_bank_feeds").update({ matched_payment_id: null, match_confidence: null, updated_at: new Date().toISOString() }).in("matched_payment_id", cancelledIds).neq("status", "matched")
+      if (fErr) fail("a cancelled invoice still has a bank-feed suggestion pointing at it", fErr.message)
+      const totals = Object.entries(money(cancelled)).map(([c, a]) => `${a} ${c}`).join(" + ")
+      lines.push(`Cancelled ${cancelled.length} unpaid invoice${cancelled.length === 1 ? "" : "s"} (${totals})`)
     }
   } catch (e) {
     fail("could not cancel the company's unpaid invoices", e)
   }
 
-  // 4. open to-dos: this job's own → Done, everything else → Cancelled
+  // 4. open to-dos: this job's own → Done, everything else → Cancelled. The job's own FOLLOW-UP cards from an earlier closing ("[CLOSURE] Remove
+  //    RA on Harbor…") are real work nobody did yet: finishing the job again after a Go Back used to tick them Done (production test 2026-11-07).
   try {
-    const { data: open, error } = await supabaseAdmin.from("tasks").select("id, delivery_id").eq("account_id", accountId).in("status", [...OPEN_TODO])
+    const { data: open, error } = await supabaseAdmin.from("tasks").select("id, delivery_id, task_title").eq("account_id", accountId).in("status", [...OPEN_TODO])
     if (error) throw new Error(error.message)
-    const rows = (open ?? []) as Array<{ id: string; delivery_id: string | null }>
-    const own = rows.filter((t) => t.delivery_id === deliveryId).map((t) => t.id)
+    const rows = (open ?? []) as Array<{ id: string; delivery_id: string | null; task_title: string | null }>
+    const own = rows.filter((t) => t.delivery_id === deliveryId && !isClosureFollowUpTitle(t.task_title)).map((t) => t.id)
     const others = rows.filter((t) => t.delivery_id !== deliveryId).map((t) => t.id)
     const { updateTasksBulk } = await import("@/lib/operations/task")
     if (own.length) {

@@ -69,9 +69,58 @@ export async function boxDefaultType(serviceType: string | null, stageName: stri
     .eq('stage_name', stageName)
     .limit(1)
   if (error || !data?.[0]) return null
-  const layout = parseStageLayout(data[0].stage_layout)
+  return boxTypeOfLayout(data[0].stage_layout)
+}
+
+/** The one document type every upload box of a stage layout carries, or null (no typed box, or boxes of different types). */
+export function boxTypeOfLayout(stageLayout: unknown): string | null {
+  const layout = parseStageLayout(stageLayout)
   const boxes = (layout?.components ?? []).filter((c) => c.type === 'document_upload')
   if (boxes.length === 0) return null
   const types = Array.from(new Set(boxes.map((b) => (typeof b.documentType === 'string' && b.documentType ? b.documentType : ''))))
   return types.length === 1 && types[0] ? types[0] : null
+}
+
+/** The generic type that stays free-for-all: a locked step whose box is typed "other document" accepts any type (Company Change Name). */
+const GENERIC_BOX_TYPE = 'other_document'
+
+/**
+ * Pure rule (production end-to-end test 2026-11-07, dev job eaa4747e): on a step that LOCKS the job until a document is uploaded, a file counts
+ * only if it is of the type the step's box asks for. The type picker lets staff choose "Other document", and an unrelated PDF uploaded that way
+ * opened the lock of "State Dissolution Filing" — the lock only looks at the step stamp. Returns the refusal sentence, or null = accepted.
+ * Not locked, an untyped box, or a box typed "other document" = no rule (unchanged behaviour).
+ */
+export function lockedBoxTypeProblem(p: { locked: boolean; boxType: string | null; chosenSlug: string | null; boxTypeName?: string | null }): string | null {
+  if (!p.locked || !p.boxType || p.boxType === GENERIC_BOX_TYPE) return null
+  if (p.chosenSlug === p.boxType) return null
+  const name = (p.boxTypeName ?? '').trim() || p.boxType.replace(/_/g, ' ')
+  return `This step stays locked until the ${name} is uploaded, so only that kind of file is accepted here: choose "${name}" in the Document type list. (A file of another type would open the lock by mistake.)`
+}
+
+/**
+ * The refusal for an upload to a locked step whose file is of the wrong type, or null = fine. A read that fails is a refusal too (fails CLOSED,
+ * like the type check above): nothing is uploaded and staff try again.
+ */
+export async function lockedStepUploadProblem(input: { serviceType: string | null; stageName: string | null; chosenSlug: string | null }): Promise<string | null> {
+  if (!input.serviceType || !input.stageName) return null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pipeline_stages rows are read loosely here
+  const { data, error } = await (supabaseAdmin as any)
+    .from('pipeline_stages')
+    .select('stage_layout, requires_document_to_advance')
+    .eq('service_type', input.serviceType)
+    .eq('stage_name', input.stageName)
+    .limit(1)
+  if (error) return 'Could not check what this step needs — nothing was uploaded. Please try again.'
+  const row = data?.[0] as { stage_layout: unknown; requires_document_to_advance: boolean | null } | undefined
+  if (!row || row.requires_document_to_advance !== true) return null
+  const boxType = boxTypeOfLayout(row.stage_layout)
+  if (!boxType || boxType === GENERIC_BOX_TYPE || input.chosenSlug === boxType) return null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- catalog_entries metadata is free-form JSON
+  const { data: entry } = await (supabaseAdmin as any)
+    .from('catalog_entries')
+    .select('display_name')
+    .eq('catalog_id', 'storage_document_types')
+    .eq('slug', boxType)
+    .maybeSingle()
+  return lockedBoxTypeProblem({ locked: true, boxType, chosenSlug: input.chosenSlug, boxTypeName: (entry as { display_name?: string } | null)?.display_name ?? null })
 }

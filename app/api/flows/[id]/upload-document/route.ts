@@ -41,7 +41,7 @@ import { formationReferenceName } from '@/lib/operations/formation-materialize'
 import { normalizeFilingId } from '@/lib/articles-parse'
 import { saveConfirmedLegalName } from '@/lib/operations/formation-name-checks'
 import { GENERIC_CLIENT_TYPE } from '@/lib/crm-store/save-for-account'
-import { resolveFlowUploadType, boxDefaultType } from '@/lib/flows/flow-upload-type'
+import { resolveFlowUploadType, boxDefaultType, lockedStepUploadProblem } from '@/lib/flows/flow-upload-type'
 import { clientWasTold } from '@/lib/flows/upload-outcome'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
@@ -199,6 +199,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         await supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})   // a refused upload leaves no staged file behind
       }
       return NextResponse.json({ success: false, detail: (chosenType as { ok: false; error: string }).error }, { status: 400 })   // (strict:false does not narrow the union)
+    }
+
+    // A step that LOCKS the job until its document is uploaded only counts a file of the type its box asks for: an unrelated file chosen as
+    // "Other document" used to open the lock of "State Dissolution Filing" (production end-to-end test 2026-11-07). Refused BEFORE anything is saved.
+    const lockProblem = await lockedStepUploadProblem({ serviceType: (sd.service_type as string | null) ?? null, stageName: flowStage, chosenSlug: (chosenType as { slug: string | null }).slug })
+    if (lockProblem) {
+      if (storagePath.startsWith('flow-uploads/') && !storagePath.includes('..')) {
+        await supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})   // a refused upload leaves no staged file behind
+      }
+      return NextResponse.json({ success: false, detail: lockProblem, error: lockProblem }, { status: 400 })
     }
 
     // 2. Download from Storage.

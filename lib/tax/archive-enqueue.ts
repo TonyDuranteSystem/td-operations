@@ -29,29 +29,33 @@ export async function enqueueTaxArchiveJob(params: {
 }): Promise<EnqueueArchiveResult> {
   const { submissionId, createdBy = "tax_archive" } = params
 
-  const { data: sub } = await supabaseAdmin
+  const { data: sub, error: subErr } = await supabaseAdmin
     .from("tax_return_submissions")
     .select("id, account_id, drive_archived_at")
     .eq("id", submissionId)
     .maybeSingle()
+  // A failed read is NOT "no such submission" and a failed insert is NOT "queued": every caller already catches a throw (and logs it), so
+  // say so instead of reporting a save that was never queued (dev job 7df278cd, follow-up).
+  if (subErr) throw new Error(`archive enqueue: submission read failed: ${subErr.message}`)
   if (!sub) return { status: "no_submission" }
   if ((sub as { drive_archived_at?: string | null }).drive_archived_at) return { status: "already_archived" }
 
   const accountId = params.accountId ?? (sub as { account_id?: string | null }).account_id ?? null
 
   // Idempotency: skip if an archive job for this submission is already waiting or running.
-  const { data: existing } = await supabaseAdmin
+  const { data: existing, error: existingErr } = await supabaseAdmin
     .from("job_queue")
     .select("id, payload")
     .eq("job_type", "archive_tax_submission")
     .in("status", ["pending", "processing"])
+  if (existingErr) throw new Error(`archive enqueue: job list read failed: ${existingErr.message}`)
 
   const already = (existing ?? []).some(
     r => (r.payload as { submission_id?: string } | null)?.submission_id === submissionId,
   )
   if (already) return { status: "already_queued" }
 
-  await supabaseAdmin.from("job_queue").insert({
+  const { error: insErr } = await supabaseAdmin.from("job_queue").insert({
     job_type: "archive_tax_submission",
     payload: { submission_id: submissionId, account_id: accountId },
     priority: 5,
@@ -60,6 +64,7 @@ export async function enqueueTaxArchiveJob(params: {
     related_entity_type: "tax_return_submission",
     related_entity_id: submissionId,
   } as never)
+  if (insErr) throw new Error(`archive enqueue: could not queue the save job: ${insErr.message}`)
 
   return { status: "enqueued" }
 }

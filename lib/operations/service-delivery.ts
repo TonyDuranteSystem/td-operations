@@ -1648,8 +1648,20 @@ export async function revertServiceDelivery(
   // silently keep being checked, or worse, keep being treated as confirmed, after the
   // real package is re-mailed under a new number. Unconditional (not scoped to a
   // specific stage): harmless no-op for any service_delivery with no tracking row.
+  // Said out loud (production end-to-end test 2026-11-07): the number used to vanish with no word, and the step's lock then asked for it again.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- not in generated types
-  await dbWriteSafe((supabaseAdmin as any).from("irs_shipment_tracking").delete().eq("service_delivery_id", sd.id), "irs_shipment_tracking.delete.flow-revert")
+  const { data: deletedTracking } = await dbWriteSafe<Array<{ id: string }>>((supabaseAdmin as any).from("irs_shipment_tracking").delete().eq("service_delivery_id", sd.id).select("id"), "irs_shipment_tracking.delete.flow-revert")
+  if (Array.isArray(deletedTracking) && deletedTracking.length > 0) {
+    warnings.push("The saved IRS tracking number was removed (a step back always clears it, so a stale number is never checked) — enter it again before the job moves on.")
+  }
+
+  // A closure job that was already finished: the company was closed by that last step and going back does NOT undo it.
+  if (sd.service_type === "Company Closure" && sd.stage === "Closing" && sd.account_id) {
+    const { data: acctRow } = await supabaseAdmin.from("accounts").select("status").eq("id", sd.account_id).maybeSingle()
+    if (String((acctRow as { status?: string | null } | null)?.status ?? "").toLowerCase() === "closed") {
+      warnings.push("The company stays Closed — going back does not reopen it, and the services and invoices cancelled when it closed stay cancelled. If the company should be open again, change its status on the company page.")
+    }
+  }
 
   // 4. Move the SD back. Append a stage_history entry mirroring the forward
   // shape so the audit trail reads symmetrically.

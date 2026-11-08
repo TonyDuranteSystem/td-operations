@@ -32,11 +32,11 @@ describe("closing the company", () => {
   })
 
   it("the question reads the brief and offers 'finish without closing' only on a mismatch warning", () => {
-    const ui = read("components/flows/action-buttons.tsx")
+    const ui = read("components/flows/closing-question.tsx")
     expect(ui).toContain("/closing-brief")
     expect(ui).toContain("Finish the job without closing the company")
-    expect(ui).toContain("brief.warning")
-    expect(ui).toContain("skip_company_close: true")
+    expect(ui).toContain("brief?.warning")
+    expect(read("components/flows/action-buttons.tsx")).toContain("skip_company_close: true")
   })
 })
 

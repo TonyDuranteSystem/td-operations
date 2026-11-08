@@ -7,10 +7,12 @@
  * client resubmits changed answers, see lib/tax/save-rules in wizard-submit). Everything here only READS that record.
  */
 
-import { ARCHIVE_SWEEP_MAX_ATTEMPTS } from "@/lib/tax/archive-sweep"
-
-/** The bookkeeping reset when the client resubmits changed answers: a fresh round gets fresh tries and a fresh alert. */
-export const SAVE_RESET_META = { attempts: 0, last_error: null, failed: [], errors: [], sweep_alerted: false } as const
+/**
+ * The bookkeeping reset when the client resubmits changed answers: a fresh round gets fresh tries and a fresh alert. `sweep_alerted`
+ * goes back to EMPTY (null), not false: the sweep's filter reads "empty", and the banking twin resets it to null too — a stored
+ * `false` reads as "already alerted" to that filter.
+ */
+export const SAVE_RESET_META = { attempts: 0, last_error: null, failed: [], errors: [], sweep_alerted: null } as const
 
 export type EarlierCopyChoice = "hidden" | "visible"
 
@@ -96,7 +98,7 @@ export function failureText(kind: SaveFailureKind, failedFiles: string[]): { rea
     case "changed":
       return { reason: "The client changed the answers while they were being saved.", fix: "Press Retry saving." }
     default:
-      return { reason: "Storage did not answer.", fix: "Nothing to fix. The system retries by itself, or press Retry saving to try now." }
+      return { reason: "Storage did not answer.", fix: "Nothing to fix. Press Retry saving to try again." }
   }
 }
 
@@ -122,7 +124,7 @@ export function decideSaveState(i: { reviewStatus: string | null; archivedAt: st
   if (i.job === "processing") return { state: "saving" }
   if (i.meta.attempts > 0 && i.meta.lastError) {
     const kind = classifyFailure(i.meta)
-    return { state: "failed", kind, ...failureText(kind, i.meta.failed), attempts: i.meta.attempts, retrying: i.job === "pending" || i.meta.attempts < ARCHIVE_SWEEP_MAX_ATTEMPTS }
+    return { state: "failed", kind, ...failureText(kind, i.meta.failed), attempts: i.meta.attempts, retrying: i.job === "pending" }
   }
   return { state: "not_saved" }
 }

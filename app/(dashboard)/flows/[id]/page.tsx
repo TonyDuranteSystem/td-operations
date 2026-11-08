@@ -14,6 +14,8 @@ import { guideHintFor, parseGuideParam, stageDefsFromRows } from '@/lib/flows/wo
 import { buildStepHints } from '@/lib/flows/storage-step-rules'
 import { SuitePanel } from '@/components/flows/suite-panel'
 import { GoBackButton } from '@/components/flows/go-back-button'
+import { goBackExtraWarnings } from '@/lib/flows/go-back-warnings'
+import { CLOSING_STEP_NAME, movingClosesCompany } from '@/lib/closure/closing-step'
 import { ItinOriginCard, type ItinOrigin } from '@/components/flows/itin-origin-card'
 import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
 import { filedName, type NameCheck } from '@/lib/flows/name-checks'
@@ -240,6 +242,20 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
     }
   }
 
+  // What a "Go Back" also does besides moving one step back, said in its question (production end-to-end test 2026-11-07): it always deletes the
+  // saved IRS tracking number, and going back from a finished closure does not reopen the company that the last step closed.
+  let goBackExtras: string[] = []
+  if (previousStageRow) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- irs_shipment_tracking is not in the generated types
+    const { data: trackingRow } = await (supabaseAdmin as any).from('irs_shipment_tracking').select('id').eq('service_delivery_id', sd.id).limit(1).maybeSingle()
+    let closureCompanyClosed = false
+    if (sd.service_type === 'Company Closure' && sd.stage === CLOSING_STEP_NAME && sd.account_id) {
+      const { data: acctStatus } = await supabaseAdmin.from('accounts').select('status').eq('id', sd.account_id).maybeSingle()
+      closureCompanyClosed = String((acctStatus as { status?: string | null } | null)?.status ?? '').toLowerCase() === 'closed'
+    }
+    goBackExtras = goBackExtraWarnings({ hasTrackingNumber: !!trackingRow, closureCompanyClosed })
+  }
+
   // Purchase Origin (ITIN only) — where this ITIN came from: the offer/contract
   // it was sold under + the invoice. ITIN SDs are contact-scoped, so the offer is
   // matched by contact_id OR via the contact's originating lead (offers.lead_id);
@@ -359,6 +375,7 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
           stages={stepperStages}
           currentStage={serviceDelivery.stage}
           serviceDeliveryId={serviceDelivery.id}
+          closesCompanyAt={movingClosesCompany({ serviceType: sd.service_type, targetStage: CLOSING_STEP_NAME, hasCompany: !!sd.account_id }) ? CLOSING_STEP_NAME : null}
         />
       </div>
 
@@ -399,6 +416,7 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
         <GoBackButton
           serviceDeliveryId={serviceDelivery.id}
           previousStageLabel={previousStageRow.stage_name}
+          extraWarnings={goBackExtras}
         />
       )}
     </div>

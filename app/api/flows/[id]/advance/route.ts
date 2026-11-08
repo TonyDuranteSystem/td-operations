@@ -10,9 +10,11 @@
  * jumping straight to "Closed" from an intermediate receipt stage) rather than
  * a single next-stage hop.
  *
- * Body: { target_stage: string, skip_company_close?: true }
+ * Body: { target_stage: string, skip_company_close?: true, company_close_confirmed?: true }
  *   skip_company_close — Company Closure only: finish the job WITHOUT closing the company (the question offers it when the client
  *   wrote a different company in the wizard than the one the job is linked to).
+ *   company_close_confirmed — Company Closure only: the "this closes the company" question was shown and answered yes. A move to the last
+ *   step is refused without it (or without skip_company_close).
  * [id] = service_delivery_id.
  */
 
@@ -66,6 +68,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       delivery_id: serviceDeliveryId,
       target_stage: targetStage,
       skip_company_close: body.skip_company_close === true,
+      company_close_confirmed: body.company_close_confirmed === true,
       formation_date: formationDate,
       entity_type: entityType,
       actor: 'flow-action',
