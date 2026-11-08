@@ -20,6 +20,7 @@ import { decideAdminSendScope, isContactLinkedToAccount, resolveAdminReplyContac
 import { contactThreadOrFilter, multiMemberAccountIds } from '@/lib/portal/thread-scope'
 import { resolveAccountMembersForChat } from '@/lib/portal/addressed-to'
 import { buildPortalChatLink } from '@/lib/portal/chat-link'
+import { chatPreviewText, stripSenderTranscripts, voiceUrls } from '@/lib/portal/chat-voice'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -509,6 +510,34 @@ export async function POST(request: NextRequest) {
     addressedToLabel = null
   }
 
+  // A voice note whose "sent" answer was lost on the way back is sent again by the client's retry, with the SAME uploaded file. The same file arriving again
+  // from the same sender within the hour is the same message: answer with the first one instead of adding a second and alerting staff twice.
+  if (senderType === 'client') {
+    const urls = voiceUrls(attachments)
+    if (urls.length > 0) {
+      // the JSON text is passed as a string: an array would be sent as a Postgres array literal, which a jsonb column rejects
+      const { data: first, error: dupeError } = await supabaseAdmin
+        .from('portal_messages')
+        .select('*, contacts:contact_id(full_name)')
+        .eq('sender_id', user.id)
+        .is('deleted_at', null)
+        .gte('created_at', new Date(Date.now() - 60 * 60 * 1000).toISOString())
+        .contains('attachments', JSON.stringify([{ url: urls[0] }]))
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      // a failed look-up never blocks a send: the message goes out as it would have
+      if (dupeError) console.warn('[portal/chat] repeat-send check failed, sending normally:', dupeError.message)
+      if (first) {
+        const { contacts: firstContact, ...firstData } = first as typeof first & { contacts: { full_name: string } | null }
+        return NextResponse.json({
+          message: { ...firstData, sender_name: pickChatSenderName(firstContact?.full_name, (firstData as { sender_name?: string | null }).sender_name) },
+          duplicate: true,
+        })
+      }
+    }
+  }
+
   const { data, error } = await insertSurface
     .from('portal_messages')
     .insert({
@@ -522,7 +551,8 @@ export async function POST(request: NextRequest) {
       message: (message || '').trim(),
       attachment_url: attachment_url || null,
       attachment_name: attachment_name || null,
-      attachments: Array.isArray(attachments) ? attachments : [],
+      // the "Show text" result of a voice note is written by our own route only — a sender never supplies it (dev job 753b2909)
+      attachments: Array.isArray(attachments) ? stripSenderTranscripts(attachments) : [],
       reply_to_id: reply_to_id || null,
       addressed_to_contact_id: addressedToContactId,
       addressed_to_company: addressedToCompany,
@@ -574,11 +604,13 @@ export async function POST(request: NextRequest) {
   // app_settings toggle (Dev Tools → Maintenance); push is always sent.
   // Also send an out-of-office auto-reply when the office is closed.
   if (senderType === 'client') {
+    // a message that is only a voice note says so in the alert (otherwise it would read "[Attachment]")
+    const alertPreview = chatPreviewText(message, attachments)
     if (await isPortalAdminEmailEnabled()) {
-      notifyAdminOfClientMessage(account_id, resolvedContactId, user.email || '', (message || '').trim()).catch(() => {})
+      notifyAdminOfClientMessage(account_id, resolvedContactId, user.email || '', alertPreview).catch(() => {})
     }
     // wait (at most 4 s) for the staff alert, phone leg included: a serverless function may be stopped as soon as it has answered
-    await waitForPhoneLeg(pushNotifyAdmin(account_id, resolvedContactId, (message || '').trim()).catch(() => {}))
+    await waitForPhoneLeg(pushNotifyAdmin(account_id, resolvedContactId, alertPreview).catch(() => {}))
 
     if (!isOfficeOpen()) {
       sendOfficeClosedAutoReply({

@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, ChevronDown, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, MailOpen, Building2, Sparkles, Check, Users, User as UserIcon } from 'lucide-react'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, ArrowUp, CheckCheck, ChevronUp, ChevronDown, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, MailOpen, Building2, Sparkles, Check, Users, User as UserIcon } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { parseTimestamp } from '@/lib/portal/chat-refresh-merge'
@@ -15,7 +15,13 @@ import { reactionSeenKey, parseSeenReactionKeys, addSeenReactionKeys, shouldPuls
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { useLocale } from '@/lib/portal/use-locale'
 import { interpolateString } from '@/lib/template-interpolation'
-import { useVoiceInput } from '@/lib/hooks/use-voice-input'
+import { useAudioNoteRecorder } from '@/lib/hooks/use-audio-note-recorder'
+import { VoiceNote } from '@/components/team-chat/voice-note'
+import { TalkI18nProvider } from '@/components/talk/talk-i18n'
+import { PortalVoiceBar } from '@/components/portal/portal-voice-bar'
+import { portalVoiceI18n } from '@/components/portal/portal-voice-i18n'
+import { hasVoiceAttachment, isVoiceAttachment, heldVoiceGoesOut, leavingHref } from '@/lib/portal/chat-voice'
+import { SEND_BEFORE_LEAVING_TIMEOUT_MS } from '@/lib/talk/recording-guard'
 import { toast } from 'sonner'
 import { format, parseISO, isToday, isYesterday } from 'date-fns'
 import dynamic from 'next/dynamic'
@@ -383,7 +389,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   const [uploading, setUploading] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [micConsented, setMicConsented] = useState(false)
-  const [replyTo, setReplyTo] = useState<{ id: string; message: string; sender_type: string } | null>(null)
+  const [replyTo, setReplyTo] = useState<{ id: string; message: string; sender_type: string; attachments?: unknown } | null>(null)
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
@@ -509,27 +515,94 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     return () => document.removeEventListener('mousedown', handler)
   }, [showEmojiPicker])
 
-  // Check if mic consent was previously given
+  // Voice notes (dev job 753b2909): the mic records a REAL voice note — the same recorder TD Talk and the WhatsApp screen use — and it is sent as the message
+  // (it used to be dictation: the words were typed into the box and the audio thrown away). Consent is asked once per device. The wording changed because the
+  // recording is now kept in the chat, so the old 'mic_consent' answer ("deleted right after") is not reused: everyone sees the true wording once.
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      setMicConsented(localStorage.getItem('mic_consent') === 'yes')
-    }
+    try { setMicConsented(localStorage.getItem('voice_note_consent') === 'yes') } catch { /* storage unavailable — asked every time */ }
   }, [])
 
-  const speechLang = locale === 'it' ? 'it-IT' : 'en-US'
-
-  const handleTranscript = useCallback((text: string) => {
-    setInput(prev => (prev ? prev + ' ' + text : text).trim())
-    inputRef.current?.focus()
-  }, [])
+  const voiceI18n = useMemo(() => portalVoiceI18n(locale), [locale])
+  // The finished recording is held here until it is sent: a client with several companies first says which one, and a failed upload keeps it so one tap tries again.
+  const [heldVoice, setHeldVoice] = useState<File | null>(null)
+  // The company a held note is being sent to once a send was tried (null while none was chosen yet): a note that failed for company A stays A's,
+  // whatever company the client looks at afterwards — it is never sent to another company by a company switch.
+  const [heldVoiceFor, setHeldVoiceFor] = useState<string | null>(null)
+  // The file of a held note after it was uploaded: a retry posts the SAME file again instead of uploading a second copy.
+  const heldUploadRef = useRef<{ file: File; att: Awaited<ReturnType<typeof uploadChatAttachment>> } | null>(null)
+  // The phone cut the recording short (a call, the screen went dark): it is kept for the client to decide, never sent by itself.
+  const voiceErrorRef = useRef(false)
+  const [voiceSeconds, setVoiceSeconds] = useState(0)
+  const sendVoiceRef = useRef<(file: File) => void>(() => {})
+  // Leaving the page (a click on the menu) while a note is being recorded or waiting: the client is asked first.
+  const [leaveAsk, setLeaveAsk] = useState<{ href: string } | null>(null)
+  const [leaveBusy, setLeaveBusy] = useState(false)
+  const leaveAfterSendRef = useRef<string | null>(null)
 
   const {
     isRecording,
-    isTranscribing,
     startRecording,
     stopRecording,
+    cancelRecording,
     isSupported: micSupported,
-  } = useVoiceInput({ language: speechLang, onTranscript: handleTranscript, onError: (msg) => toast.error(msg) })
+  } = useAudioNoteRecorder({
+    preferMp4: true,
+    onRecorded: file => {
+      setHeldVoice(file)
+      setHeldVoiceFor(null)
+      heldUploadRef.current = null
+      if (voiceErrorRef.current) {
+        // cut short: kept above the box, sent only when the client taps send
+        if (leaveAfterSendRef.current) { leaveAfterSendRef.current = null; setLeaveAsk(null); setLeaveBusy(false) }
+        return
+      }
+      sendVoiceRef.current(file)
+    },
+    onError: msg => { voiceErrorRef.current = true; toast.error(voiceI18n.t(msg)) },
+  })
+
+  // the recording clock (no length limit: the only ceiling is the 100 MB chat file limit)
+  useEffect(() => {
+    if (!isRecording) { setVoiceSeconds(0); return }
+    const started = Date.now()
+    const timer = setInterval(() => setVoiceSeconds(Math.floor((Date.now() - started) / 1000)), 250)
+    return () => clearInterval(timer)
+  }, [isRecording])
+
+  // closing or reloading the page while recording (or while a note waits to be sent) asks first, as in TD Talk
+  useEffect(() => {
+    if (!isRecording && !heldVoice) return
+    const ask = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', ask)
+    return () => window.removeEventListener('beforeunload', ask)
+  }, [isRecording, heldVoice])
+
+  // A click on a menu link (Journey Log, Invoices, …) takes the client to another page, and this chat — with its recording or its waiting note — goes away.
+  // While a note is being recorded or waits to be sent such a click is stopped and the client is asked: Send it / Throw it away / Keep it (TD Talk does the same).
+  useEffect(() => {
+    if (!isRecording && !heldVoice) return
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null
+      if (!a) return
+      const href = leavingHref(
+        { href: a.href, target: a.getAttribute('target'), download: a.hasAttribute('download') },
+        { origin: window.location.origin, pathname: window.location.pathname, search: window.location.search },
+      )
+      if (!href) return
+      e.preventDefault()
+      e.stopPropagation()
+      setLeaveAsk({ href })
+    }
+    document.addEventListener('click', onClick, true)
+    return () => document.removeEventListener('click', onClick, true)
+  }, [isRecording, heldVoice])
+
+  const abortLeave = () => { leaveAfterSendRef.current = null; setLeaveAsk(null); setLeaveBusy(false) }
+  const leaveNow = (href: string) => { leaveAfterSendRef.current = null; setLeaveAsk(null); setLeaveBusy(false); router.push(href) }
+
+  // A voice note goes to the conversation shown above the box ("Replying in: …") at the moment it is sent, exactly like typed text. It is NOT cancelled when the topic tab
+  // changes: the chat opens the unread topic by itself a few seconds after loading, and that used to end a recording that had just started (found in the sandbox browser test).
 
   // Auto-grow textarea whenever input changes (typing, voice, paste)
   useEffect(() => {
@@ -570,16 +643,18 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // Actual send, tagged to a target entity (defaults to the entity in view).
   // company → sender_context='company' + that account_id; formation/personal →
   // sender_context='person' + account_id null.
-  const doSend = async (target: PortalChatEntity | null = currentEntity) => {
-    if ((!input.trim() && pendingFiles.length === 0) || sending || uploading) return
-    if (isRecording) stopRecording()
+  // `voice` = a recorded voice note: it goes out ALONE (what is typed or attached stays in the box, as in TD Talk) and is held until the send succeeds.
+  const doSend = async (target: PortalChatEntity | null = currentEntity, voice: File | null = null) => {
+    if (sending || uploading) return
+    if (!voice && !input.trim() && pendingFiles.length === 0) return
     // Sending implies the user wants to see their message land at the bottom.
     stickToBottomRef.current = true
     const senderContext: 'person' | 'company' = target?.kind === 'company' ? 'company' : 'person'
     const tagAccountId = target?.kind === 'company' ? (target.accountId ?? null) : null
-    const msg = input
+    const msg = voice ? '' : input
     const replyId = replyTo?.id
-    const filesToSend = pendingFiles
+    const replyBefore = replyTo
+    const filesToSend: PendingFile[] = voice ? [{ file: voice }] : pendingFiles
     // Captured now, before the upload await — an upload is a real
     // multi-second network call, and nothing stops switching topic tabs
     // while it's in flight. Reading activeTopic live after the await (as
@@ -587,18 +662,27 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     // the upload finishes, not the one shown when send was pressed (council
     // review, Bug Hunter, 2026-08-30).
     const sendTopic = activeTopic
-    setInput('')
+    if (!voice) {
+      setInput('')
+      setPendingFiles([])
+      if (inputRef.current) inputRef.current.style.height = 'auto'
+    }
     setReplyTo(null)
-    setPendingFiles([])
-    if (inputRef.current) inputRef.current.style.height = 'auto'
 
     try {
       if (filesToSend.length > 0) {
         setUploading(true)
         try {
-          const uploaded = await Promise.all(filesToSend.map((pf) =>
-            uploadChatAttachment(pf.file, { accountId: tagAccountId ?? undefined, contactId })
-          ))
+          let uploaded: Awaited<ReturnType<typeof uploadChatAttachment>>[]
+          if (voice && heldUploadRef.current?.file === voice) {
+            // a retry of a note that was already uploaded: post the same file again (no second copy, and the server recognises the repeat)
+            uploaded = [heldUploadRef.current.att]
+          } else {
+            uploaded = await Promise.all(filesToSend.map((pf) =>
+              uploadChatAttachment(pf.file, { accountId: tagAccountId ?? undefined, contactId })
+            ))
+            if (voice) heldUploadRef.current = { file: voice, att: uploaded[0] }
+          }
           await sendMessage(msg || '', uploaded, replyId, senderContext, tagAccountId, sendTopic)
         } finally {
           setUploading(false)
@@ -606,15 +690,66 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       } else {
         await sendMessage(msg, undefined, replyId, senderContext, tagAccountId, sendTopic)
       }
+      if (voice) {
+        setHeldVoice(null)
+        setHeldVoiceFor(null)
+        heldUploadRef.current = null
+        if (leaveAfterSendRef.current) leaveNow(leaveAfterSendRef.current)
+      }
     } catch (err) {
       const errMsg = err instanceof Error && err.message ? err.message : t('portalChat.sendFailed')
-      toast.error(errMsg)
-      setInput(msg)
+      if (voice) {
+        // the recording is NOT lost: it stays held above the box, and the reply it answered comes back, so one tap on send tries again
+        setReplyTo(prev => prev ?? replyBefore)
+        setHeldVoiceFor(target?.id ?? null)
+        abortLeave()
+        toast.error(errMsg, { description: t('portalChat.voice.failed') })
+      } else {
+        toast.error(errMsg)
+        setInput(msg)
+        // attachments come back too (they used to be dropped on a failed send — the text alone was restored)
+        setPendingFiles(prev => (prev.length ? prev : filesToSend))
+      }
     }
     inputRef.current?.focus()
   }
 
+  // A recorded voice note: a client with several companies first says which one (same step as a typed message), then it goes out.
+  const sendVoice = (file: File) => {
+    if (sending || uploading) return
+    // a note that already failed goes to the company it was being sent to, not to whichever company is on screen now
+    const bound = heldVoiceFor ? entities.find(e => e.id === heldVoiceFor) ?? null : null
+    if (!bound && isMultiEntity && !targetConfirmed) {
+      setLeaveAsk(null) // the company window takes the place of the "leave?" question
+      setPopupOpen(true)
+      return
+    }
+    void doSend(bound ?? currentEntity, file)
+  }
+  sendVoiceRef.current = sendVoice
+
+  const leaveSend = () => {
+    if (!leaveAsk) return
+    leaveAfterSendRef.current = leaveAsk.href
+    setLeaveBusy(true)
+    if (isRecording) stopRecording()
+    else if (heldVoice) sendVoice(heldVoice)
+    // a slow or stuck send never traps the client in the question: after a few seconds they stay, and the note stays above the box
+    window.setTimeout(() => { if (leaveAfterSendRef.current) abortLeave() }, SEND_BEFORE_LEAVING_TIMEOUT_MS)
+  }
+  const leaveDiscard = () => {
+    if (!leaveAsk) return
+    const href = leaveAsk.href
+    if (isRecording) cancelRecording()
+    setHeldVoice(null)
+    setHeldVoiceFor(null)
+    heldUploadRef.current = null
+    leaveNow(href)
+  }
+
   const handleSend = async () => {
+    // a voice note is waiting: it goes first (or is thrown away) — typed text is not sent past it, and the client is told why
+    if (heldVoice && (input.trim() || pendingFiles.length > 0) && !sending && !uploading) { toast.info(t('portalChat.voice.finishFirst')); return }
     if ((!input.trim() && pendingFiles.length === 0) || sending || uploading) return
     // First send of the session for a multi-entity client → confirm the target.
     if (isMultiEntity && !targetConfirmed) {
@@ -630,12 +765,17 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   const chooseEntity = (entity: PortalChatEntity) => {
     setTargetConfirmed(true)
     setPopupOpen(false)
+    // A voice note waiting for its company goes out first, alone — but only for ITS company: a note that failed for company A is not sent to B
+    // because the client switched to B. What is drafted stays in the box for the next send, and is not sent past a waiting note.
+    const voiceGoesNow = !!heldVoice && heldVoiceGoesOut(heldVoiceFor, entity.id)
+    const draftGoesNow = !heldVoice && (!!input.trim() || pendingFiles.length > 0)
     if (entity.id !== selectedEntityId) {
-      if (input.trim() || pendingFiles.length > 0) sendSwitchEntityRef.current = entity.id
+      if (voiceGoesNow || draftGoesNow) sendSwitchEntityRef.current = entity.id
       selectEntity(entity)
     }
+    if (voiceGoesNow && heldVoice) { void doSend(entity, heldVoice); return }
     // Send only if there's something drafted (the pill "switch" path may have none).
-    if (input.trim() || pendingFiles.length > 0) doSend(entity)
+    if (draftGoesNow) doSend(entity)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -683,19 +823,16 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     Array.from(e.dataTransfer.files).forEach(file => handleFileSelect(file))
   }
 
-  const handleMicToggle = () => {
-    if (isRecording) {
-      stopRecording()
-    } else {
-      if (!micConsented) {
-        // Show consent notice
-        const ok = window.confirm(t('portalChat.micConsent'))
-        if (!ok) return
-        localStorage.setItem('mic_consent', 'yes')
-        setMicConsented(true)
-      }
-      startRecording()
+  const handleMicStart = () => {
+    if (!micConsented) {
+      // Show consent notice (once per device)
+      const ok = window.confirm(t('portalChat.micConsent'))
+      if (!ok) return
+      try { localStorage.setItem('voice_note_consent', 'yes') } catch { /* storage unavailable — asked again next time */ }
+      setMicConsented(true)
     }
+    voiceErrorRef.current = false
+    startRecording()
   }
 
   const filteredMessages = activeTopic
@@ -983,7 +1120,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                       </FastTooltip>
                       <FastTooltip label={t('portalChat.reply')}>
                         <button
-                          onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
+                          onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type, attachments: msg.attachments })}
                           className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
                           aria-label={t('portalChat.reply')}
                         >
@@ -1040,7 +1177,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                         <p className="font-medium text-[10px] mb-0.5">
                           {replyMsg.sender_type === 'admin' ? t('chat.team') : (replyMsg.sender_name || t('chat.you'))}
                         </p>
-                        <p className="line-clamp-2">{replyMsg.message || '[Attachment]'}</p>
+                        <p className="line-clamp-2">{replyMsg.message || (hasVoiceAttachment(replyMsg.attachments) ? `🎤 ${t('portalChat.voice.note')}` : '[Attachment]')}</p>
                       </div>
                     )}
                     {(() => {
@@ -1051,7 +1188,10 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                         : []
                       if (atts.length === 0) return null
                       const images = atts.filter(a => isImageUrl(a.url))
-                      const docs = atts.filter(a => !isImageUrl(a.url))
+                      // voice notes play right here with a "Show text" button (the same player as TD Talk); only for the stored attachments list, whose position the "Show text" route needs
+                      const hasList = !!msg.attachments?.length
+                      const voices = hasList ? atts.map((a, index) => ({ a, index })).filter(({ a }) => isVoiceAttachment(a)) : []
+                      const docs = atts.filter(a => !isImageUrl(a.url) && !(hasList && isVoiceAttachment(a)))
                       return (
                         <div className="mb-1 space-y-1">
                           {images.length > 0 && (
@@ -1084,6 +1224,22 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                               ))}
                             </div>
                           )}
+                          {voices.map(({ a, index }) => (
+                            <TalkI18nProvider key={`voice-${index}`} value={voiceI18n}>
+                              <VoiceNote
+                                messageId={msg.id}
+                                index={index}
+                                url={a.url}
+                                transcript={a.transcript}
+                                flat={a.flat}
+                                flattenedAt={a.flattened_at}
+                                tone={isOwn ? 'dark' : 'light'}
+                                apiBase="/api/portal/chat/message"
+                                repair={false}
+                                downloadable
+                              />
+                            </TalkI18nProvider>
+                          ))}
                           {docs.map((att, i) => (
                             <a
                               key={i}
@@ -1126,7 +1282,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                     <>
                       <FastTooltip label={t('portalChat.reply')}>
                         <button
-                          onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type })}
+                          onClick={() => setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type, attachments: msg.attachments })}
                           className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0"
                           aria-label={t('portalChat.reply')}
                         >
@@ -1202,23 +1358,39 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       )}
       </div>
 
-      {/* Recording indicator */}
-      {(isRecording || isTranscribing) && (
-        <div className="px-4 py-2 bg-red-50 border-t border-red-100 flex items-center gap-2">
-          {isRecording && (
+      {/* A finished voice note that has not gone out yet (waiting for the company choice, or a send that failed): kept here, never lost */}
+      {heldVoice && !isRecording && (
+        <div className="px-4 py-2 bg-zinc-50 border-t border-zinc-100 flex items-center gap-2" data-testid="portal-voice-held">
+          <Mic className="h-4 w-4 text-[#BE1E2D] shrink-0" />
+          <span className="text-xs text-zinc-700 flex-1 min-w-0 truncate">
+            {uploading || sending ? t('portalChat.voice.note') : t('portalChat.voice.waiting')}
+            {isMultiEntity && heldVoiceFor && (() => {
+              const forEntity = entities.find(e => e.id === heldVoiceFor)
+              return forEntity ? <span className="text-zinc-400"> · {entityLabel(forEntity)}</span> : null
+            })()}
+          </span>
+          {uploading || sending ? (
+            <Loader2 className="h-4 w-4 animate-spin text-zinc-400 shrink-0" />
+          ) : (
             <>
-              <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
-              <span className="text-xs text-red-600 font-medium">
-                {t('chat.recording') || 'Recording... tap mic to stop'}
-              </span>
-            </>
-          )}
-          {isTranscribing && (
-            <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
-              <span className="text-xs text-blue-600 font-medium">
-                {t('chat.transcribing') || 'Transcribing...'}
-              </span>
+              <button
+                type="button"
+                onClick={() => sendVoice(heldVoice)}
+                aria-label={t('portalChat.voice.send')}
+                className="h-8 w-8 rounded-full bg-[#BE1E2D] text-white flex items-center justify-center shrink-0 hover:opacity-90"
+                data-testid="portal-voice-held-send"
+              >
+                <ArrowUp className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => { setHeldVoice(null); setHeldVoiceFor(null); heldUploadRef.current = null }}
+                aria-label={t('portalChat.voice.discard')}
+                className="h-8 w-8 rounded-full text-zinc-500 flex items-center justify-center shrink-0 hover:bg-zinc-200"
+                data-testid="portal-voice-held-discard"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </>
           )}
         </div>
@@ -1243,7 +1415,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
             <p className="text-[10px] font-medium text-blue-600">
               {replyTo.sender_type === 'admin' ? t('chat.team') : t('chat.you')}
             </p>
-            <p className="text-xs text-blue-700 truncate">{replyTo.message || '[Attachment]'}</p>
+            <p className="text-xs text-blue-700 truncate">{replyTo.message || (hasVoiceAttachment(replyTo.attachments) ? `🎤 ${t('portalChat.voice.note')}` : '[Attachment]')}</p>
           </div>
           <button
             onClick={() => setReplyTo(null)}
@@ -1300,11 +1472,28 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       {/* (The "Chatting about" indicator moved to the prominent top banner —
           see above. The bottom pill was removed per Antonio's UI feedback.) */}
 
+      {/* A voice note is being recorded (or waits to be sent) and the client clicked a menu link: ask before it is lost */}
+      {leaveAsk && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center" role="dialog" aria-modal="true" data-testid="portal-voice-leave">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
+            <p className="text-[17px] font-semibold text-zinc-900">{isRecording ? t('portalChat.voice.leaveTitleRecording') : t('portalChat.voice.leaveTitleHeld')}</p>
+            <p className="mt-1 text-sm text-zinc-500">{t('portalChat.voice.leaveBody')}</p>
+            <div className="mt-4 flex flex-col gap-2">
+              <button type="button" disabled={leaveBusy} onClick={leaveSend} data-testid="portal-leave-send" className="flex h-11 items-center justify-center gap-2 rounded-full bg-[#BE1E2D] text-sm font-semibold text-white active:opacity-80 disabled:opacity-60">
+                {leaveBusy ? <><Loader2 className="h-4 w-4 animate-spin" /> {t('portalChat.voice.leaveSending')}</> : t('portalChat.voice.leaveSend')}
+              </button>
+              <button type="button" disabled={leaveBusy} onClick={leaveDiscard} data-testid="portal-leave-discard" className="h-11 rounded-full border border-zinc-200 text-sm font-semibold text-zinc-800 active:bg-zinc-100 disabled:opacity-60">{t('portalChat.voice.leaveDiscard')}</button>
+              <button type="button" disabled={leaveBusy} onClick={abortLeave} data-testid="portal-leave-keep" className="h-11 rounded-full text-sm font-medium text-zinc-600 active:bg-zinc-100 disabled:opacity-60">{isRecording ? t('portalChat.voice.leaveKeepRecording') : t('portalChat.voice.leaveStay')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Company chooser popup — "Which company is this message about?" */}
       {popupOpen && (
         <div
           className="absolute inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setPopupOpen(false)}
+          onClick={() => { setPopupOpen(false); abortLeave() }}
         >
           <div
             className="w-full max-w-sm bg-white rounded-2xl shadow-xl border overflow-hidden"
@@ -1355,12 +1544,20 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
 
       {/* Input — WhatsApp-style pill + action button */}
       <div className={cn('border-t p-2 sm:p-3', (replyTo || pendingFiles.length > 0) && 'border-t-0')}>
+        {isRecording ? (
+          // While a voice note is being recorded the bar takes the place of the message box — bin, clock, send — exactly like TD Talk
+          <PortalVoiceBar
+            seconds={voiceSeconds}
+            onDiscard={cancelRecording}
+            onSend={stopRecording}
+            discardLabel={t('portalChat.voice.discard')}
+            recordingLabel={t('portalChat.voice.recording')}
+            sendLabel={t('portalChat.voice.send')}
+          />
+        ) : (
         <div className="flex items-end gap-2">
           {/* Pill container */}
-          <div className={cn(
-            'flex items-end flex-1 min-w-0 bg-white border border-zinc-200 rounded-[24px] px-1 sm:px-2 py-1 gap-0.5 min-h-[48px] transition-colors',
-            isRecording && 'border-red-300 bg-red-50/30'
-          )}>
+          <div className="flex items-end flex-1 min-w-0 bg-white border border-zinc-200 rounded-[24px] px-1 sm:px-2 py-1 gap-0.5 min-h-[48px] transition-colors">
             {/* Emoji */}
             <div className="relative shrink-0" ref={emojiPickerRef}>
               <FastTooltip label={t('portalChat.emoji')} align="left">
@@ -1425,7 +1622,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               rows={1}
-              placeholder={isRecording ? (t('chat.recording') || 'Recording...') : t('chat.placeholder')}
+              placeholder={t('chat.placeholder')}
               className="flex-1 min-w-0 px-1 py-2.5 text-base bg-transparent border-none focus:outline-none focus:ring-0 resize-none overflow-y-auto max-h-[120px] placeholder:text-zinc-400"
             />
           </div>
@@ -1445,29 +1642,14 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
             >
               <Send className="h-5 w-5" />
             </button>
-          ) : isRecording ? (
-            <FastTooltip label={t('chat.stopRecording') || 'Stop recording'}>
-              <button
-                onClick={handleMicToggle}
-                className="w-12 h-12 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse flex items-center justify-center shrink-0 transition-all"
-                aria-label={t('chat.stopRecording') || 'Stop recording'}
-              >
-                <Square className="h-5 w-5 fill-current" />
-              </button>
-            </FastTooltip>
-          ) : isTranscribing ? (
-            <button
-              disabled
-              className="w-12 h-12 rounded-full bg-blue-100 text-blue-500 flex items-center justify-center shrink-0"
-            >
-              <Loader2 className="h-5 w-5 animate-spin" />
-            </button>
           ) : micSupported ? (
-            <FastTooltip label={t('chat.startRecording') || 'Voice input'}>
+            <FastTooltip label={t('portalChat.voice.record')}>
               <button
-                onClick={handleMicToggle}
-                className="w-12 h-12 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 flex items-center justify-center shrink-0 transition-colors"
-                aria-label={t('chat.startRecording') || 'Voice input'}
+                onClick={handleMicStart}
+                disabled={!!heldVoice}
+                className="w-12 h-12 rounded-full bg-[#BE1E2D] text-white hover:opacity-90 disabled:opacity-40 flex items-center justify-center shrink-0 transition-opacity"
+                aria-label={t('portalChat.voice.record')}
+                data-testid="portal-mic"
               >
                 <Mic className="h-5 w-5" />
               </button>
@@ -1482,6 +1664,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
             </button>
           )}
         </div>
+        )}
       </div>
 
       {/* Image lightbox */}

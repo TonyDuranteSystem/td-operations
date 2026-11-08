@@ -22,6 +22,8 @@ import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel
 import { ContactLanguageField } from '@/components/portal-chats/contact-language-field'
 import { sortPortalThreads } from '@/lib/portal-chats/sort-threads'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
+import { VoiceNote } from '@/components/team-chat/voice-note'
+import { chatPreviewText, isVoiceAttachment } from '@/lib/portal/chat-voice'
 import { isChatEventMessage } from '@/lib/portal/chat-scope'
 import { applyLandingToUrl, parseStaffChatTab, parseStaffChatTopic, pickUnreadTopicToOpen } from '@/lib/portal/staff-chat-landing'
 import { subscribeToDashboardPush } from '@/lib/push/dashboard-push'
@@ -142,6 +144,10 @@ interface ChatAttachment {
   name: string
   mime_type?: string
   size?: number
+  /** Voice notes (dev job 753b2909): written by the "Show text" route, never by a sender (lib/team/voice-text.ts). */
+  transcript?: import('@/lib/team/voice-text').VoiceTranscript | null
+  flat?: boolean
+  flattened_at?: string | null
 }
 
 interface ChatMessage {
@@ -397,7 +403,7 @@ export default function PortalChatsPage() {
   // want the draft kept as written. Dev job 9c251e65.
   const [preserveLanguage, setPreserveLanguage] = useState(false)
   const [chatSearch, setChatSearch] = useState('')
-  const [replyToMsg, setReplyToMsg] = useState<{ id: string; message: string; sender_type: string } | null>(null)
+  const [replyToMsg, setReplyToMsg] = useState<{ id: string; message: string; sender_type: string; attachments?: unknown } | null>(null)
   const [newChatOpen, setNewChatOpen] = useState(false)
   const [newChatSearch, setNewChatSearch] = useState('')
   const [newChatResults, setNewChatResults] = useState<{ id: string; company_name: string; contact_name: string | null }[]>([])
@@ -3851,7 +3857,7 @@ export default function PortalChatsPage() {
                             aria-label="Jump to message"
                           >
                             <Pin className="h-3 w-3 text-amber-500 mt-0.5 shrink-0" />
-                            <span className="truncate flex-1">{pm.message || '[Attachment]'}</span>
+                            <span className="truncate flex-1">{chatPreviewText(pm.message, pm.attachments) || '[Attachment]'}</span>
                           </button>
                         </FastTooltip>
                         <FastTooltip label="Unpin" className="shrink-0">
@@ -3983,7 +3989,7 @@ export default function PortalChatsPage() {
                         >
                           <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
-                            onSelect={() => { setReplyToMsg({ id: msg.id, message: msg.message, sender_type: msg.sender_type }); inputRef.current?.focus() }}
+                            onSelect={() => { setReplyToMsg({ id: msg.id, message: msg.message, sender_type: msg.sender_type, attachments: msg.attachments }); inputRef.current?.focus() }}
                           >
                             <Reply className="h-3.5 w-3.5 text-zinc-400" /> Reply
                           </DropdownMenu.Item>
@@ -4175,7 +4181,8 @@ export default function PortalChatsPage() {
                           <DropdownMenu.Item
                             className="flex items-center gap-2.5 px-3 py-2 text-red-600 hover:bg-red-50 cursor-pointer outline-none"
                             onSelect={() => {
-                              const preview = msg.message ? (msg.message.length > 80 ? msg.message.slice(0, 80) + '…' : msg.message) : '[Attachment]'
+                              const words = chatPreviewText(msg.message, msg.attachments)
+                              const preview = words ? (words.length > 80 ? words.slice(0, 80) + '…' : words) : '[Attachment]'
                               if (window.confirm(`Delete this message?\n\n"${preview}"\n\nThe client will no longer see it. An audit trail (deleted by, when) is kept on the admin side.`)) {
                                 deleteMessageMutation.mutate(msg.id)
                               }
@@ -4310,7 +4317,7 @@ export default function PortalChatsPage() {
                             <p className="font-medium text-[10px] mb-0.5">
                               {replyRef.sender_type === 'admin' ? 'You' : (replyRef.sender_name || 'Client')}
                             </p>
-                            <p className="line-clamp-2">{replyRef.message || '[Attachment]'}</p>
+                            <p className="line-clamp-2">{chatPreviewText(replyRef.message, replyRef.attachments) || '[Attachment]'}</p>
                           </div>
                         )}
                         {(() => {
@@ -4323,6 +4330,14 @@ export default function PortalChatsPage() {
                           return (
                             <>
                               {atts.map((att, i) => {
+                                // a client's voice note plays right here with "Show text" (dev job 753b2909); the position `i` is the stored attachments position the route needs
+                                if (msg.attachments?.length && isVoiceAttachment(att)) {
+                                  return (
+                                    <div key={i} className="mb-1">
+                                      <VoiceNote messageId={msg.id} index={i} url={att.url} transcript={att.transcript} flat={att.flat} flattenedAt={att.flattened_at} tone={isAdmin ? 'dark' : 'light'} apiBase="/api/portal/chat/message" repair={false} downloadable />
+                                    </div>
+                                  )
+                                }
                                 const ext = att.url.split('?')[0].split('.').pop()?.toLowerCase() || ''
                                 const isImg = ['jpg','jpeg','png','gif','webp','svg','heic','bmp'].includes(ext)
                                 return isImg ? (
@@ -4575,7 +4590,7 @@ export default function PortalChatsPage() {
                   <p className="text-[10px] font-medium text-blue-600">
                     {replyToMsg.sender_type === 'admin' ? 'You' : 'Client'}
                   </p>
-                  <p className="text-xs text-blue-700 truncate">{replyToMsg.message || '[Attachment]'}</p>
+                  <p className="text-xs text-blue-700 truncate">{chatPreviewText(replyToMsg.message, replyToMsg.attachments) || '[Attachment]'}</p>
                 </div>
                 <button
                   onClick={() => setReplyToMsg(null)}
@@ -4827,7 +4842,8 @@ export default function PortalChatsPage() {
                         const byId = new Map(combinedMessages.map(m => [m.id, m]))
                         const previews = ids.slice(0, 5).map(id => {
                           const m = byId.get(id)
-                          const t = m?.message ? (m.message.length > 60 ? m.message.slice(0, 60) + '…' : m.message) : '[Attachment]'
+                          const words = chatPreviewText(m?.message, m?.attachments)
+                          const t = words ? (words.length > 60 ? words.slice(0, 60) + '…' : words) : '[Attachment]'
                           return `• ${t}`
                         }).join('\n')
                         const more = ids.length > 5 ? `\n… and ${ids.length - 5} more` : ''
