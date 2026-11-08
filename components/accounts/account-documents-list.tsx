@@ -67,18 +67,20 @@ export function AccountDocumentsList({
   // A company whose files live in the new store: the files its store view below shows (with preview +
   // sharing) are never listed twice here (the double-listing Luca reported, 2026-07-20). Only THOSE are
   // hidden — the server says which; a store file the view would not show stays listed here.
-  // The account page no longer embeds the editable storage view (Antonio 2026-10-13: staff work in Storage; this page only reads),
-  // so every file of the company is listed here — nothing is "already shown below".
+  // The storage folders of a company in storage are shown by the Documents tab itself (StoreDocumentsPanel, below this list), and for
+  // such a company this list renders nothing (see the early return) — so there is never a double listing.
   const shown = new Set<string>()
   void storeOwner
   // while it is still being worked out whether the store view shows them, hold the store rows back (no
   // flash of a double listing); an error answers "no store view" and they are listed
   const pendingStore = storeOwner.isLoading
-  // a MOVED company shows only the read-only storage panel below (its Drive tree is hidden), so a record that still points at a
-  // Drive file has no other place to appear: list it here too (it used to vanish from both views)
+  // a MOVED company has its Drive tree hidden. NOTE: `moved` is only ever set for a company that has a storage owner, and such a company
+  // returns below before this list is built — so for the companies that reach the list this is just `accountHasDriveFolder`.
+  // Known gap (since 2026-10-14, not part of the 2026-11-07 change): a record of a moved company that still points at a Drive file is
+  // listed on neither view.
   const driveTreeShown = accountHasDriveFolder && !storeOwner.data?.moved
-  // A company whose files live in the new storage: NO list here — the Documents tab is only the "Open in Storage" button
-  // (Antonio 2026-10-14). While it is still being worked out, nothing flashes either.
+  // A company whose files live in the new storage: NO flat list here — the Documents tab shows its real storage folders instead
+  // (Antonio 2026-11-07, job aa072623; 2026-10-14 it was a button). While it is still being worked out, nothing flashes either.
   if (accountId && (storeOwner.isLoading || storeOwner.data?.ownerId)) return null
   const homeless = filterDocumentsNeedingFlatListing(documents, driveTreeShown)
     .filter((d) => !shown.has(d.drive_file_id ?? ''))

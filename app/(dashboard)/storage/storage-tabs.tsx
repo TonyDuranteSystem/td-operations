@@ -20,7 +20,7 @@ export function StorageTabs() {
     const owner = q.get('owner')
     const folder = q.get('folder')
     if (q.get('store') === 'new' && owner) {
-      // with a folder: that folder; without one: the company's storage from the top (the company page's "Open in Storage")
+      // with a folder: that folder; without one: the owner's storage from the top (links such as the Bank application list's "Open in Storage")
       setDeepLink({ ownerId: owner, folderId: folder })
       setTab('new')
       return

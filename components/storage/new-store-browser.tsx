@@ -40,8 +40,11 @@ import { baseName } from '@/lib/crm-store/merge-parts'
 import { orderFolders } from '@/lib/crm-store/date-sort-rules'
 import { DateSortDialog } from './date-sort-dialog'
 import { mergeBlockReason } from '@/lib/crm-store/merge-rules'
+import { planRetry } from '@/lib/crm-store/retry-plan'
 import { onReconnected } from '@/lib/hooks/use-connection-state'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
+import { useEmbedded } from '@/lib/embed/embedded-context'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { resolveDropPreset, type DropPreset } from '@/lib/crm-store/drop-preset'
 import { useShareMessagePrompt, isSilentShow } from './use-share-message-prompt'
 import { buildDocumentShareMessage } from '@/lib/portal/document-share-text'
@@ -351,8 +354,16 @@ interface NewFolder { parentId: string; value: string; year?: boolean; siblings:
 interface TreeNode { root?: Fold | null; folders: Fold[] }
 
 export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company', openOwnerId, openFolderId, onBusyChange }: { ownerId?: string; scopedKind?: string; openOwnerId?: string; openFolderId?: string; /** tells the page whether an upload / group action is running (the tab must not be switched meanwhile) */ onBusyChange?: (busy: boolean) => void } = {}) {
+  // The bar of ticked files sticks to the top while a long list scrolls. The dashboard's own sticky header (h-14, desktop) covers
+  // that spot, so the bar's buttons were hidden behind it (measured 2026-11-07: bar at y=40, header on top) — it has to stick BELOW the
+  // header; where the page shows no header (floating window, TD Social app) it sticks to the very top.
+  const inFloatingWindow = useEmbedded()
+  const inSocialApp = useAppMode()
+  const pageHasHeader = !inFloatingWindow && !inSocialApp
   const [groups, setGroups] = useState<NavGroup[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** which load the banner is about — Retry reloads only THAT part, and that part recovering clears the banner (the client list and the open storage fail and recover independently) */
+  const errorFrom = useRef<'nav' | 'owner'>('owner')
   const [ownerId, setOwnerId] = useState<string | null>(scopedOwnerId ?? null)
   const [root, setRoot] = useState<Contents | null>(null)
   /** loaded contents of each opened folder (by folder id), and of each person branch (by person:<contact id>) */
@@ -586,12 +597,19 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       if (ownerIdRef.current !== oid) return
       setLoaded((m) => ({ ...m, ...Object.fromEntries(entries) }))
     } catch (e) {
+      errorFrom.current = 'owner'
       setError(errMsg(e, 'Could not load the folder.'))
     }
   }, [fetchInto])
 
   const loadNav = useCallback(async () => {
-    try { setGroups((await getJson<{ groups: NavGroup[] }>('/api/crm-store/browse/navigation')).groups) } catch (e) { setError(errMsg(e, 'Could not load the new storage.')) }
+    try {
+      setGroups((await getJson<{ groups: NavGroup[] }>('/api/crm-store/browse/navigation')).groups)
+      if (errorFrom.current === 'nav') setError(null)
+    } catch (e) {
+      errorFrom.current = 'nav'
+      setError(errMsg(e, 'Could not load the new storage.'))
+    }
   }, [])
 
   useEffect(() => {
@@ -655,7 +673,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   }
 
   // A link can open the new storage straight on one folder (e.g. the Bank application list's "Open in Storage").
-  // Once, after the first load; a later pick by hand is never overridden.
+  // Once, after the first load; a later pick by hand is never overridden. (Not used by the Documents tabs: they embed the screen with `ownerId`.)
   const selectFolderRef = useRef(selectFolder)
   selectFolderRef.current = selectFolder
   const deepLinkDone = useRef(false)
@@ -664,7 +682,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   useEffect(() => {
     if (scopedOwnerId || !openOwnerId || deepLinkDone.current) return
     deepLinkDone.current = true
-    // a folder when the link names one; otherwise the company's storage from the top (the company page's "Open in Storage")
+    // a folder when the link names one; otherwise that storage from the top (a /storage?store=new&owner=… link)
     if (openFolderId) void selectFolderRef.current(openOwnerId, openFolderId)
     else void openOwnerRef.current(openOwnerId, true)
   }, [scopedOwnerId, openOwnerId, openFolderId])
@@ -706,6 +724,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     if (ownerIdRef.current !== ownerId) { if (!scopedOwnerId) loadNav(); return }
     // only the NEWEST refresh may write the screen: an older one finishing late would put back stale folders
     const seq = ++refreshSeq.current
+    // a folder that could not be reloaded (not "gone" — really failed twice): the red banner of an earlier failed load must not be cleared then
+    let folderFailed = false
     try {
       const people = Object.values(loaded).flatMap((x) => x.people ?? [])
       const fetchOnce = async (key: string) => {
@@ -728,6 +748,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             return await fetchOnce(key)
           } catch (e2) {
             if (isGoneError(e2)) return gone()
+            folderFailed = true
             if (key === focusRef.current) toast.message(`${errMsg(e2, 'Could not refresh.')} Showing what was loaded before.`, { id: 'store-refresh-failed' })
             return null // the folder stays as it was on screen
           }
@@ -760,7 +781,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       // changed are on screen); each folder is shown as soon as ITS reload arrives, never held back by the slowest
       void Promise.all(rest.map((k) => fetchKey(k).then((e) => {
         if (ownerIdRef.current === ownerId && seq === refreshSeq.current) apply([e])
-      })))
+      }))).then(() => {
+        // the storage on screen loaded fine now: a banner left by its earlier failed load must not stay above a screen that works —
+        // but only once EVERY folder came back (a folder that keeps failing would otherwise sit blank, with a too-low count and no warning)
+        if (!folderFailed && errorFrom.current === 'owner' && ownerIdRef.current === ownerId && seq === refreshSeq.current) setError(null)
+      })
     } catch (e) {
       toast.error(errMsg(e, 'Could not refresh.'))
     }
@@ -1220,44 +1245,52 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     const taxMemo = new Map<string, { folder: Fold; year: number | null }>()
     const oidOfDrop = folderOwner.current.get(batch.folder.id) ?? ownerId ?? ''
     const viaDrop = viaCompany.current.has(batch.folder.id)
-    for (let i = 0; i < batch.items.length; i++) {
-      const it = batch.items[i]
-      if (it.status !== 'waiting') continue
-      setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: 'uploading' } : x)) }))
-      // a dropped folder: its sub-folders are made (or reused) under the target, once per path
-      let into: Fold = batch.folder
-      if (it.path.length) {
-        const key = it.path.join('/')
-        const known = madePaths.get(key)
-        if (known === null) {
-          failed++
-          setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: 'failed' } : x)) }))
-          continue
-        }
-        if (known) into = known
-        else {
-          try {
-            const r = await postJson<{ id: string; kind: string }>(`/api/crm-store/browse/folder/${batch.folder.id}/ensure-path`, { path: it.path }, 'The folders could not be created.')
-            into = { id: r.id, name: it.path[it.path.length - 1], kind: r.kind, trashed: false, locked: false }
-            folderOwner.current.set(r.id, oidOfDrop)
-            if (viaDrop) viaCompany.current.add(r.id)
-            madePaths.set(key, into)
-          } catch (err) {
-            toast.error(`${it.path.join(' › ')}: ${errMsg(err, 'the folders could not be created.')}`)
-            madePaths.set(key, null)
+    try {
+      for (let i = 0; i < batch.items.length; i++) {
+        const it = batch.items[i]
+        if (it.status !== 'waiting') continue
+        setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: 'uploading' } : x)) }))
+        // a dropped folder: its sub-folders are made (or reused) under the target, once per path
+        let into: Fold = batch.folder
+        if (it.path.length) {
+          const key = it.path.join('/')
+          const known = madePaths.get(key)
+          if (known === null) {
             failed++
             setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: 'failed' } : x)) }))
             continue
           }
+          if (known) into = known
+          else {
+            try {
+              const r = await postJson<{ id: string; kind: string }>(`/api/crm-store/browse/folder/${batch.folder.id}/ensure-path`, { path: it.path }, 'The folders could not be created.')
+              into = { id: r.id, name: it.path[it.path.length - 1], kind: r.kind, trashed: false, locked: false }
+              folderOwner.current.set(r.id, oidOfDrop)
+              if (viaDrop) viaCompany.current.add(r.id)
+              madePaths.set(key, into)
+            } catch (err) {
+              toast.error(`${it.path.join(' › ')}: ${errMsg(err, 'the folders could not be created.')}`)
+              madePaths.set(key, null)
+              failed++
+              setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: 'failed' } : x)) }))
+              continue
+            }
+          }
         }
+        // dragged files always arrive HIDDEN from the client (decision #85); every question still applies
+        const out = await doUploadWith(it.file, { folder: into, typeSlug: it.type, personId: batch.person, displayName: it.name, visible: false, batch: true, retryOfFailed: retriedIdx.has(i), taxMemo })
+        if (out === 'saved') saved++; else if (out === 'cancelled') skipped++; else failed++
+        setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: out } : x)) }))
       }
-      // dragged files always arrive HIDDEN from the client (decision #85); every question still applies
-      const out = await doUploadWith(it.file, { folder: into, typeSlug: it.type, personId: batch.person, displayName: it.name, visible: false, batch: true, retryOfFailed: retriedIdx.has(i), taxMemo })
-      if (out === 'saved') saved++; else if (out === 'cancelled') skipped++; else failed++
-      setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: out } : x)) }))
+    } catch (err) {
+      // insurance: an unexpected throw must not leave the screen "busy" (tabs locked, Upload dead) — what was in flight is marked failed so Retry works
+      toast.error(errMsg(err, 'The upload stopped unexpectedly.'))
+      failed++
+      setDrop((d) => d && ({ ...d, items: d.items.map((x) => (x.status === 'uploading' ? { ...x, status: 'failed' } : x)) }))
+    } finally {
+      setDropRunning(false)
+      setUploading(false)
     }
-    setDropRunning(false)
-    setUploading(false)
     toast.success(`${saved} ${saved === 1 ? 'file' : 'files'} uploaded — hidden from the client${skipped ? `, ${skipped} skipped` : ''}${failed ? `, ${failed} failed` : ''}`)
     if (saved && root?.owner.kind === 'private') toast.message('Files in Shared with staff are shared with nobody yet — use "Not shared" on each one to choose who can see it.')
     await refreshAll()
@@ -2112,7 +2145,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [working])
-  const tabLocked = working || !!plain || !!drop
+  // a merged PDF waiting for its upload questions lives only in this screen: leaving the tab would throw it away (Discard unlocks)
+  const tabLocked = working || !!plain || !!drop || !!mergedFile
   useEffect(() => { onBusyChange?.(tabLocked) }, [tabLocked, onBusyChange])
   useEffect(() => () => { onBusyChange?.(false) }, [onBusyChange])
   const refreshAllRef = useRef(refreshAll)
@@ -2646,7 +2680,19 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   const right = (
     <div className={`rounded-xl border border-zinc-200 bg-white p-4 ${scopedOwnerId ? '' : 'min-h-[70vh] self-start'}`} onClick={() => { if (menuFor) setMenuFor(null); if (versionsFor) setVersionsFor(null) }}>
-      {error && <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      {error && (
+        <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{error}{' '}
+          {/* the embedded screen has no left tree to start over from, and its toolbar (with Refresh) only exists once a folder has loaded */}
+          <button type="button" onClick={() => {
+            // the banner names only the LAST failure, but the client list and the open storage can fail independently: repair whatever is still missing
+            // (the open storage → refresh what is on screen, which keeps the folder you are in, or open it again when nothing loaded yet; the list → only the list)
+            const again = ownerId ?? scopedOwnerId
+            const plan = planRetry({ embedded: !!scopedOwnerId, failedPart: errorFrom.current, hasOwner: !!again, hasRoot: !!root, hasList: groups !== null })
+            if (plan.owner === 'refresh') void refreshAll()
+            else if (plan.owner === 'open' && again) void openOwner(again)
+            if (plan.list) void loadNav()
+          }} className="font-medium underline">Retry</button></p>
+      )}
       {sharedView && (
         <>
           <div className="mb-3 flex items-center gap-2 text-sm">
@@ -2808,7 +2854,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           </div>
 
           {selectedFiles.size > 0 && (
-            <div data-no-ctx="" className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm" onClick={(e) => e.stopPropagation()}>
+            <div data-no-ctx="" className={`sticky top-0 ${pageHasHeader ? 'lg:top-14' : ''} z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm`} onClick={(e) => e.stopPropagation()}>
               <span className="font-medium text-blue-900">{selectedFiles.size} selected{selMixed ? ` · ${Array.from(selectedFiles.values()).filter((v) => v.ownerId !== (ownerId ?? '')).length} in another storage` : ''}</span>
               <span className="flex-1" />
               <FastTooltip label={selectedFiles.size < 2 ? 'Tick at least two files' : 'Merge the ticked files into one PDF'}>

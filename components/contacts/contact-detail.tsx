@@ -44,7 +44,8 @@ import { EntityActivitySummary } from '@/components/dashboard/entity-activity-su
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { useStoreOwnerForContact, useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
-import { StoreReadOnlyPanel } from '@/components/accounts/store-readonly-panel'
+import { StoreDocumentsPanel } from '@/components/accounts/store-documents-panel'
+import { StoreBusyScope, useStoreBusy, STORE_BUSY_HINT } from '@/components/accounts/store-busy'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
 import { updateContactField, updateContactName, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
@@ -313,6 +314,8 @@ export function ContactDetail({
 }: ContactDetailProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
+  // an upload / group action is running in the Documents tab's storage screen: leaving the tab would close it mid-way
+  const [storeBusy, setStoreBusy] = useState(false)
   const [showChainAudit, setShowChainAudit] = useState(false)
   const [showDeleteContact, setShowDeleteContact] = useState(false)
   const [showMergeContact, setShowMergeContact] = useState(false)
@@ -489,15 +492,16 @@ export function ContactDetail({
             if (tab.key === 'activity') count = conversations.length
 
             return (
-              <FastTooltip key={tab.key} label={tab.tooltip}>
+              <FastTooltip key={tab.key} label={storeBusy && activeTab !== tab.key ? STORE_BUSY_HINT : tab.tooltip}>
                 <button
                   onClick={() => setActiveTab(tab.key)}
-                  aria-label={tab.tooltip}
+                  disabled={storeBusy && activeTab !== tab.key}
+                  aria-label={storeBusy && activeTab !== tab.key ? `${tab.tooltip} — ${STORE_BUSY_HINT}` : tab.tooltip}
                   className={cn(
-                    'flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
+                    'flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50',
                     activeTab === tab.key
                       ? 'border-blue-500 text-blue-600'
-                      : 'border-transparent text-muted-foreground hover:text-foreground hover:border-zinc-300'
+                      : 'border-transparent text-muted-foreground hover:text-foreground hover:border-zinc-300 disabled:hover:text-muted-foreground disabled:hover:border-transparent'
                   )}
                 >
                   <Icon className="h-4 w-4" />
@@ -539,7 +543,9 @@ export function ContactDetail({
         <InvoicesTab invoices={invoices} accounts={accounts} />
       )}
       {activeTab === 'documents' && (
-        <ContactDocumentsTab documents={documents} accounts={accounts} contactId={contact.id} driveFolderUrl={contact.gdrive_folder_url} driveFolderId={contact.drive_folder_id} />
+        <StoreBusyScope busy={storeBusy} setBusy={setStoreBusy}>
+          <ContactDocumentsTab documents={documents} accounts={accounts} contactId={contact.id} driveFolderUrl={contact.gdrive_folder_url} driveFolderId={contact.drive_folder_id} />
+        </StoreBusyScope>
       )}
       {activeTab === 'emails' && (
         // All Gmail with this contact: auto-matched + manually linked
@@ -3075,7 +3081,11 @@ function ContactDocumentsTab({
   // here (preview, upload, rename, move, delete, show / hide) instead of the Drive folder tools
   const storeOwner = useStoreOwnerForContact(contactId, !driveFolderId || documents.some((d) => (d.drive_file_id ?? '').startsWith('store:')))
   const personStoreId = storeOwner.data?.ownerId ?? null
-  const personStoreSection = personStoreId ? <StoreReadOnlyPanel ownerId={personStoreId} who="person" /> : null
+  // an explicit key: this section sits at a different place in the "no documents yet" view and in the normal view below, and React keeps it
+  // (no reload of the whole screen) when the person's document count crosses zero only if it can recognise it by its key
+  const personStoreSection = personStoreId ? <StoreDocumentsPanel key="store-personal" ownerId={personStoreId} who="person" /> : null
+  // an upload is running in the screen below: the Personal / company buttons stay put (switching would close the screen mid-upload)
+  const { busy: storeBusy } = useStoreBusy()
   // the check itself failed (not "this person has no storage"): say so and offer Retry — never the quiet Drive / empty view
   const personStoreError = storeOwner.isError && !storeOwner.data ? (
     <div className="rounded-md bg-red-50 px-3 py-3 text-sm text-red-700" role="alert">
@@ -3536,14 +3546,16 @@ function ContactDocumentsTab({
       {/* Scope tabs: Personal (contact's own files) + one per company the contact belongs to */}
       <div className="flex flex-wrap gap-2 border-b pb-2">
         {docScopes.map(scope => (
+          <FastTooltip key={scope.key} label={storeBusy && activeDocScope !== scope.key ? STORE_BUSY_HINT : ''}>
           <button
-            key={scope.key}
             onClick={() => setActiveDocScope(scope.key)}
+            disabled={storeBusy && activeDocScope !== scope.key}
+            aria-label={storeBusy && activeDocScope !== scope.key ? `${scope.label || 'Company'} — ${STORE_BUSY_HINT}` : undefined}
             className={cn(
-              'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
+              'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-50',
               activeDocScope === scope.key
                 ? 'bg-blue-600 text-white'
-                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 disabled:hover:bg-zinc-100'
             )}
           >
             {scope.label || 'Company'}
@@ -3554,6 +3566,7 @@ function ContactDocumentsTab({
               {scope.count}
             </span>}
           </button>
+          </FastTooltip>
         ))}
       </div>
 
@@ -3561,7 +3574,7 @@ function ContactDocumentsTab({
           company is in the new storage too) — the same screen as the company page, with all its tools */}
       {personStoreId && activeDocScope === 'personal' && personStoreSection}
       {companyScopeInStore && activeCompanyStore.data?.ownerId && (
-        <StoreReadOnlyPanel ownerId={activeCompanyStore.data.ownerId} />
+        <StoreDocumentsPanel key="store-company" ownerId={activeCompanyStore.data.ownerId} />
       )}
 
       {!(personStoreId && activeDocScope === 'personal') && !companyScopeInStore && scopedDocuments.length === 0 && (
