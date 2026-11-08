@@ -1489,6 +1489,16 @@ export async function advanceServiceDelivery(
       })
       autoTriggers.push(...closure.lines)
       for (const problem of closure.problems) autoTriggers.push(`Closure problem: ${problem}`)
+      // The warning on screen goes away with the next refresh (the finish button unmounts, the step bar never showed it) and the action log
+      // keeps no problems — so write them on the job too, where staff look (bug-hunt 2026-11-08, dev job eaa4747e). Never fails the move.
+      if (closure.problems.length > 0) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_notes is not in the generated types yet (lib/job-notes/read.ts)
+          await (supabaseAdmin as any).from("service_delivery_notes").insert({ service_delivery_id: delivery_id, body: `CLOSURE PROBLEM: closing the company did not fully work — ${closure.problems.join(" · ")}`, author_name: "Closing step" })
+        } catch {
+          /* a note must never fail the move */
+        }
+      }
     }
   }
 

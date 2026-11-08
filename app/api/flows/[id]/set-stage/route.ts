@@ -67,6 +67,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       completed: result.completed ?? false,
       documents_deleted: result.documents_deleted ?? 0,
       renewal_date_reverted: result.renewal_date_reverted ?? false,
+      // what a move back did besides moving (deleted tracking number, company stays Closed) and, going forward, a closing that did not fully work
+      warnings: result.warnings ?? [],
+      warning: result.warning ?? null,
     })
   } catch (e) {
     return NextResponse.json(

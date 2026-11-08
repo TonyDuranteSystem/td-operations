@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, Loader2 } from 'lucide-react'
+import { useGoBackWarnings } from './use-go-back-warnings'
 
 interface GoBackButtonProps {
   serviceDeliveryId: string
@@ -27,11 +28,13 @@ export function GoBackButton({ serviceDeliveryId, previousStageLabel, extraWarni
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // the page's lines + the tracking-number line when a number was saved after the page loaded (no reload needed)
+  const warnings = useGoBackWarnings(serviceDeliveryId, extraWarnings)
 
   async function handleGoBack() {
     if (busy) return
     const confirmed = window.confirm(
-      ['Are you sure? This will delete any documents uploaded at this stage and go back to the previous step.', ...(extraWarnings ?? [])].join('\n\n'),
+      ['Are you sure? This will delete any documents uploaded at this stage and go back to the previous step.', ...warnings].join('\n\n'),
     )
     if (!confirmed) return
 

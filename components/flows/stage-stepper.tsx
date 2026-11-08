@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 import {
   CheckCircle2, Circle, ChevronRight, Loader2,
   ClipboardCheck, CreditCard, FileCheck, FileSignature, Landmark, Send,
@@ -12,6 +13,7 @@ import { FLOW_DOC_UPLOADED_EVENT, type FlowDocUploadedDetail } from './document-
 import { ClosingQuestion } from './closing-question'
 import { STEP_BAR_CLOSE_QUESTION } from '@/lib/closure/closing-step'
 import { FLOW_TRACKING_SAVED_EVENT, type FlowTrackingSavedDetail } from '@/lib/flows/tracking-saved-event'
+import { useGoBackWarnings } from './use-go-back-warnings'
 
 export interface StepperStage {
   stage_name: string
@@ -46,6 +48,9 @@ interface StageStepperProps {
   /** The name of the step whose forward move CLOSES a company (Company Closure with a company: "Closing"), else null. Moving there asks the
    *  in-page "this closes the company" question — which company, what goes with it — instead of the bare browser prompt. */
   closesCompanyAt?: string | null
+  /** What a move BACK also does here (deletes the saved IRS tracking number, a closed company stays Closed) — said in the move's question, like Go Back's.
+   *  The step bar moved back over a saved tracking number with a bare "Move to …?" and deleted it without a word (live test 2026-11-08). */
+  backWarnings?: string[]
 }
 
 /**
@@ -60,8 +65,9 @@ interface StageStepperProps {
  * backward → deletes the re-opened stages' documents + undoes the renewal bump)
  * via moveServiceDeliveryToStage. Surfaces the server's real error (R099).
  */
-export function StageStepper({ stages, currentStage, serviceDeliveryId, closesCompanyAt = null }: StageStepperProps) {
+export function StageStepper({ stages, currentStage, serviceDeliveryId, closesCompanyAt = null, backWarnings }: StageStepperProps) {
   const router = useRouter()
+  const moveBackLines = useGoBackWarnings(serviceDeliveryId, backWarnings)
   const [busyStage, setBusyStage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   // the step whose "this closes the company" question is open
@@ -109,7 +115,8 @@ export function StageStepper({ stages, currentStage, serviceDeliveryId, closesCo
       setAskingStage(stage)
       return
     }
-    const confirmed = window.confirm(`Move to ${stage.stage_name}?`)
+    const movingBack = stage.stage_order < (sorted[currentIdx]?.stage_order ?? Number.POSITIVE_INFINITY)
+    const confirmed = window.confirm([`Move to ${stage.stage_name}?`, ...(movingBack ? moveBackLines : [])].join('\n\n'))
     if (!confirmed) return
     void doMove(stage)
   }
@@ -132,6 +139,10 @@ export function StageStepper({ stages, currentStage, serviceDeliveryId, closesCo
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not move to this stage. Please try again.')
       }
+      // What the move did besides moving: a move back deletes the saved IRS tracking number / leaves a closed company Closed; a finish may not have closed
+      // the company fully. A toast survives the refresh below (an inline line would be gone with it) — and the server also wrote the closing problems on the job.
+      for (const w of (data.warnings ?? []) as string[]) toast.warning(w, { duration: 12000 })
+      if (data.warning) toast.warning(data.warning as string, { duration: 30000 })
       router.refresh()
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not move to this stage.')

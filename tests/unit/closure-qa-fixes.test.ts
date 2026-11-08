@@ -52,7 +52,8 @@ describe("the words", () => {
   it("the step bar and the server refusal name what happens; the empty Documents box says files may still be arriving", () => {
     expect(STEP_BAR_CLOSE_QUESTION).toContain("CLOSES THE COMPANY")
     expect(COMPANY_CLOSE_NOT_CONFIRMED).toContain("confirmation question")
-    expect(COMPANY_CLOSE_NOT_CONFIRMED).toContain("confirm_company_close")
+    // written for staff (the to-do card shows it); the MCP tool adds the agent's sentence (tests/unit/closure-bughunt-fixes.test.ts)
+    expect(COMPANY_CLOSE_NOT_CONFIRMED).not.toContain("confirm_company_close")
     expect(CLOSURE_DOCUMENTS_EMPTY_TEXT).toContain("within a few minutes")
   })
 })

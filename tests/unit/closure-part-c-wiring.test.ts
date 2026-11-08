@@ -27,7 +27,8 @@ describe("closing the company", () => {
   it("a failed step becomes a 'Closure problem:' line, and the advance route turns it into the warning staff see", () => {
     expect(section).toContain("Closure problem: ")
     const route = read("app/api/flows/[id]/advance/route.ts")
-    expect(route).toContain("Closure problem: ")
+    expect(route).toContain("closureProblemWarning(result.auto_triggers)")
+    expect(read("lib/closure/closing-step.ts")).toContain("Closure problem: ")
     expect(route).toContain("skip_company_close: body.skip_company_close === true")
   })
 

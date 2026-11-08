@@ -250,6 +250,24 @@ describe("applyCompanyClosure", () => {
     expect(h.state.log).not.toContain("mirror.sync p2")
   })
 
+  it("a PART-PAID invoice is NOT cancelled (the money received would sit on a cancelled invoice) — it stays open and is reported with its amounts; the plain unpaid one is cancelled", async () => {
+    Object.assign(tableRow("payments", "p2"), { amount_paid: 30, amount_due: 50 }) // 80 EUR invoice, 30 received
+    const r = await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false })
+    expect(tableRow("payments", "p2")).toMatchObject({ status: "Overdue", invoice_status: "Sent", amount_paid: 30 })
+    expect(h.state.log).not.toContain("mirror.sync p2")
+    expect(r.problems.join(" ")).toContain("invoice INV-000002 is part-paid (30 EUR received, 50 EUR still owed) — it was NOT cancelled: settle or refund it by hand")
+    expect(tableRow("payments", "p1")).toMatchObject({ status: "Cancelled", invoice_status: "Cancelled" })
+    expect(r.lines.join(" ")).toContain("Cancelled 1 unpaid invoice (120 USD)")
+  })
+
+  it("an unused credit note is left on the account and the result says so (not an error)", async () => {
+    Object.assign(tableRow("payments", "p2"), { invoice_status: "Credit", amount: -25, amount_due: 0 })
+    const r = await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false })
+    expect(tableRow("payments", "p2")).toMatchObject({ status: "Overdue", invoice_status: "Credit" })
+    expect(r.problems).toEqual([])
+    expect(r.lines.join(" ")).toContain("1 unused credit note stays on the account")
+  })
+
   it("an invoice whose client copy could not be updated stays cancelled, and says so", async () => {
     h.state.failOn.add("mirror:status")
     const r = await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false })
@@ -312,6 +330,16 @@ describe("readClosingBrief (the facts the question shows)", () => {
     expect(b!.members).toBe(2) // the person who left is not counted
     expect(b!.hasLease).toBe(true)
     expect(b!.checkNote).toBe("linked to A, client wrote B.")
+  })
+
+  it("does not count a part-paid invoice or a credit note as 'unpaid invoices': the question sums what is still OWED and lists the others apart", async () => {
+    Object.assign(tableRow("payments", "p1"), { amount_paid: 20, amount_due: 100 }) // 120 USD, 20 received
+    Object.assign(tableRow("payments", "p2"), { invoice_status: "Credit", amount: -25, amount_due: 0 }) // an unused 25 EUR credit
+    h.state.tables.payments.push({ id: "p4", account_id: ACC, status: "Pending", invoice_status: "Draft", invoice_number: "INV-000004", amount: 40, amount_due: 40, amount_paid: 0, amount_currency: "USD" })
+    const b = await readClosingBrief(JOB)
+    expect(b!.unpaid).toEqual({ count: 1, totals: { USD: 40 } })
+    expect(b!.partPaid).toEqual([{ invoice: "INV-000001", paid: 20, owed: 100, currency: "USD" }])
+    expect(b!.credits).toEqual({ count: 1, totals: { EUR: 25 } })
   })
 
   it("returns nothing for a job with no company", async () => {

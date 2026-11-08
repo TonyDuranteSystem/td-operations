@@ -33,9 +33,27 @@ export function closingQuestionButtons(state: ClosingQuestionState, hasWarning: 
 export const STEP_BAR_CLOSE_QUESTION =
   "Moving this job to Closing CLOSES THE COMPANY in the CRM: the account is set to Closed, the portal is turned off and the company’s other open services are cancelled. Continue?"
 
-/** What the server answers when a move that closes the company arrives without the question having been answered. */
+/**
+ * What the server answers when a move that closes the company arrives without the question having been answered. Written for STAFF (the
+ * to-do card shows it as its "Action failed" line — a sentence about "a tool" confused it, live test 2026-11-08); the MCP tool adds
+ * `COMPANY_CLOSE_TOOL_HINT` for the agent.
+ */
 export const COMPANY_CLOSE_NOT_CONFIRMED =
-  "Moving this job to Closing closes the company, so it needs the confirmation question first. Open the job in its workspace and use the finish button (or the step bar there): it shows which company is closed and what goes with it. From a tool, pass confirm_company_close only after the person in charge has seen that."
+  "Moving this job to Closing closes the company, so it needs the confirmation question first. Open the job in its workspace and use the finish button (or the step bar there): it shows which company is closed and what goes with it."
+
+/** Added by the MCP tool `sd_advance_stage` after `COMPANY_CLOSE_NOT_CONFIRMED`: what an agent has to do. */
+export const COMPANY_CLOSE_TOOL_HINT = " From a tool, pass confirm_company_close only after the person in charge has seen that."
+
+/**
+ * The warning staff must see when finishing the job did NOT fully close the company: the "Closure problem:" lines of the advance result
+ * (production end-to-end test 2026-11-07). Shared by the advance route (finish button) and the step bar's move, so both doors say it.
+ * Null when every step worked.
+ */
+export function closureProblemWarning(autoTriggers: readonly string[] | null | undefined): string | null {
+  const prefix = "Closure problem: "
+  const problems = (autoTriggers ?? []).filter((t) => t.startsWith(prefix)).map((t) => t.slice(prefix.length))
+  return problems.length > 0 ? `The job finished, but closing the company did not fully work: ${problems.join(" · ")}. Check the company before relying on it.` : null
+}
 
 /** The Documents box of a Company Closure job when it is empty: the client's files are listed a few minutes after the form is sent (the filing is finished by a background retry). */
 export const CLOSURE_DOCUMENTS_EMPTY_TEXT =
