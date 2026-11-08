@@ -100,7 +100,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [td-books.md](td-books.md) | TD Books (My Finances) — `td_books_transactions`, invoice-first routing target, S-corp books foundation | ✅ written |
 | [tax-returns.md](tax-returns.md) | Tax returns — status pipeline, accountant hand-off, tax pause + installment resume | ✅ written |
 | [portal.md](portal.md) | Client portal — 4 tiers (R102), syncTier, chat/notifications/docs, account types | ✅ written |
-| [client-app.md](client-app.md) | Client iPhone app (MyLLC Manager 2.0) — design decisions, build steps, what is live | ✅ written (Step 1 in the sandbox) |
+| [client-app.md](client-app.md) | Client iPhone app (MyLLC Manager 2.0) — design decisions, build steps, what is live | ✅ written (Step 1 live; Step 2 in a pull request, switched off) |
 | [referrals-circleback.md](referrals-circleback.md) | Referrals — 10% credit notes, partner commissions, Calendly intake | ✅ written |
 | [workflow-engine.md](workflow-engine.md) | Catalog framework + workflow engine — triggers, dispatch, snapshots, validity gate, editor | ✅ written |
 | [crm-core.md](crm-core.md) | CRM core — accounts/contacts/tasks/deals, account_contacts M:N, crm_update_record (R018) | ✅ written |
