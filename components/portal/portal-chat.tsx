@@ -1236,7 +1236,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                                 tone={isOwn ? 'dark' : 'light'}
                                 apiBase="/api/portal/chat/message"
                                 repair={false}
-                                downloadable
+                                hideDownload
                               />
                             </TalkI18nProvider>
                           ))}
