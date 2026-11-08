@@ -89,33 +89,60 @@ export async function notifyClientsOfNewDocument(
 
   // Mark notified FIRST (TOCTOU guard) — only the call that flips NULL -> now()
   // proceeds, so concurrent uploads/retries can't double-send.
-  const { data: claimed } = await db
+  const { data: claimed, error: claimError } = await db
     .from('documents')
     .update({ client_notified_at: new Date().toISOString() })
     .eq('id', documentId)
     .is('client_notified_at', null)
     .select('id')
     .single()
-  if (!claimed) return { notified: false, reason: 'race_lost' }
+  // 0 rows (PGRST116) = another request won the claim; any OTHER error = the claim itself failed (say so — it is not a race)
+  if (!claimed) return { notified: false, reason: claimError && claimError.code !== 'PGRST116' ? 'claim_failed' : 'race_lost' }
 
-  const locale = await resolveDocLocale(doc.account_id, doc.contact_id)
-  const c = COPY[locale]
-  const title = c.title
-  const body = c.body(doc.file_name)
-  const link = '/portal/documents'
+  // Give the claim back (client_notified_at -> null) so a retry can really send. true = given back; false = it could NOT be (the document stays marked).
+  const releaseClaim = async (): Promise<boolean> => {
+    try {
+      const { error: releaseError } = await db.from('documents').update({ client_notified_at: null }).eq('id', documentId)
+      if (releaseError) { console.error('[document-alerts] could not release the notified mark after a failed send:', releaseError.message); return false }
+      return true
+    } catch (e) {
+      console.error('[document-alerts] could not release the notified mark after a failed send:', e instanceof Error ? e.message : String(e))
+      return false
+    }
+  }
 
-  // Personal docs (category 2) -> notify the owning contact only.
-  // Everything else -> notify the account (push reaches all members; the
-  // in-portal notification + digest are account-scoped). createPortalNotification
-  // handles the insert + web push; the digest cron emails non-push recipients.
-  if (doc.category === PERSONAL_CATEGORY && doc.contact_id) {
-    await createPortalNotification({ contact_id: doc.contact_id, type: 'new_document', title, body, link })
-  } else if (doc.account_id) {
-    await createPortalNotification({ account_id: doc.account_id, type: 'new_document', title, body, link })
-  } else if (doc.contact_id) {
-    await createPortalNotification({ contact_id: doc.contact_id, type: 'new_document', title, body, link })
-  } else {
-    return { notified: false, reason: 'no_recipient' }
+  // Everything between the claim and "notified" is in one guard: ANY failure gives the claim back — the mark never outlives a notice that was not created.
+  let sent: { error: string | null } | undefined
+  let c: typeof COPY.en
+  try {
+    const locale = await resolveDocLocale(doc.account_id, doc.contact_id)
+    c = COPY[locale]
+    const title = c.title
+    const body = c.body(doc.file_name)
+    const link = '/portal/documents'
+
+    // Personal docs (category 2) -> notify the owning contact only.
+    // Everything else -> notify the account (push reaches all members; the
+    // in-portal notification + digest are account-scoped). createPortalNotification
+    // handles the insert + web push; the digest cron emails non-push recipients.
+    if (doc.category === PERSONAL_CATEGORY && doc.contact_id) {
+      sent = await createPortalNotification({ contact_id: doc.contact_id, type: 'new_document', title, body, link })
+    } else if (doc.account_id) {
+      sent = await createPortalNotification({ account_id: doc.account_id, type: 'new_document', title, body, link })
+    } else if (doc.contact_id) {
+      sent = await createPortalNotification({ contact_id: doc.contact_id, type: 'new_document', title, body, link })
+    } else {
+      await releaseClaim()
+      return { notified: false, reason: 'no_recipient' }
+    }
+  } catch (e) {
+    sent = { error: e instanceof Error ? e.message : String(e) }
+  }
+  // createPortalNotification RETURNS its failure (and anything above may throw). A bell that was never created must not stay marked
+  // "notified": give the claim back so the result is honest and a retry can really send it. If even that fails the document STAYS marked —
+  // 'send_failed_stuck' says so (a retry would answer "already notified"), so nobody is told a retry will work.
+  if (sent && sent.error) {
+    return { notified: false, reason: (await releaseClaim()) ? 'send_failed' : 'send_failed_stuck' }
   }
 
   // Optional portal chat message (Antonio 2026-06-11: ON for every share path).

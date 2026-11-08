@@ -62,7 +62,7 @@ describe("readSaveMeta", () => {
     expect(m.earlierCopy).toEqual({ choice: "visible", covered: 2, at: "2026-11-07T11:00:00.000Z", by: "Luca" })
   })
   it("a resubmit's reset gives fresh tries and a fresh alert, and keeps nothing else", () => {
-    expect(SAVE_RESET_META).toEqual({ attempts: 0, last_error: null, failed: [], errors: [], sweep_alerted: false })
+    expect(SAVE_RESET_META).toEqual({ attempts: 0, last_error: null, failed: [], errors: [], sweep_alerted: null })
   })
 })
 
@@ -90,6 +90,7 @@ describe("why a save failed", () => {
   it("anything else reads as storage not answering", () => {
     expect(classifyFailure(meta({ lastError: "save threw: fetch failed" }))).toBe("unreachable")
     expect(failureText("unreachable", []).fix).toMatch(/Nothing to fix/)
+    expect(failureText("unreachable", []).fix).not.toMatch(/by itself/i)
   })
 })
 
@@ -113,11 +114,12 @@ describe("decideSaveState", () => {
     expect(decideSaveState({ ...base, job: "pending" }).state).toBe("not_saved")
     expect(decideSaveState(base).state).toBe("not_saved")
   })
-  it("a failed save says why; 'keeps trying' is true while the tries last or a job waits", () => {
+  it("a failed save says why; it is 'retrying' ONLY while a job is waiting (nothing else retries it any more)", () => {
     const failed = meta({ attempts: 2, last_error: "save threw: fetch failed" })
-    const s = decideSaveState({ ...base, meta: failed })
-    expect(s).toMatchObject({ state: "failed", kind: "unreachable", attempts: 2, retrying: true })
+    // no job waiting: the sweep that used to retry it is gone, so the panel must not promise a retry
+    expect(decideSaveState({ ...base, meta: failed })).toMatchObject({ state: "failed", kind: "unreachable", attempts: 2, retrying: false })
     expect(decideSaveState({ ...base, meta: meta({ attempts: 5, last_error: "x" }) })).toMatchObject({ state: "failed", retrying: false })
+    expect(decideSaveState({ ...base, meta: failed, job: "pending" })).toMatchObject({ retrying: true })
     expect(decideSaveState({ ...base, meta: meta({ attempts: 5, last_error: "x" }), job: "pending" })).toMatchObject({ retrying: true })
   })
   it("a running save wins over an old failure", () => {

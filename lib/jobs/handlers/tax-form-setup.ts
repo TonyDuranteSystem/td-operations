@@ -382,7 +382,20 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
         .eq("id", p.account_id)
         .single()
 
-      if (acc?.drive_folder_id) {
+      // The client may have resubmitted since this job was queued: this payload then holds OLD answers, and the resubmit's own job (and
+      // the durable save job) file the new ones. Filing the old ones here would print them under the new answers' pinned time.
+      let payloadStale = false
+      if (acc?.drive_folder_id && p.submission_id) {
+        try {
+          payloadStale = await (await import("@/lib/tax/save-stamp")).payloadIsStale(p.submission_id, sd, uploadPaths)
+        } catch (e) {
+          console.error("[tax_form_setup] could not compare this payload with the record (filing as before):", e)
+        }
+      }
+
+      if (payloadStale) {
+        result.steps.push(step("drive_save", "skipped", "The client submitted newer answers since this job was queued; the newer submit files them"))
+      } else if (acc?.drive_folder_id) {
         const { saveFormToDrive } = await import("@/lib/form-to-drive")
         // ONE time on the PDF per submit, shared with the durable save job (dev job 7df278cd): the same answers make the same file, so
         // this inline copy and the durable job's copy never leave two versions that differ only in the time they print.

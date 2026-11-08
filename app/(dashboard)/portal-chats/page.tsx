@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, StickyNote, Link2, Languages, Lightbulb } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, StickyNote, Link2, Languages, Lightbulb, FolderInput } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -45,6 +45,7 @@ import {
 } from '@/lib/chat/topic-templates'
 import { interpolateBodyTemplate, interpolateStringStrict } from '@/lib/chat/handler-primitives'
 import type { AddressedToOption } from '@/lib/portal/addressed-to'
+import { SaveToStorageCard } from '@/components/portal-chats/save-to-storage-card'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
@@ -341,6 +342,8 @@ export default function PortalChatsPage() {
   // at "Confirm & Send" time, mirroring the existing capture-before-await
   // discipline (dev job c3bb4abc) one step later than before.
   const [sendConfirmOpen, setSendConfirmOpen] = useState(false)
+  // The message whose attachments are being filed in Storage (the "Save to Storage" card, dev job fb49265a); null = card closed.
+  const [saveCardMessageId, setSaveCardMessageId] = useState<string | null>(null)
   // Modal's OWN "create a new topic" toggle — deliberately NOT the ambient
   // tab bar's adminCreatingTopic/adminNewTopicInput, even though the modal
   // reuses that shared pair's OUTPUT (adminActiveTopic) on commit. Found by
@@ -4343,6 +4346,17 @@ export default function PortalChatsPage() {
                                   </a>
                                 )
                               })}
+                              {/* a client's attachments can be filed in Storage from here: the card reads them, proposes whose they are and where, and saves only what staff confirm (dev job fb49265a) */}
+                              {msg.sender_type === 'client' && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSaveCardMessageId(msg.id)}
+                                  className="mb-1 inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
+                                  data-testid={`save-to-storage-${msg.id}`}
+                                >
+                                  <FolderInput className="h-3 w-3" /> Save to Storage
+                                </button>
+                              )}
                             </>
                           )
                         })()}
@@ -5326,6 +5340,7 @@ export default function PortalChatsPage() {
           state via the simpler existing-topics-as-chips + free-text
           mechanism, which fully covers "an existing topic, or a new one"
           without a second topic-selection implementation to keep in sync. */}
+      {saveCardMessageId && <SaveToStorageCard messageId={saveCardMessageId} onClose={() => setSaveCardMessageId(null)} />}
       {sendConfirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={closeSendConfirm}>
           <div className="w-full max-w-md rounded-lg bg-white shadow-xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
