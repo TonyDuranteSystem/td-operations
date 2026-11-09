@@ -50,6 +50,8 @@ import type { AddressedToOption } from '@/lib/portal/addressed-to'
 import { SaveToStorageCard } from '@/components/portal-chats/save-to-storage-card'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
+// The Storage screen inside this pop-up is big (and brings the photo-conversion library): it is loaded only when "Save to Storage" is clicked, so the chat page itself stays as light as before.
+const SaveChatFileDialog = dynamic(() => import('@/components/portal-chats/save-chat-file-dialog').then((m) => m.SaveChatFileDialog), { ssr: false })
 
 // ─── chat_quick_actions catalog integration (Slice 6b) ──────────────────────
 //
@@ -350,6 +352,8 @@ export default function PortalChatsPage() {
   const [sendConfirmOpen, setSendConfirmOpen] = useState(false)
   // The message whose attachments are being filed in Storage (the "Save to Storage" card, dev job fb49265a); null = card closed.
   const [saveCardMessageId, setSaveCardMessageId] = useState<string | null>(null)
+  // 'storage' = the client's Storage screen with the chat file loaded (default); 'itin' = the ITIN card that reads an ITIN letter and fills the record
+  const [saveCardMode, setSaveCardMode] = useState<'storage' | 'itin'>('storage')
   // Modal's OWN "create a new topic" toggle — deliberately NOT the ambient
   // tab bar's adminCreatingTopic/adminNewTopicInput, even though the modal
   // reuses that shared pair's OUTPUT (adminActiveTopic) on commit. Found by
@@ -4365,7 +4369,7 @@ export default function PortalChatsPage() {
                               {msg.sender_type === 'client' && atts.some((a) => !isVoiceAttachment(a)) && (
                                 <button
                                   type="button"
-                                  onClick={() => setSaveCardMessageId(msg.id)}
+                                  onClick={() => { setSaveCardMode('storage'); setSaveCardMessageId(msg.id) }}
                                   className="mb-1 inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
                                   data-testid={`save-to-storage-${msg.id}`}
                                 >
@@ -5356,7 +5360,9 @@ export default function PortalChatsPage() {
           state via the simpler existing-topics-as-chips + free-text
           mechanism, which fully covers "an existing topic, or a new one"
           without a second topic-selection implementation to keep in sync. */}
-      {saveCardMessageId && <SaveToStorageCard messageId={saveCardMessageId} onClose={() => setSaveCardMessageId(null)} />}
+      {saveCardMessageId && (saveCardMode === 'itin'
+        ? <SaveToStorageCard messageId={saveCardMessageId} onClose={() => setSaveCardMessageId(null)} />
+        : <SaveChatFileDialog messageId={saveCardMessageId} onClose={() => setSaveCardMessageId(null)} onOpenItinCard={() => setSaveCardMode('itin')} />)}
       {sendConfirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={closeSendConfirm}>
           <div className="w-full max-w-md rounded-lg bg-white shadow-xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>

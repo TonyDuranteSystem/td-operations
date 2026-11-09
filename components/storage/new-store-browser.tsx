@@ -353,7 +353,7 @@ interface Picking { props: Omit<React.ComponentProps<typeof FolderPicker>, 'onPi
 interface NewFolder { parentId: string; value: string; year?: boolean; siblings: string[]; left?: boolean }
 interface TreeNode { root?: Fold | null; folders: Fold[] }
 
-export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company', openOwnerId, openFolderId, onBusyChange }: { ownerId?: string; scopedKind?: string; openOwnerId?: string; openFolderId?: string; /** tells the page whether an upload / group action is running (the tab must not be switched meanwhile) */ onBusyChange?: (busy: boolean) => void } = {}) {
+export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company', openOwnerId, openFolderId, onBusyChange, incomingFile, onIncomingSaved }: { ownerId?: string; scopedKind?: string; openOwnerId?: string; openFolderId?: string; /** tells the page whether an upload / group action is running (the tab must not be switched meanwhile) */ onBusyChange?: (busy: boolean) => void; /** a file handed in by Portal Chats ("Save to Storage" under a client's chat message): the upload panel opens with it, the usual questions follow (dev job fb49265a). `key` changes with every new file. */ incomingFile?: { key: string; file: File } | null; /** called once that file was saved (the key says which one) */ onIncomingSaved?: (key: string) => void } = {}) {
   // The bar of ticked files sticks to the top while a long list scrolls. The dashboard's own sticky header (h-14, desktop) covers
   // that spot, so the bar's buttons were hidden behind it (measured 2026-11-07: bar at y=40, header on top) — it has to stick BELOW the
   // header; where the page shows no header (floating window, TD Social app) it sticks to the very top.
@@ -1804,6 +1804,18 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     await loadTypes()
   }
 
+  // A file handed in from Portal Chats: the upload panel opens by itself, empty, so the person chooses folder / type / name / "Show to client"
+  // exactly as for a file from the computer. Nothing is chosen or guessed for them. A new file (new key) opens it again.
+  // Opened ONCE per handed-in file: moving inside the screen (another storage opened by "Show in folder") must never reopen the panel and wipe what was typed.
+  const incomingKey = incomingFile?.key ?? null
+  const openedIncomingKey = useRef<string | null>(null)
+  useEffect(() => {
+    if (!incomingKey || !ownerId || openedIncomingKey.current === incomingKey) return
+    openedIncomingKey.current = incomingKey
+    void openUpload()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- open once per handed-in file (and once the storage is known)
+  }, [incomingKey, ownerId])
+
   /** every folder on screen that can take a file, in tree order, with its depth (the upload's Folder list) */
   const folderOptions = (): Array<{ f: Fold; depth: number; owner: string; label: string }> => {
     const out: Array<{ f: Fold; depth: number; owner: string; label: string }> = []
@@ -2985,6 +2997,19 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                       }}
                       className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40">Upload merged file</button>
                     <button type="button" disabled={uploading} onClick={() => setMergedFile(null)} className="text-xs text-zinc-600 hover:underline">Discard</button>
+                    {(!upFolderObj || !upType) && <span className="w-full text-xs text-blue-800">Choose the folder and the document type above, then upload.</span>}
+                  </div>
+                )}
+                {incomingFile && (
+                  <div className="flex w-full flex-wrap items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2" data-no-ctx="" data-testid="chat-file-ready">
+                    <FileText className="h-4 w-4 shrink-0 text-blue-600" />
+                    <span className="font-medium text-blue-900">File from the chat:</span>
+                    <span className="min-w-0 truncate text-zinc-700" title={incomingFile.file.name}>{incomingFile.file.name}</span>
+                    <span className="text-xs text-zinc-500">{fmtSize(incomingFile.file.size)}</span>
+                    <span className="flex-1" />
+                    <button type="button" disabled={uploading || !upFolderObj || !upType || upType === '__custom__' || (upIsContacts && !upPerson)} data-testid="upload-chat-file"
+                      onClick={async () => { const out = await doUpload(incomingFile.file); if (out === 'saved') onIncomingSaved?.(incomingFile.key) }}
+                      className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40">Upload this file</button>
                     {(!upFolderObj || !upType) && <span className="w-full text-xs text-blue-800">Choose the folder and the document type above, then upload.</span>}
                   </div>
                 )}

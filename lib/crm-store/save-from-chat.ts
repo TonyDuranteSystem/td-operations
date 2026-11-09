@@ -57,7 +57,7 @@ interface MessageRow {
   deleted_at: string | null
 }
 
-async function loadMessage(messageId: string): Promise<{ row: MessageRow } | Failure> {
+export async function loadMessage(messageId: string): Promise<{ row: MessageRow } | Failure> {
   if (!/^[0-9a-f-]{36}$/i.test(messageId)) return fail(400, "That is not a message id.")
   const { data, error } = await db().from("portal_messages").select("id, account_id, contact_id, attachments, attachment_url, attachment_name, deleted_at").eq("id", messageId).maybeSingle()
   if (error) return fail(500, "Could not read the message — please try again.")
