@@ -589,14 +589,15 @@ export async function POST(request: NextRequest) {
       contact_id: resolvedContactId || undefined,
       type: 'chat',
       title: 'New message from Tony Durante Team',
-      body: (message || '').trim().slice(0, 100),
+      // a message that is only a voice note says so (otherwise the notification body would be empty)
+      body: chatPreviewText(message, attachments).slice(0, 100),
       link: buildPortalChatLink({ accountId: account_id || null, topic }),
     }).catch(() => {})
     notifyClientOfAdminMessage({
       account_id: account_id || null,
       contact_id: resolvedContactId || null,
       topic,
-      messagePreview: (message || '').trim(),
+      messagePreview: chatPreviewText(message, attachments),
     }).catch(() => {})
   }
 

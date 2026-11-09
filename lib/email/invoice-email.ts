@@ -35,6 +35,11 @@ export interface InvoiceEmailInput {
   currencySymbol: string
   currency: string
 
+  /** The card fee rate in force for this invoice (0.05 = 5%; 0 or empty = no fee).
+   *  Shown next to the card button so the client knows BEFORE clicking; it comes from
+   *  the rate pinned on the invoice, never typed into the email. */
+  cardFeeRate?: number | null
+
   /** Opaque token for the stable /pay/<token> redirect. Required when
    *  audience='no_portal' AND purpose IN ('initial','reminder'). */
   payToken?: string | null
@@ -188,13 +193,17 @@ function ctaPortalReceipt(language?: "en" | "it"): string {
   </div>`
 }
 
-function ctaNoPortalOpen(payUrl: string): string {
+function ctaNoPortalOpen(payUrl: string, cardFeeRate?: number | null): string {
+  const pct = cardFeeRate && cardFeeRate > 0 ? Math.round(cardFeeRate * 10000) / 100 : 0
+  const hint = pct > 0
+    ? `One-click card payment (+${pct}% card fee). Bank transfer has no fee — details are below.`
+    : "One-click card payment. Alternatively, bank transfer details are below."
   return `<div style="text-align:center;margin:28px 0;">
     <a href="${payUrl}"
        style="display:inline-block;padding:14px 28px;background:#2563eb;color:white;text-decoration:none;border-radius:8px;font-weight:bold;font-size:15px;">
       Pay with Card (Stripe)
     </a>
-    <p style="margin:8px 0 0;font-size:12px;color:#6b7280;">One-click card payment. Alternatively, bank transfer details are below.</p>
+    <p style="margin:8px 0 0;font-size:12px;color:#6b7280;">${hint}</p>
   </div>`
 }
 
@@ -259,7 +268,7 @@ export function buildInvoiceEmail(input: InvoiceEmailInput): InvoiceEmailOutput 
       const bdWithRef = input.bankDetails
         ? { ...input.bankDetails, reference: input.bankDetails.reference ?? input.invoiceNumber }
         : null
-      paymentPath = (payUrl ? ctaNoPortalOpen(payUrl) : "") + bankDetailsBlock(bdWithRef)
+      paymentPath = (payUrl ? ctaNoPortalOpen(payUrl, input.cardFeeRate) : "") + bankDetailsBlock(bdWithRef)
     }
   } else if (isReceipt && isPortal) {
     paymentPath = ctaPortalReceipt(input.language)
