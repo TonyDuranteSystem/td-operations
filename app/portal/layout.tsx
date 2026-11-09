@@ -1,5 +1,6 @@
 import { SupabaseIncidentBar } from '@/components/infra/supabase-incident-bar'
 import type { Metadata, Viewport } from 'next'
+import { Suspense } from 'react'
 import { SandboxBanner } from '@/components/sandbox-banner'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
@@ -132,7 +133,7 @@ export default async function PortalLayout({
             />}
             <main className="flex-1 overflow-y-auto overscroll-y-contain">
               {clientApp ? (
-                <ClientAppFrame selectionQuery={selectionQuery({ kind: 'account', id: tmSelectedAccountId })} />
+                <Suspense fallback={null}><ClientAppFrame selectionQuery={selectionQuery({ kind: 'account', id: tmSelectedAccountId })} /></Suspense>
               ) : (
                 <>
                   {/* Spacer for the persistent top bar (fixed, h-14, all breakpoints
@@ -387,7 +388,7 @@ export default async function PortalLayout({
         <main className="flex-1 overflow-y-auto overscroll-y-contain">
           <PullToRefresh />
           {clientApp ? (
-            <ClientAppFrame selectionQuery={appSelection} switcher={appSwitcher} />
+            <Suspense fallback={null}><ClientAppFrame selectionQuery={appSelection} switcher={appSwitcher} /></Suspense>
           ) : (
             <>
               {/* Spacer for the persistent top bar (fixed, h-14, all breakpoints

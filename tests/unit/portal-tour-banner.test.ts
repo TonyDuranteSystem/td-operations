@@ -37,7 +37,8 @@ describe('wiring', () => {
   const banner = read('components/portal/tour-banner.tsx')
 
   it('the page renders the banner only for the client with the hub on, outside view-as, and while the tour is offered', () => {
-    const m = /\{isClientHub && guides && !viewingAsClient && shouldOfferTour\(tourPref, guides\.tour\) && \(\s*<TourBanner/.exec(page)
+    // `!appMode`: the client iPhone app has no tab row for the tour to point at, so it never offers the banner there (Step 3c, job 056a70d0).
+    const m = /\{isClientHub && guides && !viewingAsClient && !appMode && shouldOfferTour\(tourPref, guides\.tour\) && \(\s*<TourBanner/.exec(page)
     expect(m).not.toBeNull()
   })
   it('the banner is the first thing in the page (above the header)', () => {

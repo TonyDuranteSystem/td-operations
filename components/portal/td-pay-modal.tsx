@@ -5,6 +5,7 @@ import { CreditCard, Building2, Copy, Check, X, Loader2, ExternalLink, ChevronDo
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface TdPayModalProps {
@@ -58,6 +59,9 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 
 export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose }: TdPayModalProps) {
   const { t } = useLocale()
+  // Inside the client iPhone app the card page opens in the app's own window (a new window needs the phone shell to catch it; the
+  // card page sends the client back to the portal when done). On the website it is a new tab, as before.
+  const appMode = useAppMode()
   // Read inside the mount-only effect below without retriggering it \u2014 t() is
   // a fresh closure every render, and this fetch must only run once.
   const tRef = useRef(t)
@@ -132,6 +136,7 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
   const handlePayByCard = async () => {
     if (stripeLoading) return
     setStripeLoading(true)
+    let leaving = false
     try {
       const res = await fetch('/api/workflows/create-invoice-checkout', {
         method: 'POST',
@@ -142,11 +147,17 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
       if (!res.ok || !data.checkoutUrl) {
         throw new Error(data.error || t('tdPayModal.checkoutFailed'))
       }
-      window.open(data.checkoutUrl, '_blank', 'noopener,noreferrer')
+      if (appMode) {
+        // Keep the button locked while the page leaves: a second tap would be refused ("being processed right now").
+        leaving = true
+        window.location.assign(data.checkoutUrl)
+      } else {
+        window.open(data.checkoutUrl, '_blank', 'noopener,noreferrer')
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t('tdPayModal.cardPaymentFailed'))
     } finally {
-      setStripeLoading(false)
+      if (!leaving) setStripeLoading(false)
     }
   }
 

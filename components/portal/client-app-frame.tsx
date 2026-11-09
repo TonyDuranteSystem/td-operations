@@ -5,7 +5,7 @@
 // (or the screen's name where a screen draws it here) on the left, and the round Menu button on the right, with its red number.
 // The bottom bar and the Menu list are drawn by the app itself; this button only asks the app to open that list. It exists only inside the app.
 import { useEffect, useState, type ReactNode } from 'react'
-import { usePathname } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { Menu } from 'lucide-react'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { useLocale } from '@/lib/portal/use-locale'
@@ -18,6 +18,7 @@ interface MeAnswer { menuBadge?: number; items?: AppMenuItem[] }
 export function ClientAppFrame({ selectionQuery, switcher }: { selectionQuery: string; switcher?: ReactNode }) {
   const appMode = useAppMode()
   const pathname = usePathname()
+  const tab = useSearchParams()?.get('tab') ?? null
   const { t } = useLocale()
   const [me, setMe] = useState<MeAnswer | null>(null)
 
@@ -40,7 +41,7 @@ export function ClientAppFrame({ selectionQuery, switcher }: { selectionQuery: s
 
   if (!appMode) return null
   const badge = Math.max(0, me?.menuBadge ?? 0)
-  const title = pathname === '/portal' ? null : screenTitleFor(pathname, me?.items ?? [])
+  const title = pathname === '/portal' ? null : screenTitleFor(pathname, me?.items ?? [], tab, t('nav.invoices'))
   const label = badge > 0 ? t('app.menuNeedsYou').replace('{n}', String(badge)) : t('app.menu')
 
   return (
