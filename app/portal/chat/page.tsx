@@ -11,6 +11,7 @@ import { PortalChat } from '@/components/portal/portal-chat'
 import type { ChatScope } from '@/lib/hooks/use-portal-chat'
 import { LogTab } from '@/components/portal/chat/log-tab'
 import { cn } from '@/lib/utils'
+import { getClientAppMode } from '@/lib/app-mode/server'
 
 export default async function PortalChatPage({
   searchParams,
@@ -83,17 +84,22 @@ export default async function PortalChatPage({
   const initialTopic = typeof topic === 'string' && topic.trim() ? topic.trim().slice(0, 100) : null
   // Teammates are scoped to chat only — the Journey Log (contact-oriented) is hidden.
   const isTeammate = !contactId
-  const activeView = view === 'log' && !isTeammate ? 'log' : 'chat'
+  // Inside the client iPhone app (dev job 056a70d0, Step 3b): the screen's name sits in the top row (lib/portal-app/frame.ts), the
+  // "Tony Durante Team" line moves into the chat's own header next to the Topic button, and there is no Journey Log, only the messages.
+  const appMode = getClientAppMode()
+  const activeView = view === 'log' && !isTeammate && !appMode ? 'log' : 'chat'
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto h-[calc(100dvh-3.5rem)] lg:h-[calc(100dvh-6rem)] flex flex-col overflow-hidden">
-      <div className="mb-3 sm:mb-4">
-        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('chat.title', locale)}</h1>
-        <p className="text-zinc-500 text-xs sm:text-sm mt-1">{t('chat.team', locale)}</p>
-      </div>
+      {!appMode && (
+        <div className="mb-3 sm:mb-4">
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('chat.title', locale)}</h1>
+          <p className="text-zinc-500 text-xs sm:text-sm mt-1">{t('chat.team', locale)}</p>
+        </div>
+      )}
 
-      {/* Tab switcher — hidden for teammates (chat-only scope) */}
-      {!isTeammate && (
+      {/* Tab switcher — hidden for teammates (chat-only scope) and inside the client app (no Journey Log there) */}
+      {!isTeammate && !appMode && (
       <div className="flex gap-1 mb-3 border-b border-zinc-200">
         <Link
           href="/portal/chat"

@@ -25,6 +25,9 @@ import { SEND_BEFORE_LEAVING_TIMEOUT_MS } from '@/lib/talk/recording-guard'
 import { toast } from 'sonner'
 import { format, parseISO, isToday, isYesterday } from 'date-fns'
 import dynamic from 'next/dynamic'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
+import { chooseOpeningTopic } from '@/lib/portal-app/chat-topic'
+import { AppTopicButton } from '@/components/portal/chat/app-topic-button'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
@@ -126,6 +129,9 @@ function formatTime(dateStr: string): string {
 
 export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, initialTopic = null }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; initialTopic?: string | null }) {
   const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready, serverUnread, markRead } = usePortalChat(scope, accountId || null, contactId)
+  // Inside the client iPhone app (dev job 056a70d0, Step 3b): one Topic button instead of the row of topic pills, and the chat opens on the
+  // topic of the newest unread answer. The website (appMode false) is exactly as it was.
+  const appMode = useAppMode()
   const router = useRouter()
 
   // Team reactions on the client's own messages pulse until they have REALLY been on screen (the pill reports
@@ -314,18 +320,16 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       return
     }
     autoOpenedForRef.current = selectedEntityId
-    if ((serverUnread[''] ?? 0) > 0) return
-    const candidates = Object.entries(serverUnread).filter(([k, n]) => k && n > 0)
-    if (candidates.length === 0) return
-    const lastAt = (k: string) => Math.max(0, ...messages.filter(m => (m.topic ?? '') === k).map(m => parseTimestamp(m.created_at)))
-    candidates.sort((a, b) => (b[1] - a[1]) || (lastAt(b[0]) - lastAt(a[0])))
-    const target = candidates[0][0]
+    // The rule itself lives in lib/portal-app/chat-topic.ts: the website keeps "General if it has unread, else the topic with the most
+    // unread"; the app opens on the topic of the newest unread answer. null = stay on General.
+    const target = chooseOpeningTopic({ serverUnread, messages, newestAnswerRule: appMode })
+    if (target === null) return
     if (!topics.includes(target)) {
       pendingTopicRef.current = { topic: target, allowPaging: true }
       deepLinkPagesRef.current = 0
     }
     setActiveTopic(target)
-  }, [ready, serverUnread, selectedEntityId, topics, messages])
+  }, [ready, serverUnread, selectedEntityId, topics, messages, appMode])
 
   // "Read" = the client is actually looking at it: the tab is open AND the
   // page is on screen. A message that arrives while the app sits in the
@@ -946,8 +950,15 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
           </div>
         )
       })()}
+      {/* Inside the client iPhone app the row of topic pills below is replaced by ONE Topic button (Step 3b). */}
+      {appMode && (
+        <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-3 pr-12" data-testid="app-chat-header">
+          <p className="min-w-0 truncate text-sm text-zinc-600">{t('chat.team')}</p>
+          <AppTopicButton activeTopic={activeTopic} topicOrder={topicOrder} unreadByTopic={unreadByTopic} onChoose={chooseTopic} />
+        </div>
+      )}
       {/* Topic tabs — always visible. General = untagged messages. Named tabs = thread per topic. */}
-      <div className="px-3 pt-2 pb-1 border-b border-zinc-100 flex items-center gap-1.5 overflow-x-auto">
+      <div className="app-hide px-3 pt-2 pb-1 border-b border-zinc-100 flex items-center gap-1.5 overflow-x-auto">
         {topicOrder.map(key => {
           const isGeneral = key === ''
           const isActive = isGeneral ? activeTopic === null : activeTopic === key

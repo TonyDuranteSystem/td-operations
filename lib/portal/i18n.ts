@@ -61,6 +61,11 @@ const translations: Record<Locale, Record<string, string>> = {
     'nav.portal': 'Portal',
     'app.menu': 'Menu',
     'app.menuNeedsYou': 'Menu, {n} need you',
+    'app.topics': 'Topics',
+    'app.close': 'Close',
+    'app.create': 'Create',
+    'app.topicLabel': 'Topic: {name}',
+    'app.topicLabelUnread': 'Topic: {name}, {n} unread in other topics',
     'nav.profile': 'Profile',
 
     // Sidebar hover/tap descriptions — one per client-facing nav item
@@ -1670,6 +1675,11 @@ const translations: Record<Locale, Record<string, string>> = {
     'nav.portal': 'Portale',
     'app.menu': 'Menu',
     'app.menuNeedsYou': 'Menu, {n} richiedono te',
+    'app.topics': 'Argomenti',
+    'app.close': 'Chiudi',
+    'app.create': 'Crea',
+    'app.topicLabel': 'Argomento: {name}',
+    'app.topicLabelUnread': 'Argomento: {name}, {n} non letti in altri argomenti',
     'nav.profile': 'Profilo',
 
     // Sidebar hover/tap descriptions — see the EN block for context.
