@@ -33,6 +33,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { APP_BASE_URL } from "@/lib/config"
 import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
+import { getCardQuote, stripeProductName } from "@/lib/payments/card-quote"
 import { claimPaymentForCharge, releasePaymentClaim, recordCheckoutSessionId, CLIENT_CLAIM_TTL_MS } from "@/lib/operations/autopay-claim"
 
 export const dynamic = "force-dynamic"
@@ -74,16 +75,31 @@ export async function GET(
     return NextResponse.redirect(`${APP_BASE_URL}/pay/${token}/thanks`, 303)
   }
 
-  const amount = Number(payment.amount)
-  if (!amount || amount <= 0) {
-    return new NextResponse("This invoice has an invalid amount. Please contact support.", { status: 400 })
+  // What the card is charged comes from the same place as the portal Pay button
+  // (lib/payments/card-quote.ts): what is STILL OWED on the invoice plus the card fee on
+  // it. One rule for every Pay button — wire has no fee, card has the invoice's fee. This
+  // link used to charge the whole invoice with no fee, ignoring anything already paid.
+  const quote = await getCardQuote(payment.id)
+  if (quote.ok === false) {
+    // A row flagged Paid on its invoice status only (status column not yet Paid) is paid:
+    // same thank-you page as the check above.
+    if (quote.reason === "paid") {
+      return NextResponse.redirect(`${APP_BASE_URL}/pay/${token}/thanks`, 303)
+    }
+    const message =
+      quote.reason === "unavailable"
+        ? "We could not look up this invoice right now. Please try again in a minute."
+      : quote.reason === "currency"
+        ? "This invoice uses an unsupported currency. Please contact support."
+        : quote.reason === "nothing_owed"
+          ? "Nothing is owed on this invoice. If you think this is wrong, please contact support."
+          : quote.reason === "too_small"
+            ? "The remaining balance is too small to pay by card. Please pay it by bank transfer or contact support."
+            : quote.reason === "closed"
+              ? "This invoice is closed and cannot be paid. Please contact support."
+              : "This pay link is not valid."
+    return new NextResponse(message, { status: quote.reason === "not_found" ? 404 : quote.reason === "unavailable" ? 503 : 400 })
   }
-
-  const rawCurrency = (payment.amount_currency || "USD").toString().toLowerCase()
-  if (rawCurrency !== "usd" && rawCurrency !== "eur") {
-    return new NextResponse(`This invoice uses an unsupported currency. Please contact support.`, { status: 400 })
-  }
-  const currency = rawCurrency as "usd" | "eur"
 
   // Claim this payment before touching Stripe — the card-autopay cron
   // (dev job 10995181) can independently act on any payments row, including
@@ -112,10 +128,10 @@ export async function GET(
   const { createStripeCheckoutSession } = await import("@/lib/stripe-checkout")
   const result = await createStripeCheckoutSession({
     clientName,
-    amount,
-    currency,
+    amount: quote.cardTotal,
+    currency: quote.currency,
     contractType: "annual_renewal",
-    serviceName: payment.description || "Invoice Payment",
+    serviceName: stripeProductName(payment.description, quote),
     clientEmail,
     invoiceNumber: payment.invoice_number || undefined,
   })

@@ -21,6 +21,7 @@ import { buildInvoiceEmail } from "@/lib/email/invoice-email"
 import { ensurePayToken, resolveInvoiceAudience, sanitizeInvoiceMessage, gateBankDetailsForAudience } from "@/lib/portal/pay-token"
 import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
 import { TD_COMPANY } from "@/lib/config"
+import { resolveChargeRate } from "@/lib/payments/card-fee-config"
 
 type SettingsBank = {
   id?: string
@@ -323,6 +324,8 @@ export async function sendTDInvoice(
     currencySymbol: csym,
     currency,
     payToken,
+    // Same lookup the card charge uses (the invoice's pinned rate; 0 when the global switch is off).
+    cardFeeRate: payToken ? await resolveChargeRate((payment as { card_fee_rate?: number | string | null }).card_fee_rate) : null,
     bankDetails: gateBankDetailsForAudience(bankDetails, audience),
     message: sanitizedMessage,
   })

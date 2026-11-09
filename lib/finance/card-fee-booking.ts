@@ -23,7 +23,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { deriveFeeFromCharge, round2 } from '@/lib/payments/card-fee'
+import { balanceOwed, deriveFeeFromCharge, invoiceBaseExFee, round2 } from '@/lib/payments/card-fee'
 
 export const CARD_FEE_DESCRIPTION = 'Card processing fee'
 
@@ -36,8 +36,6 @@ export interface BookCardFeeResult {
   invoiceId: string
 }
 
-interface ItemRow { amount: number | string | null; item_type: string | null }
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => supabaseAdmin as any
 
@@ -48,21 +46,27 @@ export async function bookCardFee(
   invoiceId: string,
   chargedAmount: number,
 ): Promise<BookCardFeeResult> {
-  // Load the invoice + its line items. A load failure THROWS (caller retries).
+  // Load the invoice. A load failure THROWS (caller retries).
   const { data: payment, error: payErr } = await db()
     .from('payments')
-    .select('id, total, amount, card_fee_rate')
+    .select('id, total, amount, amount_paid, card_fee_amount, card_fee_rate')
     .eq('id', invoiceId)
     .single()
   if (payErr || !payment) throw new Error(`bookCardFee: invoice ${invoiceId} not found: ${payErr?.message ?? ''}`)
 
-  const { data: items, error: itemsErr } = await db()
-    .from('payment_items')
-    .select('amount, item_type')
-    .eq('payment_id', invoiceId)
-  if (itemsErr) throw new Error(`bookCardFee: items load failed: ${itemsErr.message}`)
-
-  const base = deriveBase(payment, (items as ItemRow[]) ?? [])
+  // Two different numbers, do not confuse them:
+  //  - invoiceBase = the WHOLE invoice without the card fee: its total minus the fee
+  //                  already booked (`card_fee_amount` is written in the same update as
+  //                  the total bump, so this is right on every retry). The TOTAL, not the
+  //                  line items — a discount, tax, a payment-plan part or a staff edit
+  //                  make the lines differ from what was owed;
+  //  - base        = what is still OWED on it — the money this card payment is for. A
+  //                  client who already wired part of the invoice pays the balance plus
+  //                  the fee on the balance, so the fee check starts from the balance (the
+  //                  same number the card price was built from: lib/payments/card-quote.ts).
+  //                  With nothing paid before, base === invoiceBase.
+  const invoiceBase = invoiceBaseExFee(payment)
+  const base = balanceOwed(invoiceBase, payment.amount_paid)
   const derived = deriveFeeFromCharge(base, chargedAmount, payment.card_fee_rate)
 
   // Base does not match the charge → do not corrupt money. Caller settles at base
@@ -107,7 +111,7 @@ export async function bookCardFee(
 
   // (c) raise the invoice total to base+fee + stamp the money-truth. SET (not
   // increment) → idempotent on retry. amount_due is recomputed by the settle.
-  const newTotal = round2(base + derived.fee)
+  const newTotal = round2(invoiceBase + derived.fee)
   // eslint-disable-next-line no-restricted-syntax -- the fee total-bump choke-point; the subsequent applyMoneyToInvoice settle is what credits it (dev_task 6ec6872a)
   const { error: upErr } = await db()
     .from('payments')
@@ -116,17 +120,4 @@ export async function bookCardFee(
   if (upErr) throw new Error(`bookCardFee: total bump failed: ${upErr.message}`)
 
   return { outcome: 'booked', base, fee: derived.fee, chargedAmount: round2(chargedAmount), invoiceId }
-}
-
-/** base = sum of NON-fee line items; fallback = the invoice's pre-bump total when it
- *  has no line items. Never "total − fee". Pure — unit-tested. */
-export function deriveBase(
-  payment: { total: number | string | null; amount: number | string | null },
-  items: ItemRow[],
-): number {
-  const nonFee = items.filter((i) => i.item_type !== 'fee')
-  if (nonFee.length > 0) {
-    return round2(nonFee.reduce((s, i) => s + (Number(i.amount) || 0), 0))
-  }
-  return round2(Number(payment.total ?? payment.amount ?? 0))
 }
