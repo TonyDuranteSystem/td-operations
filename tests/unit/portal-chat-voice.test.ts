@@ -264,3 +264,41 @@ describe('voice note download: staff only', () => {
     }
   })
 })
+
+// The staff Portal Chats mic records a real voice note (Antonio 2026-11-09; it used to be dictation: the words were typed into the box and the audio thrown
+// away). The project has no jsdom to render the page, so these guard the source for the rules that must not slip back.
+describe('staff Portal Chats mic: a real voice note, not dictation', () => {
+  const read = (p: string) => readFileSync(p, 'utf8')
+  const page = read('app/(dashboard)/portal-chats/page.tsx')
+
+  it('the client-chat mic uses the voice-note recorder with MP4 preferred (an iPhone cannot play WebM)', () => {
+    expect(page).toMatch(/useAudioNoteRecorder\(\{[^}]*preferMp4: true/s)
+  })
+
+  it('dictation stays only on the internal Team composer — one useVoiceInput call left, feeding the Team box', () => {
+    expect(page.match(/useVoiceInput\(/g) ?? []).toHaveLength(1)
+    expect(page).toContain('onTranscript: handleInternalTranscript')
+    expect(page).not.toContain('onTranscript: handleTranscript')
+  })
+
+  it('a recorded note is staged as an attachment, so it goes out through the Send → Confirm & Send pop-up like any file', () => {
+    expect(page).toMatch(/onRecorded: file =>[\s\S]*?handleAdminFileSelect\(file\)/)
+  })
+
+  it('a recording is only cancelled while one is in progress (cancelling while idle would swallow the next real note)', () => {
+    expect(page).toMatch(/if \(!isRecordingRef\.current\) return\s+cancelRecording\(\)/)
+  })
+
+  it('Send is refused while a note is still being recorded, and the stop button wins over Send', () => {
+    expect(page).toContain('Finish the voice note first')
+    expect(page.indexOf('data-testid="staff-voice-stop"')).toBeLessThan(page.indexOf('data-testid="staff-voice-start"'))
+    // the stop branch comes before the Send branch of the action button
+    expect(page.indexOf(') : isRecording ? (')).toBeLessThan(page.indexOf(') : (replyText.trim() || pendingAdminFiles.length > 0) ? ('))
+  })
+
+  it('the staff reply alert and email say "Voice note" for a voice-only message instead of an empty preview', () => {
+    const route = read('app/api/portal/chat/route.ts')
+    expect(route).toContain('body: chatPreviewText(message, attachments).slice(0, 100)')
+    expect(route).toContain('messagePreview: chatPreviewText(message, attachments)')
+  })
+})

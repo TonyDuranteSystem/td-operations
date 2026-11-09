@@ -26,6 +26,58 @@ export function normalizeRate(rate: number | string | null | undefined): number 
   return n
 }
 
+/**
+ * What is still OWED on an invoice's own amount (card fee excluded): the invoice base
+ * minus what was already paid, never below zero, to the cent.
+ *
+ * A client who wired part of an invoice owes only the rest — the card price and the
+ * fee check must both start from THIS number, never from the whole invoice. With
+ * nothing paid it returns the whole base, so an ordinary card payment is unchanged.
+ * A negative `amountPaid` (credit notes carry one) counts as nothing paid.
+ */
+export function balanceOwed(
+  invoiceBase: number | string | null | undefined,
+  amountPaid: number | string | null | undefined,
+): number {
+  const base = Number(invoiceBase)
+  const paid = Number(amountPaid)
+  const safeBase = Number.isFinite(base) ? base : 0
+  const safePaid = Number.isFinite(paid) && paid > 0 ? paid : 0
+  return round2(Math.max(safeBase - safePaid, 0))
+}
+
+/**
+ * The invoice's own amount WITHOUT the card fee: its total — the figure the client was
+ * told and the one the settle caps at (`applyMoneyToInvoice` reads `total ?? amount`) —
+ * minus the card fee already booked onto it.
+ *
+ * Why the TOTAL and not the line items: a discount, a tax line, a payment-plan part
+ * (lines for the whole setup fee, total for this part) or a staff edit all make the
+ * lines differ from what is actually owed — in production 31 of 382 invoices with
+ * lines already do. `card_fee_amount` is written in the SAME update that bumps the
+ * total (`bookCardFee`), so `total − card_fee_amount` is right on every retry, also
+ * after a crash between the fee line and the bump (then `card_fee_amount` is still
+ * empty and the total is still unbumped).
+ */
+export function invoiceBaseExFee(payment: {
+  total?: number | string | null
+  amount?: number | string | null
+  card_fee_amount?: number | string | null
+}): number {
+  const total = Number(payment.total ?? payment.amount)
+  const fee = Number(payment.card_fee_amount)
+  const safeTotal = Number.isFinite(total) ? total : 0
+  const safeFee = Number.isFinite(fee) && fee > 0 ? fee : 0
+  return round2(Math.max(safeTotal - safeFee, 0))
+}
+
+/**
+ * The smallest card charge Stripe accepts (0.50 in USD and EUR). A balance whose card
+ * price is below this cannot be paid by card — the client is pointed to bank transfer
+ * instead of hitting a Stripe error.
+ */
+export const MIN_CARD_CHARGE = 0.5
+
 export interface CardTotal {
   base: number
   fee: number
