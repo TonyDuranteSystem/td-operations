@@ -9,6 +9,8 @@ import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sp
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
+import { useAudioNoteRecorder } from '@/lib/hooks/use-audio-note-recorder'
+import { clock } from '@/lib/talk/chat-model'
 import { useNotificationSound } from '@/lib/hooks/use-notification-sound'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import { format, parseISO } from 'date-fns'
@@ -119,6 +121,18 @@ interface ChatThread {
   active_services: { service_type: string; stage: string | null }[]
   /** Overdue invoices owed to TD — account-level thread's account, or contact-direct invoices. */
   overdue?: OverdueSummary | null
+}
+
+/** A recorded voice note waiting to be sent: staff can play it back before pressing Send. The temporary link is released when the note goes or is removed. */
+function StagedVoicePreview({ file }: { file: File }) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    const objectUrl = URL.createObjectURL(file)
+    setUrl(objectUrl)
+    return () => URL.revokeObjectURL(objectUrl)
+  }, [file])
+  // eslint-disable-next-line jsx-a11y/media-has-caption
+  return url ? <audio controls preload="metadata" src={url} className="h-8 w-full min-w-[180px] max-w-[260px]" data-testid="staff-voice-preview" /> : null
 }
 
 /** Red pill shown next to a contact name / company when invoices are overdue. */
@@ -592,19 +606,38 @@ export default function PortalChatsPage() {
     setIsRefreshing(false)
   }, [queryClient, selectedAccountId, selectedContactId, selectedThreadId])
 
-  // Voice input for client chat
-  const handleTranscript = useCallback((text: string) => {
-    setReplyText(prev => (prev ? prev + ' ' + text : text).trim())
-    inputRef.current?.focus()
-  }, [])
-
+  // Voice note for the client chat (dev job 753b2909): the mic RECORDS a real voice note — the same recorder TD Talk, WhatsApp and the client portal use — and
+  // stages it like an attached file, so it goes out through the usual Send → "Confirm & Send" pop-up (company / personal / topic) and the same
+  // capture-before-await send as every other message. It used to be dictation: the words were typed into the box and the audio was thrown away.
+  // (The internal Team composer below still dictates.)
+  const recordingKeyRef = useRef<string | null>(null)
+  const [voiceSeconds, setVoiceSeconds] = useState(0)
   const {
     isRecording,
-    isTranscribing,
-    startRecording,
+    startRecording: startVoiceRecording,
     stopRecording,
+    cancelRecording,
     isSupported: micSupported,
-  } = useVoiceInput({ language: 'en-US', onTranscript: handleTranscript, onError: (msg) => toast.error(msg) })
+  } = useAudioNoteRecorder({
+    // iPhone cannot play a WebM note, so prefer MP4/AAC (what TD Talk and the client portal do)
+    preferMp4: true,
+    onRecorded: file => {
+      // The note belongs to the conversation that was open when the mic was pressed. Switching cancels a recording in progress (effect below); this
+      // only covers the instant between "finish" and the file being handed over.
+      const live = liveSelectionRef.current
+      if (recordingKeyRef.current !== (live.accountId || live.contactId || null)) {
+        toast.error('You switched to another conversation, so the voice note was discarded.')
+        return
+      }
+      handleAdminFileSelect(file)
+    },
+    onError: (msg) => toast.error(msg),
+  })
+  const startRecording = useCallback(() => {
+    const live = liveSelectionRef.current
+    recordingKeyRef.current = live.accountId || live.contactId || null
+    startVoiceRecording()
+  }, [startVoiceRecording])
 
   // Voice input for internal chat
   const handleInternalTranscript = useCallback((text: string) => {
@@ -692,6 +725,24 @@ export default function PortalChatsPage() {
     liveSelectionRef.current = { accountId: selectedAccountId, contactId: selectedContactId, threadId: selectedThreadId }
   })
   const clientThreadKey = selectedAccountId || selectedContactId || null
+  // Voice note in progress: the clock, and — a recording must never end up in a different conversation (or keep the microphone open behind a screen
+  // that no longer shows it) — it is thrown away when the open conversation, the sub-tab or Chats / Actions / Team changes. Only when something is
+  // actually recording: the recorder's cancel also arms a "swallow the next recording" flag, which would eat the next real note if called while idle.
+  const isRecordingRef = useRef(false)
+  useEffect(() => { isRecordingRef.current = isRecording })
+  useEffect(() => {
+    if (!isRecording) { setVoiceSeconds(0); return }
+    const started = Date.now()
+    const timer = setInterval(() => setVoiceSeconds(Math.floor((Date.now() - started) / 1000)), 250)
+    return () => clearInterval(timer)
+  }, [isRecording])
+  useEffect(() => {
+    return () => {
+      if (!isRecordingRef.current) return
+      cancelRecording()
+      toast.info('Voice note discarded — the screen changed while recording.')
+    }
+  }, [clientThreadKey, chatViewMode, sidebarView, cancelRecording])
   useEffect(() => {
     const draftsMap = clientDraftsRef.current!
     let saved = clientThreadKey ? draftsMap.get(clientThreadKey) : undefined
@@ -2276,7 +2327,11 @@ export default function PortalChatsPage() {
       toast.error(`${closedTargetName} is closed — the client can't see messages here. Pick an active company or "Personal".`)
       return
     }
-    if (isRecording) stopRecording()
+    // A voice note still being recorded is not part of the message yet: finish (or discard) it first, so what the pop-up confirms is what goes out.
+    if (isRecording) {
+      toast.error('Finish the voice note first (tap the red square), or discard it.')
+      return
+    }
     if (inputRef.current) {
       inputRef.current.style.height = 'auto'
       // Blur so further typing while the modal is open can't silently
@@ -4485,20 +4540,19 @@ export default function PortalChatsPage() {
             </div>
 
             {/* Recording indicator */}
-            {(isRecording || isTranscribing) && (
-              <div className="px-4 py-2 bg-red-50 border-t border-red-100 flex items-center gap-2">
-                {isRecording && (
-                  <>
-                    <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
-                    <span className="text-xs text-red-600 font-medium">Recording... tap mic to stop</span>
-                  </>
-                )}
-                {isTranscribing && (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
-                    <span className="text-xs text-blue-600 font-medium">Transcribing...</span>
-                  </>
-                )}
+            {isRecording && (
+              <div className="px-4 py-2 bg-red-50 border-t border-red-100 flex items-center gap-2" data-testid="staff-voice-recording">
+                <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
+                <span className="font-mono text-xs tabular-nums text-red-700" data-testid="staff-voice-clock">{clock(voiceSeconds)}</span>
+                <span className="text-xs text-red-600 font-medium flex-1">Recording a voice note — tap the red square to finish</span>
+                <button
+                  type="button"
+                  onClick={cancelRecording}
+                  className="flex items-center gap-1 rounded-full px-2 py-1 text-xs text-red-700 hover:bg-red-100"
+                  data-testid="staff-voice-discard"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Discard
+                </button>
               </div>
             )}
 
@@ -4606,8 +4660,15 @@ export default function PortalChatsPage() {
               <div className="px-4 py-2 border-t border-zinc-100 bg-zinc-50 shrink-0">
                 <div className="flex flex-wrap gap-2">
                   {pendingAdminFiles.map((pf, i) => (
-                    <div key={i} className="flex items-center gap-2 bg-white border border-zinc-200 rounded-lg px-2 py-1.5 max-w-[200px]">
-                      {pf.previewUrl ? (
+                    <div key={i} className={cn('flex items-center gap-2 bg-white border border-zinc-200 rounded-lg px-2 py-1.5', pf.file.type.startsWith('audio/') ? 'max-w-[340px]' : 'max-w-[200px]')}>
+                      {pf.file.type.startsWith('audio/') ? (
+                        <>
+                          <div className="h-8 w-8 rounded bg-red-50 flex items-center justify-center shrink-0">
+                            <Mic className="h-4 w-4 text-red-500" />
+                          </div>
+                          <StagedVoicePreview file={pf.file} />
+                        </>
+                      ) : pf.previewUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={pf.previewUrl} alt={pf.file.name} className="h-8 w-8 rounded object-cover shrink-0" />
                       ) : (
@@ -4615,12 +4676,15 @@ export default function PortalChatsPage() {
                           <FileText className="h-4 w-4 text-zinc-400" />
                         </div>
                       )}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[11px] font-medium text-zinc-700 truncate">{pf.file.name}</p>
-                        <p className="text-[10px] text-zinc-400">{formatFileSize(pf.file.size)}</p>
-                      </div>
+                      {!pf.file.type.startsWith('audio/') && (
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[11px] font-medium text-zinc-700 truncate">{pf.file.name}</p>
+                          <p className="text-[10px] text-zinc-400">{formatFileSize(pf.file.size)}</p>
+                        </div>
+                      )}
                       <button
                         onClick={() => setPendingAdminFiles(prev => prev.filter((_, idx) => idx !== i))}
+                        aria-label="Remove attachment"
                         className="p-0.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 shrink-0"
                       >
                         <X className="h-3 w-3" />
@@ -5052,6 +5116,18 @@ export default function PortalChatsPage() {
                   <button disabled className="w-12 h-12 rounded-full bg-blue-600 text-white flex items-center justify-center shrink-0">
                     <Loader2 className="h-5 w-5 animate-spin" />
                   </button>
+                ) : isRecording ? (
+                  // First, ahead of Send: while a note is being recorded the person must always be able to finish it, even with text typed or a file attached meanwhile
+                  <FastTooltip label="Finish the voice note">
+                    <button
+                      onClick={stopRecording}
+                      className="w-12 h-12 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse flex items-center justify-center shrink-0 transition-all"
+                      aria-label="Finish the voice note"
+                      data-testid="staff-voice-stop"
+                    >
+                      <Square className="h-5 w-5 fill-current" />
+                    </button>
+                  </FastTooltip>
                 ) : (replyText.trim() || pendingAdminFiles.length > 0) ? (
                   <FastTooltip label={sendingToClosedAccount ? `${closedTargetName} is closed — the client can't see messages here.` : undefined}>
                     <button
@@ -5066,26 +5142,13 @@ export default function PortalChatsPage() {
                       <Send className="h-5 w-5" />
                     </button>
                   </FastTooltip>
-                ) : isRecording ? (
-                  <FastTooltip label="Stop recording">
-                    <button
-                      onClick={stopRecording}
-                      className="w-12 h-12 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 animate-pulse flex items-center justify-center shrink-0 transition-all"
-                      aria-label="Stop recording"
-                    >
-                      <Square className="h-5 w-5 fill-current" />
-                    </button>
-                  </FastTooltip>
-                ) : isTranscribing ? (
-                  <button disabled className="w-12 h-12 rounded-full bg-blue-100 text-blue-500 flex items-center justify-center shrink-0">
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  </button>
                 ) : micSupported ? (
-                  <FastTooltip label="Voice input">
+                  <FastTooltip label="Record a voice note">
                     <button
                       onClick={startRecording}
                       className="w-12 h-12 rounded-full bg-zinc-100 text-zinc-600 hover:bg-blue-100 hover:text-blue-600 flex items-center justify-center shrink-0 transition-colors"
-                      aria-label="Voice input"
+                      aria-label="Record a voice note"
+                      data-testid="staff-voice-start"
                     >
                       <Mic className="h-5 w-5" />
                     </button>

@@ -16,6 +16,29 @@ interface TdPayModalProps {
   onClose: () => void
 }
 
+/** GET /api/workflows/create-invoice-checkout — the card price for this invoice. */
+interface CardQuoteView {
+  /** Still owed on the invoice (card fee excluded). */
+  amount: number
+  /** Card fee on that balance (0 when the global fee switch is off). */
+  fee: number
+  /** The rate applied, e.g. 0.05. */
+  cardFeeRate: number
+  /** What the card page will ask for: balance + fee. */
+  cardAmount: number
+}
+
+/** The popup's own wording for a refused card payment (falls back to the server's text). */
+function refusalText(r: { reason: string | null; error: string }, t: (k: string) => string): string {
+  switch (r.reason) {
+    case 'closed': return t('tdPayModal.refusedClosed')
+    case 'nothing_owed': return t('tdPayModal.refusedNothingOwed')
+    case 'paid': return t('tdPayModal.refusedPaid')
+    case 'too_small': return t('tdPayModal.refusedTooSmall')
+    default: return r.error
+  }
+}
+
 interface BankDetails {
   beneficiary: string | null
   bank: string | null
@@ -69,7 +92,17 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
   const tRef = useRef(t)
   tRef.current = t
   const csym = currency === 'EUR' ? '\u20AC' : '$'
-  const cardTotal = Math.ceil(amount * 1.05)
+
+  // The card price comes from the SERVER (lib/payments/card-quote.ts): what is still
+  // owed on the invoice plus the card fee on it, at the rate pinned on that invoice.
+  // The popup used to work out its own "+5%, rounded up" and could disagree with what
+  // Stripe was then asked to charge \u2014 the number shown here is now the number charged.
+  const [quote, setQuote] = useState<CardQuoteView | null>(null)
+  const [quoteState, setQuoteState] = useState<'loading' | 'ready' | 'refused' | 'failed'>('loading')
+  // Why the card cannot be used: the server's reason code (translated here) + its own text as a fallback.
+  const [quoteRefusal, setQuoteRefusal] = useState<{ reason: string | null; error: string } | null>(null)
+  // What is still owed: the server's number once we have it, the list's balance until then.
+  const owed = quote ? quote.amount : amount
 
   const [bankDetails, setBankDetails] = useState<BankDetails | null>(null)
   const [bankLoading, setBankLoading] = useState(true)
@@ -100,6 +133,33 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
       })
     return () => { cancelled = true }
   }, [])
+
+  // Ask the server for the card price (read-only — starts no payment).
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/workflows/create-invoice-checkout?payment_id=${encodeURIComponent(paymentId)}`)
+      .then(async res => ({ ok: res.ok, data: await res.json().catch(() => ({})) }))
+      .then(({ ok, data }) => {
+        if (cancelled) return
+        if (ok && typeof data.cardAmount === 'number' && typeof data.amount === 'number') {
+          setQuote({ amount: data.amount, fee: Number(data.fee) || 0, cardFeeRate: Number(data.cardFeeRate) || 0, cardAmount: data.cardAmount })
+          setQuoteState('ready')
+        } else if (data?.reason === 'unavailable' || data?.reason === 'not_found' || data?.reason === 'currency') {
+          // The price could not be worked out (lookup failed, invoice not found, a currency
+          // the card cannot take): translated "could not load the card price, pay by bank
+          // transfer" text — not the server's English sentence.
+          setQuoteState('failed')
+        } else if (data?.error) {
+          // R099: show the server's real reason (closed invoice, nothing owed, ...).
+          setQuoteRefusal({ reason: typeof data.reason === 'string' ? data.reason : null, error: String(data.error) })
+          setQuoteState('refused')
+        } else {
+          setQuoteState('failed')
+        }
+      })
+      .catch(() => { if (!cancelled) setQuoteState('failed') })
+    return () => { cancelled = true }
+  }, [paymentId])
 
   // Should we nudge this client to activate autopay? Only when the feature
   // is live and this invoice's account isn't already enrolled.
@@ -188,7 +248,7 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
               {t('tdPayModal.title')}
             </h3>
             <p className="text-blue-100 text-sm mt-0.5">
-              {invoiceNumber} — {csym}{amount.toFixed(2)} {currency}
+              {invoiceNumber} — {csym}{owed.toFixed(2)} {currency}
             </p>
           </div>
           <FastTooltip label={t('tdPayModal.close')}>
@@ -224,7 +284,7 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
             <button
               type="button"
               onClick={handlePayByCard}
-              disabled={stripeLoading}
+              disabled={stripeLoading || quoteState === 'loading' || quoteState === 'refused' || quoteState === 'failed'}
               className="flex items-center justify-between w-full group disabled:opacity-60"
             >
               <div className="flex items-center gap-3">
@@ -235,10 +295,19 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
                   <p className="text-sm font-medium text-zinc-900 group-hover:text-blue-600 transition-colors">
                     {t('tdPayModal.creditCard')}
                   </p>
-                  <p className="text-xs text-zinc-500">
-                    {csym}{cardTotal.toFixed(2)} {currency}
-                    <span className="text-zinc-400"> ({t('tdPayModal.fee')})</span>
-                  </p>
+                  {quoteState === 'ready' && quote && (
+                    <p className="text-xs text-zinc-500">
+                      {csym}{quote.cardAmount.toFixed(2)} {currency}
+                      {quote.fee > 0 && (
+                        <span className="text-zinc-400"> ({t('tdPayModal.feeRate').replace('{rate}', String(Math.round(quote.cardFeeRate * 10000) / 100))})</span>
+                      )}
+                    </p>
+                  )}
+                  {quoteState === 'loading' && <p className="text-xs text-zinc-400">…</p>}
+                  {quoteState === 'refused' && quoteRefusal && (
+                    <p className="text-xs text-red-600">{refusalText(quoteRefusal, t)}</p>
+                  )}
+                  {quoteState === 'failed' && <p className="text-xs text-red-600">{t('tdPayModal.priceFailed')}</p>}
                 </div>
               </div>
               <div className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg group-hover:bg-blue-700 transition-colors">
@@ -268,7 +337,7 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
                   <p className="text-sm font-medium text-zinc-900">
                     {t('tdPayModal.bankTransfer')}
                   </p>
-                  <p className="text-xs text-zinc-500">{csym}{amount.toFixed(2)} {currency}</p>
+                  <p className="text-xs text-zinc-500">{csym}{owed.toFixed(2)} {currency}</p>
                 </div>
               </div>
               <ChevronDown className={cn('h-5 w-5 text-zinc-400 transition-transform', wireExpanded && 'rotate-180')} />
