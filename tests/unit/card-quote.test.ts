@@ -195,6 +195,15 @@ describe('stripeProductName — the one line the client sees on Stripe\'s page',
     expect(stripeProductName('Annual renewal', { alreadyPaid: 0, fee: 0, rate: 0 })).toBe('Annual renewal')
     expect(stripeProductName('Annual renewal', { alreadyPaid: 500, fee: 0, rate: 0 })).toBe('Annual renewal — remaining balance')
   })
+  it('never cuts an emoji in half (a lone surrogate would break the Stripe call)', () => {
+    const name = stripeProductName('😀'.repeat(200), { alreadyPaid: 0, fee: 0, rate: 0 })
+    expect(Array.from(name)).toHaveLength(120)
+    expect(() => encodeURIComponent(name)).not.toThrow() // throws on a lone surrogate
+    // an emoji straddling the cut point
+    const straddle = stripeProductName('a'.repeat(119) + '😀😀', { alreadyPaid: 0, fee: 0, rate: 0 })
+    expect(() => encodeURIComponent(straddle)).not.toThrow()
+  })
+
   it('falls back to a plain label and never grows without bound', () => {
     expect(stripeProductName(null, { alreadyPaid: 0, fee: 0, rate: 0 })).toBe('Invoice Payment')
     expect(stripeProductName('x'.repeat(500), { alreadyPaid: 0, fee: 0, rate: 0 }).length).toBe(120)

@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     // The raw error can carry database text — log it, show the client a plain sentence.
     console.error("[create-invoice-checkout] Quote error:", err)
-    return NextResponse.json({ error: "Could not work out the card price right now. Please try again." }, { status: 500 })
+    return NextResponse.json({ error: "Could not work out the card price right now. Please try again.", reason: "unavailable" }, { status: 500 })
   }
 }
 

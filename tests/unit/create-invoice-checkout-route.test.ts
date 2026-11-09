@@ -177,6 +177,7 @@ describe('GET create-invoice-checkout — the price the popup shows', () => {
     expect(res.status).toBe(500)
     expect(body.error).not.toContain('secret db text')
     expect(body.error).toMatch(/try again/i)
+    expect(body.reason).toBe('unavailable') // lets the popup show its translated 'could not load the price' text
   })
 
   it('a too-small balance is refused with its own reason', async () => {

@@ -123,7 +123,8 @@ export function stripeProductName(
   description: string | null,
   quote: { alreadyPaid: number; fee: number; rate: number },
 ): string {
-  let name = (description || 'Invoice Payment').trim().slice(0, 120)
+  // By code point, not UTF-16 unit: cutting an emoji in half would break the Stripe call.
+  let name = Array.from((description || 'Invoice Payment').trim()).slice(0, 120).join('')
   if (quote.alreadyPaid > 0) name += ' — remaining balance'
   if (quote.fee > 0) name += ` + ${Math.round(quote.rate * 10000) / 100}% card fee`
   return name

@@ -138,8 +138,10 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
         if (ok && typeof data.cardAmount === 'number' && typeof data.amount === 'number') {
           setQuote({ amount: data.amount, fee: Number(data.fee) || 0, cardFeeRate: Number(data.cardFeeRate) || 0, cardAmount: data.cardAmount })
           setQuoteState('ready')
-        } else if (data?.reason === 'unavailable') {
-          // The server could not look the invoice up right now — a retry, not a refusal.
+        } else if (data?.reason === 'unavailable' || data?.reason === 'not_found' || data?.reason === 'currency') {
+          // The price could not be worked out (lookup failed, invoice not found, a currency
+          // the card cannot take): translated "could not load the card price, pay by bank
+          // transfer" text — not the server's English sentence.
           setQuoteState('failed')
         } else if (data?.error) {
           // R099: show the server's real reason (closed invoice, nothing owed, ...).
