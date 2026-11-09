@@ -26,8 +26,8 @@ export function AppTopicButton({ activeTopic, topicOrder, unreadByTopic, onChoos
   const current = activeTopic || general
   const others = unreadInOtherTopics(unreadByTopic, activeTopic)
   const label = others > 0
-    ? t('app.topicLabelUnread').replace('{name}', current).replace('{n}', String(others))
-    : t('app.topicLabel').replace('{name}', current)
+    ? t('app.topicLabelUnread').replace('{name}', () => current).replace('{n}', String(others))
+    : t('app.topicLabel').replace('{name}', () => current)
 
   const close = () => { setOpen(false); setCreating(false); setName('') }
   const choose = (key: string) => { onChoose(key === '' ? null : key); close() }

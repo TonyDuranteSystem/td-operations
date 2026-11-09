@@ -97,13 +97,14 @@ export interface BillingRowState {
   kind: BillingRowKind
   /** The date written on the tag (due date, or the day it was paid); null when the invoice has none. */
   date: string | null
-  /** The Pay button is offered. Exactly the website's rule (`ExpenseList`): a Tony Durante invoice with a payment behind it, still Pending or Overdue. */
+  /** The Pay button is offered: a Tony Durante invoice with a payment behind it, still Pending or Overdue, not a credit note (the website's rule plus that last guard). */
   canPay: boolean
 }
 
 export function billingRowState(e: Pick<BillingExpense, 'status' | 'total' | 'due_date' | 'paid_date' | 'td_payment_id' | 'source'>): BillingRowState {
   const open = e.status === 'Pending' || e.status === 'Overdue'
-  const canPay = e.source === 'td_invoice' && !!e.td_payment_id && open
+  // A credit note is money owed TO the client, never a bill: no Pay on a negative total (the website's list would offer it by status alone).
+  const canPay = e.source === 'td_invoice' && !!e.td_payment_id && open && Number(e.total) >= 0
   if (Number(e.total) < 0) return { kind: 'credit', date: null, canPay }
   if (e.status === 'Cancelled') return { kind: 'cancelled', date: null, canPay }
   if (e.status === 'Paid') return { kind: 'paid', date: e.paid_date, canPay }
@@ -111,10 +112,10 @@ export function billingRowState(e: Pick<BillingExpense, 'status' | 'total' | 'du
 }
 
 /**
- * The amount written on a row. An open invoice shows what is still to pay (the balance left on a part-paid one, else the whole total, the
- * same figure the Pay pop-up charges); a paid, cancelled or credit row shows the invoice's own total, so a paid invoice does not read $0.00.
+ * The amount written on a row. An open invoice shows what is still to pay (the balance left on a part-paid one, else the whole total); a paid, cancelled or credit row shows the invoice's own total, so a paid invoice does not read $0.00.
  */
 export function billingRowAmount(e: Pick<BillingExpense, 'total' | 'amount_due' | 'status'>): number {
   const open = e.status === 'Pending' || e.status === 'Overdue'
-  return open ? Number(e.amount_due ?? e.total) : Number(e.total)
+  // A zero balance on an open invoice is a bookkeeping gap, not "nothing to pay": show the invoice total rather than $0.00 next to a Pay button.
+  return open && Number(e.amount_due) > 0 ? Number(e.amount_due) : Number(e.total)
 }

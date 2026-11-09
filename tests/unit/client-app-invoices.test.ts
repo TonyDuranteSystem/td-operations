@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { join } from 'node:path'
 import {
   APP_BILLING_TAB,
@@ -14,6 +16,8 @@ import {
 } from '@/lib/portal-app/invoices'
 import { INVOICE_TABS, type InvoiceTabId } from '@/lib/portal/invoice-hub'
 import { TITLE_IN_ROW_EXACT, screenTitleFor } from '@/lib/portal-app/frame'
+import { AppTdBilling } from '@/components/portal/app-td-billing'
+import { AppTopicButton } from '@/components/portal/chat/app-topic-button'
 
 // Client iPhone app, Step 3c (dev job 056a70d0): Invoices list, tappable set-up steps, TD Billing, Pay.
 
@@ -132,11 +136,18 @@ describe('billingRowState', () => {
     expect(billingRowState(inv({ total: -25, status: 'Paid' }))).toEqual({ kind: 'credit', date: null, canPay: false })
   })
 
+  it('a credit note is never offered Pay, even when old data left it Pending or Overdue with a payment behind it', () => {
+    for (const status of ['Pending', 'Overdue']) {
+      expect(billingRowState(inv({ total: -25, status, td_payment_id: 'p1' }))).toEqual({ kind: 'credit', date: null, canPay: false })
+    }
+  })
+
   it('cannot be paid without a payment behind it', () => {
     expect(billingRowState(inv({ td_payment_id: null })).canPay).toBe(false)
   })
 
-  // The website's list offers Pay by one rule (components/portal/expense-list.tsx before Step 3c); the app's rows must agree exactly.
+  // The website's list offers Pay by one rule (components/portal/expense-list.tsx before Step 3c); the app's rows agree with it exactly,
+  // except that a credit note (negative total) is never offered Pay in the app.
   const oldPayRule = (e: { source: string; td_payment_id: string | null; status: string }) =>
     e.source === 'td_invoice' && !!e.td_payment_id && (e.status === 'Pending' || e.status === 'Overdue')
 
@@ -147,8 +158,8 @@ describe('billingRowState', () => {
         for (const status of ['Pending', 'Overdue', 'Paid', 'Cancelled', 'Delinquent', 'Waived', '']) {
           for (const total of [100, 0, -5]) {
             const e = inv({ source, td_payment_id, status, total })
-            // a credit note (negative total) is a credit, never a bill: the website pays by status only, the app also shows it as a credit
-            if (total >= 0) expect(billingRowState(e).canPay, JSON.stringify({ source, td_payment_id, status, total })).toBe(oldPayRule(e))
+            const expected = total >= 0 && oldPayRule(e)
+            expect(billingRowState(e).canPay, JSON.stringify({ source, td_payment_id, status, total })).toBe(expected)
             checked++
           }
         }
@@ -163,6 +174,11 @@ describe('billingRowAmount', () => {
     expect(billingRowAmount({ status: 'Pending', total: 100, amount_due: 40 })).toBe(40)
     expect(billingRowAmount({ status: 'Overdue', total: 100, amount_due: null })).toBe(100)
     expect(billingRowAmount({ status: 'Pending', total: 100 })).toBe(100)
+  })
+
+  it('an open invoice with a zero balance on file shows its total, never $0.00 next to a Pay button', () => {
+    expect(billingRowAmount({ status: 'Pending', total: 100, amount_due: 0 })).toBe(100)
+    expect(billingRowAmount({ status: 'Overdue', total: 80, amount_due: 0 })).toBe(80)
   })
 
   it('a paid, cancelled or credit row shows the invoice total, never $0.00 left to pay', () => {
@@ -205,6 +221,65 @@ describe('the top row names the Invoices screens', () => {
   })
 })
 
+
+// The screens drawn for real (server-side), so these fail if the behaviour is wrong, not only if the source text changes.
+describe('TD Billing screen, rendered', () => {
+  const totals = { pending: '$100.00', paid: '$250.00', total: '$350.00' }
+  const html = (rows: BillingExpense[], payEnabled = true) => renderToStaticMarkup(createElement(AppTdBilling, { rows, totals, payEnabled }))
+  const rowHtml = (h: string, number: string) => h.slice(h.indexOf(`data-testid="app-billing-row-${number}"`)).split('data-testid="app-billing-row-')[1] ?? ''
+
+  it('offers Pay on an open invoice and shows the balance and the due date', () => {
+    const h = html([inv({ amount_due: 40, total: 100 })])
+    expect(h).toContain('aria-label="Pay invoice INV-000123"')
+    expect(h).toContain('$40.00')
+    expect(h).toContain('Due Nov 20')
+  })
+
+  it('offers no Pay on a paid, cancelled or credit row, and shows the invoice total on them', () => {
+    const h = html([
+      inv({ id: 'p', invoice_number: 'INV-P', status: 'Paid', paid_date: '2026-10-14', total: 250, amount_due: 0 }),
+      inv({ id: 'c', invoice_number: 'INV-C', status: 'Cancelled', total: 75, amount_due: 0 }),
+      inv({ id: 'k', invoice_number: 'INV-K', status: 'Pending', total: -25 }),
+    ])
+    expect(h).not.toContain('aria-label="Pay invoice')
+    expect(h).toContain('$250.00')
+    expect(h).toContain('Paid Oct 14')
+    expect(h).toContain('Cancelled')
+    expect(h).toContain('Credit')
+    expect(h).not.toMatch(/\$0\.00/)
+  })
+
+  it('with the Pay switch off nothing can be tapped to pay, but every invoice is still listed with its tag', () => {
+    const h = html([inv(), inv({ id: 'e2', invoice_number: 'INV-2', status: 'Overdue' })], false)
+    expect(h).not.toContain('aria-label="Pay invoice')
+    expect(h).not.toContain('<button')
+    expect(h).toContain('INV-000123')
+    expect(h).toContain('INV-2')
+    expect(h).toContain('Due Nov 20')
+    expect(h).toContain('Overdue Nov 20')
+  })
+
+  it('shows the three totals, one currency per line, and an empty message with no invoices', () => {
+    const h = renderToStaticMarkup(createElement(AppTdBilling, { rows: [], totals: { pending: '$10.00 · €5.00', paid: '$0.00', total: '$10.00 · €5.00' }, payEnabled: true }))
+    expect(h).toContain('data-testid="app-billing-empty"')
+    expect(h).toContain('<div>$10.00</div><div>€5.00</div>')
+  })
+
+  it('writes an invoice with no description or number plainly, and keeps the row of one invoice to itself', () => {
+    const h = html([inv({ description: null, invoice_number: null, internal_ref: null, vendor_name: 'Tony Durante LLC' })])
+    expect(h).toContain('Tony Durante LLC')
+    expect(h).toContain('—')
+    expect(rowHtml(html([inv({ id: 'a', invoice_number: 'INV-A' }), inv({ id: 'b', invoice_number: 'INV-B', status: 'Paid' })]), 'INV-B')).not.toContain('Pay invoice')
+  })
+})
+
+describe('Topic button, rendered', () => {
+  it('writes a topic name that contains $ signs exactly as typed', () => {
+    const h = renderToStaticMarkup(createElement(AppTopicButton, { activeTopic: 'Fees $& $1 $$', topicOrder: ['Fees $& $1 $$'], unreadByTopic: {}, onChoose: () => {} }))
+    expect(h).toContain('Topic: Fees $&amp; $1 $$')
+  })
+})
+
 describe('wiring (source guards)', () => {
   const page = src('app/portal/invoices/page.tsx')
 
@@ -229,6 +304,22 @@ describe('wiring (source guards)', () => {
     const list = src('components/portal/expense-list.tsx')
     expect(list).toContain('hidePay = false')
     expect(list).toContain('{!hidePay && exp.source ===')
+  })
+
+  it('the app\'s Pay switch also hides the autopay card on the Expenses area, and never on the website', () => {
+    expect(page).toContain('{selectedAccountId && showAutopayCard && !appPayHidden && (')
+    expect(page).toContain("const appPayHidden = appMode ? !(await isClientAppPayEnabled()) : false")
+  })
+
+  it('a company name with $ signs is not mangled by the subtitle fill', () => {
+    expect(page).toContain(".replace('{company}', () => companyName)")
+  })
+
+  it('the Pay Now button unlocks when the phone brings the screen back from its page cache', () => {
+    const modal = src('components/portal/td-pay-modal.tsx')
+    expect(modal).toContain("window.addEventListener('pageshow', onShow)")
+    expect(modal).toContain('if (e.persisted) setStripeLoading(false)')
+    expect(modal).not.toContain('would be refused')
   })
 
   it('only the fields TD Billing shows are sent to the browser (no attachment links)', () => {

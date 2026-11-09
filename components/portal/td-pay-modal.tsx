@@ -59,8 +59,10 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 
 export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose }: TdPayModalProps) {
   const { t } = useLocale()
-  // Inside the client iPhone app the card page opens in the app's own window (a new window needs the phone shell to catch it; the
-  // card page sends the client back to the portal when done). On the website it is a new tab, as before.
+  // Inside the client iPhone app the card page opens in the app's own window (a new window needs the phone shell to catch it).
+  // When the client is done the card page sends them to the "payment received" page (or the "payment cancelled" page), each with its
+  // own button back to the portal; the Back button returns here. See docs/systems/client-app.md (Step 3c). On the website it is a new
+  // tab, as before.
   const appMode = useAppMode()
   // Read inside the mount-only effect below without retriggering it \u2014 t() is
   // a fresh closure every render, and this fetch must only run once.
@@ -133,6 +135,15 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
     }
   }
 
+  // Coming back from the card page, the phone can bring this screen back exactly as it was left (its page cache), with the button still
+  // spinning. Unlock it then; a normal load starts fresh anyway.
+  useEffect(() => {
+    if (!appMode) return
+    const onShow = (e: PageTransitionEvent) => { if (e.persisted) setStripeLoading(false) }
+    window.addEventListener('pageshow', onShow)
+    return () => window.removeEventListener('pageshow', onShow)
+  }, [appMode])
+
   const handlePayByCard = async () => {
     if (stripeLoading) return
     setStripeLoading(true)
@@ -148,7 +159,7 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
         throw new Error(data.error || t('tdPayModal.checkoutFailed'))
       }
       if (appMode) {
-        // Keep the button locked while the page leaves: a second tap would be refused ("being processed right now").
+        // Keep the button locked while the page leaves: a second tap would start a second live card session for the same invoice.
         leaving = true
         window.location.assign(data.checkoutUrl)
       } else {

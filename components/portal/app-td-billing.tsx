@@ -112,7 +112,7 @@ export function AppTdBilling({
                   <button
                     type="button"
                     onClick={() => setPaying(row)}
-                    aria-label={t('app.billing.payInvoice').replace('{number}', number)}
+                    aria-label={t('app.billing.payInvoice').replace('{number}', () => number)}
                     className="flex min-h-[64px] w-full items-center gap-3 px-4 py-3 text-left"
                   >
                     {content}

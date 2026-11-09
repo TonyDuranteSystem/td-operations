@@ -312,7 +312,7 @@ export default async function PortalInvoicesPage({
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
       {appMode && appScreen === 'areas' && (
         <AppInvoiceAreas
-          subtitle={showHub && companyName ? tr('app.invoicesSubtitle').replace('{company}', companyName) : companyName ?? tr('invoices.yourPersonalExpenses')}
+          subtitle={showHub && companyName ? tr('app.invoicesSubtitle').replace('{company}', () => companyName) : companyName ?? tr('invoices.yourPersonalExpenses')}
           steps={appSteps}
           stepsLeft={setupMissing}
           areas={appAreas}
@@ -478,7 +478,8 @@ export default async function PortalInvoicesPage({
       {/* ── Expenses Tab ── */}
       {showTab && activeTab === 'expenses' && (
         <>
-          {selectedAccountId && showAutopayCard && (
+          {/* The app's Pay switch also hides the autopay card (it opens a card page too); the website never sets appPayHidden. */}
+          {selectedAccountId && showAutopayCard && !appPayHidden && (
             <AutopayCard
               accountId={selectedAccountId}
               enabled={autopay?.autopay_card_enabled ?? false}
