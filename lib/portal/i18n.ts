@@ -59,6 +59,8 @@ const translations: Record<Locale, Record<string, string>> = {
     'nav.guide': 'Guide',
     'nav.signOut': 'Sign Out',
     'nav.portal': 'Portal',
+    'app.menu': 'Menu',
+    'app.menuNeedsYou': 'Menu, {n} need you',
     'nav.profile': 'Profile',
 
     // Sidebar hover/tap descriptions — one per client-facing nav item
@@ -1666,6 +1668,8 @@ const translations: Record<Locale, Record<string, string>> = {
     'nav.guide': 'Guida',
     'nav.signOut': 'Esci',
     'nav.portal': 'Portale',
+    'app.menu': 'Menu',
+    'app.menuNeedsYou': 'Menu, {n} richiedono te',
     'nav.profile': 'Profilo',
 
     // Sidebar hover/tap descriptions — see the EN block for context.

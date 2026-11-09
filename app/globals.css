@@ -124,6 +124,14 @@
    the whole height it is given instead of leaving a dead strip at the bottom. */
 [data-app-mode="true"] .app-fill { height: 100%; }
 
+/* Client iPhone app (dev job 056a70d0, Step 3): the website's always-visible cookie-preferences button floats in the bottom-right corner
+   on every portal page and would sit on top of page content, just above the app's own bottom bar. Only that button is hidden inside the
+   app; the cookie notice itself is not touched (it shows only when the consent tool decides to ask), and what the app says about cookies
+   is decided with the App Store privacy wording (client-app.md). */
+/* The consent tool's own rule is `display: inline-block !important` with three class-level parts, so this one names `body` and both of the
+   button's classes to be more specific than it (a plain `.iubenda-tp-btn` rule loses). */
+[data-app-mode="true"] body .iubenda-tp-btn.iubenda-cs-preferences-link { display: none !important; }
+
 /* TD Social phone app, Portal chats (dev job 2072bc3e, Step 1b, fix-list item 6): the row of six tabs (Messages, What's New,
    Idea request, To Do, Email, Worker) does not fit 390 px, so inside the app it scrolls sideways and each tab keeps its own
    width instead of being squeezed until the labels overlap their icons. Outside the app nothing changes. */

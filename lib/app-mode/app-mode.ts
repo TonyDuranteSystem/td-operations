@@ -15,3 +15,15 @@ export const APP_MODE_UA_TOKEN = 'TDSocial/'
 export function isAppModeUserAgent(userAgent: string | null | undefined): boolean {
   return typeof userAgent === 'string' && userAgent.includes(APP_MODE_UA_TOKEN)
 }
+
+/**
+ * The CLIENT iPhone app (dev job 056a70d0, docs/systems/client-app.md): its web view adds ` TDClient/<version>` to the browser name.
+ * Same rules as above: a layout hint only, exact and case-sensitive, never a security switch. It is a separate token on purpose, so a
+ * staff page opened in TD Social and a portal page opened in the client app can never be mistaken for each other. Only the portal
+ * (`app/portal/layout.tsx`) listens for it; the staff screens keep listening for `TDSocial/`.
+ */
+export const CLIENT_APP_UA_TOKEN = 'TDClient/'
+
+export function isClientAppUserAgent(userAgent: string | null | undefined): boolean {
+  return typeof userAgent === 'string' && userAgent.includes(CLIENT_APP_UA_TOKEN)
+}

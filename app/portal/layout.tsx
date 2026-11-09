@@ -37,6 +37,12 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies, headers } from 'next/headers'
 import { resolvePortalMode } from '@/lib/portal/portal-mode'
 import Script from 'next/script'
+import { AppModeProvider } from '@/components/app-mode/app-mode-provider'
+import { getClientAppMode } from '@/lib/app-mode/server'
+import { ClientAppFrame } from '@/components/portal/client-app-frame'
+import { CompanySwitcher } from '@/components/portal/company-switcher'
+import { isPartnerPortal } from '@/lib/portal/tier-config'
+import { selectionQuery } from '@/lib/portal-app/selection-query'
 
 export const viewport: Viewport = {
   width: 'device-width',
@@ -64,10 +70,14 @@ export default async function PortalLayout({
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
+  // Inside the CLIENT iPhone app (its web view adds "TDClient/" to the browser name): a layout hint only, never a security switch.
+  // The app draws its own bottom bar and Menu list, so the website's side menu, top bar and install/alert prompts are left out
+  // and a slim top row with the round Menu button takes their place (docs/systems/client-app.md). Everything else is unchanged.
+  const clientApp = getClientAppMode()
 
   // No user — render children without shell (login/forgot-password/change-password pages handle their own UI)
   if (!user) {
-    return <><SandboxBanner />{children}</>
+    return <AppModeProvider initial={clientApp}><SandboxBanner />{children}</AppModeProvider>
   }
 
   // ── Teammate (Portal Team Access) — scoped to ONE company; nav filtered by capability ──
@@ -77,11 +87,11 @@ export default async function PortalLayout({
     if (identity.kind !== 'teammate') {
       // Revoked / not found → no access.
       return (
-        <><SandboxBanner />
+        <AppModeProvider initial={clientApp}><SandboxBanner />
           <div className="min-h-screen flex items-center justify-center p-8 text-center text-sm text-zinc-500">
             Your access has been removed. Please contact the company owner.
           </div>
-        </>
+        </AppModeProvider>
       )
     }
     const tmAccount = await getPortalAccountById(identity.accountId)
@@ -96,8 +106,9 @@ export default async function PortalLayout({
 
     return (
       <Providers>
+       <AppModeProvider initial={clientApp}>
         <SandboxBanner />
-        <PortalSwRegister locale={tmLocale} />
+        {!clientApp && <PortalSwRegister locale={tmLocale} />}
         {/* Teammates see documents and chat through this same shell — they must
             catch up on wake too. Mounting only in the branch below would have
             silently excluded them (caught in review). */}
@@ -106,7 +117,7 @@ export default async function PortalLayout({
           {/* The owner hands the first password over by message: the colleague must choose their own at first login. */}
           <PasswordGate mustChangePassword={!!user.user_metadata?.must_change_password} />
           <div className="flex h-screen bg-gradient-to-br from-slate-50 to-blue-50/30">
-            <PortalSidebar
+            {!clientApp && <PortalSidebar
               user={user}
               accounts={tmAccounts}
               selectedAccountId={tmSelectedAccountId}
@@ -118,17 +129,23 @@ export default async function PortalLayout({
               canManageTeam={false}
               isTeammate={true}
               teammateCapabilities={identity.capabilities}
-            />
+            />}
             <main className="flex-1 overflow-y-auto overscroll-y-contain">
-              {/* Spacer for the persistent top bar (fixed, h-14, all breakpoints
-                  since the 2026-08-20 redesign — see portal-sidebar.tsx). */}
-              <div className="h-14" />
-              <div className="px-4 pt-4 sm:px-6 lg:px-8">
-                <OfficeClock />
-              </div>
+              {clientApp ? (
+                <ClientAppFrame selectionQuery={selectionQuery({ kind: 'account', id: tmSelectedAccountId })} />
+              ) : (
+                <>
+                  {/* Spacer for the persistent top bar (fixed, h-14, all breakpoints
+                      since the 2026-08-20 redesign — see portal-sidebar.tsx). */}
+                  <div className="h-14" />
+                  <div className="px-4 pt-4 sm:px-6 lg:px-8">
+                    <OfficeClock />
+                  </div>
+                </>
+              )}
               {/* Team members have no email: chat alerts reach them ONLY through the installed app. So a team member who may
                   see chat gets the same notification switch and install prompts as a client (dev job e5d5400d). */}
-              {tmCanChat && tmSelectedAccountId && (
+              {!clientApp && tmCanChat && tmSelectedAccountId && (
                 <div className="hidden lg:flex items-center justify-end gap-3 px-8 pt-4">
                   <PushToggle accountId={tmSelectedAccountId} compact />
                 </div>
@@ -137,15 +154,16 @@ export default async function PortalLayout({
                 <SuspendedGuard companyName={tmAccount.company_name}>{children}</SuspendedGuard>
               ) : (
                 <>
-                  <DashboardInstallBanner />
-                  {tmCanChat && tmSelectedAccountId && <EnablePushCard accountId={tmSelectedAccountId} />}
+                  {!clientApp && <DashboardInstallBanner />}
+                  {!clientApp && tmCanChat && tmSelectedAccountId && <EnablePushCard accountId={tmSelectedAccountId} />}
                   {children}
                 </>
               )}
             </main>
-            <PwaInstallPrompt />
+            {!clientApp && <PwaInstallPrompt />}
           </div>
         </LocaleProvider>
+       </AppModeProvider>
       </Providers>
     )
   }
@@ -310,17 +328,38 @@ export default async function PortalLayout({
     ? await isAccountAdmin(contactId, selectedAccountId)
     : false
 
+  // The company chooser the app shows on the Overview: the same chip the website's top bar draws, for the same people
+  // (not for a partner, not for a dual-role login, and only when there is a company to choose).
+  const appSwitcher = clientApp && !isPartnerPortal(effectivePortalRole) && !portalModeCtx.dual && accounts.length > 0 ? (
+    <CompanySwitcher
+      variant="topbar"
+      accounts={accounts}
+      selectedAccountId={selectedAccountId}
+      inProgress={inProgress}
+      selectedFormationId={selected.kind === 'formation' ? selected.formationId : undefined}
+      inProgressOnboardings={inProgressOnboardings}
+      selectedOnboardingId={selected.kind === 'onboarding' ? selected.onboardingId : undefined}
+      userName={userName || user.email?.split('@')[0]}
+    />
+  ) : null
+  const appSelection = selectionQuery({
+    kind: selected.kind,
+    id: selected.kind === 'account' ? selected.accountId : selected.kind === 'formation' ? selected.formationId : selected.kind === 'onboarding' ? selected.onboardingId : undefined,
+    mode: portalModeCtx.mode === 'partner' ? 'partner' : 'client',
+  })
+
   return (
     <Providers>
+     <AppModeProvider initial={clientApp}>
       <SandboxBanner />
       {viewAsMarker && <ViewAsBanner clientName={viewAsName} />}
-      <PortalSwRegister locale={locale} />
+      {!clientApp && <PortalSwRegister locale={locale} />}
       <PortalWakeRefresh />
       <LocaleProvider locale={locale} translations={translations}>
         <PasswordGate mustChangePassword={mustChangePassword} />
         {showOnboarding && <OnboardingWrapper showOnboarding={true} userName={userName} />}
         <div className="flex h-screen bg-gradient-to-br from-slate-50 to-blue-50/30">
-          <PortalSidebar
+          {!clientApp && <PortalSidebar
             user={user}
             accounts={accounts}
             selectedAccountId={selectedAccountId}
@@ -344,24 +383,30 @@ export default async function PortalLayout({
             inProgressOnboardings={inProgressOnboardings}
             selectedOnboardingId={selected.kind === 'onboarding' ? selected.onboardingId : undefined}
             canManageTeam={canManageTeam}
-          />
+          />}
         <main className="flex-1 overflow-y-auto overscroll-y-contain">
           <PullToRefresh />
-          {/* Spacer for the persistent top bar (fixed, h-14, all breakpoints
-              since the 2026-08-20 redesign — see portal-sidebar.tsx). */}
-          <div className="h-14" />
-          {/* International office clock — shows US (ET) office time + Open/Closed
-              status + the client's own local time, on every page. */}
-          <div className="px-4 pt-4 sm:px-6 lg:px-8">
-            <OfficeClock
-              clientTimeZone={clientTz?.tz}
-              clientTimeZoneLabel={clientTz?.label}
-              isViewAs={!!viewAsMarker}
-              lastSeenTimeZone={lastSeenTimeZone ?? undefined}
-            />
-          </div>
+          {clientApp ? (
+            <ClientAppFrame selectionQuery={appSelection} switcher={appSwitcher} />
+          ) : (
+            <>
+              {/* Spacer for the persistent top bar (fixed, h-14, all breakpoints
+                  since the 2026-08-20 redesign — see portal-sidebar.tsx). */}
+              <div className="h-14" />
+              {/* International office clock — shows US (ET) office time + Open/Closed
+                  status + the client's own local time, on every page. */}
+              <div className="px-4 pt-4 sm:px-6 lg:px-8">
+                <OfficeClock
+                  clientTimeZone={clientTz?.tz}
+                  clientTimeZoneLabel={clientTz?.label}
+                  isViewAs={!!viewAsMarker}
+                  lastSeenTimeZone={lastSeenTimeZone ?? undefined}
+                />
+              </div>
+            </>
+          )}
           {/* Notification bell - top right on desktop (always shown if contactId exists) */}
-          {contactId && (
+          {!clientApp && contactId && (
             <div className="hidden lg:flex items-center justify-end gap-3 px-8 pt-4">
               <PushToggle accountId={selectedAccountId || ''} compact />
               <NotificationBell accountId={selectedAccountId || undefined} contactId={contactId} />
@@ -375,16 +420,16 @@ export default async function PortalLayout({
             </SuspendedGuard>
           ) : (
             <>
-              <DashboardInstallBanner />
+              {!clientApp && <DashboardInstallBanner />}
               {/* Installed-app-only: one-tap push opt-in (mobile; desktop has
                   the header PushToggle). Never shows together with the install
                   banner — that one hides in standalone mode. */}
-              <EnablePushCard accountId={selectedAccountId || ''} />
+              {!clientApp && <EnablePushCard accountId={selectedAccountId || ''} />}
               {children}
             </>
           )}
         </main>
-        <PwaInstallPrompt />
+        {!clientApp && <PwaInstallPrompt />}
         </div>
       </LocaleProvider>
       {/* Iubenda Cookie Consent Banner */}
@@ -392,6 +437,7 @@ export default async function PortalLayout({
         src="https://embeds.iubenda.com/widgets/e5dba7a9-75ac-453c-8542-ffbc914deb88.js"
         strategy="lazyOnload"
       />
+     </AppModeProvider>
     </Providers>
   )
 }
