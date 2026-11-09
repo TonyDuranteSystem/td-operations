@@ -107,6 +107,23 @@ describe("buildInvoiceEmail — no_portal audience (One-Time customers)", () => 
     expect(html).not.toContain("log in to your portal")
   })
 
+  it("tells the client about the card fee next to the button — the rate comes from the invoice, not the email", () => {
+    const at5 = buildInvoiceEmail({ ...baseInput, purpose: "initial", audience: "no_portal", cardFeeRate: 0.05 }).html
+    expect(at5).toContain("+5% card fee")
+    expect(at5).toContain("Bank transfer has no fee")
+    const at4 = buildInvoiceEmail({ ...baseInput, purpose: "initial", audience: "no_portal", cardFeeRate: 0.04 }).html
+    expect(at4).toContain("+4% card fee")
+    expect(at4).not.toContain("+5%")
+  })
+
+  it("says nothing about a fee when there is none (fee switch off / no rate)", () => {
+    for (const cardFeeRate of [0, null, undefined]) {
+      const { html } = buildInvoiceEmail({ ...baseInput, purpose: "initial", audience: "no_portal", cardFeeRate })
+      expect(html).not.toContain("card fee")
+      expect(html).toContain("One-click card payment")
+    }
+  })
+
   it("reminder includes the same Pay with Card + bank details", () => {
     const { html } = buildInvoiceEmail({ ...baseInput, purpose: "reminder", audience: "no_portal" })
     expect(html).toContain("Pay with Card")
