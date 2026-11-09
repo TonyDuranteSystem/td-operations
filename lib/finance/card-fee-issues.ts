@@ -64,7 +64,7 @@ export async function raiseCardFeeOverageIssue(p: {
   if (await alreadyOpen(p.gatewayPaymentId)) return
   await insertIssue({
     paymentId: p.paymentId,
-    message: `Card payment amount doesn't match the invoice — no fee was booked. Charged ${p.charged}, invoice base ${p.base}. Reconcile the difference by hand.`,
+    message: `Card payment amount doesn't match what was still owed on the invoice — no fee was booked. Charged ${p.charged}, still owed ${p.base}. Reconcile the difference by hand.`,
     context: {
       kind: 'overage',
       gateway_payment_id: p.gatewayPaymentId,
