@@ -79,11 +79,11 @@ describe("handoffFileName", () => {
 
 describe("tax numbers and dots in a client's file name", () => {
   it("replaces a tax number written into the name (the real incident name)", () => {
-    expect(redactTaxNumberInName("PETER---903-61-8342-itin.pdf")).toBe("PETER---xxx-xx-xxxx-itin.pdf")
-    expect(redactTaxNumberInName("903.61.8342 letter.pdf")).toBe("xxx-xx-xxxx letter.pdf")
-    expect(redactTaxNumberInName("903_61_8342.pdf")).toBe("xxx-xx-xxxx.pdf")
+    expect(redactTaxNumberInName("NAME---123-45-6789-itin.pdf")).toBe("NAME---xxx-xx-xxxx-itin.pdf")
+    expect(redactTaxNumberInName("123.45.6789 letter.pdf")).toBe("xxx-xx-xxxx letter.pdf")
+    expect(redactTaxNumberInName("123_45_6789.pdf")).toBe("xxx-xx-xxxx.pdf")
     expect(redactTaxNumberInName("EIN 12-3456789.pdf")).toBe("EIN xx-xxxxxxx.pdf")
-    expect(redactTaxNumberInName("ITIN 903618342.pdf")).toBe("ITIN xxxxxxxxx.pdf")
+    expect(redactTaxNumberInName("ITIN 123456789.pdf")).toBe("ITIN xxxxxxxxx.pdf")
   })
   it("leaves ordinary names alone — screenshot names, dates, phone-like and long numbers", () => {
     for (const n of ["Screenshot_20261108_141245.png", "Screenshot 2026-11-08 at 14.12.45.png", "IMG_1234.jpg", "Bank statement October.pdf", "2026-11-08.pdf", "invoice 12345678.pdf", "scan 1234567890123.pdf"]) {
@@ -91,14 +91,14 @@ describe("tax numbers and dots in a client's file name", () => {
     }
   })
   it("handoffFileName applies it and also collapses runs of dots", () => {
-    expect(handoffFileName("PETER---903-61-8342-itin.pdf", 0)).toBe("PETER---xxx-xx-xxxx-itin.pdf")
+    expect(handoffFileName("NAME---123-45-6789-itin.pdf", 0)).toBe("NAME---xxx-xx-xxxx-itin.pdf")
     expect(handoffFileName("Statement..pdf", 0)).toBe("Statement.pdf")
     expect(handoffFileName("a...b....pdf", 0)).toBe("a.b.pdf")
     expect(handoffFileName("Screenshot_20261108_141245.png", 0)).toBe("Screenshot_20261108_141245.png")
   })
   it("the name listed for a file and the name handed over agree", () => {
-    const items = handoffItems([{ url: urlIn(ACCOUNT, "a.pdf"), name: "PETER---903-61-8342-itin.pdf" }])
-    expect(items[0].name).toBe("PETER---xxx-xx-xxxx-itin.pdf")
+    const items = handoffItems([{ url: urlIn(ACCOUNT, "a.pdf"), name: "NAME---123-45-6789-itin.pdf" }])
+    expect(items[0].name).toBe("NAME---xxx-xx-xxxx-itin.pdf")
   })
 })
 

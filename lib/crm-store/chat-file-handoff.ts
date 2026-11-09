@@ -48,7 +48,7 @@ export function handoffMime(claimed: string | null | undefined, fileName: string
 }
 
 /**
- * A tax number written into a file name ("PETER---903-61-8342-itin.pdf" — the real incident file name) is replaced by x's: names are listed,
+ * A tax number written into a file name ("NAME---123-45-6789-itin.pdf" — the shape of a real incident file name; the number here is made up) is replaced by x's: names are listed,
  * searched, emailed and can be posted into the company chat, and a client's own file name often carries the ITIN. Only the NAME handed to
  * the Storage screen changes — the chat keeps the original, and the file's content is untouched. Screenshot names such as
  * "Screenshot_20261108_141245.png" are NOT touched (a date + time is not a tax number). Regex LITERALS on purpose (R115).
