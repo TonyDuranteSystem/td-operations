@@ -41,13 +41,14 @@ export function ClientAppFrame({ selectionQuery, switcher }: { selectionQuery: s
 
   if (!appMode) return null
   const badge = Math.max(0, me?.menuBadge ?? 0)
-  const title = pathname === '/portal' ? null : screenTitleFor(pathname, me?.items ?? [], tab, t('nav.invoices'))
+  const title = pathname === '/portal' ? null : screenTitleFor(pathname, me?.items ?? [], tab, { invoices: t('nav.invoices'), billing: t('nav.tdBilling'), chat: t('nav.chat') })
   const label = badge > 0 ? t('app.menuNeedsYou').replace('{n}', String(badge)) : t('app.menu')
 
   return (
     <div
       data-testid="client-app-frame"
-      className="flex h-[52px] shrink-0 items-center justify-between gap-3 px-4"
+      // Stays at the top of the scrolling page (the Menu is the way to every entry that is not in the bar, so it must never scroll away).
+      className="sticky top-0 z-30 flex h-[52px] shrink-0 items-center justify-between gap-3 bg-slate-50/95 px-4 backdrop-blur"
     >
       <div className="min-w-0 flex-1">
         {pathname === '/portal' ? switcher : title ? <span className="block truncate text-[17px] font-semibold text-zinc-900">{title}</span> : null}

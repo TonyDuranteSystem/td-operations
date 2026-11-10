@@ -46,13 +46,15 @@ export async function createStripeCheckoutSession(params: {
   offerToken?: string
   leadId?: string
   invoiceNumber?: string
+  /** Where the card page sends the client when done / cancelled. Fixed addresses chosen by our own code (never from a request); the usual offer pages when absent. */
+  returnUrls?: { success: string; cancel: string }
 }): Promise<StripeCheckoutResult> {
   const stripe = getStripe()
   if (!stripe) {
     return { success: false, error: "STRIPE_SECRET_KEY not set" }
   }
 
-  const { clientName, amount, currency, contractType, serviceName, clientEmail, offerToken, leadId, invoiceNumber } = params
+  const { clientName, amount, currency, contractType, serviceName, clientEmail, offerToken, leadId, invoiceNumber, returnUrls } = params
 
   const productName = serviceName
     || (contractType === "formation" ? "LLC Formation"
@@ -111,8 +113,8 @@ export async function createStripeCheckoutSession(params: {
           source: "td-operations",
         },
       },
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"}/offer/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"}/offer/payment-cancelled${offerToken ? `?token=${encodeURIComponent(offerToken)}` : ""}`,
+      success_url: returnUrls?.success ?? `${process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"}/offer/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: returnUrls?.cancel ?? `${process.env.NEXT_PUBLIC_APP_URL || "https://app.tonydurante.us"}/offer/payment-cancelled${offerToken ? `?token=${encodeURIComponent(offerToken)}` : ""}`,
     })
 
     console.warn(`[stripe-checkout] Created session ${session.id} for ${clientName}: ${currency.toUpperCase()} ${amount}`)

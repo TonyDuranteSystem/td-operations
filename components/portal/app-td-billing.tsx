@@ -5,6 +5,7 @@
 // Drawn only inside the app. When Antonio's Pay switch is off (`client_app_pay_enabled`) the rows stay but nothing can be tapped to pay.
 import { useState } from 'react'
 import { format, parseISO } from 'date-fns'
+import { it as itLocale } from 'date-fns/locale'
 import { FileText } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
 import { billingRowAmount, billingRowState, type BillingExpense, type BillingRowKind } from '@/lib/portal-app/invoices'
@@ -18,11 +19,14 @@ const TAG_STYLE: Record<BillingRowKind, string> = {
   cancelled: 'bg-zinc-100 text-zinc-600',
 }
 
-// "Nov 20" in the current year, "Nov 20, 2025" otherwise (a bare day is ambiguous in an old invoice).
-function shortDate(d: string): string {
+// "Nov 20" in the current year, "Nov 20, 2025" otherwise (a bare day is ambiguous in an old invoice); "20 nov" / "20 nov 2025" in Italian.
+// `year` comes from the server so the server's and the phone's page always agree.
+function shortDate(d: string, year: number, locale: string): string {
   try {
     const date = parseISO(d)
-    return format(date, date.getFullYear() === new Date().getFullYear() ? 'MMM d' : 'MMM d, yyyy')
+    const sameYear = date.getFullYear() === year
+    if (locale === 'it') return format(date, sameYear ? 'd MMM' : 'd MMM yyyy', { locale: itLocale })
+    return format(date, sameYear ? 'MMM d' : 'MMM d, yyyy')
   } catch {
     return d
   }
@@ -36,16 +40,24 @@ export function AppTdBilling({
   rows,
   totals,
   payEnabled,
+  year,
+  justPaid = false,
 }: {
   rows: BillingExpense[]
   totals: { pending: string; paid: string; total: string }
   payEnabled: boolean
+  /** The current year, from the server (so a date's year is shown or left out the same way on the server and on the phone). */
+  year: number
+  /** The client just came back from the card page after paying: a thank-you line (the payment can take a moment to be booked). */
+  justPaid?: boolean
 }) {
-  const { t } = useLocale()
+  const { t, locale } = useLocale()
+  // A company or "Personal" tag on each invoice, only when the list mixes more than one (a client with a personal invoice next to a company's).
+  const showScope = new Set(rows.map(r => r.scope_label).filter(Boolean)).size > 1
   const [paying, setPaying] = useState<BillingExpense | null>(null)
 
   const tagText = (kind: BillingRowKind, date: string | null): string => {
-    const d = date ? shortDate(date) : null
+    const d = date ? shortDate(date, year, locale) : null
     switch (kind) {
       case 'due': return d ? t('app.billing.due').replace('{date}', d) : t('app.billing.dueNoDate')
       case 'overdue': return d ? t('app.billing.overdue').replace('{date}', d) : t('app.billing.overdueNoDate')
@@ -58,6 +70,10 @@ export function AppTdBilling({
   return (
     <div className="space-y-4" data-testid="app-td-billing">
       <p className="px-1 text-sm leading-snug text-zinc-600">{t('app.billing.subtitle')}</p>
+
+      {justPaid && (
+        <p role="status" data-testid="app-billing-paid-notice" className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900">{t('app.billing.paidNotice')}</p>
+      )}
 
       <section aria-label={t('app.billing.total')} className="flex gap-2.5 rounded-[18px] border border-zinc-200 bg-white p-4" data-testid="app-billing-totals">
         {([
@@ -93,6 +109,9 @@ export function AppTdBilling({
                 <span className="min-w-0 flex-1">
                   <span className="block whitespace-nowrap text-base font-semibold leading-tight text-zinc-900">{number || '—'}</span>
                   <span className="mt-0.5 block truncate text-[13px] text-zinc-600">{row.description || row.vendor_name}</span>
+                  {showScope && row.scope_label && (
+                    <span className="mt-1 inline-block max-w-full truncate rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[11px] text-zinc-600">{row.scope_label}</span>
+                  )}
                 </span>
                 <span className="text-right">
                   <span className={`block text-base font-bold ${state.kind === 'credit' ? 'text-emerald-700' : 'text-zinc-900'}`}>

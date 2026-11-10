@@ -88,7 +88,8 @@ export function assembleAppMe(input: AppMeInput): AppMe {
     items.push({
       key: def.key,
       path: resolveNavHref(def, selection),
-      label: input.t(navLabelKey(def, { invoicesHubOn })),
+      // The approved bar and menu say plainly "Invoices" (the website's "Customers & Invoices" swap is for its own sidebar).
+      label: input.t(def.key === 'nav.invoices' ? 'nav.invoices' : navLabelKey(def, { invoicesHubOn })),
       badge: Math.max(0, badgeFor(def.key, counts)),
     })
   }

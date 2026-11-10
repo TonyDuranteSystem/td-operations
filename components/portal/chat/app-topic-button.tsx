@@ -55,7 +55,7 @@ export function AppTopicButton({ activeTopic, topicOrder, unreadByTopic, onChoos
           </span>
         )}
       </button>
-      <BottomSheet open={open} onClose={close}>
+      <BottomSheet open={open} onClose={close} title={t('app.topics')} closeLabel={t('app.close')}>
         <div className="flex items-center justify-between px-5 pb-2 pt-3">
           <p className="text-lg font-bold text-zinc-900">{t('app.topics')}</p>
           <button type="button" onClick={close} className="h-11 px-2 text-base font-semibold text-blue-600">{t('app.close')}</button>

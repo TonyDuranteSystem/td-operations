@@ -124,6 +124,32 @@ describe('POST create-invoice-checkout — charges what is still owed', () => {
   })
 })
 
+describe('POST create-invoice-checkout — where the card page sends the client back to', () => {
+  it('the client app asks for its TD Billing screen: fixed addresses, handed to Stripe', async () => {
+    const res = await post({ payment_id: PAYMENT_ID, return_to: 'client_app' })
+    expect(res.status).toBe(200)
+    expect(stripeCalls[0].returnUrls).toMatchObject({
+      success: expect.stringMatching(/\/portal\/invoices\?tab=billing&paid=1$/),
+      cancel: expect.stringMatching(/\/portal\/invoices\?tab=billing$/),
+    })
+  })
+
+  it('without the app\'s word, or with anything else (never an address), the usual pages are kept', async () => {
+    for (const body of [{ payment_id: PAYMENT_ID }, { payment_id: PAYMENT_ID, return_to: 'https://evil.example/x' }, { payment_id: PAYMENT_ID, return_to: { success: 'https://evil.example' } }]) {
+      stripeCalls.length = 0
+      const res = await post(body)
+      expect(res.status).toBe(200)
+      expect(stripeCalls[0].returnUrls).toBeUndefined()
+    }
+  })
+
+  it('the amount charged is the same with or without the app\'s word', async () => {
+    await post({ payment_id: PAYMENT_ID })
+    await post({ payment_id: PAYMENT_ID, return_to: 'client_app' })
+    expect(stripeCalls[1].amount).toBe(stripeCalls[0].amount)
+  })
+})
+
 describe('the invoice lookup', () => {
   it('reads every column the price depends on (a dropped column would silently change the price)', async () => {
     await get(`?payment_id=${PAYMENT_ID}`)

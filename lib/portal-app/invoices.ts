@@ -14,6 +14,16 @@ export const APP_BILLING_TAB = 'billing'
 
 export type AppInvoicesScreen = 'areas' | 'billing' | 'tab'
 
+/** The Invoices list address, keeping the company a person is managing (`?accountId=<id>`, the website's own address word). */
+export function invoicesRootHref(managedAccountId?: string | null): string {
+  return managedAccountId ? `/portal/invoices?accountId=${encodeURIComponent(managedAccountId)}` : '/portal/invoices'
+}
+
+/** `&accountId=<id>` for a person managing a client's company (the website's own address word), so going between the list and an area keeps the company. */
+export function accountQuery(managedAccountId?: string | null): string {
+  return managedAccountId ? `&accountId=${encodeURIComponent(managedAccountId)}` : ''
+}
+
 /**
  * Which Invoices screen the app shows. No tab in the address = the list; `billing` = TD Billing; any other tab = that area exactly as the
  * website draws it. The link in the "payment received" email (`view=paid`) always means the Expenses area, as on the website.
@@ -40,11 +50,12 @@ export function appInvoiceAreas(
   tabs: ReadonlyArray<{ id: InvoiceTabId; labelKey: string }>,
   counts: { customers: number; sales: number; vendors: number; expenses: number },
   setupMissing: number,
+  managedAccountId?: string | null,
 ): AppArea[] {
   return tabs.map(tab => ({
     id: tab.id,
     labelKey: tab.labelKey,
-    href: `/portal/invoices?tab=${tab.id}`,
+    href: `/portal/invoices?tab=${tab.id}${accountQuery(managedAccountId)}`,
     count: tab.id === 'customers' ? counts.customers
       : tab.id === 'sales' ? counts.sales
       : tab.id === 'vendors' ? counts.vendors
@@ -72,6 +83,10 @@ export function checklistStepTarget(rule: ChecklistRule | undefined, visible: Re
 
 export interface BillingExpense {
   id: string
+  /** "Personal" or the company's name; shown on a row only when the list mixes more than one. */
+  scope_label?: string | null
+  /** Money already received on it (a part payment). */
+  amount_paid?: number | null
   invoice_number: string | null
   internal_ref: string | null
   vendor_name: string
@@ -112,10 +127,47 @@ export function billingRowState(e: Pick<BillingExpense, 'status' | 'total' | 'du
 }
 
 /**
- * The amount written on a row. An open invoice shows what is still to pay (the balance left on a part-paid one, else the whole total); a paid, cancelled or credit row shows the invoice's own total, so a paid invoice does not read $0.00.
+ * The amount written on a row. An open invoice shows what is still to pay: the balance on file, or, when the balance is missing/zero but
+ * money was already received, the invoice total minus that money (what the Pay pop-up asks the card for); else the whole total. A paid,
+ * cancelled or credit row shows the invoice's own total, so a paid invoice does not read $0.00. A zero balance on an open invoice with
+ * nothing received is a bookkeeping gap, not "nothing to pay": it shows the total rather than $0.00 next to a Pay button.
  */
-export function billingRowAmount(e: Pick<BillingExpense, 'total' | 'amount_due' | 'status'>): number {
+export function billingRowAmount(e: Pick<BillingExpense, 'total' | 'amount_due' | 'status'> & { amount_paid?: number | null }): number {
   const open = e.status === 'Pending' || e.status === 'Overdue'
-  // A zero balance on an open invoice is a bookkeeping gap, not "nothing to pay": show the invoice total rather than $0.00 next to a Pay button.
-  return open && Number(e.amount_due) > 0 ? Number(e.amount_due) : Number(e.total)
+  const total = Number(e.total)
+  if (!open) return total
+  if (Number(e.amount_due) > 0) return Number(e.amount_due)
+  const paid = Number(e.amount_paid)
+  if (paid > 0 && total > paid) return Math.round((total - paid) * 100) / 100
+  return total
+}
+
+export type MoneyMap = Record<string, number>
+
+/**
+ * The three boxes at the top of TD Billing, per currency (dollars and euros are never added together).
+ *   Total   = every invoice that is not cancelled (a credit note counts with its negative total).
+ *   Paid    = the paid invoices' totals, plus what was already received on an invoice that is only part paid.
+ *   Pending = what is still to pay on the open invoices (their balance, as written on their rows), and, like the website's Expenses tab,
+ *             the total of any other status that is neither paid nor cancelled.
+ * So Paid + Pending adds up to Total for the usual cases, and a part-paid invoice no longer counts its whole total as pending.
+ */
+export function billingTotals(rows: ReadonlyArray<Pick<BillingExpense, 'status' | 'currency' | 'total' | 'amount_due' | 'amount_paid'>>): { total: MoneyMap; paid: MoneyMap; pending: MoneyMap } {
+  const total: MoneyMap = {}
+  const paid: MoneyMap = {}
+  const pending: MoneyMap = {}
+  const put = (map: MoneyMap, currency: string, n: number) => { if (n) map[currency] = Math.round(((map[currency] ?? 0) + n) * 100) / 100 }
+  for (const r of rows) {
+    if (r.status === 'Cancelled') continue
+    const c = r.currency === 'EUR' ? 'EUR' : 'USD'
+    const t = Number(r.total) || 0
+    put(total, c, t)
+    if (r.status === 'Paid') put(paid, c, t)
+    else if (r.status === 'Pending' || r.status === 'Overdue') {
+      put(pending, c, billingRowAmount(r))
+      const received = Number(r.amount_paid)
+      if (received > 0) put(paid, c, received)
+    } else put(pending, c, t)
+  }
+  return { total, paid, pending }
 }
