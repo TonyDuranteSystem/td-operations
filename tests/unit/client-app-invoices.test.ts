@@ -1,14 +1,23 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
+
+// The pieces below render without a running Next router: the router hooks are replaced by plain stand-ins.
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: () => {} }),
+  usePathname: () => '/portal/invoices',
+  useSearchParams: () => new URLSearchParams('tab=billing'),
+}))
 import { renderToStaticMarkup } from 'react-dom/server'
 import { join } from 'node:path'
 import {
   APP_BILLING_TAB,
   appInvoiceAreas,
   appInvoicesScreen,
+  invoicesRootHref,
   billingRowAmount,
   billingRowState,
+  billingTotals,
   checklistStepTarget,
   requiredFirst,
   tdInvoicesOf,
@@ -18,6 +27,12 @@ import { INVOICE_TABS, type InvoiceTabId } from '@/lib/portal/invoice-hub'
 import { TITLE_IN_ROW_EXACT, screenTitleFor } from '@/lib/portal-app/frame'
 import { AppTdBilling } from '@/components/portal/app-td-billing'
 import { AppTopicButton } from '@/components/portal/chat/app-topic-button'
+import { TdPayModal } from '@/components/portal/td-pay-modal'
+import { ClientAppFrame } from '@/components/portal/client-app-frame'
+import { AppModeContext } from '@/lib/app-mode/app-mode-context'
+import { LocaleContext } from '@/lib/portal/use-locale'
+import { checkoutReturnUrls, CLIENT_APP_RETURN_TO } from '@/lib/portal-app/checkout-return'
+import { PORTAL_BASE_URL } from '@/lib/config'
 
 // Client iPhone app, Step 3c (dev job 056a70d0): Invoices list, tappable set-up steps, TD Billing, Pay.
 
@@ -86,6 +101,22 @@ describe('requiredFirst', () => {
     requiredFirst(steps)
     expect(steps.map(s => s.id)).toEqual(['a', 'b'])
     expect(requiredFirst([])).toEqual([])
+  })
+})
+
+describe('keeping the managed company in the links', () => {
+  const hub = INVOICE_TABS.map(t => ({ id: t.id, labelKey: t.labelKey }))
+
+  it('adds the company a partner is managing to every area link, and nothing otherwise', () => {
+    expect(appInvoiceAreas(hub, { customers: 0, sales: 0, vendors: 0, expenses: 0 }, 0, 'acct-1').every(a => a.href.endsWith('&accountId=acct-1'))).toBe(true)
+    expect(appInvoiceAreas(hub, { customers: 0, sales: 0, vendors: 0, expenses: 0 }, 0).every(a => !a.href.includes('accountId'))).toBe(true)
+    expect(appInvoiceAreas(hub, { customers: 0, sales: 0, vendors: 0, expenses: 0 }, 0, null).every(a => !a.href.includes('accountId'))).toBe(true)
+  })
+
+  it('the way back to the list keeps it too', () => {
+    expect(invoicesRootHref('acct-1')).toBe('/portal/invoices?accountId=acct-1')
+    expect(invoicesRootHref()).toBe('/portal/invoices')
+    expect(invoicesRootHref('a&b')).toBe('/portal/invoices?accountId=a%26b')
   })
 })
 
@@ -169,7 +200,47 @@ describe('billingRowState', () => {
   })
 })
 
+describe('billingTotals', () => {
+  const row = (over: Partial<BillingExpense> = {}) => ({ status: 'Pending', currency: 'USD', total: 100, amount_due: null, amount_paid: null, ...over })
+
+  it('splits invoices into Pending (balance still to pay), Paid and Total, per currency', () => {
+    const t = billingTotals([
+      row({ status: 'Pending', total: 100 }),
+      row({ status: 'Paid', total: 250 }),
+      row({ status: 'Paid', total: 2000, currency: 'EUR' }),
+      row({ status: 'Overdue', total: 40, currency: 'EUR' }),
+    ])
+    expect(t.pending).toEqual({ USD: 100, EUR: 40 })
+    expect(t.paid).toEqual({ USD: 250, EUR: 2000 })
+    expect(t.total).toEqual({ USD: 350, EUR: 2040 })
+  })
+
+  it('a part-paid invoice counts its balance as pending and what was received as paid, so Paid + Pending = Total', () => {
+    const t = billingTotals([row({ total: 1000, amount_due: 400, amount_paid: 600 })])
+    expect(t.pending).toEqual({ USD: 400 })
+    expect(t.paid).toEqual({ USD: 600 })
+    expect(t.total).toEqual({ USD: 1000 })
+  })
+
+  it('a cancelled invoice counts nowhere; a status that is neither paid nor cancelled counts as pending, like the website', () => {
+    const t = billingTotals([row({ status: 'Cancelled', total: 75 }), row({ status: 'Waived', total: 30 })])
+    expect(t.total).toEqual({ USD: 30 })
+    expect(t.pending).toEqual({ USD: 30 })
+    expect(t.paid).toEqual({})
+  })
+
+  it('no invoices = empty boxes', () => {
+    expect(billingTotals([])).toEqual({ total: {}, paid: {}, pending: {} })
+  })
+})
+
 describe('billingRowAmount', () => {
+  it('an open invoice with money already received but no balance on file shows the total minus that money (what the card is asked for)', () => {
+    expect(billingRowAmount({ status: 'Pending', total: 1000, amount_due: 0, amount_paid: 400 })).toBe(600)
+    expect(billingRowAmount({ status: 'Overdue', total: 1000, amount_due: null, amount_paid: 400 })).toBe(600)
+    expect(billingRowAmount({ status: 'Pending', total: 1000, amount_due: 250, amount_paid: 400 })).toBe(250)
+  })
+
   it('an open invoice shows what is still to pay: the balance left on a part-paid one, else the whole total', () => {
     expect(billingRowAmount({ status: 'Pending', total: 100, amount_due: 40 })).toBe(40)
     expect(billingRowAmount({ status: 'Overdue', total: 100, amount_due: null })).toBe(100)
@@ -204,10 +275,10 @@ describe('the top row names the Invoices screens', () => {
 
   it('names the Invoices screen plainly even when the menu entry says Customers & Invoices', () => {
     const hubItems = [{ key: 'nav.invoices', path: '/portal/invoices', label: 'Customers & Invoices' }, { key: 'nav.tdBilling', path: '/portal/billing', label: 'TD Billing' }]
-    expect(screenTitleFor('/portal/invoices', hubItems, null, 'Invoices')).toBe('Invoices')
-    expect(screenTitleFor('/portal/invoices', hubItems, 'customers', 'Invoices')).toBe('Invoices')
-    expect(screenTitleFor('/portal/invoices', hubItems, 'billing', 'Invoices')).toBe('TD Billing')
-    expect(screenTitleFor('/portal/invoices/new', hubItems, null, 'Invoices')).toBeNull()
+    expect(screenTitleFor('/portal/invoices', hubItems, null, { invoices: 'Invoices' })).toBe('Invoices')
+    expect(screenTitleFor('/portal/invoices', hubItems, 'customers', { invoices: 'Invoices' })).toBe('Invoices')
+    expect(screenTitleFor('/portal/invoices', hubItems, 'billing', { invoices: 'Invoices' })).toBe('TD Billing')
+    expect(screenTitleFor('/portal/invoices/new', hubItems, null, { invoices: 'Invoices' })).toBeNull()
   })
 
   it('names nothing on the pages under Invoices, which draw their own heading', () => {
@@ -215,9 +286,20 @@ describe('the top row names the Invoices screens', () => {
     expect(screenTitleFor('/portal/invoices/abc-123', items, 'billing')).toBeNull()
   })
 
-  it('falls back to Invoices when the person has no TD Billing entry, and Chat is unchanged', () => {
-    expect(screenTitleFor('/portal/invoices', items.filter(i => i.key !== 'nav.tdBilling'), 'billing')).toBe('Invoices')
+  it('without the app\'s server answer (offline, a blip, the switch off) the screens still name themselves', () => {
+    const labels = { invoices: 'Invoices', billing: 'TD Billing', chat: 'Chat' }
+    expect(screenTitleFor('/portal/chat', [], null, labels)).toBe('Chat')
+    expect(screenTitleFor('/portal/chat/open', [], null, labels)).toBe('Chat')
+    expect(screenTitleFor('/portal/invoices', [], null, labels)).toBe('Invoices')
+    expect(screenTitleFor('/portal/invoices', [], 'billing', labels)).toBe('TD Billing')
+    // with no answer and no words given there is simply no name (never a crash)
+    expect(screenTitleFor('/portal/chat', [])).toBeNull()
+    expect(screenTitleFor('/portal/invoices', [], 'billing')).toBeNull()
+  })
+
+  it('Chat is unchanged, and a screen that draws its own heading still gets no name', () => {
     expect(screenTitleFor('/portal/chat', items)).toBe('Chat')
+    expect(screenTitleFor('/portal/documents', items, null, { invoices: 'Invoices', billing: 'TD Billing', chat: 'Chat' })).toBeNull()
   })
 })
 
@@ -273,6 +355,108 @@ describe('TD Billing screen, rendered', () => {
   })
 })
 
+describe('TD Billing screen, more rendering', () => {
+  const html = (rows: BillingExpense[], extra: Record<string, unknown> = {}, locale = 'en') =>
+    renderToStaticMarkup(createElement(LocaleContext.Provider, { value: { locale: locale as 'en', translations: {} } },
+      createElement(AppTdBilling, { rows, totals: { pending: '$1.00', paid: '$2.00', total: '$3.00' }, payEnabled: true, year: 2026, ...extra })))
+
+  it('tags each invoice with its company or "Personal" only when the list mixes more than one', () => {
+    const mixed = html([inv({ id: 'a', scope_label: 'Acme LLC' }), inv({ id: 'b', invoice_number: 'INV-2', scope_label: 'Personal' })])
+    expect(mixed).toContain('Acme LLC')
+    expect(mixed).toContain('Personal')
+    const single = html([inv({ id: 'a', scope_label: 'Acme LLC' }), inv({ id: 'b', invoice_number: 'INV-2', scope_label: 'Acme LLC' })])
+    expect(single).not.toContain('Acme LLC')
+  })
+
+  it('writes dates in the client\'s language and leaves the year out only for this year', () => {
+    expect(html([inv({ due_date: '2026-11-20' })])).toContain('Due Nov 20')
+    expect(html([inv({ due_date: '2025-11-20' })])).toContain('Due Nov 20, 2025')
+    expect(html([inv({ due_date: '2026-11-20' })], {}, 'it')).toContain('Scade 20 nov')
+    expect(html([inv({ due_date: '2025-11-20' })], {}, 'it')).toContain('Scade 20 nov 2025')
+  })
+
+  it('says thank you after the client comes back from the card page, and not otherwise', () => {
+    expect(html([inv()], { justPaid: true })).toContain('data-testid="app-billing-paid-notice"')
+    expect(html([inv()])).not.toContain('app-billing-paid-notice')
+  })
+})
+
+describe('Pay pop-up in the app, rendered', () => {
+  const modal = (inApp: boolean) => renderToStaticMarkup(
+    createElement(AppModeContext.Provider, { value: inApp },
+      createElement(TdPayModal, { paymentId: 'p1', invoiceNumber: 'INV-1', amount: 10, currency: 'USD', onClose: () => {} })))
+
+  it('scrolls inside the screen in the app (it is taller than a small phone with the bank details open), and is unchanged on the website', () => {
+    expect(modal(true)).toContain('max-h-[calc(100dvh-2rem)]')
+    expect(modal(true)).toContain('overflow-y-auto')
+    expect(modal(false)).not.toContain('max-h-[calc(100dvh-2rem)]')
+  })
+
+  it('cannot start a card payment before the price is known', () => {
+    // first paint: the price has not come back from the server yet, so the card button is disabled (and stays so if the price is refused)
+    expect(modal(true)).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Pay Now/)
+    expect(modal(false)).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Pay Now/)
+  })
+})
+
+describe('the frame row, rendered', () => {
+  it('stays at the top of the scrolling page so the Menu is always reachable', () => {
+    const h = renderToStaticMarkup(createElement(AppModeContext.Provider, { value: true }, createElement(ClientAppFrame, { selectionQuery: '' })))
+    expect(h).toContain('data-testid="client-app-frame"')
+    expect(h).toMatch(/class="[^"]*sticky top-0[^"]*"/)
+    expect(h).toContain('data-testid="client-app-menu"')
+  })
+
+  it('draws nothing outside the app', () => {
+    expect(renderToStaticMarkup(createElement(ClientAppFrame, { selectionQuery: '' }))).toBe('')
+  })
+})
+
+describe('where the card page sends a client who paid in the app', () => {
+  it('only the app\'s own request word gives the TD Billing addresses', () => {
+    expect(CLIENT_APP_RETURN_TO).toBe('client_app')
+    expect(checkoutReturnUrls('client_app')).toEqual({
+      success: `${PORTAL_BASE_URL}/portal/invoices?tab=billing&paid=1`,
+      cancel: `${PORTAL_BASE_URL}/portal/invoices?tab=billing`,
+    })
+  })
+
+  it('nothing else, and never an address from the request, changes where the client goes', () => {
+    for (const v of [undefined, null, '', 'CLIENT_APP', 'https://evil.example/x', { success: 'https://evil.example' }, ['client_app'], 1, true]) {
+      expect(checkoutReturnUrls(v), JSON.stringify(v)).toBeUndefined()
+    }
+  })
+
+  it('the checkout helper uses them when given and keeps the usual offer pages otherwise', () => {
+    const helper = src('lib/stripe-checkout.ts')
+    expect(helper).toContain('returnUrls?.success ??')
+    expect(helper).toContain('returnUrls?.cancel ??')
+    expect(helper).toContain('/offer/payment-success?session_id={CHECKOUT_SESSION_ID}')
+    expect(helper).toContain('/offer/payment-cancelled')
+  })
+})
+
+describe('the offer page under the app\'s Pay switch', () => {
+  const offer = src('app/portal/offer/page.tsx')
+
+  it('is replaced by a plain note only inside the app with the switch off, before anything about the offer is read', () => {
+    expect(offer).toContain('getClientAppMode() && !(await isClientAppPayEnabled())')
+    expect(offer.indexOf('getClientAppMode() && !(await isClientAppPayEnabled())')).toBeLessThan(offer.indexOf('const contactId = getClientContactId(user)'))
+    expect(offer).toContain('data-testid="app-offer-unavailable"')
+  })
+
+  it('the website still draws the offer exactly as before', () => {
+    expect(offer).toContain('<PortalOfferClient')
+  })
+})
+
+describe('the Topic sheet speaks the client\'s language', () => {
+  it('names itself and its Close label from the portal words, not a fixed English default', () => {
+    expect(src('components/portal/chat/app-topic-button.tsx')).toContain("title={t('app.topics')} closeLabel={t('app.close')}")
+    expect(src('components/app-mode/bottom-sheet.tsx')).toContain("aria-label={closeLabel ?? 'Close'}")
+  })
+})
+
 describe('Topic button, rendered', () => {
   it('writes a topic name that contains $ signs exactly as typed', () => {
     const h = renderToStaticMarkup(createElement(AppTopicButton, { activeTopic: 'Fees $& $1 $$', topicOrder: ['Fees $& $1 $$'], unreadByTopic: {}, onChoose: () => {} }))
@@ -307,7 +491,8 @@ describe('wiring (source guards)', () => {
   })
 
   it('the app\'s Pay switch also hides the autopay card on the Expenses area, and never on the website', () => {
-    expect(page).toContain('{selectedAccountId && showAutopayCard && !appPayHidden && (')
+    // ... except for a company already enrolled: they must still be able to see and turn off their autopay
+    expect(page).toContain('{selectedAccountId && showAutopayCard && (!appPayHidden || Boolean(autopay?.autopay_card_enabled)) && (')
     expect(page).toContain("const appPayHidden = appMode ? !(await isClientAppPayEnabled()) : false")
   })
 
@@ -318,7 +503,10 @@ describe('wiring (source guards)', () => {
   it('the Pay Now button unlocks when the phone brings the screen back from its page cache', () => {
     const modal = src('components/portal/td-pay-modal.tsx')
     expect(modal).toContain("window.addEventListener('pageshow', onShow)")
-    expect(modal).toContain('if (e.persisted) setStripeLoading(false)')
+    expect(modal).toContain('if (e.persisted) comeBack()')
+    expect(modal).toContain("document.addEventListener('visibilitychange', onVisible)")
+    expect(modal).toContain('setAutopayLoading(false)')
+    expect(modal).toContain('router.refresh()')
     expect(modal).not.toContain('would be refused')
   })
 
@@ -346,6 +534,6 @@ describe('wiring (source guards)', () => {
     const layout = src('app/portal/layout.tsx')
     expect((layout.match(/<Suspense fallback=\{null\}><ClientAppFrame /g) ?? []).length).toBe(2)
     expect(src('components/portal/client-app-frame.tsx')).toContain("useSearchParams()?.get('tab')")
-    expect(src('components/portal/client-app-frame.tsx')).toContain("screenTitleFor(pathname, me?.items ?? [], tab, t('nav.invoices'))")
+    expect(src('components/portal/client-app-frame.tsx')).toContain("screenTitleFor(pathname, me?.items ?? [], tab, { invoices: t('nav.invoices'), billing: t('nav.tdBilling'), chat: t('nav.chat') })")
   })
 })

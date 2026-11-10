@@ -7,7 +7,7 @@ import { createPortal } from 'react-dom'
 import { Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-export function BottomSheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title?: string; children: ReactNode }) {
+export function BottomSheet({ open, onClose, title, closeLabel, children }: { open: boolean; onClose: () => void; title?: string; closeLabel?: string; children: ReactNode }) {
   const panel = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -22,7 +22,7 @@ export function BottomSheet({ open, onClose, title, children }: { open: boolean;
   if (!open || typeof document === 'undefined') return null
   return createPortal(
     <div className="fixed inset-0 z-[100]" data-testid="bottom-sheet">
-      <button type="button" aria-label="Close" className="absolute inset-0 bg-black/35" onClick={onClose} />
+      <button type="button" aria-label={closeLabel ?? 'Close'} className="absolute inset-0 bg-black/35" onClick={onClose} />
       <div
         ref={panel}
         role="dialog"

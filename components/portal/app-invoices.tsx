@@ -96,10 +96,10 @@ export function AppInvoiceAreas({
 }
 
 /** The way back from an area (Customers, Sales...) to the list, with the area's name. */
-export function AppAreaHeader({ backLabel, title }: { backLabel: string; title: string }) {
+export function AppAreaHeader({ backLabel, backHref = '/portal/invoices', title }: { backLabel: string; backHref?: string; title: string }) {
   return (
     <div data-testid="app-area-header" className="-mt-1 flex items-center gap-2">
-      <Link href="/portal/invoices" aria-label={backLabel} className="-ml-2 flex h-11 items-center gap-0.5 pr-2 text-[15px] font-medium text-blue-700">
+      <Link href={backHref} aria-label={backLabel} className="-ml-2 flex h-11 items-center gap-0.5 pr-2 text-[15px] font-medium text-blue-700">
         <ChevronLeft className="h-5 w-5" aria-hidden="true" />
         {backLabel}
       </Link>

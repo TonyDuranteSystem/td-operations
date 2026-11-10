@@ -39,14 +39,14 @@ import { isCardAutopayEnabled } from '@/lib/payments/card-autopay-config'
 import { latestDeliveryProblems } from '@/lib/portal/invoice-delivery'
 import { getClientAppMode } from '@/lib/app-mode/server'
 import { isClientAppPayEnabled } from '@/lib/portal-app/enabled'
-import { appInvoicesScreen, appInvoiceAreas, checklistStepTarget, requiredFirst, tdInvoicesOf } from '@/lib/portal-app/invoices'
+import { appInvoicesScreen, appInvoiceAreas, billingTotals, checklistStepTarget, invoicesRootHref, requiredFirst, tdInvoicesOf } from '@/lib/portal-app/invoices'
 import { AppInvoiceAreas, AppAreaHeader } from '@/components/portal/app-invoices'
 import { AppTdBilling } from '@/components/portal/app-td-billing'
 
 export default async function PortalInvoicesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; view?: string; accountId?: string }>
+  searchParams: Promise<{ tab?: string; view?: string; accountId?: string; paid?: string }>
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -272,7 +272,7 @@ export default async function PortalInvoicesPage({
   const tr = (key: string) => t(key, locale, translations)
   const visibleTabs = visibleInvoiceTabs(tabCtx)
   const appAreas = appMode
-    ? appInvoiceAreas(visibleTabs, { customers: setupFacts?.customerCount ?? 0, sales: salesStats.total, vendors: vendors.length, expenses: expenseStats.total }, setupMissing)
+    ? appInvoiceAreas(visibleTabs, { customers: setupFacts?.customerCount ?? 0, sales: salesStats.total, vendors: vendors.length, expenses: expenseStats.total }, setupMissing, partnerAccountId)
     : []
   const appSteps = appMode && isClientHub && guides
     ? requiredFirst(checklist).map(item => ({
@@ -295,6 +295,8 @@ export default async function PortalInvoicesPage({
         currency: e.currency,
         total: Number(e.total),
         amount_due: e.amount_due == null ? null : Number(e.amount_due),
+        amount_paid: e.amount_paid == null ? null : Number(e.amount_paid),
+        scope_label: e.scope_label ?? null,
         due_date: e.due_date,
         paid_date: e.paid_date,
         status: e.status,
@@ -302,17 +304,19 @@ export default async function PortalInvoicesPage({
         td_payment_id: e.td_payment_id,
       }))
     : []
-  const billingTotals = {
-    total: formatMoneyMap(sumExpensesByCurrency(billingRows, st => st !== 'Cancelled')),
-    paid: formatMoneyMap(sumExpensesByCurrency(billingRows, st => st === 'Paid')),
-    pending: formatMoneyMap(sumExpensesByCurrency(billingRows, st => st !== 'Paid' && st !== 'Cancelled')),
+  // The three boxes follow the same rule as the rows (lib/portal-app/invoices.ts): a part-paid invoice counts its balance as pending.
+  const billingMoney = billingTotals(billingRows)
+  const billingBoxes = {
+    total: formatMoneyMap(billingMoney.total),
+    paid: formatMoneyMap(billingMoney.paid),
+    pending: formatMoneyMap(billingMoney.pending),
   }
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
       {appMode && appScreen === 'areas' && (
         <AppInvoiceAreas
-          subtitle={showHub && companyName ? tr('app.invoicesSubtitle').replace('{company}', () => companyName) : companyName ?? tr('invoices.yourPersonalExpenses')}
+          subtitle={companyName ? (showHub ? tr('app.invoicesSubtitle').replace('{company}', () => companyName) : companyName) : selectedAccountId ? tr('app.invoicesSubtitleNoCompany') : tr('invoices.yourPersonalExpenses')}
           steps={appSteps}
           stepsLeft={setupMissing}
           areas={appAreas}
@@ -320,10 +324,10 @@ export default async function PortalInvoicesPage({
         />
       )}
       {appMode && appScreen === 'billing' && (
-        <AppTdBilling rows={billingRows} totals={billingTotals} payEnabled={!appPayHidden} />
+        <AppTdBilling rows={billingRows} totals={billingBoxes} payEnabled={!appPayHidden} year={new Date().getFullYear()} justPaid={params.paid === '1'} />
       )}
       {appMode && appScreen === 'tab' && (
-        <AppAreaHeader backLabel={tr('app.backToInvoices')} title={tr(visibleTabs.find(x => x.id === activeTab)?.labelKey ?? 'nav.invoices')} />
+        <AppAreaHeader backLabel={tr('app.backToInvoices')} backHref={invoicesRootHref(partnerAccountId)} title={tr(visibleTabs.find(x => x.id === activeTab)?.labelKey ?? 'nav.invoices')} />
       )}
       {/* Slim "New: take the tour" strip: only while the tour is still being offered to this login (never in view-as) */}
       {isClientHub && guides && !viewingAsClient && !appMode && shouldOfferTour(tourPref, guides.tour) && (
@@ -478,8 +482,8 @@ export default async function PortalInvoicesPage({
       {/* ── Expenses Tab ── */}
       {showTab && activeTab === 'expenses' && (
         <>
-          {/* The app's Pay switch also hides the autopay card (it opens a card page too); the website never sets appPayHidden. */}
-          {selectedAccountId && showAutopayCard && !appPayHidden && (
+          {/* The app's Pay switch also hides the autopay card (it opens a card page too), except for a company already enrolled: they must still see and be able to turn off their autopay. The website never sets appPayHidden. */}
+          {selectedAccountId && showAutopayCard && (!appPayHidden || Boolean(autopay?.autopay_card_enabled)) && (
             <AutopayCard
               accountId={selectedAccountId}
               enabled={autopay?.autopay_card_enabled ?? false}

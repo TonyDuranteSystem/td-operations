@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { CreditCard, Building2, Copy, Check, X, Loader2, ExternalLink, ChevronDown, Zap } from 'lucide-react'
 import { toast } from 'sonner'
+import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
@@ -83,10 +84,10 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose }: TdPayModalProps) {
   const { t } = useLocale()
   // Inside the client iPhone app the card page opens in the app's own window (a new window needs the phone shell to catch it).
-  // When the client is done the card page sends them to the "payment received" page (or the "payment cancelled" page), each with its
-  // own button back to the portal; the Back button returns here. See docs/systems/client-app.md (Step 3c). On the website it is a new
-  // tab, as before.
+  // The app asks the checkout to send the client back to its TD Billing screen when they are done or cancel (`return_to`), so they never
+  // end up on a plain page outside the app. See docs/systems/client-app.md (Step 3c). On the website it is a new tab, as before.
   const appMode = useAppMode()
+  const router = useRouter()
   // Read inside the mount-only effect below without retriggering it \u2014 t() is
   // a fresh closure every render, and this fetch must only run once.
   const tRef = useRef(t)
@@ -195,14 +196,25 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
     }
   }
 
-  // Coming back from the card page, the phone can bring this screen back exactly as it was left (its page cache), with the button still
-  // spinning. Unlock it then; a normal load starts fresh anyway.
+  // Coming back from the card page (Back, or the app returning to the front after the phone handed the page to another app), the phone can
+  // bring this screen back exactly as it was left, buttons still spinning and the invoice list still saying "Pay". Unlock the buttons and
+  // ask the page for fresh data. A normal load starts fresh anyway.
   useEffect(() => {
     if (!appMode) return
-    const onShow = (e: PageTransitionEvent) => { if (e.persisted) setStripeLoading(false) }
+    const comeBack = () => {
+      setStripeLoading(false)
+      setAutopayLoading(false)
+      router.refresh()
+    }
+    const onShow = (e: PageTransitionEvent) => { if (e.persisted) comeBack() }
+    const onVisible = () => { if (document.visibilityState === 'visible') comeBack() }
     window.addEventListener('pageshow', onShow)
-    return () => window.removeEventListener('pageshow', onShow)
-  }, [appMode])
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.removeEventListener('pageshow', onShow)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [appMode, router])
 
   const handlePayByCard = async () => {
     if (stripeLoading) return
@@ -212,7 +224,7 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
       const res = await fetch('/api/workflows/create-invoice-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ payment_id: paymentId }),
+        body: JSON.stringify(appMode ? { payment_id: paymentId, return_to: 'client_app' } : { payment_id: paymentId }),
       })
       const data = await res.json()
       if (!res.ok || !data.checkoutUrl) {
@@ -238,7 +250,8 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl shadow-xl max-w-md w-full overflow-hidden"
+        // In the app the pop-up never grows taller than the screen: with the bank details open it is taller than a small phone, so it scrolls.
+        className={cn('bg-white rounded-xl shadow-xl max-w-md w-full overflow-hidden', appMode && 'max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain')}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
