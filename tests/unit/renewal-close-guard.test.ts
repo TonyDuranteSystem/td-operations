@@ -39,14 +39,15 @@ function installFrom() {
   vi.mocked(supabaseAdmin.from).mockImplementation(((table: string) => {
     const make = (result: unknown): Record<string, unknown> => {
       const chain: Record<string, unknown> = {}
+      let updating = false // a stage move is written only if it matches the step it read: the stand-in says one row matched
       const self = () => chain
       for (const m of ['select', 'eq', 'neq', 'in', 'is', 'or', 'ilike', 'order', 'limit', 'contains', 'gte', 'lte']) chain[m] = self
       chain.single = () => Promise.resolve({ data: result, error: null })
       chain.maybeSingle = () => Promise.resolve({ data: result, error: null })
-      chain.update = (row: unknown) => { writes.push({ table, op: 'update', row }); return chain }
+      chain.update = (row: unknown) => { updating = true; writes.push({ table, op: 'update', row }); return chain }
       chain.insert = (row: unknown) => { writes.push({ table, op: 'insert', row }); return chain }
       chain.then = (resolve: (v: unknown) => unknown) =>
-        Promise.resolve({ data: table === 'pipeline_stages' ? RA_STAGES : [], error: null }).then(resolve)
+        Promise.resolve({ data: table === 'pipeline_stages' ? RA_STAGES : updating && table === 'service_deliveries' ? [{ id: 'sd-1' }] : [], error: null }).then(resolve)
       return chain
     }
     if (table === 'service_deliveries') return make(delivery)

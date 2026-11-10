@@ -54,7 +54,9 @@ import {
   buildEinClosurePackage,
   loadEinClosureFacts,
   isEinNoticeCandidate,
+  einNoticeMatch,
   splitAddress,
+  addressToLines,
   signerFromAnswers,
   einPackageName,
   einPackageCallerKey,
@@ -73,7 +75,7 @@ const docs = [
   { id: 'd-articles', file_name: 'Articles_of_Organization__Italyflow_LLC.pdf', document_type_name: 'Articles of Organization', drive_file_id: 'store:33333333-3333-4333-8333-333333333333', created_at: '2026-11-10T15:22:02Z' },
 ]
 
-function seed(over: { job?: Record<string, unknown>; submitted?: Record<string, unknown> | null; docRows?: typeof docs; account?: Record<string, unknown> | null } = {}) {
+function seed(over: { job?: Record<string, unknown>; submitted?: Record<string, unknown> | null; docRows?: typeof docs; account?: Record<string, unknown> | null; trashed?: string[] } = {}) {
   for (const k of Object.keys(tables)) delete tables[k]
   asked.length = 0
   tables.service_deliveries = [jobRow(over.job)]
@@ -81,6 +83,11 @@ function seed(over: { job?: Record<string, unknown>; submitted?: Record<string, 
   tables.documents = over.docRows ?? docs
   tables.accounts = over.account ? [over.account] : []
   tables.contacts = [{ full_name: 'Christian Ranieri' }]
+  // every stored file the documents point at is LIVE unless the test says it was trashed
+  tables.store_files = (tables.documents as Array<{ drive_file_id?: string | null }>)
+    .map((d) => (typeof d.drive_file_id === 'string' && d.drive_file_id.startsWith('store:') ? d.drive_file_id.slice(6) : null))
+    .filter((id): id is string => !!id)
+    .map((id) => ({ id, state: (over.trashed ?? []).includes(id) ? 'trashed' : 'live' }))
 }
 
 beforeEach(async () => {
@@ -105,11 +112,31 @@ describe('pure helpers', () => {
     expect(isEinNoticeCandidate('Closure_Data_Italyflow_LLC.pdf', 'Other document')).toBe(false)
   })
 
-  it('splits a typed address into at most 4 short lines', () => {
+  it('matches the words as whole words: a typed EIN letter is never lost to its file name, a name-only match is a guess', () => {
+    expect(einNoticeMatch('EIN_enclosure_scan.pdf', 'EIN Letter (IRS)')).toBe('type') // typed: the name does not matter
+    expect(einNoticeMatch('disclosure CP 575.pdf', null)).toBe('name') // "disclosure" is not "closure"
+    expect(einNoticeMatch('ein_letter_disclosure.pdf', null)).toBe('name')
+    expect(einNoticeMatch('EIN closure request.pdf', null)).toBeNull() // a standalone "closure"
+    expect(einNoticeMatch('scan CP575B.pdf', null)).toBe('name')
+    expect(einNoticeMatch('ACP5750.pdf', null)).toBeNull() // no word boundary: not an IRS form number
+    expect(einNoticeMatch('notes 147C extra.pdf', null)).toBe('name')
+    expect(einNoticeMatch('x1147Cx.pdf', null)).toBeNull()
+  })
+
+  it('keeps every line a person types — nothing is cut here (a letter that cannot hold it says so)', () => {
     expect(splitAddress('  1209 Mountain Road PL NE Ste R \r\n\nAlbuquerque, NM 87110  ')).toEqual(['1209 Mountain Road PL NE Ste R', 'Albuquerque, NM 87110'])
-    expect(splitAddress('a\nb\nc\nd\ne')).toHaveLength(4)
-    expect(splitAddress('x'.repeat(200))[0]).toHaveLength(80)
+    expect(splitAddress('a\nb\nc\nd\ne\nf\ng')).toHaveLength(7)
+    expect(splitAddress('x'.repeat(200))[0]).toHaveLength(200)
+    expect(splitAddress('a  b \t c')).toEqual(['a b c'])
     expect(splitAddress('  \n ')).toEqual([])
+  })
+
+  it('turns the address on file into letter lines without dropping a piece', () => {
+    expect(addressToLines('1209 Mountain Road PL NE Ste R, Albuquerque, NM 87110')).toEqual(['1209 Mountain Road PL NE Ste R', 'Albuquerque, NM 87110'])
+    expect(addressToLines('c/o Agent Inc., 1209 Mountain Road, Ste R, Albuquerque, NM 87110-1234')).toEqual(['c/o Agent Inc., 1209 Mountain Road, Ste R', 'Albuquerque, NM 87110-1234'])
+    expect(addressToLines('Via Roma 1\n00100 Roma\nItaly\nExtra\nFive')).toHaveLength(5) // a multi-line address is kept as typed
+    expect(addressToLines('Strada 1, Roma, Italia')).toEqual(['Strada 1', 'Roma', 'Italia']) // not a US address: pieces kept
+    expect(addressToLines('')).toEqual([])
   })
 
   it('takes the signer from the owner fields, then the first/last name', () => {
@@ -181,6 +208,77 @@ describe('loadEinClosureFacts', () => {
     const r = await loadEinClosureFacts(JOB)
     expect(r.ok && r.facts.existingLetter?.documentId).toBe('d-letter')
     expect(r.ok && r.facts.notices.map((n) => n.documentId)).toEqual(['d-ein']) // the letter itself is never offered as the "copy"
+  })
+
+  it('a trashed stored file is not offered as attachable', async () => {
+    seed({ trashed: ['22222222-2222-4222-8222-222222222222'] })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.notices.map((n) => [n.documentId, n.storeFileId])).toEqual([['d-ein', null]])
+    expect(r.ok && r.facts.warnings.join(' ')).toMatch(/not in the new storage \(or was removed\)/)
+  })
+
+  it('a name-only guess is shown but never preselected on its own; a typed EIN notice is', async () => {
+    seed({ docRows: [{ ...docs[1], file_name: 'CP 575 copy.pdf', document_type_name: null }] })
+    const guess = await loadEinClosureFacts(JOB)
+    expect(guess.ok && guess.facts.notices.map((n) => [n.documentId, n.recommended])).toEqual([['d-ein', false]])
+    seed({ docRows: [{ ...docs[1], file_name: 'scan.pdf', document_type_name: 'EIN Letter (IRS)' }] })
+    const typed = await loadEinClosureFacts(JOB)
+    expect(typed.ok && typed.facts.notices.map((n) => [n.documentId, n.recommended])).toEqual([['d-ein', true]])
+  })
+
+  it('when the client wrote another company or EIN than the job’s, no EIN copy is preselected and staff are told', async () => {
+    seed({ job: { account_id: 'acc-1' }, account: { company_name: 'Italyflow LLC', ein_number: '41-9999999', state_of_formation: 'NM', physical_address: null } })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.notices.every((n) => !n.recommended)).toBe(true)
+    expect(r.ok && r.facts.warnings.join(' ')).toMatch(/EIN is 41-2330246, but our record says 41-9999999/)
+    expect(r.ok && r.facts.warnings.join(' ')).toMatch(/No EIN copy is preselected/)
+  })
+
+  it('the same company written another way is not a mismatch (case, punctuation, suffix)', async () => {
+    seed({ job: { account_id: 'acc-1' }, account: { company_name: 'ITALYFLOW, L.L.C.', ein_number: '412330246', state_of_formation: 'NM', physical_address: null } })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.warnings.join(' ')).not.toMatch(/The client wrote/)
+    expect(r.ok && r.facts.notices.find((n) => n.recommended)?.documentId).toBe('d-ein')
+  })
+
+  it('an empty text in our record does not hide what the client wrote', async () => {
+    seed({ job: { account_id: 'acc-1' }, account: { company_name: '  ', ein_number: '', state_of_formation: '', physical_address: null } })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && [r.facts.companyName, r.facts.ein, r.facts.state]).toEqual(['Italyflow LLC', '41-2330246', 'New Mexico'])
+  })
+
+  it('an address on file in one line becomes street + "City, ST ZIP" (nothing dropped)', async () => {
+    seed({ job: { account_id: 'acc-1' }, account: { company_name: 'Italyflow LLC', ein_number: '41-2330246', state_of_formation: 'NM', physical_address: '1209 Mountain Road PL NE Ste R, Albuquerque, NM 87110' } })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.addressLines).toEqual(['1209 Mountain Road PL NE Ste R', 'Albuquerque, NM 87110'])
+  })
+
+  it('says so when the wizard answers cannot be told apart (another closure is open) instead of showing blanks silently', async () => {
+    seed({ submitted: null })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.warnings.join(' ')).toMatch(/could not tell which closure wizard answers belong to this job/)
+  })
+
+  it('"not sure" about the tax returns gets its own sentence', async () => {
+    seed({ submitted: { ...answers, tax_returns_filed: 'Not sure' } })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.warnings.join(' ')).toMatch(/not sure whether all tax returns were filed/)
+    expect(r.ok && r.facts.warnings.join(' ')).not.toMatch(/NOT all filed/)
+  })
+
+  it('the box has a fingerprint that changes when what it shows changes', async () => {
+    seed()
+    const a = await loadEinClosureFacts(JOB)
+    seed({ submitted: { ...answers, llc_name: 'Italyflow Two LLC' } })
+    const b = await loadEinClosureFacts(JOB)
+    expect(a.ok && b.ok && a.facts.factsHash !== b.facts.factsHash).toBe(true)
+    seed()
+    const again = await loadEinClosureFacts(JOB)
+    expect(a.ok && again.ok && a.facts.factsHash === again.facts.factsHash).toBe(true)
+  })
+
+  it('refuses something that is not a job id with the plain "not found" (never a database sentence)', async () => {
+    expect(await loadEinClosureFacts('not-a-uuid')).toMatchObject({ ok: false, status: 404, error: 'Job not found.' })
   })
 
   it('refuses a job that is not a Company Closure, and a missing job', async () => {
@@ -259,8 +357,65 @@ describe('buildEinClosurePackage', () => {
 })
 
 
+describe('buildEinClosurePackage — guards', () => {
+  it('only an OPEN closure gets a letter', async () => {
+    seed({ job: { status: 'cancelled' } })
+    const r = await buildEinClosurePackage({ jobId: JOB, addressLines: ['1 Main St'], noticeDocumentId: null })
+    expect(r).toMatchObject({ ok: false, status: 409 })
+    expect((r as { error?: string }).error).toMatch(/is cancelled/)
+    expect(saveContact).not.toHaveBeenCalled()
+  })
+
+  it('nothing is made when what staff were looking at changed (the facts fingerprint no longer matches), and the first call with the right one works', async () => {
+    seed()
+    const facts = await loadEinClosureFacts(JOB)
+    expect(facts.ok).toBe(true)
+    if (!facts.ok) return
+    const stale = await buildEinClosurePackage({ jobId: JOB, addressLines: ['1 Main St'], noticeDocumentId: null, factsHash: 'old' })
+    expect(stale).toMatchObject({ ok: false, status: 409 })
+    expect((stale as { error?: string }).error).toMatch(/Something changed/)
+    expect(saveContact).not.toHaveBeenCalled()
+    saveContact.mockResolvedValue({ route: 'store', fileId: 'f', pointer: 'store:f', documentRowId: 'doc-new', status: 'created' })
+    expect(await buildEinClosurePackage({ jobId: JOB, addressLines: ['1 Main St'], noticeDocumentId: null, factsHash: facts.facts.factsHash })).toMatchObject({ ok: true })
+  })
+
+  it('an address that does not fit the letter is refused with a plain sentence instead of being cut', async () => {
+    seed()
+    const tooMany = await buildEinClosurePackage({ jobId: JOB, addressLines: ['a', 'b', 'c', 'd', 'e', 'f', 'g'], noticeDocumentId: null })
+    expect(tooMany).toMatchObject({ ok: false, status: 400 })
+    expect((tooMany as { error?: string }).error).toMatch(/7 lines/)
+    const tooLong = await buildEinClosurePackage({ jobId: JOB, addressLines: ['x'.repeat(130)], noticeDocumentId: null })
+    expect((tooLong as { error?: string }).error).toMatch(/longer than 120/)
+    expect(saveContact).not.toHaveBeenCalled()
+  })
+
+  it('a long address that DOES fit is made in full on one page (it wraps instead of running off the page)', async () => {
+    seed()
+    saveContact.mockResolvedValue({ route: 'store', fileId: 'f', pointer: 'store:f', documentRowId: 'doc-new', status: 'created' })
+    const r = await buildEinClosurePackage({ jobId: JOB, addressLines: ['1209 Mountain Road PL NE Ste R Building Twelve Floor Three Room Nine', 'Albuquerque, NM 87110'], noticeDocumentId: null })
+    expect(r).toMatchObject({ ok: true, pages: 1 })
+  })
+
+  it('characters the letter cannot print are refused with the characters named, not printed as empty boxes', async () => {
+    seed()
+    const r = await buildEinClosurePackage({ jobId: JOB, addressLines: ['北京 1 Main St', 'Beijing'], noticeDocumentId: null })
+    expect(r).toMatchObject({ ok: false, status: 400 })
+    expect((r as { error?: string }).error).toMatch(/cannot print these characters.*北/)
+    expect(saveContact).not.toHaveBeenCalled()
+  })
+
+  it('says the real reason when the storage refuses (a closed company), not a general sentence', async () => {
+    seed({ job: { account_id: 'acc-1' }, account: { company_name: 'Italyflow LLC', ein_number: '41-2330246', state_of_formation: 'NM', physical_address: null } })
+    tables.accounts[0].status = 'Closed'
+    saveAccount.mockResolvedValueOnce({ route: 'drive' })
+    const r = await buildEinClosurePackage({ jobId: JOB, addressLines: ['1 Main St'], noticeDocumentId: null })
+    expect(r).toMatchObject({ ok: false, status: 409 })
+    expect((r as { error?: string }).error).toMatch(/This company is closed, so nothing new can be saved for it\. The letter could not be saved\./)
+  })
+})
+
 describe('the client’s drawn signature (closure wizard, part F step 2)', () => {
-  const sigDoc = { id: 'd-sig', file_name: 'signature_image_signature.png', document_type_name: null, drive_file_id: `store:${SIG_STORE_ID}`, created_at: '2026-11-10T15:22:03Z' }
+  const sigDoc = { id: 'd-sig', file_name: 'signature_image_ab12cd34_signature.png', document_type_name: null, drive_file_id: `store:${SIG_STORE_ID}`, created_at: '2026-11-10T15:22:03Z' }
   const consented = { ...answers, signature_image: ['closure/x/signature_image_ab12cd34_signature.png'], signature_consent: 'text', signature_signed_at: '2026-11-10T18:30:00.000Z' }
 
   it('is used only when the file is on the job AND the server recorded the client’s consent', async () => {
@@ -271,7 +426,7 @@ describe('the client’s drawn signature (closure wizard, part F step 2)', () =>
   })
 
   it('a signature file with no consent record is NOT used, and staff are told', async () => {
-    seed({ submitted: answers, docRows: [...docs, sigDoc] })
+    seed({ submitted: { ...answers, signature_image: consented.signature_image }, docRows: [...docs, sigDoc] })
     const r = await loadEinClosureFacts(JOB)
     expect(r.ok && r.facts.hasSignature).toBe(false)
     expect(r.ok && r.facts.warnings.join(' ')).toMatch(/consent was not recorded/)
@@ -305,5 +460,51 @@ describe('the client’s drawn signature (closure wizard, part F step 2)', () =>
     const r = await buildEinClosurePackage({ jobId: JOB, addressLines: ['1 Main St'], noticeDocumentId: null })
     expect(r).toMatchObject({ ok: true, signed: false })
     expect(r.ok && r.warnings.join(' ')).toMatch(/not a usable PNG/)
+  })
+
+  it('a PNG with a valid header but unusable contents (or a huge size) is left out with a plain warning — the letter is still made', async () => {
+    const head = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const ihdr = (w: number, h: number) => { const b = Buffer.alloc(25); b.writeUInt32BE(13, 0); b.write('IHDR', 4); b.writeUInt32BE(w, 8); b.writeUInt32BE(h, 12); return b }
+    for (const [bytes, why] of [[Buffer.concat([head, ihdr(400, 160), Buffer.from('truncated nonsense')]), /could not be read/], [Buffer.concat([head, ihdr(60000, 60000)]), /not a usable size/]] as const) {
+      sigBytes = bytes
+      seed({ submitted: consented, docRows: [...docs, sigDoc] })
+      saveContact.mockResolvedValue({ route: 'store', fileId: 'f', pointer: 'store:f', documentRowId: 'doc-new', status: 'created' })
+      const r = await buildEinClosurePackage({ jobId: JOB, addressLines: ['1 Main St'], noticeDocumentId: null })
+      expect(r).toMatchObject({ ok: true, signed: false })
+      expect(r.ok && r.warnings.join(' ')).toMatch(why)
+    }
+  })
+
+  it('uses THE file the answers name, not just any file called signature_image…', async () => {
+    const other = { ...sigDoc, id: 'd-sig-old', file_name: 'signature_image_00000000_signature.png', drive_file_id: 'store:66666666-6666-4666-8666-666666666666', created_at: '2026-11-11T09:00:00Z' }
+    seed({ submitted: consented, docRows: [...docs, sigDoc, other] })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.signatureStoreFileId).toBe(SIG_STORE_ID) // the newer, different file is ignored
+  })
+
+  it('tells staff when the client signed but the picture is not on the job yet (still filing) — and the letter has a line to sign by hand', async () => {
+    seed({ submitted: consented, docRows: docs })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.hasSignature).toBe(false)
+    expect(r.ok && r.facts.warnings.join(' ')).toMatch(/drew a signature, but its picture is not on this job yet/)
+  })
+
+  it('a signature given for another company or EIN than this letter is NOT used, and staff are told why', async () => {
+    seed({ job: { account_id: 'acc-1' }, account: { company_name: 'Italyflow Holdings LLC', ein_number: '41-9999999', state_of_formation: 'NM', physical_address: null }, submitted: consented, docRows: [...docs, sigDoc] })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.hasSignature).toBe(false)
+    expect(r.ok && r.facts.warnings.join(' ')).toMatch(/signed a letter for "Italyflow LLC" \(EIN 41-2330246\), but this letter is for "Italyflow Holdings LLC" \(EIN 41-9999999\)/)
+  })
+
+  it('the same company written another way keeps the signature', async () => {
+    seed({ job: { account_id: 'acc-1' }, account: { company_name: 'ITALYFLOW L.L.C.', ein_number: '412330246', state_of_formation: 'NM', physical_address: null }, submitted: consented, docRows: [...docs, sigDoc] })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.hasSignature).toBe(true)
+  })
+
+  it('a trashed signature file is not used', async () => {
+    seed({ submitted: consented, docRows: [...docs, sigDoc], trashed: [SIG_STORE_ID] })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.hasSignature).toBe(false)
   })
 })

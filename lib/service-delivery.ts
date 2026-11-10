@@ -187,6 +187,9 @@ export async function clientStageLabelFor(
   return { label, hasClientLabel: !!stage.client_label }
 }
 
+/** Said when the job's step changed between reading it and saving the move (someone else — or a late background step — moved it first). Nothing was changed. */
+export const JOB_MOVED_MEANWHILE = "This job moved to another step while this move was being saved, so nothing was changed. Refresh the page and look at where the job is now."
+
 // ─── Main function ────────────────────────────────────────
 
 export async function advanceServiceDelivery(
@@ -638,7 +641,10 @@ export async function advanceServiceDelivery(
   const stageHistory = Array.isArray(delivery.stage_history) ? [...delivery.stage_history, historyEntry] : [historyEntry]
 
   // 6. Update delivery (isCompleted is resolved above, before the 4e check)
-  await dbWrite(
+  // The write is ONLY applied if the job is still on the stage this function READ at the top: a slower caller (a form's background filing that
+  // finished minutes after staff had already moved the job on) used to overwrite the newer stage and erase the history entries made in between
+  // (production end-to-end test 2026-11-10: IRS Closure was pulled back to State Compliance Check). When the stage moved meanwhile nothing is written.
+  const guardedUpdate =
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     supabaseAdmin
       .from("service_deliveries")
@@ -654,9 +660,25 @@ export async function advanceServiceDelivery(
           : {}),
         updated_at: new Date().toISOString(),
       })
-      .eq("id", delivery_id),
+      .eq("id", delivery_id)
+  const movedRows = await dbWrite(
+    (delivery.stage === null || delivery.stage === undefined ? guardedUpdate.is("stage", null) : guardedUpdate.eq("stage", delivery.stage)).select("id"),
     "service_deliveries.update"
   )
+  if (!Array.isArray(movedRows) || movedRows.length === 0) {
+    return {
+      success: false,
+      error: JOB_MOVED_MEANWHILE,
+      from_stage: delivery.stage || "New",
+      to_stage: targetStage.stage_name,
+      to_order: targetStage.stage_order,
+      total_stages: stages.length,
+      is_completed: false,
+      created_tasks: [],
+      failed_tasks: [],
+      auto_triggers: [],
+    }
+  }
 
   const autoTriggers: string[] = []
 
