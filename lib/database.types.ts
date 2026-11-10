@@ -16689,12 +16689,14 @@ export type Database = {
           app_build: number | null
           app_version: string | null
           bundle_id: string
+          contact_id: string | null
           created_at: string
           device_name: string | null
           id: string
           last_seen_at: string
           revoked_at: string | null
           revoked_reason: string | null
+          team_account_id: string | null
           token: string
           user_id: string
         }
@@ -16703,12 +16705,14 @@ export type Database = {
           app_build?: number | null
           app_version?: string | null
           bundle_id: string
+          contact_id?: string | null
           created_at?: string
           device_name?: string | null
           id?: string
           last_seen_at?: string
           revoked_at?: string | null
           revoked_reason?: string | null
+          team_account_id?: string | null
           token: string
           user_id: string
         }
@@ -16717,12 +16721,14 @@ export type Database = {
           app_build?: number | null
           app_version?: string | null
           bundle_id?: string
+          contact_id?: string | null
           created_at?: string
           device_name?: string | null
           id?: string
           last_seen_at?: string
           revoked_at?: string | null
           revoked_reason?: string | null
+          team_account_id?: string | null
           token?: string
           user_id?: string
         }
