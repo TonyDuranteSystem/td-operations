@@ -183,7 +183,7 @@ export function SaveChatFileDialog({ messageId, onClose, onOpenItinCard }: { mes
               {area === 'business' && business.state === 'unavailable' && <p className="flex gap-1.5 rounded bg-amber-50 p-3 text-sm text-amber-900" data-testid="save-chat-file-business-unavailable"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> {business.error}</p>}
               {area === 'business' && business.state === 'ready' && business.ownerId && (
                 <>
-                  <p className="text-xs text-zinc-500" data-testid="save-chat-file-business-hint">Business has no document type and no client: open the folder where the file goes and the upload bar appears there.</p>
+                  <p className="text-xs text-zinc-500" data-testid="save-chat-file-business-hint">Business has no document type and no client: click the folder where the file goes, then press “Upload this file into …”.</p>
                   <CardErrorBoundary key={business.ownerId} fallbackTitle="Business">
                     <NewStoreBrowser ownerId={business.ownerId} scopedKind="business" incomingFile={incoming} onIncomingSaved={onSaved} onBusyChange={setBusy} />
                   </CardErrorBoundary>

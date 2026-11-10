@@ -2445,7 +2445,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               onBlur={() => doRenameFolder(f, renaming.value)}
               className="ml-6 min-w-0 flex-1 rounded border border-blue-300 px-1.5 py-0.5 text-sm" />
           ) : (
-            <button type="button" onClick={() => toggleKey(f.id)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left" aria-expanded={isOpen}>
+            <button type="button" onClick={() => { if (incomingFile && isInternalOwnerKind(ownerKind) && ownerId && f.kind !== 'contacts' && !f.trashed) void selectFolder(ownerId, f.id); else toggleKey(f.id) }} className="flex min-w-0 flex-1 items-center gap-1.5 text-left" aria-expanded={isOpen}>
               {isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" /> : <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />}
               {isOpen ? <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" /> : <Folder className="h-4 w-4 shrink-0 text-amber-500" />}
               <span className="truncate font-medium text-zinc-800">{f.name}</span>
@@ -2947,9 +2947,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                       setPlain({ folder: viewFolder, items, skipped, folders }); setUploadOpen(false)
                     }}
                     className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40">Upload this file into “{viewFolder.name}”</button>
-                  {isTopKind(viewFolder.kind) && <span className="text-xs text-blue-800" data-testid="chat-file-open-a-folder">Open a folder first — files go inside a folder, not at the top.</span>}
+                  {isTopKind(viewFolder.kind) && <span className="text-xs text-blue-800" data-testid="chat-file-open-a-folder">Open a folder first — click a folder name below. Files go inside a folder, not at the top.</span>}
                 </span>
               )}
+              {!incomingFile && (<>
               <label className="cursor-pointer rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50">Choose files
                 <input type="file" multiple className="hidden" onChange={(e) => { const list = Array.from(e.target.files ?? []); e.target.value = ''; if (!list.length) return; const { items, skipped, folders } = filterPlainDrop(itemsFromFileList(list.map((file) => ({ file })))); plainFolders.current = new Map(); setPlain({ folder: viewFolder, items, skipped, folders }); setUploadOpen(false) }} />
               </label>
@@ -2958,8 +2959,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 <input type="file" multiple className="hidden" {...({ webkitdirectory: '', directory: '' } as any)} onChange={(e) => { const list = Array.from(e.target.files ?? []).filter((f) => !hasHiddenPart((f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name)); e.target.value = ''; if (!list.length) return; const { items, skipped, folders } = filterPlainDrop(itemsFromFileList(list.map((file) => ({ file, relative: (file as File & { webkitRelativePath?: string }).webkitRelativePath })))); plainFolders.current = new Map(); setPlain({ folder: viewFolder, items, skipped, folders }); setUploadOpen(false) }} />
               </label>
               {myDriveProbe?.allowed && <button type="button" onClick={() => { setMyDriveFor(viewFolder); setUploadOpen(false) }} className="rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50" data-testid="my-drive-open">From my Google Drive</button>}
+              </>)}
               <button type="button" onClick={() => setUploadOpen(false)} className="text-xs text-zinc-500 hover:underline">Cancel</button>
-              <span className="text-xs text-zinc-400">Any kind of file. The same name replaces the file; the old copy is kept under “older copies” (or use “Upload edited version…” on the file itself).</span>
+              {!incomingFile && <span className="text-xs text-zinc-400">Any kind of file. The same name replaces the file; the old copy is kept under “older copies” (or use “Upload edited version…” on the file itself).</span>}
             </div>
           )}
           {uploadOpen && !isInternalOwnerKind(ownerKind) && (
@@ -3036,7 +3038,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                     {(!upFolderObj || !upType) && <span className="w-full text-xs text-blue-800">Choose the folder and the document type above, then upload.</span>}
                   </div>
                 )}
-                {(() => {
+                {!incomingFile && (() => {
                   const target = upOptions.find((o) => o.f.id === upFolder)?.f ?? viewFolder
                   const pick = (list: File[], withPath: boolean) => {
                     if (!target || target.trashed || target.kind === 'root') { toast.error('Choose the folder first.'); return }
@@ -3059,9 +3061,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                     </>
                   )
                 })()}
+                {!incomingFile && (
                 <input ref={fileInput} type="file" className="text-sm"
                   disabled={uploading || !upFolder || !upType || upType === '__custom__' || (upIsContacts && !upPerson)}
                   onChange={(e) => { const file = e.target.files?.[0]; if (file) doUpload(file) }} />
+                )}
                 {uploading && <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />}
                 <button type="button" onClick={() => { setUploadOpen(false); setMergedFile(null) }} disabled={uploading} className="rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50 disabled:opacity-50" data-testid="company-upload-cancel">Cancel</button>
                 <span className="text-xs text-zinc-400">Uploading a file with the same name replaces it; the old copy is kept under “older copies” (or use “Upload edited version…” on the file itself).</span>
