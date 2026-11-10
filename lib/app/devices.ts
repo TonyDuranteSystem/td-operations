@@ -81,8 +81,15 @@ export function parseRemoval(body: unknown, allowedBundle: string | null): Parse
 
 export type RegisterOutcome = { ok: true } | { ok: false; code: "TOO_MANY_DEVICES" | "DB_ERROR" }
 
+/**
+ * Who a CLIENT-app phone belongs to as a portal person (client iPhone app, Step 4): the client contact, or the company a team member belongs to.
+ * Read from the session by the route, never from the request. TD Social (staff) phones pass none, and then these two columns are not written at all
+ * (so a TD Social registration works even where the database file that adds them has not been run yet).
+ */
+export interface PhoneOwner { contactId?: string | null; teamAccountId?: string | null }
+
 /** Register (or move, or refresh) a phone for the signed-in person. */
-export async function registerDevice(userId: string, reg: DeviceRegistration, now: Date = new Date()): Promise<RegisterOutcome> {
+export async function registerDevice(userId: string, reg: DeviceRegistration, now: Date = new Date(), owner?: PhoneOwner): Promise<RegisterOutcome> {
   const since = new Date(now.getTime() - DEVICE_STALE_DAYS * 86_400_000).toISOString()
   const others = await db().from("social_app_devices").select("id", { count: "exact", head: true })
     .eq("user_id", userId).is("revoked_at", null).gte("last_seen_at", since)
@@ -100,6 +107,8 @@ export async function registerDevice(userId: string, reg: DeviceRegistration, no
     last_seen_at: now.toISOString(),
     revoked_at: null,
     revoked_reason: null,
+    // a phone that moves to another person must lose the old owner: both facts are written together whenever an owner is given
+    ...(owner ? { contact_id: owner.contactId ?? null, team_account_id: owner.teamAccountId ?? null } : {}),
   }, { onConflict: "bundle_id,token" })
   if (error) { console.error("[social-app] device register failed:", error.code ?? "unknown"); return { ok: false, code: "DB_ERROR" } }
   return { ok: true }
