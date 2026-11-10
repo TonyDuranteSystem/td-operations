@@ -28,6 +28,7 @@ export async function POST(request: NextRequest) {
     body: 'Push notifications are working! You will receive alerts for documents, services, and deadlines.',
     url: '/portal',
     tag: 'test-notification',
+    clientKind: 'test',
   })
 
   return NextResponse.json(result)

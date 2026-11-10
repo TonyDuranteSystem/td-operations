@@ -11,12 +11,12 @@ const h = vi.hoisted(() => ({
   enabled: true,
   user: null as null | { id: string; email: string },
   loadResult: null as null | { ok: true; input: unknown } | { ok: false; status: number; code: string; error: string },
-  audience: null as null | { ok: true } | { ok: false; status: number; code: string; error: string },
+  audience: null as null | { ok: true; kind: 'client'; contactId: string } | { ok: true; kind: 'teammate'; account: { id: string } } | { ok: false; status: number; code: string; error: string },
   order: [] as string[],
   barWrites: [] as Array<{ userId: string; keys: string[] }>,
   barClears: [] as string[],
   barResult: { ok: true } as { ok: true } | { ok: false },
-  registered: [] as Array<{ userId: string; reg: Record<string, unknown> }>,
+  registered: [] as Array<{ userId: string; reg: Record<string, unknown>; owner?: Record<string, unknown> }>,
   removed: [] as Array<{ userId: string; token: string; bundleId: string }>,
   registerResult: { ok: true } as { ok: true } | { ok: false; code: string },
   readers: [] as Array<(name: string) => string | undefined>,
@@ -44,7 +44,7 @@ vi.mock('@/lib/app/devices', async importOriginal => {
   const real = await importOriginal<typeof import('@/lib/app/devices')>()
   return {
     ...real,
-    registerDevice: async (userId: string, reg: Record<string, unknown>) => { h.order.push('register'); h.registered.push({ userId, reg }); return h.registerResult },
+    registerDevice: async (userId: string, reg: Record<string, unknown>, _now?: Date, owner?: Record<string, unknown>) => { h.order.push('register'); h.registered.push({ userId, reg, owner }); return h.registerResult },
     removeDevice: async (userId: string, token: string, bundleId: string) => { h.order.push('remove'); h.removed.push({ userId, token, bundleId }); return { ok: true, removed: 1 } },
   }
 })
@@ -78,7 +78,7 @@ const refusal = (code: string) => ({ ok: false as const, status: 403, code, erro
 
 beforeEach(() => {
   h.enabled = true; h.user = { id: 'u-client', email: 'c@x.y' }; h.loadResult = { ok: true, input }
-  h.audience = { ok: true }; h.order = []; h.barWrites = []; h.barClears = []; h.barResult = { ok: true }
+  h.audience = { ok: true, kind: 'client', contactId: 'contact-1' }; h.order = []; h.barWrites = []; h.barClears = []; h.barResult = { ok: true }
   h.registered = []; h.removed = []; h.registerResult = { ok: true }; h.readers = []; h.loadThrows = false
   process.env.NEXT_PUBLIC_SUPABASE_URL = SANDBOX_URL
 })
@@ -190,6 +190,14 @@ describe('PUT / DELETE /api/portal/app/devices', () => {
     expect(h.order).toEqual(['enabled', 'user', 'audience', 'register'])
     expect(h.registered[0].userId).toBe('u-client')
     expect(h.registered[0].reg).toMatchObject({ token: TOKEN, bundleId: CLIENT_BUNDLE })
+  })
+  it('a client phone is saved with its contact as owner, a team member phone with their company (from the session, never the request)', async () => {
+    await DEV_PUT(req({ ...good, contactId: 'forged', teamAccountId: 'forged' }))
+    expect(h.registered[0].owner).toEqual({ contactId: 'contact-1' })
+    h.registered = []
+    h.audience = { ok: true, kind: 'teammate', account: { id: 'acct-9' } }
+    await DEV_PUT(req(good))
+    expect(h.registered[0].owner).toEqual({ teamAccountId: 'acct-9' })
   })
   it('refuses staff and partners before anything is saved', async () => {
     h.audience = refusal('NOT_FOR_PARTNERS')
