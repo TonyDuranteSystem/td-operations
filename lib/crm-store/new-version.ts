@@ -154,13 +154,30 @@ export async function saveNewVersionFromStaged(r: NewVersionRequest): Promise<Ne
 }
 
 /** "Make this the current copy": the old version's bytes saved again as a NEW version (nothing is deleted or rewritten). */
-export async function restoreVersion(p: { fileId: string; versionNo: number; baseVersionNo: number; actor: string | null; ip?: string | null; userAgent?: string | null }): Promise<NewVersionReply> {
+export async function restoreVersion(p: { fileId: string; versionNo: number; baseVersionNo: number; actor: string | null; ip?: string | null; userAgent?: string | null; /** the file is shown to the client now: "keep" it shown with the new current copy (default) or "hide" it BEFORE the new copy is saved */ clientChoice?: "keep" | "hide" }): Promise<NewVersionReply> {
   const { data: v, error } = await db().from("store_file_versions").select("storage_bucket, storage_path, mime_type, size_bytes").eq("file_id", p.fileId).eq("version_no", p.versionNo).maybeSingle()
   if (error || !v) return { status: "not_found", message: "That older copy no longer exists." }
   if ((v.size_bytes as number | null) !== null && (v.size_bytes as number) > INLINE_REGISTER_MAX_BYTES) return { status: "refused", message: "That copy is too large to restore from here for now." }
   const { data: blob, error: dlErr } = await db().storage.from(v.storage_bucket ?? STORE_BUCKET).download(v.storage_path)
   if (dlErr || !blob) { console.error("[crm-store] older copy unreadable:", dlErr?.message); return { status: "refused", message: "The older copy could not be read — please try again." } }
   const info = await currentInfo(p.fileId)
+  // "hide it from the client": done BEFORE the new copy is saved (the client never sees it, not even for a moment); shown again if the save fails
+  let hiddenByUs = false
+  if (p.clientChoice === "hide") {
+    const { storePointer } = await import("./document-pointer")
+    const { data: rows } = await db().from("documents").select("portal_visible").eq("drive_file_id", storePointer(p.fileId))
+    if (((rows ?? []) as { portal_visible: boolean | null }[]).some((x) => x.portal_visible === true)) {
+      try {
+        const { setClientVisibility } = await import("./browse")
+        await setClientVisibility(p.fileId, false, p.actor, { silent: true })
+        hiddenByUs = true
+      } catch (e) { return { status: "refused", message: e instanceof Error ? e.message : "The file could not be hidden from the client, so nothing was saved." } }
+    }
+  }
+  const reshowIfNotSaved = async (saved: boolean): Promise<string> => {
+    if (!hiddenByUs || saved) return ""
+    try { const { setClientVisibility } = await import("./browse"); await setClientVisibility(p.fileId, true, p.actor, { silent: true }); return "" } catch (e) { return ` ${reshowFailedNote(e)}` }
+  }
   let res
   try {
     res = await appendVersionBytes({
@@ -169,8 +186,19 @@ export async function restoreVersion(p: { fileId: string; versionNo: number; bas
     })
   } catch (e) {
     console.error("[crm-store] restore failed:", e instanceof Error ? e.message : e)
-    return { status: "refused", message: "The older copy could not be restored — please try again." }
+    const note = await reshowIfNotSaved(false)
+    return { status: "refused", message: `The older copy could not be restored — please try again.${note}` }
   }
+  const reshowNote = await reshowIfNotSaved(res.status === "versioned")
+  if (reshowNote && res.status !== "versioned") {
+    const r = await restoreReply(res, p, info?.name)
+    return { ...r, message: `${r.message}${reshowNote}` } as NewVersionReply
+  }
+  return restoreReply(res, p, info?.name)
+}
+
+async function restoreReply(res: Awaited<ReturnType<typeof appendVersionBytes>>, p: { versionNo: number }, infoName: string | undefined): Promise<NewVersionReply> {
+  const info = infoName ? { name: infoName } : null
   const name = res.name ?? info?.name ?? "this file"
   if (res.status === "versioned") return { status: "versioned", versionNo: res.versionNo ?? 0, message: `Version ${p.versionNo} is now the current copy (saved as version ${res.versionNo}).` }
   if (res.status === "conflict") return { status: "conflict", currentVersionNo: res.currentVersionNo ?? null, message: conflictText({ name, currentVersionNo: res.currentVersionNo, by: await personName(res.currentBy), at: plainWhen(res.currentAt) }) }

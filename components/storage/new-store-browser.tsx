@@ -392,7 +392,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [preview, setPreview] = useState<File_ | null>(null)
   const [ocrDocId, setOcrDocId] = useState<string | null>(null)
   const [versionsFor, setVersionsFor] = useState<string | null>(null)
-  const [versions, setVersions] = useState<{ id: string; versionNo: number; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null; unmerged?: boolean }[] | null>(null)
+  const [versions, setVersions] = useState<{ id: string; versionNo: number; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null; unmerged?: boolean; note?: string | null; discarded?: boolean }[] | null>(null)
+  /** a not-applied change on a file the client can see: which one is being accepted (asks "show it to the client?") */
+  const [acceptAsk, setAcceptAsk] = useState<{ fileId: string; versionNo: number } | null>(null)
   const [editing, setEditing] = useState<EditTarget | null>(null)
   const [lockNote, setLockNote] = useState<string | null>(null)
   const [signConfirm, setSignConfirm] = useState<File_ | null>(null)
@@ -816,15 +818,28 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   }
 
   /** "Make this the current copy": the older copy is saved again as a NEW version (nothing is deleted) */
-  const makeCurrent = (f: File_, versionNo: number) => withBusy(f.id, async () => {
+  const makeCurrent = (f: File_, versionNo: number, clientChoice?: 'keep' | 'hide') => withBusy(f.id, async () => {
     if (f.versionNo == null) { toast.error('The current version of this file could not be read — reload the page and try again.'); return }
+    setAcceptAsk(null)
     try {
-      const r = await postJson<{ status: string; message: string }>(`/api/crm-store/browse/file/${f.id}/restore`, { versionNo, baseVersionNo: f.versionNo }, 'The older copy could not be restored.')
+      const r = await postJson<{ status: string; message: string }>(`/api/crm-store/browse/file/${f.id}/restore`, { versionNo, baseVersionNo: f.versionNo, clientChoice }, 'The older copy could not be restored.')
       if (r.status === 'versioned') toast.success(r.message); else toast.error(r.message)
     } catch (e) { toast.error(errMsg(e, 'The older copy could not be restored.')) }
     versionsSeq.current++
     setVersionsFor(null)
     await refreshAll()   // held until the screen has the new version number: a second click can't restore from the old one
+  })
+
+  /** "Discard": a not-applied change (e.g. one Claude proposed) is put aside; the current copy is not touched and nothing is deleted */
+  const discardChange = (f: File_, versionNo: number) => withBusy(f.id, async () => {
+    setAcceptAsk(null)
+    try {
+      const r = await postJson<{ status: string; message: string }>(`/api/crm-store/browse/file/${f.id}/discard-proposal`, { versionNo }, 'The change could not be discarded.')
+      if (r.status === 'refused') toast.error(r.message); else toast.success(r.message)
+    } catch (e) { toast.error(errMsg(e, 'The change could not be discarded.')) }
+    versionsSeq.current++
+    setVersionsFor(null)
+    await refreshAll()
   })
 
   const doMarkSigned = async (f: File_) => {
@@ -2328,7 +2343,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               <div className="relative">
                 <FastTooltip label="See and open every saved copy">
                   <button type="button" onClick={(e) => { e.stopPropagation(); openVersions(f.id) }} className="inline-flex items-center gap-1 text-blue-700 hover:underline">
-                    <Layers className="h-3 w-3" />v{f.versionNo ?? f.versions} · {Math.max(0, f.versions - 1)} older{(f.unmergedPending ?? 0) > 0 ? ` · ${f.unmergedPending} unmerged` : ''}
+                    <Layers className="h-3 w-3" />v{f.versionNo ?? f.versions} · {Math.max(0, f.versions - 1)} older{(f.unmergedPending ?? 0) > 0 ? ` · ${f.unmergedPending} change${f.unmergedPending === 1 ? '' : 's'} waiting` : ''}
                   </button>
                 </FastTooltip>
                 {versionsFor === f.id && (
@@ -2340,16 +2355,32 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                         <span className="font-medium">v{v.versionNo}</span>
                         <span className="text-zinc-500">{fmtDate(v.createdAt)} · {fmtSize(v.size)}{v.by ? ` · ${v.by}` : ''}</span>
                         {v.current && <Badge tone="green">current</Badge>}
-                        {v.unmerged && <Badge tone="amber">not applied</Badge>}
+                        {v.unmerged && !v.discarded && <Badge tone="amber">{(v.note ?? '').startsWith('Proposed by Claude') ? 'Claude proposes' : 'not applied'}</Badge>}
+                        {v.discarded && <Badge tone="gray">discarded</Badge>}
                         <span className="flex-1" />
                         <button type="button" className="text-blue-700 hover:underline"
                           onClick={() => { setVersionsFor(null); setPreviewVersion({ file: { ...f, mimeType: v.mimeType ?? f.mimeType }, src: `/api/crm-store/browse/file/${f.id}/versions?open=${v.id}`, viewSrc: `/api/crm-store/browse/file/${f.id}/view?version=${v.id}`, title: `${f.name} — version ${v.versionNo}${v.current ? ' (current)' : ''}` }) }}>
                           View
                         </button>
-                        {!v.current && !f.lockKind && f.state === 'live' && (
-                          <button type="button" disabled={busy} className="text-blue-700 hover:underline disabled:opacity-50" onClick={() => void makeCurrent(f, v.versionNo)}>
-                            {v.unmerged ? 'Apply this edit' : 'Make this the current copy'} (saved as v{Math.max(0, ...(versions ?? []).map((x) => x.versionNo)) + 1})
+                        {!v.current && !f.lockKind && f.state === 'live' && !v.discarded && (
+                          <button type="button" disabled={busy} className="text-blue-700 hover:underline disabled:opacity-50"
+                            onClick={() => { if (v.unmerged && f.clientVisible) setAcceptAsk({ fileId: f.id, versionNo: v.versionNo }); else void makeCurrent(f, v.versionNo) }}>
+                            {v.unmerged ? (f.clientVisible ? 'Accept this change' : 'Apply this edit') : 'Make this the current copy'} (saved as v{Math.max(0, ...(versions ?? []).map((x) => x.versionNo)) + 1})
                           </button>
+                        )}
+                        {v.unmerged && !v.discarded && !v.current && f.state === 'live' && (
+                          <button type="button" disabled={busy} className="text-zinc-600 hover:underline disabled:opacity-50" onClick={() => void discardChange(f, v.versionNo)}>Discard</button>
+                        )}
+                        {v.note && <p className="basis-full text-[11px] text-zinc-500">{v.note}</p>}
+                        {acceptAsk?.fileId === f.id && acceptAsk.versionNo === v.versionNo && (
+                          <div className="basis-full rounded-md bg-amber-50 p-2 text-[11px] text-amber-900" data-testid="accept-ask">
+                            <p className="mb-1.5">The client can see this file. Should the client see the new version?</p>
+                            <div className="flex flex-wrap gap-2">
+                              <button type="button" disabled={busy} className="rounded bg-blue-600 px-2 py-1 text-white disabled:opacity-50" onClick={() => void makeCurrent(f, v.versionNo, 'keep')}>Yes — the client sees the new version</button>
+                              <button type="button" disabled={busy} className="rounded border border-amber-300 bg-white px-2 py-1 disabled:opacity-50" onClick={() => void makeCurrent(f, v.versionNo, 'hide')}>No — hide the file from the client</button>
+                              <button type="button" className="px-1 text-zinc-600 hover:underline" onClick={() => setAcceptAsk(null)}>Cancel</button>
+                            </div>
+                          </div>
                         )}
                       </div>
                     ))}

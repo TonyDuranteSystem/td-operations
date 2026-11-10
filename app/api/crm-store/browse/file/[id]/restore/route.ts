@@ -23,6 +23,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const { restoreVersion } = await import("@/lib/crm-store/new-version")
     return NextResponse.json(await restoreVersion({
       fileId: params.id, versionNo: b.versionNo as number, baseVersionNo: b.baseVersionNo as number, actor: user?.id ?? null,
+      clientChoice: b.clientChoice === "hide" ? "hide" : "keep",
       ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null, userAgent: req.headers.get("user-agent")?.slice(0, 200) ?? null,
     }))
   } catch (e) {
