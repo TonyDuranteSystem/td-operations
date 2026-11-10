@@ -42,15 +42,17 @@ export function signaturePathsOf(value: unknown): string[] {
   return list.filter((p): p is string => typeof p === 'string' && SIGNATURE_PATH.test(p))
 }
 
-/** Letters, digits only — "ZZQA Città & Café Test, L.L.C." and "zzqa citta and cafe test llc" are the same company to a human. */
+/** Letters and digits only (any alphabet) — "ZZQA Città & Café Test, L.L.C." and "zzqa citta and cafe test llc" are the same company to a human. */
 export function normalizeCompanyName(name: unknown): string {
   const t = (typeof name === 'string' ? name : '')
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/&/g, ' and ')
+    // letters that do not split into a base letter + a mark
+    .replace(/ø/g, 'o').replace(/ł/g, 'l').replace(/đ/g, 'd').replace(/ı/g, 'i').replace(/ß/g, 'ss').replace(/æ/g, 'ae').replace(/œ/g, 'oe')
     .replace(/\bl\.?\s?l\.?\s?c\.?(?![a-z])/g, ' llc ')
-    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/[\u0000-\u002f\u003a-\u0040\u005b-\u0060\u007b-\u00bf\u2000-\u206f]/g, ' ') // drop ASCII/Latin-1 punctuation and symbols, KEEP letters of every alphabet (a Cyrillic or Greek name must not become empty)
   const words = t.split(/\s+/).filter(Boolean)
   while (words.length > 1 && /^(llc|inc|corp|corporation|ltd|co|company)$/.test(words[words.length - 1])) words.pop()
   return words.join('')
@@ -91,7 +93,11 @@ export function applyClosureSignatureConsent(
   ctx: { ip: string | null; userAgent: string | null; now: Date },
 ): { signed: boolean; changedAfterSigning?: boolean } {
   const locale: 'en' | 'it' = data[CLOSURE_SIGNATURE_LOCALE_HINT] === 'it' ? 'it' : 'en'
-  const seen = typeof data[CLOSURE_SIGNATURE_SEEN_HINT] === 'string' ? (data[CLOSURE_SIGNATURE_SEEN_HINT] as string) : null
+  // what the client saw when drawing: the box sends it; a form re-opened from a SENT closure carries the server's own fingerprint of what was sent
+  // (`signature_for`, saved with the answers) — the same fact, so it stands in when the hint was not sent
+  const seenHint = typeof data[CLOSURE_SIGNATURE_SEEN_HINT] === 'string' ? (data[CLOSURE_SIGNATURE_SEEN_HINT] as string) : null
+  const claimedFor = typeof data.signature_for === 'string' ? (data.signature_for as string) : null
+  const seen = seenHint ?? claimedFor
   delete data[CLOSURE_SIGNATURE_LOCALE_HINT]
   delete data[CLOSURE_SIGNATURE_SEEN_HINT]
   for (const k of CLOSURE_SIGNATURE_RECORD_KEYS) delete data[k]

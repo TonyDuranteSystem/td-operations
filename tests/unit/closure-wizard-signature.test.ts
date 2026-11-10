@@ -84,6 +84,16 @@ describe('applyClosureSignatureConsent — the server owns the consent record', 
     expect(applyClosureSignatureConsent(einChanged, ctx).signed).toBe(false)
   })
 
+  it('a closure form re-opened after it was sent re-sends the server’s own fingerprint — an unchanged re-send is accepted, a changed one is not', () => {
+    const first = submitted()
+    applyClosureSignatureConsent(first, ctx) // what the server stored the first time: the drawing, the consent record and signature_for (the hint was consumed)
+    const reopened: Record<string, unknown> = { ...first, llc_name: 'X LLC' } // the saved answers come back as they were stored: no signature_seen
+    expect('signature_seen' in reopened).toBe(false)
+    expect(applyClosureSignatureConsent({ ...reopened }, ctx).signed).toBe(true)
+    const changed = { ...reopened, llc_name: 'Other LLC' }
+    expect(applyClosureSignatureConsent(changed, ctx)).toEqual({ signed: false, changedAfterSigning: true })
+  })
+
   it('a different spelling of the same company or EIN is still the same letter', () => {
     const data = submitted({ llc_name: 'Café & Co, L.L.C.', llc_ein: '12-3456789' })
     data.signature_seen = signatureFingerprint({ ...data, llc_name: 'cafe and co llc', llc_ein: '123456789' })
@@ -119,6 +129,12 @@ describe('company comparison used by the signature', () => {
     expect(normalizeCompanyName('Acme Inc.')).toBe(normalizeCompanyName('ACME'))
     expect(normalizeCompanyName('Acme LLC')).not.toBe(normalizeCompanyName('Acme Holdings LLC'))
     expect(normalizeCompanyName(null)).toBe('')
+  })
+  it('letters of any alphabet count: Cyrillic and Greek names are not empty, ø/ł/đ/ß match their plain spelling', () => {
+    expect(normalizeCompanyName('Рога и Копыта ООО')).not.toBe('')
+    expect(normalizeCompanyName('Ελληνική Εταιρεία LLC')).not.toBe('')
+    expect(normalizeCompanyName('Łukasz Søren Đorđe LLC')).toBe(normalizeCompanyName('Lukasz Soren Dorde LLC'))
+    expect(normalizeCompanyName('Weiß GmbH')).toBe(normalizeCompanyName('Weiss GmbH'))
   })
   it('an EIN is nine digits however it is written', () => {
     expect(einDigits('88-7700001')).toBe('887700001')
@@ -223,6 +239,7 @@ describe('the signature box is wired into the closure wizard', () => {
     expect(c).toContain('onFileUpload(name, file)')
     expect(c).toContain('CLOSURE_SIGNATURE_LOCALE_HINT')
     expect(c).toContain('CLOSURE_SIGNATURE_SEEN_HINT') // which letter was signed: the server compares it with what is sent
+    expect(c).toContain("text(context?.signature_for)") // a re-opened SENT form uses the server's fingerprint as the hint
     expect(c).toContain("new File([blob], 'signature.png'")
   })
 

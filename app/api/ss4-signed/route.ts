@@ -141,13 +141,15 @@ export async function POST(req: NextRequest) {
           if (sd.stage === "SS-4 Prepared") {
             try {
               const { advanceServiceDelivery } = await import("@/lib/service-delivery")
-              await advanceServiceDelivery({
+              const adv = await advanceServiceDelivery({
                 delivery_id: sd.id,
                 target_stage: "SS-4 Signed",
                 actor: "ss4-sign",
                 notes: `Client signed SS-4 for ${ss4.company_name}`,
               })
-              results.push({ step: "sd_advance", status: "ok", detail: "SS-4 Prepared → SS-4 Signed" })
+              // a move the step refused (a document missing, the job moved meanwhile) is NOT "ok": staff are told
+              if (adv.success) results.push({ step: "sd_advance", status: "ok", detail: "SS-4 Prepared → SS-4 Signed" })
+              else results.push({ step: "sd_advance", status: "error", detail: adv.error || "The job could not be moved to SS-4 Signed." })
             } catch (e) {
               results.push({ step: "sd_advance", status: "error", detail: e instanceof Error ? e.message : String(e) })
             }

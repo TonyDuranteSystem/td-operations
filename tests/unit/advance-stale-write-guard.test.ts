@@ -100,4 +100,37 @@ describe('a stage move is written only if the job is still where it was read', (
     expect(res.from_stage).toBe('IRS Closure')
     expect(res.created_tasks).toEqual([])
   })
+
+  it('a repeat of the same move (the job already stands at the target) is a success that changes nothing — not a failure', async () => {
+    closureAt('IRS Closure', 4)
+    installFrom(0) // the write matches nothing because the job is already at the target by the time it is re-read
+    const res = await advanceServiceDelivery({ delivery_id: 'sd-1', target_stage: 'IRS Closure' })
+    expect(res.success).toBe(true)
+    expect(res.auto_triggers.join(' ')).toMatch(/already at this step/)
+    expect(res.created_tasks).toEqual([])
+  })
+
+  it('a move decided for a job on one step is refused when the job is on another by the time it is read (no write at all)', async () => {
+    closureAt('IRS Closure', 4)
+    const { writes } = installFrom(1)
+    const res = await advanceServiceDelivery({ delivery_id: 'sd-1', target_stage: 'State Compliance Check', expected_from_stage: 'Data Collection' })
+    expect(res.success).toBe(false)
+    expect(res.error).toBe(JOB_MOVED_MEANWHILE)
+    expect(writes.filter((w) => w.table === 'service_deliveries')).toHaveLength(0)
+  })
+
+  it('…and when the job already stands at the target the repeat is a success', async () => {
+    closureAt('IRS Closure', 4)
+    const { writes } = installFrom(1)
+    const res = await advanceServiceDelivery({ delivery_id: 'sd-1', target_stage: 'IRS Closure', expected_from_stage: 'State Compliance Check' })
+    expect(res.success).toBe(true)
+    expect(writes.filter((w) => w.table === 'service_deliveries')).toHaveLength(0)
+  })
+
+  it('a move decided for the step the job is on goes through as before', async () => {
+    closureAt('IRS Closure', 4)
+    installFrom(1)
+    const res = await advanceServiceDelivery({ delivery_id: 'sd-1', target_stage: 'Waiting for the IRS', expected_from_stage: 'IRS Closure' })
+    expect(res.success).toBe(true)
+  })
 })

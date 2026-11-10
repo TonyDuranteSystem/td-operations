@@ -121,6 +121,11 @@ describe('pure helpers', () => {
     expect(einNoticeMatch('ACP5750.pdf', null)).toBeNull() // no word boundary: not an IRS form number
     expect(einNoticeMatch('notes 147C extra.pdf', null)).toBe('name')
     expect(einNoticeMatch('x1147Cx.pdf', null)).toBeNull()
+    // the file the wizard minted for its own EIN-letter field is the client's upload whatever they called it
+    expect(einNoticeMatch('ein_letter_ab12cd34_EIN_letter_for_closure.pdf', null)).toBe('name')
+    expect(einNoticeMatch('ein_letter_ab12cd34_cancel.pdf', null)).toBe('name')
+    expect(einNoticeMatch('ein_letter_notahexid_closure.pdf', null)).toBeNull()
+    expect(einNoticeMatch('EIN Closure Letter - X LLC.pdf', null)).toBeNull() // our own package stays out
   })
 
   it('keeps every line a person types — nothing is cut here (a letter that cannot hold it says so)', () => {

@@ -66,6 +66,11 @@ export interface AdvanceStageParams {
   notes?: string
   actor?: string // "crm-tracker" | "mcp" | etc.
   /**
+   * The step the CALLER saw the job on when it decided to move it (a gate like advanceStageIfAt). If the job is on another step when this function
+   * reads it, nothing is written (JOB_MOVED_MEANWHILE) — the move was decided for a job that is no longer there.
+   */
+  expected_from_stage?: string
+  /**
    * Formation date (ISO YYYY-MM-DD) confirmed by staff when advancing a Company
    * Formation SD into "Articles Received". Passed straight to
    * materializeFormationCompany so the SS-4 Line 11 ("date business started")
@@ -628,6 +633,35 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // The job is already where this move would put it (a double click, a retried webhook, a second pass): the move is done — a success that changes nothing,
+  // so no caller reports a harmless repeat as a failure.
+  const alreadyThere = (): AdvanceStageResult => ({
+    success: true,
+    from_stage: delivery.stage || "New",
+    to_stage: targetStage.stage_name,
+    to_order: targetStage.stage_order,
+    total_stages: stages.length,
+    is_completed: isCompleted,
+    created_tasks: [],
+    failed_tasks: [],
+    auto_triggers: ["The job was already at this step — nothing changed."],
+  })
+  const movedMeanwhile = (): AdvanceStageResult => ({
+    success: false,
+    error: JOB_MOVED_MEANWHILE,
+    from_stage: delivery.stage || "New",
+    to_stage: targetStage.stage_name,
+    to_order: targetStage.stage_order,
+    total_stages: stages.length,
+    is_completed: false,
+    created_tasks: [],
+    failed_tasks: [],
+    auto_triggers: [],
+  })
+  if (params.expected_from_stage !== undefined && (delivery.stage ?? "") !== params.expected_from_stage) {
+    return delivery.stage === targetStage.stage_name ? alreadyThere() : movedMeanwhile()
+  }
+
   // 5. Build stage history entry
   const historyEntry = {
     from_stage: delivery.stage || "New",
@@ -665,19 +699,12 @@ export async function advanceServiceDelivery(
     (delivery.stage === null || delivery.stage === undefined ? guardedUpdate.is("stage", null) : guardedUpdate.eq("stage", delivery.stage)).select("id"),
     "service_deliveries.update"
   )
-  if (!Array.isArray(movedRows) || movedRows.length === 0) {
-    return {
-      success: false,
-      error: JOB_MOVED_MEANWHILE,
-      from_stage: delivery.stage || "New",
-      to_stage: targetStage.stage_name,
-      to_order: targetStage.stage_order,
-      total_stages: stages.length,
-      is_completed: false,
-      created_tasks: [],
-      failed_tasks: [],
-      auto_triggers: [],
-    }
+  // only an explicit EMPTY list means "nothing matched" (the database always answers a list when asked to return the row's id)
+  if (Array.isArray(movedRows) && movedRows.length === 0) {
+    // nothing matched: the job moved after it was read. If it now stands exactly where this move wanted it, someone (a double click, a retry) did the
+    // same move first — that is a success that changed nothing; otherwise the move is refused and nothing was written.
+    const { data: nowRow } = await supabaseAdmin.from("service_deliveries").select("stage").eq("id", delivery_id).maybeSingle()
+    return (nowRow as { stage?: string | null } | null)?.stage === targetStage.stage_name ? alreadyThere() : movedMeanwhile()
   }
 
   const autoTriggers: string[] = []

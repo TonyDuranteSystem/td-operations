@@ -96,6 +96,8 @@ export function einNoticeMatch(fileName: string, typeLabel: string | null): Noti
   const type = (typeLabel ?? '').trim()
   if (/cancel/i.test(type)) return null // a cancellation request, not the notice
   if (/^EIN\b/i.test(type)) return 'type' // "EIN IRS FAX - LTR 147C", "EIN Letter (IRS)", "EIN CP575B"…
+  // the file the closure wizard minted for its own "EIN letter" field (ein_letter_<8 hex>_<the client's file name>): whatever the client called their file ("EIN letter for closure.pdf"), it IS the one they uploaded for this closure
+  if (/^ein_letter_[0-9a-f]{8}_/i.test(name)) return 'name'
   if (/(?<![a-z])(closure|cancel[a-z]*)/i.test(name)) return null // a closure / cancellation file named by the client or the IRS
   if (/^ein[_ -]?letter/i.test(name) || /(?<![a-z0-9])(cp[ _-]?575[a-z]?|147c)(?![a-z0-9])/i.test(name)) return 'name' // the wizard's field name prefix, or the IRS form number
   return null

@@ -46,6 +46,10 @@ describe('EIN closure letter — the pieces are wired together', () => {
     expect(sd).toMatch(/guardedUpdate\.eq\("stage", delivery\.stage\)/)
     // …and the form's filing pass treats such a refusal as "someone else moved it", not as something to retry
     expect(read('app/api/closure-form-completed/route.ts')).toContain('adv.result?.error === JOB_MOVED_MEANWHILE')
+    // the gate hands the step it matched to the move, and two callers no longer report a refused move as "ok"
+    expect(read('lib/operations/service-delivery.ts')).toContain('expected_from_stage: currentStage')
+    expect(read('app/api/ss4-signed/route.ts')).toContain('if (adv.success) results.push')
+    expect(read('app/api/signature-request-signed/route.ts')).toContain('flow_advance: NOT moved')
     expect(sd).toMatch(/\.select\("id"\)[\s\S]{0,200}movedRows/)
   })
 })

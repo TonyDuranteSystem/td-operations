@@ -50,6 +50,13 @@ export function WizardSignatureField({ name, value, onChange, onFileUpload, cont
 
   // A signature belongs to the letter the client saw when drawing it. If the company, the EIN or the owner is changed afterwards (the client went
   // back a step), the saved drawing is dropped and they draw again — the server refuses a signature for other details too.
+  // A closure form re-opened after it was SENT has the drawing and the server's own fingerprint of what was sent (`signature_for`), but not the hint
+  // (the server consumes it): that fingerprint says what the drawing was signed for, so it stands in as the hint.
+  const signedFor = text(context?.signature_for)
+  useEffect(() => {
+    if (saved && !seen && signedFor) onChange(CLOSURE_SIGNATURE_SEEN_HINT, signedFor)
+  }, [saved, seen, signedFor, onChange])
+
   useEffect(() => {
     if (saved && seen && seen !== fingerprint) {
       onChange(name, [])
