@@ -13,6 +13,7 @@
  * pdf/upload-signed routes; verifyTokenAccess closes it here too.
  */
 
+import type { Json } from "@/lib/database.types"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { verifyTokenAccess } from "@/lib/public-forms/verify-token-access"
@@ -80,14 +81,20 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (!body.submitted_data || typeof body.submitted_data !== "object") {
       return NextResponse.json({ error: "submitted_data required" }, { status: 400 })
     }
+    // the signature consent record is written ONLY by the portal wizard's server step (lib/closure/signature-consent.ts): anything a visitor of this
+    // emailed-link form sends under those names is thrown away, so the letter maker can trust the keys it reads
+    const { CLOSURE_SIGNATURE_RECORD_KEYS, CLOSURE_SIGNATURE_LOCALE_HINT, CLOSURE_SIGNATURE_SEEN_HINT, CLOSURE_SIGNATURE_FIELD } = await import("@/lib/closure/signature-consent")
+    const submittedData: Record<string, unknown> = Array.isArray(body.submitted_data) ? {} : { ...body.submitted_data }
+    for (const k of [...CLOSURE_SIGNATURE_RECORD_KEYS, CLOSURE_SIGNATURE_LOCALE_HINT, CLOSURE_SIGNATURE_SEEN_HINT, CLOSURE_SIGNATURE_FIELD]) delete submittedData[k]
+    const uploadPaths: string[] = Array.isArray(body.upload_paths) ? (body.upload_paths as unknown[]).filter((p): p is string => typeof p === "string" && !/(^|\/)signature_image_/.test(p)) : []
     const forwardedFor = req.headers.get("x-forwarded-for")
     const clientIpAddr = forwardedFor ? forwardedFor.split(",")[0].trim() : ""
     const { data: updated, error } = await supabaseAdmin
       .from("closure_submissions")
       .update({
-        submitted_data: body.submitted_data,
+        submitted_data: submittedData as unknown as Json,
         changed_fields: body.changed_fields ?? {},
-        upload_paths: body.upload_paths ?? [],
+        upload_paths: uploadPaths,
         status: "completed",
         completed_at: new Date().toISOString(),
         client_ip: clientIpAddr,

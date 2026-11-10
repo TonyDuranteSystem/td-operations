@@ -40,13 +40,14 @@ function installFrom() {
     const result = table === 'service_deliveries' ? delivery : table === 'accounts' ? { is_test: true } : null
     const list = table === 'pipeline_stages' ? CLOSURE : []
     const chain: Record<string, unknown> = {}
+    let updating = false // a stage move is written only if it matches the step it read: the stand-in says one row matched
     const self = () => chain
     for (const m of ['select', 'eq', 'neq', 'in', 'is', 'or', 'ilike', 'order', 'limit', 'contains']) chain[m] = self
     chain.single = () => Promise.resolve({ data: result, error: null })
     chain.maybeSingle = () => Promise.resolve({ data: result, error: null })
-    chain.update = (row: unknown) => { writes.push({ table, row }); return chain }
+    chain.update = (row: unknown) => { updating = true; writes.push({ table, row }); return chain }
     chain.insert = (row: unknown) => { writes.push({ table, row }); return chain }
-    chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ data: list, error: null }).then(resolve)
+    chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ data: updating && table === 'service_deliveries' ? [{ id: 'sd-1' }] : list, error: null }).then(resolve)
     return chain
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }) as any)

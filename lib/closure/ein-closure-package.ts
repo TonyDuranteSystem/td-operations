@@ -21,9 +21,10 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { pickClosureAnswers } from '@/lib/flows/closure-answers'
-import { buildEinClosureLetterPdf, einClosureLetterProblems } from '@/lib/closure/ein-closure-letter'
+import { buildEinClosureLetter, einClosureLetterProblems } from '@/lib/closure/ein-closure-letter'
 import { parseStorePointer } from '@/lib/crm-store/document-pointer'
-import { looksLikePng, MAX_SIGNATURE_BYTES } from '@/lib/closure/signature-consent'
+import { looksLikePng, MAX_SIGNATURE_BYTES, signaturePathsOf, einDigits, signatureFingerprint, sameSignedCompany, normalizeCompanyName } from '@/lib/closure/signature-consent'
+import { createHash } from 'crypto'
 import { TD_LARGO_STREET_3D, TD_LARGO_CITY, TD_LARGO_STATE, TD_LARGO_ZIP } from '@/lib/addresses'
 
 /** The saved package's file name and the key that makes "Generate again" a NEW VERSION of the same file, never a second file. */
@@ -43,9 +44,16 @@ export interface EinNoticeCandidate {
   recommended: boolean
 }
 
+/** How a file was recognised as an EIN notice: by its document TYPE (staff or the system typed it) or only by its file name (a guess). */
+export type NoticeMatch = 'type' | 'name' | null
+
 export interface EinClosureFacts {
   jobId: string
   stage: string | null
+  /** 'active' / 'cancelled' / 'completed' — a letter is only made for an open closure */
+  jobStatus: string | null
+  /** a short fingerprint of what the box shows (company, EIN, signer, signature, EIN copies): the letter is made only if it is still the same when staff press the button */
+  factsHash: string
   hasCompany: boolean
   companyName: string
   ein: string
@@ -77,19 +85,45 @@ export function isFail<T extends { ok: boolean }>(r: T): r is Extract<T, { ok: f
   return r.ok === false
 }
 
-/** Is this stored file the company's EIN notice (CP 575 / 147C / "EIN letter") — and not our own closure letter or the IRS's closure answer? */
-export function isEinNoticeCandidate(fileName: string, typeLabel: string | null): boolean {
+/**
+ * How this stored file is recognised as the company's EIN notice (CP 575 / 147C / "EIN letter") — and never our own closure letter or the IRS's
+ * closure answer. A typed file ("EIN Letter (IRS)", "EIN CP575B"…) is a sure match; a file known only by its NAME is a guess, so it is offered but
+ * never preselected on its own. The words are matched as whole words ("disclosure", "enclosure" are not "closure").
+ */
+export function einNoticeMatch(fileName: string, typeLabel: string | null): NoticeMatch {
   const name = fileName.trim()
-  if (/^EIN Closure Letter/i.test(name)) return false // our own package
+  if (/^EIN Closure Letter/i.test(name)) return null // our own package
   const type = (typeLabel ?? '').trim()
-  if (/cancel/i.test(type) || /closure|cancel/i.test(name)) return false // a cancellation request / the IRS's answer, not the notice
-  if (/^EIN\b/i.test(type)) return true // "EIN IRS FAX - LTR 147C", "EIN Letter (IRS)", "EIN CP575B"…
-  return /^ein[_ -]?letter/i.test(name) || /(cp[ _-]?575|147c)/i.test(name) // the wizard's field name prefix, or the IRS form number
+  if (/cancel/i.test(type)) return null // a cancellation request, not the notice
+  if (/^EIN\b/i.test(type)) return 'type' // "EIN IRS FAX - LTR 147C", "EIN Letter (IRS)", "EIN CP575B"…
+  // the file the closure wizard minted for its own "EIN letter" field (ein_letter_<8 hex>_<the client's file name>): whatever the client called their file ("EIN letter for closure.pdf"), it IS the one they uploaded for this closure
+  if (/^ein_letter_[0-9a-f]{8}_/i.test(name)) return 'name'
+  if (/(?<![a-z])(closure|cancel[a-z]*)/i.test(name)) return null // a closure / cancellation file named by the client or the IRS
+  if (/^ein[_ -]?letter/i.test(name) || /(?<![a-z0-9])(cp[ _-]?575[a-z]?|147c)(?![a-z0-9])/i.test(name)) return 'name' // the wizard's field name prefix, or the IRS form number
+  return null
 }
 
-/** Staff type an address in a box: one line per row, at most 4 lines of at most 80 characters. */
+export const isEinNoticeCandidate = (fileName: string, typeLabel: string | null): boolean => einNoticeMatch(fileName, typeLabel) !== null
+
+/** Staff type an address in a box: one line per row. Nothing is cut here — a letter that cannot hold it says so (einClosureLetterProblems) instead of losing the end of the address. */
 export function splitAddress(text: string): string[] {
-  return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 4).map((l) => l.slice(0, 80))
+  return text.split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean)
+}
+
+/**
+ * The company's address on file as the lines of the letter. A multi-line address is kept as it is; a one-line "street, suite, City, ST 12345" becomes
+ * the street part and a "City, ST 12345" line — nothing is dropped (it used to keep only the first four comma pieces).
+ */
+export function addressToLines(raw: string): string[] {
+  const lines = raw.split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean)
+  if (lines.length > 1) return lines
+  const one = lines[0] ?? ''
+  const parts = one.split(/,\s*/).map((p) => p.trim()).filter(Boolean)
+  const last = parts[parts.length - 1] ?? ''
+  if (parts.length >= 3 && /^[A-Za-z]{2}\s+\d{5}(-\d{4})?$/.test(last)) {
+    return [parts.slice(0, -2).join(', '), `${parts[parts.length - 2]}, ${last}`]
+  }
+  return parts.length > 0 ? parts : []
 }
 
 /** "Christian Ranieri" from the wizard's answers — the owner's own fields first, then the first/last name the client signed in with. */
@@ -110,7 +144,11 @@ interface JobRow {
   source_closure_token: string | null
 }
 
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 async function loadJob(jobId: string): Promise<{ ok: true; job: JobRow } | { ok: false; error: string; status: number }> {
+  // not an id at all: the same plain answer as a job that does not exist (never a database error sentence)
+  if (!UUID_SHAPE.test(jobId)) return { ok: false, error: 'Job not found.', status: 404 }
   const { data, error } = await supabaseAdmin
     .from('service_deliveries')
     .select('id, service_type, stage, status, account_id, contact_id, created_at, source_closure_token')
@@ -144,6 +182,15 @@ async function loadAnswers(job: JobRow): Promise<{ ok: true; answers: Record<str
   return { ok: true, answers: (picked?.submitted_data as Record<string, unknown> | null) ?? null }
 }
 
+/** Which of these stored files are still LIVE in the storage (a trashed or purged file must not be offered, attached or embedded). */
+async function liveStoreIds(ids: string[]): Promise<{ ok: true; live: Set<string> } | { ok: false; error: string }> {
+  if (ids.length === 0) return { ok: true, live: new Set() }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* tables are not in the generated types until they reach production
+  const { data, error } = await (supabaseAdmin as any).from('store_files').select('id, state').in('id', ids)
+  if (error) return { ok: false, error: `Could not check the stored files: ${error.message}` }
+  return { ok: true, live: new Set(((data ?? []) as Array<{ id: string; state: string | null }>).filter((r) => r.state === 'live').map((r) => r.id)) }
+}
+
 export async function loadEinClosureFacts(jobId: string): Promise<EinFactsResult> {
   const j = await loadJob(jobId)
   if (isFail(j)) return j
@@ -154,23 +201,34 @@ export async function loadEinClosureFacts(jobId: string): Promise<EinFactsResult
   if (isFail(a)) return { ok: false, error: a.error, status: 500 }
   const answers = a.answers
   const str = (k: string) => (typeof answers?.[k] === 'string' ? (answers[k] as string).trim() : '')
+  if (!answers && (job.account_id || job.contact_id)) {
+    warnings.push("The system could not tell which closure wizard answers belong to this job (another closure of the same company or person is open, or the form is not sent yet), so the client's signature and wizard answers are NOT used — fill in the address below and the letter has a line to sign by hand.")
+  }
 
   // the company: our record when the job has one, else what the client wrote
-  let companyName = str('llc_name')
-  let ein = str('llc_ein')
+  const wizardName = str('llc_name')
+  const wizardEin = str('llc_ein')
+  let companyName = wizardName
+  let ein = wizardEin
   let state: string | null = str('llc_state') || null
   let addressLines: string[] = []
   let addressSource: EinClosureFacts['addressSource'] = 'none'
+  let clientWroteOtherCompany = false
   if (job.account_id) {
     const { data: acc, error } = await supabaseAdmin.from('accounts').select('company_name, ein_number, state_of_formation, physical_address').eq('id', job.account_id).maybeSingle()
     if (error) return { ok: false, error: `Could not read the company: ${error.message}`, status: 500 }
     if (acc) {
-      const wizardName = companyName
-      companyName = (acc.company_name as string | null) ?? companyName
-      ein = (acc.ein_number as string | null) ?? ein
-      state = (acc.state_of_formation as string | null) ?? state
-      if (wizardName && companyName && wizardName.toLowerCase() !== companyName.toLowerCase()) {
+      // `||` not `??`: an empty text in our record must not hide what the client wrote
+      companyName = ((acc.company_name as string | null) ?? '').trim() || companyName
+      ein = ((acc.ein_number as string | null) ?? '').trim() || ein
+      state = ((acc.state_of_formation as string | null) ?? '').trim() || state
+      if (wizardName && companyName && normalizeCompanyName(wizardName) !== normalizeCompanyName(companyName)) {
+        clientWroteOtherCompany = true
         warnings.push(`The client wrote "${wizardName}" in the wizard, but this job is for "${companyName}". The letter uses ${companyName}.`)
+      }
+      if (einDigits(wizardEin) && einDigits(ein) && einDigits(wizardEin) !== einDigits(ein)) {
+        clientWroteOtherCompany = true
+        warnings.push(`The client's form says the EIN is ${wizardEin}, but our record says ${ein}. The letter uses our record (${ein}) — check the EIN letter before it goes.`)
       }
       const { companyCmraAddressLine } = await import('@/lib/operations/suite')
       let hasSuite = false
@@ -183,7 +241,7 @@ export async function loadEinClosureFacts(jobId: string): Promise<EinFactsResult
         addressLines = [TD_LARGO_STREET_3D, `${TD_LARGO_CITY}, ${TD_LARGO_STATE} ${TD_LARGO_ZIP}`]
         addressSource = 'suite'
       } else if (typeof acc.physical_address === 'string' && acc.physical_address.trim()) {
-        addressLines = acc.physical_address.split(/,\s*|\r?\n/).map((l: string) => l.trim()).filter(Boolean).slice(0, 4)
+        addressLines = addressToLines(acc.physical_address)
         addressSource = 'account'
       }
     }
@@ -210,43 +268,80 @@ export async function loadEinClosureFacts(jobId: string): Promise<EinFactsResult
   }
   docs.sort((x, y) => y.created_at.localeCompare(x.created_at))
 
-  const noticeDocs = docs.filter((d) => isEinNoticeCandidate(d.file_name, d.document_type_name)).slice(0, 12)
+  // the client's drawn signature: the file the wizard filed under the field `signature_image` — THE file the answers name, not just any file with
+  // that prefix — AND the consent record the SERVER wrote for it (a file with no consent record, staff uploaded or a forged answer, is never used)
+  const sigPaths = signaturePathsOf(answers?.signature_image)
+  const sigFileName = sigPaths.length > 0 ? (sigPaths[sigPaths.length - 1].split('/').pop() ?? null) : null
+  const sigDoc = sigFileName ? docs.find((d) => d.file_name === sigFileName) : undefined
+  const anyOtherSigDoc = !sigDoc && docs.some((d) => /^signature_image/i.test(d.file_name))
+  const signedAt = str('signature_signed_at') || null
+  const hasConsent = !!signedAt && !!str('signature_consent')
+
+  const noticeDocs = docs.filter((d) => einNoticeMatch(d.file_name, d.document_type_name) !== null).slice(0, 12)
+  const storePointer = (d: Doc | undefined) => (d ? parseStorePointer(d.drive_file_id) : null)
+  const liveCheck = await liveStoreIds([...noticeDocs.map((d) => storePointer(d)), storePointer(sigDoc)].filter((x): x is string => !!x))
+  if (isFail(liveCheck)) return { ok: false, error: liveCheck.error, status: 500 }
+  const liveOnly = (id: string | null) => (id && liveCheck.live.has(id) ? id : null)
+
   const notices: EinNoticeCandidate[] = noticeDocs.map((d) => ({
     documentId: d.id,
     name: d.file_name,
     typeLabel: d.document_type_name,
-    storeFileId: parseStorePointer(d.drive_file_id),
+    storeFileId: liveOnly(storePointer(d)),
     mergeable: MERGEABLE_EXT.test(d.file_name),
     recommended: false,
   }))
-  // the wizard keeps the field name in the file name ("ein_letter_…"): that is the file the client uploaded for this closure
-  const wizardOne = notices.find((n) => /^ein[_ -]?letter/i.test(n.name))
-  if (wizardOne) wizardOne.recommended = true
-  else if (notices.length === 1) notices[0].recommended = true
+  // preselect only what is certain: the file the wizard named for this closure, or the one typed EIN notice — never a name-only guess, and
+  // nothing at all when the client wrote another company than the one this job is for (the copy could be the other company's)
+  if (!clientWroteOtherCompany) {
+    const wizardOne = notices.find((n) => /^ein[_ -]?letter/i.test(n.name))
+    if (wizardOne) wizardOne.recommended = true
+    else if (notices.length === 1 && einNoticeMatch(noticeDocs[0].file_name, noticeDocs[0].document_type_name) === 'type') notices[0].recommended = true
+  } else if (notices.length > 0) {
+    warnings.push("No EIN copy is preselected because of the difference above — check that the one you attach is this company's.")
+  }
 
-  // the client's drawn signature: the file the wizard filed under the field `signature_image` AND the consent record the SERVER wrote for it
-  // (a file with that name but no consent record — staff uploaded it, or a client forged the answers — is never put on the letter)
-  const sigDoc = docs.find((d) => /^signature_image/i.test(d.file_name))
-  const sigFileId = sigDoc ? parseStorePointer(sigDoc.drive_file_id) : null
-  const signedAt = str('signature_signed_at') || null
-  const hasConsent = !!signedAt && !!str('signature_consent')
+  const sigFileId = liveOnly(storePointer(sigDoc))
+  // the signature belongs to the letter the client SAW (company, EIN, owner as typed in the wizard): if this letter is for another company or EIN
+  // (our record differs from what the client wrote), the signature is NOT used
+  const factsFingerprint = `${normalizeCompanyName(companyName)}|${einDigits(ein)}|`
+  const signedFingerprint = (str('signature_for') || (answers ? signatureFingerprint(answers) : '')).split('|').slice(0, 2).join('|') + '|'
+  const signedForThisLetter = !answers || sameSignedCompany(signedFingerprint, factsFingerprint)
+  if (hasConsent && !signedForThisLetter) {
+    warnings.push(`The client signed a letter for "${wizardName || '?'}" (EIN ${wizardEin || '?'}), but this letter is for "${companyName}" (EIN ${ein || '?'}). The signature is NOT used — the letter has a line to sign by hand.`)
+  }
   if (sigDoc && !hasConsent) warnings.push("A signature picture is on this job but the client's consent was not recorded, so it is NOT used — the letter has a line to sign by hand.")
-  if (sigDoc && hasConsent && !sigFileId) warnings.push("The client's signature picture is not in the new storage, so it cannot be used — the letter has a line to sign by hand.")
-  const usableSignature = !!sigFileId && hasConsent
+  if (sigFileName && hasConsent && !sigDoc) {
+    warnings.push(`The client drew a signature, but its picture is not on this job${anyOtherSigDoc ? ' (only another signature file is)' : ' yet (it may still be filing — look again in a minute)'}. The letter has a line to sign by hand until then.`)
+  }
+  if (sigDoc && hasConsent && !sigFileId) warnings.push("The client's signature picture is not in the new storage (or was removed), so it cannot be used — the letter has a line to sign by hand.")
+  const usableSignature = !!sigFileId && hasConsent && signedForThisLetter
 
   const existing = docs.find((d) => /^EIN Closure Letter/i.test(d.file_name))
   if (notices.length === 0) warnings.push('No copy of the EIN letter is on this job. The IRS asks for one if the client still has it — the letter can go without it.')
   if (notices.some((n) => !n.mergeable)) warnings.push('One of the EIN letter files is not a PDF or a picture the system can join (for example a phone HEIC photo) — it cannot be attached.')
+  if (notices.some((n) => n.mergeable && !n.storeFileId)) warnings.push('One of the EIN letter files is not in the new storage (or was removed), so it cannot be attached.')
   const returnsFiled = str('tax_returns_filed') || null
   if (returnsFiled && returnsFiled.toLowerCase() !== 'yes') {
-    warnings.push('The client says tax returns were NOT all filed. The IRS will not close the account until every return is filed and taxes are paid — a final return may be needed before this letter goes.')
+    warnings.push(
+      returnsFiled.toLowerCase() === 'no'
+        ? 'The client says tax returns were NOT all filed. The IRS will not close the account until every return is filed and taxes are paid — a final return may be needed before this letter goes.'
+        : 'The client is not sure whether all tax returns were filed. The IRS will not close the account until every return is filed and taxes are paid — check before this letter goes.',
+    )
   }
+
+  const factsHash = createHash('sha256')
+    .update(JSON.stringify({ c: companyName, e: ein, s: signerName, g: usableSignature ? sigFileId : null, n: notices.map((n) => `${n.documentId}:${n.storeFileId ?? ''}`).sort(), st: job.status }))
+    .digest('hex')
+    .slice(0, 16)
 
   return {
     ok: true,
     facts: {
       jobId: job.id,
       stage: job.stage,
+      jobStatus: job.status,
+      factsHash,
       hasCompany: !!job.account_id,
       companyName,
       ein,
@@ -271,6 +366,8 @@ export interface BuildPackageInput {
   addressLines: string[]
   /** the EIN notice to attach — one of the job's own candidates, or null for none */
   noticeDocumentId: string | null
+  /** the fingerprint of the box staff were looking at (facts.factsHash); when it differs now, nothing is made and staff are asked to look again */
+  factsHash?: string | null
   now?: Date
 }
 
@@ -282,6 +379,12 @@ export async function buildEinClosurePackage(input: BuildPackageInput): Promise<
   const f = await loadEinClosureFacts(input.jobId)
   if (isFail(f)) return f
   const facts = f.facts
+
+  // a letter is only made for an OPEN closure (a cancelled or finished job keeps no new paperwork)
+  if (facts.jobStatus && facts.jobStatus !== 'active') return { ok: false, error: `This closure is ${facts.jobStatus} — the letter is only made for an open closure.`, status: 409 }
+  if (input.factsHash && input.factsHash !== facts.factsHash) {
+    return { ok: false, error: 'Something changed since you opened this box (the client, the company record or the files were updated). The box has been reloaded — check it, then press the button again.', status: 409 }
+  }
 
   const problems = einClosureLetterProblems({ companyName: facts.companyName, ein: facts.ein, companyAddressLines: input.addressLines, signerName: facts.signerName })
   if (problems.length > 0) return { ok: false, error: problems.join(' '), status: 400 }
@@ -309,8 +412,9 @@ export async function buildEinClosurePackage(input: BuildPackageInput): Promise<
   }
 
   let letter: Uint8Array
+  let signed = false
   try {
-    letter = await buildEinClosureLetterPdf({
+    const made = await buildEinClosureLetter({
       companyName: facts.companyName,
       ein: facts.ein,
       companyAddressLines: input.addressLines,
@@ -319,6 +423,9 @@ export async function buildEinClosurePackage(input: BuildPackageInput): Promise<
       includesEinNotice: !!notice,
       signaturePng,
     })
+    letter = made.bytes
+    signed = made.signatureUsed
+    warnings.push(...made.warnings)
   } catch (e) {
     return { ok: false, error: `Could not make the letter: ${e instanceof Error ? e.message : String(e)}`, status: 400 }
   }
@@ -382,8 +489,19 @@ export async function buildEinClosurePackage(input: BuildPackageInput): Promise<
     } else {
       return { ok: false, error: 'This job has neither a company nor a person, so there is nowhere to save the letter.', status: 400 }
     }
-    if (saved.route !== 'store') return { ok: false, error: "This company's files are not in the new storage yet, so the letter could not be saved.", status: 409 }
-    return { ok: true, documentId: saved.documentRowId, name, pages, attachedNotice: notice?.name ?? null, signed: !!signaturePng, warnings }
+    if (saved.route !== 'store') {
+      // say the REAL reason (closed / moving / no folder) when the storage rules know it
+      let why = "This company's files are not in the new storage yet, so the letter could not be saved."
+      try {
+        const { noStorageDecisionFor, noStorageDecisionForContact } = await import('@/lib/crm-store/no-storage')
+        const d = job.job.account_id ? await noStorageDecisionFor(job.job.account_id) : await noStorageDecisionForContact(job.job.contact_id as string)
+        if (d.route === 'refuse') why = `${d.sentence} The letter could not be saved.`
+      } catch {
+        /* keep the general sentence */
+      }
+      return { ok: false, error: why, status: 409 }
+    }
+    return { ok: true, documentId: saved.documentRowId, name, pages, attachedNotice: notice?.name ?? null, signed, warnings: Array.from(new Set(warnings)) }
   } catch (e) {
     if (e instanceof CompanyMovingError) return { ok: false, error: e.message, status: 409 }
     return { ok: false, error: `Could not save the letter: ${e instanceof Error ? e.message : String(e)}`, status: 500 }

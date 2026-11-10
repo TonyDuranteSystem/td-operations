@@ -31,6 +31,7 @@ import { resolveClosureSubmissionToken } from '@/lib/portal/closure-submission-t
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { validateWizardData } from '@/lib/jobs/validation'
 import { collectUploadPaths, isWizardUploadPath } from '@/lib/portal/wizard-uploads'
+import { withoutSignatureRecord } from '@/lib/closure/signature-consent'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
 import { formationLeadOwned, formationOfferOwned, onboardingOfferOwned } from '@/lib/portal/formation-lead-access'
@@ -77,15 +78,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'wizard_type and data are required' }, { status: 400 })
   }
 
-  // Company Closure, the signature for the EIN letter (part F step 2): the consent record is written HERE, by the server — the text, the
-  // time and the caller's address — never taken from the request; a client who did not draw a signature has none recorded.
-  if (wizard_type === 'closure' && typeof data === 'object') {
-    const { applyClosureSignatureConsent, clientIpFromForwardedFor } = await import('@/lib/closure/signature-consent')
-    applyClosureSignatureConsent(data as Record<string, unknown>, {
-      ip: clientIpFromForwardedFor(req.headers.get('x-forwarded-for')),
-      userAgent: req.headers.get('user-agent'),
-      now: new Date(),
-    })
+  // Company Closure: the answers must be a JSON object (a string or a number would skip every check below and still be stored)
+  if (wizard_type === 'closure' && (typeof data !== 'object' || data === null || Array.isArray(data))) {
+    return NextResponse.json({ error: 'The closure form could not be read. Refresh the page and try again.' }, { status: 400 })
   }
 
   // Server-side backstop: a formation is for a NEW company and lives on the
@@ -113,6 +108,43 @@ export async function POST(req: NextRequest) {
     const { data: link, error: linkErr } = await supabaseAdmin
       .from('account_contacts').select('contact_id').eq('account_id', identity.accountId).eq('contact_id', contact_id).limit(1).maybeSingle()
     if (linkErr || !link) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+
+  // ─── Company Closure: who signs, and the signature for the EIN letter (part F step 2; dev job a6bbea09) ───
+  // The closure form carries the OWNER's signature on a letter to the IRS: a company teammate (a login with no person behind it) cannot send it.
+  // The consent record is written HERE, by the server — the text, the time and the caller's address — never taken from the request; the
+  // signature must be the client's own drawing (their folder, a real small PNG) of THIS letter (the company details they signed for are the ones they
+  // are sending), and a closure sent without one is refused (R099: plain sentences, in both languages — the server does not know the client's).
+  if (wizard_type === 'closure') {
+    if (identity.kind !== 'contact') {
+      return NextResponse.json({ error: "Only the company's owner can send the closure form — it carries their signature. / Solo il titolare può inviare il modulo di chiusura — contiene la sua firma." }, { status: 403 })
+    }
+    const closureData = data as Record<string, unknown>
+    const { applyClosureSignatureConsent, clientIpFromForwardedFor, signaturePathsOf } = await import('@/lib/closure/signature-consent')
+    const claimed = signaturePathsOf(closureData.signature_image)
+    if (claimed.length > 0) {
+      const { verifyClosureSignatureFile, ownWizardFolders } = await import('@/lib/closure/signature-verify')
+      const checked = await verifyClosureSignatureFile(
+        claimed[claimed.length - 1],
+        ownWizardFolders([rawAccountId, contact_id, identity.contactId, user.email, user.id]),
+      )
+      if (checked.ok === false) return NextResponse.json({ error: (checked as { error: string }).error }, { status: 400 })
+    }
+    const sig = applyClosureSignatureConsent(closureData, {
+      ip: clientIpFromForwardedFor(req.headers.get('x-forwarded-for')),
+      userAgent: req.headers.get('user-agent'),
+      now: new Date(),
+    })
+    if (!sig.signed) {
+      return NextResponse.json(
+        {
+          error: sig.changedAfterSigning
+            ? 'You changed the company details after signing — please draw your signature again. / Hai cambiato i dati della società dopo aver firmato — disegna di nuovo la firma.'
+            : 'Please draw your signature for the EIN letter before sending the closure form. / Disegna la tua firma per la lettera EIN prima di inviare il modulo di chiusura.',
+        },
+        { status: 400 },
+      )
+    }
   }
 
   // ─── 0b. FORMATION LEAD OWNERSHIP (default-deny) ───
@@ -1200,7 +1232,8 @@ export async function POST(req: NextRequest) {
         contactId: contact_id,
         leadId: lead_id,
         offerId: anchorOfferId,
-        data,
+        // without the consent record: it carries the server's clock, so a retried send would otherwise never look like the same send
+        data: withoutSignatureRecord(data),
       })
       payload.dedupe_key = dedupeKey
 

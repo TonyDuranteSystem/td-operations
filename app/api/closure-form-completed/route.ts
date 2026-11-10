@@ -10,8 +10,10 @@
  *    person's storage, folder "Company closure_<name>" (Company Closure Part B, Antonio 2026-11-06).
  * 3. Ensure Service Delivery exists
  * 3b. Move the job from "Data Collection" to "State Compliance Check" by itself (only from Data Collection — never re-advances; not when the
- *     wizard created the job, not when the client wrote another company than the job's, not twice for the same submission content —
- *     lib/closure/wizard-move-guard.ts)
+ *     wizard created the job, not when the client wrote a company the job's own link does not agree with — the typed EIN beats the typed name, so
+ *     only another EIN, or a name that is another of the person's companies, counts — not twice for the same submission content —
+ *     lib/closure/wizard-move-guard.ts). The move itself is written only if the job is STILL on the step it was read at (lib/service-delivery.ts):
+ *     a late pass can no longer pull a job back after staff moved it on (production test 2026-11-10).
  * 4. (no email to support any more — the What's New note is the only notification, Antonio 2026-11-05)
  * 5. Create task for Luca on a genuine RESUBMISSION only
  * 5b. What's New note for staff
@@ -30,6 +32,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWriteSafe } from "@/lib/db"
 import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
+import { JOB_MOVED_MEANWHILE } from "@/lib/service-delivery"
 import type { ClosureDestination } from "@/lib/forms/closure-destination"
 import type { FilingStep } from "@/lib/forms/file-form-package"
 import type { Json } from "@/lib/database.types"
@@ -341,6 +344,9 @@ export async function POST(req: NextRequest) {
           })
           if (adv.advanced) {
             results.push({ step: "sd_advance", status: "ok", detail: `SD ${deliveryId} -> State Compliance Check` })
+          } else if (adv.result?.error === JOB_MOVED_MEANWHILE) {
+            // staff (or another pass) moved the job while this one was running: the job is where they put it — nothing to retry
+            results.push({ step: "sd_advance", status: "skipped", detail: "the job was moved by someone else while this pass ran" })
           } else if (adv.current_stage === "Data Collection") {
             // the gate matched but the move itself failed — an error step, so the job retries it
             results.push({ step: "sd_advance", status: "error", detail: adv.result?.error || adv.reason })

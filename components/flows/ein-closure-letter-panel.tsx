@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AlertTriangle, CheckCircle2, FileText, Loader2 } from 'lucide-react'
 import type { EinClosureFacts } from '@/lib/closure/ein-closure-package'
+import { MAX_ADDRESS_LINES, MAX_ADDRESS_LINE_CHARS } from '@/lib/closure/ein-letter-wording'
 
 interface MadeInfo {
   documentId: string
@@ -11,6 +12,13 @@ interface MadeInfo {
   pages: number
   attachedNotice: string | null
   signed?: boolean
+  warnings?: string[]
+}
+
+/** The day the client signed, in New York time (the UTC date is already tomorrow's after 8 pm there). */
+const signedDay = (iso: string): string => {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d)
 }
 
 // Luca's rule (TD Talk, 2026-11-10): the top address is ALWAYS the one printed on the EIN letter — the address the IRS has on file (the main address of the Articles).
@@ -30,7 +38,8 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
   const [facts, setFacts] = useState<EinClosureFacts | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [address, setAddress] = useState('')
-  const [noticeId, setNoticeId] = useState<string>('')
+  // null = staff have not chosen yet (the box preselects the certain one); '' = staff chose "No copy" — that choice must survive a reload of the facts
+  const [noticeId, setNoticeId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [made, setMade] = useState<MadeInfo | null>(null)
 
@@ -43,7 +52,8 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
       const f = data.facts as EinClosureFacts
       setFacts(f)
       setAddress((prev) => prev || f.addressLines.join('\n'))
-      setNoticeId((prev) => prev || f.notices.find((n) => n.recommended && n.mergeable && n.storeFileId)?.documentId || '')
+      const preselected = f.notices.find((n) => n.recommended && n.mergeable && n.storeFileId)?.documentId || ''
+      setNoticeId((prev) => (prev === null ? preselected : prev === '' ? '' : f.notices.some((n) => n.documentId === prev && n.mergeable && n.storeFileId) ? prev : preselected))
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not load the letter.')
     }
@@ -60,10 +70,15 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
       const res = await fetch(`/api/flows/${serviceDeliveryId}/ein-closure-letter`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address, notice_document_id: noticeId || null }),
+        body: JSON.stringify({ address, notice_document_id: noticeId || null, facts_hash: facts?.factsHash ?? null }),
       })
       const data = await res.json().catch(() => null)
-      if (!res.ok || !data || !data.success) throw new Error(data?.error || 'The letter could not be made.')
+      if (!res.ok || !data || !data.success) {
+        const msg = data?.error || 'The letter could not be made.'
+        // something changed under the box (409): show the fresh facts, keep the message on top of them
+        if (res.status === 409) await load()
+        throw new Error(msg)
+      }
       setMade(data.result as MadeInfo)
       await load()
       router.refresh() // the new file appears in the documents list
@@ -74,6 +89,13 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
     }
   }
 
+  const addressRows = address.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  const addressTooLong =
+    addressRows.length > MAX_ADDRESS_LINES
+      ? `The letter has room for ${MAX_ADDRESS_LINES} address lines — this has ${addressRows.length}. Join some lines (for example the street and the suite).`
+      : addressRows.some((l) => l.length > MAX_ADDRESS_LINE_CHARS)
+        ? `An address line is longer than ${MAX_ADDRESS_LINE_CHARS} characters — split it over two lines.`
+        : null
   const link = (id: string) => `/api/documents/${id}/preview`
   const shown = made ?? (facts?.existingLetter ? { documentId: facts.existingLetter.documentId, name: facts.existingLetter.name, pages: 0, attachedNotice: null } : null)
 
@@ -97,7 +119,7 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
             <dt className="text-zinc-500">EIN</dt>
             <dd className="font-medium text-zinc-900">{facts.ein || '—'}</dd>
             <dt className="text-zinc-500">Signed by</dt>
-            <dd className="font-medium text-zinc-900">{facts.signerName || '—'} <span className="font-normal text-zinc-500">{facts.hasSignature ? `(signature drawn by the client${facts.signedAt ? ` on ${facts.signedAt.slice(0, 10)}` : ''})` : '(a line to sign by hand)'}</span></dd>
+            <dd className="font-medium text-zinc-900">{facts.signerName || '—'} <span className="font-normal text-zinc-500">{facts.hasSignature ? `(signature drawn by the client${facts.signedAt ? ` on ${signedDay(facts.signedAt)}` : ''})` : '(a line to sign by hand)'}</span></dd>
           </dl>
 
           <div>
@@ -111,6 +133,7 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
               placeholder={'Street\nCity, State ZIP'}
             />
             <p className="mt-0.5 text-xs text-zinc-500">{SOURCE_NOTE[facts.addressSource]}</p>
+            {addressTooLong && <p className="mt-0.5 text-xs text-red-700">{addressTooLong}</p>}
           </div>
 
           <fieldset>
@@ -137,7 +160,7 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
           ))}
 
           <div className="flex flex-wrap items-center gap-3">
-            <button type="button" disabled={busy || !address.trim()} onClick={() => void make()} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:bg-zinc-300">
+            <button type="button" disabled={busy || !address.trim() || !!addressTooLong} onClick={() => void make()} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:bg-zinc-300">
               {busy ? 'Making the letter…' : shown ? 'Make the letter again' : 'Make the letter'}
             </button>
             {shown && (
@@ -151,6 +174,9 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
               <span>Saved on this job — {made.pages} page{made.pages === 1 ? '' : 's'}{made.attachedNotice ? `, with “${made.attachedNotice}” attached` : ', letter only'}{made.signed ? ', signed with the client’s signature' : ', with a line to sign by hand'}. Print it and mail it; then save the tracking number below.</span>
             </p>
           )}
+          {made?.warnings && made.warnings.length > 0 && made.warnings.filter((w) => !facts.warnings.includes(w)).map((w) => (
+            <p key={w} className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {w}</p>
+          ))}
         </div>
       )}
     </div>
