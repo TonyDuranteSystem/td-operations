@@ -19,8 +19,8 @@ import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { HandoffTarget } from '@/lib/crm-store/chat-file-handoff'
 import { businessOwnerIdOf, type HandoffArea, type NavGroupLike } from '@/lib/crm-store/handoff-area'
 
-/** Why the ITIN reader exists: Storage's own upload of an "ITIN Letter" fills the person's record from the file and does not check whose letter it is. */
-const ITIN_HINT = "Storage fills a person's record from an ITIN letter without checking whose letter it is. The ITIN reader checks the name, the date of birth and the other holders of that ITIN first."
+/** What the ITIN reader adds (2026-11-10, after #1043): Storage's own upload of an "ITIN Letter" now also checks whose letter it is before it fills the record, so the hint no longer says it doesn't. The reader shows what it read and fills only after staff confirm. */
+const ITIN_HINT = "The ITIN reader shows what it read from the letter and fills the person's record only after you confirm. Saving the file here also fills the record, but only when the letter names this person."
 
 interface SignedFile { url: string; name: string; mimeType: string; size: number | null }
 
