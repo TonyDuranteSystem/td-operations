@@ -54,8 +54,10 @@ describe('the Tax Return layouts', () => {
   })
 
   it('the other upload boxes of the service are untouched and stay untyped (extension receipt, client data)', () => {
-    for (const [stage, label] of [['1st Installment Paid', 'Upload Extension Receipt'], ['Wizard Available', 'Upload Client Data']] as const) {
-      const box = layoutOf(stage).components.find((c) => c.type === 'document_upload')!
+    // "1st Installment Paid": the plain box became the extension box (item 7), which carries the SAME label and shows that plain box for the companies
+    // that are not single-member LLCs — so it is still untyped there
+    for (const [stage, type, label] of [['1st Installment Paid', 'extension_fax_panel', 'Upload Extension Receipt'], ['Wizard Available', 'document_upload', 'Upload Client Data']] as const) {
+      const box = layoutOf(stage).components.find((c) => c.type === type)!
       expect(box.label).toBe(label)
       expect(box.documentType).toBeUndefined()
     }
