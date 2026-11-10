@@ -295,6 +295,8 @@ const sortKids = (c: { folders: Fold[]; sortOrder?: 'newest' | 'oldest' }): Fold
 const sortFolders = (a: Fold, b: Fold) => (isYear(a.name) && isYear(b.name) ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name))
 
 type UploadOutcome = 'saved' | 'cancelled' | 'failed'
+/** The top of a storage (the client's root, Business, My files): files go INSIDE a folder, never at the top. */
+const isTopKind = (kind: string): boolean => kind === 'root' || kind === 'business_root' || kind === 'private_root'
 interface TrashBatch {
   whose: string | null; ownerId: string
   batchId: string; trashedAt: string; purgeAfter: string | null; trashedBy: string | null
@@ -381,6 +383,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const focusRef = useRef<string | null>(null)
   /** the storage open on the right RIGHT NOW (a slower, older load must not overwrite a newer pick) */
   const ownerIdRef = useRef<string | null>(scopedOwnerId ?? null)
+  // A chat file handed in from Portal Chats keeps the upload panel open when this storage (re)loads: opening an owner used to close it, and in Business the owner loads again after the panel was opened.
+  const incomingKeyRef = useRef<string | null>(incomingFile?.key ?? null)
+  incomingKeyRef.current = incomingFile?.key ?? null
   /** each folder pick gets a number; only the latest one may land */
   const pickSeq = useRef(0)
   const [filter, setFilter] = useState('')
@@ -471,6 +476,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   /** a plain drop / upload into the firm's own areas (Business, My files): no type, no limit */
   const [plain, setPlain] = useState<{ folder: Fold; items: PlainItem[]; skipped: PlainSkipped[]; folders: string[][] } | null>(null)
   const plainFolders = useRef(new Map<string, Fold>())
+  /** the handed-in chat file (its key) that the open plain-upload window is saving into Business / My files — ticked in the pop-up only when it really was saved */
+  const plainFromIncoming = useRef<string | null>(null)
   // many files at once: selection, sort, filters, details
   const [selectedFiles, setSelectedFiles] = useState<Map<string, File_ & { folderId: string | null; ownerId: string; ownerKind: string; ownerLabel: string }>>(new Map())
   // "Merge into one": the files being ordered, and the merged PDF waiting for the usual upload questions (folder, type, name)
@@ -585,7 +592,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setExpanded(new Set())
     setSelected(null)
     setFocus(null)
-    setUploadOpen(false)
+    if (!incomingKeyRef.current) setUploadOpen(false)
     try {
       const r = await fetchInto(oid, null)
       if (ownerIdRef.current !== oid) return // another storage was opened meanwhile
@@ -2927,6 +2934,22 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           {uploadOpen && isInternalOwnerKind(ownerKind) && viewFolder && !mergedFile && (
             <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm" onClick={(e) => e.stopPropagation()} data-no-ctx="" data-testid="plain-upload-box">
               <span className="text-zinc-700">Into <strong>{viewFolder.name}</strong>:</span>
+              {incomingFile && (
+                <span className="flex flex-wrap items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-2 py-1" data-testid="chat-file-ready-plain">
+                  <FileText className="h-4 w-4 shrink-0 text-blue-600" />
+                  <span className="font-medium text-blue-900">File from the chat:</span>
+                  <span className="max-w-[14rem] truncate text-zinc-700" title={incomingFile.file.name}>{incomingFile.file.name}</span>
+                  <span className="text-xs text-zinc-500">{fmtSize(incomingFile.file.size)}</span>
+                  <button type="button" data-testid="upload-chat-file-plain" disabled={isTopKind(viewFolder.kind)}
+                    onClick={() => {
+                      const { items, skipped, folders } = filterPlainDrop(itemsFromFileList([{ file: incomingFile.file }]))
+                      plainFolders.current = new Map(); plainFromIncoming.current = incomingFile.key
+                      setPlain({ folder: viewFolder, items, skipped, folders }); setUploadOpen(false)
+                    }}
+                    className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40">Upload this file into “{viewFolder.name}”</button>
+                  {isTopKind(viewFolder.kind) && <span className="text-xs text-blue-800" data-testid="chat-file-open-a-folder">Open a folder first — files go inside a folder, not at the top.</span>}
+                </span>
+              )}
               <label className="cursor-pointer rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50">Choose files
                 <input type="file" multiple className="hidden" onChange={(e) => { const list = Array.from(e.target.files ?? []); e.target.value = ''; if (!list.length) return; const { items, skipped, folders } = filterPlainDrop(itemsFromFileList(list.map((file) => ({ file })))); plainFolders.current = new Map(); setPlain({ folder: viewFolder, items, skipped, folders }); setUploadOpen(false) }} />
               </label>
@@ -3077,7 +3100,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       )}
       {plain && (
         <PlainDropPanel folderName={plain.folder.name} items={plain.items} skipped={plain.skipped} folders={plain.folders} makeFolder={async (path) => { await ensurePlainFolder(path) }} run={runPlainItem}
-          onClose={() => setPlain(null)} onFinished={() => { void refreshAll([plain.folder.id]) }} />
+          onClose={() => { plainFromIncoming.current = null; setPlain(null) }}
+          onFinished={(r) => {
+            void refreshAll([plain.folder.id])
+            // a chat file handed in from Portal Chats is ticked there only when it really is in Business (saved, or already there unchanged)
+            const k = plainFromIncoming.current
+            if (k && r.failed === 0 && r.saved + r.same > 0) { plainFromIncoming.current = null; onIncomingSaved?.(k) }
+          }} />
       )}
       {aiFile && ownerId && (
         <AiReviewPanel fileId={aiFile} onClose={() => setAiFile(null)}

@@ -214,7 +214,7 @@ _Regenerated 2026-11-10. Every subsystem doc under `docs/systems/` (56 docs), wi
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-11-06)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
-- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-09)_
+- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-10)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
 - [portal.md](portal.md) — Client Portal _(verified 2026-11-10)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-11-05)_
@@ -225,7 +225,7 @@ _Regenerated 2026-11-10. Every subsystem doc under `docs/systems/` (56 docs), wi
 - [social-app.md](social-app.md) — TD Social (iPhone app) — "app mode" on the web side _(verified 2026-11-10)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-11-05)_
 - [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-04)_
-- [storage.md](storage.md) — CRM Storage _(verified 2026-11-09)_
+- [storage.md](storage.md) — CRM Storage _(verified 2026-11-10)_
 - [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-05)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-07)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-11-08)_
