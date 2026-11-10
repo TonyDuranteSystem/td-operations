@@ -25,9 +25,13 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { RenewalFixProposal } from '@/lib/operations/renewal-problem-proposals'
+import type { RenewalRow } from '@/app/(dashboard)/calendar/page'
+import { RenewalDetailsDialog, formatDay } from '@/components/calendar/renewal-details-dialog'
 
 interface ProblemsRailProps {
   proposals: RenewalFixProposal[]
+  /** Companies whose RA date is not on the anniversary of their RA switch (dev job 51324085). */
+  dateChecks?: RenewalRow[]
 }
 
 const OBLIGATION_LABEL: Record<RenewalFixProposal['obligation'], string> = {
@@ -145,12 +149,14 @@ function ProblemCard({ proposal }: { proposal: RenewalFixProposal }) {
   )
 }
 
-export function ProblemsRail({ proposals }: ProblemsRailProps) {
+export function ProblemsRail({ proposals, dateChecks = [] }: ProblemsRailProps) {
   const urgent = proposals.filter(p => p.status === 'overdue' || p.status === 'on_hold_unpaid')
   const hygiene = proposals.filter(p => p.status === 'missing_data')
   const [showHygiene, setShowHygiene] = useState(false)
+  const [showChecks, setShowChecks] = useState(false)
+  const [detailsRow, setDetailsRow] = useState<RenewalRow | null>(null)
 
-  if (proposals.length === 0) {
+  if (proposals.length === 0 && dateChecks.length === 0) {
     return (
       <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-sm text-emerald-800">
         All companies check out — no renewal problems detected.
@@ -160,6 +166,47 @@ export function ProblemsRail({ proposals }: ProblemsRailProps) {
 
   return (
     <div className="space-y-3">
+      {dateChecks.length > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50/60 p-3" data-testid="date-checks">
+          <button
+            type="button"
+            onClick={() => setShowChecks(!showChecks)}
+            className="w-full flex items-center gap-2 text-left"
+          >
+            {showChecks ? (
+              <ChevronDown className="h-4 w-4 text-amber-600 shrink-0" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-amber-600 shrink-0" />
+            )}
+            <span className="text-sm font-medium text-amber-900">
+              {dateChecks.length} compan{dateChecks.length === 1 ? 'y' : 'ies'} whose Registered Agent renewal date does not match the rule (Client Since if filled, otherwise Formation)
+            </span>
+          </button>
+          {showChecks && (
+            <div className="mt-2 space-y-1.5">
+              <p className="text-xs text-amber-800">
+                Check each one in Harbor Compliance, then click it to correct the date. Nothing is changed until you save.
+              </p>
+              {dateChecks.map(r => (
+                <button
+                  key={`${r.account_id}:check`}
+                  type="button"
+                  onClick={() => setDetailsRow(r)}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm bg-white border rounded-md hover:bg-zinc-50"
+                >
+                  <span className="font-medium truncate flex-1">{r.company_name}</span>
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    CRM {formatDay(r.due_date)}
+                    {r.date_check?.expected ? ` · rule ${formatDay(r.date_check.expected)}` : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {detailsRow && <RenewalDetailsDialog row={detailsRow} onClose={() => setDetailsRow(null)} />}
+
       {urgent.length > 0 && (
         <div className="rounded-lg border border-red-200 bg-red-50/60 p-4 space-y-2">
           <div className="flex items-center gap-2">

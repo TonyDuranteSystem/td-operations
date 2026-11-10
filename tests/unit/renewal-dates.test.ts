@@ -39,7 +39,7 @@ describe("deriveRenewalDates — RA renewal", () => {
     expect(fills.ra_renewal_date).toBe("2027-06-05")
   })
 
-  it("onboarding intake derives from ra_switch_date first, then client_since — never formation_date", () => {
+  it("onboarding intake derives from Client Since first, then ra_switch_date — never formation_date", () => {
     const a = deriveRenewalDates({
       intake: "onboarding",
       formation_date: "2023-08-10",
@@ -49,7 +49,7 @@ describe("deriveRenewalDates — RA renewal", () => {
       existing: EMPTY,
       currentYear: 2026,
     })
-    expect(a.ra_renewal_date).toBe("2027-05-01")
+    expect(a.ra_renewal_date).toBe("2027-04-01") // Client Since wins (Antonio, 2026-11-10)
 
     const b = deriveRenewalDates({
       intake: "onboarding",

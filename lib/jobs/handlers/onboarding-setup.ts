@@ -1372,8 +1372,8 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     try {
       // Single source of truth for the initial fills (plan c2d97552 B1/B2c):
       // lib/operations/renewal-dates.ts. Same null-only semantics as before,
-      // now also deriving ra_renewal_date from the RA-change anniversary
-      // (ra_switch_date || client_since, matching billing's start-date chain) —
+      // now also deriving ra_renewal_date from the anniversary of Client Since
+      // (ra_switch_date only as a fallback — Antonio's rule, 2026-11-10) —
       // this path historically never set it, leaving onboarded clients
       // invisible to the compliance calendar.
       // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
