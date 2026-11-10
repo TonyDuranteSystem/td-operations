@@ -13,7 +13,7 @@ const OWNER = U(1), FOLDER = U(2), BIZ = U(3), BIZROOT = U(4)
 const st = vi.hoisted(() => ({
   user: { id: '00000000-0000-4000-8000-0000000000aa', email: 'luca@tonydurante.us', app_metadata: { role: 'team' } } as Record<string, unknown>,
   logsAtSend: [] as number[], sendCalls: 0, sendOk: true, sendThrows: false as boolean | 'sandbox' | 'notsent' | 'timeout', sendUnknown: false, errors: [] as string[], actionLog: [] as Array<Record<string, unknown>>, bucketUploads: [] as string[], docInserts: [] as Array<Record<string, unknown>>,
-  storeReads: 0, storeEmpty: false,
+  storeReads: 0, storeEmpty: false, docOverride: {} as Record<string, unknown>, sdRow: null as Record<string, unknown> | null,
   owners: {} as Record<string, unknown>, folders: {} as Record<string, unknown>, companyState: 'store' as string,
   files: new Map<string, { fileId: string; name: string }>(), rows: [] as Array<Record<string, unknown>>, saves: [] as string[], saveThrows: false, logsAtSave: [] as number[],
   logFail: { select: false, insert: false, update: 0, updateAll: false, insertRecordAfterClaim: false, insertRecordCount: 0 } as { select: boolean; insert: boolean; update: number; updateAll: boolean; insertRecordAfterClaim: boolean; insertRecordCount: number }, nextLogId: 1, signedUrls: 0, removed: [] as string[], staged: new Map<string, Buffer>(),
@@ -79,6 +79,12 @@ vi.mock('@/lib/supabase-admin', () => {
     c.eq = (col: string, val: unknown) => { filters.push((r) => String(getCol(r, col)) === String(val)); return c }
     c.in = (col: string, vals: unknown[]) => { filters.push((r) => vals.includes(getCol(r, col))); return c }
     c.gte = (col: string, val: unknown) => { filters.push((r) => String(getCol(r, col)) >= String(val)); return c }
+    // or('details->>purpose.is.null,details->>purpose.neq.X'): the extension-purpose exclusion the double-send guard adds (item 7)
+    c.or = (expr: string) => {
+      const terms = expr.split(',').map((t) => /^(.+)\.(is\.null|neq\.(.*))$/.exec(t)!)
+      filters.push((r) => terms.some((m) => (m[2] === 'is.null' ? getCol(r, m[1]) == null : String(getCol(r, m[1])) !== m[3])))
+      return c
+    }
     c.delete = () => { mode = 'delete'; return c }
     c.update = (p: Record<string, unknown>) => { mode = 'update'; patch = p; return c }
     c.insert = (row: Record<string, unknown>) => {
@@ -105,7 +111,9 @@ vi.mock('@/lib/supabase-admin', () => {
           else { const row = st.actionLog.find((r) => filters.every((f) => f(r))); if (row) { Object.assign(row, patch); out = { data: [{ id: row.id }], error: null } } else out = { data: [], error: null } }
         }
       } else if (table === 'documents') {
-        out = mode === 'insert' ? { data: c.__inserted, error: null } : { data: { id: 'stored-doc', file_name: 'SS-4 package.pdf', drive_file_id: 'store:sf-1', account_id: 'acc-1' }, error: null }
+        out = mode === 'insert' ? { data: c.__inserted, error: null } : { data: { id: 'stored-doc', file_name: 'SS-4 package.pdf', drive_file_id: 'store:sf-1', account_id: 'acc-1', ...st.docOverride }, error: null }
+      } else if (table === 'service_deliveries' && mode === 'select') {
+        out = { data: st.sdRow, error: null }
       } else if (mode === 'insert') out = { data: c.__inserted, error: null }
       return Promise.resolve(out).then(resolve)
     }
@@ -129,6 +137,7 @@ const send = async (extra: Record<string, unknown> = {}) => {
 
 beforeEach(() => {
   st.user = { id: '00000000-0000-4000-8000-0000000000aa', email: 'luca@tonydurante.us', app_metadata: { role: 'team' } }
+  st.docOverride = {}; st.sdRow = null
   st.sendCalls = 0; st.logsAtSend.length = 0; st.sendOk = true; st.sendThrows = false; st.sendUnknown = false; st.errors.length = 0; st.actionLog.length = 0; st.bucketUploads.length = 0; st.docInserts.length = 0; st.storeReads = 0
   st.companyState = 'store'; st.files.clear(); st.rows.length = 0; st.saves.length = 0; st.saveThrows = false; st.logsAtSave.length = 0; st.logFail = { select: false, insert: false, update: 0, updateAll: false, insertRecordAfterClaim: false, insertRecordCount: 0 }; st.storeEmpty = false; st.nextLogId = 1; st.signedUrls = 0; st.removed.length = 0; st.staged.clear()
   st.owners = {
@@ -557,5 +566,86 @@ describe('/api/tools/fax/send — final bug-hunt', () => {
     const r = await send({ save_choice: saveChoice(), send_id: SEND_ID })
     expect(r.status).toBe(502); expect(r.body.outcome_unknown).toBe(true); expect(r.body.error).toMatch(/not known whether the fax went out/)
     expect(st.actionLog.map((x) => x.action_type)).toEqual(['fax_claim'])
+  })
+})
+
+
+// ─── Tax Return plan item 7 (dev job 6f555c9f): the extension box's purpose tag ────────────────────────────────────────────────────────────────
+// A job's Form 7004 fax and its signed-return fax are DIFFERENT faxes of the same job. The tag keeps the double-send guard, the claim and the
+// history row of one from ever blocking, or being mistaken for, the other.
+describe('/api/tools/fax/send — the extension purpose (Form 7004)', () => {
+  const WORKING = 'Form 7004 (as faxed) - Acme LLC - Tax Return 2025.pdf'
+  const ext = (extra: Record<string, unknown> = {}) => send({
+    faxno: '8558877737', file_base64: undefined, document_id: 'stored-doc', service_delivery_id: 'sd-1', dedupe_service_delivery_id: 'sd-1', purpose: 'tax_extension_7004', send_id: 'ext-send-0001', ...extra,
+  })
+  beforeEach(() => {
+    st.docOverride = { file_name: WORKING, service_delivery_id: 'sd-1' }
+    st.sdRow = { service_type: 'Tax Return', stage: '1st Installment Paid', status: 'active' }
+  })
+
+  it('an extension fax goes out, and its history row carries the purpose (the delivery check finds it by that)', async () => {
+    const r = await ext()
+    expect(r.body.success).toBe(true)
+    const row = st.actionLog.find((x) => x.action_type === 'fax_sent')!
+    expect((row.details as Record<string, unknown>).purpose).toBe('tax_extension_7004')
+    expect(st.sendCalls).toBe(1)
+  })
+  it('the claim row written BEFORE the send already carries the purpose: an unconfirmed extension send never blocks the return fax', async () => {
+    st.sendUnknown = true
+    await ext()
+    const claim = st.actionLog.find((x) => x.action_type === 'fax_claim')!
+    expect((claim.details as Record<string, unknown>).purpose).toBe('tax_extension_7004')
+  })
+  it('an earlier SIGNED-RETURN fax of the same job does not block the extension fax', async () => {
+    st.actionLog.push({ id: 'old-return', action_type: 'fax_sent', service_delivery_id: 'sd-1', created_at: '2026-06-20T10:00:00Z', details: { job_id: 'R1', faxno: '8558877737' } })
+    const r = await ext()
+    expect(r.status).toBe(200); expect(r.body.success).toBe(true)
+  })
+  it('an earlier EXTENSION fax of the same job blocks a second one (409, confirmable); with the confirm it goes', async () => {
+    st.actionLog.push({ id: 'old-ext', action_type: 'fax_sent', service_delivery_id: 'sd-1', created_at: '2026-11-08T10:00:00Z', details: { job_id: 'E1', faxno: '8558877737', purpose: 'tax_extension_7004' } })
+    const blocked = await ext()
+    expect(blocked.status).toBe(409); expect(blocked.body.already_faxed).toMatchObject({ job_id: 'E1' }); expect(st.sendCalls).toBe(0)
+    const again = await ext({ confirm_resend: true, send_id: 'ext-send-0002' })
+    expect(again.body.success).toBe(true); expect(st.sendCalls).toBe(1)
+  })
+  it('an earlier EXTENSION fax of the job does not block the SIGNED-RETURN fax (no purpose = the return box)', async () => {
+    st.actionLog.push({ id: 'old-ext', action_type: 'fax_sent', service_delivery_id: 'sd-1', created_at: '2026-11-08T10:00:00Z', details: { job_id: 'E1', faxno: '8558877737', purpose: 'tax_extension_7004' } })
+    const r = await send({ faxno: '8558877737', service_delivery_id: 'sd-1', dedupe_service_delivery_id: 'sd-1', save_choice: saveChoice() })
+    expect(r.body.success).toBe(true); expect(st.sendCalls).toBe(1)
+    const row = st.actionLog.filter((x) => x.action_type === 'fax_sent').pop()!
+    expect((row.details as Record<string, unknown>).purpose).toBeUndefined() // a return fax carries no purpose
+  })
+  it('an earlier SIGNED-RETURN fax of the job still blocks a second return fax (the guard is unchanged for it)', async () => {
+    st.actionLog.push({ id: 'old-return', action_type: 'fax_sent', service_delivery_id: 'sd-1', created_at: '2026-06-20T10:00:00Z', details: { job_id: 'R1', faxno: '8558877737' } })
+    const r = await send({ faxno: '8558877737', service_delivery_id: 'sd-1', dedupe_service_delivery_id: 'sd-1', save_choice: saveChoice() })
+    expect(r.status).toBe(409); expect(st.sendCalls).toBe(0)
+  })
+  it('a purpose that is not known is refused (400) and nothing is sent', async () => {
+    const r = await ext({ purpose: 'something_else' })
+    expect(r.status).toBe(400); expect(st.sendCalls).toBe(0)
+  })
+  it('the extension fax is sent from a stored document only (never an upload)', async () => {
+    const r = await ext({ document_id: undefined, file_base64: Buffer.from('%PDF').toString('base64'), file_name: WORKING })
+    expect(r.status).toBe(400); expect(st.sendCalls).toBe(0)
+  })
+  it('only the Form 7004 generated IN THIS JOB can be faxed as its extension: another job\'s document, or any other file, is refused', async () => {
+    st.docOverride = { file_name: WORKING, service_delivery_id: 'sd-OTHER' }
+    expect((await ext()).status).toBe(400)
+    st.docOverride = { file_name: 'Signed return.pdf', service_delivery_id: 'sd-1' }
+    expect((await ext()).status).toBe(400)
+    st.docOverride = { file_name: WORKING }
+    expect((await ext()).status).toBe(400)
+    expect(st.sendCalls).toBe(0)
+  })
+  it('only while the job waits at "1st Installment Paid": at any other step (or cancelled, or not a Tax Return) nothing is sent', async () => {
+    st.sdRow = { service_type: 'Tax Return', stage: 'Signed', status: 'active' }
+    expect((await ext()).status).toBe(409)
+    st.sdRow = { service_type: 'Tax Return', stage: '1st Installment Paid', status: 'cancelled' }
+    expect((await ext()).status).toBe(409)
+    st.sdRow = { service_type: 'ITIN', stage: '1st Installment Paid', status: 'active' }
+    expect((await ext()).status).toBe(409)
+    st.sdRow = null
+    expect((await ext()).status).toBe(409)
+    expect(st.sendCalls).toBe(0)
   })
 })

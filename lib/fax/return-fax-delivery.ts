@@ -17,6 +17,7 @@
 import type { FaxDeliveryStatus } from '@/lib/fax/faxage'
 import { decideReturnFaxOutcome, isReturnFaxLine, RETURN_FAX_MARKERS, returnFaxReceiptName } from '@/lib/fax/return-fax'
 import { TAX_RETURN_SIGN_STAGES } from '@/lib/flows/tax-return-sign-stages'
+import { EXTENSION_FAX_PURPOSE } from '@/lib/fax/extension-fax'
 
 export interface DeliveryJob {
   id: string
@@ -173,6 +174,8 @@ export async function realReturnFaxDeps(): Promise<ReturnFaxDeps> {
         .select('created_at, details')
         .eq('service_delivery_id', sdId)
         .eq('action_type', 'fax_sent')
+        // the job's EXTENSION fax (Form 7004) is another fax of the same job: it never files the return
+        .or(`details->>purpose.is.null,details->>purpose.neq.${EXTENSION_FAX_PURPOSE}`)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle()

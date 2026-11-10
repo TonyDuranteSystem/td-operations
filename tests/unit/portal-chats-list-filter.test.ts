@@ -10,6 +10,7 @@ import {
   buildPeopleThreadKeySet,
   loadPeopleThreadKeys,
   matchesListFilter,
+  orderThreadsForChip,
   threadHasPeopleMessages,
   type FilterableThread,
 } from '@/lib/portal-chats/list-filter'
@@ -58,6 +59,17 @@ describe('matchesListFilter', () => {
     expect(matchesListFilter(thread({ has_people_messages: false }), 'chats')).toBe(false)
   })
 
+  it('Chats leaves out the conversations that have their own chip: pinned ones and ones with an unhandled client action', () => {
+    expect(matchesListFilter(thread({ has_people_messages: true, is_pinned: true }), 'chats')).toBe(false)
+    expect(matchesListFilter(thread({ account_id: 'acc-wn', has_people_messages: true }), 'chats', counts)).toBe(false)
+    expect(matchesListFilter(thread({ account_id: null, contact_id: 'con-wn', has_people_messages: true }), 'chats', counts)).toBe(false)
+    // …and a plain chat stays, also when What's New counts exist for other conversations
+    expect(matchesListFilter(thread({ account_id: 'acc-plain', has_people_messages: true }), 'chats', counts)).toBe(true)
+    // they are still under their own chips
+    expect(matchesListFilter(thread({ is_pinned: true }), 'pinned')).toBe(true)
+    expect(matchesListFilter(thread({ account_id: 'acc-wn' }), 'whatsnew', counts)).toBe(true)
+  })
+
   it('Chats keeps a conversation whose flag is unknown (old answer / function not installed) — never an empty default list', () => {
     expect(matchesListFilter(thread({ has_people_messages: undefined }), 'chats')).toBe(true)
   })
@@ -71,6 +83,31 @@ describe('matchesListFilter', () => {
   it('an unread conversation always has a person-written message, so it is never hidden by Chats', () => {
     // unread_count only counts sender_type 'client' rows; the database flag counts client AND admin rows.
     expect(matchesListFilter(thread({ unread_count: 2, has_people_messages: true }), 'chats')).toBe(true)
+  })
+})
+
+describe('orderThreadsForChip', () => {
+  const t = (id: string, at: string, over: Partial<FilterableThread> = {}) => ({ ...thread({ account_id: id, last_message_at: at, ...over }), id })
+  const list = [
+    t('old-plain', '2026-11-01T10:00:00Z'),
+    t('new-plain', '2026-11-09T10:00:00Z'),
+    t('pinned-old', '2026-10-01T10:00:00Z', { is_pinned: true }),
+    t('unread-mid', '2026-11-05T10:00:00Z', { unread_count: 2 }),
+  ]
+
+  it('Chats is a plain list, newest first — nothing floats to the top', () => {
+    expect(orderThreadsForChip(list, 'chats').map(x => x.id)).toEqual(['new-plain', 'unread-mid', 'old-plain', 'pinned-old'])
+  })
+
+  it('every other chip keeps the usual order: pinned first, then what needs a look, then newest first', () => {
+    expect(orderThreadsForChip(list, 'all').map(x => x.id)).toEqual(['pinned-old', 'unread-mid', 'new-plain', 'old-plain'])
+    expect(orderThreadsForChip(list, 'unread').map(x => x.id)).toEqual(['pinned-old', 'unread-mid', 'new-plain', 'old-plain'])
+  })
+
+  it('does not change the list it is given', () => {
+    const before = list.map(x => x.id)
+    orderThreadsForChip(list, 'chats')
+    expect(list.map(x => x.id)).toEqual(before)
   })
 })
 
@@ -150,6 +187,7 @@ describe('wiring (source guards — the project has no jsdom)', () => {
     expect(page).toContain('LIST_FILTER_CHIPS.map(')
     expect(page).toContain('useState<ListFilter>(DEFAULT_LIST_FILTER)')
     expect(page).toContain('matchesListFilter(t, listFilter, whatsNewCounts)')
+    expect(page).toContain('orderThreadsForChip(threads ?? [], listFilter, whatsNewCounts)')
   })
 
   it('the page offers a way out of an empty chip', () => {

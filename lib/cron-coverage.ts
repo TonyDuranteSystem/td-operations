@@ -73,6 +73,8 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/faxage-ss4-confirm": "0 */2 * * *",
   // Tax Return fax delivery check (plan item 6, 2026-11-07) — a delivered return fax saves its receipt and files the job.
   "/api/cron/return-fax-confirm": "*/10 * * * *",
+  // Tax Return extension fax delivery check (plan item 7, 2026-11-09) — a delivered Form 7004 fax merges + saves the document, moves the job to Extension Filed and tells the client.
+  "/api/cron/extension-fax-confirm": "*/10 * * * *",
   "/api/cron/portal-digest": "*/5 * * * *",
   "/api/cron/plaid-sync": "0 */6 * * *",
   "/api/cron/mercury-sync": "*/15 * * * *",

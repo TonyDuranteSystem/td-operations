@@ -27,7 +27,7 @@ vi.mock('@/lib/supabase-admin', () => ({
       const b: any = {}
       let single = false
       const chain = () => b
-      b.select = chain; b.eq = chain; b.in = chain; b.order = chain; b.limit = chain
+      b.select = chain; b.eq = chain; b.in = chain; b.order = chain; b.limit = chain; b.or = chain
       const answer = () => {
         if (fx.fail[table]) return { data: null, error: { message: 'boom' } }
         if (table === 'service_deliveries') return { data: fx.sd, error: null }
