@@ -188,13 +188,13 @@ describe("resolveClosureDestination", () => {
   it("another company (Ranieri): the person's storage, folder Company closure_<name>, nothing to check", async () => {
     state.links = [{ account_id: "acc-b" }]; state.accounts = [B]
     const d = await resolveClosureDestination({ linkedAccountId: null, contactId: "contact-1", clientName: "Christian", submittedData: { llc_name: "Italyflow LLC", llc_ein: "55-1234567" } })
-    expect(d).toEqual({ folderId: `person-storage:${PERSON_UUID}`, storeRootSubFolder: "Company closure_Italyflow LLC", kind: "other_company", disagreement: null, storageOwnerId: PERSON_UUID })
+    expect(d).toEqual({ folderId: `person-storage:${PERSON_UUID}`, storeRootSubFolder: "Company closure_Italyflow LLC", kind: "other_company", disagreement: null, note: null, storageOwnerId: PERSON_UUID })
     expect(state.folderCalls).toEqual([{ accountId: null }])
   })
   it("the client's own company, job linked and the wizard agrees: that company's storage, no sub-folder", async () => {
     state.links = [{ account_id: "acc-a" }]; state.accounts = [A]
     const d = await resolveClosureDestination({ linkedAccountId: "acc-a", contactId: "contact-1", clientName: "C", submittedData: { llc_name: "Datavora LLC", llc_ein: "12-3456789" } })
-    expect(d).toEqual({ folderId: `account-storage:${ACC_UUID}`, kind: "company", disagreement: null, storageOwnerId: "acc-a" })
+    expect(d).toEqual({ folderId: `account-storage:${ACC_UUID}`, kind: "company", disagreement: null, note: null, storageOwnerId: "acc-a" })
     expect(d.storeRootSubFolder).toBeUndefined()
   })
   it("a company that kept its Drive folder id (262 of 275 on production): the files still belong to the COMPANY's storage — the owner is the company, not the Drive id (bug hunt finding 4)", async () => {
@@ -202,14 +202,14 @@ describe("resolveClosureDestination", () => {
     const folder = await import("@/lib/forms/closure-folder")
     vi.mocked(folder.resolveClosureFolder).mockResolvedValueOnce("1AbCdEfDriveFolderId")
     const d = await resolveClosureDestination({ linkedAccountId: "acc-a", contactId: "contact-1", clientName: "C", submittedData: { llc_name: "Datavora LLC", llc_ein: "12-3456789" } })
-    expect(d).toEqual({ folderId: "1AbCdEfDriveFolderId", kind: "company", disagreement: null, storageOwnerId: "acc-a" })
+    expect(d).toEqual({ folderId: "1AbCdEfDriveFolderId", kind: "company", disagreement: null, note: null, storageOwnerId: "acc-a" })
   })
   it("the client's own company that has NO storage yet: the person's tidy 'Company closure_<name>' folder, nothing to check", async () => {
     state.links = [{ account_id: "acc-a" }]; state.accounts = [A]
     const folder = await import("@/lib/forms/closure-folder")
     vi.mocked(folder.resolveClosureFolder).mockResolvedValueOnce(`person-storage:${PERSON_UUID}`)
     const d = await resolveClosureDestination({ linkedAccountId: "acc-a", contactId: "contact-1", clientName: "C", submittedData: { llc_name: "Datavora LLC", llc_ein: "12-3456789" } })
-    expect(d).toEqual({ folderId: `person-storage:${PERSON_UUID}`, storeRootSubFolder: "Company closure_Datavora LLC", kind: "company", disagreement: null, storageOwnerId: PERSON_UUID })
+    expect(d).toEqual({ folderId: `person-storage:${PERSON_UUID}`, storeRootSubFolder: "Company closure_Datavora LLC", kind: "company", disagreement: null, note: null, storageOwnerId: PERSON_UUID })
   })
   it("the job's linked company is a candidate even when the person is not in account_contacts", async () => {
     state.links = []; state.accounts = [A]

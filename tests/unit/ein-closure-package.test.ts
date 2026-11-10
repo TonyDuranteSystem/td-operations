@@ -513,3 +513,49 @@ describe('the client’s drawn signature (closure wizard, part F step 2)', () =>
     expect(r.ok && r.facts.hasSignature).toBe(false)
   })
 })
+
+describe('a closure for a company that is NOT ours — staff can fix the client’s typo before the letter goes (QA 2026-11-10)', () => {
+  it('takes the corrected name and EIN, and says the client’s signature is not used for them', async () => {
+    seed({ submitted: { ...answers, signature_image: ['closure/c-1/signature_image_ab12cd34_signature.png'], signature_consent: 'x', signature_signed_at: '2026-11-10T12:00:00Z' }, docRows: [...docs] })
+    const base = await loadEinClosureFacts(JOB)
+    expect(base.ok && base.facts.correctedByStaff).toBe(false)
+    const r = await loadEinClosureFacts(JOB, { companyName: 'Italyflow Corrected LLC', ein: '41-2330247' })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect([r.facts.companyName, r.facts.ein, r.facts.correctedByStaff]).toEqual(['Italyflow Corrected LLC', '41-2330247', true])
+    expect([r.facts.wizardCompanyName, r.facts.wizardEin]).toEqual(['Italyflow LLC', '41-2330246'])
+    expect(r.facts.hasSignature).toBe(false)
+  })
+
+  it('the box fingerprint ignores the correction, so the box staff are looking at still matches when they press the button', async () => {
+    seed()
+    const a = await loadEinClosureFacts(JOB)
+    const b = await loadEinClosureFacts(JOB, { companyName: 'Something Else LLC', ein: '99-9999999' })
+    expect(a.ok && b.ok && a.facts.factsHash === b.facts.factsHash).toBe(true)
+  })
+
+  it('repeating the client’s own values is not a correction (case, punctuation and the legal form are ignored)', async () => {
+    seed()
+    const r = await loadEinClosureFacts(JOB, { companyName: 'ITALYFLOW L.L.C.', ein: '412330246' })
+    expect(r.ok && r.facts.correctedByStaff).toBe(false)
+  })
+
+  it('is ignored on a job with a company of ours — the record is authoritative there', async () => {
+    seed({ job: { account_id: 'acc-1' }, account: { company_name: 'Italyflow Holdings LLC', ein_number: '41-9999999', state_of_formation: 'NM', physical_address: null } })
+    const r = await loadEinClosureFacts(JOB, { companyName: 'Hacked LLC', ein: '11-1111111' })
+    expect(r.ok && [r.facts.companyName, r.facts.ein, r.facts.correctedByStaff]).toEqual(['Italyflow Holdings LLC', '41-9999999', false])
+  })
+
+  it('the letter is made with the corrected EIN, and a bad corrected EIN is refused with the plain sentence', async () => {
+    seed()
+    saveContact.mockResolvedValue({ route: 'store', fileId: 'f', pointer: 'store:f', documentRowId: 'doc-new', status: 'created' })
+    const good = await buildEinClosurePackage({ jobId: JOB, addressLines: ['1 Main St', 'Santa Fe, NM 87501'], noticeDocumentId: null, companyName: 'Italyflow Fixed LLC', ein: '41-2330247' })
+    expect(good).toMatchObject({ ok: true, name: 'EIN Closure Letter - Italyflow Fixed LLC.pdf' })
+    expect(saveContact).toHaveBeenCalled()
+    seed()
+    const bad = await buildEinClosurePackage({ jobId: JOB, addressLines: ['1 Main St', 'Santa Fe, NM 87501'], noticeDocumentId: null, companyName: 'Italyflow LLC', ein: '41-23' })
+    expect(bad.ok).toBe(false)
+    expect((bad as { error?: string }).error).toMatch(/EIN must be 9 digits/)
+  })
+})
+

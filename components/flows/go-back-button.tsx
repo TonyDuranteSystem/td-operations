@@ -8,6 +8,8 @@ import { useGoBackWarnings } from './use-go-back-warnings'
 
 interface GoBackButtonProps {
   serviceDeliveryId: string
+  /** The step the page is showing now: sent with the click so a job that moved meanwhile is not sent back from the wrong place. */
+  currentStage?: string | null
   /** Label of the stage we'd return to, for the button copy (optional). */
   previousStageLabel?: string | null
   /** Things this particular Go Back also does or does not do, added to the question (e.g. "also deletes the saved IRS tracking number"). */
@@ -24,7 +26,7 @@ interface GoBackButtonProps {
  * so it never competes with the primary stage action. Surfaces the server's
  * real error (R099) rather than a generic message.
  */
-export function GoBackButton({ serviceDeliveryId, previousStageLabel, extraWarnings }: GoBackButtonProps) {
+export function GoBackButton({ serviceDeliveryId, currentStage, previousStageLabel, extraWarnings }: GoBackButtonProps) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -44,7 +46,7 @@ export function GoBackButton({ serviceDeliveryId, previousStageLabel, extraWarni
       const res = await fetch(`/api/flows/${serviceDeliveryId}/revert`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify(currentStage ? { expected_from_stage: currentStage } : {}),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {

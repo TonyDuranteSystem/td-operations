@@ -416,6 +416,7 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
       {previousStageRow && (
         <GoBackButton
           serviceDeliveryId={serviceDelivery.id}
+          currentStage={sd.stage}
           previousStageLabel={previousStageRow.stage_name}
           extraWarnings={goBackExtras}
         />

@@ -64,6 +64,7 @@ import { VoiceNote } from '@/components/team-chat/voice-note'
 import { isVoiceAttachment } from '@/lib/portal/chat-voice'
 import { FlowChips } from '@/components/flows/flow-chips'
 import type { ResolvedFlow } from '@/lib/flows/resolve-flows'
+import { stagingFileName } from '@/lib/storage/staging-name'
 
 // ─── Constants ───
 
@@ -3249,7 +3250,7 @@ function ContactDocumentsTab({
       }
 
       // Step 1: Upload to Supabase Storage (bypasses Vercel 4.5MB body limit)
-      const storagePath = `crm-uploads/${contactId}/${Date.now()}_${file.name}`
+      const storagePath = `crm-uploads/${contactId}/${Date.now()}_${stagingFileName(file.name)}`
       const uploadRes = await fetch(`/api/storage/upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

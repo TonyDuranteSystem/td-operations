@@ -86,3 +86,39 @@ export function collectUploadPaths(
   }
   return paths
 }
+
+/**
+ * Removes from the answers every wizard-upload path that sits in SOMEONE ELSE's folder (`<wizard>/<folder>/<file>`), in any field — a text answer
+ * included. The files of a submission are copied into the sender's own storage from `upload_paths`, which is collected from every value of the
+ * answers; a client who typed another client's file path into any box could otherwise have that file copied to themselves (production QA
+ * 2026-11-10, hunter finding #12). The path itself is not guessable, but the server must not rely on that. Mutates `data`; returns what was removed.
+ * A value that is not a wizard path is never touched. Pure — no I/O.
+ */
+export function dropForeignUploadPaths(
+  data: Record<string, unknown>,
+  ownFolders: readonly string[],
+  prefixes: readonly string[] = WIZARD_UPLOAD_PREFIXES,
+): string[] {
+  const dropped: string[] = []
+  const foreign = (v: unknown): boolean => {
+    if (typeof v !== 'string' || !prefixes.some((p) => v.startsWith(p))) return false
+    if (!isTraversalSafePath(v)) return true // a path that walks out of its folder is never one of the sender's
+    const folder = v.split('/')[1] ?? ''
+    return !ownFolders.includes(folder)
+  }
+  for (const key of Object.keys(data)) {
+    const val = data[key]
+    if (Array.isArray(val)) {
+      const kept = val.filter((v) => !foreign(v))
+      if (kept.length !== val.length) {
+        for (const v of val) if (foreign(v)) dropped.push(v as string)
+        data[key] = kept
+      }
+    } else if (foreign(val)) {
+      dropped.push(val as string)
+      data[key] = ''
+    }
+  }
+  return dropped
+}
+

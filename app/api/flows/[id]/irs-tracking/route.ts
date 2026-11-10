@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { isCourier } from '@/lib/flows/courier'
+import { trackingNumberProblem } from '@/lib/flows/tracking-number'
 
 const MAX_TRACKING_LEN = 100
 
@@ -108,7 +109,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   try {
     const body = await req.json().catch(() => ({}))
     const courier = typeof body.courier === 'string' ? body.courier.trim() : ''
-    const trackingNumber = typeof body.tracking_number === 'string' ? body.tracking_number.trim() : ''
+    const rawTracking = typeof body.tracking_number === 'string' ? body.tracking_number.trim() : ''
+    // spaces and dashes typed for readability are not part of a carrier's number — the daily check looks the number up as saved
+    const trackingNumber = rawTracking.replace(/[\s-]+/g, '')
 
     if (!isCourier(courier)) {
       return NextResponse.json({ success: false, error: 'Please choose a valid courier.' }, { status: 400 })
@@ -122,6 +125,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         { status: 400 },
       )
     }
+
+    // A made-up number ("abc") used to be saved and satisfied the step's tracking lock (production end-to-end test 2026-11-10).
+    const shapeProblem = trackingNumberProblem(courier, rawTracking)
+    if (shapeProblem) return NextResponse.json({ success: false, error: shapeProblem }, { status: 400 })
 
     const { data: sd } = await supabaseAdmin.from('service_deliveries').select('id').eq('id', params.id).maybeSingle()
     if (!sd) return NextResponse.json({ success: false, error: 'Flow not found' }, { status: 404 })

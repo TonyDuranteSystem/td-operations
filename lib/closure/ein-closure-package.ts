@@ -55,8 +55,14 @@ export interface EinClosureFacts {
   /** a short fingerprint of what the box shows (company, EIN, signer, signature, EIN copies): the letter is made only if it is still the same when staff press the button */
   factsHash: string
   hasCompany: boolean
+  /** the name / EIN the letter will carry: our record for a company of ours; for a job with NO company of ours, what staff corrected or else what the client wrote */
   companyName: string
   ein: string
+  /** what the client wrote in the wizard (a job with no company of ours has no other source — the box lets staff correct a typo, see `overrides`) */
+  wizardCompanyName: string
+  wizardEin: string
+  /** true when staff changed the client's name or EIN for this letter (only possible on a job with no company of ours) */
+  correctedByStaff: boolean
   state: string | null
   signerName: string
   /** the company's address, prefilled when we know it ('suite' = our official Largo address, a company that has a TD suite) */
@@ -191,7 +197,12 @@ async function liveStoreIds(ids: string[]): Promise<{ ok: true; live: Set<string
   return { ok: true, live: new Set(((data ?? []) as Array<{ id: string; state: string | null }>).filter((r) => r.state === 'live').map((r) => r.id)) }
 }
 
-export async function loadEinClosureFacts(jobId: string): Promise<EinFactsResult> {
+/**
+ * `overrides` = the company name / EIN staff typed in the box. They are honoured ONLY on a job with no company of ours (nothing to compare with: any
+ * company, any EIN is simply what the client wrote, and a typo there is staff's to fix before the letter goes to the IRS). On a company of ours the
+ * record is authoritative and an override is ignored.
+ */
+export async function loadEinClosureFacts(jobId: string, overrides?: { companyName?: string | null; ein?: string | null }): Promise<EinFactsResult> {
   const j = await loadJob(jobId)
   if (isFail(j)) return j
   const job = j.job
@@ -245,6 +256,18 @@ export async function loadEinClosureFacts(jobId: string): Promise<EinFactsResult
         addressSource = 'account'
       }
     }
+  }
+
+  // The box's fingerprint is made from the values BEFORE staff's correction, so the box staff are looking at stays recognisable when they press the button.
+  const hashCompanyName = companyName
+  const hashEin = ein
+  let correctedByStaff = false
+  if (!job.account_id && overrides) {
+    const o = { name: (overrides.companyName ?? '').trim(), ein: (overrides.ein ?? '').trim() }
+    if (o.name && normalizeCompanyName(o.name) !== normalizeCompanyName(companyName)) correctedByStaff = true
+    if (o.ein && einDigits(o.ein) !== einDigits(ein)) correctedByStaff = true
+    if (o.name) companyName = o.name
+    if (o.ein) ein = o.ein
   }
 
   // who signs: the owner the client named, else the person on the job
@@ -331,7 +354,7 @@ export async function loadEinClosureFacts(jobId: string): Promise<EinFactsResult
   }
 
   const factsHash = createHash('sha256')
-    .update(JSON.stringify({ c: companyName, e: ein, s: signerName, g: usableSignature ? sigFileId : null, n: notices.map((n) => `${n.documentId}:${n.storeFileId ?? ''}`).sort(), st: job.status }))
+    .update(JSON.stringify({ c: hashCompanyName, e: hashEin, s: signerName, g: usableSignature ? sigFileId : null, n: notices.map((n) => `${n.documentId}:${n.storeFileId ?? ''}`).sort(), st: job.status }))
     .digest('hex')
     .slice(0, 16)
 
@@ -345,6 +368,9 @@ export async function loadEinClosureFacts(jobId: string): Promise<EinFactsResult
       hasCompany: !!job.account_id,
       companyName,
       ein,
+      wizardCompanyName: wizardName,
+      wizardEin,
+      correctedByStaff,
       state,
       signerName,
       addressLines,
@@ -366,6 +392,9 @@ export interface BuildPackageInput {
   addressLines: string[]
   /** the EIN notice to attach — one of the job's own candidates, or null for none */
   noticeDocumentId: string | null
+  /** staff's correction of the client's company name / EIN — used only on a job with no company of ours (see loadEinClosureFacts) */
+  companyName?: string | null
+  ein?: string | null
   /** the fingerprint of the box staff were looking at (facts.factsHash); when it differs now, nothing is made and staff are asked to look again */
   factsHash?: string | null
   now?: Date
@@ -376,7 +405,7 @@ export type BuildPackageResult =
   | { ok: false; error: string; status: number }
 
 export async function buildEinClosurePackage(input: BuildPackageInput): Promise<BuildPackageResult> {
-  const f = await loadEinClosureFacts(input.jobId)
+  const f = await loadEinClosureFacts(input.jobId, { companyName: input.companyName, ein: input.ein })
   if (isFail(f)) return f
   const facts = f.facts
 

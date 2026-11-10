@@ -586,12 +586,17 @@ export async function advanceServiceDelivery(
         exempt = !!(acct as { is_test?: boolean | null } | null)?.is_test
       }
       if (!exempt) {
+        // A document with nothing inside (0 bytes) is not a document: it must not open the lock. An older row with no recorded size still counts.
         const { data: docs } = await supabaseAdmin
           .from("documents")
-          .select("flow_stage")
+          .select("flow_stage, file_size")
           .eq("service_delivery_id", delivery.id)
           .in("flow_stage", crossed)
-        const have = new Set(((docs ?? []) as Array<{ flow_stage: string | null }>).map(d => d.flow_stage))
+        const have = new Set(
+          ((docs ?? []) as Array<{ flow_stage: string | null; file_size: number | null }>)
+            .filter(d => d.file_size === null || d.file_size === undefined || d.file_size > 0)
+            .map(d => d.flow_stage),
+        )
         const missing = crossed.filter(n => !have.has(n))
         if (missing.length > 0) {
           return {

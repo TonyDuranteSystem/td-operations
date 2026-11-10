@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
+import { wizardFileTypeProblem } from '@/lib/portal/wizard-file-rules'
 import { WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES, wizardUploadTooLargeMessage } from '@/lib/portal/wizard-uploads'
 
 const BUCKET = 'onboarding-uploads' // Shared bucket for all wizard uploads
@@ -48,6 +49,10 @@ export async function POST(req: NextRequest) {
     if (fileSize !== undefined && fileSize > WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES) {
       return NextResponse.json({ error: wizardUploadTooLargeMessage(fileSize) }, { status: 400 })
     }
+
+    // The Articles, the EIN letter, the SS-4 and the passports must be a document or a picture — a ".txt" was accepted as the Articles (QA 2026-11-10).
+    const typeProblem = wizardFileTypeProblem(fieldName, fileName)
+    if (typeProblem) return NextResponse.json({ error: typeProblem }, { status: 400 })
 
     // CSV or PDF guard for the tax per-bank statement sections (master plan
     // b2115fd3 §2.1; PDF added 2026-06-25 — the AI extractor reads PDFs too).

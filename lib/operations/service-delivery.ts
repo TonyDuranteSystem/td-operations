@@ -1430,6 +1430,9 @@ export async function reactivateSD(
 
 // ─── revertServiceDelivery ─────────────────────────────
 
+/** The job is not at the step the caller saw (or another Go Back got there first): nothing was changed. */
+export const REVERT_JOB_MOVED = "This job is no longer at the step you were looking at (someone or something moved it a moment ago), so nothing was changed. Refresh the page and look at where the job is now."
+
 export interface RevertStageParams {
   delivery_id: string
   actor?: string
@@ -1437,6 +1440,11 @@ export interface RevertStageParams {
   actor_user_id?: string | null
   /** Free-text note appended to stage_history + action_log. */
   notes?: string
+  /**
+   * The step the caller was LOOKING at when it asked. When the job is somewhere else by now (another click, another staff member, a background move),
+   * nothing is changed and the caller is told — a stale page could otherwise send a job back one step too many. Omitted = no check beyond the write guard below.
+   */
+  expected_from_stage?: string
 }
 
 export interface RevertStageResult {
@@ -1551,6 +1559,10 @@ export async function revertServiceDelivery(
     }
   }
 
+  if (params.expected_from_stage !== undefined && params.expected_from_stage !== sd.stage) {
+    return { success: false, outcome: "error", delivery_id: sd.id, service_type: sd.service_type, error: REVERT_JOB_MOVED }
+  }
+
   const previous = stages
     .filter((s) => s.stage_order < current.stage_order)
     .sort((a, b) => b.stage_order - a.stage_order)[0]
@@ -1591,11 +1603,16 @@ export async function revertServiceDelivery(
       const { data: fo, error: foErr } = await (supabaseAdmin as any).from("store_files")
         .select("name, store_owners!inner(kind)").eq("id", fileId).maybeSingle()
       const ownerKind = (fo?.store_owners as { kind?: string } | null)?.kind
-      if (foErr || !fo || ownerKind === "company") {
+      // The EIN closure letter is never taken out by a Go Back, whoever owns the job: it may already be printed and in the mail, and a person-owned
+      // job used to lose it while a company-owned one kept it (production end-to-end test 2026-11-10). Making the letter again replaces it as a new version.
+      const isClosureLetter = !!fo && /^EIN Closure Letter/i.test(String(fo.name ?? ""))
+      if (foErr || !fo || ownerKind === "company" || isClosureLetter) {
         keptStorePointers.push(r.drive_file_id as string)
         warnings.push(foErr || !fo
           ? `A stored document of "${previous.stage_name}" could not be checked, so it was kept.`
-          : `"${fo.name}" was kept in the company's storage — the company already exists. Upload the corrected file with the same name to replace it (it becomes a new version).`)
+          : isClosureLetter
+            ? `"${fo.name}" was kept — a closure letter that may already be mailed is never removed by Go Back. Make the letter again on this step if it must change: the new one replaces it as a new version.`
+            : `"${fo.name}" was kept in the company's storage — the company already exists. Upload the corrected file with the same name to replace it (it becomes a new version).`)
         continue
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
@@ -1694,10 +1711,16 @@ export async function revertServiceDelivery(
     patch.end_date = null
   }
 
-  await dbWrite(
-    supabaseAdmin.from("service_deliveries").update(patch).eq("id", sd.id),
+  // Applied ONLY if the job is still at the step it was read at: two Go Backs at the same moment both read the same step and both appended their own
+  // history line to the same list, so one line was lost (production end-to-end test 2026-11-10). The second one now finds the step already changed.
+  const revertUpdate = supabaseAdmin.from("service_deliveries").update(patch).eq("id", sd.id)
+  const revertedRows = await dbWrite(
+    (sd.stage === null || sd.stage === undefined ? revertUpdate.is("stage", null) : revertUpdate.eq("stage", sd.stage)).select("id"),
     "service_deliveries.update.revert",
   )
+  if (Array.isArray(revertedRows) && revertedRows.length === 0) {
+    return { success: false, outcome: "error", delivery_id: sd.id, service_type: sd.service_type, error: REVERT_JOB_MOVED }
+  }
 
   // 5. Undo the completion's renewal-date roll when a completed renewal SD
   // is RE-OPENED — on ANY final stage name, not just "Closed". The old

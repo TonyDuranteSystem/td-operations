@@ -227,6 +227,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const buffer = Buffer.from(rawContent)
     const fileMime = mimeType || blob.type || 'application/pdf'
 
+    // An empty file, or a ".pdf" that is not a PDF, must never be saved — it would count as the step's document and open the lock of a step that
+    // needs one (production end-to-end test 2026-11-10: a 0-byte "state confirmation" moved the job on). Refused BEFORE anything is saved.
+    const { uploadContentProblem } = await import('@/lib/flows/upload-content-check')
+    const contentProblem = uploadContentProblem({ fileName, mimeType: fileMime, bytes: buffer })
+    if (contentProblem) {
+      supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})   // a refused upload leaves no staged file behind
+      return NextResponse.json({ success: false, detail: contentProblem, error: contentProblem }, { status: 400 })
+    }
+
     const { deriveEffectiveFileName } = await import('@/lib/flows/flow-drive-folder')
 
     // A refused upload must not leave the staged object behind in the upload bucket.
