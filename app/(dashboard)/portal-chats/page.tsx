@@ -23,6 +23,7 @@ import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel'
 import { ContactLanguageField } from '@/components/portal-chats/contact-language-field'
 import { sortPortalThreads } from '@/lib/portal-chats/sort-threads'
+import { DEFAULT_LIST_FILTER, LIST_FILTER_CHIPS, matchesListFilter, type ListFilter } from '@/lib/portal-chats/list-filter'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import { chatPreviewText, isVoiceAttachment } from '@/lib/portal/chat-voice'
@@ -42,6 +43,8 @@ import { HelpDot } from '@/components/help/help-dot'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { AppYouButton } from '@/components/app-mode/app-you-button'
 import { PhoneConvNav, PhoneViewStrip, PhoneMoreSheet, PhoneReplyToLine, PhoneReplyToSheet, PhonePlusButton, PhonePlusSheet } from '@/components/portal-chats/app-phone-chrome'
+import { AttachChoiceMenu } from '@/components/scan/attach-choice-menu'
+import { DocumentScanner } from '@/components/scan/document-scanner'
 import {
   filterForSurfaceAndContext as filterTopicsForSurfaceAndContext,
   validateMetadata as validateTopicMetadata,
@@ -119,6 +122,8 @@ interface ChatThread {
   unread_count: number
   /** Manually pinned conversation (staff, shared). Pins sort above everything. */
   is_pinned?: boolean
+  /** A client or a team member wrote here (not only automatic notices) — the "Chats" chip. undefined = unknown. */
+  has_people_messages?: boolean
   /** Active service deliveries for this account — sourced live from service_deliveries, fully dynamic */
   active_services: { service_type: string; stage: string | null }[]
   /** Overdue invoices owed to TD — account-level thread's account, or contact-direct invoices. */
@@ -449,8 +454,8 @@ export default function PortalChatsPage() {
   const appMode = useAppMode()
   const [appSheet, setAppSheet] = useState<'more' | 'replyTo' | 'plus' | null>(null)
   const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(new Set())
-  // Chat-list filter chip: all / unread / whatsnew / issues.
-  const [listFilter, setListFilter] = useState<'all' | 'unread' | 'whatsnew'>('all')
+  // Chat-list filter chip: All / Unread / What's New / Chats / Pinned (lib/portal-chats/list-filter.ts). Opens on Chats.
+  const [listFilter, setListFilter] = useState<ListFilter>(DEFAULT_LIST_FILTER)
   // "Open card" from a What's New note → opens the same dashboard card editor, preset to this client.
   const [cardPreset, setCardPreset] = useState<{
     accountId?: string | null
@@ -584,6 +589,9 @@ export default function PortalChatsPage() {
   const internalMessagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const adminFileRef = useRef<HTMLInputElement>(null)
+  // the paperclip opens a small menu: Scan document (camera -> one PDF) or Photo or file
+  const [attachMenu, setAttachMenu] = useState(false)
+  const [scanning, setScanning] = useState(false)
 
   // Message edit state
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
@@ -2581,6 +2589,14 @@ export default function PortalChatsPage() {
 
   const totalUnread = threads?.reduce((sum, t) => sum + t.unread_count, 0) ?? 0
 
+  // The conversations the left list shows: sorted, then the active chip, then the search box.
+  const visibleThreads = sortPortalThreads(threads ?? [], whatsNewCounts).filter(t => {
+    if (!matchesListFilter(t, listFilter, whatsNewCounts)) return false
+    if (!chatSearch.trim()) return true
+    const q = chatSearch.toLowerCase()
+    return (t.contact_name || t.company_name).toLowerCase().includes(q) || (t.companies?.some(c => c.name.toLowerCase().includes(q)) ?? false)
+  })
+
   return (
     // app-fill: inside the TD Social app there is no 4rem CRM top bar above this page, so it takes the whole height under the notice (app/globals.css)
     <div className="app-fill flex h-[calc(100vh-4rem)] overflow-hidden">
@@ -2694,10 +2710,11 @@ export default function PortalChatsPage() {
         </div>
         {/* Filter chips + issues total */}
         <div className="px-3 py-2 border-b flex items-center gap-1.5 flex-wrap">
-          {([['all', 'All'], ['unread', 'Unread'], ['whatsnew', "What's New"]] as const).map(([key, label]) => (
+          {LIST_FILTER_CHIPS.map(([key, label]) => (
             <button
               key={key}
               onClick={() => setListFilter(key)}
+              aria-pressed={listFilter === key}
               className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${listFilter === key ? 'bg-blue-600 text-white border-blue-600' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50'}`}
             >
               {label}
@@ -2714,18 +2731,24 @@ export default function PortalChatsPage() {
               <MessageSquare className="h-10 w-10 text-zinc-200 mx-auto mb-2" />
               <p className="text-sm text-zinc-400">No portal conversations yet</p>
             </div>
+          ) : visibleThreads.length === 0 ? (
+            // Nothing under the active chip (and search). Say so, and offer the way out — otherwise a search for a
+            // notice-only client under "Chats" would look like the client does not exist.
+            <div className="text-center px-4 py-10" data-testid="chat-list-empty">
+              <p className="text-sm text-zinc-400">
+                {chatSearch.trim() ? 'No conversation matches your search here.' : 'Nothing here.'}
+              </p>
+              {listFilter !== 'all' && (
+                <button
+                  onClick={() => setListFilter('all')}
+                  className="mt-2 text-xs font-medium text-blue-600 hover:underline"
+                >
+                  Show all conversations
+                </button>
+              )}
+            </div>
           ) : (
-            sortPortalThreads(threads, whatsNewCounts).filter(t => {
-              // Chip filter: all / unread / whats-new / issues.
-              if (listFilter === 'unread' && !(t.unread_count > 0)) return false
-              if (listFilter === 'whatsnew') {
-                const wn = (t.account_id ? whatsNewCounts?.by_account?.[t.account_id] : whatsNewCounts?.by_contact?.[t.contact_id ?? '']) ?? 0
-                if (!(wn > 0)) return false
-              }
-              if (!chatSearch.trim()) return true
-              const q = chatSearch.toLowerCase()
-              return (t.contact_name || t.company_name).toLowerCase().includes(q) || (t.companies?.some(c => c.name.toLowerCase().includes(q)) ?? false)
-            }).map(thread => {
+            visibleThreads.map(thread => {
               const threadKey = thread.account_id || thread.contact_id || ''
               const isSelected = thread.account_id
                 ? selectedAccountId === thread.account_id
@@ -3680,6 +3703,7 @@ export default function PortalChatsPage() {
                   onClose={() => setAppSheet(null)}
                   onEmoji={() => setShowEmojiPicker(true)}
                   onAttach={() => adminFileRef.current?.click()}
+                  onScan={() => setScanning(true)}
                   onAi={handleSuggest}
                   aiBusy={aiLoading || (!selectedAccountId && !selectedContactId)}
                   attachBusy={uploadingAdminFile}
@@ -4999,9 +5023,13 @@ export default function PortalChatsPage() {
                     )}
                   </div>
                   {/* Paperclip */}
+                  <div className="app-hide relative shrink-0">
                   <FastTooltip label="Attach file">
                     <button
-                      onClick={() => adminFileRef.current?.click()}
+                      onClick={() => setAttachMenu(o => !o)}
+                      aria-haspopup="menu"
+                      aria-expanded={attachMenu}
+                      data-testid="portal-attach"
                       disabled={uploadingAdminFile}
                       className={cn(
                         'app-hide p-2 rounded-full transition-colors shrink-0',
@@ -5014,6 +5042,13 @@ export default function PortalChatsPage() {
                       {uploadingAdminFile ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
                     </button>
                   </FastTooltip>
+                  <AttachChoiceMenu
+                    open={attachMenu} onClose={() => setAttachMenu(false)}
+                    onScan={() => { setAttachMenu(false); setScanning(true) }}
+                    onFile={() => { setAttachMenu(false); adminFileRef.current?.click() }}
+                  />
+                  </div>
+                  {scanning && <DocumentScanner onClose={() => setScanning(false)} onDone={file => { setScanning(false); handleAdminFileSelect(file) }} />}
                   <input
                     ref={adminFileRef}
                     type="file"

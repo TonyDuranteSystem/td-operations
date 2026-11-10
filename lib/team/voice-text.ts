@@ -61,3 +61,13 @@ export function transcriptLines(t: VoiceTranscript): Array<{ label: string; text
   lines.push({ label: t.english ? lang : 'Text', text: t.text })
   return lines
 }
+
+/**
+ * What the "Copy text" button puts on the clipboard. One version = just the words, ready to paste.
+ * Two versions (what was said + its English) = each under its language name, English first, like on screen.
+ */
+export function transcriptCopyText(t: VoiceTranscript): string {
+  const lines = transcriptLines(t)
+  if (lines.length === 1) return lines[0].text
+  return lines.map(l => `${l.label}:\n${l.text}`).join('\n\n')
+}
