@@ -107,10 +107,37 @@ export function describeChange(before: string, after: string): ChangeSummary {
 }
 
 /** The one line kept with the version: who, what, and a few words of the new text. Never longer than 600 characters. */
-export function versionNote(prefix: string, what: string, instruction?: string | null): string {
+export function versionNote(prefix: string, what: string, instruction?: string | null, basedOn?: number | null): string {
   const extra = (instruction ?? "").trim()
+  const tag = basedOn ? basedOnTag(basedOn) : ""
   const line = `${prefix}${what}${extra ? ` — ${extra}` : ""}`
-  return line.length > 600 ? `${line.slice(0, 597)}...` : line
+  const room = 600 - tag.length
+  return `${line.length > room ? `${line.slice(0, room - 3)}...` : line}${tag}`
+}
+
+/** "[based on version N]" kept with a proposal, so accepting it later can tell it was made from an older copy. */
+export const basedOnTag = (n: number): string => ` [based on version ${n}]`
+export function basedOnVersion(note: string | null | undefined): number | null {
+  const m = typeof note === "string" ? /\[based on version (\d+)\]/.exec(note) : null
+  return m ? Number(m[1]) : null
+}
+
+/** The text of a file ONLY if it is valid UTF-8; otherwise null (a Windows-1252 CSV read as UTF-8 would be corrupted when saved back). */
+export function decodeUtf8Strict(bytes: Buffer): string | null {
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes) } catch { return null }
+}
+
+/** A whole-file save whose bytes are not what the file name says (a .pdf that is not a PDF, a .docx that is not a zip …). */
+export function contentMismatch(name: string, bytes: Buffer): boolean {
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : ""
+  const starts = (...sig: number[]) => sig.every((b, i) => bytes[i] === b)
+  switch (ext) {
+    case "pdf": return !starts(0x25, 0x50, 0x44, 0x46)
+    case "png": return !starts(0x89, 0x50, 0x4e, 0x47)
+    case "jpg": case "jpeg": return !starts(0xff, 0xd8)
+    case "docx": case "xlsx": case "pptx": case "zip": return !starts(0x50, 0x4b)
+    default: return false
+  }
 }
 
 /** What a whole-file save changes, for a non-text file (no line diff): the sizes. */

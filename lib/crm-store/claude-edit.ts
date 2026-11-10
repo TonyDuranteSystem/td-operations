@@ -5,7 +5,8 @@
  * It is built ON the safe save of step 1 (`appendVersionBytes` → database function `store_append_version`), so every rule of that save applies
  * to Claude exactly as to a person on the web page, and the database enforces it, not this file:
  *   - every saved change is the NEXT numbered version; the old copy stays under "older copies" (nothing is overwritten or deleted)
- *   - a signed document, a passport / ID, a replaced file and a filed return are never changed ("locked" / "frozen")
+ *   - a signed document, a passport / ID, a replaced file and a filed return are never CHANGED ("locked" / "frozen"). READING them is allowed
+ *     on purpose (Antonio, 2026-11-10: Claude may read passports, IDs and ITIN papers in person storages) — `openStoreFile` has no lock refusal
  *   - an amended return needs a person's confirmation and a typed reason: Claude can never give one, so it is refused (the word of the person
  *     on the Storage page is the only way)
  *   - the change names the version it started from: if the file changed meanwhile, Claude's change is kept as a hidden "not applied" version
@@ -22,12 +23,12 @@ import { randomUUID } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { appendVersionBytes, INLINE_REGISTER_MAX_BYTES, sha256Hex, STORE_BUCKET } from "./writer"
 import { effectiveKind, ownersAreaUserId } from "./structure"
-import { storePointer } from "./document-pointer"
 import { checkReplacement, conflictText, lockText, statusMessage } from "./new-version-rules"
 import { ACCESS_LIMITS, clipText, isTextual, isUuid } from "./my-files-access-rules"
 import { guarded, Refuse, clip, type AccessCaller, type AccessResult } from "./my-files-access"
+import { clientVisibleFileIds } from "./client-visibility"
 import {
-  applyTextEdits, CLAUDE_EDIT_PREFIX, CONFLICT_PREFIX, describeChange, describeWholeFile, PROPOSAL_PREFIX, versionNote,
+  applyTextEdits, CLAUDE_EDIT_PREFIX, CONFLICT_PREFIX, contentMismatch, decodeUtf8Strict, describeChange, describeWholeFile, PROPOSAL_PREFIX, versionNote,
 } from "./claude-edit-rules"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* tables are not in the generated types
@@ -82,12 +83,13 @@ async function folderPath(folderId: string): Promise<string> {
   return names.join("/") || "(top)"
 }
 
-/** Is the file in front of a client now? (a CRM document row that is visible, or the store's own published mark) */
+/**
+ * Is the file in front of a client now? The store's own published mark, a CRM listing that is visible, OR a document the client sees
+ * through its workspace stage (e.g. the Articles at "Filed with State") — the same answer the Storage page gives (client-visibility.ts).
+ */
 async function visibleToClient(fileId: string, published: boolean | null): Promise<boolean> {
   if (published === true) return true
-  const { data, error } = await db().from("documents").select("portal_visible").eq("drive_file_id", storePointer(fileId)).limit(20)
-  if (error) throw new Error(`visibility lookup: ${error.message}`)
-  return ((data ?? []) as Array<{ portal_visible: boolean | null }>).some((r) => r.portal_visible === true)
+  return (await clientVisibleFileIds([fileId])).has(fileId)
 }
 
 /** A live file Claude may change, or a plain refusal (a foreign id gets the same answer as a missing one). */
@@ -146,30 +148,37 @@ export async function findStoreFiles(input: { query?: unknown }, caller: AccessC
   return guarded({ caller, tool: "store_find_files", kind: "read", summary: "find files", detail: { query: clip(input.query) } }, async () => {
     const q = typeof input.query === "string" ? input.query.trim() : ""
     if (q.length < 2 || q.length > 100 || /[%_\\,()]/.test(q)) throw new Refuse("query must be 2 to 100 characters of plain text (part of a file name), without % _ \\ , ( ).")
-    const { data, error } = await db().from("store_files")
-      .select("id, name, folder_id, published, owner_id, store_owners(kind, study_only, account_id, contact_id, private_user_id), store_file_versions!store_files_current_version_fk(version_no, size_bytes)")
-      .eq("state", "live").ilike("name", `%${q}%`).order("updated_at", { ascending: false }).limit(150)
-    if (error) throw new Error(`find: ${error.message}`)
     const mine = await ownersAreaUserId()
     type Row = { id: string; name: string; folder_id: string; published: boolean | null; owner_id: string; store_owners: OwnerRow | null; store_file_versions: { version_no: number | null; size_bytes: number | null } | null }
-    const rows = ((data ?? []) as Row[]).filter((r) => {
-      const o = r.store_owners
-      if (!o) return false
-      if (o.kind === "private") return !!mine && o.private_user_id === mine
-      return REACH_KINDS.has(o.kind) && o.study_only !== true
-    })
+    // Other people's My files and hidden study copies are filtered AFTER the read, so a single page of 150 could be all unreachable files and
+    // wrongly answer "no results": keep reading further pages (up to 1000 matches) until 21 reachable ones are found or the matches run out.
+    const PAGE = 150, MAX_PAGES = 7
     const shown: Row[] = []
-    for (const r of rows) {
-      if (r.store_owners?.kind === "private" && (await effectiveKind(r.folder_id)) === "staff_share") continue
-      shown.push(r)
-      if (shown.length >= 20) break
+    let more = false
+    for (let page = 0; page < MAX_PAGES && shown.length < 21; page++) {
+      const { data, error } = await db().from("store_files")
+        .select("id, name, folder_id, published, owner_id, store_owners(kind, study_only, account_id, contact_id, private_user_id), store_file_versions!store_files_current_version_fk(version_no, size_bytes)")
+        .eq("state", "live").ilike("name", `%${q}%`).order("updated_at", { ascending: false }).order("id", { ascending: true }).range(page * PAGE, page * PAGE + PAGE - 1)
+      if (error) throw new Error(`find: ${error.message}`)
+      const got = (data ?? []) as Row[]
+      for (const r of got) {
+        const o = r.store_owners
+        if (!o) continue
+        if (o.kind === "private" ? !(!!mine && o.private_user_id === mine) : !(REACH_KINDS.has(o.kind) && o.study_only !== true)) continue
+        if (o.kind === "private" && (await effectiveKind(r.folder_id)) === "staff_share") continue
+        shown.push(r)
+        if (shown.length >= 21) break
+      }
+      if (got.length < PAGE) break
+      if (page === MAX_PAGES - 1) more = true
     }
+    if (shown.length > 20) { shown.length = 20; more = true }
     const labels = await ownerLabels(shown.map((r) => ({ id: r.owner_id, ...(r.store_owners as OwnerRow) })))
     const files: FoundFile[] = []
     for (const r of shown) {
       files.push({ file_id: r.id, name: r.name, where: labels.get(r.owner_id) ?? "Storage", folder: await folderPath(r.folder_id), version_no: r.store_file_versions?.version_no ?? null, size: r.store_file_versions?.size_bytes ?? null, client_visible: await visibleToClient(r.id, r.published) })
     }
-    return { files, truncated: rows.length > shown.length }
+    return { files, truncated: more }
   })
 }
 
@@ -192,11 +201,17 @@ export async function openStoreFile(input: { file_id?: unknown; as_base64?: unkn
         : lock === "amended" ? AMENDED_REFUSAL(f.name)
         : f.clientVisible ? "The client can see this file, so a change from Claude is saved as a PROPOSED version that a person accepts on the Storage page." : "A change from Claude is saved straight away as the next version.",
     }
+    // READING is open on purpose, including passports, IDs and ITIN papers in person storages (Antonio, 2026-11-10): only CHANGING them is locked above.
     const { readFileForStaff } = await import("./browse")
     const got = await readFileForStaff(f.id)
     if (input.as_base64 !== true && isTextual(f.name, got.mimeType ?? f.mimeType)) {
-      const c = clipText(got.bytes.toString("utf8"))
-      return { ...base, encoding: "text" as const, content: c.text, cut: c.cut, download_url: null }
+      const text = decodeUtf8Strict(got.bytes)
+      if (text !== null) {
+        const c = clipText(text)
+        return { ...base, edit_note: c.cut ? `${base.edit_note} This is only the FIRST part of the file (it is longer than ${ACCESS_LIMITS.maxReadChars} characters): never save it back with store_save_file — change it with store_edit_file, which works on the whole stored file.` : base.edit_note, encoding: "text" as const, content: c.text, cut: c.cut, download_url: null }
+      }
+      // not valid UTF-8 (e.g. an old Windows-1252 CSV): showing it as text would garble it, so it is handed over as bytes and cannot be edited piece by piece
+      base.edit_note = `${base.edit_note} This text file is not UTF-8 (an older encoding), so it is not shown as text and store_edit_file refuses it: a rewrite would garble the accents.`
     }
     if (input.as_base64 === true && got.bytes.length <= ACCESS_LIMITS.maxReadBase64Bytes) return { ...base, encoding: "base64" as const, content: got.bytes.toString("base64"), cut: false, download_url: null }
     // a binary file (or a big one): a short-lived link instead of the bytes
@@ -224,13 +239,26 @@ async function writeVersion(w: WriteArgs): Promise<SaveReply> {
   const f = w.file
   const base = { client_visible: f.clientVisible, summary: w.summary }
   const proposal = f.clientVisible
-  const note = versionNote(proposal ? PROPOSAL_PREFIX : CLAUDE_EDIT_PREFIX, w.summary, w.instruction)
+  // a proposal remembers the version it was made from, so a person who accepts it later is stopped if the file has moved on since
+  const note = versionNote(proposal ? PROPOSAL_PREFIX : CLAUDE_EDIT_PREFIX, w.summary, w.instruction, proposal ? w.baseVersionNo : null)
   const call = (unmerged: boolean, n: string) => appendVersionBytes({
     fileId: f.id, bytes: w.bytes, mimeType: w.mimeType, expectedVersionNo: w.baseVersionNo, actor: null, source: "claude", unmerged, note: n,
   })
+  // the same change sent twice (a retried call) waits ONCE: an identical not-applied version of this file that nobody discarded is reused
+  const sha = sha256Hex(w.bytes)
+  const alreadyWaiting = async (): Promise<number | null> => {
+    const { data, error } = await db().from("store_file_versions").select("id, version_no").eq("file_id", f.id).eq("unmerged", true).eq("sha256", sha).order("version_no", { ascending: false }).limit(5)
+    if (error || !data?.length) return null
+    const { versionNotes } = await import("./proposals")
+    const notes = await versionNotes(f.id)
+    for (const v of data as Array<{ id: string; version_no: number }>) if (!notes.get(v.id)?.discarded) return v.version_no
+    return null
+  }
+  const waitingReply = (versionNo: number, conflicted: boolean): SaveReply => ({ ...base, status: conflicted ? "kept_not_applied" : "proposed", version_no: versionNo, message: `This same change is already waiting as version ${versionNo} (not applied). Nothing new was saved; a person accepts or discards it on the Storage page.` })
+  if (proposal) { const dup = await alreadyWaiting(); if (dup !== null) return waitingReply(dup, false) }
   let res = await call(proposal, note)
   let conflicted = false
-  if (res.status === "conflict") { conflicted = true; res = await call(true, versionNote(CONFLICT_PREFIX, w.summary, w.instruction)) } // the file moved on: keep Claude's change, hidden
+  if (res.status === "conflict") { conflicted = true; const dup = await alreadyWaiting(); if (dup !== null) return waitingReply(dup, true); res = await call(true, versionNote(CONFLICT_PREFIX, w.summary, w.instruction)) } // the file moved on: keep Claude's change, hidden
   const name = res.name ?? f.name
   if (res.status === "versioned") return { ...base, status: "saved", version_no: res.versionNo ?? null, message: `Saved as version ${res.versionNo}. The previous copy is kept under "older copies".` }
   if (res.status === "unmerged") {
@@ -260,7 +288,8 @@ export async function editStoreFile(input: { file_id?: unknown; base_version_no?
     if (lock) throw new Refuse(lockText(lock, f.name))
     const { bytes: baseBytes, mimeType } = await readVersionBytes(f.id, base)
     if (!isTextual(f.name, mimeType ?? f.mimeType)) throw new Refuse(`"${f.name}" is not a text file, so it cannot be edited piece by piece. Save a whole new copy with store_save_file instead.`)
-    const before = baseBytes.toString("utf8")
+    const before = decodeUtf8Strict(baseBytes)
+    if (before === null) throw new Refuse(`"${f.name}" is not saved as UTF-8 (it uses an older text encoding), so rewriting it piece by piece would garble the accents. Nothing was changed. Open it on the Storage page.`)
     const applied = applyTextEdits(before, input.edits)
     if (applied.ok === false) throw new Refuse(applied.error)
     const change = describeChange(before, applied.text)
@@ -273,8 +302,13 @@ export async function editStoreFile(input: { file_id?: unknown; base_version_no?
 }
 
 export async function saveStoreFile(input: { file_id?: unknown; base_version_no?: unknown; content_base64?: unknown; staged_path?: unknown; accept_warnings?: unknown; why?: unknown }, caller: AccessCaller): Promise<AccessResult<SaveReply>> {
-  const declared = typeof input.content_base64 === "string" ? Math.ceil((input.content_base64.length * 3) / 4) : 0
-  return guarded({ caller, tool: "store_save_file", kind: "change", summary: "save a whole new copy", detail: { file_id: clip(input.file_id), base_version_no: input.base_version_no, staged: clip(input.staged_path), why: clip(input.why) }, recordId: isUuid(input.file_id) ? input.file_id : null, extraBytes: declared || 1 }, async (note) => {
+  // the size counted against the hourly byte limit BEFORE the work starts: the pasted data, or — for a staged upload — the staged object's real size
+  // (counting 1 byte there would let parallel big saves all pass the check)
+  let declared = typeof input.content_base64 === "string" ? Math.ceil((input.content_base64.length * 3) / 4) : 0
+  if (!declared && typeof input.staged_path === "string" && input.staged_path.startsWith(CLAUDE_STAGING_PREFIX) && !input.staged_path.includes("..")) {
+    try { declared = (await stagedSize(input.staged_path)) ?? 0 } catch { declared = 0 }
+  }
+  return guarded({ caller, tool: "store_save_file", kind: "change", summary: "save a whole new copy", detail: { file_id: clip(input.file_id), base_version_no: input.base_version_no, staged: clip(input.staged_path), why: clip(input.why), size: declared || undefined }, recordId: isUuid(input.file_id) ? input.file_id : null, extraBytes: declared || 1 }, async (note) => {
     const base = checkBaseVersion(input.base_version_no)
     const hasB64 = typeof input.content_base64 === "string" && input.content_base64.length > 0
     const hasStaged = typeof input.staged_path === "string" && input.staged_path.length > 0
@@ -293,9 +327,7 @@ export async function saveStoreFile(input: { file_id?: unknown; base_version_no?
     } else {
       stagedPath = input.staged_path as string
       if (!stagedPath.startsWith(CLAUDE_STAGING_PREFIX) || stagedPath.includes("..")) throw new Refuse("staged_path must be the path store_upload_url gave you.")
-      const slash = stagedPath.lastIndexOf("/")
-      const { data: listed } = await db().storage.from(STAGING_BUCKET).list(stagedPath.slice(0, slash), { search: stagedPath.slice(slash + 1), limit: 5 })
-      const size = ((listed ?? []) as Array<{ name: string; metadata?: { size?: number } | null }>).find((o) => o.name === stagedPath!.slice(slash + 1))?.metadata?.size
+      const size = await stagedSize(stagedPath)
       if (typeof size !== "number") throw new Refuse("Nothing was found at that staged_path. Upload the file to the link first, then call this again.")
       if (size > INLINE_REGISTER_MAX_BYTES) { await db().storage.from(STAGING_BUCKET).remove([stagedPath]).catch(() => {}); throw new Refuse(`That file is ${(size / 1048576).toFixed(0)} MB — the limit for a new version is ${INLINE_REGISTER_MAX_BYTES / 1048576} MB.`) }
       const { data: blob, error } = await db().storage.from(STAGING_BUCKET).download(stagedPath)
@@ -303,18 +335,32 @@ export async function saveStoreFile(input: { file_id?: unknown; base_version_no?
       bytes = Buffer.from(await blob.arrayBuffer())
     }
     const removeStaged = () => (stagedPath ? db().storage.from(STAGING_BUCKET).remove([stagedPath]).catch(() => {}) : Promise.resolve())
-    try {
-      const mime = (f.mimeType ?? "application/octet-stream")
-      const chk = checkReplacement({ name: f.name, mimeType: f.mimeType, size: f.size }, { name: f.name, mimeType: mime, size: bytes.length })
-      if (chk.block) throw new Refuse(chk.block)
-      if (chk.warnings.length > 0 && input.accept_warnings !== true) {
-        throw new Refuse(`Please check: ${chk.warnings.map((w) => (w === "much_smaller" ? "the new copy is much smaller than the current one" : "the type differs from the current file")).join(" and ")}. If that is right, send accept_warnings: true. Nothing was saved.`)
-      }
-      note({ file_name: f.name, size: bytes.length, sha256: sha256Hex(bytes).slice(0, 16), client_visible: f.clientVisible })
-      const summary = describeWholeFile(f.size, bytes.length)
-      return await writeVersion({ file: f, bytes, mimeType: mime, baseVersionNo: base, summary, instruction: cleanInstruction(input.why) })
-    } finally { await removeStaged() }
+    // The staged upload is removed ONLY once its content was dealt with (saved, kept, or the same change found waiting). A "please check"
+    // question or a hiccup leaves it in place so the retry with accept_warnings finds it; the daily sweep removes anything never used.
+    const mime = (f.mimeType ?? "application/octet-stream")
+    const chk = checkReplacement({ name: f.name, mimeType: f.mimeType, size: f.size }, { name: f.name, mimeType: mime, size: bytes.length })
+    if (chk.block) { await removeStaged(); throw new Refuse(chk.block) }
+    // the new copy must look like what the file name says (the old "different type" check compared the file's name with itself and could never fire)
+    const wrongContent = contentMismatch(f.name, bytes)
+    if ((chk.warnings.length > 0 || wrongContent) && input.accept_warnings !== true) {
+      const parts = chk.warnings.map(() => "the new copy is much smaller than the current one")
+      if (wrongContent) parts.push(`the content does not look like a real "${f.name.slice(f.name.lastIndexOf(".") + 1).toLowerCase()}" file`)
+      throw new Refuse(`Please check: ${parts.join(" and ")}. If that is right, send accept_warnings: true. Nothing was saved.`)
+    }
+    note({ file_name: f.name, size: bytes.length, sha256: sha256Hex(bytes).slice(0, 16), client_visible: f.clientVisible })
+    const summary = describeWholeFile(f.size, bytes.length)
+    const reply = await writeVersion({ file: f, bytes, mimeType: mime, baseVersionNo: base, summary, instruction: cleanInstruction(input.why) })
+    if (reply.status !== "refused") await removeStaged() // a refusal (locked meanwhile, conflict text) keeps it for a retry
+    return reply
   })
+}
+
+/** Size in bytes of a staged upload, or null when nothing is there yet. */
+async function stagedSize(path: string): Promise<number | null> {
+  const slash = path.lastIndexOf("/")
+  const { data: listed } = await db().storage.from(STAGING_BUCKET).list(path.slice(0, slash), { search: path.slice(slash + 1), limit: 5 })
+  const size = ((listed ?? []) as Array<{ name: string; metadata?: { size?: number } | null }>).find((o) => o.name === path.slice(slash + 1))?.metadata?.size
+  return typeof size === "number" ? size : null
 }
 
 export async function uploadUrlForStoreFile(input: { file_id?: unknown }, caller: AccessCaller): Promise<AccessResult<{ upload_url: string; staged_path: string; expires: string; how: string }>> {

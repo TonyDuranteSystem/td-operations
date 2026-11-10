@@ -41,7 +41,7 @@ export function registerStorageEditTools(server: McpServer) {
   )
   server.tool(
     "store_open_file",
-    `Open ONE file by file_id (from store_find_files). Returns its current version_no (you need it to save), where it is, whether the client can see it, any lock, and a plain note on what a change will do. A text file comes back as text (cut at 200,000 characters); a binary file comes back as a short-lived download_url (or as base64 with as_base64: true, up to 3 MB). Owner session only. ${CAUTION}`,
+    `Open ONE file by file_id (from store_find_files). Returns its current version_no (you need it to save), where it is, whether the client can see it, any lock, and a plain note on what a change will do. Passports, IDs and ITIN papers can be OPENED and read (only changing them is refused). A text file comes back as text (cut at 200,000 characters — if cut, never save it back whole; use store_edit_file); a text file in an older encoding (not UTF-8) and a binary file comes back as a short-lived download_url (or as base64 with as_base64: true, up to 3 MB). Owner session only. ${CAUTION}`,
     { file_id: z.string(), as_base64: z.boolean().optional() },
     async (a) => run((c) => openStoreFile(a, c), (r) => {
       const { content, ...meta } = r

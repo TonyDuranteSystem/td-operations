@@ -111,6 +111,7 @@ describe("privacy boundary — Claude's file editing is not reachable from any H
   })
   it("the Storage page only ever sees a proposal through the history and the two staff routes", () => {
     const users = files().filter((f) => !f.endsWith("lib/crm-store/proposals.ts") && /crm-store\/proposals["']|\.\/proposals["']/.test(readFileSync(f, "utf8"))).map(rel).sort()
-    expect(users).toEqual(["app/api/crm-store/browse/file/[id]/discard-proposal/route.ts", "lib/crm-store/browse.ts"])
+    // claude-edit.ts (MCP only) and new-version.ts (the accept path: refuses a proposal made from an older copy) read the history notes too
+    expect(users).toEqual(["app/api/crm-store/browse/file/[id]/discard-proposal/route.ts", "lib/crm-store/browse.ts", "lib/crm-store/claude-edit.ts", "lib/crm-store/new-version.ts"])
   })
 })

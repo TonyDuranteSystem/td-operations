@@ -39,7 +39,8 @@ export async function discardedVersionNos(fileIds: string[]): Promise<Map<string
       if (error) continue
       for (const r of (data ?? []) as Array<{ file_id: string; details: { version_no?: number } | null }>) {
         const n = Number(r.details?.version_no)
-        if (Number.isInteger(n)) out.set(r.file_id, [...(out.get(r.file_id) ?? []), n])
+        // a version discarded twice (a double click) counts once
+        if (Number.isInteger(n) && !(out.get(r.file_id) ?? []).includes(n)) out.set(r.file_id, [...(out.get(r.file_id) ?? []), n])
       }
     }
   } catch { /* the counter then simply includes them */ }

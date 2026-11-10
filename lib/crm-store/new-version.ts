@@ -155,8 +155,19 @@ export async function saveNewVersionFromStaged(r: NewVersionRequest): Promise<Ne
 
 /** "Make this the current copy": the old version's bytes saved again as a NEW version (nothing is deleted or rewritten). */
 export async function restoreVersion(p: { fileId: string; versionNo: number; baseVersionNo: number; actor: string | null; ip?: string | null; userAgent?: string | null; /** the file is shown to the client now: "keep" it shown with the new current copy (default) or "hide" it BEFORE the new copy is saved */ clientChoice?: "keep" | "hide" }): Promise<NewVersionReply> {
-  const { data: v, error } = await db().from("store_file_versions").select("storage_bucket, storage_path, mime_type, size_bytes").eq("file_id", p.fileId).eq("version_no", p.versionNo).maybeSingle()
+  const { data: v, error } = await db().from("store_file_versions").select("id, storage_bucket, storage_path, mime_type, size_bytes").eq("file_id", p.fileId).eq("version_no", p.versionNo).maybeSingle()
   if (error || !v) return { status: "not_found", message: "That older copy no longer exists." }
+  // A change PROPOSED by Claude was made from one version of the file. If the file has moved on since, applying it would silently undo the
+  // newer work (it replaces the whole file) — so it is refused, with the plain reason.
+  {
+    const { versionNotes } = await import("./proposals")
+    const { isProposalNote, basedOnVersion } = await import("./claude-edit-rules")
+    const note = (await versionNotes(p.fileId)).get(v.id as string)?.note
+    const basedOn = basedOnVersion(note)
+    if (isProposalNote(note) && basedOn !== null && basedOn < p.baseVersionNo) {
+      return { status: "refused", message: `Claude made this proposal from version ${basedOn}, but the file is now at version ${p.baseVersionNo}. Applying it would undo the newer changes, so nothing was applied. Discard it and ask Claude to make the change again on the current copy.` }
+    }
+  }
   if ((v.size_bytes as number | null) !== null && (v.size_bytes as number) > INLINE_REGISTER_MAX_BYTES) return { status: "refused", message: "That copy is too large to restore from here for now." }
   const { data: blob, error: dlErr } = await db().storage.from(v.storage_bucket ?? STORE_BUCKET).download(v.storage_path)
   if (dlErr || !blob) { console.error("[crm-store] older copy unreadable:", dlErr?.message); return { status: "refused", message: "The older copy could not be read — please try again." } }
@@ -164,6 +175,11 @@ export async function restoreVersion(p: { fileId: string; versionNo: number; bas
   // "hide it from the client": done BEFORE the new copy is saved (the client never sees it, not even for a moment); shown again if the save fails
   let hiddenByUs = false
   if (p.clientChoice === "hide") {
+    // a file the client sees THROUGH its workspace stage (e.g. the Articles at "Filed with State") cannot be hidden from the storage:
+    // saying "hidden" while the client still sees the new copy would be wrong, so nothing is saved
+    const { workspaceShownFiles, workspaceShownMessage } = await import("./client-visibility")
+    const shown = (await workspaceShownFiles([p.fileId])).get(p.fileId)
+    if (shown) return { status: "refused", message: `${workspaceShownMessage(info?.name ?? "This file", shown)} Choose "keep it visible" to apply this change, or discard it.` }
     const { storePointer } = await import("./document-pointer")
     const { data: rows } = await db().from("documents").select("portal_visible").eq("drive_file_id", storePointer(p.fileId))
     if (((rows ?? []) as { portal_visible: boolean | null }[]).some((x) => x.portal_visible === true)) {
