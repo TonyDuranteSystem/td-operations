@@ -13,8 +13,14 @@ import {
   extensionFaxReason,
   extensionFiledMessage,
   extensionReceiptName,
+  faxDigits,
+  form7004OnlyName,
   isExtensionFaxDetails,
+  isKnownIrsExtensionNumber,
+  isPastOriginalDueDate,
   lastDeliveredNumber,
+  originalDueDateIso,
+  todayNewYork,
   longDate,
   mergedDocumentName,
   pickWorkingCopy,
@@ -142,6 +148,18 @@ describe('the client\'s message', () => {
     expect(m).not.toContain('deadline')
     expect(m).toBe('Good news: we have filed the extension for your tax return.')
   })
+  it('when the document holds the form WITHOUT the IRS fax receipt, the message does not promise one', () => {
+    const en = extensionFiledMessage({ italian: false, year: 2025, deadlineIso: '2026-10-15', withDocument: true, withReceipt: false })
+    expect(en).toContain('in your Documents')
+    expect(en).not.toContain('confirmation')
+    const it = extensionFiledMessage({ italian: true, year: 2025, deadlineIso: '2026-10-15', withDocument: true, withReceipt: false })
+    expect(it).toContain('Documenti')
+    expect(it).not.toContain('conferma')
+  })
+  it('the form-alone document has its own name, which can never be taken for the working copy or the merged document', () => {
+    expect(form7004OnlyName('Acme LLC', 2025)).toBe('Form 7004 - Acme LLC - Tax Return 2025.pdf')
+    expect(form7004OnlyName('Acme LLC', 2025).startsWith(WORKING_COPY_PREFIX)).toBe(false)
+  })
   it('long dates read naturally and an unreadable date comes back untouched', () => {
     expect(longDate('2026-10-15', false)).toBe('October 15, 2026')
     expect(longDate('2027-03-01', true)).toBe('1 marzo 2027')
@@ -151,17 +169,79 @@ describe('the client\'s message', () => {
 })
 
 describe('what the form is pre-filled with', () => {
-  it('the company\'s saved mailing address wins', () => {
-    expect(prefillAddress({ address_line1: ' 1 Main St ', address_line2: 'Suite 5', city: 'Austin', state: 'TX', zip: '78701' }, '3D-318'))
-      .toEqual({ street: '1 Main St', suite: 'Suite 5', city: 'Austin', state: 'TX', zip: '78701' })
+  it('a company with a TD office number gets the OFFICIAL address (the one on its EIN application), without the box number, whatever row is saved', () => {
+    const official = { street: '10225 Ulmerton Rd 3D', suite: '', city: 'Largo', state: 'FL', zip: '33771' }
+    expect(prefillAddress(null, '3D-318')).toEqual(official)
+    // the shared Largo row most companies have saved (street + "3D" on the second line) gives the same answer: no second style, no box number
+    expect(prefillAddress({ address_line1: '10225 Ulmerton Rd', address_line2: '3D', city: 'Largo', state: 'FL', zip: '33771' }, '3D-318')).toEqual(official)
+    // even a different saved address does not override it: the IRS's record is the official address
+    expect(prefillAddress({ address_line1: ' 1 Main St ', address_line2: 'Suite 5', city: 'Austin', state: 'TX', zip: '78701' }, '3D-318')).toEqual(official)
   })
-  it('else the TD mailing address built from the company\'s suite number (the box number is part of the street)', () => {
-    const a = prefillAddress(null, '3D-318')
-    expect(a.street).toBe('10225 Ulmerton Rd 3D PMB 318')
-    expect(a).toMatchObject({ city: 'Largo', state: 'FL', zip: '33771', suite: '' })
+  it('a company with NO number: its own saved address, trimmed — but never the shared Largo row', () => {
+    expect(prefillAddress({ address_line1: ' 1 Main St ', address_line2: 'Suite 5', city: 'Austin', state: 'TX', zip: '78701' }, null))
+      .toEqual({ street: '1 Main St', suite: 'Suite 5', city: 'Austin', state: 'TX', zip: '78701' })
+    expect(prefillAddress({ address_line1: '10225 Ulmerton Rd', address_line2: '3D', city: 'Largo', state: 'FL', zip: '33771' }, null))
+      .toEqual({ street: '', suite: '', city: '', state: '', zip: '' })
   })
   it('a company with neither gets an empty form for staff to fill — never a guessed address', () => {
     expect(prefillAddress(null, null)).toEqual({ street: '', suite: '', city: '', state: '', zip: '' })
     expect(prefillAddress({ address_line1: '  ' }, undefined)).toEqual({ street: '', suite: '', city: '', state: '', zip: '' })
+  })
+})
+
+describe('the number a fax went to', () => {
+  it('numbers are compared as 10 digits, however they were typed', () => {
+    expect(faxDigits('1 (855) 887-7737')).toBe('8558877737')
+    expect(faxDigits('+18558877737')).toBe('8558877737')
+    expect(faxDigits(null)).toBe('')
+    expect(isKnownIrsExtensionNumber('855-887-7737')).toBe(true)
+    expect(isKnownIrsExtensionNumber('855-887-7731')).toBe(false) // one wrong digit is NOT the IRS
+    expect(isKnownIrsExtensionNumber(undefined)).toBe(false)
+  })
+})
+
+describe('the return\'s original due date (a Form 7004 after it is late)', () => {
+  it('April 15 of the next year, moved to Monday when it falls on a weekend', () => {
+    expect(originalDueDateIso(2025)).toBe('2026-04-15') // a Wednesday
+    expect(originalDueDateIso(2027)).toBe('2028-04-17') // April 15, 2028 is a Saturday
+    expect(originalDueDateIso(2023)).toBe('2024-04-15') // a Monday
+    expect(originalDueDateIso(2029)).toBe('2030-04-15') // a Monday; and a Sunday case below
+    expect(originalDueDateIso(2024)).toBe('2025-04-15') // a Tuesday
+    expect(originalDueDateIso(2021)).toBe('2022-04-15') // a Friday
+    expect(originalDueDateIso(2032)).toBe('2033-04-15') // a Friday
+    expect(originalDueDateIso(2036)).toBe('2037-04-15') // a Wednesday
+  })
+  it('a Sunday 15th moves one day', () => {
+    // April 15, 2029 is a Sunday
+    expect(originalDueDateIso(2028)).toBe('2029-04-16')
+  })
+  it('late only AFTER the due date; the day itself is still on time; an unknown year is never "late"', () => {
+    expect(isPastOriginalDueDate(2025, '2026-04-15')).toBe(false)
+    expect(isPastOriginalDueDate(2025, '2026-04-16')).toBe(true)
+    expect(isPastOriginalDueDate(2025, '2026-11-10')).toBe(true)
+    expect(isPastOriginalDueDate(2025, '2026-03-01')).toBe(false)
+    expect(isPastOriginalDueDate(null, '2030-01-01')).toBe(false)
+    expect(isPastOriginalDueDate(Number.NaN, '2030-01-01')).toBe(false)
+  })
+  it('"today" is the New York date: 9 pm New York on Nov 9 is already Nov 10 in UTC, and counts as Nov 9', () => {
+    expect(todayNewYork(new Date('2026-11-10T02:00:00Z'))).toBe('2026-11-09')
+    expect(todayNewYork(new Date('2026-11-10T15:00:00Z'))).toBe('2026-11-10')
+  })
+})
+
+describe('delivered to a number nobody confirmed', () => {
+  const m = (kind: string, details: Record<string, unknown> = { job_id: 'F1' }) => ({ action_type: kind, created_at: '2026-11-09T12:00:00Z', details })
+  it('the unverified marker of THIS fax turns the box into "was that the IRS?", with the number and the copy', () => {
+    const s = buildExtensionFaxState({ entityType: 'Single Member LLC', workingCopy: COPY, latestFax: fax(), markers: [m(EXTENSION_FAX_MARKERS.recipientUnverified, { job_id: 'F1', faxno: '8005550199' })] })
+    expect(s).toMatchObject({ mode: 'confirm_recipient', faxJobId: 'F1', faxno: '8005550199', copy: COPY })
+  })
+  it('once a person confirmed it, the box is back to "sent" (the next check files it); filed wins over everything; another fax\'s marker changes nothing', () => {
+    const both = [m(EXTENSION_FAX_MARKERS.recipientUnverified, { job_id: 'F1', faxno: '8005550199' }), m(EXTENSION_FAX_MARKERS.recipientConfirmed)]
+    expect(buildExtensionFaxState({ entityType: 'Single Member LLC', workingCopy: COPY, latestFax: fax(), markers: both }).mode).toBe('sent')
+    expect(buildExtensionFaxState({ entityType: 'Single Member LLC', workingCopy: COPY, latestFax: fax(), markers: [...both, m(EXTENSION_FAX_MARKERS.confirmed)] }).mode).toBe('delivered')
+    expect(buildExtensionFaxState({ entityType: 'Single Member LLC', workingCopy: COPY, latestFax: fax(), markers: [m(EXTENSION_FAX_MARKERS.recipientUnverified, { job_id: 'OLD' })] }).mode).toBe('sent')
+  })
+  it('a failed fax stays "failed" even if an unverified marker exists', () => {
+    expect(buildExtensionFaxState({ entityType: 'Single Member LLC', workingCopy: COPY, latestFax: fax(), markers: [m(EXTENSION_FAX_MARKERS.failed), m(EXTENSION_FAX_MARKERS.recipientUnverified)] }).mode).toBe('failed')
   })
 })

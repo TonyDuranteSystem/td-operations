@@ -6,7 +6,7 @@
  *  - whether this company's extension is faxed from here at all (single-member LLC) or the plain upload box is shown (everything else),
  *  - the Form 7004 generated in this job (the working copy) and the job's extension fax on record (fax_sent / an unconfirmed fax_claim carrying the
  *    extension purpose) and the delivery-check markers,
- *  - what the "Generate" form is pre-filled with (company name, EIN, mailing address, tax year) — staff review it before anything is made,
+ *  - what the "Generate" form is pre-filled with (company name, EIN, official address, tax year) — staff review it before anything is made,
  *  - the pre-filled number (the last number an extension fax was DELIVERED to, else the IRS number) — editable in the box.
  * Generating is POST /api/flows/[id]/extension-fax/generate; the send is the shared fax engine (POST /api/tools/fax/send, purpose tag).
  *
@@ -25,11 +25,15 @@ import {
   buildExtensionFaxState,
   EXTENSION_FAX_MARKERS,
   EXTENSION_FAX_PURPOSE,
+  DEFAULT_EXTENSION_FAX_NUMBER,
   extensionFaxCover,
   extensionFaxReason,
+  isPastOriginalDueDate,
   lastDeliveredNumber,
+  originalDueDateIso,
   pickWorkingCopy,
   prefillAddress,
+  todayNewYork,
   WORKING_COPY_PREFIX,
   type WorkingCopyRow,
 } from '@/lib/fax/extension-fax'
@@ -106,7 +110,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     .from('action_log')
     .select('action_type, created_at, details')
     .eq('service_delivery_id', sdId)
-    .in('action_type', Object.values(EXTENSION_FAX_MARKERS))
+    .in('action_type', Object.values(EXTENSION_FAX_MARKERS).filter((k) => k !== EXTENSION_FAX_MARKERS.filingClaim)) // claims are bookkeeping, not state; they must never crowd the real markers out of the 20
     .order('created_at', { ascending: false })
     .limit(20)
   if (markerRes.error) return NextResponse.json({ success: false, error: NOT_CHECKED }, { status: 503 })
@@ -137,6 +141,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       company,
       year,
       prefill: { companyName: company === 'this company' ? '' : company, ein, ...address, taxYear: year },
+      // the return's ORIGINAL due date: after it, a Form 7004 is late (the box warns; generating then needs an explicit confirmation)
+      original_due_date: year ? originalDueDateIso(year) : null,
+      past_due: isPastOriginalDueDate(year, todayNewYork()),
+      known_irs_number: DEFAULT_EXTENSION_FAX_NUMBER,
       fax_number: lastDeliveredNumber((lastRes.data ?? []) as Array<{ details: { faxno?: string | null } | null }>),
       default_reason: extensionFaxReason(company, year),
       default_cover: extensionFaxCover(company, year),

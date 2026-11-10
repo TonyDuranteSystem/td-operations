@@ -6,7 +6,8 @@
  * client). The box then shows it for a look, and the fax engine sends THAT file. Generating again (a correction) saves a newer copy as long as
  * no fax is on record for the job; once a fax went out (or was started and never confirmed) the copy is what the IRS got and is not replaced here.
  *
- * Body: { companyName, ein, street, suite?, city, state, zip, taxYear, generate_id }. Staff-only. [id] = service_delivery_id.
+ * Body: { companyName, ein, street, suite?, city, state, zip, taxYear, generate_id, confirm_late? }. Past the return's ORIGINAL due date a Form 7004 is late:
+ * it is only made when staff confirmed that on purpose (confirm_late), never by accident. Staff-only. [id] = service_delivery_id.
  * A plain sentence on every refusal; the data that cannot make a valid form is a 400 and nothing is saved.
  */
 
@@ -19,7 +20,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { taxReturnYear } from '@/lib/flows/resolve-flows'
 import { fill7004, form7004Problem, type Form7004FillData } from '@/lib/pdf/7004-fill'
-import { EXTENSION_FAX_MARKERS, EXTENSION_FAX_PURPOSE, EXTENSION_STAGES, usesExtensionFaxBox, workingCopyName } from '@/lib/fax/extension-fax'
+import { EXTENSION_FAX_MARKERS, EXTENSION_FAX_PURPOSE, EXTENSION_STAGES, isPastOriginalDueDate, longDate, originalDueDateIso, todayNewYork, usesExtensionFaxBox, workingCopyName } from '@/lib/fax/extension-fax'
 
 const text = (v: unknown, max = 200): string => (typeof v === 'string' ? v.trim().slice(0, max) : '')
 
@@ -96,6 +97,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       failed = Array.isArray(m.data) && m.data.length > 0
     }
     if (!failed) return NextResponse.json({ success: false, error: 'A Form 7004 was already faxed for this job. It cannot be replaced here.' }, { status: 409 })
+  }
+
+  // a Form 7004 filed after the return's original due date is late: only on purpose
+  const jobYear = taxReturnYear(sd)
+  if (isPastOriginalDueDate(jobYear, todayNewYork()) && body.confirm_late !== true) {
+    return NextResponse.json({
+      success: false,
+      late: true,
+      error: `The original due date of the ${jobYear} return (${longDate(originalDueDateIso(jobYear as number), false)}) has passed, so a Form 7004 filed now is late and may not count as an extension. Tick the box to confirm only if you know it is still valid.`,
+    }, { status: 409 })
   }
 
   let bytes: Uint8Array

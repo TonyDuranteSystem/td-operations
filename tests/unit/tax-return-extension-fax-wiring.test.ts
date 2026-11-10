@@ -3,7 +3,7 @@
  * wired together, the box's state route and the generate route. The rules are tested in extension-fax.test.ts, the delivery check in
  * extension-fax-delivery.test.ts, the form in form-7004-fill.test.ts, the purpose tag in fax-send-route-save-where.test.ts.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -180,6 +180,10 @@ describe('how the pieces are wired', () => {
   })
 })
 
+// the clock matters now (a Form 7004 after the return's original due date is late): tests that care set it, and it is always put back
+const setToday = (iso: string) => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(`${iso}T15:00:00Z`)) }
+afterEach(() => { vi.useRealTimers() })
+
 const call = async () => GET({} as never, { params: { id: 'sd-1' } })
 const json = async () => (await call()).json()
 
@@ -201,14 +205,41 @@ describe('GET /api/flows/[id]/extension-fax — the box\'s state', () => {
     fx.sd = null
     expect((await call()).status).toBe(404)
   })
-  it('a single-member company with nothing generated → generate, with the form pre-filled (name, EIN, the TD mailing address from the suite number, the tax year from the job name) and the IRS number', async () => {
+  it('a single-member company with nothing generated → generate, with the form pre-filled (name, EIN, the OFFICIAL address from the suite number — no box number —, the tax year from the job name) and the IRS number', async () => {
     const body = await json()
     expect(body).toMatchObject({
       success: true, company: 'Acme LLC', year: 2025, account_id: 'acc-1', fax_number: DEFAULT_EXTENSION_FAX_NUMBER,
       default_reason: 'Form 7004 extension 2025 - Acme LLC',
       state: { mode: 'generate' },
-      prefill: { companyName: 'Acme LLC', ein: '12-3456789', street: '10225 Ulmerton Rd 3D PMB 318', city: 'Largo', state: 'FL', zip: '33771', taxYear: 2025 },
+      prefill: { companyName: 'Acme LLC', ein: '12-3456789', street: '10225 Ulmerton Rd 3D', suite: '', city: 'Largo', state: 'FL', zip: '33771', taxYear: 2025 },
     })
+  })
+  it('the address is the same official one whether or not a lease ran: the shared Largo row most companies have saved gives the same answer, no second style', async () => {
+    const withoutRow = (await json()).prefill
+    fx.account = { ...fx.account, mailing_address: { address_line1: '10225 Ulmerton Rd', address_line2: '3D', city: 'Largo', state: 'FL', zip: '33771' } }
+    expect((await json()).prefill).toEqual(withoutRow)
+  })
+  it('a company with no TD number never gets the shared Largo row as its address; its own saved address is used', async () => {
+    fx.account = { ...fx.account, suite_number: null, mailing_address: { address_line1: '10225 Ulmerton Rd', address_line2: '3D', city: 'Largo', state: 'FL', zip: '33771' } }
+    expect((await json()).prefill).toMatchObject({ street: '', city: '', zip: '' })
+    fx.account = { ...fx.account, mailing_address: { address_line1: '1 Main St', address_line2: null, city: 'Austin', state: 'TX', zip: '78701' } }
+    expect((await json()).prefill).toMatchObject({ street: '1 Main St', city: 'Austin', state: 'TX', zip: '78701' })
+  })
+  it('the box is told the return\'s original due date and whether it has passed (New York date): the day itself is still on time', async () => {
+    setToday('2026-04-15')
+    expect(await json()).toMatchObject({ original_due_date: '2026-04-15', past_due: false, known_irs_number: DEFAULT_EXTENSION_FAX_NUMBER })
+    setToday('2026-04-16')
+    expect((await json()).past_due).toBe(true)
+  })
+  it('delivered to a number nobody confirmed → the box asks "was that the IRS?"; once confirmed it is back to waiting for the check', async () => {
+    fx.latestFax = { id: 'l1', action_type: 'fax_sent', created_at: '2026-11-09T10:00:00Z', details: { job_id: '555', faxno: '8005550199', purpose: EXTENSION_FAX_PURPOSE } }
+    fx.markers = [{ action_type: 'extension_fax_recipient_unverified', created_at: '2026-11-09T10:20:00Z', details: { job_id: '555', faxno: '8005550199' } }]
+    expect((await json()).state).toMatchObject({ mode: 'confirm_recipient', faxJobId: '555', faxno: '8005550199' })
+    fx.markers = [...fx.markers, { action_type: 'extension_fax_recipient_ok', created_at: '2026-11-09T10:30:00Z', details: { job_id: '555' } }]
+    expect((await json()).state.mode).toBe('sent')
+  })
+  it('the filing-claim bookkeeping rows are left out of the markers the state reads (they could crowd real markers out of the newest 20)', () => {
+    expect(read('../../app/api/flows/[id]/extension-fax/route.ts')).toContain('filter((k) => k !== EXTENSION_FAX_MARKERS.filingClaim)')
   })
   it('a generated 7004 → ready; a fax on record → sent (never "ready"); the confirmed marker → delivered', async () => {
     fx.docs = [{ id: 'doc-1', file_name: 'Form 7004 (as faxed) - Acme LLC - Tax Return 2025.pdf', drive_file_id: 'store:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', created_at: '2026-11-09T09:00:00Z' }]
@@ -235,9 +266,10 @@ describe('GET /api/flows/[id]/extension-fax — the box\'s state', () => {
 })
 
 describe('POST /api/flows/[id]/extension-fax/generate — make the Form 7004', () => {
-  const valid = { companyName: 'Acme LLC', ein: '12-3456789', street: '10225 Ulmerton Rd 3D PMB 318', suite: '', city: 'Largo', state: 'FL', zip: '33771', taxYear: 2025, generate_id: 'gen-0000-0001' }
+  const valid = { companyName: 'Acme LLC', ein: '12-3456789', street: '10225 Ulmerton Rd 3D', suite: '', city: 'Largo', state: 'FL', zip: '33771', taxYear: 2025, generate_id: 'gen-0000-0001' }
   const generate = (body: Record<string, unknown> = valid) => GENERATE({ json: async () => body } as never, { params: { id: 'sd-1' } })
   beforeEach(() => {
+    setToday('2026-03-01') // before the 2025 return's original due date (April 15, 2026)
     fx.staff = true
     fx.sd = { id: 'sd-1', account_id: 'acc-1', service_type: 'Tax Return', service_name: 'Tax Return 2025 - Acme LLC', stage: '1st Installment Paid', status: 'active', due_date: null, created_at: '2026-01-10T00:00:00Z', stage_entered_at: '2026-02-01T00:00:00Z' }
     fx.account = { company_name: 'Acme LLC', entity_type: 'Single Member LLC' }
@@ -260,6 +292,31 @@ describe('POST /api/flows/[id]/extension-fax/generate — make the Form 7004', (
     })
     const bytes = fx.saves[0].bytes as Buffer
     expect(bytes.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+  })
+  it('AFTER the return\'s original due date a Form 7004 is late: refused with a plain sentence until staff confirm it on purpose — nothing is made by accident', async () => {
+    setToday('2026-11-10')
+    const res = await generate()
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: false, late: true })
+    expect(body.error).toContain('April 15, 2026')
+    expect(body.error).toContain('late')
+    expect(fx.saves).toEqual([])
+    // confirm_late must be exactly true (a truthy string is not a confirmation)
+    expect((await generate({ ...valid, confirm_late: 'yes' })).status).toBe(409)
+    expect(fx.saves).toEqual([])
+    expect((await generate({ ...valid, confirm_late: true })).status).toBe(200)
+    expect(fx.saves).toHaveLength(1)
+  })
+  it('the due date itself is still on time; the day after is late', async () => {
+    setToday('2026-04-15')
+    expect((await generate()).status).toBe(200)
+    setToday('2026-04-16')
+    expect((await generate({ ...valid, generate_id: 'gen-0000-0002' })).status).toBe(409)
+  })
+  it('the lateness is judged by the JOB\'s tax year, not by a year typed in the form', async () => {
+    setToday('2026-11-10')
+    expect((await generate({ ...valid, taxYear: 2030 })).status).toBe(409)
   })
   it('data that cannot make a valid form is a 400 with a plain sentence and nothing is saved', async () => {
     const res = await generate({ ...valid, ein: '12' })

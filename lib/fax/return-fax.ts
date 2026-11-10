@@ -125,7 +125,7 @@ export interface FaxLogRow {
 export interface MarkerRow {
   action_type: string
   created_at: string
-  details: { job_id?: string; reason?: string } | null
+  details: { job_id?: string; reason?: string; faxno?: string } | null
 }
 
 export type ReturnFaxState =

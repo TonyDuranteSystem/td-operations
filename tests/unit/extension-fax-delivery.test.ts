@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
 import { processExtensionFaxDelivery, type ExtensionFaxDeps, type ExtensionJob, type ExtensionFaxRow } from '@/lib/fax/extension-fax-delivery'
-import { EXTENSION_FAX_MARKERS } from '@/lib/fax/extension-fax'
+import { DEFAULT_EXTENSION_FAX_NUMBER, EXTENSION_FAX_MARKERS, EXTENSION_RECEIPT_GRACE_MINUTES, faxDigits } from '@/lib/fax/extension-fax'
 
 const WORK = Buffer.from('%PDF-1.4 the form 7004 as faxed')
 const RECEIPT = Buffer.from('%PDF-1.4 the faxage receipt')
@@ -41,6 +41,9 @@ function make(over: Partial<ExtensionFaxDeps> & { job?: ExtensionJob | null; fax
     markerExists: async (kind) => ({ exists: have.has(kind), error: null }),
     faxStatus: async () => ({ status: over.status ?? 'delivered', error: null }),
     transmittal: async () => ({ pdf: RECEIPT, error: null }),
+    // the IRS number we know, or a number a person confirmed for this fax (a marker written during the test) is trusted — like the real deps
+    recipientTrusted: async ({ faxno }) => ({ trusted: faxDigits(faxno) === DEFAULT_EXTENSION_FAX_NUMBER || have.has(EXTENSION_FAX_MARKERS.recipientConfirmed), error: null }),
+    claimFiling: async () => ({ won: true, error: null }),
     taxYear: () => 2025,
     companyName: async () => 'Acme LLC',
     readWorkingCopy: async () => ({ bytes: WORK, error: null }),
@@ -135,9 +138,11 @@ describe('delivered', () => {
     expect(m.calls.messages[0]).toContain('proroga')
     expect(m.calls.messages[0]).toContain('15 ottobre 2026')
   })
-  it('a fax to ANY number counts once Faxage says it was delivered (the number is the IRS\'s to change)', async () => {
-    const m = make({ fax: { ...FAX, details: { ...FAX.details, faxno: '8001234567' } } })
-    expect((await processExtensionFaxDelivery('x', m.deps)).outcome).toBe('filed')
+  it('the IRS number written in any style counts: dashes, a leading 1, a plus sign', async () => {
+    for (const faxno of ['855-887-7737', '1 (855) 887-7737', '+18558877737']) {
+      const m = make({ fax: { ...FAX, details: { ...FAX.details, faxno } } })
+      expect((await processExtensionFaxDelivery('x', m.deps)).outcome, faxno).toBe('filed')
+    }
   })
   it('the receipt page not ready yet → try again next run: nothing saved, nothing moved, nothing said', async () => {
     const m = make({ transmittal: async () => ({ pdf: null, error: 'ERR28' }) })
@@ -246,5 +251,102 @@ describe('the move and the message', () => {
   it('never throws: an exception anywhere is an error to retry', async () => {
     const m = make({ merge: undefined, readWorkingCopy: async () => { throw new Error('boom') } })
     expect(await processExtensionFaxDelivery('x', m.deps)).toEqual({ outcome: 'error', error: 'boom' })
+  })
+})
+
+describe('delivered to a number nobody confirmed as the IRS (a typo that is a live line, or a test number)', () => {
+  const OTHER: ExtensionFaxRow = { ...FAX, details: { ...FAX.details, faxno: '8558877731' } } // one digit off
+  it('the job is HELD: nothing saved, nothing moved, the client not told, ONE marker and ONE alert that names the number', async () => {
+    const m = make({ fax: OTHER })
+    expect(await processExtensionFaxDelivery('x', m.deps)).toEqual({ outcome: 'needs_recipient_check' })
+    expect(await processExtensionFaxDelivery('x', m.deps)).toEqual({ outcome: 'needs_recipient_check' })
+    expect(m.calls.saved).toEqual([])
+    expect(m.calls.moves).toEqual([])
+    expect(m.calls.messages).toEqual([])
+    expect(m.calls.markers.filter((x) => x.kind === EXTENSION_FAX_MARKERS.recipientUnverified)).toHaveLength(1)
+    expect(m.calls.markers.find((x) => x.kind === EXTENSION_FAX_MARKERS.recipientUnverified)?.details).toMatchObject({ job_id: 'F1', faxno: '8558877731', faxno_digits: '8558877731' })
+    expect(m.calls.markers.some((x) => x.kind === EXTENSION_FAX_MARKERS.confirmed)).toBe(false) // never "filed", so never remembered as a good number
+    expect(m.calls.alerts).toHaveLength(1)
+    expect(m.calls.alerts[0]).toContain('8558877731')
+    expect(m.calls.alerts[0]).toContain('NOT told')
+  })
+  it('the receipt is not even asked for while the number is unconfirmed', async () => {
+    const m = make({ fax: OTHER, transmittal: async () => { throw new Error('must not be called') } })
+    expect((await processExtensionFaxDelivery('x', m.deps)).outcome).toBe('needs_recipient_check')
+  })
+  it('once a person confirms THIS fax went to the IRS, the same check files it — document, move, message, marker', async () => {
+    const m = make({ fax: OTHER, markers: [EXTENSION_FAX_MARKERS.recipientConfirmed] })
+    const r = await processExtensionFaxDelivery('x', m.deps)
+    expect(r).toEqual({ outcome: 'filed', documentSaved: true, messagePosted: true })
+    expect(m.calls.moves).toHaveLength(1)
+    expect(m.calls.markers.find((x) => x.kind === EXTENSION_FAX_MARKERS.confirmed)?.details).toMatchObject({ faxno: '8558877731', faxno_digits: '8558877731' })
+  })
+  it('a number that cannot be looked up is an error to retry, never a filing', async () => {
+    const m = make({ recipientTrusted: async () => ({ trusted: false, error: 'db down' }) })
+    expect(await processExtensionFaxDelivery('x', m.deps)).toEqual({ outcome: 'error', error: 'db down' })
+    expect(m.calls.moves).toEqual([])
+  })
+  it('a fax that is still waiting or failed is not held for its number: only a DELIVERED fax is judged by who got it', async () => {
+    expect((await processExtensionFaxDelivery('x', make({ fax: OTHER, status: 'pending' }).deps)).outcome).toBe('pending')
+    expect((await processExtensionFaxDelivery('x', make({ fax: OTHER, status: 'failed' }).deps)).outcome).toBe('failed')
+  })
+})
+
+describe('delivered, but Faxage never gives the receipt page', () => {
+  const NO_RECEIPT = { transmittal: async () => ({ pdf: null, error: 'ERR28 not ready' }) }
+  const AFTER_GRACE = Date.parse(FAX_AT) + (EXTENSION_RECEIPT_GRACE_MINUTES + 5) * 60_000
+  it('within the grace time it waits quietly; right at the limit it still waits', async () => {
+    const m = make({ ...NO_RECEIPT, now: () => Date.parse(FAX_AT) + EXTENSION_RECEIPT_GRACE_MINUTES * 60_000 })
+    expect(await processExtensionFaxDelivery('x', m.deps)).toEqual({ outcome: 'pending', note: 'ERR28 not ready' })
+    expect(m.calls.alerts).toEqual([])
+    expect(m.calls.moves).toEqual([])
+  })
+  it('after the grace time the extension IS filed (the fax was delivered): the Form 7004 alone for the client, the job moved, the client told without a promise of a receipt, ONE alert', async () => {
+    const m = make({ ...NO_RECEIPT, now: () => AFTER_GRACE })
+    const r = await processExtensionFaxDelivery('x', m.deps)
+    expect(r).toEqual({ outcome: 'filed', documentSaved: true, messagePosted: true })
+    expect(m.calls.merges).toEqual([]) // nothing to merge with
+    expect(m.calls.saved).toHaveLength(1)
+    expect(m.calls.saved[0]).toMatchObject({ name: 'Form 7004 - Acme LLC - Tax Return 2025.pdf', key: 'extension-7004-filed:F1', visibleToClient: true, documentType: 'form_7004' })
+    expect(m.calls.saved[0].bytes.equals(WORK)).toBe(true) // exactly the form that was faxed
+    expect(m.calls.moves).toHaveLength(1)
+    expect(m.calls.messages[0]).toContain('in your Documents')
+    expect(m.calls.messages[0]).not.toContain('confirmation')
+    expect(m.calls.alerts).toHaveLength(1)
+    expect(m.calls.alerts[0]).toContain('never gave the fax receipt')
+    expect(m.calls.markers.find((x) => x.kind === EXTENSION_FAX_MARKERS.confirmed)?.details).toMatchObject({ receipt_missing: true, document_saved: true })
+  })
+  it('… and if the form itself cannot be read either, it is still filed, nothing is shown to the client, one alert', async () => {
+    const m = make({ ...NO_RECEIPT, now: () => AFTER_GRACE, readWorkingCopy: async () => ({ bytes: null, error: 'gone' }) })
+    const r = await processExtensionFaxDelivery('x', m.deps)
+    expect(r).toMatchObject({ outcome: 'filed', documentSaved: false })
+    expect(m.calls.saved).toEqual([]) // no receipt to keep either
+    expect(m.calls.alerts).toHaveLength(1)
+    expect(m.calls.messages[0]).not.toContain('Documents')
+  })
+})
+
+describe('two checks at the same moment (the cron and "Check now")', () => {
+  it('the check that does not win the claim does nothing: no document, no move, no message, no marker', async () => {
+    const m = make({ claimFiling: async () => ({ won: false, error: null }) })
+    expect(await processExtensionFaxDelivery('x', m.deps)).toEqual({ outcome: 'pending', note: 'another check is filing this extension right now' })
+    expect(m.calls.saved).toEqual([])
+    expect(m.calls.moves).toEqual([])
+    expect(m.calls.messages).toEqual([])
+    expect(m.calls.markers).toEqual([])
+  })
+  it('a claim that cannot be made is an error to retry, never a filing', async () => {
+    const m = make({ claimFiling: async () => ({ won: false, error: 'db down' }) })
+    expect(await processExtensionFaxDelivery('x', m.deps)).toEqual({ outcome: 'error', error: 'db down' })
+    expect(m.calls.moves).toEqual([])
+  })
+  it('the winner is asked once per attempt, after the receipt is in hand (a receipt that is not ready writes no claim)', async () => {
+    let claims = 0
+    const m = make({ claimFiling: async () => { claims++; return { won: true, error: null } } })
+    await processExtensionFaxDelivery('x', m.deps)
+    expect(claims).toBe(1)
+    const waiting = make({ claimFiling: async () => { claims++; return { won: true, error: null } }, transmittal: async () => ({ pdf: null, error: 'not ready' }) })
+    await processExtensionFaxDelivery('x', waiting.deps)
+    expect(claims).toBe(1)
   })
 })

@@ -10,7 +10,9 @@
  *  - generated → the 7004 to view, the IRS number pre-filled (editable: the IRS can change it), a confirm window naming the file and number, then Send,
  *  - sent → "waiting for delivery" + Check now; when Faxage confirms delivery the system merges the 7004 with the receipt, saves ONE document in
  *    the company's Tax folder, moves the job to "Extension Filed" and tells the client in the chat (cron every 10 minutes),
- *  - failed → red + a confirmed re-send; never confirmed → blocked until someone has looked in Fax History.
+ *  - failed → red + a confirmed re-send (or correct the form and generate it again); never confirmed → blocked until someone has looked in Fax History,
+ *  - delivered to a number nobody has confirmed is the IRS → the job is held and the box asks "was that the IRS?" (Yes files the extension),
+ *  - past the return's original due date → a warning, and Generate needs an explicit tick (a late Form 7004 may not count).
  * The send goes through the shared fax engine (POST /api/tools/fax/send, tagged with the extension purpose — one claim row per Send, a repeat needs an
  * explicit confirm). Nothing here moves the job: the delivery check does (lib/fax/extension-fax-delivery.ts).
  */
@@ -45,6 +47,11 @@ interface ApiState {
   year: number | null
   prefill: Prefill
   fax_number: string
+  /** the IRS Form 7004 number this system knows (any other number delivered to is held until a person confirms it) */
+  known_irs_number: string
+  /** the return's original due date (ISO) and whether it has passed: a Form 7004 filed after it is late */
+  original_due_date: string | null
+  past_due: boolean
   default_reason: string
   default_cover: string
 }
@@ -100,6 +107,8 @@ export function ExtensionFaxPanel({
   const [sending, setSending] = useState(false)
   const [checking, setChecking] = useState(false)
   const [showAgain, setShowAgain] = useState(false)
+  const [lateOk, setLateOk] = useState(false)
+  const [confirmingRecipient, setConfirmingRecipient] = useState(false)
   const [historyError, setHistoryError] = useState<string | null>(null)
   const sendId = useRef(crypto.randomUUID()) // one Send = one fax (the server refuses a second try with the same id)
   const sendGuard = useRef(createOnceGuard()) // three clicks in one instant = one request
@@ -148,7 +157,9 @@ export function ExtensionFaxPanel({
       const body = await res.json().catch(() => ({}))
       if (!res.ok || !body.success) throw new Error(body.error || 'Could not check the fax.')
       const outcome = body.result?.outcome as string | undefined
-      if (outcome === 'filed') toast.success('The fax was delivered. The document is saved and the job moved to Extension Filed.')
+      if (outcome === 'filed') toast.success(body.result?.documentSaved === false ? 'The fax was delivered and the job moved to Extension Filed, but the document was not saved. Staff were alerted.' : 'The fax was delivered. The document is saved and the job moved to Extension Filed.')
+      else if (outcome === 'already_done') toast.success('This extension was already delivered and filed.')
+      else if (outcome === 'needs_recipient_check') toast.warning('Delivered, but to a number not confirmed as the IRS. Say whether it was the IRS.')
       else if (outcome === 'failed') toast.error('Faxage reports that the fax was not delivered.')
       else if (outcome === 'waiting_too_long') toast.warning('Still not confirmed by Faxage. Check Fax History.')
       else toast.message('Not delivered yet. It is checked again every few minutes.')
@@ -157,6 +168,22 @@ export function ExtensionFaxPanel({
       toast.error(err instanceof Error && err.message ? err.message : 'Could not check the fax.')
     } finally {
       setChecking(false)
+    }
+  }
+
+  async function confirmRecipient() {
+    setConfirmingRecipient(true)
+    try {
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/extension-fax/confirm-recipient`, { method: 'POST' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok || !body.success) throw new Error(body.error || 'Could not confirm the number.')
+      toast.success(body.result?.outcome === 'filed' ? 'Confirmed. The document is saved and the job moved to Extension Filed.' : 'Confirmed.')
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not confirm the number.')
+      await load()
+    } finally {
+      setConfirmingRecipient(false)
     }
   }
 
@@ -169,7 +196,7 @@ export function ExtensionFaxPanel({
         const res = await fetch(`/api/flows/${serviceDeliveryId}/extension-fax/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...form, taxYear: form.taxYear ?? undefined, generate_id: crypto.randomUUID() }),
+          body: JSON.stringify({ ...form, taxYear: form.taxYear ?? undefined, generate_id: crypto.randomUUID(), confirm_late: lateOk }),
         })
         const body = await res.json().catch(() => ({}))
         if (!res.ok || !body.success) throw new Error(body.error || 'Could not make the Form 7004.')
@@ -277,7 +304,7 @@ export function ExtensionFaxPanel({
   )
 
   // The send form: shared by "ready", a failed fax, and "send again" on a fax already on record.
-  const sendForm = (documentId: string, fileName: string, resend: boolean) => (
+  const sendForm = (documentId: string, fileName: string, resend: boolean, canEdit: boolean) => (
     <div className="mt-3">
       <div className="flex flex-wrap items-center gap-4">
         <a
@@ -288,7 +315,7 @@ export function ExtensionFaxPanel({
         >
           <Eye className="h-3.5 w-3.5" /> View the Form 7004 to fax
         </a>
-        {!resend && (
+        {canEdit && (
           <button onClick={() => { setEditing(true); setConfirming(false) }} className="text-xs font-medium text-zinc-500 hover:text-zinc-800 underline">Change something and generate again</button>
         )}
       </div>
@@ -391,12 +418,22 @@ export function ExtensionFaxPanel({
         {field('state', 'State')}
         {field('zip', 'ZIP code')}
       </div>
-      <p className="mt-2 text-[11px] text-zinc-400">The form is the official IRS Form 7004 (Rev. December 2025): code 12 (Form 1120) on line 1, “Foreign-owned U.S. DE” across the top, lines 6, 7 and 8 printed as -0-. The address is pre-filled with the company’s mailing address.</p>
+      <p className="mt-2 text-[11px] text-zinc-400">The form is the official IRS Form 7004 (Rev. December 2025): code 12 (Form 1120) on line 1, “Foreign-owned U.S. DE” across the top, lines 6, 7 and 8 printed as -0-. The address is pre-filled with the company’s official address (the one on its EIN application), without the box number.</p>
+      {data.past_due && (
+        <div role="alert" className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <p className="font-semibold">The original due date{data.original_due_date ? ` (${data.original_due_date})` : ''} has passed.</p>
+          <p className="mt-1">A Form 7004 filed now is late and may not count as an extension. Only generate it if you know it is still valid.</p>
+          <label className="mt-2 flex items-center gap-2 font-medium">
+            <input type="checkbox" checked={lateOk} onChange={(e) => setLateOk(e.target.checked)} />
+            I know it is late and want to generate it anyway
+          </label>
+        </div>
+      )}
       {generateError && <p role="alert" className="mt-2 text-xs font-medium text-red-700">{generateError}</p>}
       <div className="mt-3 flex items-center gap-3">
         <button
           onClick={generate}
-          disabled={generating}
+          disabled={generating || (data.past_due && !lateOk)}
           className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
         >
           {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />} Generate Form 7004
@@ -422,7 +459,7 @@ export function ExtensionFaxPanel({
       <div className={card}>
         {header}
         {historyError && <p role="alert" className="mt-2 text-xs font-medium text-red-700">{historyError}</p>}
-        {editing ? generateForm : sendForm(s.documentId, s.fileName, false)}
+        {editing ? generateForm : sendForm(s.documentId, s.fileName, false, true)}
       </div>
     )
   }
@@ -451,6 +488,32 @@ export function ExtensionFaxPanel({
     )
   }
 
+  if (s.mode === 'confirm_recipient') {
+    return (
+      <div className={`${card} border-amber-300`}>
+        {header}
+        <div role="alert" className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <div className="flex items-center gap-1.5 font-semibold"><AlertTriangle className="h-3.5 w-3.5" /> Delivered, but not to the IRS number we know</div>
+          <p className="mt-1">
+            Faxage says the fax{formatWhen(s.at) ? ` sent on ${formatWhen(s.at)}` : ''} was delivered to <span className="font-mono">{s.faxno ? prettyNumber(s.faxno) : 'an unknown number'}</span>.
+            The IRS number we know is <span className="font-mono">{prettyNumber(data.known_irs_number)}</span>. Nothing moved and the client has not been told.
+          </p>
+          <p className="mt-1">If the IRS gave you this number, confirm it: the extension is filed and the client is told. If it was a typo or a test, send the fax again to the right number.</p>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button onClick={confirmRecipient} disabled={confirmingRecipient} className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+            {confirmingRecipient ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />} Yes, that number is the IRS — file the extension
+          </button>
+          {s.copy && !showAgain && (
+            <button onClick={() => setShowAgain(true)} className="text-xs font-medium text-zinc-600 hover:text-zinc-900 underline">No — send it again…</button>
+          )}
+        </div>
+        {historyError && <p role="alert" className="mt-2 text-xs font-medium text-red-700">{historyError}</p>}
+        {s.copy && showAgain && sendForm(s.copy.documentId, s.copy.fileName, true, false)}
+      </div>
+    )
+  }
+
   if (s.mode === 'sent') {
     return (
       <div className={card}>
@@ -473,7 +536,7 @@ export function ExtensionFaxPanel({
           )}
         </div>
         {historyError && <p role="alert" className="mt-2 text-xs font-medium text-red-700">{historyError}</p>}
-        {s.copy && showAgain && sendForm(s.copy.documentId, s.copy.fileName, true)}
+        {s.copy && showAgain && sendForm(s.copy.documentId, s.copy.fileName, true, false)}
       </div>
     )
   }
@@ -487,7 +550,7 @@ export function ExtensionFaxPanel({
         <p className="mt-1">{s.reason ?? 'Faxage reported a failure.'} Nothing moved. Check Fax History, then send it again.</p>
       </div>
       {s.copy
-        ? sendForm(s.copy.documentId, s.copy.fileName, true)
+        ? (editing ? generateForm : sendForm(s.copy.documentId, s.copy.fileName, true, true))
         : <p className="mt-3 text-xs text-amber-800">The Form 7004 could not be found any more. Use the <a href="/tools/fax" target="_blank" rel="noreferrer" className="underline font-medium">Fax tool</a>.</p>}
     </div>
   )

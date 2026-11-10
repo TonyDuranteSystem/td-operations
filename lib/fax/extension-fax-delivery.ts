@@ -12,21 +12,32 @@
  *   WAITING   → nothing moves; after EXTENSION_FAX_STALE minutes ONE marker + ONE alert; still checked on every run.
  * If the merged document cannot be built (the working copy is gone or was changed after it was faxed, or the company has no storage), the extension IS
  * filed anyway (the fax was delivered): the receipt is kept by itself, the client's message does not point to a document, and staff get ONE alert.
- * A fax to ANY number counts once Faxage says it was delivered: the number is the IRS's to change; staff see the number in the box before they send.
+ * WHO RECEIVED IT: only a fax to a number we can trust files the job — the IRS number this system knows, or a number a person has confirmed (the
+ * box's "Yes, that was the IRS", or an earlier filing a person confirmed). The IRS may change its number, so a different number is not refused: the
+ * job is HELD (ONE marker + ONE alert), the box asks "was that the IRS?", and the check files it when a person says yes. A mistyped number that happens
+ * to be a live fax line therefore never tells a client "filed", and never becomes the pre-filled number of later jobs.
+ * RECEIPT: Faxage can take a few minutes to give the receipt page. If it never does (EXTENSION_RECEIPT_GRACE_MINUTES), the extension is filed anyway
+ * (the fax WAS delivered) with the Form 7004 alone for the client, and staff get ONE alert.
+ * TWO CHECKS AT ONCE (the cron and "Check now"): each writes a filing claim and only the earliest recent one goes on, so the client is told once.
  *
  * All outside work (database, Faxage, storage, the stage move, the chat) sits behind `ExtensionFaxDeps`, so the decisions are tested with fakes; the
  * real deps are at the bottom (`realExtensionFaxDeps`). Faxage never answers from the sandbox: nothing is sent there, so there is nothing to check.
  */
 
-import { createHash } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import type { FaxDeliveryStatus } from '@/lib/fax/faxage'
 import {
   decideExtensionFaxOutcome,
+  DEFAULT_EXTENSION_FAX_NUMBER,
   EXTENSION_FAX_MARKERS,
   EXTENSION_FAX_PURPOSE,
+  EXTENSION_RECEIPT_GRACE_MINUTES,
   EXTENSION_STAGES,
   extensionFiledMessage,
   extensionReceiptName,
+  FILING_CLAIM_MINUTES,
+  faxDigits,
+  form7004OnlyName,
   mergedDocumentName,
 } from '@/lib/fax/extension-fax'
 
@@ -57,6 +68,13 @@ export interface ExtensionFaxDeps {
   markerExists(kind: string, sdId: string, faxJobId: string): Promise<{ exists: boolean; error: string | null }>
   faxStatus(faxJobId: string): Promise<{ status: FaxDeliveryStatus; error: string | null }>
   transmittal(faxJobId: string): Promise<{ pdf: Buffer | null; error: string | null }>
+  /**
+   * Is the number this fax went to one we can trust as the IRS? Yes for the IRS number this system knows, for a number a person confirmed for THIS fax, and
+   * for a number an earlier extension was filed to (which only happens after a person confirmed it).
+   */
+  recipientTrusted(p: { sdId: string; faxJobId: string; faxno: string | null | undefined }): Promise<{ trusted: boolean; error: string | null }>
+  /** Take the right to file this fax: true only for the earliest recent claim, so two checks at the same moment never file twice. */
+  claimFiling(sdId: string, faxJobId: string): Promise<{ won: boolean; error: string | null }>
   taxYear(job: ExtensionJob): number | null
   companyName(accountId: string): Promise<string>
   /** the Form 7004 exactly as it is stored (the working copy), by its CRM document row */
@@ -81,6 +99,8 @@ export type ExtensionFaxResult =
   | { outcome: 'pending'; note?: string }
   | { outcome: 'waiting_too_long' }
   | { outcome: 'failed' }
+  /** delivered to a number nobody has confirmed is the IRS: held until a person says so */
+  | { outcome: 'needs_recipient_check' }
   | { outcome: 'filed'; documentSaved: boolean; messagePosted: boolean }
   | { outcome: 'error'; error: string }
 
@@ -138,17 +158,46 @@ export async function processExtensionFaxDelivery(sdId: string, d: ExtensionFaxD
       return { outcome: 'failed' }
     }
 
-    // DELIVERED. The receipt page is needed first: Faxage answers "not ready" for a few minutes after delivery (try again next run, move nothing yet).
+    // DELIVERED. First WHO got it: only the IRS number we know, or one a person confirmed, files the job.
+    const faxno = fax.row.details?.faxno ?? null
+    const trust = await d.recipientTrusted({ sdId, faxJobId, faxno })
+    if (trust.error) return { outcome: 'error', error: trust.error }
+    if (!trust.trusted) {
+      const seen = await d.markerExists(EXTENSION_FAX_MARKERS.recipientUnverified, sdId, faxJobId)
+      if (seen.error) return { outcome: 'error', error: seen.error }
+      if (!seen.exists) {
+        const w = await d.writeMarker(EXTENSION_FAX_MARKERS.recipientUnverified, { sdId, accountId: job.account_id, faxJobId, summary: 'Extension fax delivered to a number not confirmed as the IRS', details: { job_id: faxJobId, faxno, faxno_digits: faxDigits(faxno) } })
+        if (w.error) return { outcome: 'error', error: w.error }
+        await d.alert(`A Form 7004 was delivered (fax job ${faxJobId}) to ${faxno ?? 'an unknown number'}, which is not the IRS number this system knows. The job was NOT moved and the client was NOT told. Open the job and say whether that number is the IRS (the extension box asks), or send the fax again.`, context)
+      }
+      return { outcome: 'needs_recipient_check' }
+    }
+
+    // The receipt page is needed next: Faxage answers "not ready" for a few minutes after delivery (try again next run, move nothing yet).
+    // If it never comes, the fax WAS delivered: after the grace time the extension is filed without it.
     const t = await d.transmittal(faxJobId)
-    if (!t.pdf) return { outcome: 'pending', note: t.error ?? 'the receipt page is not ready yet' }
+    const receipt: Buffer | null = t.pdf
+    let receiptMissing: string | null = null
+    if (!receipt) {
+      const sentMs = Date.parse(fax.row.created_at)
+      const waitedMinutes = Number.isNaN(sentMs) ? 0 : (d.now() - sentMs) / 60_000
+      if (waitedMinutes <= EXTENSION_RECEIPT_GRACE_MINUTES) return { outcome: 'pending', note: t.error ?? 'the receipt page is not ready yet' }
+      receiptMissing = `Faxage never gave the fax receipt page (${t.error ?? 'not available'})`
+    }
+
+    // Two checks at the same moment (the cron and "Check now"): only the earliest claim goes on, so the client is told once.
+    const claim = await d.claimFiling(sdId, faxJobId)
+    if (claim.error) return { outcome: 'error', error: claim.error }
+    if (!claim.won) return { outcome: 'pending', note: 'another check is filing this extension right now' }
 
     const year = d.taxYear(job)
     const company = job.account_id ? await d.companyName(job.account_id) : 'Company'
 
     // 1. the document: the 7004 as faxed + the receipt, merged and saved (idempotent on its key); the receipt alone when that cannot be done
+    //    (no receipt at all: the Form 7004 alone is what the client gets)
     let documentSaved = false
     let documentFileId: string | null = null
-    let problem: string | null = null
+    let problem: string | null = receiptMissing
     if (!job.account_id) {
       problem = 'the job has no company, so there is no storage to hold the document'
     } else {
@@ -163,8 +212,10 @@ export async function processExtensionFaxDelivery(sdId: string, d: ExtensionFaxD
           problem = 'the stored Form 7004 was changed after it was faxed, so it is not what the IRS received'
         } else {
           try {
-            const merged = await d.merge([work.bytes, t.pdf])
-            const saved = await d.saveDocument({ accountId: job.account_id, sdId, name: mergedDocumentName(company, year), bytes: merged, year, key: `extension-7004-merged:${faxJobId}`, visibleToClient: true, documentType: 'form_7004', typeLabel: 'Form 7004' })
+            const bytes = receipt ? await d.merge([work.bytes, receipt]) : work.bytes
+            const saved = await d.saveDocument(receipt
+              ? { accountId: job.account_id, sdId, name: mergedDocumentName(company, year), bytes, year, key: `extension-7004-merged:${faxJobId}`, visibleToClient: true, documentType: 'form_7004', typeLabel: 'Form 7004' }
+              : { accountId: job.account_id, sdId, name: form7004OnlyName(company, year), bytes, year, key: `extension-7004-filed:${faxJobId}`, visibleToClient: true, documentType: 'form_7004', typeLabel: 'Form 7004' })
             documentSaved = saved.route === 'store'
             documentFileId = saved.fileId ?? null
             if (!documentSaved) problem = 'the company has no storage to hold the document'
@@ -173,17 +224,20 @@ export async function processExtensionFaxDelivery(sdId: string, d: ExtensionFaxD
           }
         }
       }
-      if (!documentSaved) {
+      if (!documentSaved && receipt) {
         // the receipt alone, internal, so it is never lost
         try {
-          await d.saveDocument({ accountId: job.account_id, sdId, name: extensionReceiptName(company, year), bytes: t.pdf, year, key: `extension-7004-receipt:${faxJobId}`, visibleToClient: false, documentType: 'fax_confirmation', typeLabel: 'Fax Confirmation' })
+          await d.saveDocument({ accountId: job.account_id, sdId, name: extensionReceiptName(company, year), bytes: receipt, year, key: `extension-7004-receipt:${faxJobId}`, visibleToClient: false, documentType: 'fax_confirmation', typeLabel: 'Fax Confirmation' })
         } catch (e) {
           problem = `${problem ?? 'the merged document was not saved'}; the receipt alone could not be saved either (${e instanceof Error ? e.message : String(e)})`
         }
       }
     }
     if (problem) {
-      await d.alert(`A Form 7004 fax was delivered (fax job ${faxJobId}) and the extension is being filed, but ${problem}. Save the merged document by hand (Storage › Merge into one, then type Form 7004) — the receipt is in Fax History.`, context)
+      const hint = receiptMissing && documentSaved
+        ? 'The Form 7004 alone was saved for the client; the receipt is in Fax History if you want to add it.'
+        : 'Save the merged document by hand (Storage › Merge into one, then type Form 7004) — the receipt is in Fax History.'
+      await d.alert(`A Form 7004 fax was delivered (fax job ${faxJobId}) and the extension is being filed, but ${problem}. ${hint}`, context)
     }
 
     // 2. the move to "Extension Filed" (the tax record follows: extension filed + today's date). Our own message below replaces the generic notice.
@@ -203,7 +257,7 @@ export async function processExtensionFaxDelivery(sdId: string, d: ExtensionFaxD
     // 3. the client's message (looked up first, so a retry never posts it twice)
     const italian = await d.clientIsItalian(job)
     const deadlineIso = await d.extensionDeadline(job, year)
-    const message = extensionFiledMessage({ italian, year, deadlineIso, withDocument: documentSaved })
+    const message = extensionFiledMessage({ italian, year, deadlineIso, withDocument: documentSaved, withReceipt: !receiptMissing })
     const posted = await d.postClientMessage({ job, year, message })
     if (posted.error) {
       await d.alert(`The extension is filed (fax job ${faxJobId}) but the client's chat message could not be posted: ${posted.error}. Tell the client by hand.`, context)
@@ -211,7 +265,7 @@ export async function processExtensionFaxDelivery(sdId: string, d: ExtensionFaxD
 
     const w = await d.writeMarker(EXTENSION_FAX_MARKERS.confirmed, {
       sdId, accountId: job.account_id, faxJobId, summary: 'Extension fax delivered; job moved to Extension Filed',
-      details: { job_id: faxJobId, faxno: fax.row.details?.faxno ?? null, document_file_id: documentFileId, document_saved: documentSaved, message_posted: posted.posted || posted.alreadyThere },
+      details: { job_id: faxJobId, faxno, faxno_digits: faxDigits(faxno), receipt_missing: !!receiptMissing, document_file_id: documentFileId, document_saved: documentSaved, message_posted: posted.posted || posted.alreadyThere },
     })
     if (w.error) await d.alert(`The extension fax was delivered and the job was moved, but the confirmation marker could not be saved (${w.error}).`, context)
     return { outcome: 'filed', documentSaved, messagePosted: posted.posted || posted.alreadyThere }
@@ -289,6 +343,45 @@ export async function realExtensionFaxDeps(): Promise<ExtensionFaxDeps> {
       const { getFaxTransmittal, FAXAGE_TZ_EASTERN } = await import('@/lib/fax/faxage')
       const r = await getFaxTransmittal(creds, faxJobId, { tz: FAXAGE_TZ_EASTERN })
       return { pdf: r.ok ? r.pdf : null, error: r.ok ? null : r.error }
+    },
+    recipientTrusted: async ({ sdId, faxJobId, faxno }) => {
+      const digits = faxDigits(faxno)
+      if (digits === DEFAULT_EXTENSION_FAX_NUMBER) return { trusted: true, error: null }
+      // a person confirmed THIS fax, or an earlier extension fax to this number was filed (which only happens after a person confirmed it)
+      const own = await db.from('action_log').select('id').eq('action_type', EXTENSION_FAX_MARKERS.recipientConfirmed).eq('service_delivery_id', sdId).eq('details->>job_id', faxJobId).limit(1)
+      if (own.error) return { trusted: false, error: msg(own.error) }
+      if (Array.isArray(own.data) && own.data.length > 0) return { trusted: true, error: null }
+      if (digits.length !== 10) return { trusted: false, error: null }
+      const before = await db.from('action_log').select('id').in('action_type', [EXTENSION_FAX_MARKERS.recipientConfirmed, EXTENSION_FAX_MARKERS.confirmed]).eq('details->>faxno_digits', digits).limit(1)
+      if (before.error) return { trusted: false, error: msg(before.error) }
+      return { trusted: Array.isArray(before.data) && before.data.length > 0, error: null }
+    },
+    claimFiling: async (sdId, faxJobId) => {
+      const claimId = randomUUID()
+      const ins = await db.from('action_log').insert({
+        actor: 'system',
+        action_type: EXTENSION_FAX_MARKERS.filingClaim,
+        table_name: 'service_deliveries',
+        record_id: sdId,
+        service_delivery_id: sdId,
+        summary: 'Extension fax: claim to file',
+        details: { job_id: faxJobId, claim_id: claimId },
+      })
+      if (ins.error) return { won: false, error: msg(ins.error) }
+      const since = new Date(Date.now() - FILING_CLAIM_MINUTES * 60_000).toISOString()
+      const first = await db
+        .from('action_log')
+        .select('id, details')
+        .eq('action_type', EXTENSION_FAX_MARKERS.filingClaim)
+        .eq('service_delivery_id', sdId)
+        .eq('details->>job_id', faxJobId)
+        .gte('created_at', since)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(1)
+      if (first.error) return { won: false, error: msg(first.error) }
+      const row = Array.isArray(first.data) ? first.data[0] : null
+      return { won: (row?.details?.claim_id as string | undefined) === claimId, error: null }
     },
     taxYear: (job) => taxReturnYear(job),
     companyName: async (accountId) => {

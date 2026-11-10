@@ -14,7 +14,7 @@
  */
 
 import { decideReturnFaxOutcome, usesReturnFaxBox, type FaxLogRow, type MarkerRow } from '@/lib/fax/return-fax'
-import { companyMailingRow } from '@/lib/addresses'
+import { companyOfficialRow, isTdLargoAddressRow } from '@/lib/addresses'
 
 /** Stamped on the history row of every fax sent from this box (`details.purpose`). Nothing else may carry it. */
 export const EXTENSION_FAX_PURPOSE = 'tax_extension_7004'
@@ -39,7 +39,53 @@ export const EXTENSION_FAX_MARKERS = {
   confirmed: 'extension_fax_confirmed',
   failed: 'extension_fax_failed',
   stale: 'extension_fax_stale',
+  /** Faxage says the fax was delivered, but to a number nobody has confirmed is the IRS: the job is held until a person says so */
+  recipientUnverified: 'extension_fax_recipient_unverified',
+  /** a person confirmed that the number this fax went to is the IRS (written by the box's "Yes, that was the IRS") */
+  recipientConfirmed: 'extension_fax_recipient_ok',
+  /** one row per attempt to file a delivered fax: only the earliest recent one proceeds, so two checks at the same moment never file twice */
+  filingClaim: 'extension_fax_filing_claim',
 } as const
+
+/** Delivered, but Faxage still gives no receipt page after this long: the extension is filed anyway (the fax WAS delivered), without the receipt. */
+export const EXTENSION_RECEIPT_GRACE_MINUTES = 360
+
+/** A filing claim older than this is a crashed attempt and no longer blocks a retry (a filing takes seconds). */
+export const FILING_CLAIM_MINUTES = 3
+
+/** A phone number as 10 digits (a leading 1 dropped); anything else comes back as the digits it has. Pure. */
+export function faxDigits(raw: string | null | undefined): string {
+  const d = (raw ?? '').replace(/\D/g, '')
+  return d.length === 11 && d.startsWith('1') ? d.slice(1) : d
+}
+
+/** True when the number is the IRS Form 7004 number this system knows (the other trusted numbers are the ones a person has confirmed). Pure. */
+export function isKnownIrsExtensionNumber(raw: string | null | undefined): boolean {
+  return faxDigits(raw) === DEFAULT_EXTENSION_FAX_NUMBER
+}
+
+/**
+ * The ORIGINAL due date of the return of `taxYear` (calendar-year filer): April 15 of the next year, moved to the Monday when that is a weekend.
+ * Holidays are not modelled (a day or two off only changes when the late warning shows; it never blocks). Pure. ISO date.
+ */
+export function originalDueDateIso(taxYear: number): string {
+  const d = new Date(Date.UTC(taxYear + 1, 3, 15))
+  const dow = d.getUTCDay()
+  if (dow === 6) d.setUTCDate(d.getUTCDate() + 2)
+  else if (dow === 0) d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
+
+/** Today's date in New York as YYYY-MM-DD (the IRS counts days there; the server clock is UTC, which is already "tomorrow" after 8 pm). */
+export function todayNewYork(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now)
+}
+
+/** True when `todayIso` (YYYY-MM-DD, New York date) is after the original due date of `taxYear`: a Form 7004 filed now is late. Pure. */
+export function isPastOriginalDueDate(taxYear: number | null | undefined, todayIso: string): boolean {
+  if (!taxYear || !Number.isFinite(taxYear)) return false
+  return todayIso > originalDueDateIso(taxYear)
+}
 
 /** The name prefix that tells the working copy (the 7004 exactly as faxed) from the merged document apart. */
 export const WORKING_COPY_PREFIX = 'Form 7004 (as faxed)'
@@ -84,6 +130,11 @@ export function mergedDocumentName(company: string, year: number | null): string
   return `Form 7004 + IRS fax receipt - ${safeName(company)} - Tax Return${year ? ` ${year}` : ''}.pdf`
 }
 
+/** The Form 7004 alone, shown to the client, when Faxage never gave the receipt page (a different name from the merged document and from the working copy). */
+export function form7004OnlyName(company: string, year: number | null): string {
+  return `Form 7004 - ${safeName(company)} - Tax Return${year ? ` ${year}` : ''}.pdf`
+}
+
 /** The IRS fax receipt kept by itself (only when the merged document could not be built). Its own name: the return fax receipt of the same year must never collide with it. */
 export function extensionReceiptName(company: string, year: number | null): string {
   return `IRS fax receipt (Form 7004) - ${safeName(company)} - Tax Return${year ? ` ${year}` : ''}.pdf`
@@ -111,16 +162,21 @@ export function longDate(iso: string, italian: boolean): string {
 }
 
 /** The message the client gets in the portal chat when the extension is filed. `deadlineIso` is the new filing deadline (null = not stated). */
-export function extensionFiledMessage(p: { italian: boolean; year: number | null; deadlineIso: string | null; /** false when no client-visible document was saved (then the message does not point to one) */ withDocument?: boolean }): string {
+export function extensionFiledMessage(p: { italian: boolean; year: number | null; deadlineIso: string | null; /** false when no client-visible document was saved (then the message does not point to one) */ withDocument?: boolean; /** false when the document holds the form without the IRS fax receipt (then the message does not promise one) */ withReceipt?: boolean }): string {
   const y = p.year ? ` ${p.year}` : ''
   const withDocument = p.withDocument !== false
+  const withReceipt = p.withReceipt !== false
   if (p.italian) {
     const deadline = p.deadlineIso ? ` La nuova scadenza è il ${longDate(p.deadlineIso, true)}.` : ''
-    const docs = withDocument ? " Trovi il modulo presentato, con la conferma di invio all'IRS, nella sezione Documenti." : ''
+    const docs = withDocument
+      ? (withReceipt ? " Trovi il modulo presentato, con la conferma di invio all'IRS, nella sezione Documenti." : ' Trovi il modulo presentato nella sezione Documenti.')
+      : ''
     return `Buone notizie: abbiamo presentato la proroga per la tua dichiarazione dei redditi${y}.${deadline}${docs}`
   }
   const deadline = p.deadlineIso ? ` The new deadline is ${longDate(p.deadlineIso, false)}.` : ''
-  const docs = withDocument ? ' You can find the filed form, with the IRS fax confirmation, in your Documents.' : ''
+  const docs = withDocument
+    ? (withReceipt ? ' You can find the filed form, with the IRS fax confirmation, in your Documents.' : ' You can find the filed form in your Documents.')
+    : ''
   return `Good news: we have filed the extension for your${y} tax return.${deadline}${docs}`
 }
 
@@ -145,14 +201,21 @@ export function pickWorkingCopy(docs: readonly WorkingCopyRow[]): WorkingCopy | 
   return d ? { documentId: d.id, fileName: d.file_name ?? 'Form 7004.pdf' } : null
 }
 
-/** The address a 7004 is pre-filled with: the company's saved mailing address, else the TD mailing address built from its suite number. Staff review it. */
+/**
+ * The address a 7004 is pre-filled with. A company with a TD office number gets the OFFICIAL address ("10225 Ulmerton Rd 3D, Largo, FL 33771", no box
+ * number) whatever row is saved: it is the address on the EIN application (SS-4 line 4a) and the Articles, so the IRS's record and this form agree
+ * (lib/addresses.ts, "the four addresses"). A company with no number: its saved mailing address, but NEVER the shared Largo row (that is not its
+ * address); with neither, an empty form for staff to fill. Staff review it before anything is made.
+ */
 export interface PrefillAddress { street: string; suite: string; city: string; state: string; zip: string }
 
 export function prefillAddress(
   mailing: { address_line1?: string | null; address_line2?: string | null; city?: string | null; state?: string | null; zip?: string | null } | null | undefined,
   suiteNumber: string | null | undefined,
 ): PrefillAddress {
-  if (mailing?.address_line1?.trim()) {
+  const official = companyOfficialRow(suiteNumber)
+  if (official) return { street: official.address_line1, suite: '', city: official.city, state: official.state, zip: official.zip }
+  if (mailing?.address_line1?.trim() && !isTdLargoAddressRow(mailing)) {
     return {
       street: mailing.address_line1.trim(),
       suite: (mailing.address_line2 ?? '').trim(),
@@ -161,8 +224,6 @@ export function prefillAddress(
       zip: (mailing.zip ?? '').trim(),
     }
   }
-  const row = companyMailingRow(suiteNumber)
-  if (row) return { street: row.address_line1 ?? '', suite: '', city: row.city ?? '', state: row.state ?? '', zip: row.zip ?? '' }
   return { street: '', suite: '', city: '', state: '', zip: '' }
 }
 
@@ -177,6 +238,8 @@ export type ExtensionFaxState =
   | { mode: 'sent'; at: string; faxJobId: string | null; faxno: string | null; waitingTooLong: boolean; copy: WorkingCopy | null }
   | { mode: 'delivered'; at: string; faxJobId: string | null }
   | { mode: 'failed'; at: string; faxJobId: string | null; reason: string | null; copy: WorkingCopy | null }
+  /** Faxage says it was delivered, to a number nobody has confirmed is the IRS: nothing moved; a person says whether it was the IRS */
+  | { mode: 'confirm_recipient'; at: string; faxJobId: string | null; faxno: string | null; copy: WorkingCopy | null }
 
 export interface ExtensionFaxStateInput {
   entityType: string | null
@@ -198,6 +261,10 @@ export function buildExtensionFaxState(i: ExtensionFaxStateInput): ExtensionFaxS
     if (forThisFax(EXTENSION_FAX_MARKERS.confirmed)) return { mode: 'delivered', at: fax.created_at, faxJobId: jobId }
     const failed = forThisFax(EXTENSION_FAX_MARKERS.failed)
     if (failed) return { mode: 'failed', at: fax.created_at, faxJobId: jobId, reason: failed.details?.reason ?? null, copy: i.workingCopy }
+    const unverified = forThisFax(EXTENSION_FAX_MARKERS.recipientUnverified)
+    if (unverified && !forThisFax(EXTENSION_FAX_MARKERS.recipientConfirmed)) {
+      return { mode: 'confirm_recipient', at: fax.created_at, faxJobId: jobId, faxno: unverified.details?.faxno ?? fax.details?.faxno ?? null, copy: i.workingCopy }
+    }
     return {
       mode: 'sent',
       at: fax.created_at,
