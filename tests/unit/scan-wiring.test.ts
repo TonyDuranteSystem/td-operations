@@ -55,7 +55,8 @@ describe('where Scan document is hooked in', () => {
   it('the menu can open below its button (placement) and defaults to above', () => {
     const m = read('components/scan/attach-choice-menu.tsx')
     expect(m).toContain("placement = 'above'")
-    expect(m).toContain("placement === 'below' ? 'top-full mt-2' : 'bottom-full mb-2'")
+    expect(m).toContain("side === 'below' ? 'top-full mt-2' : 'bottom-full mb-2'")
+    expect(m).toContain('chooseMenuSide(placement,') // and flips to the side that has room
   })
 
   it('the phone sheet shows Scan document only when asked, and then calls the file row "Photo or file"', () => {
