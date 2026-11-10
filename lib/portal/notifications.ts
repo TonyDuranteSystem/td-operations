@@ -59,6 +59,7 @@ export async function createPortalNotification(params: {
       body: pushBody ?? (params.body || ''),
       url: params.link || '/portal',
       tag: params.type,
+      clientKind: params.type, // the client iPhone app shows fixed words for this kind, never the title or body
     }).catch(() => {})
   } else if (params.account_id) {
     sendPushToAccount(params.account_id, {
@@ -66,6 +67,7 @@ export async function createPortalNotification(params: {
       body: pushBody ?? (params.body || ''),
       url: params.link || '/portal',
       tag: params.type,
+      clientKind: params.type, // the client iPhone app shows fixed words for this kind, never the title or body
     }).catch(() => {})
   }
 

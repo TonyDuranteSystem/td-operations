@@ -3,6 +3,7 @@ import { routeAdminSubscriptions } from '@/lib/push/route-subscriptions'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import type { StaffAlertKind } from '@/lib/push/alert-kinds'
 import { startPhoneLeg, waitForPhoneLeg } from '@/lib/app/phone-leg'
+import { startClientPhoneLeg } from '@/lib/portal-app/client-phone-leg'
 
 // Status codes that mean the push subscription is permanently dead and
 // must be removed. Excludes 408 (timeout) and 429 (rate-limit) — those
@@ -25,6 +26,13 @@ type StoredSubscription = {
  * standalone team chat app, receives direct messages and nothing else) and is never sent to the browser.
  */
 type PushPayload = { title: string; body: string; url?: string; tag?: string; dm?: boolean }
+
+/**
+ * What a CLIENT alert may carry besides the web payload: `clientKind` is the notification's `type` word (a word our code picks). The client iPhone app's phone leg
+ * (lib/portal-app/client-phone-leg.ts) maps it to fixed lock-screen words; the browser never sees it (it is removed before the web send, like `dm`). Without it the
+ * phone shows generic words.
+ */
+export type ClientPushPayload = PushPayload & { clientKind?: string }
 
 /**
  * What a STAFF alert must carry: the label `alertKind` (lib/push/alert-kinds.ts) says what kind of alert it is. It is required, so a sender that forgets it
@@ -110,8 +118,22 @@ async function deliverPushBatch(
  */
 export async function sendPushToAccount(
   accountId: string,
-  payload: PushPayload,
+  payload: ClientPushPayload,
 ) {
+  // Client iPhone app phones (Step 4): the phone leg starts FIRST, before any early return below, and runs beside the web send (a client who only has the
+  // app has no browser subscription). It does nothing unless the Apple key is set and the client app is switched on, and it never throws.
+  const phone = startClientPhoneLeg({ scope: 'account', id: accountId, kind: payload.clientKind, url: payload.url, tag: payload.tag })
+  try {
+    return await sendAccountWeb(accountId, payload)
+  } finally {
+    await waitForPhoneLeg(phone)
+  }
+}
+
+/** The web send to a company's browsers, unchanged from before the client phone leg existed (the same body, now one step down). */
+async function sendAccountWeb(accountId: string, clientPayload: ClientPushPayload) {
+  const { clientKind: _clientKind, ...payload } = clientPayload // for the phone leg only, never sent to a browser
+  void _clientKind
   try {
     initWebPush()
   } catch {
@@ -134,8 +156,20 @@ export async function sendPushToAccount(
  */
 export async function sendPushToContact(
   contactId: string,
-  payload: PushPayload,
+  payload: ClientPushPayload,
 ) {
+  const phone = startClientPhoneLeg({ scope: 'contact', id: contactId, kind: payload.clientKind, url: payload.url, tag: payload.tag })
+  try {
+    return await sendContactWeb(contactId, payload)
+  } finally {
+    await waitForPhoneLeg(phone)
+  }
+}
+
+/** The web send to one person's browsers, unchanged from before the client phone leg existed (the same body, now one step down). */
+async function sendContactWeb(contactId: string, clientPayload: ClientPushPayload) {
+  const { clientKind: _clientKind, ...payload } = clientPayload // for the phone leg only, never sent to a browser
+  void _clientKind
   try {
     initWebPush()
   } catch {
