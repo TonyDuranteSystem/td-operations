@@ -379,6 +379,12 @@ describe('TD Billing screen, more rendering', () => {
     expect(html([inv()], { justPaid: true })).toContain('data-testid="app-billing-paid-notice"')
     expect(html([inv()])).not.toContain('app-billing-paid-notice')
   })
+
+  it('shows no Pay button while the client is just back from the card page (a second tap would open a second payment for the same balance)', () => {
+    expect(html([inv()])).toContain('Pay invoice')
+    expect(html([inv()], { justPaid: true })).not.toContain('Pay invoice')
+    expect(html([inv()], { justPaid: true })).toContain('data-testid="app-billing-paid-notice"')
+  })
 })
 
 describe('Pay pop-up in the app, rendered', () => {
@@ -440,8 +446,8 @@ describe('the offer page under the app\'s Pay switch', () => {
   const offer = src('app/portal/offer/page.tsx')
 
   it('is replaced by a plain note only inside the app with the switch off, before anything about the offer is read', () => {
-    expect(offer).toContain('getClientAppMode() && !(await isClientAppPayEnabled())')
-    expect(offer.indexOf('getClientAppMode() && !(await isClientAppPayEnabled())')).toBeLessThan(offer.indexOf('const contactId = getClientContactId(user)'))
+    expect(offer).toContain('(await getClientAppModeActive()) && !(await isClientAppPayEnabled())')
+    expect(offer.indexOf('(await getClientAppModeActive()) && !(await isClientAppPayEnabled())')).toBeLessThan(offer.indexOf('const contactId = getClientContactId(user)'))
     expect(offer).toContain('data-testid="app-offer-unavailable"')
   })
 
@@ -468,7 +474,7 @@ describe('wiring (source guards)', () => {
   const page = src('app/portal/invoices/page.tsx')
 
   it('the page changes only behind the app marker: the website keeps the tab row, the title and every area', () => {
-    expect(page).toContain('const appMode = getClientAppMode()')
+    expect(page).toContain('const appMode = await getClientAppModeActive()')
     expect(page).toContain("const appScreen = appMode ? appInvoicesScreen(params) : 'tab'")
     expect(page).toContain("const showTab = appScreen === 'tab'")
     expect(page).toContain('requiredFirst(checklist)')
@@ -527,7 +533,7 @@ describe('wiring (source guards)', () => {
 
   it('the billing page goes to the app\'s TD Billing screen only in the app', () => {
     const billing = src('app/portal/billing/page.tsx')
-    expect(billing).toContain('getClientAppMode() ? `/portal/invoices?tab=' + '$' + '{APP_BILLING_TAB}` : \'/portal/invoices?tab=expenses\'')
+    expect(billing).toContain('(await getClientAppModeActive()) ? `/portal/invoices?tab=' + '$' + '{APP_BILLING_TAB}` : \'/portal/invoices?tab=expenses\'')
   })
 
   it('the frame reads the address word inside Suspense so the build never trips on it', () => {

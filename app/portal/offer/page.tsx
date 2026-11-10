@@ -16,7 +16,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { APP_BASE_URL } from '@/lib/config'
 import { PortalOfferClient } from './portal-offer-client'
-import { getClientAppMode } from '@/lib/app-mode/server'
+import { getClientAppModeActive } from '@/lib/app-mode/server'
 import { isClientAppPayEnabled } from '@/lib/portal-app/enabled'
 import { getLocale, t } from '@/lib/portal/i18n'
 
@@ -34,7 +34,7 @@ export default async function PortalOfferPage() {
 
   // Inside the client iPhone app, with the app's Pay switch OFF, the offer is not drawn: it is one embedded page that signs the agreement and
   // then takes the card payment itself, so the switch cannot hide only the payment. The website never takes this branch.
-  if (getClientAppMode() && !(await isClientAppPayEnabled())) {
+  if ((await getClientAppModeActive()) && !(await isClientAppPayEnabled())) {
     const locale = getLocale(user)
     return (
       <div className="mx-auto flex max-w-md flex-col items-center gap-2 px-6 py-16 text-center" data-testid="app-offer-unavailable">

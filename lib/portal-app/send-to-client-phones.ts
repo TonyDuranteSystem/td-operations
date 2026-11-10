@@ -25,8 +25,11 @@ import { clientAlertKind, clientPhoneWording } from '@/lib/portal-app/phone-word
 import type { ClientPhoneAlert } from '@/lib/portal-app/client-phone-leg'
 import { localeFromLanguage } from '@/lib/locale'
 import { hasCapability, normalizeCapabilities } from '@/lib/portal/team/capabilities'
+import { isCurrentLink, liveBannedUserIds, type LinkRow } from '@/lib/portal-app/phone-people'
 
 export const MAX_PHONES = 60
+/** How many saved phones the database is asked for before the recipient rules and the suspended-login check (newest first); the leg itself still sends to at most MAX_PHONES. */
+export const MAX_FETCH = 300
 export const SEND_TIMEOUT_MS = 5000
 export const LEG_DEADLINE_MS = 9000
 export const CONCURRENCY = 8
@@ -181,23 +184,27 @@ const DEVICE_COLUMNS = 'id, user_id, token, bundle_id, apns_env, contact_id, tea
 /** The phones to tell, from the live database. Any failure = []. */
 export async function livePhones(alert: ClientPhoneAlert, bundleId: string, sinceIso: string): Promise<ClientPhoneRow[]> {
   try {
-    const base = () => db().from('social_app_devices').select(DEVICE_COLUMNS).eq('bundle_id', bundleId).is('revoked_at', null).gte('last_seen_at', sinceIso)
+    const base = () => db().from('social_app_devices').select(DEVICE_COLUMNS).eq('bundle_id', bundleId).is('revoked_at', null).gte('last_seen_at', sinceIso).order('last_seen_at', { ascending: false })
     if (alert.scope === 'contact') {
       const { data: contact, error: cErr } = await db().from('contacts').select('id, language').eq('id', alert.id).maybeSingle()
       if (cErr || !contact) return []
-      const { data, error } = await base().eq('contact_id', alert.id).limit(MAX_PHONES)
+      const { data, error } = await base().eq('contact_id', alert.id).limit(MAX_FETCH)
       if (error) return []
-      const rows = selectRecipientPhones((data ?? []) as OwnedDevice[], { scope: 'contact', id: alert.id, linkedContactIds: new Set(), activeTeamUserIds: new Set() })
+      const picked = selectRecipientPhones((data ?? []) as OwnedDevice[], { scope: 'contact', id: alert.id, linkedContactIds: new Set(), activeTeamUserIds: new Set() })
+      const banned = await liveBannedUserIds(picked.map(r => r.user_id))
+      const rows = picked.filter(r => !banned.has(r.user_id))
       const locale = localeFromLanguage((contact as { language?: string | null }).language)
       return rows.map(r => ({ ...r, locale }))
     }
     // account scope: the contacts linked to the company right now, and the team members of the company
-    const { data: links, error: lErr } = await db().from('account_contacts').select('contact_id').eq('account_id', alert.id)
+    // "linked right now": a link that ended, had its access revoked, or is past its end date no longer counts (the alert must not reach a person who left)
+    const { data: links, error: lErr } = await db().from('account_contacts').select('contact_id, ended_at, access_revoked_at, access_until').eq('account_id', alert.id)
     if (lErr) return []
-    const contactIds = Array.from(new Set(((links ?? []) as Array<{ contact_id: string | null }>).map(l => l.contact_id).filter((x): x is string => !!x)))
+    const nowMs = Date.now()
+    const contactIds = Array.from(new Set(((links ?? []) as LinkRow[]).filter(l => isCurrentLink(l, nowMs)).map(l => l.contact_id).filter((x): x is string => !!x)))
     const orParts = [`team_account_id.eq.${alert.id}`]
     if (contactIds.length > 0) orParts.push(`contact_id.in.(${contactIds.join(',')})`)
-    const { data, error } = await base().or(orParts.join(',')).limit(MAX_PHONES)
+    const { data, error } = await base().or(orParts.join(',')).limit(MAX_FETCH)
     if (error) return []
     const devices = (data ?? []) as OwnedDevice[]
     const teamUserIds = Array.from(new Set(devices.filter(d => d.contact_id === null && d.team_account_id === alert.id).map(d => d.user_id)))
@@ -209,7 +216,10 @@ export async function livePhones(alert: ClientPhoneAlert, bundleId: string, sinc
         if (m.status === 'active' && hasCapability(normalizeCapabilities(m.capabilities), 'chat')) activeTeam.add(m.auth_user_id)
       }
     }
-    const rows = selectRecipientPhones(devices, { scope: 'account', id: alert.id, linkedContactIds: new Set(contactIds), activeTeamUserIds: activeTeam })
+    const picked = selectRecipientPhones(devices, { scope: 'account', id: alert.id, linkedContactIds: new Set(contactIds), activeTeamUserIds: activeTeam })
+    // a suspended login (the CRM bans a client's login when it suspends portal access) gets nothing
+    const banned = await liveBannedUserIds(picked.map(r => r.user_id))
+    const rows = picked.filter(r => !banned.has(r.user_id))
     // wording language: a client's own language; a team member's portal language
     const localeByContact = new Map<string, 'en' | 'it'>()
     const wantContacts = Array.from(new Set(rows.map(r => r.contact_id).filter((x): x is string => !!x)))
@@ -233,18 +243,20 @@ export async function livePhones(alert: ClientPhoneAlert, bundleId: string, sinc
 }
 
 /**
- * The icon number for a client's phone: unread chat + documents to sign + unpaid Tony Durante invoices, across their companies, capped. HONEST OR ABSENT: any
+ * The icon number for a client's phone: unread chat + documents to sign + unopened documents + unpaid Tony Durante invoices, across their companies, capped. HONEST OR ABSENT: any
  * failure returns null and the alert goes without a number (the app corrects it when opened). A team member's phone gets none (null).
  */
 export async function liveClientBadge(phone: ClientPhoneRow): Promise<number | null> {
   if (!phone.contact_id) return null
   try {
     const contactId = phone.contact_id
-    const [{ getUnreadChatCount, getPortalAccounts, getUnpaidInvoiceCount }, { getToSignCount }] = await Promise.all([import('@/lib/portal/queries'), import('@/lib/portal/signable-documents')])
+    const [{ getUnreadChatCount, getPortalAccounts, getUnpaidInvoiceCount }, { getToSignCount }, { getUnopenedDocsCount }] = await Promise.all([import('@/lib/portal/queries'), import('@/lib/portal/signable-documents'), import('@/lib/portal/document-alerts')])
     const userEmail = (await supabaseAdmin.auth.admin.getUserById(phone.user_id)).data?.user?.email ?? null
     const [chat, accounts] = await Promise.all([getUnreadChatCount(contactId), getPortalAccounts(contactId)])
+    // unopened documents too, so a "new document is ready" alert moves the number like the app's Documents badge does
+    const documents = await getUnopenedDocsCount(contactId, accounts.map(a => a.id))
     const perCompany = await Promise.all(accounts.map(async a => (await getUnpaidInvoiceCount(a.id)) + (await getToSignCount({ selectedAccountId: a.id, contactId, userEmail, skipLegacyDrive: true }))))
-    const total = chat + perCompany.reduce((a, b) => a + b, 0)
+    const total = chat + documents + perCompany.reduce((a, b) => a + b, 0)
     return Number.isFinite(total) && total >= 0 ? Math.min(BADGE_CAP, total) : null
   } catch {
     return null

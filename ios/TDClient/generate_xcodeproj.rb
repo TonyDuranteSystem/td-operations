@@ -10,8 +10,8 @@
 #   Production = the REAL portal (default https://portal.tonydurante.us; override TD_PRODUCTION_URL), TestFlight / App Store
 # Each flavour has its own bundle id (the server accepts only its own: lib/app/environment.ts CLIENT_APP_BUNDLE_IDS), so a test build can never
 # register a phone on production. The Production flavour is an UPDATE of the live App Store app "MyLLC Manager" (Apple ID 6749905082, bundle
-# com.tonydurante.myllcmanager, live version 1.3 / build 6 on 10 Nov 2026): version 2.0.0, build numbers continue after 6 (TD_BUILD, default 7).
-#   TD_BUILD=8 TD_VERSION=2.0.0 ruby generate_xcodeproj.rb
+# com.tonydurante.myllcmanager, live version 1.3 / build 6 on 10 Nov 2026): version 2.0.0, build numbers continue after 6 (TD_BUILD, default 8: build 7 is on TestFlight).
+#   TD_BUILD=9 TD_VERSION=2.0.0 ruby generate_xcodeproj.rb
 require 'xcodeproj'
 require 'fileutils'
 
@@ -43,7 +43,7 @@ project.add_build_configuration('Production', :release)
 common = {
   'SWIFT_VERSION' => '5.0', 'IPHONEOS_DEPLOYMENT_TARGET' => '17.0', 'TARGETED_DEVICE_FAMILY' => '1,2', 'SDKROOT' => 'iphoneos',
   'CODE_SIGN_STYLE' => 'Automatic', 'DEVELOPMENT_TEAM' => (ENV['TD_TEAM'] || 'LMKMUC5864'),
-  'GENERATE_INFOPLIST_FILE' => 'NO', 'CURRENT_PROJECT_VERSION' => (ENV['TD_BUILD'] || '7'), 'MARKETING_VERSION' => (ENV['TD_VERSION'] || '2.0.0'),
+  'GENERATE_INFOPLIST_FILE' => 'NO', 'CURRENT_PROJECT_VERSION' => (ENV['TD_BUILD'] || '8'), 'MARKETING_VERSION' => (ENV['TD_VERSION'] || '2.0.0'),
   'CLANG_ENABLE_MODULES' => 'YES', 'ENABLE_USER_SCRIPT_SANDBOXING' => 'YES', 'ASSETCATALOG_COMPILER_APPICON_NAME' => 'AppIcon',
   'SUPPORTS_MACCATALYST' => 'NO', 'SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD' => 'NO',
 }

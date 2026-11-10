@@ -39,7 +39,7 @@ import { cookies, headers } from 'next/headers'
 import { resolvePortalMode } from '@/lib/portal/portal-mode'
 import Script from 'next/script'
 import { AppModeProvider } from '@/components/app-mode/app-mode-provider'
-import { getClientAppMode } from '@/lib/app-mode/server'
+import { getClientAppModeActive } from '@/lib/app-mode/server'
 import { ClientAppFrame } from '@/components/portal/client-app-frame'
 import { CompanySwitcher } from '@/components/portal/company-switcher'
 import { isPartnerPortal } from '@/lib/portal/tier-config'
@@ -74,7 +74,7 @@ export default async function PortalLayout({
   // Inside the CLIENT iPhone app (its web view adds "TDClient/" to the browser name): a layout hint only, never a security switch.
   // The app draws its own bottom bar and Menu list, so the website's side menu, top bar and install/alert prompts are left out
   // and a slim top row with the round Menu button takes their place (docs/systems/client-app.md). Everything else is unchanged.
-  const clientApp = getClientAppMode()
+  const clientApp = await getClientAppModeActive()
 
   // No user — render children without shell (login/forgot-password/change-password pages handle their own UI)
   if (!user) {

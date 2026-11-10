@@ -2,13 +2,19 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject var model: ClientModel
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: 0) {
             WebHost()
+                .id(model.webEpoch)   // a sign-out makes a brand-new web view (no page of the person who left stays in its history)
                 .ignoresSafeArea(edges: .bottom)
                 .overlay { if model.loadFailed { LoadFailedView() } }
             if let me = model.me { BottomBar(me: me) }
+        }
+        // coming back to the app: the numbers on the bar and the alerts setting may have changed meanwhile
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.refreshMe() } }
         }
         .sheet(item: $model.sheet) { sheet in
             switch sheet {
@@ -56,8 +62,7 @@ struct BottomBar: View {
         HStack(spacing: 0) {
             ForEach(me.bar, id: \.self) { key in
                 if let item = me.items.first(where: { $0.key == key }) {
-                    let path = item.path.split(separator: "?").first.map(String.init) ?? item.path
-                    let active = path == "/portal" ? model.currentPath == "/portal" : model.currentPath.hasPrefix(path)
+                    let active = BarRules.isActive(itemPath: item.path, currentPath: model.currentPath, currentTab: model.currentTab)
                     Button { model.open(path: item.path) } label: {
                         VStack(spacing: 2) {
                             ZStack(alignment: .topTrailing) {
@@ -103,17 +108,27 @@ struct MenuSheet: View {
                             .accessibilityIdentifier("menu-\(item.key)")
                         }
                     }
-                    if model.alertsOff {
+                    if model.alertsOff || model.alertsPending {
                         Section {
                             Text(AppConfig.say(.alertsOffStrip)).font(.footnote).foregroundColor(.secondary)
-                            Button(AppConfig.say(.alertsOpenSettings)) { model.openPhoneSettings() }.accessibilityIdentifier("open-settings")
+                            if model.alertsOff {
+                                Button(AppConfig.say(.alertsOpenSettings)) { model.openPhoneSettings() }.accessibilityIdentifier("open-settings")
+                            } else {
+                                // "Not now" was chosen and iPhone was never asked: asking again is one tap here
+                                Button(AppConfig.say(.alertsTurnOn)) { Task { await model.turnOnAlerts() } }.accessibilityIdentifier("menu-turn-on-alerts")
+                            }
                         }
                     }
+                } else {
+                    Section {
+                        Text(model.meOutcome == nil || model.meOutcome == .signedOut ? AppConfig.say(.signInFirst) : AppConfig.say(.menuUnavailable))
+                    }
+                }
+                // Sign out is always there while somebody is signed in, also when the server cannot answer (the app switched off, a fault)
+                if model.meOutcome != .signedOut {
                     Section {
                         Button(AppConfig.say(.signOut), role: .destructive) { Task { await model.signOut() } }.accessibilityIdentifier("sign-out")
                     }
-                } else {
-                    Text(AppConfig.say(.signInFirst))
                 }
                 #if DEBUG
                 Section { Text(model.status).font(.footnote).foregroundColor(.secondary).accessibilityIdentifier("alert-status") }
@@ -122,6 +137,8 @@ struct MenuSheet: View {
             .navigationTitle(AppConfig.say(.menuTitle))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(AppConfig.say(.close)) { model.sheet = nil } } }
+            // the server could not be told to forget this phone (no connection ...): the person is still signed in and is told so
+            .alert(AppConfig.say(.signOutFailed), isPresented: $model.signOutFailed) { Button(AppConfig.say(.ok), role: .cancel) {} }
         }
         .presentationDetents([.medium, .large])
     }
@@ -132,17 +149,20 @@ struct AlertsAskSheet: View {
     @EnvironmentObject var model: ClientModel
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "bell.badge").font(.system(size: 40)).foregroundColor(.accentColor).padding(.top, 28)
-            Text(AppConfig.say(.alertsTitle)).font(.title3.bold()).multilineTextAlignment(.center)
-            Text(AppConfig.say(.alertsBody)).font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center)
-            Button { Task { await model.turnOnAlerts() } } label: { Text(AppConfig.say(.alertsTurnOn)).frame(maxWidth: .infinity) }
-                .buttonStyle(.borderedProminent).controlSize(.large).accessibilityIdentifier("alerts-turn-on")
-            Button(AppConfig.say(.alertsNotNow)) { model.notNow() }.accessibilityIdentifier("alerts-not-now")
-            Spacer()
+        // scrolls, and can be pulled up to full height: with large text or a small iPhone the buttons must never be cut off
+        ScrollView {
+            VStack(spacing: 16) {
+                Image(systemName: "bell.badge").font(.system(size: 40)).foregroundColor(.accentColor).padding(.top, 28)
+                Text(AppConfig.say(.alertsTitle)).font(.title3.bold()).multilineTextAlignment(.center)
+                Text(AppConfig.say(.alertsBody)).font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center)
+                Button { Task { await model.turnOnAlerts() } } label: { Text(AppConfig.say(.alertsTurnOn)).frame(maxWidth: .infinity) }
+                    .buttonStyle(.borderedProminent).controlSize(.large).accessibilityIdentifier("alerts-turn-on")
+                Button(AppConfig.say(.alertsNotNow)) { model.notNow() }.accessibilityIdentifier("alerts-not-now")
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
         }
-        .padding(.horizontal, 24)
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
         .interactiveDismissDisabled()
     }
 }

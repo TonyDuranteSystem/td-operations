@@ -18,6 +18,8 @@ import { getPersonalInfo } from '@/lib/portal/personal-info'
 import { Building2, Shield, MapPin, Calendar, FileText, Mail, Phone, User, ChevronRight, ListChecks, ShieldCheck, Package } from 'lucide-react'
 import Link from 'next/link'
 import { t, getLocale, type Locale } from '@/lib/portal/i18n'
+import { getClientAppModeActive } from '@/lib/app-mode/server'
+import { isClientAppPayEnabled } from '@/lib/portal-app/enabled'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -909,6 +911,9 @@ export default async function PortalDashboardPage() {
         .maybeSingle()
         .then(r => r.data ?? null)
     : null
+  // Inside the client iPhone app with its Pay switch OFF the "View Offer" banner is not drawn: it links to the offer page, which signs the agreement and
+  // then takes the card payment itself, so the switch must cover this door too (bug hunt 2026-11-10, finding 2). The website always shows it.
+  const offerHiddenInApp = pendingOffer ? (await getClientAppModeActive()) && !(await isClientAppPayEnabled()) : false
 
   // Service Status — client-facing flow progress (Tax Return / Annual Report /
   // RA Renewal / CMRA) driven by active service_deliveries + per-stage
@@ -970,7 +975,7 @@ export default async function PortalDashboardPage() {
       <WhatsNewBanner />
 
       {/* Offer banner — persistent until the offer is completed or expired */}
-      {pendingOffer && (
+      {pendingOffer && !offerHiddenInApp && (
         <OfferBanner
           offerUrl={`${APP_BASE_URL}/offer/${pendingOffer.token}${pendingOffer.access_code ? `/${pendingOffer.access_code}` : ''}`}
           locale={locale}
