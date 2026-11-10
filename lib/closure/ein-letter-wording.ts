@@ -10,3 +10,8 @@ export const EIN_LETTER_BODY_CLOSE = 'Please close the business account associat
 export const EIN_LETTER_BODY_QUESTIONS = 'Please let me know if you have any questions or need anything else.'
 export const EIN_LETTER_BODY_COPY = 'I have included a copy of the original EIN Assignment /Confirmation Letter.'
 export const EIN_LETTER_REPLY_INTRO = 'Please mail a confirmation letter to the address listed below.'
+
+/** The most address lines the letter has room for, and the longest one (a longer line wraps onto the next row of the same address). The box in the workspace and the letter maker use the same numbers. */
+export const MAX_ADDRESS_LINES = 6
+export const MAX_ADDRESS_LINE_CHARS = 120
+export const MAX_COMPANY_NAME_CHARS = 150

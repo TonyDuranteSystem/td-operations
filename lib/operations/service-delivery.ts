@@ -732,6 +732,8 @@ export async function advanceStageIfAt(
     notes: params.notes,
     skip_tasks: params.skip_tasks,
     skip_notify: params.skip_notify,
+    // the move was decided for a job on THIS step: if it has moved on by the time the move reads it, nothing is written
+    expected_from_stage: currentStage,
   })
 
   return {

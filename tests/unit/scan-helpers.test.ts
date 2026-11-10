@@ -7,6 +7,7 @@ import sharp from 'sharp'
 import { createSteadyTracker } from '@/lib/scan/steady'
 import { applyLook, DEFAULT_SCAN_LOOK, levelsOf, paperBrightness, SCAN_LOOKS } from '@/lib/scan/enhance'
 import { buildPdf, pdfPageSize } from '@/lib/scan/pdf'
+import { chooseMenuSide } from '@/lib/scan/menu-side'
 import { MAX_SCAN_PAGES, canAddPage, cleanScanName, defaultScanName, movePage, removePage, scanFileName } from '@/lib/scan/session'
 import type { Point, Quad, Raster } from '@/lib/scan/geometry'
 
@@ -174,5 +175,27 @@ describe('scan rules', () => {
     expect(removePage(list, 1)).toEqual(['a', 'c', 'd'])
     expect(removePage(list, 7)).toEqual(list)
     expect(list).toEqual(['a', 'b', 'c', 'd'])
+  })
+})
+
+describe('chooseMenuSide (the attach menu must never run off the edge — it hid "Scan document" in the phone app\'s Reply screen)', () => {
+  it('keeps the asked-for side when there is room', () => {
+    expect(chooseMenuSide('above', 400, 50, 124)).toBe('above')
+    expect(chooseMenuSide('below', 50, 400, 124)).toBe('below')
+  })
+
+  it('flips when the asked-for side is too tight and the other is roomier', () => {
+    expect(chooseMenuSide('above', 97, 600, 139)).toBe('below') // the phone Reply screen: 97 px above, lots below
+    expect(chooseMenuSide('below', 300, 40, 124)).toBe('above') // a menu asked to open below, 40 px of room below, 300 above
+  })
+
+  it('stays put when neither side has more room', () => {
+    expect(chooseMenuSide('above', 50, 40, 124)).toBe('above')
+    expect(chooseMenuSide('below', 40, 50, 124)).toBe('below')
+  })
+
+  it('needs the menu height plus a little breathing room', () => {
+    expect(chooseMenuSide('above', 136, 500, 124)).toBe('above') // 124 + 12 fits exactly
+    expect(chooseMenuSide('above', 135, 500, 124)).toBe('below')
   })
 })

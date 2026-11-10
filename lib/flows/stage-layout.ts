@@ -49,6 +49,8 @@ export const STAGE_COMPONENT_TYPES = [
   'esign_panel',
   // Tax Return "Signed": fax the signed return to the IRS (single-member LLCs) and let the delivery check file the job (lib/fax/return-fax*.ts).
   'return_fax_panel',
+  // Tax Return "1st Installment Paid": file the extension from the workspace — generate the Form 7004, fax it, and the delivery check merges it with the receipt, files it and tells the client (lib/fax/extension-fax*.ts).
+  'extension_fax_panel',
   // Company Change Name, "Update our records": the one button that renames the company and moves its old folders (lib/operations/change-name-apply.ts).
   'apply_name_panel',
   // Company Closure, "IRS Closure": makes the EIN closure letter for the IRS and attaches a copy of the company's EIN letter (lib/closure/ein-closure-package.ts).

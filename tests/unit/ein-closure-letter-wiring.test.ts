@@ -18,6 +18,8 @@ describe('EIN closure letter — the pieces are wired together', () => {
     expect((route.match(/requireStaffRoute\(\)/g) ?? []).length).toBe(2)
     expect(route).not.toMatch(/application\/pdf/) // saved on the job, opened from the documents list (the host cuts responses over 4.5 MB)
     expect(route).toContain('splitAddress(body.address)')
+    expect(route).toContain('facts_hash')               // the letter is made only for the box staff were looking at
+    expect(route).toContain('export const maxDuration')
   })
 
   it('the migration adds the box under the waiting notice, is guarded and can be undone', () => {
@@ -32,9 +34,22 @@ describe('EIN closure letter — the pieces are wired together', () => {
 
   it('the letter never takes a signature from anywhere but the client’s own drawing (no passport, no ID)', () => {
     const pkg = read('lib/closure/ein-closure-package.ts')
-    expect(pkg).toContain("/^signature_image/i")        // only the file the wizard box filed under its own field name…
+    expect(pkg).toContain('d.file_name === sigFileName') // only THE file the answers name (the wizard box's own upload)…
     expect(pkg).toContain("str('signature_consent')")   // …and only with the consent record the server wrote for it
     expect(pkg).toContain('looksLikePng')                // …and only a real picture
     expect(pkg).not.toMatch(/passport/i)
+  })
+
+  it('the stage move is written only if the job is still on the step it was read at (a late background step cannot pull a job back)', () => {
+    const sd = read('lib/service-delivery.ts')
+    expect(sd).toContain('JOB_MOVED_MEANWHILE')
+    expect(sd).toMatch(/guardedUpdate\.eq\("stage", delivery\.stage\)/)
+    // …and the form's filing pass treats such a refusal as "someone else moved it", not as something to retry
+    expect(read('app/api/closure-form-completed/route.ts')).toContain('adv.result?.error === JOB_MOVED_MEANWHILE')
+    // the gate hands the step it matched to the move, and two callers no longer report a refused move as "ok"
+    expect(read('lib/operations/service-delivery.ts')).toContain('expected_from_stage: currentStage')
+    expect(read('app/api/ss4-signed/route.ts')).toContain('if (adv.success) results.push')
+    expect(read('app/api/signature-request-signed/route.ts')).toContain('flow_advance: NOT moved')
+    expect(sd).toMatch(/\.select\("id"\)[\s\S]{0,200}movedRows/)
   })
 })

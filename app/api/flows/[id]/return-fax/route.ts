@@ -30,6 +30,7 @@ import {
   type MarkerRow,
   type SignedEnvelopeRow,
 } from '@/lib/fax/return-fax'
+import { EXTENSION_FAX_PURPOSE } from '@/lib/fax/extension-fax'
 
 const NOT_CHECKED = 'Could not check this job\'s fax history. Please reload; nothing was sent.'
 
@@ -86,6 +87,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     .select('id, action_type, created_at, details')
     .eq('service_delivery_id', sdId)
     .in('action_type', ['fax_sent', 'fax_claim'])
+    // the job's EXTENSION fax (Form 7004, step "1st Installment Paid") is another fax of the same job: it is not the return fax
+    .or(`details->>purpose.is.null,details->>purpose.neq.${EXTENSION_FAX_PURPOSE}`)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()

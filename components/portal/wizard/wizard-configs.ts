@@ -845,9 +845,10 @@ export const CLOSURE_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'articles_of_organization', label: 'Articles of Organization', labelIt: 'Atto Costitutivo', type: 'file', required: true },
     { name: 'ein_letter', label: 'EIN Letter', labelIt: 'Lettera EIN', type: 'file', required: true },
     { name: 'other_documents', label: 'Other Relevant Documents', labelIt: 'Altri Documenti Rilevanti', type: 'file', required: false },
-    // Part F step 2: the client's own drawn signature for the EIN closure letter. OPTIONAL — without it the letter has a line to sign by hand.
-    // The consent text and its record are the server's (lib/closure/signature-consent.ts).
-    { name: 'signature_image', label: 'Draw your signature here for the EIN letter to send to the IRS for its closure', labelIt: 'Disegna qui la tua firma per la lettera EIN da inviare all’IRS per la chiusura', type: 'signature', required: false },
+    // Part F step 2: the client's own drawn signature for the EIN closure letter. REQUIRED (Antonio 2026-11-10: "it's required") — the wizard will not
+    // send without it, and the server refuses a closure sent without one (app/api/portal/wizard-submit). The consent text and its record are the server's
+    // (lib/closure/signature-consent.ts).
+    { name: 'signature_image', label: 'Draw your signature here for the EIN letter to send to the IRS for its closure', labelIt: 'Disegna qui la tua firma per la lettera EIN da inviare all’IRS per la chiusura', type: 'signature', required: true },
     { name: 'disclaimer_accepted', label: 'I confirm that all information is accurate. I understand the closure fee does not include outstanding state taxes or fees.', labelIt: 'Confermo che le informazioni sono corrette. Comprendo che la tariffa di chiusura non include tasse o spese statali pendenti.', type: 'checkbox', required: true },
   ],
 }

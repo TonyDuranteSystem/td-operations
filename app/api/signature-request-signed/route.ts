@@ -213,13 +213,14 @@ export async function POST(req: NextRequest) {
           .single()
         if (sd?.stage === "Sent for Signature") {
           const { advanceServiceDelivery } = await import("@/lib/service-delivery")
-          await advanceServiceDelivery({
+          const adv = await advanceServiceDelivery({
             delivery_id: sigReq.service_delivery_id,
             target_stage: "Signed",
             actor: "signature-webhook",
             notes: `Client signed: ${sigReq.document_name}`,
           })
-          results.push("flow_advance: ok")
+          // a move the step refused (a document missing, the job moved meanwhile) is NOT "ok"
+          results.push(adv.success ? "flow_advance: ok" : `flow_advance: NOT moved (${adv.error || "refused"})`)
         } else {
           results.push(`flow_advance: skipped (stage=${sd?.stage ?? "unknown"})`)
         }

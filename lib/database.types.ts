@@ -22733,6 +22733,13 @@ export type Database = {
           document_type_name: string
         }[]
       }
+      get_portal_chat_people_thread_keys: {
+        Args: never
+        Returns: {
+          account_id: string
+          contact_id: string
+        }[]
+      }
       get_portal_chat_threads: {
         Args: never
         Returns: {

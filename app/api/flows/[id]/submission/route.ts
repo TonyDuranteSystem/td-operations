@@ -28,6 +28,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { pickClosureAnswers } from '@/lib/flows/closure-answers'
+import { presentClosureAnswers } from '@/lib/closure/signature-consent'
 import { loadTargetTaxSubmission } from '@/lib/tax/target-submission'
 import { answerOutcomes, canWriteReviewRequests, latestRound, parseReviewRequests } from '@/lib/tax/review-requests'
 
@@ -169,7 +170,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
               tax_year: null,
               review_status: cs.status ?? null,
               created_at: cs.completed_at ?? cs.created_at ?? null,
-              submitted_data: cs.submitted_data ?? null,
+              // the technical consent record (address, browser, fingerprint) stays in the database as the audit record; staff read one plain line
+              submitted_data: presentClosureAnswers(cs.submitted_data ?? null),
             }
           : null,
       })

@@ -5,6 +5,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
 import { X, Send, Loader2, Sparkles, Paperclip, Link2, Settings } from 'lucide-react'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
+import { AttachChoiceMenu } from '@/components/scan/attach-choice-menu'
+import { DocumentScanner } from '@/components/scan/document-scanner'
 import { useEmailAttachments } from './use-email-attachments'
 import { EmailAttachmentChips } from './email-attachment-chips'
 import { RecipientAutocomplete } from './recipient-autocomplete'
@@ -116,6 +118,9 @@ export function ComposeDialog({
   const [linkLabel, setLinkLabel] = useState(prefillLinkLabel)
   const [attachNotice, setAttachNotice] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // the Attach files button opens a small menu: Scan document (camera -> one PDF) or Photo or file (what it did before)
+  const [attachMenu, setAttachMenu] = useState(false)
+  const [scanning, setScanning] = useState(false)
   // Synchronous double-click guard — isPending is render-state and two clicks
   // can land inside one render window, firing two POSTs.
   const sendingRef = useRef(false)
@@ -529,15 +534,26 @@ export function ComposeDialog({
                   e.target.value = '' // re-picking the same file must fire again
                 }}
               />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50
-                  px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-100 transition-colors"
-              >
-                <Paperclip className="h-3 w-3" />
-                Attach files
-              </button>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setAttachMenu(o => !o)}
+                  aria-haspopup="menu"
+                  aria-expanded={attachMenu}
+                  data-testid="email-attach"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50
+                    px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-100 transition-colors"
+                >
+                  <Paperclip className="h-3 w-3" />
+                  Attach files
+                </button>
+                <AttachChoiceMenu
+                  open={attachMenu} onClose={() => setAttachMenu(false)} placement="below"
+                  onScan={() => { setAttachMenu(false); setScanning(true) }}
+                  onFile={() => { setAttachMenu(false); fileInputRef.current?.click() }}
+                />
+                {scanning && <DocumentScanner onClose={() => setScanning(false)} onDone={file => { setScanning(false); void attachments.add([file]) }} />}
+              </div>
               <span className="ml-2 text-xs text-zinc-400">or drag &amp; drop anywhere</span>
               <input
                 type="text"
