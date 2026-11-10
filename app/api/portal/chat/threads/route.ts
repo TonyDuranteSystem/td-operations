@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { fillVoiceListPreviews } from '@/lib/portal/chat-voice'
 import { summarizeOverdue, type OverduePaymentRow, type OverdueSummary } from '@/lib/billing/overdue'
+import { loadPeopleThreadKeys, threadHasPeopleMessages, type PeopleKeysClient } from '@/lib/portal-chats/list-filter'
 import { NextResponse } from 'next/server'
 
 /**
@@ -22,8 +23,14 @@ export async function GET() {
     return NextResponse.json({ error: 'Dashboard access required' }, { status: 403 })
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: rows, error } = await (supabaseAdmin as any).rpc('get_portal_chat_threads_v2')
+  // Both calls start together. The second one only feeds the "Chats" chip (which conversations have a
+  // message written by a person); if it fails or the function is not installed yet, the list still loads
+  // and every conversation is left unflagged (the chip then shows everything — see list-filter.ts).
+  const [{ data: rows, error }, peopleKeys] = await Promise.all([
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabaseAdmin as any).rpc('get_portal_chat_threads_v2') as PromiseLike<{ data: unknown; error: unknown }>,
+    loadPeopleThreadKeys(supabaseAdmin as unknown as PeopleKeysClient),
+  ])
 
   if (!error && rows) {
     const rawThreads = rows as Array<{
@@ -216,6 +223,9 @@ export async function GET() {
       unread_count: Number(r.unread_count ?? 0),
       is_pinned: (!!r.account_id && pinnedAccounts.has(r.account_id)) ||
         (!!r.contact_id && pinnedContacts.has(r.contact_id)),
+      // Feeds the "Chats" chip: true when a client or a team member wrote in this conversation
+      // (not only automatic notices). undefined = unknown (function unavailable) → chip keeps it.
+      has_people_messages: peopleKeys ? threadHasPeopleMessages(r, peopleKeys) : undefined,
       active_services: resolveActiveServices(r),
       // Name-level overdue badge: account-level threads (companies=[]) show their
       // own account's overdue; contact-level threads show contact-direct invoices

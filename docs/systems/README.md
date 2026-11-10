@@ -90,6 +90,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | Doc | Subsystem | Status |
 |---|---|---|
 | [SYSTEM-ATLAS.md](SYSTEM-ATLAS.md) | Master map of every system + tool/hook/guardrail/table inventory | ✅ generated |
+| [scan-document.md](scan-document.md) | Scan document — the chat paperclip's camera scanner (live page finder → one PDF) for TD Talk, Marketing chat, WhatsApp, staff Portal Chats | ✅ written |
 | [todo-board.md](todo-board.md) | Dashboard "TO DO — FROM CHATS" board (staff action cards) | ✅ written |
 | [billing-invoicing.md](billing-invoicing.md) | Billing & invoicing — the 4 money domains, invoice numbers, credit netting | ✅ written |
 | [formation.md](formation.md) | Company formation lifecycle — signed→EIN→active, the EIN hand-off, tiers | ✅ written |

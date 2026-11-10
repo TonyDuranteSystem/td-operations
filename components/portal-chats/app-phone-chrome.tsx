@@ -178,22 +178,25 @@ export function PhonePlusButton({ onClick }: { onClick: () => void }) {
   )
 }
 
-export function PhonePlusSheet({ open, onClose, onEmoji, onAttach, onAi, aiBusy, attachBusy, attachNote }: {
+export function PhonePlusSheet({ open, onClose, onEmoji, onAttach, onScan, onAi, aiBusy, attachBusy, attachNote }: {
   open: boolean
   onClose: () => void
   onEmoji: () => void
   onAttach: () => void
+  /** when given, a "Scan document" row sits above the file row (camera -> one PDF); the file row then reads "Photo or file" */
+  onScan?: () => void
   onAi: () => void
   aiBusy: boolean
   attachBusy: boolean
-  /** a standing reminder shown right under "Attach a file", the moment it matters (WhatsApp: no ID or tax documents) */
+  /** an optional standing reminder shown right under "Attach a file", the moment it matters (nothing passes one today: WhatsApp's "no ID or tax documents" line was removed 2026-11-10) */
   attachNote?: string
 }) {
   const pick = (fn: () => void) => () => { onClose(); fn() }
   return (
     <BottomSheet open={open} onClose={onClose} title="Add to your message">
       <SheetRow label="Emoji" onClick={pick(onEmoji)} />
-      <SheetRow label="Attach a file" disabled={attachBusy} onClick={pick(onAttach)} />
+      {onScan && <SheetRow label="Scan document" hint="Camera to one PDF" disabled={attachBusy} onClick={pick(onScan)} />}
+      <SheetRow label={onScan ? 'Photo or file' : 'Attach a file'} disabled={attachBusy} onClick={pick(onAttach)} />
       {attachNote && <p className="border-t border-zinc-100 bg-amber-50 px-5 py-2 text-sm text-amber-900" data-testid="attach-note">{attachNote}</p>}
       <SheetRow label="AI suggest a reply" disabled={aiBusy} onClick={pick(onAi)} />
     </BottomSheet>

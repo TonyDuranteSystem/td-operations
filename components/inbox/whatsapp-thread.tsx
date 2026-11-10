@@ -38,6 +38,8 @@ import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-te
 import { QuickCreateModal } from '@/components/dashboard/quick-create-modal'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { PhonePlusButton, PhonePlusSheet } from '@/components/portal-chats/app-phone-chrome'
+import { AttachChoiceMenu } from '@/components/scan/attach-choice-menu'
+import { DocumentScanner } from '@/components/scan/document-scanner'
 
 // Same dynamic-import + ssr:false pattern as every other composer in this
 // codebase that embeds this picker (portal-chat.tsx, floating-chat.tsx, …).
@@ -168,6 +170,9 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
   // TD Social phone app: emoji, attach and AI sit under one plus, next to the message box (the computer layout keeps its row of buttons)
   const appMode = useAppMode()
   const [plusOpen, setPlusOpen] = useState(false)
+  // the paperclip opens a small menu: Scan document (camera -> one PDF) or Photo or file
+  const [attachMenu, setAttachMenu] = useState(false)
+  const [scanning, setScanning] = useState(false)
   // Per-message "three dots" menu (Antonio 2026-09-27, "full menu", matching Portal Chats):
   // reply-to-a-message, pin, react, tag/to-do, discuss with team, share to team chat, a note, and
   // create task/service/invoice all live here. "Edit" is deliberately not offered — WhatsApp's real
@@ -1170,10 +1175,10 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                 onClose={() => setPlusOpen(false)}
                 onEmoji={() => setShowEmojiPicker(true)}
                 onAttach={handlePickFile}
+                onScan={() => setScanning(true)}
                 onAi={handleAi}
                 aiBusy={suggesting || audioNoteRecorder.isRecording}
                 attachBusy={!!file || audioNoteRecorder.isRecording}
-                attachNote={isWabridgeLine ? "Don't send ID or tax documents over WhatsApp — use the portal instead." : undefined}
               />
             )}
             {replyTo && (
@@ -1265,14 +1270,24 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                   </button>
                 </FastTooltip>
               )}
-              <button
-                onClick={handlePickFile}
-                disabled={!!file || audioNoteRecorder.isRecording}
-                className="app-hide inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50 disabled:opacity-40"
-                aria-label="Attach a file"
-              >
-                <Paperclip className="h-4 w-4" />
-              </button>
+              <div className="app-hide relative shrink-0">
+                <button
+                  onClick={() => setAttachMenu(o => !o)}
+                  disabled={!!file || audioNoteRecorder.isRecording}
+                  className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50 disabled:opacity-40"
+                  aria-label="Attach a file"
+                  aria-haspopup="menu"
+                  aria-expanded={attachMenu}
+                  data-testid="wa-attach"
+                >
+                  <Paperclip className="h-4 w-4" />
+                </button>
+                <AttachChoiceMenu
+                  open={attachMenu} onClose={() => setAttachMenu(false)} align="right"
+                  onScan={() => { setAttachMenu(false); setScanning(true) }}
+                  onFile={() => { setAttachMenu(false); handlePickFile() }}
+                />
+              </div>
               <FastTooltip label={text.trim() ? 'Polish my text — fixes wording and keeps your meaning' : 'Suggest a reply from this chat'}>
                 <button
                   onClick={handleAi}
@@ -1303,11 +1318,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                 )}
               </div>
             )}
-            {isWabridgeLine && (
-              <p className="app-hide text-[11px] text-zinc-400 px-1">
-                Don&apos;t send ID or tax documents over WhatsApp — use the portal instead.
-              </p>
-            )}
+            {scanning && <DocumentScanner onClose={() => setScanning(false)} onDone={file => { setScanning(false); void uploadAndStageFile(file) }} />}
           </div>
         ) : (
           <div className="p-3 space-y-2">
