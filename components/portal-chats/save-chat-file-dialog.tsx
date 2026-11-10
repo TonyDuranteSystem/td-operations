@@ -17,6 +17,7 @@ import { NewStoreBrowser } from '@/components/storage/new-store-browser'
 import { CardErrorBoundary } from '@/components/dashboard/card-error-boundary'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { HandoffTarget } from '@/lib/crm-store/chat-file-handoff'
+import { businessOwnerIdOf, type HandoffArea, type NavGroupLike } from '@/lib/crm-store/handoff-area'
 
 /** Why the ITIN reader exists: Storage's own upload of an "ITIN Letter" fills the person's record from the file and does not check whose letter it is. */
 const ITIN_HINT = "Storage fills a person's record from an ITIN letter without checking whose letter it is. The ITIN reader checks the name, the date of birth and the other holders of that ITIN first."
@@ -42,6 +43,10 @@ export function SaveChatFileDialog({ messageId, onClose, onOpenItinCard }: { mes
   const [fetching, setFetching] = useState(false)
   const [fileError, setFileError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // where this file goes: the client's own storage (default) or the firm's Business folders (Antonio 2026-11-10)
+  const [area, setArea] = useState<HandoffArea>('client')
+  const [business, setBusiness] = useState<{ state: 'idle' | 'loading' | 'ready' | 'unavailable'; ownerId: string | null; error: string | null }>({ state: 'idle', ownerId: null, error: null })
+  const businessAsked = useRef(false)
   const rootRef = useRef<HTMLDivElement>(null)
   // the answer of an older click must never land on a newer one
   const seq = useRef(0)
@@ -74,13 +79,29 @@ export function SaveChatFileDialog({ messageId, onClose, onOpenItinCard }: { mes
         if (!live) return
         setTarget(t)
         const first = t.items.find((i) => !i.voice)
-        if (t.ownerId && first) void loadFile(first.index)
+        if (first) void loadFile(first.index)
       })
       .catch((e) => { if (live) setLoadError(e instanceof Error && e.message ? e.message : 'Could not open the files — please try again.') })
     return () => { live = false }
   }, [messageId, loadFile])
 
   useEffect(() => { rootRef.current?.focus() }, [target])
+
+  // The Business owner is looked up once, the first time Business is chosen (the navigation lists only what this login may open).
+  useEffect(() => {
+    if (area !== 'business' || businessAsked.current) return
+    businessAsked.current = true
+    setBusiness({ state: 'loading', ownerId: null, error: null })
+    getJson<{ groups: NavGroupLike[] }>('/api/crm-store/browse/navigation', 'Could not open the Business folders — please try again.')
+      .then((d) => {
+        const id = businessOwnerIdOf(d.groups)
+        setBusiness(id ? { state: 'ready', ownerId: id, error: null } : { state: 'unavailable', ownerId: null, error: 'The Business folders are not offered to your login.' })
+      })
+      .catch((e) => {
+        businessAsked.current = false // a failed lookup may be tried again by choosing Business again
+        setBusiness({ state: 'unavailable', ownerId: null, error: e instanceof Error && e.message ? e.message : 'Could not open the Business folders — please try again.' })
+      })
+  }, [area])
 
   // No Escape-to-close on purpose: the Storage screen inside has its own question windows, and Escape must only ever close the one in front.
 
@@ -102,7 +123,9 @@ export function SaveChatFileDialog({ messageId, onClose, onOpenItinCard }: { mes
         <div className="flex items-start justify-between gap-3 border-b border-zinc-200 bg-white px-4 py-3">
           <div className="min-w-0">
             <h3 className="truncate text-sm font-semibold text-zinc-900">{title}</h3>
-            <p className="text-xs text-zinc-500">The chat file is in the upload bar below. Choose the folder, the type and whether the client sees it, then press “Upload this file”. The file also stays in the chat.</p>
+            <p className="text-xs text-zinc-500">{area === 'business'
+              ? 'Open the Business folder where this file goes, then press “Upload this file into …”. The file also stays in the chat.'
+              : 'The chat file is in the upload bar below. Choose the folder, the type and whether the client sees it, then press “Upload this file”. The file also stays in the chat.'}</p>
           </div>
           <div className="flex shrink-0 items-center gap-3">
             <FastTooltip label={ITIN_HINT}>
@@ -116,14 +139,16 @@ export function SaveChatFileDialog({ messageId, onClose, onOpenItinCard }: { mes
           {!target && !loadError && <p className="flex items-center gap-2 text-sm text-zinc-600" data-testid="save-chat-file-loading"><Loader2 className="h-4 w-4 animate-spin" /> Opening the client&apos;s storage…</p>}
           {loadError && <p className="flex gap-1.5 rounded bg-red-50 p-3 text-sm text-red-700" data-testid="save-chat-file-load-error"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> {loadError}</p>}
 
-          {target && !target.ownerId && (
-            <p className="rounded bg-amber-50 p-3 text-sm text-amber-900" data-testid="save-chat-file-no-storage">
-              {target.scope === 'company' ? `${target.label ?? 'This company'} has no storage yet` : `${target.label ?? 'This person'} has no storage of their own yet`}, so there is nowhere to save this file from here. Nothing was saved or created.
-            </p>
-          )}
-
-          {target && target.ownerId && (
+          {target && (
             <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="save-chat-file-area">
+                <span className="text-zinc-500">Save in:</span>
+                {(['client', 'business'] as const).map((a) => (
+                  <button key={a} type="button" disabled={busy || fetching} aria-pressed={area === a} onClick={() => setArea(a)}
+                    className={`rounded-md border px-2.5 py-1 font-medium ${area === a ? 'border-blue-400 bg-blue-50 text-blue-900' : 'border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50'} disabled:opacity-60`}
+                    data-testid={`save-chat-file-area-${a}`}>{a === 'client' ? (target.label ?? (target.scope === 'company' ? 'This company' : 'This person')) : 'Business'}</button>
+                ))}
+              </div>
               {files.length > 1 && (
                 <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="save-chat-file-list">
                   <span className="text-zinc-500">Files in this message:</span>
@@ -142,9 +167,28 @@ export function SaveChatFileDialog({ messageId, onClose, onOpenItinCard }: { mes
               {fetching && <p className="flex items-center gap-2 text-sm text-zinc-600" data-testid="save-chat-file-fetching"><Loader2 className="h-4 w-4 animate-spin" /> Getting the file from the chat…</p>}
               {fileError && <p className="flex gap-1.5 rounded bg-red-50 p-3 text-sm text-red-700" data-testid="save-chat-file-error"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> {fileError}</p>}
               {allDone && !incoming && <p className="flex items-center gap-1.5 rounded bg-emerald-50 p-3 text-sm text-emerald-900" data-testid="save-chat-file-all-done"><CheckCircle2 className="h-4 w-4 shrink-0" /> {files.length === 1 ? 'The file is saved in Storage.' : 'All the files of this message are saved in Storage.'} You can close this window.</p>}
-              <CardErrorBoundary key={target.ownerId} fallbackTitle="Storage">
-                <NewStoreBrowser ownerId={target.ownerId} scopedKind={target.scope === 'person' ? 'person' : 'company'} incomingFile={incoming} onIncomingSaved={onSaved} onBusyChange={setBusy} />
-              </CardErrorBoundary>
+
+              {area === 'client' && !target.ownerId && (
+                <p className="rounded bg-amber-50 p-3 text-sm text-amber-900" data-testid="save-chat-file-no-storage">
+                  {target.scope === 'company' ? `${target.label ?? 'This company'} has no storage yet` : `${target.label ?? 'This person'} has no storage of their own yet`}, so there is nowhere to save this file under them from here. Nothing was saved or created. You can still save it in Business.
+                </p>
+              )}
+              {area === 'client' && target.ownerId && (
+                <CardErrorBoundary key={target.ownerId} fallbackTitle="Storage">
+                  <NewStoreBrowser ownerId={target.ownerId} scopedKind={target.scope === 'person' ? 'person' : 'company'} incomingFile={incoming} onIncomingSaved={onSaved} onBusyChange={setBusy} />
+                </CardErrorBoundary>
+              )}
+
+              {area === 'business' && business.state === 'loading' && <p className="flex items-center gap-2 text-sm text-zinc-600" data-testid="save-chat-file-business-loading"><Loader2 className="h-4 w-4 animate-spin" /> Opening the Business folders…</p>}
+              {area === 'business' && business.state === 'unavailable' && <p className="flex gap-1.5 rounded bg-amber-50 p-3 text-sm text-amber-900" data-testid="save-chat-file-business-unavailable"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> {business.error}</p>}
+              {area === 'business' && business.state === 'ready' && business.ownerId && (
+                <>
+                  <p className="text-xs text-zinc-500" data-testid="save-chat-file-business-hint">Business has no document type and no client: open the folder where the file goes and the upload bar appears there.</p>
+                  <CardErrorBoundary key={business.ownerId} fallbackTitle="Business">
+                    <NewStoreBrowser ownerId={business.ownerId} scopedKind="business" incomingFile={incoming} onIncomingSaved={onSaved} onBusyChange={setBusy} />
+                  </CardErrorBoundary>
+                </>
+              )}
             </div>
           )}
         </div>

@@ -20,7 +20,8 @@ export function PlainDropPanel({ folderName, items, skipped, folders, makeFolder
   makeFolder: (path: string[]) => Promise<void>
   run: (item: PlainItem) => Promise<PlainOutcome>
   onClose: () => void
-  onFinished: () => void
+  /** called once the run is over; the counts say what really happened (a chat file handed to Business is ticked only when it was saved) */
+  onFinished: (result: { saved: number; same: number; failed: number }) => void
 }) {
   const [phase, setPhase] = useState<'ready' | 'running' | 'done'>('ready')
   const [done, setDone] = useState(0)
@@ -42,10 +43,11 @@ export function PlainDropPanel({ folderName, items, skipped, folders, makeFolder
   const start = async () => {
     stop.current = false
     setPhase('running'); setDone(0); setSaved(0); setSame(0); setFailures([])
+    let savedN = 0, sameN = 0, failedN = 0
     // the folders first (parents before children), so an empty folder — or one holding only Google Docs shortcuts — still appears
     for (const path of folders) {
       if (stop.current) break
-      try { await makeFolder(path) } catch (e) { setFailures((f) => (f.length < 50 ? [...f, { name: path.join(' › '), message: e instanceof Error ? e.message : 'The folder could not be created.' }] : f)) }
+      try { await makeFolder(path) } catch (e) { failedN++; setFailures((f) => (f.length < 50 ? [...f, { name: path.join(' › '), message: e instanceof Error ? e.message : 'The folder could not be created.' }] : f)) }
     }
     let next = 0
     const worker = async () => {
@@ -56,15 +58,15 @@ export function PlainDropPanel({ folderName, items, skipped, folders, makeFolder
         const it = items[i]
         let r: PlainOutcome
         try { r = await run(it) } catch (e) { r = { outcome: 'failed', message: e instanceof Error ? e.message : 'The file could not be saved.' } }
-        if (r.outcome === 'saved') setSaved((n) => n + 1)
-        else if (r.outcome === 'unchanged') setSame((n) => n + 1)
-        else setFailures((f) => (f.length < 50 ? [...f, { name: [...it.path, it.file.name].join(' › '), message: r.message ?? 'The file could not be saved.' }] : f))
+        if (r.outcome === 'saved') { savedN++; setSaved((n) => n + 1) }
+        else if (r.outcome === 'unchanged') { sameN++; setSame((n) => n + 1) }
+        else { failedN++; setFailures((f) => (f.length < 50 ? [...f, { name: [...it.path, it.file.name].join(' › '), message: r.message ?? 'The file could not be saved.' }] : f)) }
         setDone((n) => n + 1)
       }
     }
     await Promise.all(Array.from({ length: Math.min(PLAIN_CONCURRENCY, Math.max(1, items.length)) }, () => worker()))
     setPhase('done')
-    onFinished()
+    onFinished({ saved: savedN, same: sameN, failed: failedN })
   }
 
   const failedCount = done - saved - same
