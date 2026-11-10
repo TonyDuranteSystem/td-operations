@@ -22,16 +22,18 @@ function pathOnly(href: string): string {
   return i === -1 ? href : href.slice(0, i)
 }
 
-export function screenTitleFor(pathname: string, items: readonly AppMenuItem[], tab?: string | null, invoicesLabel?: string): string | null {
+/** The screens' own plain names in the person's language, used when the app's server answer is not there (offline, a blip, the switch off). */
+export interface ScreenLabels { invoices?: string; billing?: string; chat?: string }
+
+export function screenTitleFor(pathname: string, items: readonly AppMenuItem[], tab?: string | null, labels?: ScreenLabels): string | null {
   const here = pathOnly(pathname)
-  // The menu entry says "Customers & Invoices" when the website's invoicing hub is on; the app's screen is named plainly "Invoices"
-  // (the approved design), with "Customers and invoices · <company>" under it.
-  if (here === '/portal/invoices' && tab !== 'billing' && invoicesLabel) return invoicesLabel
-  if (here === '/portal/invoices' && tab === 'billing') {
-    const billing = items.find(it => it.key === BILLING_ENTRY_KEY)
-    if (billing) return billing.label
+  if (here === '/portal/invoices') {
+    if (tab === 'billing') return items.find(it => it.key === BILLING_ENTRY_KEY)?.label ?? labels?.billing ?? null
+    // The menu entry says "Customers & Invoices" when the website's invoicing hub is on; the app's screen is named plainly "Invoices"
+    // (the approved design), with "Customers and invoices · <company>" under it.
+    return labels?.invoices ?? items.find(it => it.key === 'nav.invoices')?.label ?? null
   }
-  const inRow = TITLE_IN_ROW.some(p => here === p || here.startsWith(`${p}/`)) || TITLE_IN_ROW_EXACT.includes(here)
+  const inRow = TITLE_IN_ROW.some(p => here === p || here.startsWith(`${p}/`))
   if (!inRow) return null
   let best: AppMenuItem | null = null
   for (const it of items) {
@@ -41,5 +43,6 @@ export function screenTitleFor(pathname: string, items: readonly AppMenuItem[], 
       if (!best || p.length > pathOnly(best.path).length) best = it
     }
   }
-  return best ? best.label : null
+  if (best) return best.label
+  return (here === '/portal/chat' || here.startsWith('/portal/chat/')) ? labels?.chat ?? null : null
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
 import { getCardQuote, stripeProductName } from "@/lib/payments/card-quote"
+import { checkoutReturnUrls } from "@/lib/portal-app/checkout-return"
 import { claimPaymentForCharge, releasePaymentClaim, recordCheckoutSessionId, CLIENT_CLAIM_TTL_MS } from "@/lib/operations/autopay-claim"
 
 export const dynamic = "force-dynamic"
@@ -73,7 +74,7 @@ export async function POST(req: NextRequest) {
   let claimedPaymentId: string | null = null
   try {
     const body = await req.json()
-    const { payment_id } = body as { payment_id?: string }
+    const { payment_id, return_to } = body as { payment_id?: string; return_to?: unknown }
 
     if (!payment_id || typeof payment_id !== "string") {
       return NextResponse.json({ error: "Missing payment_id" }, { status: 400 })
@@ -133,6 +134,8 @@ export async function POST(req: NextRequest) {
       serviceName: stripeProductName(payment.description, quote),
       clientEmail,
       invoiceNumber: payment.invoice_number || undefined,
+      // The client app asks to come back to its TD Billing screen; the addresses are fixed in lib/portal-app/checkout-return.ts.
+      returnUrls: checkoutReturnUrls(return_to),
     })
 
     if (!result.success || !result.checkoutUrl) {

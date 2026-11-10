@@ -88,6 +88,10 @@ const translations: Record<Locale, Record<string, string>> = {
     'app.billing.credit': 'Credit',
     'app.billing.cancelled': 'Cancelled',
     'app.billing.empty': 'No invoices from Tony Durante LLC yet.',
+    'app.invoicesSubtitleNoCompany': 'Customers and invoices',
+    'app.billing.paidNotice': 'Thank you. Your payment can take a moment to show here.',
+    'app.offerPayUnavailable.title': 'This step is not available in the app',
+    'app.offerPayUnavailable.body': 'Message us in Chat and we will help you.',
     'nav.profile': 'Profile',
 
     // Sidebar hover/tap descriptions — one per client-facing nav item
@@ -1724,6 +1728,10 @@ const translations: Record<Locale, Record<string, string>> = {
     'app.billing.credit': 'Nota di credito',
     'app.billing.cancelled': 'Annullata',
     'app.billing.empty': 'Nessuna fattura da Tony Durante LLC per ora.',
+    'app.invoicesSubtitleNoCompany': 'Clienti e fatture',
+    'app.billing.paidNotice': 'Grazie. Il pagamento può impiegare qualche istante per comparire qui.',
+    'app.offerPayUnavailable.title': 'Questo passaggio non è disponibile nell\'app',
+    'app.offerPayUnavailable.body': 'Scrivici in Chat e ti aiuteremo.',
     'nav.profile': 'Profilo',
 
     // Sidebar hover/tap descriptions — see the EN block for context.

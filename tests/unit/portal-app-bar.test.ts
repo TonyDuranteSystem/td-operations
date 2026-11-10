@@ -162,7 +162,8 @@ describe('the "who am I" answer', () => {
     const keys = me.items.map(i => i.key)
     expect(keys).toEqual(['nav.overview', 'nav.chat', 'nav.referrals', 'nav.myClients', 'nav.invoices', 'nav.documents', 'nav.generateDocuments', 'nav.signDocuments', 'nav.tdBilling', 'nav.bankApplications', 'nav.requestService', 'nav.guide'])
     for (const k of APP_EXCLUDED_KEYS) expect(keys).not.toContain(k)
-    expect(me.items.find(i => i.key === 'nav.invoices')?.label).toBe('Customers & Invoices')
+    // The app's bar and menu say plainly "Invoices" (approved design), even with the hub on; the website's sidebar keeps "Customers & Invoices".
+    expect(me.items.find(i => i.key === 'nav.invoices')?.label).toBe('Invoices')
     expect(me.items.find(i => i.key === 'nav.chat')).toMatchObject({ path: '/portal/chat', badge: 2 })
     expect(me.items.find(i => i.key === 'nav.signDocuments')?.badge).toBe(1)
     expect(me.items.find(i => i.key === 'nav.tdBilling')?.badge).toBe(1)
