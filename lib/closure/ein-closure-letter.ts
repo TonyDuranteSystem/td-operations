@@ -18,10 +18,13 @@
 import { PDFDocument, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
 import { embedUnicodeFonts } from '@/lib/pdf/unicode-fonts'
 import { wrapPdfText } from '@/lib/pdf/wrap-text'
-import { TD_LARGO_STREET_3D, TD_LARGO_CITY, TD_LARGO_STATE, TD_LARGO_ZIP } from '@/lib/addresses'
+import { TD_OFFICE, TD_CITY_STATE_ZIP } from '@/lib/td-address'
 
-/** Where the IRS is asked to mail its confirmation: our official Largo address (the company's mail goes there — same as every past letter). */
-export const EIN_LETTER_REPLY_ADDRESS_LINES: readonly string[] = [TD_LARGO_STREET_3D, `${TD_LARGO_CITY}, ${TD_LARGO_STATE} ${TD_LARGO_ZIP}`]
+/**
+ * Where the IRS is asked to mail its confirmation: OUR Seminole office (Antonio 2026-11-10: "the address for the return letter must be the one in
+ * Seminole"). Past letters used the Largo Ulmerton Rd address; that one is now only the company's address for a company that has one of our suites.
+ */
+export const EIN_LETTER_REPLY_ADDRESS_LINES: readonly string[] = [TD_OFFICE.street, TD_CITY_STATE_ZIP]
 
 /** The contact lines every past letter carries under the signer's name (TD's phone and support mailbox). */
 export const EIN_LETTER_CONTACT = { phone: '727-452-1093', email: 'support@tonydurante.us' } as const

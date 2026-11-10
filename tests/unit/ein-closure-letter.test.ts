@@ -45,10 +45,11 @@ describe('einClosureLetterLines — the wording every past closure letter used',
     expect(without.join(' ')).not.toMatch(/included a copy/)
   })
 
-  it('asks for the confirmation at our official Largo address and signs with the owner, TD phone and support mailbox', () => {
+  it('asks for the confirmation at our SEMINOLE office (not Largo) and signs with the owner, TD phone and support mailbox', () => {
     const l = einClosureLetterLines(base)
     expect(l.replyIntro).toBe('Please mail a confirmation letter to the address listed below.')
-    expect(l.replyLines).toEqual(['10225 Ulmerton Rd 3D', 'Largo, FL 33771'])
+    expect(l.replyLines).toEqual(['11125 Park Blvd, Suite 104-153', 'Seminole, FL 33772'])
+    expect(l.replyLines.join(' ')).not.toMatch(/Ulmerton|Largo/)
     expect(EIN_LETTER_REPLY_ADDRESS_LINES).toEqual(l.replyLines)
     expect(l.signer).toEqual(['Name: Christian Ranieri', 'Phone: 727-452-1093', 'Email: support@tonydurante.us'])
     expect(EIN_LETTER_CONTACT.email).toBe('support@tonydurante.us')
