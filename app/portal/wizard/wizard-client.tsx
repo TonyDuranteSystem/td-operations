@@ -1805,7 +1805,7 @@ export function WizardClient({
               }
               // ── Regular field ────────────────────────────────────────
               return (
-                <div key={field.name} data-field-key={field.name} className={`${field.type === 'textarea' || field.type === 'checkbox' ? 'md:col-span-2' : ''} ${noteFor(field.name) ? FLAGGED_FIELD_CLASS : ''}`}>
+                <div key={field.name} data-field-key={field.name} className={`${field.type === 'textarea' || field.type === 'checkbox' || field.type === 'signature' ? 'md:col-span-2' : ''} ${noteFor(field.name) ? FLAGGED_FIELD_CLASS : ''}`}>
                   <WizardField
                     field={{ ...field, prefilled: !!prefillData[field.name] }}
                     value={formData[field.name] ?? ''}
@@ -1814,6 +1814,7 @@ export function WizardClient({
                     onAiAssist={wizardType === 'td_communication' ? handleAiAssist : undefined}
                     locale={locale}
                     error={errorFor(field.name)}
+                    context={formData}
                   />
                   {noteFor(field.name) && <ReviewNote note={noteFor(field.name)!} heading={noteHeading} />}
                   {/* High-stakes confirmation: show an amber warning when the

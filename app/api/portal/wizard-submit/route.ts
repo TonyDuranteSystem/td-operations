@@ -77,6 +77,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'wizard_type and data are required' }, { status: 400 })
   }
 
+  // Company Closure, the signature for the EIN letter (part F step 2): the consent record is written HERE, by the server — the text, the
+  // time and the caller's address — never taken from the request; a client who did not draw a signature has none recorded.
+  if (wizard_type === 'closure' && typeof data === 'object') {
+    const { applyClosureSignatureConsent, clientIpFromForwardedFor } = await import('@/lib/closure/signature-consent')
+    applyClosureSignatureConsent(data as Record<string, unknown>, {
+      ip: clientIpFromForwardedFor(req.headers.get('x-forwarded-for')),
+      userAgent: req.headers.get('user-agent'),
+      now: new Date(),
+    })
+  }
+
   // Server-side backstop: a formation is for a NEW company and lives on the
   // contact (+lead) until the Articles of Organization materialize the real
   // account. It must NEVER carry an account_id. Without this guard, an existing

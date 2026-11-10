@@ -32,7 +32,9 @@ describe('EIN closure letter — the pieces are wired together', () => {
 
   it('the letter never takes a signature from anywhere but the client’s own drawing (no passport, no ID)', () => {
     const pkg = read('lib/closure/ein-closure-package.ts')
-    expect(pkg).toContain('signaturePng: null') // until the wizard box exists nothing is embedded
+    expect(pkg).toContain("/^signature_image/i")        // only the file the wizard box filed under its own field name…
+    expect(pkg).toContain("str('signature_consent')")   // …and only with the consent record the server wrote for it
+    expect(pkg).toContain('looksLikePng')                // …and only a real picture
     expect(pkg).not.toMatch(/passport/i)
   })
 })

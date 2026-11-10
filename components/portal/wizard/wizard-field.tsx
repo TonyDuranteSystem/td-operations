@@ -8,12 +8,13 @@ import { interpolateString } from '@/lib/template-interpolation'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { MoneyInput } from '@/components/forms/money-input'
 import { moneyOptionsFor } from '@/lib/portal/wizard-money'
+import { WizardSignatureField } from './wizard-signature-field'
 
 export interface FieldConfig {
   name: string
   label: string
   labelIt?: string
-  type: 'text' | 'email' | 'tel' | 'date' | 'textarea' | 'select' | 'number' | 'file' | 'checkbox' | 'country' | 'repeater' | 'multiselect'
+  type: 'text' | 'email' | 'tel' | 'date' | 'textarea' | 'select' | 'number' | 'file' | 'checkbox' | 'country' | 'repeater' | 'multiselect' | 'signature'
   required?: boolean
   placeholder?: string
   placeholderIt?: string
@@ -78,6 +79,8 @@ interface WizardFieldProps {
   onAiAssist?: (field: FieldConfig, currentValue: string) => Promise<string | null>
   locale: 'en' | 'it'
   error?: string
+  /** The answers given so far — only the `signature` field reads them (its letter preview names the company, EIN and owner). */
+  context?: Record<string, unknown>
 }
 
 // Full ISO 3166-1 country list (195 countries)
@@ -104,7 +107,7 @@ const COUNTRIES = [
   'United States','Uruguay','Uzbekistan','Vanuatu','Vatican City','Venezuela','Vietnam','Yemen','Zambia','Zimbabwe',
 ].sort()
 
-export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, locale, error }: WizardFieldProps) {
+export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, locale, error, context }: WizardFieldProps) {
   // Any language beyond en/it (dev job 12cab351) — loaded translations are
   // keyed by the field's own English text (lib/portal/wizard-translatable-
   // text.ts), so this MUST be layered under the existing it/en choice, not
@@ -336,6 +339,8 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
           />
           <span className="text-sm text-zinc-600">{hint}</span>
         </label>
+      ) : field.type === 'signature' ? (
+        <WizardSignatureField name={field.name} value={value} onChange={onChange} onFileUpload={onFileUpload} context={context} locale={locale} pick={pick} />
       ) : field.type === 'file' ? (
         (() => {
           // File fields store an ARRAY of storage paths (multi-file). Legacy

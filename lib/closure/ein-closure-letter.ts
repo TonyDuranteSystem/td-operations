@@ -19,6 +19,14 @@ import { PDFDocument, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
 import { embedUnicodeFonts } from '@/lib/pdf/unicode-fonts'
 import { wrapPdfText } from '@/lib/pdf/wrap-text'
 import { TD_OFFICE, TD_CITY_STATE_ZIP } from '@/lib/td-address'
+import {
+  EIN_LETTER_TO,
+  EIN_LETTER_REQUEST,
+  EIN_LETTER_BODY_CLOSE,
+  EIN_LETTER_BODY_QUESTIONS,
+  EIN_LETTER_BODY_COPY,
+  EIN_LETTER_REPLY_INTRO,
+} from '@/lib/closure/ein-letter-wording'
 
 /**
  * Where the IRS is asked to mail its confirmation: OUR Seminole office (Antonio 2026-11-10: "the address for the return letter must be the one in
@@ -62,22 +70,19 @@ export function einClosureLetterLines(i: EinClosureLetterInput): {
   replyLines: string[]
   signer: string[]
 } {
-  const body = [
-    'Please close the business account associated with the EIN listed above. I am no longer using this account.',
-    'Please let me know if you have any questions or need anything else.',
-  ]
-  if (i.includesEinNotice) body.push('I have included a copy of the original EIN Assignment /Confirmation Letter.')
+  const body = [EIN_LETTER_BODY_CLOSE, EIN_LETTER_BODY_QUESTIONS]
+  if (i.includesEinNotice) body.push(EIN_LETTER_BODY_COPY)
   return {
     date: letterDateText(i.date),
     fields: [
-      { label: 'To:', lines: ['Internal Revenue Service'] },
-      { label: 'Request:', lines: ['Close Business Account/Cancel EIN'] },
+      { label: 'To:', lines: [EIN_LETTER_TO] },
+      { label: 'Request:', lines: [EIN_LETTER_REQUEST] },
       { label: 'Name/Business Name:', lines: [i.companyName.trim()] },
       { label: 'Mailing Address:', lines: i.companyAddressLines.map((l) => l.trim()).filter(Boolean) },
       { label: 'EIN', lines: [i.ein.trim()] },
     ],
     body,
-    replyIntro: 'Please mail a confirmation letter to the address listed below.',
+    replyIntro: EIN_LETTER_REPLY_INTRO,
     replyLines: [...EIN_LETTER_REPLY_ADDRESS_LINES],
     signer: [`Name: ${i.signerName.trim()}`, `Phone: ${EIN_LETTER_CONTACT.phone}`, `Email: ${EIN_LETTER_CONTACT.email}`],
   }
