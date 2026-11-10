@@ -41,7 +41,7 @@ project.build_configurations.find { |c| c.name == 'Release' }.name = 'Sandbox'
 project.add_build_configuration('Production', :release)
 
 common = {
-  'SWIFT_VERSION' => '5.0', 'IPHONEOS_DEPLOYMENT_TARGET' => '17.0', 'TARGETED_DEVICE_FAMILY' => '1', 'SDKROOT' => 'iphoneos',
+  'SWIFT_VERSION' => '5.0', 'IPHONEOS_DEPLOYMENT_TARGET' => '17.0', 'TARGETED_DEVICE_FAMILY' => '1,2', 'SDKROOT' => 'iphoneos',
   'CODE_SIGN_STYLE' => 'Automatic', 'DEVELOPMENT_TEAM' => (ENV['TD_TEAM'] || 'LMKMUC5864'),
   'GENERATE_INFOPLIST_FILE' => 'NO', 'CURRENT_PROJECT_VERSION' => (ENV['TD_BUILD'] || '7'), 'MARKETING_VERSION' => (ENV['TD_VERSION'] || '2.0.0'),
   'CLANG_ENABLE_MODULES' => 'YES', 'ENABLE_USER_SCRIPT_SANDBOXING' => 'YES', 'ASSETCATALOG_COMPILER_APPICON_NAME' => 'AppIcon',
@@ -79,7 +79,7 @@ app.resources_build_phase.add_file_reference(privacy, true)
 app.build_configurations.each do |c|
   cfg = CONFIGS[c.name]
   c.build_settings.merge!(
-    'PRODUCT_NAME' => 'TDClient', 'PRODUCT_BUNDLE_IDENTIFIER' => cfg['ID'], 'TARGETED_DEVICE_FAMILY' => '1',   # iPhone only
+    'PRODUCT_NAME' => 'TDClient', 'PRODUCT_BUNDLE_IDENTIFIER' => cfg['ID'], 'TARGETED_DEVICE_FAMILY' => '1,2',   # iPhone + iPad: the live MyLLC Manager 1.3 supports iPad, so Apple refuses an update that drops it
     'INFOPLIST_FILE' => 'App/Info.plist', 'CODE_SIGN_ENTITLEMENTS' => 'App/TDClient.entitlements',
     'TD_SERVER_URL' => cfg['URL'], 'TD_DISPLAY_NAME' => cfg['NAME'], 'TD_APNS_ENV' => cfg['APNS'],
     'TD_APS_ENVIRONMENT' => cfg['APNS'] == 'development' ? 'development' : 'production',
