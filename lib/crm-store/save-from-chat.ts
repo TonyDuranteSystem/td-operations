@@ -19,6 +19,7 @@ import { createHash } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { PORTAL_BASE_URL } from "@/lib/config"
 import { readItinLetter, formatItin, isValidItin, checkIssueDate, normalizeLetterText, namesCouldBeSamePerson } from "@/lib/itin/read-itin-letter"
+import { otherHolderOfItin } from "@/lib/itin/itin-holder"
 import {
   assetsPathOfUrl, attachmentDirAllowed, candidateNamedIn, chatAttachmentsOf, chatSaveCallerKey, chatSaveKeyPrefix, claimedSizeProblem, contactOfChatSaveKey, decideItinWrite, defaultLetterName,
   extForMime, fileNameHasTaxNumber, MAX_CARD_ITEMS, proposeOwner, READABLE_MAX_BYTES, sniffReadableMime, visibilityPlan, withoutKnownExtension,
@@ -326,16 +327,6 @@ async function fileBelongsTo(fileId: string, contactId: string): Promise<"yes" |
   const { data, error } = await db().from("store_files").select("store_owners!inner(contact_id)").eq("id", fileId).maybeSingle()
   if (error || !data) return "unknown" // a lookup that failed is not "somebody else's file"
   return (data.store_owners as { contact_id?: string | null } | null | undefined)?.contact_id === contactId ? "yes" : "no"
-}
-
-/** The name of ANOTHER contact whose record already holds this ITIN (a cheap net for a letter put on the wrong person); "error" when that could not be checked. */
-async function otherHolderOfItin(itin: string, contactId: string): Promise<string | null | "error"> {
-  // compared on the DIGITS: records hold the number as 999-99-9999, 999999999, "999 99 9999" and one older "999-999999" — a list of spellings would miss the next odd one
-  const digits = itin.replace(/\D/g, "")
-  const { data, error } = await db().from("contacts").select("full_name, itin_number").ilike("itin_number", `%${digits.slice(-4)}%`).neq("id", contactId).limit(50)
-  if (error) return "error"
-  const row = ((data ?? []) as Array<{ full_name: string | null; itin_number: string | null }>).find((r) => (r.itin_number ?? "").replace(/\D/g, "") === digits)
-  return row ? (row.full_name || "another contact") : null
 }
 
 const last4 = (v: string | null): string | null => (v ? v.replace(/\D/g, "").slice(-4) || null : null)
