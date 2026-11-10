@@ -22,8 +22,7 @@ import { ThreadIdeasPanel } from '@/components/portal-chats/thread-ideas-panel'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel'
 import { ContactLanguageField } from '@/components/portal-chats/contact-language-field'
-import { sortPortalThreads } from '@/lib/portal-chats/sort-threads'
-import { DEFAULT_LIST_FILTER, LIST_FILTER_CHIPS, matchesListFilter, type ListFilter } from '@/lib/portal-chats/list-filter'
+import { DEFAULT_LIST_FILTER, LIST_FILTER_CHIPS, matchesListFilter, orderThreadsForChip, type ListFilter } from '@/lib/portal-chats/list-filter'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import { chatPreviewText, isVoiceAttachment } from '@/lib/portal/chat-voice'
@@ -2589,8 +2588,8 @@ export default function PortalChatsPage() {
 
   const totalUnread = threads?.reduce((sum, t) => sum + t.unread_count, 0) ?? 0
 
-  // The conversations the left list shows: sorted, then the active chip, then the search box.
-  const visibleThreads = sortPortalThreads(threads ?? [], whatsNewCounts).filter(t => {
+  // The conversations the left list shows: ordered for the active chip (Chats = newest first, no floating), then the chip, then the search box.
+  const visibleThreads = orderThreadsForChip(threads ?? [], listFilter, whatsNewCounts).filter(t => {
     if (!matchesListFilter(t, listFilter, whatsNewCounts)) return false
     if (!chatSearch.trim()) return true
     const q = chatSearch.toLowerCase()
