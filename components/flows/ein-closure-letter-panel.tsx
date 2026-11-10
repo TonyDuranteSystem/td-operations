@@ -10,6 +10,7 @@ interface MadeInfo {
   name: string
   pages: number
   attachedNotice: string | null
+  signed?: boolean
 }
 
 // Luca's rule (TD Talk, 2026-11-10): the top address is ALWAYS the one printed on the EIN letter — the address the IRS has on file (the main address of the Articles).
@@ -96,7 +97,7 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
             <dt className="text-zinc-500">EIN</dt>
             <dd className="font-medium text-zinc-900">{facts.ein || '—'}</dd>
             <dt className="text-zinc-500">Signed by</dt>
-            <dd className="font-medium text-zinc-900">{facts.signerName || '—'} <span className="font-normal text-zinc-500">{facts.hasSignature ? '(signature drawn by the client)' : '(a line to sign by hand)'}</span></dd>
+            <dd className="font-medium text-zinc-900">{facts.signerName || '—'} <span className="font-normal text-zinc-500">{facts.hasSignature ? `(signature drawn by the client${facts.signedAt ? ` on ${facts.signedAt.slice(0, 10)}` : ''})` : '(a line to sign by hand)'}</span></dd>
           </dl>
 
           <div>
@@ -147,7 +148,7 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
           {made && (
             <p className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-emerald-900">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>Saved on this job — {made.pages} page{made.pages === 1 ? '' : 's'}{made.attachedNotice ? `, with “${made.attachedNotice}” attached` : ', letter only'}. Print it and mail it; then save the tracking number below.</span>
+              <span>Saved on this job — {made.pages} page{made.pages === 1 ? '' : 's'}{made.attachedNotice ? `, with “${made.attachedNotice}” attached` : ', letter only'}{made.signed ? ', signed with the client’s signature' : ', with a line to sign by hand'}. Print it and mail it; then save the tracking number below.</span>
             </p>
           )}
         </div>

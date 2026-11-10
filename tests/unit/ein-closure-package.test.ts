@@ -35,9 +35,18 @@ vi.mock('@/lib/crm-store/formation-pilot', () => ({ ensurePersonOwner: vi.fn(asy
 vi.mock('@/lib/crm-store/switched-drive-guard', () => ({ liveOwnerOfContact: vi.fn(async () => 'owner-1') }))
 
 let noticeBytes: Buffer = Buffer.alloc(0)
+let sigBytes: Buffer = Buffer.alloc(0)
+const SIG_STORE_ID = '55555555-5555-4555-8555-555555555555'
 vi.mock('@/lib/crm-store/document-pointer', async (orig) => {
   const actual = await orig<typeof import('@/lib/crm-store/document-pointer')>()
-  return { ...actual, readStoreFile: vi.fn(async () => ({ bytes: noticeBytes, mimeType: 'application/pdf', name: 'ein_letter_Italyflow_LLC_CP_575_B.pdf' })) }
+  return {
+    ...actual,
+    readStoreFile: vi.fn(async (id: string) =>
+      id === '55555555-5555-4555-8555-555555555555'
+        ? { bytes: sigBytes, mimeType: 'image/png', name: 'signature_image_signature.png' }
+        : { bytes: noticeBytes, mimeType: 'application/pdf', name: 'ein_letter_Italyflow_LLC_CP_575_B.pdf' },
+    ),
+  }
 })
 
 import { buildEinClosureLetterPdf } from '@/lib/closure/ein-closure-letter'
@@ -80,6 +89,7 @@ beforeEach(async () => {
   saveContact.mockReset()
   const sample = await buildEinClosureLetterPdf({ companyName: 'X LLC', ein: '12-3456789', companyAddressLines: ['1 Main St'], signerName: 'A B', date: new Date(), includesEinNotice: false })
   noticeBytes = Buffer.from(sample)
+  sigBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
 })
 
 describe('pure helpers', () => {
@@ -245,5 +255,55 @@ describe('buildEinClosurePackage', () => {
     expect(r).toMatchObject({ ok: false, status: 400 })
     expect((r as { error?: string }).error).toMatch(/could not be attached/)
     expect(saveContact).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('the client’s drawn signature (closure wizard, part F step 2)', () => {
+  const sigDoc = { id: 'd-sig', file_name: 'signature_image_signature.png', document_type_name: null, drive_file_id: `store:${SIG_STORE_ID}`, created_at: '2026-11-10T15:22:03Z' }
+  const consented = { ...answers, signature_image: ['closure/x/signature_image_ab12cd34_signature.png'], signature_consent: 'text', signature_signed_at: '2026-11-10T18:30:00.000Z' }
+
+  it('is used only when the file is on the job AND the server recorded the client’s consent', async () => {
+    seed({ submitted: consented, docRows: [...docs, sigDoc] })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && [r.facts.hasSignature, r.facts.signedAt, r.facts.signatureStoreFileId]).toEqual([true, '2026-11-10T18:30:00.000Z', SIG_STORE_ID])
+    expect(r.ok && r.facts.notices.map((n) => n.documentId)).toEqual(['d-ein']) // the picture is never offered as the EIN letter copy
+  })
+
+  it('a signature file with no consent record is NOT used, and staff are told', async () => {
+    seed({ submitted: answers, docRows: [...docs, sigDoc] })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.hasSignature).toBe(false)
+    expect(r.ok && r.facts.warnings.join(' ')).toMatch(/consent was not recorded/)
+  })
+
+  it('a signature that is not in the new storage cannot be used', async () => {
+    seed({ submitted: consented, docRows: [...docs, { ...sigDoc, drive_file_id: 'drive-file-id' }] })
+    const r = await loadEinClosureFacts(JOB)
+    expect(r.ok && r.facts.hasSignature).toBe(false)
+    expect(r.ok && r.facts.warnings.join(' ')).toMatch(/not in the new storage/)
+  })
+
+  it('goes onto the letter: the saved package says it is signed', async () => {
+    seed({ submitted: consented, docRows: [...docs, sigDoc] })
+    saveContact.mockResolvedValue({ route: 'store', fileId: 'f', pointer: 'store:f', documentRowId: 'doc-new', status: 'created' })
+    const r = await buildEinClosurePackage({ jobId: JOB, addressLines: ['1 Main St'], noticeDocumentId: null })
+    expect(r).toMatchObject({ ok: true, signed: true })
+    const withSig = saveContact.mock.calls[0][0].bytes as Buffer
+    seed({ submitted: answers })
+    saveContact.mockClear()
+    saveContact.mockResolvedValue({ route: 'store', fileId: 'f', pointer: 'store:f', documentRowId: 'doc-2', status: 'created' })
+    const plain = await buildEinClosurePackage({ jobId: JOB, addressLines: ['1 Main St'], noticeDocumentId: null })
+    expect(plain).toMatchObject({ ok: true, signed: false })
+    expect(withSig.length).toBeGreaterThan((saveContact.mock.calls[0][0].bytes as Buffer).length - 1) // the picture is inside
+  })
+
+  it('a signature file that is not a real PNG is left out with a plain warning — the letter still gets made, with a line to sign by hand', async () => {
+    sigBytes = Buffer.from('%PDF-1.7 pretending to be a picture')
+    seed({ submitted: consented, docRows: [...docs, sigDoc] })
+    saveContact.mockResolvedValue({ route: 'store', fileId: 'f', pointer: 'store:f', documentRowId: 'doc-new', status: 'created' })
+    const r = await buildEinClosurePackage({ jobId: JOB, addressLines: ['1 Main St'], noticeDocumentId: null })
+    expect(r).toMatchObject({ ok: true, signed: false })
+    expect(r.ok && r.warnings.join(' ')).toMatch(/not a usable PNG/)
   })
 })
