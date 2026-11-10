@@ -1,0 +1,4 @@
+TDClient.xcodeproj/
+build/
+DerivedData/
+*.xcuserstate

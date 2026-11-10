@@ -829,6 +829,7 @@ export async function advanceServiceDelivery(
         body: `${serviceLabel} moved to ${pushStageName}`,
         url: "/portal/services",
         tag: `sd-advance-${delivery_id}`,
+        clientKind: "service", // the client iPhone app shows fixed words ("Update on your service"), never the service or stage name
       }
       if (delivery.account_id) {
         await sendPushToAccount(delivery.account_id, pushPayload)

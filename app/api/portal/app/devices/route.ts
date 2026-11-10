@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic'
  *   1. the on/off switch, 2. signed in, 3. (register only) the login is a client or a team member a client added (staff and partners
  *   are refused), 4. this server knows what it is and the bundle id matches, 5. the body is valid, 6. the write.
  * Removing does NOT require step 3: a person who lost access can still remove their own phone.
- * Nothing is SENT to these phones yet (client alerts are a later step).
+ * Alerts to these phones are Step 4 (lib/portal-app/send-to-client-phones.ts); the phone is saved with its owner (contact or company) so an alert can find it.
  */
 const UNKNOWN_SERVER = { error: 'The app cannot tell which server this is.', code: 'APP_ENV_UNKNOWN' } as const
 
@@ -30,7 +30,9 @@ export async function PUT(request: NextRequest) {
     if (!bundle) return appJson(UNKNOWN_SERVER, 503)
     const parsed = parseRegistration(await request.json().catch(() => null), bundle)
     if (parsed.ok === false) return appJson({ error: parsed.error, code: parsed.code }, 400)
-    const r = await registerDevice(g.user.id, parsed.value)
+    // who this phone belongs to: a client's contact, or the company of a team member (from the session; used to find the right phones for an alert)
+    const owner = audience.kind === 'client' ? { contactId: audience.contactId } : { teamAccountId: audience.account.id }
+    const r = await registerDevice(g.user.id, parsed.value, new Date(), owner)
     if (r.ok === false) {
       return r.code === 'TOO_MANY_DEVICES'
         ? appJson({ error: 'This login already has the most phones allowed. Remove one first.', code: r.code }, 409)
