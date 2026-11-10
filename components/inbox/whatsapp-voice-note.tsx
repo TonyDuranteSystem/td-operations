@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Loader2, Play } from 'lucide-react'
 import { describeVoiceState, type MediaStatus } from '@/lib/messaging/wabridge-media'
+import { copyTextToClipboard } from '@/lib/ui/copy-to-clipboard'
 
 export interface VoiceInfo {
   status: MediaStatus
@@ -26,12 +27,20 @@ export function WhatsAppVoiceNote({ messageId, voice }: { messageId: string; voi
   const [url, setUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
+  const [copied, setCopied] = useState<'yes' | 'no' | null>(null)
   const state = describeVoiceState({
     status: voice.status,
     transcript: voice.transcript,
     durationSeconds: voice.duration_seconds,
     audioDeleted: voice.audio_deleted,
   })
+
+  async function copyTranscript() {
+    if (!voice.transcript) return
+    const ok = await copyTextToClipboard(voice.transcript)
+    setCopied(ok ? 'yes' : 'no')
+    setTimeout(() => setCopied(null), 2000)
+  }
 
   async function play() {
     setLoading(true)
@@ -72,6 +81,14 @@ export function WhatsAppVoiceNote({ messageId, voice }: { messageId: string; voi
         <div className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1.5">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Machine transcript — may be wrong</p>
           <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-zinc-800">{voice.transcript}</p>
+          <button
+            type="button"
+            onClick={() => void copyTranscript()}
+            data-testid="voice-copy-text"
+            className={`mt-1 text-xs underline ${copied === 'no' ? 'text-red-600' : 'text-zinc-500'}`}
+          >
+            {copied === 'yes' ? 'Copied' : copied === 'no' ? 'Could not copy' : 'Copy text'}
+          </button>
         </div>
       )}
     </div>

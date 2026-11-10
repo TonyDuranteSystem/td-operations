@@ -43,6 +43,8 @@ import { HelpDot } from '@/components/help/help-dot'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { AppYouButton } from '@/components/app-mode/app-you-button'
 import { PhoneConvNav, PhoneViewStrip, PhoneMoreSheet, PhoneReplyToLine, PhoneReplyToSheet, PhonePlusButton, PhonePlusSheet } from '@/components/portal-chats/app-phone-chrome'
+import { AttachChoiceMenu } from '@/components/scan/attach-choice-menu'
+import { DocumentScanner } from '@/components/scan/document-scanner'
 import {
   filterForSurfaceAndContext as filterTopicsForSurfaceAndContext,
   validateMetadata as validateTopicMetadata,
@@ -587,6 +589,9 @@ export default function PortalChatsPage() {
   const internalMessagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const adminFileRef = useRef<HTMLInputElement>(null)
+  // the paperclip opens a small menu: Scan document (camera -> one PDF) or Photo or file
+  const [attachMenu, setAttachMenu] = useState(false)
+  const [scanning, setScanning] = useState(false)
 
   // Message edit state
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
@@ -3698,6 +3703,7 @@ export default function PortalChatsPage() {
                   onClose={() => setAppSheet(null)}
                   onEmoji={() => setShowEmojiPicker(true)}
                   onAttach={() => adminFileRef.current?.click()}
+                  onScan={() => setScanning(true)}
                   onAi={handleSuggest}
                   aiBusy={aiLoading || (!selectedAccountId && !selectedContactId)}
                   attachBusy={uploadingAdminFile}
@@ -5017,9 +5023,13 @@ export default function PortalChatsPage() {
                     )}
                   </div>
                   {/* Paperclip */}
+                  <div className="app-hide relative shrink-0">
                   <FastTooltip label="Attach file">
                     <button
-                      onClick={() => adminFileRef.current?.click()}
+                      onClick={() => setAttachMenu(o => !o)}
+                      aria-haspopup="menu"
+                      aria-expanded={attachMenu}
+                      data-testid="portal-attach"
                       disabled={uploadingAdminFile}
                       className={cn(
                         'app-hide p-2 rounded-full transition-colors shrink-0',
@@ -5032,6 +5042,13 @@ export default function PortalChatsPage() {
                       {uploadingAdminFile ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
                     </button>
                   </FastTooltip>
+                  <AttachChoiceMenu
+                    open={attachMenu} onClose={() => setAttachMenu(false)}
+                    onScan={() => { setAttachMenu(false); setScanning(true) }}
+                    onFile={() => { setAttachMenu(false); adminFileRef.current?.click() }}
+                  />
+                  </div>
+                  {scanning && <DocumentScanner onClose={() => setScanning(false)} onDone={file => { setScanning(false); handleAdminFileSelect(file) }} />}
                   <input
                     ref={adminFileRef}
                     type="file"

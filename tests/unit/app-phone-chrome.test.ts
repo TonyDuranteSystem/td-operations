@@ -164,10 +164,10 @@ describe("round two (5 Nov 2026, after the first real-phone look)", () => {
     expect(src("components/inbox/inbox-shell.tsx")).toContain("compact={selected.channel === 'whatsapp'}")
   })
 
-  it("the ID / tax-documents reminder leaves the WhatsApp screen in the app and sits under 'Attach a file'; the computer line stays", () => {
+  it("the 'no ID or tax documents over WhatsApp' reminder is GONE (Antonio 2026-11-10: remove the limit for ID and passport) — on the computer and in the app; the phone sheet can still show a note for other uses", () => {
     const wa = src("components/inbox/whatsapp-thread.tsx")
-    expect(wa).toMatch(/<p className="app-hide text-\[11px\] text-zinc-400 px-1">\s*Don&apos;t send ID or tax documents over WhatsApp/)
-    expect(wa).toContain("attachNote={isWabridgeLine ? \"Don't send ID or tax documents over WhatsApp — use the portal instead.\" : undefined}")
+    expect(wa).not.toMatch(/ID or tax documents/)
+    expect(wa).not.toContain("attachNote=")
     expect(src("components/portal-chats/app-phone-chrome.tsx")).toContain('data-testid="attach-note"')
   })
 

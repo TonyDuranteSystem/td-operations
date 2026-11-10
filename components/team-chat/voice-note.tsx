@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { stopPlayingAudio } from '@/lib/media/stop-playing-audio'
-import { transcriptLines, type VoiceTranscript } from '@/lib/team/voice-text'
+import { transcriptCopyText, transcriptLines, type VoiceTranscript } from '@/lib/team/voice-text'
+import { copyTextToClipboard } from '@/lib/ui/copy-to-clipboard'
 import { useTalkI18n } from '@/components/talk/talk-i18n'
 
 /**
@@ -15,7 +16,7 @@ import { useTalkI18n } from '@/components/talk/talk-i18n'
 const repairAsked = new Set<string>()
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export function VoiceNote({ messageId, index, url, transcript: saved, flat, flattenedAt, tone = 'light', onBroken, eager = false, apiBase = '/api/team/messages', repair = true, downloadable = false, hideDownload = false }: {
+export function VoiceNote({ messageId, index, url, transcript: saved, flat, flattenedAt, tone = 'light', onBroken, eager = false, apiBase = '/api/team/messages', repair = true, downloadable = false, hideDownload = false, copyable = true }: {
   messageId: string
   index: number
   url: string
@@ -36,10 +37,13 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
   downloadable?: boolean
   /** true = the browser's own "Download" item in the player's ⋮ menu is switched off too. The client-portal chat: clients listen, they cannot save. It hides the option; the file itself is still an ordinary web address. */
   hideDownload?: boolean
+  /** true (default) = a "Copy text" button beside "Show text" once the words are on screen. The bubble in TD Talk / the marketing chat blocks selecting text, so a button is the only reliable way to copy. false = the client-portal chat (staff screens only for now). */
+  copyable?: boolean
 }) {
   const { t } = useTalkI18n()
   const [fetched, setFetched] = useState<VoiceTranscript | null>(null)
   const [open, setOpen] = useState(false)
+  const [copied, setCopied] = useState<'yes' | 'no' | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const transcript = saved ?? fetched
@@ -78,6 +82,14 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
   }, [])
   const src = stamp ? `${url}?v=${encodeURIComponent(stamp)}` : url
 
+  // straight from the tap (never after a network wait): the words are already on screen when this button exists
+  const copy = async () => {
+    if (!transcript) return
+    const ok = await copyTextToClipboard(transcriptCopyText(transcript))
+    setCopied(ok ? 'yes' : 'no')
+    setTimeout(() => setCopied(null), 2000)
+  }
+
   const show = async () => {
     setError(null)
     if (transcript) { setOpen(o => !o); return }
@@ -102,16 +114,28 @@ export function VoiceNote({ messageId, index, url, transcript: saved, flat, flat
         ref={audioRef} controls controlsList={hideDownload ? 'nodownload' : undefined} preload={near ? (eager ? 'auto' : 'metadata') : 'none'} src={src} className="h-10 w-60 max-w-full" onError={onBroken}
         onPlay={e => stopPlayingAudio(e.currentTarget)} onEnded={swapIfIdle} data-testid="talk-voice-note"
       />
-      <button
-        type="button"
-        onClick={show}
-        disabled={busy}
-        data-testid="voice-show-text"
-        className={`flex items-center gap-1 self-start text-xs underline ${muted}`}
-      >
-        {busy && <Loader2 className="h-3 w-3 animate-spin" />}
-        {busy ? t('Reading the voice note…') : transcript && open ? t('Hide text') : t('Show text')}
-      </button>
+      <div className="flex items-center gap-3 self-start">
+        <button
+          type="button"
+          onClick={show}
+          disabled={busy}
+          data-testid="voice-show-text"
+          className={`flex items-center gap-1 text-xs underline ${muted}`}
+        >
+          {busy && <Loader2 className="h-3 w-3 animate-spin" />}
+          {busy ? t('Reading the voice note…') : transcript && open ? t('Hide text') : t('Show text')}
+        </button>
+        {copyable && transcript && open && (
+          <button
+            type="button"
+            onClick={() => void copy()}
+            data-testid="voice-copy-text"
+            className={`text-xs underline ${copied === 'no' ? 'text-red-600' : muted}`}
+          >
+            {copied === 'yes' ? t('Copied') : copied === 'no' ? t('Could not copy.') : t('Copy text')}
+          </button>
+        )}
+      </div>
       {downloadable && (
         <a href={url} download target="_blank" rel="noopener noreferrer" data-testid="voice-download" className={`self-start text-xs underline ${muted}`}>{t('Download')}</a>
       )}
