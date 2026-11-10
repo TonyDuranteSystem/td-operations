@@ -830,7 +830,7 @@ export function passportReadNote(r: { status: string; extracted_fields?: string[
   return "The passport was saved, but its details could not be read automatically (check the scan quality) — enter them on the contact by hand."
 }
 
-/** Passport → number / expiry / date of birth; ITIN letter → ITIN + issue date (same helpers as today's upload). */
+/** Passport → number / expiry / date of birth (as today); ITIN letter → ITIN + issue date, but only after the careful checks in lib/itin/fill-from-upload.ts. */
 async function readIdentityIntoContact(contactId: string, slug: string, bytes: Buffer, mimeType: string, fileName: string, accountId: string | null): Promise<string | null> {
   try {
     const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
@@ -840,13 +840,11 @@ async function readIdentityIntoContact(contactId: string, slug: string, bytes: B
       return passportReadNote(r)
     }
     const { ocrRawContent } = await import("@/lib/docai")
-    const { extractItinFromOcr, parseItinIssueDateFromOcr } = await import("@/lib/ocr-helpers")
-    const { writeITINFields } = await import("@/lib/itin/write-itin-fields")
     const ocr = await ocrRawContent(ab, mimeType, fileName)
-    const itin = extractItinFromOcr(ocr.fullText)
-    if (!itin) return "ITIN letter saved — no ITIN number found in the text (check the image quality)"
-    await writeITINFields(contactId, { itin_number: itin, itin_issue_date: parseItinIssueDateFromOcr(ocr.fullText) })
-    return `ITIN ${itin} saved on the contact`
+    // Careful fill-in (Antonio 2026-11-10): the same reader and rules as the chat ITIN card — the letter must name THIS person, no other
+    // contact may hold the ITIN, a different ITIN / date on the record is kept, and today's date is never guessed. The FILE is saved either way.
+    const { fillItinFromLetterText } = await import("@/lib/itin/fill-from-upload")
+    return (await fillItinFromLetterText(contactId, ocr.fullText ?? "")).message
   } catch (e) {
     return `The document was saved, but its details could not be read (${e instanceof Error ? e.message : String(e)})`
   }
