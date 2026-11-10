@@ -6,15 +6,17 @@ import { useTalkI18n } from '@/components/talk/talk-i18n'
 
 /**
  * The small menu the paperclip opens: "Scan document" (the camera, one PDF) or "Photo or file" (exactly what the paperclip did
- * before). Put it inside a `relative` wrapper around the paperclip button; it opens upwards, above the message box.
+ * before). Put it inside a `relative` wrapper around the paperclip button; it opens upwards by default (above a message box), or downwards with `placement="below"`.
  * Closes on a tap outside or Escape. Both choices run straight from the tap, so the phone's file picker still opens.
  */
-export function AttachChoiceMenu({ open, onClose, onScan, onFile, align = 'left' }: {
+export function AttachChoiceMenu({ open, onClose, onScan, onFile, align = 'left', placement = 'above' }: {
   open: boolean
   onClose: () => void
   onScan: () => void
   onFile: () => void
   align?: 'left' | 'right'
+  /** 'above' (default) suits a message box at the bottom of the screen; 'below' suits a row near the top of a dialog */
+  placement?: 'above' | 'below'
 }) {
   const { t } = useTalkI18n()
   const ref = useRef<HTMLDivElement>(null)
@@ -36,7 +38,7 @@ export function AttachChoiceMenu({ open, onClose, onScan, onFile, align = 'left'
   return (
     <div
       ref={ref} role="menu" aria-label={t('Attach')} data-testid="attach-choice-menu"
-      className={`absolute bottom-full z-30 mb-2 w-64 overflow-hidden rounded-xl border border-zinc-200 bg-white text-zinc-900 shadow-lg ${align === 'right' ? 'right-0' : 'left-0'}`}
+      className={`absolute z-30 w-64 ${placement === 'below' ? 'top-full mt-2' : 'bottom-full mb-2'} overflow-hidden rounded-xl border border-zinc-200 bg-white text-zinc-900 shadow-lg ${align === 'right' ? 'right-0' : 'left-0'}`}
     >
       <button type="button" role="menuitem" onClick={onScan} data-testid="attach-scan" className="flex w-full items-center gap-3 border-b border-zinc-100 px-3.5 py-3 text-left hover:bg-zinc-50 active:bg-zinc-100">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-50 text-[#BE1E2D]"><Camera className="h-5 w-5" /></span>

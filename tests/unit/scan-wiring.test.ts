@@ -36,6 +36,28 @@ describe('where Scan document is hooked in', () => {
     expect(s).toContain("onFile={() => { setAttachMenu(false); adminFileRef.current?.click() }}")
   })
 
+  it('Inbox email: the reply / forward composer and the New Email dialog have the menu; a scan joins the attachments like a picked file; "Photo or file" still opens the picker', () => {
+    const reply = read('components/inbox/compose-reply.tsx')
+    expect(reply).toContain('<AttachChoiceMenu')
+    expect(reply).toContain('onDone={file => { setScanning(false); void attachments.add([file]) }}')
+    expect(reply).toContain("onFile={() => { setAttachMenu(false); fileInputRef.current?.click() }}")
+    const dialog = read('components/inbox/compose-dialog.tsx')
+    expect(dialog).toContain('<AttachChoiceMenu')
+    expect(dialog).toContain('placement="below"') // the Files row is near the top of the dialog: the menu opens downwards
+    expect(dialog).toContain('onDone={file => { setScanning(false); void attachments.add([file]) }}')
+    expect(dialog).toContain("onFile={() => { setAttachMenu(false); fileInputRef.current?.click() }}")
+    // the Portal Chats email panel embeds the same reply composer, so it gets it too
+    expect(read('components/portal-chats/thread-email-panel.tsx')).toContain('<ComposeReply')
+    // the Marketing mailbox's own Attach button is NOT part of this
+    expect(read('components/marketing/inbox/composer.tsx')).not.toMatch(/DocumentScanner|AttachChoiceMenu/)
+  })
+
+  it('the menu can open below its button (placement) and defaults to above', () => {
+    const m = read('components/scan/attach-choice-menu.tsx')
+    expect(m).toContain("placement = 'above'")
+    expect(m).toContain("placement === 'below' ? 'top-full mt-2' : 'bottom-full mb-2'")
+  })
+
   it('the phone sheet shows Scan document only when asked, and then calls the file row "Photo or file"', () => {
     const s = read('components/portal-chats/app-phone-chrome.tsx')
     expect(s).toContain('{onScan && <SheetRow label="Scan document"')
