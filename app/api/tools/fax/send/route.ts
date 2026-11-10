@@ -17,6 +17,7 @@
  *     service_delivery_id?: string,
  *     send_id?: string,              // one Send = one fax (see lib/fax/send-claim.ts)
  *     confirm_resend?: boolean,      // the user confirmed sending the same file to the same number again
+ *     purpose?: 'tax_extension_7004', // the Tax Return extension box (plan item 7): tags the history row; see the guard below
  *     // upload source only — where the sent file is kept (the "Where should this be saved?" window; dev job c43a8b2e):
  *     save_choice?: { mode: 'save', purpose, ownerId, folderId, newFolderName?, fileName } | { mode: 'dont_save' },
  *   }
@@ -57,6 +58,7 @@ import { claimSend, finishClaim, abandonClaim, realClaimDeps, HISTORY_NOT_SAVED_
 import { isFaxStagingPath, FAX_STAGING_BUCKET, faxSizeProblem } from '@/lib/fax/staged-upload'
 import { checkSs4Fax } from '@/lib/fax/ss4-fax-gate'
 import { latestSs4ResubmitAt } from '@/lib/fax/ss4-resubmit-marker'
+import { EXTENSION_FAX_PURPOSE, EXTENSION_STAGES, WORKING_COPY_PREFIX } from '@/lib/fax/extension-fax'
 
 const MAX_COVER_LENGTH = 2000
 
@@ -122,6 +124,12 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
     : null
   const confirmResend: boolean = body.confirm_resend === true
   const sendId: string | null = typeof body.send_id === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(body.send_id) ? body.send_id : null
+  // The Tax Return extension box (plan item 7) tags its faxes. A job's extension fax and its signed-return fax are DIFFERENT faxes of the same
+  // job: with the tag, the double-send guard below counts only the faxes of the same purpose, and the return fax box ignores the extension ones.
+  const purpose: typeof EXTENSION_FAX_PURPOSE | null = body.purpose === EXTENSION_FAX_PURPOSE ? EXTENSION_FAX_PURPOSE : null
+  if (body.purpose !== undefined && body.purpose !== null && !purpose) {
+    return NextResponse.json({ success: false, error: 'That fax purpose is not known.' }, { status: 400 })
+  }
 
   // Validate the recipient number.
   if (!isValidFaxNo(faxnoRaw)) {
@@ -143,6 +151,10 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
       .in('action_type', ['fax_sent', 'fax_claim'])
       .eq('service_delivery_id', dedupeSdId)
     if (resubmit.at) priorQuery = priorQuery.gt('created_at', resubmit.at)
+    // only faxes of the SAME purpose count: an extension fax is not "the return was already faxed", and the other way round
+    priorQuery = purpose
+      ? priorQuery.eq('details->>purpose', purpose)
+      : priorQuery.or(`details->>purpose.is.null,details->>purpose.neq.${EXTENSION_FAX_PURPOSE}`)
     const { data: prior, error: priorErrRaw } = await priorQuery
       .order('created_at', { ascending: false })
       .limit(1)
@@ -168,6 +180,10 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
     }
   }
 
+  if (purpose && !documentId) {
+    return NextResponse.json({ success: false, error: 'The extension fax is sent from the Form 7004 generated in the job.' }, { status: 400 })
+  }
+
   // Resolve the file to send: a selected document, a file already in the storage, a big upload staged by the browser, or a base64 upload.
   let fileBase64 = ''
   let fileName = 'document.pdf'
@@ -183,7 +199,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- document_type_name is not in the generated types
     const { data: doc, error: docErr } = await (supabaseAdmin as any)
       .from('documents')
-      .select('id, file_name, drive_file_id, account_id, document_type_name')
+      .select('id, file_name, drive_file_id, account_id, document_type_name, service_delivery_id')
       .eq('id', documentId)
       .single()
     if (docErr || !doc) {
@@ -222,6 +238,19 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
     }
     if (!accountId && doc.account_id) accountId = doc.account_id as string
     docRowForCheck = { account_id: (doc.account_id as string | null) ?? null, document_type_name: (doc.document_type_name as string | null) ?? null }
+    if (purpose) {
+      // only the 7004 this job generated may be faxed as its extension (the delivery check merges exactly that file)
+      const sdOfDoc = (doc as { service_delivery_id?: string | null }).service_delivery_id ?? null
+      if (!serviceDeliveryId || sdOfDoc !== serviceDeliveryId || !(doc.file_name ?? '').startsWith(WORKING_COPY_PREFIX)) {
+        return NextResponse.json({ success: false, error: 'Only the Form 7004 generated in this job can be faxed from the extension box.' }, { status: 400 })
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_deliveries columns are not all in the generated types
+      const { data: sdRow, error: sdErr } = await (supabaseAdmin as any).from('service_deliveries').select('service_type, stage, status').eq('id', serviceDeliveryId).maybeSingle()
+      if (sdErr) return NextResponse.json({ success: false, error: 'Could not check the job. The fax was NOT sent. Please try again.' }, { status: 503 })
+      if (!sdRow || sdRow.service_type !== 'Tax Return' || sdRow.stage !== EXTENSION_STAGES.waiting || sdRow.status === 'cancelled') {
+        return NextResponse.json({ success: false, error: `The extension is faxed while the job is at "${EXTENSION_STAGES.waiting}".` }, { status: 409 })
+      }
+    }
   } else if (body.staged_path !== undefined && body.staged_path !== null) {
     // a big upload the browser sent direct to the private bucket: read it here, remove it at once (the bytes are in memory now)
     if (!isFaxStagingPath(body.staged_path)) {
@@ -308,7 +337,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
   const claimDeps = await realClaimDeps()
   const claim = await claimSend({
     sendId, faxno, hash, confirmResend, actor: user?.email || 'dashboard', summary: `Fax to ${faxno} — ${fileName} (sending)`, serviceDeliveryId,
-    display: { file_name: fileName, recip_name: recipName ?? null, reason: reason || null },
+    display: { file_name: fileName, recip_name: recipName ?? null, reason: reason || null, purpose },
   }, claimDeps)
   if (!claim.ok) {
     return NextResponse.json({
@@ -378,6 +407,7 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
     content_hash: hash,
     save_choice: stored ? 'stored_document' : saveChoice ? saveChoice.mode : 'none',
     faxage_response: result.raw.slice(0, 500),
+    ...(purpose ? { purpose } : {}),
   }
   const ownerFromChoice = toSave?.validated.owner ?? null
   const logAccount = ownerFromChoice?.kind === 'company' ? ownerFromChoice.account_id : accountId

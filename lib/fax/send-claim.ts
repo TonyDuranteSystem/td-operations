@@ -58,7 +58,7 @@ const priorOf = (r: ClaimRow) => {
 }
 
 export async function claimSend(
-  i: { sendId: string | null; faxno: string; hash: string; confirmResend: boolean; actor: string; summary: string; serviceDeliveryId: string | null; /** what staff must be able to recognise the send by while it is unconfirmed */ display?: { file_name?: string | null; recip_name?: string | null; reason?: string | null }; now?: Date },
+  i: { sendId: string | null; faxno: string; hash: string; confirmResend: boolean; actor: string; summary: string; serviceDeliveryId: string | null; /** what staff must be able to recognise the send by while it is unconfirmed */ display?: { file_name?: string | null; recip_name?: string | null; reason?: string | null; /** the purpose tag of the sender's box (the extension box); see lib/fax/extension-fax.ts */ purpose?: string | null }; now?: Date },
   deps: ClaimDeps,
 ): Promise<ClaimResult> {
   const since = new Date((i.now ?? new Date()).getTime() - RECENT_MINUTES * 60_000).toISOString()
@@ -120,7 +120,7 @@ export async function claimSend(
 
   const ins = await withTimeout(deps.insertClaim({
     actor: i.actor, action_type: 'fax_claim', table_name: 'documents', service_delivery_id: i.serviceDeliveryId, summary: i.summary,
-    details: { send_id: i.sendId, faxno: i.faxno, content_hash: i.hash, claim: 'pending', file_name: i.display?.file_name ?? null, recip_name: i.display?.recip_name ?? null, reason: i.display?.reason ?? null },
+    details: { send_id: i.sendId, faxno: i.faxno, content_hash: i.hash, claim: 'pending', file_name: i.display?.file_name ?? null, recip_name: i.display?.recip_name ?? null, reason: i.display?.reason ?? null, ...(i.display?.purpose ? { purpose: i.display.purpose } : {}) },
   }), CLAIM_STEP_TIMEOUT_MS, { id: null, error: 'timed out' })
   if (ins.error || !ins.id) return { ok: false, status: 503, code: 'claim_failed', error: `Could not start this fax safely.${NOT_SENT} Please try again.` }
 

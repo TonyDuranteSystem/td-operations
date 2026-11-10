@@ -52,7 +52,7 @@ vi.mock('@/lib/supabase-admin', () => ({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const b: any = {}
       const chain = () => b
-      b.select = chain; b.eq = chain; b.in = chain; b.order = chain; b.limit = chain; b.is = chain; b.gte = chain
+      b.select = chain; b.eq = chain; b.in = chain; b.order = chain; b.limit = chain; b.is = chain; b.gte = chain; b.or = chain
       const one = () => {
         if (table === 'service_deliveries') return fx.fail.sd ? { data: null, error: { message: 'boom' } } : { data: fx.sd, error: null }
         if (table === 'accounts') return fx.fail.accounts ? { data: null, error: { message: 'boom' } } : { data: fx.account, error: null }
