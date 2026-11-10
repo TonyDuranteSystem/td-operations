@@ -10,14 +10,29 @@ export interface AppMenuItem { key: string; path: string; label: string }
 /** Screens whose own heading is hidden in the app and drawn in the top row instead. Grows as screens are dressed for the app. */
 export const TITLE_IN_ROW: readonly string[] = ['/portal/chat']
 
+/**
+ * Same, but only for exactly this address, not for the pages under it: `/portal/invoices/new` and an invoice's own page still draw their
+ * own heading. On `/portal/invoices` the address word `tab=billing` is the TD Billing screen, which takes the name of the TD Billing entry.
+ */
+export const TITLE_IN_ROW_EXACT: readonly string[] = ['/portal/invoices']
+const BILLING_ENTRY_KEY = 'nav.tdBilling'
+
 function pathOnly(href: string): string {
   const i = href.search(/[?#]/)
   return i === -1 ? href : href.slice(0, i)
 }
 
-export function screenTitleFor(pathname: string, items: readonly AppMenuItem[]): string | null {
+export function screenTitleFor(pathname: string, items: readonly AppMenuItem[], tab?: string | null, invoicesLabel?: string): string | null {
   const here = pathOnly(pathname)
-  if (!TITLE_IN_ROW.some(p => here === p || here.startsWith(`${p}/`))) return null
+  // The menu entry says "Customers & Invoices" when the website's invoicing hub is on; the app's screen is named plainly "Invoices"
+  // (the approved design), with "Customers and invoices · <company>" under it.
+  if (here === '/portal/invoices' && tab !== 'billing' && invoicesLabel) return invoicesLabel
+  if (here === '/portal/invoices' && tab === 'billing') {
+    const billing = items.find(it => it.key === BILLING_ENTRY_KEY)
+    if (billing) return billing.label
+  }
+  const inRow = TITLE_IN_ROW.some(p => here === p || here.startsWith(`${p}/`)) || TITLE_IN_ROW_EXACT.includes(here)
+  if (!inRow) return null
   let best: AppMenuItem | null = null
   for (const it of items) {
     const p = pathOnly(it.path)

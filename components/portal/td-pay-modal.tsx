@@ -5,6 +5,7 @@ import { CreditCard, Building2, Copy, Check, X, Loader2, ExternalLink, ChevronDo
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface TdPayModalProps {
@@ -81,6 +82,11 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 
 export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose }: TdPayModalProps) {
   const { t } = useLocale()
+  // Inside the client iPhone app the card page opens in the app's own window (a new window needs the phone shell to catch it).
+  // When the client is done the card page sends them to the "payment received" page (or the "payment cancelled" page), each with its
+  // own button back to the portal; the Back button returns here. See docs/systems/client-app.md (Step 3c). On the website it is a new
+  // tab, as before.
+  const appMode = useAppMode()
   // Read inside the mount-only effect below without retriggering it \u2014 t() is
   // a fresh closure every render, and this fetch must only run once.
   const tRef = useRef(t)
@@ -189,9 +195,19 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
     }
   }
 
+  // Coming back from the card page, the phone can bring this screen back exactly as it was left (its page cache), with the button still
+  // spinning. Unlock it then; a normal load starts fresh anyway.
+  useEffect(() => {
+    if (!appMode) return
+    const onShow = (e: PageTransitionEvent) => { if (e.persisted) setStripeLoading(false) }
+    window.addEventListener('pageshow', onShow)
+    return () => window.removeEventListener('pageshow', onShow)
+  }, [appMode])
+
   const handlePayByCard = async () => {
     if (stripeLoading) return
     setStripeLoading(true)
+    let leaving = false
     try {
       const res = await fetch('/api/workflows/create-invoice-checkout', {
         method: 'POST',
@@ -202,11 +218,17 @@ export function TdPayModal({ paymentId, invoiceNumber, amount, currency, onClose
       if (!res.ok || !data.checkoutUrl) {
         throw new Error(data.error || t('tdPayModal.checkoutFailed'))
       }
-      window.open(data.checkoutUrl, '_blank', 'noopener,noreferrer')
+      if (appMode) {
+        // Keep the button locked while the page leaves: a second tap would start a second live card session for the same invoice.
+        leaving = true
+        window.location.assign(data.checkoutUrl)
+      } else {
+        window.open(data.checkoutUrl, '_blank', 'noopener,noreferrer')
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t('tdPayModal.cardPaymentFailed'))
     } finally {
-      setStripeLoading(false)
+      if (!leaving) setStripeLoading(false)
     }
   }
 

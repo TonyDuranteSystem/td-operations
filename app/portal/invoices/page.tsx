@@ -37,6 +37,11 @@ import { listTemplates } from './actions'
 import { listVendors } from './vendor-actions'
 import { isCardAutopayEnabled } from '@/lib/payments/card-autopay-config'
 import { latestDeliveryProblems } from '@/lib/portal/invoice-delivery'
+import { getClientAppMode } from '@/lib/app-mode/server'
+import { isClientAppPayEnabled } from '@/lib/portal-app/enabled'
+import { appInvoicesScreen, appInvoiceAreas, checklistStepTarget, requiredFirst, tdInvoicesOf } from '@/lib/portal-app/invoices'
+import { AppInvoiceAreas, AppAreaHeader } from '@/components/portal/app-invoices'
+import { AppTdBilling } from '@/components/portal/app-td-billing'
 
 export default async function PortalInvoicesPage({
   searchParams,
@@ -57,6 +62,12 @@ export default async function PortalInvoicesPage({
   const teammateCaps = actor.kind === 'teammate' ? actor.capabilities : null
 
   const params = await searchParams
+  // Inside the client iPhone app the page opens on a LIST of areas, TD Billing is a screen of its own, and every other address is the
+  // website's area exactly as drawn there (dev job 056a70d0, Step 3c). On the website `showTab` is always true: nothing below changes.
+  const appMode = getClientAppMode()
+  const appScreen = appMode ? appInvoicesScreen(params) : 'tab'
+  const showTab = appScreen === 'tab'
+  const appPayHidden = appMode ? !(await isClientAppPayEnabled()) : false
 
   // Partner access: if ?accountId is provided and the user is a partner,
   // verify they manage that account via client_partners → accounts.partner_id.
@@ -257,10 +268,65 @@ export default async function PortalInvoicesPage({
     delivery_problem: deliveryProblems.has(inv.id),
   }))
 
+  // The app's own screens (dev job 056a70d0, Step 3c): the same numbers the page already worked out, shown as a list.
+  const tr = (key: string) => t(key, locale, translations)
+  const visibleTabs = visibleInvoiceTabs(tabCtx)
+  const appAreas = appMode
+    ? appInvoiceAreas(visibleTabs, { customers: setupFacts?.customerCount ?? 0, sales: salesStats.total, vendors: vendors.length, expenses: expenseStats.total }, setupMissing)
+    : []
+  const appSteps = appMode && isClientHub && guides
+    ? requiredFirst(checklist).map(item => ({
+        id: item.id,
+        label: tr(item.labelKey),
+        required: item.required,
+        done: item.done,
+        href: checklistStepTarget(guides.checklist.items.find(i => i.id === item.id)?.rule, visibleTabs.map(x => x.id)),
+      }))
+    : null
+  // TD Billing = the invoices from Tony Durante LLC among the expenses this person may see (same history start date as the list).
+  // Only the fields the screen shows go to the browser (no attachment links).
+  const billingRows = appMode && appScreen === 'billing'
+    ? tdInvoicesOf(expenses).map(e => ({
+        id: e.id,
+        invoice_number: e.invoice_number,
+        internal_ref: e.internal_ref,
+        vendor_name: e.vendor_name,
+        description: e.description,
+        currency: e.currency,
+        total: Number(e.total),
+        amount_due: e.amount_due == null ? null : Number(e.amount_due),
+        due_date: e.due_date,
+        paid_date: e.paid_date,
+        status: e.status,
+        source: e.source,
+        td_payment_id: e.td_payment_id,
+      }))
+    : []
+  const billingTotals = {
+    total: formatMoneyMap(sumExpensesByCurrency(billingRows, st => st !== 'Cancelled')),
+    paid: formatMoneyMap(sumExpensesByCurrency(billingRows, st => st === 'Paid')),
+    pending: formatMoneyMap(sumExpensesByCurrency(billingRows, st => st !== 'Paid' && st !== 'Cancelled')),
+  }
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
+      {appMode && appScreen === 'areas' && (
+        <AppInvoiceAreas
+          subtitle={showHub && companyName ? tr('app.invoicesSubtitle').replace('{company}', () => companyName) : companyName ?? tr('invoices.yourPersonalExpenses')}
+          steps={appSteps}
+          stepsLeft={setupMissing}
+          areas={appAreas}
+          tr={tr}
+        />
+      )}
+      {appMode && appScreen === 'billing' && (
+        <AppTdBilling rows={billingRows} totals={billingTotals} payEnabled={!appPayHidden} />
+      )}
+      {appMode && appScreen === 'tab' && (
+        <AppAreaHeader backLabel={tr('app.backToInvoices')} title={tr(visibleTabs.find(x => x.id === activeTab)?.labelKey ?? 'nav.invoices')} />
+      )}
       {/* Slim "New: take the tour" strip: only while the tour is still being offered to this login (never in view-as) */}
-      {isClientHub && guides && !viewingAsClient && shouldOfferTour(tourPref, guides.tour) && (
+      {isClientHub && guides && !viewingAsClient && !appMode && shouldOfferTour(tourPref, guides.tour) && (
         <TourBanner
           tourId={guides.tour.id}
           version={guides.tour.version}
@@ -270,7 +336,8 @@ export default async function PortalInvoicesPage({
         />
       )}
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3${appMode ? ' empty:hidden' : ''}`}>
+        {!appMode && (
         <div>
           <h1 data-tour="hub-title" className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t(showHub ? 'nav.invoicesHub' : 'invoices.title', locale, translations)}</h1>
           <p className="text-zinc-500 text-xs sm:text-sm mt-1">
@@ -283,7 +350,8 @@ export default async function PortalInvoicesPage({
               : t('invoices.expensesSubtitle', locale, translations)}
           </p>
         </div>
-        {isClientHub && guides && (
+        )}
+        {isClientHub && guides && !appMode && (
           <GuidedTour
             tourId={guides.tour.id}
             version={guides.tour.version}
@@ -305,7 +373,7 @@ export default async function PortalInvoicesPage({
             activeTab={activeTab}
           />
         )}
-        {activeTab === 'sales' && selectedAccountId && (
+        {showTab && activeTab === 'sales' && selectedAccountId && (
           <Link
             data-tour="sales-new"
             href="/portal/invoices/new"
@@ -315,7 +383,7 @@ export default async function PortalInvoicesPage({
             {t('invoices.new', locale, translations)}
           </Link>
         )}
-        {activeTab === 'expenses' && selectedAccountId && (
+        {showTab && activeTab === 'expenses' && selectedAccountId && (
           <ExpensesHeader accountId={selectedAccountId} vendors={vendors} />
         )}
       </div>
@@ -324,7 +392,7 @@ export default async function PortalInvoicesPage({
           genuinely company-scoped per R027 — client_invoices is the client's outgoing
           sales invoices, vendors are the client's vendors. Formation-gap clients only
           have personal expenses to view.) */}
-      {selectedAccountId && (
+      {selectedAccountId && !appMode && (
       <div className="flex gap-1 bg-zinc-100 p-1 rounded-lg w-fit max-w-full overflow-x-auto" data-testid="invoice-tabs">
         {visibleInvoiceTabs(tabCtx).map(tab => {
           const Icon = { sales: ArrowUpRight, customers: Users, expenses: ArrowDownLeft, vendors: Building2, setup: Settings2 }[tab.id]
@@ -366,7 +434,7 @@ export default async function PortalInvoicesPage({
       )}
 
       {/* ── Sales Tab ── */}
-      {activeTab === 'sales' && (
+      {showTab && activeTab === 'sales' && (
         <>
           {/* Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -408,9 +476,10 @@ export default async function PortalInvoicesPage({
       )}
 
       {/* ── Expenses Tab ── */}
-      {activeTab === 'expenses' && (
+      {showTab && activeTab === 'expenses' && (
         <>
-          {selectedAccountId && showAutopayCard && (
+          {/* The app's Pay switch also hides the autopay card (it opens a card page too); the website never sets appPayHidden. */}
+          {selectedAccountId && showAutopayCard && !appPayHidden && (
             <AutopayCard
               accountId={selectedAccountId}
               enabled={autopay?.autopay_card_enabled ?? false}
@@ -444,18 +513,19 @@ export default async function PortalInvoicesPage({
             <ExpenseList
               expenses={expenses}
               initialFilter={defaultExpenseFilter === 'paid' ? 'Paid' : 'All'}
+              hidePay={appPayHidden}
             />
           )}
         </>
       )}
 
       {/* ── Customers Tab (hub) ── */}
-      {activeTab === 'customers' && selectedAccountId && (
+      {showTab && activeTab === 'customers' && selectedAccountId && (
         <CustomersPanel accountId={selectedAccountId} locale={locale} translations={translations} showHeading={false} invoicesFrom={actor.kind === 'teammate' ? actor.historyStart : null} />
       )}
 
       {/* ── Setup Tab (hub): logo, bank accounts, payment link — the same cards that used to live on Profile ── */}
-      {activeTab === 'setup' && selectedAccountId && setupFacts && (
+      {showTab && activeTab === 'setup' && selectedAccountId && setupFacts && (
         <div className="space-y-4" data-testid="invoice-setup">
           {isClientHub && (
           <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3" data-tour="setup-checklist">
@@ -491,12 +561,12 @@ export default async function PortalInvoicesPage({
       )}
 
       {/* ── Vendors Tab ── */}
-      {activeTab === 'vendors' && (
+      {showTab && activeTab === 'vendors' && (
         <VendorList vendors={vendors} accountId={selectedAccountId!} expenses={expenses} />
       )}
 
       {/* Feature ideas (hub clients, every tab) — also the last stop of the guided tour */}
-      {isClientHub && selectedAccountId && (
+      {showTab && isClientHub && selectedAccountId && (
         <FeatureRequestCard
           accountId={selectedAccountId}
           labels={{

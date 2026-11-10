@@ -67,9 +67,12 @@ function fmtDate(d: string | null): string {
 export function ExpenseList({
   expenses,
   initialFilter = 'All',
+  hidePay = false,
 }: {
   expenses: Expense[]
   initialFilter?: 'All' | 'Pending' | 'Paid' | 'Overdue'
+  /** The client iPhone app's Pay switch is off: the Pay button is not offered (the website never sets this). */
+  hidePay?: boolean
 }) {
   const { t } = useLocale()
   const router = useRouter()
@@ -237,7 +240,7 @@ export function ExpenseList({
                   </span>
                 </span>
                 <span className="flex items-center justify-center gap-1">
-                  {exp.source === 'td_invoice' && exp.td_payment_id && (exp.status === 'Pending' || exp.status === 'Overdue') && (
+                  {!hidePay && exp.source === 'td_invoice' && exp.td_payment_id && (exp.status === 'Pending' || exp.status === 'Overdue') && (
                     <FastTooltip label={t('expenseList.pay')}>
                       <button
                         onClick={() => setPayingExpense(exp)}
