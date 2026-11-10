@@ -9,6 +9,8 @@ import { meterFill, SILENT_WARN_AFTER_SECONDS } from '@/lib/media/sound-level'
 import { prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } from '@/lib/team/attachment'
 import { clock, snippet, type TalkMessage, type TypingKind } from '@/lib/talk/chat-model'
 import { readDraft, writeDraft } from '@/lib/talk/drafts'
+import { AttachChoiceMenu } from '@/components/scan/attach-choice-menu'
+import { DocumentScanner } from '@/components/scan/document-scanner'
 import type { RecordingControl, VoiceOutcome } from '@/lib/talk/recording-guard'
 
 /** A voice note longer than this is stopped and sent by itself. */
@@ -66,6 +68,9 @@ export function TalkComposer({
   const [mention, setMention] = useState<{ at: number; q: string } | null>(null)
   const [mentionHot, setMentionHot] = useState(0)
   const fileRef = useRef<HTMLInputElement>(null)
+  // the paperclip opens a small menu: Scan document (camera -> one PDF) or Photo or file (what it always did)
+  const [attachMenu, setAttachMenu] = useState(false)
+  const [scanning, setScanning] = useState(false)
   const textRef = useRef(text)
   const modeRef = useRef(mode)
   modeRef.current = mode
@@ -210,7 +215,7 @@ export function TalkComposer({
     }
   }, [canSend, text, files, send, mode, onEdit, onCancelMode])
 
-  const pick = (list: FileList | null) => {
+  const pick = (list: ArrayLike<File> | null) => {
     if (!list || list.length === 0) return
     const intake = prepareChatFiles(Array.from(list), files.length, CHAT_ATTACHMENT_MAX_COUNT)
     if (intake.rejected.length) toast.error(t("Can't attach: {names}", { names: intake.rejected.join(', ') }))
@@ -272,9 +277,16 @@ export function TalkComposer({
       <div className="flex items-end gap-1.5">
         <input ref={fileRef} type="file" multiple className="hidden" onChange={e => pick(e.target.files)} data-testid="talk-file-input" />
         {mode?.kind !== 'edit' && (
-          <button type="button" onClick={() => fileRef.current?.click()} disabled={busy} aria-label={t('Attach a photo or file')} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-500 active:bg-zinc-100 disabled:opacity-40">
-            <Paperclip className="h-5 w-5" />
-          </button>
+          <div className="relative shrink-0">
+            <button type="button" onClick={() => setAttachMenu(o => !o)} disabled={busy} aria-label={t('Attach a photo or file')} aria-haspopup="menu" aria-expanded={attachMenu} data-testid="talk-attach" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-500 active:bg-zinc-100 disabled:opacity-40">
+              <Paperclip className="h-5 w-5" />
+            </button>
+            <AttachChoiceMenu
+              open={attachMenu} onClose={() => setAttachMenu(false)}
+              onScan={() => { setAttachMenu(false); setScanning(true) }}
+              onFile={() => { setAttachMenu(false); fileRef.current?.click() }}
+            />
+          </div>
         )}
         {mention && mentionMatches.length > 0 && (
           <ul role="listbox" aria-label={t('Mention someone')} data-testid="mention-picker" className="absolute bottom-full left-14 z-20 mb-1 min-w-[12rem] overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lg">
@@ -330,6 +342,7 @@ export function TalkComposer({
           <span className="h-11 w-11 shrink-0" />
         )}
       </div>
+      {scanning && <DocumentScanner onClose={() => setScanning(false)} onDone={file => { setScanning(false); pick([file]) }} />}
     </div>
   )
 }

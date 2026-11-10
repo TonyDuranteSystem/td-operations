@@ -1,4 +1,6 @@
+*.xcuserstate
+.build/
+.swiftpm/
+DerivedData/
 TDClient.xcodeproj/
 build/
-DerivedData/
-*.xcuserstate

@@ -64,13 +64,19 @@ export async function sweepStoreStaging(opts: { now?: Date; dryRun?: boolean; ma
   if (top.error) return { listed: 0, stale: 0, deleted: 0, dryRun, capped: false, error: top.error }
   const objects: StagedObject[] = []
   let error: string | null = null
-  for (const e of top.entries) {
-    if (e.id) { objects.push({ path: `${STORE_STAGING_SWEEP_PREFIX}${e.name}`, created_at: e.created_at }); continue } // a file directly under the prefix
-    const inner = await listAll(bucket, `${root}/${e.name}`, budget)
-    for (const f of inner.entries) if (f.id) objects.push({ path: `${STORE_STAGING_SWEEP_PREFIX}${e.name}/${f.name}`, created_at: f.created_at })
-    if (inner.error) { error = inner.error; break }
-    if (budget.left <= 0) break
+  // folders are walked down to 3 levels: `<owner>/<file>` for staff uploads, `claude/<random>/<file>` for Claude's own
+  const walk = async (folder: string, entries: ListEntry[], depth: number): Promise<void> => {
+    for (const e of entries) {
+      if (error || budget.left <= 0) return
+      const path = `${folder}/${e.name}`
+      if (e.id) { objects.push({ path, created_at: e.created_at }); continue }
+      if (depth >= 3) continue
+      const inner = await listAll(bucket, path, budget)
+      if (inner.error) { error = inner.error; return }
+      await walk(path, inner.entries, depth + 1)
+    }
   }
+  await walk(root, top.entries, 1)
   const allStale = staleStagingPaths(objects, now)
   const stale = allStale.slice(0, maxDelete)
   const capped = allStale.length > stale.length || budget.left <= 0

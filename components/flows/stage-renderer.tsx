@@ -28,6 +28,7 @@ import { ReturnFaxPanel } from './return-fax-panel'
 import { ExtensionFaxPanel } from './extension-fax-panel'
 import { esignDocName } from '@/lib/flows/esign-doc-name'
 import { ApplyNamePanel } from './apply-name-panel'
+import { EinClosureLetterPanel } from './ein-closure-letter-panel'
 
 interface StageRendererProps {
   layout: StageLayout | null
@@ -195,6 +196,8 @@ function renderComponent(
       )
     case 'apply_name_panel':
       return <ApplyNamePanel key={key} serviceDeliveryId={serviceDelivery.id} />
+    case 'ein_closure_letter_panel':
+      return <EinClosureLetterPanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'closure_wrapup':
       return <ClosureWrapupPanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'chat':

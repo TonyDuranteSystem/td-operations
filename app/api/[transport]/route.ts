@@ -51,6 +51,7 @@ import { registerDocTools } from "@/lib/mcp/tools/doc"
 import { registerStorageTools } from "@/lib/mcp/tools/storage"
 import { registerMyFilesDropTools } from "@/lib/mcp/tools/my-files-drop"
 import { registerMyFilesAccessTools } from "@/lib/mcp/tools/my-files-access"
+import { registerStorageEditTools } from "@/lib/mcp/tools/storage-edit"
 import { registerSqlTools } from "@/lib/mcp/tools/sql"
 import { registerHermesReadTools } from "@/lib/mcp/tools/hermes-read"
 import { registerCodebaseReadTools } from "@/lib/mcp/tools/codebase-read"
@@ -118,6 +119,7 @@ const handler = createMcpHandler(
     registerStorageTools(server)
     registerMyFilesDropTools(server)
     registerMyFilesAccessTools(server)
+    registerStorageEditTools(server)
     registerSqlTools(server)
     registerHermesReadTools(server)
     registerCodebaseReadTools(server)

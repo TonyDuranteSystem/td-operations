@@ -93,7 +93,9 @@ describe("privacy boundary — My files access is not reachable from any HTTP ro
     }).map((f) => f.replace(root + "/", ""))
     // lib/team/attach-from-my-files.ts (dev job f34c915d) is the one other importer: it reads ONE named From Claude file for a Claude post in
     // Team Chat. Its own reachability is pinned by the next test — only the team_chat_send MCP tool may import it.
-    expect(importers.sort()).toEqual(["app/api/[transport]/route.ts", "lib/mcp/tools/my-files-access.ts", "lib/team/attach-from-my-files.ts"])
+    // lib/crm-store/claude-edit.ts + lib/mcp/tools/storage-edit.ts (dev job bd21e833, step 2) share its audit / switch / rate-limit guard; their own
+    // reachability is pinned in tests/unit/mcp-storage-edit-tool.test.ts — only the MCP route may register the tool file.
+    expect(importers.sort()).toEqual(["app/api/[transport]/route.ts", "lib/crm-store/claude-edit.ts", "lib/mcp/tools/my-files-access.ts", "lib/mcp/tools/storage-edit.ts", "lib/team/attach-from-my-files.ts"])
   })
   it("the chat-attach module is imported only by the team_chat_send MCP tool — never by a route, a page, a component or the AI worker", () => {
     const root = process.cwd()

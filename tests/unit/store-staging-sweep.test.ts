@@ -44,6 +44,18 @@ describe("sweepStoreStaging", () => {
     expect(r).toMatchObject({ listed: 3, stale: 2, deleted: 2, dryRun: false, error: null })
     expect(removed).toEqual([[`${P}o1/old.pdf`, `${P}o2/old2.pdf`]])
   })
+  it("also reaches Claude's uploads, which sit two folders deep (claude/<random>/<file>)", async () => {
+    const deep = {
+      "crm-uploads/store-staging": [{ name: "claude", id: null }],
+      "crm-uploads/store-staging/claude": [{ name: "u1", id: null }, { name: "u2", id: null }],
+      "crm-uploads/store-staging/claude/u1": [{ name: "old.docx", id: "1", created_at: ago(40) }],
+      "crm-uploads/store-staging/claude/u2": [{ name: "new.docx", id: "2", created_at: ago(2) }],
+    }
+    const { bucket, removed } = fakeBucket(deep)
+    const r = await sweepStoreStaging({ now: NOW, bucket })
+    expect(r).toMatchObject({ listed: 2, stale: 1, deleted: 1, error: null })
+    expect(removed).toEqual([[`${P}claude/u1/old.docx`]])
+  })
   it("dry run deletes nothing", async () => {
     const { bucket, removed } = fakeBucket(tree)
     const r = await sweepStoreStaging({ now: NOW, bucket, dryRun: true })

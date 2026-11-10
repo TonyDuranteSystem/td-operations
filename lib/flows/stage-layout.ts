@@ -53,6 +53,8 @@ export const STAGE_COMPONENT_TYPES = [
   'extension_fax_panel',
   // Company Change Name, "Update our records": the one button that renames the company and moves its old folders (lib/operations/change-name-apply.ts).
   'apply_name_panel',
+  // Company Closure, "IRS Closure": makes the EIN closure letter for the IRS and attaches a copy of the company's EIN letter (lib/closure/ein-closure-package.ts).
+  'ein_closure_letter_panel',
 ] as const
 
 export type StageComponentType = (typeof STAGE_COMPONENT_TYPES)[number]
