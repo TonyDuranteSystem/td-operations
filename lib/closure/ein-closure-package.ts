@@ -23,6 +23,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { pickClosureAnswers } from '@/lib/flows/closure-answers'
 import { buildEinClosureLetterPdf, einClosureLetterProblems } from '@/lib/closure/ein-closure-letter'
 import { parseStorePointer } from '@/lib/crm-store/document-pointer'
+import { looksLikePng, MAX_SIGNATURE_BYTES } from '@/lib/closure/signature-consent'
 import { TD_LARGO_STREET_3D, TD_LARGO_CITY, TD_LARGO_STATE, TD_LARGO_ZIP } from '@/lib/addresses'
 
 /** The saved package's file name and the key that makes "Generate again" a NEW VERSION of the same file, never a second file. */
@@ -56,8 +57,12 @@ export interface EinClosureFacts {
   /** what the client answered: "Yes" / "No" / null */
   returnsFiled: string | null
   notices: EinNoticeCandidate[]
-  /** the client's drawn signature is on file (the closure wizard box) */
+  /** the client's drawn signature is on file AND the wizard recorded their consent (the closure wizard box, lib/closure/signature-consent.ts) */
   hasSignature: boolean
+  /** when the client signed (the server's clock, from the consent record) */
+  signedAt: string | null
+  /** the stored picture of the signature (internal: read when the letter is made) */
+  signatureStoreFileId: string | null
   existingLetter: { documentId: string; name: string; createdAt: string } | null
   /** plain sentences for staff: things to look at before printing */
   warnings: string[]
@@ -219,6 +224,16 @@ export async function loadEinClosureFacts(jobId: string): Promise<EinFactsResult
   if (wizardOne) wizardOne.recommended = true
   else if (notices.length === 1) notices[0].recommended = true
 
+  // the client's drawn signature: the file the wizard filed under the field `signature_image` AND the consent record the SERVER wrote for it
+  // (a file with that name but no consent record — staff uploaded it, or a client forged the answers — is never put on the letter)
+  const sigDoc = docs.find((d) => /^signature_image/i.test(d.file_name))
+  const sigFileId = sigDoc ? parseStorePointer(sigDoc.drive_file_id) : null
+  const signedAt = str('signature_signed_at') || null
+  const hasConsent = !!signedAt && !!str('signature_consent')
+  if (sigDoc && !hasConsent) warnings.push("A signature picture is on this job but the client's consent was not recorded, so it is NOT used — the letter has a line to sign by hand.")
+  if (sigDoc && hasConsent && !sigFileId) warnings.push("The client's signature picture is not in the new storage, so it cannot be used — the letter has a line to sign by hand.")
+  const usableSignature = !!sigFileId && hasConsent
+
   const existing = docs.find((d) => /^EIN Closure Letter/i.test(d.file_name))
   if (notices.length === 0) warnings.push('No copy of the EIN letter is on this job. The IRS asks for one if the client still has it — the letter can go without it.')
   if (notices.some((n) => !n.mergeable)) warnings.push('One of the EIN letter files is not a PDF or a picture the system can join (for example a phone HEIC photo) — it cannot be attached.')
@@ -241,7 +256,9 @@ export async function loadEinClosureFacts(jobId: string): Promise<EinFactsResult
       addressSource,
       returnsFiled,
       notices,
-      hasSignature: false,
+      hasSignature: usableSignature,
+      signedAt: usableSignature ? signedAt : null,
+      signatureStoreFileId: usableSignature ? sigFileId : null,
       existingLetter: existing ? { documentId: existing.id, name: existing.file_name, createdAt: existing.created_at } : null,
       warnings,
     },
@@ -258,7 +275,7 @@ export interface BuildPackageInput {
 }
 
 export type BuildPackageResult =
-  | { ok: true; documentId: string; name: string; pages: number; attachedNotice: string | null; warnings: string[] }
+  | { ok: true; documentId: string; name: string; pages: number; attachedNotice: string | null; signed: boolean; warnings: string[] }
   | { ok: false; error: string; status: number }
 
 export async function buildEinClosurePackage(input: BuildPackageInput): Promise<BuildPackageResult> {
@@ -277,6 +294,20 @@ export async function buildEinClosurePackage(input: BuildPackageInput): Promise<
     if (!notice.mergeable) return { ok: false, error: 'That EIN letter is not a PDF or a picture (PNG / JPG) — convert it first, then upload it again.', status: 400 }
   }
 
+  // the client's drawn signature, when they drew one and consented: a real, small PNG only — anything else leaves the line to sign by hand
+  let signaturePng: Uint8Array | null = null
+  const warnings = [...facts.warnings]
+  if (facts.signatureStoreFileId) {
+    try {
+      const { readStoreFile } = await import('@/lib/crm-store/document-pointer')
+      const sig = await readStoreFile(facts.signatureStoreFileId)
+      if (sig.bytes.length <= MAX_SIGNATURE_BYTES && looksLikePng(sig.bytes)) signaturePng = new Uint8Array(sig.bytes)
+      else warnings.push("The client's signature file is not a usable PNG picture, so the letter has a line to sign by hand.")
+    } catch (e) {
+      warnings.push(`The client's signature could not be read (${e instanceof Error ? e.message : String(e)}), so the letter has a line to sign by hand.`)
+    }
+  }
+
   let letter: Uint8Array
   try {
     letter = await buildEinClosureLetterPdf({
@@ -286,7 +317,7 @@ export async function buildEinClosurePackage(input: BuildPackageInput): Promise<
       signerName: facts.signerName,
       date: input.now ?? new Date(),
       includesEinNotice: !!notice,
-      signaturePng: null,
+      signaturePng,
     })
   } catch (e) {
     return { ok: false, error: `Could not make the letter: ${e instanceof Error ? e.message : String(e)}`, status: 400 }
@@ -352,7 +383,7 @@ export async function buildEinClosurePackage(input: BuildPackageInput): Promise<
       return { ok: false, error: 'This job has neither a company nor a person, so there is nowhere to save the letter.', status: 400 }
     }
     if (saved.route !== 'store') return { ok: false, error: "This company's files are not in the new storage yet, so the letter could not be saved.", status: 409 }
-    return { ok: true, documentId: saved.documentRowId, name, pages, attachedNotice: notice?.name ?? null, warnings: facts.warnings }
+    return { ok: true, documentId: saved.documentRowId, name, pages, attachedNotice: notice?.name ?? null, signed: !!signaturePng, warnings }
   } catch (e) {
     if (e instanceof CompanyMovingError) return { ok: false, error: e.message, status: 409 }
     return { ok: false, error: `Could not save the letter: ${e instanceof Error ? e.message : String(e)}`, status: 500 }
