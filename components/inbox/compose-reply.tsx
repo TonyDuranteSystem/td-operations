@@ -6,6 +6,8 @@ import { Send, Sparkles, Loader2, Paperclip, X, ChevronDown, ChevronUp, Maximize
 import { cn } from '@/lib/utils'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
+import { AttachChoiceMenu } from '@/components/scan/attach-choice-menu'
+import { DocumentScanner } from '@/components/scan/document-scanner'
 import { useEmailAttachments } from './use-email-attachments'
 import { EmailAttachmentChips } from './email-attachment-chips'
 import { SignatureControls, SignaturePreview } from './signature-controls'
@@ -174,6 +176,9 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   const [placeholderWarn, setPlaceholderWarn] = useState<string[] | null>(null)
   const [attachNotice, setAttachNotice] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // the Attach button opens a small menu: Scan document (camera -> one PDF) or Photo or file (what it did before)
+  const [attachMenu, setAttachMenu] = useState(false)
+  const [scanning, setScanning] = useState(false)
   // Synchronous double-click guard — isPending is render-state and two clicks
   // can land inside one render window, firing two POSTs (the route has no
   // idempotency key).
@@ -1041,17 +1046,28 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
                 e.target.value = '' // re-picking the same file must fire again
               }}
             />
-            <FastTooltip label="Attach files">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-zinc-100 px-3 py-2.5 text-xs font-medium text-zinc-600
-                  transition-colors hover:bg-zinc-200 hover:text-zinc-800"
-                aria-label="Attach files"
-              >
-                <Paperclip className="h-4 w-4" />
-                <span>Attach</span>
-              </button>
-            </FastTooltip>
+            <div className="relative shrink-0">
+              <FastTooltip label="Attach files">
+                <button
+                  onClick={() => setAttachMenu(o => !o)}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-zinc-100 px-3 py-2.5 text-xs font-medium text-zinc-600
+                    transition-colors hover:bg-zinc-200 hover:text-zinc-800"
+                  aria-label="Attach files"
+                  aria-haspopup="menu"
+                  aria-expanded={attachMenu}
+                  data-testid="email-attach"
+                >
+                  <Paperclip className="h-4 w-4" />
+                  <span>Attach</span>
+                </button>
+              </FastTooltip>
+              <AttachChoiceMenu
+                open={attachMenu} onClose={() => setAttachMenu(false)}
+                onScan={() => { setAttachMenu(false); setScanning(true) }}
+                onFile={() => { setAttachMenu(false); fileInputRef.current?.click() }}
+              />
+              {scanning && <DocumentScanner onClose={() => setScanning(false)} onDone={file => { setScanning(false); void attachments.add([file]) }} />}
+            </div>
             {/* ONE AI button, named for what it will do RIGHT NOW (a hover label does not exist on a phone):
                 text in the box → it polishes that text; empty box → it drafts from the thread. */}
             <FastTooltip
