@@ -6,6 +6,8 @@
  *   - OFF unless MY_FILES_ACCESS_ENABLED=1; the MCP tool layer already refuses anyone but the owner.
  *   - Everything is scoped to ONE area: the owner's private "My files". Ids from the caller are checked to belong to that area
  *     (a foreign id gets the same "not found" as a missing one). No route, no client storage, no Business area.
+ *     (Editing files in Business / company / person storage is a SEPARATE set of tools — claude-edit.ts, dev job bd21e833 step 2 — which
+ *     reuses this file's switch, audit and limits through `guarded`.)
  *   - "Shared with staff" (the folder staff can read) is READ-ONLY here: nothing is written, renamed, moved, trashed or restored
  *     into or out of it. A write there would publish a Claude-made file to staff.
  *   - No permanent delete exists. "Trash" is the store's own 90-day trash (restorable).
@@ -31,7 +33,7 @@ export interface AccessCaller { method: string; email: string }
 export type AccessResult<T> = ({ ok: true } & T) | { ok: false; error: string }
 
 /** A refusal that is safe and useful to show the caller as it is. Anything else becomes the generic INTERNAL text. */
-class Refuse extends Error {}
+export class Refuse extends Error {}
 const INTERNAL = "That could not be done right now. Nothing was changed; try again in a minute."
 const NOT_FOUND = "Not found in My files."
 const SHARE_REFUSAL = "\"Shared with staff\" is read-only for Claude: staff can read what is in it, so nothing may be written, renamed, moved or deleted there. Do that from the Storage page."
@@ -139,7 +141,7 @@ async function relPath(folderId: string): Promise<string> {
 // ────────────────────────────────────────────────────────────── audit + limits
 
 /** Caller text goes into the audit row only in a short form (a huge string must not bloat the log). */
-const clip = (v: unknown): unknown => (typeof v === "string" ? v.slice(0, 300) : v ?? null)
+export const clip = (v: unknown): unknown => (typeof v === "string" ? v.slice(0, 300) : v ?? null)
 
 const ACTION_TYPE: Record<AccessKind, string> = { read: "my_files_read", change: "my_files_change" }
 
@@ -157,15 +159,15 @@ async function bytesWrittenLastHour(): Promise<number> {
   return ((data ?? []) as Array<{ details: { size?: number | string } | null }>).reduce((n, r) => n + (Number(r.details?.size ?? 0) || 0), 0)
 }
 
-interface Run { caller: AccessCaller; tool: string; kind: AccessKind; summary: string; detail: Record<string, unknown>; recordId?: string | null; extraBytes?: number }
+export interface Run { caller: AccessCaller; tool: string; kind: AccessKind; summary: string; detail: Record<string, unknown>; recordId?: string | null; extraBytes?: number }
 
-type Note = (extra: Record<string, unknown>) => void
+export type Note = (extra: Record<string, unknown>) => void
 
 /**
  * Switch → audit row → limit → the action → outcome on the audit row. The audit row is written FIRST and the limits count it (and the bytes it declares),
  * so parallel calls cannot all pass the same count. A failed audit insert stops the action (no log, no action).
  */
-async function guarded<T>(r: Run, act: (note: Note) => Promise<T>): Promise<AccessResult<T extends object ? T : never>> {
+export async function guarded<T>(r: Run, act: (note: Note) => Promise<T>): Promise<AccessResult<T extends object ? T : never>> {
   if (!accessEnabled()) return { ok: false, error: "My files access is switched off. It is turned on with the setting MY_FILES_ACCESS_ENABLED=1." }
   let logId: string | null = null
   try {

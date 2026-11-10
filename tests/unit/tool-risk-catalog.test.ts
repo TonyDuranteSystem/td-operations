@@ -175,6 +175,10 @@ describe("the two registration points must agree", () => {
       // the My files ACCESS tools (2026-10-23) read and change the owner's PRIVATE My files: owner-signed-in MCP session only
       // (callerIsOwner + MY_FILES_ACCESS_ENABLED). Same reason as the drop: the in-CRM assistant has no owner identity and must never reach it.
       "MyFilesAccess",
+      // the Storage EDIT tools (dev job bd21e833, step 2) change files of Business / company / person storages: owner-signed-in MCP session
+      // only (callerIsOwner + MY_FILES_ACCESS_ENABLED, the same switch). The in-CRM assistant acts for any staff member with no owner
+      // identity and must not edit client files through the generic bridge.
+      "StorageEdit",
     ])
     const missing = Array.from(onServer).filter((n) => !onBridge.has(n) && !BRIDGE_EXEMPT.has(n))
     expect(missing, `registered with the server but unreachable via the bridge: ${missing.join(", ")}`).toEqual([])

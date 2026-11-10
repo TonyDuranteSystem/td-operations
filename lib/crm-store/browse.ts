@@ -248,6 +248,15 @@ export async function folderContents(ownerId: string, folderId: string | null, o
       if (!eErr) for (const x of (ei ?? []) as { file_id: string; lock_kind: string | null; version_no: number | null; version_count: number; unmerged_pending: number }[]) editInfo.set(x.file_id, x)
     }
   }
+  // a not-applied change that was put aside ("Discard") no longer counts as waiting
+  {
+    const waiting = Array.from(editInfo.entries()).filter(([, x]) => x.unmerged_pending > 0)
+    if (waiting.length > 0) {
+      const { discardedVersionNos, pendingAfterDiscards } = await import("./proposals")
+      const gone = await discardedVersionNos(waiting.map(([id]) => id))
+      for (const [id, x] of waiting) editInfo.set(id, { ...x, unmerged_pending: pendingAfterDiscards(x.unmerged_pending, x.version_no, gone.get(id)) })
+    }
+  }
   const isPerson = own.kind === "person"
   let shares: Map<string, string[]> | null = null
   if (own.kind === "private" && all.length > 0) {
@@ -379,7 +388,7 @@ export async function storeOwnerForAccountOrThrow(accountId: string): Promise<st
   return ((data ?? [])[0]?.id as string | undefined) ?? null
 }
 
-export interface BrowseVersion { id: string; versionNo: number; unmerged: boolean; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null }
+export interface BrowseVersion { id: string; versionNo: number; unmerged: boolean; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null; /** the note kept with the version (e.g. "Proposed by Claude: 2 lines added") */ note?: string | null; /** a not-applied version that was put aside */ discarded?: boolean }
 
 /** Every saved copy of a file, newest first — so an older copy can be opened (and a wrong replacement spotted). */
 export async function listFileVersions(fileId: string): Promise<BrowseVersion[]> {
@@ -398,10 +407,16 @@ export async function listFileVersions(fileId: string): Promise<BrowseVersion[]>
     const email = u?.user?.email ?? null
     if (email) names.set(id, email.split("@")[0])
   }
-  return (data ?? []).map((v: { id: string; version_no: number; created_at: string; size_bytes: number | null; mime_type: string | null; created_by: string | null; unmerged?: boolean }) => ({
-    id: v.id, versionNo: v.version_no, unmerged: v.unmerged === true, createdAt: v.created_at, size: v.size_bytes, mimeType: v.mime_type,
-    current: v.id === f.current_version_id, by: v.created_by ? names.get(v.created_by) ?? "staff" : null,
-  }))
+  const { versionNotes } = await import("./proposals")
+  const notes = await versionNotes(fileId)
+  return (data ?? []).map((v: { id: string; version_no: number; created_at: string; size_bytes: number | null; mime_type: string | null; created_by: string | null; unmerged?: boolean }) => {
+    const n = notes.get(v.id)
+    return {
+      id: v.id, versionNo: v.version_no, unmerged: v.unmerged === true, createdAt: v.created_at, size: v.size_bytes, mimeType: v.mime_type,
+      current: v.id === f.current_version_id, by: n?.source === "claude" ? "Claude" : v.created_by ? names.get(v.created_by) ?? "staff" : null,
+      note: n?.note ?? null, discarded: n?.discarded === true,
+    }
+  })
 }
 
 /** One saved copy's bytes (staff only) — an older version opens exactly like the current file. */
