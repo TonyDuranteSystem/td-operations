@@ -96,11 +96,11 @@ describe('the wizard shows the same words the letter prints', () => {
 })
 
 describe('the signature box is wired into the closure wizard', () => {
-  it('is an OPTIONAL field of the documents step with the words Antonio chose, in English and Italian', () => {
+  it('is a REQUIRED field of the documents step with the words Antonio chose, in English and Italian', () => {
     const f = CLOSURE_FIELDS.documents.find((x) => x.name === 'signature_image')
     expect(f).toBeDefined()
     expect(f?.type).toBe('signature')
-    expect(f?.required).toBe(false)
+    expect(f?.required).toBe(true) // Antonio 2026-11-10: "it's required"
     expect(f?.label).toBe('Draw your signature here for the EIN letter to send to the IRS for its closure')
     expect(f?.labelIt).toMatch(/firma/)
   })
@@ -125,5 +125,12 @@ describe('the signature box is wired into the closure wizard', () => {
     expect(at).toBeGreaterThan(0)
     expect(route).toContain("wizard_type === 'closure' && typeof data === 'object'")
     expect(at).toBeLessThan(route.indexOf('buildSubmissionRecord(submissionTable'))
+  })
+
+  it('the server refuses a closure sent without a valid signature, with a plain sentence (the wizard gate stops it first)', () => {
+    const route = read('app/api/portal/wizard-submit/route.ts')
+    expect(route).toContain('if (!sig.signed)')
+    expect(route).toContain('Please draw your signature for the EIN letter before sending the closure form.')
+    expect(route).toMatch(/!sig\.signed\)[\s\S]{0,260}status: 400/)
   })
 })

@@ -27,8 +27,8 @@ const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 /**
  * Company Closure wizard: "Draw your signature here for the EIN letter to send to the IRS for its closure" (part F step 2).
  * Shows the letter's own sentences with the client's answers in them (so they sign what will be printed), the consent text, and a pad. The drawing
- * is a PNG uploaded through the wizard's normal file pipeline under the field name `signature_image`; the answers hold the path. OPTIONAL: a client
- * who does not draw one signs the printed letter by hand. The server writes the consent record (lib/closure/signature-consent.ts).
+ * is a PNG uploaded through the wizard's normal file pipeline under the field name `signature_image`; the answers hold the path. REQUIRED (the field's
+ * `required` flag: the wizard gate and the server both refuse a closure sent without it). The server writes the consent record (lib/closure/signature-consent.ts).
  */
 export function WizardSignatureField({ name, value, onChange, onFileUpload, context, locale, pick }: Props) {
   const [open, setOpen] = useState(false)

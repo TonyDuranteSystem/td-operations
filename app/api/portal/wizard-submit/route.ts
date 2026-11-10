@@ -81,11 +81,15 @@ export async function POST(req: NextRequest) {
   // time and the caller's address — never taken from the request; a client who did not draw a signature has none recorded.
   if (wizard_type === 'closure' && typeof data === 'object') {
     const { applyClosureSignatureConsent, clientIpFromForwardedFor } = await import('@/lib/closure/signature-consent')
-    applyClosureSignatureConsent(data as Record<string, unknown>, {
+    const sig = applyClosureSignatureConsent(data as Record<string, unknown>, {
       ip: clientIpFromForwardedFor(req.headers.get('x-forwarded-for')),
       userAgent: req.headers.get('user-agent'),
       now: new Date(),
     })
+    // The signature is REQUIRED (Antonio 2026-11-10): the wizard stops a client who has not drawn one, and the server refuses it too (R099: plain sentence).
+    if (!sig.signed) {
+      return NextResponse.json({ error: 'Please draw your signature for the EIN letter before sending the closure form.' }, { status: 400 })
+    }
   }
 
   // Server-side backstop: a formation is for a NEW company and lives on the
