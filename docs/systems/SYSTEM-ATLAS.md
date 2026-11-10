@@ -190,7 +190,7 @@ _Regenerated 2026-11-10. Every subsystem doc under `docs/systems/` (57 docs), wi
 - [client-app.md](client-app.md) — Client iPhone App (MyLLC Manager 2.0) _(verified 2026-11-10)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-10-20)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
-- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-19)_
+- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-11-10)_
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-11-07)_
 - [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-11-06)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
@@ -209,7 +209,7 @@ _Regenerated 2026-11-10. Every subsystem doc under `docs/systems/` (57 docs), wi
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-10)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-02)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-10)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-04)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-10)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-11-06)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
