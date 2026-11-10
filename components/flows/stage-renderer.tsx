@@ -25,6 +25,7 @@ import { IrsTrackingEntry } from './irs-tracking-entry'
 import { ClosureWrapupPanel } from './closure-wrapup-panel'
 import { EsignPanel } from './esign-panel'
 import { ReturnFaxPanel } from './return-fax-panel'
+import { ExtensionFaxPanel } from './extension-fax-panel'
 import { esignDocName } from '@/lib/flows/esign-doc-name'
 import { ApplyNamePanel } from './apply-name-panel'
 
@@ -179,6 +180,19 @@ function renderComponent(
       )
     case 'return_fax_panel':
       return <ReturnFaxPanel key={key} serviceDeliveryId={serviceDelivery.id} account={account} serviceType={serviceDelivery.service_type} />
+    case 'extension_fax_panel':
+      return (
+        <ExtensionFaxPanel
+          key={key}
+          serviceDeliveryId={serviceDelivery.id}
+          flowStage={serviceDelivery.stage}
+          accountId={account.id}
+          uploadLabel={component.label}
+          uploadFolder={component.folder}
+          uploadDocumentType={component.documentType}
+          uploadAutoAdvance={component.autoAdvance}
+        />
+      )
     case 'apply_name_panel':
       return <ApplyNamePanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'closure_wrapup':
