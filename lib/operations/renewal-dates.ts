@@ -4,9 +4,12 @@
  *
  * Business rules (Antonio, 2026-07):
  *  - RA renewal = anniversary of the RA service start. Formation intake → the
- *    formation date. Onboarding intake → the day TD took over the agent
- *    (ra_switch_date, falling back to client_since — the same start-date
- *    precedence billing uses in lib/billing/june-installment-eligibility.ts).
+ *    formation date. Onboarding intake → Client Since (the day we onboarded a
+ *    company they already had), falling back to ra_switch_date.
+ *    Antonio, 2026-11-10: "Client Since filled = we onboarded an existing
+ *    company; Client Since empty = we created the company." (Billing's own
+ *    chain in lib/billing/june-installment-eligibility.ts is separate and
+ *    unchanged.)
  *  - Annual report per state: FL May 1, DE Jun 1, WY 1st of the formation
  *    month — all next calendar year; NM has NO annual report. TD files ARs
  *    itself (never via Harbor).
@@ -137,7 +140,7 @@ export function deriveRenewalDates(input: RenewalDeriveInput): RenewalDateFills 
     const start =
       input.intake === "formation"
         ? input.formation_date
-        : input.ra_switch_date || input.client_since || null
+        : input.client_since || input.ra_switch_date || null
     if (start) fills.ra_renewal_date = plusOneYear(start)
   }
 

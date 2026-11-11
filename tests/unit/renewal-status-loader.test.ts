@@ -115,6 +115,28 @@ describe("loadRenewalStatuses", () => {
     expect(held.status.closing).toBe(true) // active Company Closure SD
   })
 
+  it("intake: Client Since filled = onboarded (even with a formation job); empty + formation date = created by us; nothing = null", async () => {
+    const { client } = fakeClient({
+      accounts: { rows: [
+        account({ id: "onb", company_name: "Onboarded LLC", client_since: "2026-02-19", formation_date: "2021-12-10" }),
+        account({ id: "onb-job", company_name: "Onboarded With Job LLC", client_since: "2026-02-19", formation_date: "2021-12-10" }),
+        account({ id: "made", company_name: "Created LLC", client_since: null, formation_date: "2023-12-12" }),
+        account({ id: "none", company_name: "Unknown LLC", client_since: null, formation_date: null }),
+      ] },
+      service_deliveries: { rows: [
+        { id: "sd-f", account_id: "onb-job", service_type: "Company Formation", status: "completed", stage: null, stage_order: null, due_date: null },
+      ] },
+      payments: { rows: [] },
+      tax_returns: { rows: [] },
+    })
+    const result = await loadRenewalStatuses(client, { today: TODAY })
+    const intake = (id: string) => result.find(r => r.account.id === id)!.intake
+    expect(intake("onb")).toBe("onboarding")
+    expect(intake("onb-job")).toBe("onboarding") // the legacy formation job does not make it a company we created
+    expect(intake("made")).toBe("formation")
+    expect(intake("none")).toBeNull()
+  })
+
   it("excludes test payments via NOT IS TRUE (NULL is_test rows are kept)", async () => {
     const { client, calls } = fakeClient({
       accounts: { rows: [account({ ra_renewal_date: "2026-08-20" })] },

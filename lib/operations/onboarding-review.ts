@@ -261,9 +261,10 @@ export async function applyOnboardingReview(
     // same session) was about — RA Switch Date must reflect the actual day
     // the Harbor Compliance switch completes, a separate, later staff action
     // (Option B, manual-confirm — not yet built). Until that step exists,
-    // renewal-date derivation below correctly falls back to client_since
-    // (deriveRenewalDates's own existing ra_switch_date || client_since
-    // chain), which is more accurate than the old always-today stamp.
+    // renewal-date derivation below correctly uses client_since
+    // (deriveRenewalDates: Client Since first, ra_switch_date as fallback —
+    // Antonio's rule, 2026-11-10), which is more accurate than the old
+    // always-today stamp.
     acctFields.client_since = now.slice(0, 10)
     acctFields.updated_at = now
 
