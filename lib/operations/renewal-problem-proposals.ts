@@ -70,6 +70,7 @@ function proposeForVerdict(
   loaded: LoadedRenewalAccount,
   kind: ObligationKind,
   currentYear: number | undefined,
+  today: string | undefined,
 ): RenewalFixProposal | null {
   const verdict = kind === "ra_renewal" ? loaded.status.ra : loaded.status.annualReport
   const a = loaded.account
@@ -132,12 +133,17 @@ function proposeForVerdict(
         })
         const derived = kind === "ra_renewal" ? fills.ra_renewal_date : fills.annual_report_due_date
         if (derived) {
+          // A date derived from the start can already be in the past (an old company): confirming it turns the
+          // company overdue, so the card says so instead of hiding it (bug-hunter 2026-11-10).
+          const pastWarning = today && derived < today
+            ? ` ⚠ ${derived} is already in the past: after you confirm, this company shows as overdue and someone must check in Harbor${kind === "annual_report" ? " (or on the state website)" : ""} whether it was renewed.`
+            : ""
           return {
             ...base,
             action: "derive_missing_date",
             tier: "confirm",
             summary: `${label} date missing — can be derived`,
-            details: `${verdict.cause} Derived ${derived} from the ${loaded.intake === "formation" ? "formation anniversary" : "onboarding RA-switch date"} per the standard rules. Confirm to set it — the company becomes visible to reminders again.${
+            details: `${verdict.cause} Derived ${derived} from the ${loaded.intake === "formation" ? "formation anniversary" : "Client Since date"} per the standard rules. Confirm to set it — the company becomes visible to reminders again.${pastWarning}${
               kind === "annual_report"
                 ? " ⚠ Before confirming: check whether THIS year's report was actually filed — the derived date is next year's cycle, and confirming it marks the company current (compliance-auditor, council 2026-08-06)."
                 : ""
@@ -173,7 +179,7 @@ export function proposeRenewalFixes(
   const currentYear = opts.today ? parseInt(opts.today.split("-")[0], 10) : undefined
   const out: RenewalFixProposal[] = []
   for (const kind of ["ra_renewal", "annual_report"] as const) {
-    const p = proposeForVerdict(loaded, kind, currentYear)
+    const p = proposeForVerdict(loaded, kind, currentYear, opts.today)
     if (p) out.push(p)
   }
   return out

@@ -9,7 +9,7 @@
  * stage to active, and — for State Annual Report / State RA Renewal leaving
  * "Closed" — undoes the +1-year renewal-date bump.
  *
- * No body required. [id] = service_delivery_id.
+ * Body optional: { expected_from_stage } = the step the page showed. [id] = service_delivery_id.
  */
 
 export const maxDuration = 60
@@ -19,15 +19,21 @@ import { NextRequest, NextResponse } from 'next/server'
 import { revertServiceDelivery } from '@/lib/operations/service-delivery'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
-export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await requireStaffRoute()
   if (denied) return denied
   try {
     // The staff member's id — the CRM Store trash (pilot rows only) needs the person who did it.
     const { createClient } = await import('@/lib/supabase/server')
     const { data: { user } } = await createClient().auth.getUser()
+    // The step the page showed when the button was pressed (optional): a job that is somewhere else by now is not sent back from the wrong place.
+    const raw: unknown = await req.json().catch(() => null)
+    const expected = raw && typeof raw === 'object' && !Array.isArray(raw) && typeof (raw as Record<string, unknown>).expected_from_stage === 'string'
+      ? ((raw as Record<string, unknown>).expected_from_stage as string)
+      : undefined
     const result = await revertServiceDelivery({
       delivery_id: params.id,
+      ...(expected !== undefined ? { expected_from_stage: expected } : {}),
       actor: 'flow-action',
       actor_user_id: user?.id ?? null,
       notes: 'Reverted via flow Workspace "Go Back"',

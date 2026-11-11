@@ -65,11 +65,13 @@ let deletedDocs: { id: string }[] | null = []
 let deletedTracking: { id: string }[] | null = null
 
 let capturedSDUpdate: { patch: Record<string, unknown> | null } = { patch: null }
+/** true = the guarded write matches NO row (the job was moved by someone else after it was read) */
+let updateMatchesNothing = false
 let capturedDocMatch: Record<string, unknown> | null = null
 
 function resolveFor(table: string, op: string) {
   if (table === "service_deliveries") {
-    return op === "update" ? { data: { id: "sd-1" }, error: null } : { data: sdRow, error: null }
+    return op === "update" ? { data: updateMatchesNothing ? [] : { id: "sd-1" }, error: null } : { data: sdRow, error: null }
   }
   if (table === "pipeline_stages") return { data: stagesRows, error: null }
   if (table === "documents") return { data: deletedDocs, error: null }
@@ -118,7 +120,7 @@ vi.mock("@/lib/supabase-admin", () => ({
   },
 }))
 
-import { revertServiceDelivery } from "@/lib/operations/service-delivery"
+import { revertServiceDelivery, REVERT_JOB_MOVED } from "@/lib/operations/service-delivery"
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -129,6 +131,7 @@ beforeEach(() => {
   deletedTracking = null
   capturedSDUpdate = { patch: null }
   capturedDocMatch = null
+  updateMatchesNothing = false
   updateAccount.mockResolvedValue({ success: true, outcome: "updated" })
 })
 
@@ -429,3 +432,46 @@ describe("revertServiceDelivery", () => {
     expect((res.warnings ?? []).join(" ")).not.toContain("stays Closed")
   })
 })
+
+describe("revertServiceDelivery — a job that moved meanwhile is not sent back from the wrong place (QA 2026-11-10)", () => {
+  const sd = () => ({
+    id: "sd-1", service_type: "Company Formation", service_name: "Formation", stage: "Stage C", status: "active",
+    account_id: "acct-1", contact_id: null, stage_history: [{ to_stage: "Stage C" }], end_date: null,
+  })
+  const stages = [
+    { stage_name: "Stage A", stage_order: 1 },
+    { stage_name: "Stage B", stage_order: 2 },
+    { stage_name: "Stage C", stage_order: 3 },
+  ]
+
+  it("changes nothing when the page was looking at another step than the one the job is on", async () => {
+    sdRow = sd()
+    stagesRows = stages
+    const res = await revertServiceDelivery({ delivery_id: "sd-1", expected_from_stage: "Stage B" })
+    expect(res.success).toBe(false)
+    expect(res.error).toBe(REVERT_JOB_MOVED)
+    expect(capturedSDUpdate.patch).toBeNull()
+    expect(capturedDocMatch).toBeNull() // nothing deleted either
+  })
+
+  it("goes back when the page's step is the job's step", async () => {
+    sdRow = sd()
+    stagesRows = stages
+    const res = await revertServiceDelivery({ delivery_id: "sd-1", expected_from_stage: "Stage C" })
+    expect(res.success).toBe(true)
+    expect(res.to_stage).toBe("Stage B")
+  })
+
+  it("says so when the guarded write finds the job already moved (two Go Backs at the same moment): no second history line is written over the first", async () => {
+    sdRow = sd()
+    stagesRows = stages
+    updateMatchesNothing = true
+    const res = await revertServiceDelivery({ delivery_id: "sd-1" })
+    expect(res.success).toBe(false)
+    expect(res.error).toBe(REVERT_JOB_MOVED)
+    expect(logAction).not.toHaveBeenCalled()
+    // the claim comes first: the losing Go Back deleted nothing (no documents, no tracking number)
+    expect(capturedDocMatch).toBeNull()
+  })
+})
+

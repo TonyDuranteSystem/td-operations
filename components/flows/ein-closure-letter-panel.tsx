@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { AlertTriangle, CheckCircle2, FileText, Loader2 } from 'lucide-react'
 import type { EinClosureFacts } from '@/lib/closure/ein-closure-package'
 import { MAX_ADDRESS_LINES, MAX_ADDRESS_LINE_CHARS } from '@/lib/closure/ein-letter-wording'
+import { normalizeCompanyName, einDigits } from '@/lib/closure/signature-consent'
 
 interface MadeInfo {
   documentId: string
@@ -42,6 +43,9 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
   const [noticeId, setNoticeId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [made, setMade] = useState<MadeInfo | null>(null)
+  // A job with NO company of ours (a closure for a company that is not a client): there is no record to trust, so staff can fix a typo in the name or
+  // EIN the client wrote before the letter goes to the IRS. `forKey` ties the typed values to the client's answers they were prefilled from — new answers replace them.
+  const [edit, setEdit] = useState<{ forKey: string; name: string; ein: string } | null>(null)
 
   const load = useCallback(async () => {
     setError(null)
@@ -51,6 +55,8 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
       if (!res.ok || !data || !data.success) throw new Error(data?.error || 'Could not load the letter.')
       const f = data.facts as EinClosureFacts
       setFacts(f)
+      const key = `${f.wizardCompanyName}|${f.wizardEin}`
+      setEdit((prev) => (prev && prev.forKey === key ? prev : { forKey: key, name: f.wizardCompanyName, ein: f.wizardEin }))
       setAddress((prev) => prev || f.addressLines.join('\n'))
       const preselected = f.notices.find((n) => n.recommended && n.mergeable && n.storeFileId)?.documentId || ''
       setNoticeId((prev) => (prev === null ? preselected : prev === '' ? '' : f.notices.some((n) => n.documentId === prev && n.mergeable && n.storeFileId) ? prev : preselected))
@@ -70,13 +76,22 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
       const res = await fetch(`/api/flows/${serviceDeliveryId}/ein-closure-letter`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address, notice_document_id: noticeId || null, facts_hash: facts?.factsHash ?? null }),
+        body: JSON.stringify({
+          address,
+          notice_document_id: noticeId || null,
+          facts_hash: facts?.factsHash ?? null,
+          ...(facts && !facts.hasCompany && edit ? { company_name: edit.name, ein: edit.ein } : {}),
+        }),
       })
       const data = await res.json().catch(() => null)
       if (!res.ok || !data || !data.success) {
         const msg = data?.error || 'The letter could not be made.'
         // something changed under the box (409): show the fresh facts, keep the message on top of them
-        if (res.status === 409) await load()
+        if (res.status === 409) {
+          // forget the EIN copy chosen on the OLD facts: the fresh box preselects again (or preselects nothing, when it warns that it cannot tell)
+          setNoticeId(null)
+          await load()
+        }
         throw new Error(msg)
       }
       setMade(data.result as MadeInfo)
@@ -96,6 +111,14 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
       : addressRows.some((l) => l.length > MAX_ADDRESS_LINE_CHARS)
         ? `An address line is longer than ${MAX_ADDRESS_LINE_CHARS} characters — split it over two lines.`
         : null
+  // the same comparison the server makes (case, punctuation and the legal form are ignored for the name; an EIN is its nine digits)
+  const changedFromClient = !!facts && !!edit && (normalizeCompanyName(edit.name) !== normalizeCompanyName(facts.wizardCompanyName) || einDigits(edit.ein) !== einDigits(facts.wizardEin))
+  // a job with no company of ours needs a name and an EIN in the box (a blank one would silently fall back to what the client wrote)
+  const detailsMissing = !!facts && !facts.hasCompany && !!edit && (!edit.name.trim() || !edit.ein.trim())
+  // the correction lives only in this page: after a reload the box shows the client's words again, so say what the saved letter was made for
+  const savedLetterCompany = facts?.existingLetter ? facts.existingLetter.name.replace(/^EIN Closure Letter\s*-\s*/i, '').replace(/\.pdf$/i, '').trim() : ''
+  const boxCompany = facts ? (facts.hasCompany || !edit ? facts.companyName : edit.name) : ''
+  const savedLetterDiffers = !!savedLetterCompany && !made && !!boxCompany.trim() && normalizeCompanyName(savedLetterCompany) !== normalizeCompanyName(boxCompany)
   const link = (id: string) => `/api/documents/${id}/preview`
   const shown = made ?? (facts?.existingLetter ? { documentId: facts.existingLetter.documentId, name: facts.existingLetter.name, pages: 0, attachedNotice: null } : null)
 
@@ -115,12 +138,35 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
         <div className="mt-3 space-y-3 text-sm">
           <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1">
             <dt className="text-zinc-500">Company</dt>
-            <dd className="font-medium text-zinc-900">{facts.companyName || '—'}{facts.state ? ` (${facts.state})` : ''}</dd>
+            <dd className="font-medium text-zinc-900">
+              {facts.hasCompany || !edit ? (
+                <>{facts.companyName || '—'}{facts.state ? ` (${facts.state})` : ''}</>
+              ) : (
+                <input aria-label="Company name on the letter" value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} className="w-full rounded-md border border-zinc-300 px-2 py-1 text-sm font-normal" />
+              )}
+            </dd>
             <dt className="text-zinc-500">EIN</dt>
-            <dd className="font-medium text-zinc-900">{facts.ein || '—'}</dd>
+            <dd className="font-medium text-zinc-900">
+              {facts.hasCompany || !edit ? (
+                facts.ein || '—'
+              ) : (
+                <input aria-label="EIN on the letter" value={edit.ein} onChange={(e) => setEdit({ ...edit, ein: e.target.value })} inputMode="numeric" placeholder="XX-XXXXXXX" className="w-40 rounded-md border border-zinc-300 px-2 py-1 text-sm font-normal" />
+              )}
+            </dd>
             <dt className="text-zinc-500">Signed by</dt>
             <dd className="font-medium text-zinc-900">{facts.signerName || '—'} <span className="font-normal text-zinc-500">{facts.hasSignature ? `(signature drawn by the client${facts.signedAt ? ` on ${signedDay(facts.signedAt)}` : ''})` : '(a line to sign by hand)'}</span></dd>
           </dl>
+
+          {!facts.hasCompany && edit && (
+            <p className="text-xs text-zinc-500">
+              This company is not one of ours, so the name and EIN come from what the client wrote — fix a typo here before the letter goes to the IRS.
+              {changedFromClient
+                ? facts.hasSignature
+                  ? ' You changed what the client wrote: they signed for their own version, so their signature will NOT be used and the letter will have a line to sign by hand.'
+                  : ' You changed what the client wrote.'
+                : ''}
+            </p>
+          )}
 
           <div>
             <label htmlFor="ein-letter-address" className="block text-xs font-medium text-zinc-700">Company address on the letter — as printed on the EIN letter</label>
@@ -155,12 +201,17 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
             </div>
           </fieldset>
 
+          {savedLetterDiffers && (
+            <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> The letter already made on this job is for “{savedLetterCompany}”, but the box shows “{boxCompany}”. Making the letter again replaces it with what the box shows.</p>
+          )}
+          {detailsMissing && <p className="text-xs text-red-700">Fill in the company name and the EIN before making the letter.</p>}
+
           {facts.warnings.map((w) => (
             <p key={w} className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {w}</p>
           ))}
 
           <div className="flex flex-wrap items-center gap-3">
-            <button type="button" disabled={busy || !address.trim() || !!addressTooLong} onClick={() => void make()} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:bg-zinc-300">
+            <button type="button" disabled={busy || !address.trim() || !!addressTooLong || detailsMissing} onClick={() => void make()} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:bg-zinc-300">
               {busy ? 'Making the letter…' : shown ? 'Make the letter again' : 'Make the letter'}
             </button>
             {shown && (

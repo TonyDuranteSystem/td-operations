@@ -22,6 +22,14 @@ export function ClientAppFrame({ selectionQuery, switcher }: { selectionQuery: s
   const { t } = useLocale()
   const [me, setMe] = useState<MeAnswer | null>(null)
 
+  // Tell the app which company this page is showing, so its own bottom bar and Menu list describe THAT company, not the first one (bug hunt
+  // 2026-11-10, finding 1: the website's company cookies never reach the app's server doors, so the app has to be told). The app only believes a
+  // message from this site's main frame and checks the words before using them (lib: ios/TDClient/Sources/TDClientCore/Rules.swift `SelectionRules`).
+  useEffect(() => {
+    if (!appMode) return
+    ;(window as unknown as ClientBridge).webkit?.messageHandlers?.tdclient?.postMessage(`selection:${selectionQuery}`)
+  }, [appMode, selectionQuery])
+
   // The number on the button and the screen names come from the app's own server answer, so the website's menu rule and the app can
   // never disagree. Asked again on every screen change and whenever the app comes back to the front (the number moves while you read).
   useEffect(() => {

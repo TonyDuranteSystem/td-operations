@@ -5,6 +5,7 @@
 
 import type { WizardStep } from './wizard-shell'
 import type { FieldConfig } from './wizard-field'
+import { WIZARD_DOCUMENT_ACCEPT } from '@/lib/portal/wizard-file-rules'
 
 // ─── Owner Info Fields (shared across formation/onboarding) ───
 
@@ -49,7 +50,7 @@ export const MEMBER_FIELDS: FieldConfig[] = [
   // additional individual member uploads theirs here. The upload key resolves
   // to member_{idx}_member_passport (see wizard-client members repeater), which
   // formation materialization reads to file each member's passport privately.
-  { name: 'member_passport', label: 'Passport Scan', labelIt: 'Scansione Passaporto', type: 'file', required: true, hint: 'Clear photo of the passport data page', hintIt: 'Foto chiara della pagina dati del passaporto', conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_passport', label: 'Passport Scan', labelIt: 'Scansione Passaporto', type: 'file', required: true, hint: 'Clear photo of the passport data page', hintIt: 'Foto chiara della pagina dati del passaporto', conditional: { field: 'member_type', value: 'individual' }, accept: WIZARD_DOCUMENT_ACCEPT },
 
   // ── Ownership % (always shown — applies to both types) ──
   { name: 'member_ownership_pct', label: 'Ownership %', labelIt: 'Quota %', type: 'number', required: true },
@@ -131,7 +132,7 @@ export const FORMATION_FIELDS: Record<string, FieldConfig[]> = {
   ],
   members: MEMBER_FIELDS,
   documents: [
-    { name: 'passport_owner', label: 'Passport Scan (Owner)', labelIt: 'Scansione Passaporto (Titolare)', type: 'file', required: true, hint: 'Clear photo of passport data page', hintIt: 'Foto chiara della pagina dati del passaporto' },
+    { name: 'passport_owner', label: 'Passport Scan (Owner)', labelIt: 'Scansione Passaporto (Titolare)', type: 'file', required: true, hint: 'Clear photo of passport data page', hintIt: 'Foto chiara della pagina dati del passaporto', accept: WIZARD_DOCUMENT_ACCEPT },
     { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
   ],
 }
@@ -204,10 +205,10 @@ export const ONBOARDING_FIELDS: Record<string, FieldConfig[]> = {
   ],
   members: MEMBER_FIELDS,
   documents: [
-    { name: 'passport_owner', label: 'Passport Scan (Owner)', labelIt: 'Scansione Passaporto (Titolare)', type: 'file', required: true },
-    { name: 'articles_of_organization', label: 'Articles of Organization', labelIt: 'Atto Costitutivo', type: 'file', required: true },
-    { name: 'ein_letter', label: 'EIN Letter (CP 575)', labelIt: 'Lettera EIN (CP 575)', type: 'file', required: true },
-    { name: 'ss4_form', label: 'SS-4 Form (optional)', labelIt: 'Modulo SS-4 (opzionale)', type: 'file', required: false },
+    { name: 'passport_owner', label: 'Passport Scan (Owner)', labelIt: 'Scansione Passaporto (Titolare)', type: 'file', required: true, accept: WIZARD_DOCUMENT_ACCEPT },
+    { name: 'articles_of_organization', label: 'Articles of Organization', labelIt: 'Atto Costitutivo', type: 'file', required: true, accept: WIZARD_DOCUMENT_ACCEPT },
+    { name: 'ein_letter', label: 'EIN Letter (CP 575)', labelIt: 'Lettera EIN (CP 575)', type: 'file', required: true, accept: WIZARD_DOCUMENT_ACCEPT },
+    { name: 'ss4_form', label: 'SS-4 Form (optional)', labelIt: 'Modulo SS-4 (opzionale)', type: 'file', required: false, accept: WIZARD_DOCUMENT_ACCEPT },
     { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
   ],
 }
@@ -791,7 +792,7 @@ export const BANKING_RELAY_FIELDS: Record<string, FieldConfig[]> = {
       { value: 'No', label: 'No' },
       { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
     ]},
-    { name: 'passport_image', label: 'Passport Photo (JPG, all 4 corners visible)', labelIt: 'Foto Passaporto (JPG, 4 angoli visibili)', type: 'file', required: true },
+    { name: 'passport_image', label: 'Passport Photo (JPG, all 4 corners visible)', labelIt: 'Foto Passaporto (JPG, 4 angoli visibili)', type: 'file', required: true, accept: WIZARD_DOCUMENT_ACCEPT },
     { name: 'proof_of_address', label: 'Proof of Address', labelIt: 'Prova di Residenza', type: 'file', required: true },
     { name: 'disclaimer_accepted', label: 'Confirmation', labelIt: 'Conferma', type: 'checkbox', required: true, hint: 'I confirm that all information provided is accurate and complete.', hintIt: 'Confermo che tutte le informazioni fornite sono accurate e complete.' },
   ],
@@ -842,8 +843,8 @@ export const CLOSURE_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'tax_returns_years', label: 'Which years? (e.g. 2024, 2025)', labelIt: 'Quali anni? (es. 2024, 2025)', type: 'text', required: false },
   ],
   documents: [
-    { name: 'articles_of_organization', label: 'Articles of Organization', labelIt: 'Atto Costitutivo', type: 'file', required: true },
-    { name: 'ein_letter', label: 'EIN Letter', labelIt: 'Lettera EIN', type: 'file', required: true },
+    { name: 'articles_of_organization', label: 'Articles of Organization', labelIt: 'Atto Costitutivo', type: 'file', required: true, accept: WIZARD_DOCUMENT_ACCEPT },
+    { name: 'ein_letter', label: 'EIN Letter', labelIt: 'Lettera EIN', type: 'file', required: true, accept: WIZARD_DOCUMENT_ACCEPT },
     { name: 'other_documents', label: 'Other Relevant Documents', labelIt: 'Altri Documenti Rilevanti', type: 'file', required: false },
     // Part F step 2: the client's own drawn signature for the EIN closure letter. REQUIRED (Antonio 2026-11-10: "it's required") — the wizard will not
     // send without it, and the server refuses a closure sent without one (app/api/portal/wizard-submit). The consent text and its record are the server's
@@ -895,9 +896,9 @@ export const COMPANY_INFO_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'business_purpose', label: 'Business Activities', labelIt: 'Attività Aziendali', type: 'textarea', required: true },
   ],
   documents: [
-    { name: 'passport_owner', label: 'Passport Scan (Owner)', labelIt: 'Scansione Passaporto (Titolare)', type: 'file', required: true, hint: 'Clear photo of passport data page', hintIt: 'Foto chiara della pagina dati del passaporto' },
-    { name: 'articles_of_organization', label: 'Articles of Organization', labelIt: 'Atto Costitutivo', type: 'file', required: true },
-    { name: 'ein_letter', label: 'EIN Letter (CP 575)', labelIt: 'Lettera EIN (CP 575)', type: 'file', required: false },
+    { name: 'passport_owner', label: 'Passport Scan (Owner)', labelIt: 'Scansione Passaporto (Titolare)', type: 'file', required: true, hint: 'Clear photo of passport data page', hintIt: 'Foto chiara della pagina dati del passaporto', accept: WIZARD_DOCUMENT_ACCEPT },
+    { name: 'articles_of_organization', label: 'Articles of Organization', labelIt: 'Atto Costitutivo', type: 'file', required: true, accept: WIZARD_DOCUMENT_ACCEPT },
+    { name: 'ein_letter', label: 'EIN Letter (CP 575)', labelIt: 'Lettera EIN (CP 575)', type: 'file', required: false, accept: WIZARD_DOCUMENT_ACCEPT },
     { name: 'disclaimer_accepted', label: 'I confirm that all information provided is accurate', labelIt: 'Confermo che tutte le informazioni fornite sono corrette', type: 'checkbox', required: true },
   ],
 }

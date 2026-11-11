@@ -11,7 +11,7 @@ import { PortalChat } from '@/components/portal/portal-chat'
 import type { ChatScope } from '@/lib/hooks/use-portal-chat'
 import { LogTab } from '@/components/portal/chat/log-tab'
 import { cn } from '@/lib/utils'
-import { getClientAppMode } from '@/lib/app-mode/server'
+import { getClientAppModeActive } from '@/lib/app-mode/server'
 
 export default async function PortalChatPage({
   searchParams,
@@ -86,7 +86,7 @@ export default async function PortalChatPage({
   const isTeammate = !contactId
   // Inside the client iPhone app (dev job 056a70d0, Step 3b): the screen's name sits in the top row (lib/portal-app/frame.ts), the
   // "Tony Durante Team" line moves into the chat's own header next to the Topic button, and there is no Journey Log, only the messages.
-  const appMode = getClientAppMode()
+  const appMode = await getClientAppModeActive()
   const activeView = view === 'log' && !isTeammate && !appMode ? 'log' : 'chat'
 
   return (

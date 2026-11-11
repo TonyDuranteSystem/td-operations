@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, Building2, AlertTriangle, CheckCircle2, Lock
 import { cn } from '@/lib/utils'
 import { parseISO, differenceInCalendarDays } from 'date-fns'
 import { MarkFiledDialog } from '@/components/calendar/mark-filed-dialog'
+import { RenewalDetailsDialog } from '@/components/calendar/renewal-details-dialog'
 import { renewalActionLink } from '@/lib/renewal-links'
 import type { CalendarRow, RenewalRow, InfoRow } from '@/app/(dashboard)/calendar/page'
 
@@ -72,6 +73,10 @@ export function AnnualCalendar({ rows, year, today }: AnnualCalendarProps) {
   const [selectedMonth, setSelectedMonth] = useState<number | null>(null)
   const [kindFilter, setKindFilter] = useState<CalendarRow['kind'] | ''>('')
   const [dialogRow, setDialogRow] = useState<RenewalRow | null>(null)
+  // Every Registered Agent renewal row opens the details pop-up (CRM facts + "correct the date");
+  // "Mark filed" is reached from there for rows that are due. Annual reports are another procedure:
+  // they behave exactly as before (a red row opens the Mark Filed dialog directly).
+  const [detailsRow, setDetailsRow] = useState<RenewalRow | null>(null)
 
   const filtered = kindFilter ? rows.filter(r => r.kind === kindFilter) : rows
 
@@ -226,6 +231,15 @@ export function AnnualCalendar({ rows, year, today }: AnnualCalendarProps) {
                   const actionable = renewal && (u === 'red' || u === 'overdue') && renewal.status !== 'offboarding' && renewal.status !== 'filed'
                   const blocked = renewal?.status === 'blocked'
                   const offb = renewal?.status === 'offboarding'
+                  // Any Registered Agent renewal that is still to be done opens the details pop-up (filed history
+                  // and companies being closed stay read-only).
+                  const opensDetails = !!renewal && renewal.kind === 'ra' && renewal.status !== 'offboarding' && renewal.status !== 'filed'
+                  const interactive = opensDetails || !!actionable
+                  const openRow = () => {
+                    if (!renewal) return
+                    if (opensDetails) setDetailsRow(renewal)
+                    else if (actionable) setDialogRow(renewal)
+                  }
 
                   return (
                     <div
@@ -238,14 +252,15 @@ export function AnnualCalendar({ rows, year, today }: AnnualCalendarProps) {
                         offb && 'opacity-50',
                         u === 'green' && 'opacity-60',
                         !actionable && !blocked && !offb && u !== 'green' && 'border-zinc-200',
+                        opensDetails && !actionable && 'hover:bg-zinc-50 cursor-pointer',
                       )}
-                      onClick={() => actionable && renewal && setDialogRow(renewal)}
-                      role={actionable ? 'button' : undefined}
-                      tabIndex={actionable ? 0 : undefined}
+                      onClick={() => interactive && openRow()}
+                      role={interactive ? 'button' : undefined}
+                      tabIndex={interactive ? 0 : undefined}
                       onKeyDown={(e) => {
-                        if (actionable && (e.key === 'Enter' || e.key === ' ') && renewal) {
+                        if (interactive && (e.key === 'Enter' || e.key === ' ')) {
                           e.preventDefault()
-                          setDialogRow(renewal)
+                          openRow()
                         }
                       }}
                     >
@@ -333,7 +348,22 @@ export function AnnualCalendar({ rows, year, today }: AnnualCalendarProps) {
         </div>
       )}
 
-      {/* Mark Filed dialog — opens when a red renewal row is clicked */}
+      {/* Renewal details — opens when any renewal row is clicked */}
+      {detailsRow && (
+        <RenewalDetailsDialog
+          row={detailsRow}
+          onClose={() => setDetailsRow(null)}
+          onMarkFiled={
+            (() => {
+              const u = urgencyFor(detailsRow, today)
+              const due = (u === 'red' || u === 'overdue') && detailsRow.status !== 'offboarding' && detailsRow.status !== 'filed'
+              return due ? () => { setDialogRow(detailsRow); setDetailsRow(null) } : undefined
+            })()
+          }
+        />
+      )}
+
+      {/* Mark Filed dialog — reached from the details pop-up for rows that are due */}
       {dialogRow && (
         <MarkFiledDialog
           row={dialogRow}

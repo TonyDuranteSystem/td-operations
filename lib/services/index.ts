@@ -399,6 +399,19 @@ export async function getPerPersonServiceTypes(): Promise<string[]> {
   return activeServiceTypesWithTag("per_person")
 }
 
+/**
+ * Pipeline / `service_type` names tagged `multi_unit` — services where buying N means N SEPARATE JOBS, one per
+ * unit, each on its own (Company Closure: a client closing two companies gets two jobs, each with its own client
+ * form and its own workspace). Payment creates the units 2..N on the PERSON (never on the same company: a company
+ * has at most one active closure). Not the same as `per_person` (ITIN ×2 = two different people, never two jobs
+ * for one person) nor `repeatable` (a new purchase later, not units of one offer). Dev job 9829a468 — Antonio,
+ * 2026-11-11 (Contrabona). Tagged by scripts/migrations/20261111-1500-closure-multi-unit.sql; without the tag the
+ * code is a no-op (one job, the rest reported) — safe rollout order either way.
+ */
+export async function getMultiUnitServiceTypes(): Promise<string[]> {
+  return activeServiceTypesWithTag("multi_unit")
+}
+
 /** True when a single person can hold at most ONE live instance of this service. */
 export async function isPerPersonServiceType(serviceType: string): Promise<boolean> {
   return (await getPerPersonServiceTypes()).includes(serviceType)

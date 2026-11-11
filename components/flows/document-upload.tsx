@@ -15,6 +15,7 @@ import { FILING_ID_UNRESOLVED, type FilingIdCheckResult } from '@/lib/flows/fili
 import { mimeTypeFromFileName } from '@/lib/flows/onboarding-articles'
 import { typesForTarget } from '@/lib/crm-store/types-for-target'
 import { uploadOutcome } from '@/lib/flows/upload-outcome'
+import { stagingFileName } from '@/lib/storage/staging-name'
 
 /** Window event fired after a flow document upload succeeds. The sibling
  *  DocumentViewer listens for it to re-fetch live (a server router.refresh()
@@ -186,7 +187,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
   // Stage the file to Supabase Storage via a signed URL (bypasses the 4.5MB
   // Vercel body limit). Returns the storage path. Throws on failure.
   async function stageFile(picked: File): Promise<string> {
-    const storagePath = `flow-uploads/${serviceDeliveryId}/${Date.now()}_${picked.name}`
+    const storagePath = `flow-uploads/${serviceDeliveryId}/${Date.now()}_${stagingFileName(picked.name)}`
     const sigRes = await fetch('/api/storage/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

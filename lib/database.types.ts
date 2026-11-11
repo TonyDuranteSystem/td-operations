@@ -15968,6 +15968,7 @@ export type Database = {
           is_test: boolean | null
           name_checks: Json | null
           notes: string | null
+          offer_unit: number | null
           pipeline: string | null
           service_name: string
           service_type: string
@@ -16009,6 +16010,7 @@ export type Database = {
           is_test?: boolean | null
           name_checks?: Json | null
           notes?: string | null
+          offer_unit?: number | null
           pipeline?: string | null
           service_name: string
           service_type: string
@@ -16050,6 +16052,7 @@ export type Database = {
           is_test?: boolean | null
           name_checks?: Json | null
           notes?: string | null
+          offer_unit?: number | null
           pipeline?: string | null
           service_name?: string
           service_type?: string

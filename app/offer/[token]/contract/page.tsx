@@ -7,6 +7,7 @@ import { contractVersionLabel, portalChatVoiceWording, type PortalChatVoiceWordi
 import StandaloneServiceAgreement, { contractWordingFor, ContractNotReady } from './standalone-service-agreement'
 import { isStandaloneAgreementType, isCustomContractType, type ShortContractType } from '@/lib/offers/standalone-contract-types'
 import { InlineText, AgreementBody } from '@/components/contracts/agreement-body'
+import { isNoChargeFee } from '@/lib/offers/fee-label'
 import RenewalAgreement from './renewal-agreement'
 import ServiceAgreement from './service-agreement'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
@@ -1263,7 +1264,7 @@ export default function ContractPage() {
                 <tbody>
                   <tr><th>Service</th><td>{svc.name}</td></tr>
                   {svc.description && <tr><th>Description</th><td>{svc.description}</td></tr>}
-                  <tr><th>Fee</th><td>{svcFee} (one-time)</td></tr>
+                  <tr><th>Fee</th><td>{isNoChargeFee(svcFee) ? 'Included \u2014 no separate charge' : <>{svcFee} (one-time)</>}</td></tr>
                   {svc.includes && svc.includes.length > 0 && (
                     <tr><th>Includes</th><td>{(svc.includes as string[]).map((item, i) => <span key={i}>{item}{i < svc.includes!.length - 1 ? ', ' : ''}</span>)}</td></tr>
                   )}
@@ -1297,8 +1298,15 @@ export default function ContractPage() {
 
               <div className="contract-section">
                 <h3>5. Payment</h3>
-                <p>The total fee for this service is <strong>{svcFee}</strong>, payable in full before services begin. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
-                <p><strong>All fees are non-refundable</strong> once services have commenced.</p>
+                {/* a $0 / "included" service (e.g. a closure bundled in the formation price) says so — never "$0, payable in full" */}
+                {isNoChargeFee(svcFee) ? (
+                  <p>No service fee is payable to the Service Provider for this service itself; it is included in your offer. Any third-party or government charges described in this Agreement remain the Client&rsquo;s responsibility.</p>
+                ) : (
+                  <>
+                    <p>The total fee for this service is <strong>{svcFee}</strong>, payable in full before services begin. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
+                    <p><strong>All fees are non-refundable</strong> once services have commenced.</p>
+                  </>
+                )}
               </div>
 
               <div className="contract-section">

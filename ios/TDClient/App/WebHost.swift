@@ -47,6 +47,7 @@ struct WebHost: UIViewRepresentable {
                 Task { @MainActor in
                     guard let self else { return }
                     self.model.currentPath = v.url?.path ?? "/"
+                    self.model.currentTab = v.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems?.first(where: { $0.name == "tab" })?.value
                     try? await Task.sleep(nanoseconds: 700_000_000)
                     await self.model.refreshMe()
                 }
@@ -55,9 +56,15 @@ struct WebHost: UIViewRepresentable {
 
         func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
             // only a page of OUR site, in the main frame, is believed (a payment frame must never be able to open the app's Menu)
-            guard message.name == "tdclient", message.frameInfo.isMainFrame, (message.body as? String) == "menu",
+            guard message.name == "tdclient", message.frameInfo.isMainFrame, let body = message.body as? String,
                   LinkRules.ownSite(host: message.frameInfo.securityOrigin.host, serverHost: AppConfig.serverHost) else { return }
-            Task { @MainActor in self.model.sheet = .menu }
+            if body == "menu" {
+                Task { @MainActor in self.model.sheet = .menu }
+            } else if let query = SelectionRules.query(from: body),
+                      PageRules.mayRunRequest(pageHost: message.frameInfo.securityOrigin.host, serverHost: AppConfig.serverHost) {
+                // the page says which company it shows: the bar and the Menu list are asked about THAT company (only words that are plain ids are accepted)
+                Task { @MainActor in await self.model.setSelection(query) }
+            }
         }
 
         // MARK: loading
@@ -66,6 +73,7 @@ struct WebHost: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             Task { @MainActor in
                 self.model.loadFailed = false
+                self.model.failedURL = nil
                 await self.model.refreshMe()
             }
         }
@@ -76,7 +84,8 @@ struct WebHost: UIViewRepresentable {
             let e = error as NSError
             if e.code == NSURLErrorCancelled { return }                          // a page replaced by another one is not a failure
             if e.domain == "WebKitErrorDomain" && e.code == 102 { return }       // "frame load interrupted": the page turned into a file for the viewer, the screen is fine
-            Task { @MainActor in self.model.loadFailed = true }
+            let failed = e.userInfo[NSURLErrorFailingURLErrorKey] as? URL        // "Try again" opens THIS page
+            Task { @MainActor in self.model.failedURL = failed; self.model.loadFailed = true }
         }
 
         // MARK: files

@@ -5,6 +5,7 @@ import { resolveDriveFolderUrl } from '@/lib/drive-folder-url'
 import { loadRenewalStatuses } from '@/lib/operations/renewal-status-loader'
 import { proposeRenewalFixes, type RenewalFixProposal } from '@/lib/operations/renewal-problem-proposals'
 import type { ObligationStatus, ObligationVerdict } from '@/lib/operations/renewal-status'
+import { checkRaDate, crmDatesOf, renewalCheckStart, type CrmDates, type RenewalStartBasis } from '@/lib/operations/renewal-date-check'
 
 export type RenewalKind = 'ra' | 'ar'
 export type RenewalStatus = 'upcoming' | 'active' | 'blocked' | 'completed' | 'filed' | 'offboarding'
@@ -28,6 +29,11 @@ export interface RenewalRow {
   /** The status engine's verdict for this obligation (single source of truth). */
   engine_status?: ObligationStatus
   engine_cause?: string
+  // CRM facts shown in the "renewal details" pop-up (dev job 51324085)
+  /** Every date the CRM holds for the company (Registered Agent rows only — the pop-up is about the Registered Agent). */
+  dates?: CrmDates
+  /** RA rows only: the stored date vs the anniversary of the RA start (Client Since if filled, else Formation). null = neither recorded. */
+  date_check?: { start: string; basis: RenewalStartBasis; expected: string | null; mismatch: boolean } | null
 }
 
 /** Informational row — Tax Return / Payment. Not clickable. */
@@ -163,8 +169,14 @@ export default async function CalendarPage({
   })
 
   // ─── 4. Grid rows from engine verdicts ─────────────────────────────
-  const renewalRows: RenewalRow[] = []
-  for (const l of onCalendar) {
+  // One builder for both the grid (year window) and the "date doesn't match"
+  // list (any year), so the pop-up shows the same facts from either place.
+  const buildRenewalRow = (
+    l: (typeof onCalendar)[number],
+    kind: RenewalKind,
+    verdict: ObligationVerdict,
+    sdType: string,
+  ): RenewalRow => {
     const a = l.account
     const addr = a.registered_agent_id ? raAddressMap.get(a.registered_agent_id) ?? null : null
     const provider = addr?.provider ?? a.registered_agent_provider ?? null
@@ -172,7 +184,51 @@ export default async function CalendarPage({
     const ra_address_line = formatAddressLine(addr) ?? a.registered_agent_address ?? null
     const ra_county = addr?.county ?? null
     const has_offboarding = l.status.closing
+    const sd = l.renewalSDs.find(s => s.service_type === sdType && (s.status === 'active' || s.status === 'blocked'))
+    // Status comes from the LIVE engine verdict only. The stored SD
+    // 'blocked' stamp is deliberately ignored — it goes stale when the
+    // client pays (nothing flips it back) and would lock Mark Filed
+    // forever (bug-hunter major #2). A blocked SD with clean payments
+    // renders as a normal working row.
+    const status: RenewalStatus = has_offboarding
+      ? 'offboarding'
+      : verdict.status === 'on_hold_unpaid'
+        ? 'blocked'
+        : sd
+          ? 'active'
+          : 'upcoming'
+    // RA only: does the stored date sit on the anniversary of Client Since
+    // (we onboarded the company) or, when Client Since is empty, of Formation
+    // (we created it)? A suggestion for the pop-up — never written.
+    const check = kind === 'ra'
+      ? checkRaDate(verdict.date, renewalCheckStart(a), today)
+      : null
+    return {
+      kind,
+      account_id: a.id,
+      company_name: a.company_name,
+      state_of_formation: a.state_of_formation,
+      due_date: verdict.date as string,
+      status,
+      delivery_id: sd?.id ?? null,
+      provider,
+      agent_name,
+      ra_address_line,
+      ra_county,
+      drive_folder_url: resolveDriveFolderUrl(a.gdrive_folder_url, a.drive_folder_id),
+      has_offboarding,
+      engine_status: verdict.status,
+      engine_cause: verdict.cause,
+      dates: kind === 'ra' ? crmDatesOf(a) : undefined,
+      date_check: check
+        ? { start: check.start, basis: check.basis, expected: check.expected, mismatch: !check.matches }
+        : null,
+    }
+  }
 
+  const renewalRows: RenewalRow[] = []
+  const dateChecks: RenewalRow[] = []
+  for (const l of onCalendar) {
     const obligations: Array<{ kind: RenewalKind; verdict: ObligationVerdict; sdType: string }> = [
       { kind: 'ra', verdict: l.status.ra, sdType: 'State RA Renewal' },
       { kind: 'ar', verdict: l.status.annualReport, sdType: 'State Annual Report' },
@@ -180,39 +236,17 @@ export default async function CalendarPage({
     for (const { kind, verdict, sdType } of obligations) {
       if (verdict.status === 'not_applicable') continue
       if (!verdict.date) continue // missing dates live in the problems rail
-      if (verdict.date < yearStart || verdict.date > yearEnd) continue
-      const sd = l.renewalSDs.find(s => s.service_type === sdType && (s.status === 'active' || s.status === 'blocked'))
-      // Status comes from the LIVE engine verdict only. The stored SD
-      // 'blocked' stamp is deliberately ignored — it goes stale when the
-      // client pays (nothing flips it back) and would lock Mark Filed
-      // forever (bug-hunter major #2). A blocked SD with clean payments
-      // renders as a normal working row.
-      const status: RenewalStatus = has_offboarding
-        ? 'offboarding'
-        : verdict.status === 'on_hold_unpaid'
-          ? 'blocked'
-          : sd
-            ? 'active'
-            : 'upcoming'
-      renewalRows.push({
-        kind,
-        account_id: a.id,
-        company_name: a.company_name,
-        state_of_formation: a.state_of_formation,
-        due_date: verdict.date,
-        status,
-        delivery_id: sd?.id ?? null,
-        provider,
-        agent_name,
-        ra_address_line,
-        ra_county,
-        drive_folder_url: resolveDriveFolderUrl(a.gdrive_folder_url, a.drive_folder_id),
-        has_offboarding,
-        engine_status: verdict.status,
-        engine_cause: verdict.cause,
-      })
+      const inYear = verdict.date >= yearStart && verdict.date <= yearEnd
+      if (!inYear && kind !== 'ra') continue
+      const row = buildRenewalRow(l, kind, verdict, sdType)
+      if (inYear) renewalRows.push(row)
+      // Companies whose RA date does not fall on the anniversary of Client Since /
+      // Formation — shown in the rail whatever year the grid displays. A company
+      // being closed is left out (nothing will be renewed).
+      if (kind === 'ra' && row.date_check?.mismatch && !row.has_offboarding) dateChecks.push(row)
     }
   }
+  dateChecks.sort((x, y) => x.due_date.localeCompare(y.due_date))
 
   // ─── 5. Filed-history rows ─────────────────────────────────────────
   for (const f of visibleFiledSDs) {
@@ -296,7 +330,7 @@ export default async function CalendarPage({
         </p>
       </div>
       <div className="mb-6">
-        <ProblemsRail proposals={proposals} />
+        <ProblemsRail proposals={proposals} dateChecks={dateChecks} />
       </div>
       <AnnualCalendar rows={allRows} year={year} today={today} />
     </div>

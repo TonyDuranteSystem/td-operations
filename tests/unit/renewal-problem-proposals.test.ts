@@ -102,15 +102,24 @@ describe("proposeRenewalFixes", () => {
     })
   })
 
-  it("missing RA date, onboarding intake → derive from ra_switch_date", () => {
+  it("missing RA date, onboarding intake → derive from the Client Since date", () => {
     const l = loaded(
-      { annual_report_due_date: "2027-08-01", formation_date: "2020-01-15", ra_switch_date: "2026-03-01" },
+      { annual_report_due_date: "2027-08-01", formation_date: "2020-01-15", client_since: "2026-03-01", ra_switch_date: "2026-04-20" },
       {},
       "onboarding",
     )
     const props = proposeRenewalFixes(l, { today: TODAY })
-    expect(props[0].autoFix).toEqual({ column: "ra_renewal_date", from: null, to: "2027-03-01" })
-    expect(props[0].details).toContain("RA-switch date")
+    expect(props[0].autoFix).toEqual({ column: "ra_renewal_date", from: null, to: "2027-03-01" }) // Client Since wins over the switch date
+    expect(props[0].details).toContain("Client Since date")
+    expect(props[0].details).not.toContain("already in the past")
+  })
+
+  it("a derived RA date that is already in the past says so on the card (the company will show as overdue)", () => {
+    const l = loaded({ annual_report_due_date: "2027-08-01", formation_date: "2019-03-10" }, {}, "formation")
+    const props = proposeRenewalFixes(l, { today: TODAY })
+    expect(props[0].autoFix?.to).toBe("2020-03-10")
+    expect(props[0].details).toContain("is already in the past")
+    expect(props[0].details).toContain("check in Harbor")
   })
 
   it("missing date, unknown intake → fix_account_fields manual, NO auto-fix", () => {

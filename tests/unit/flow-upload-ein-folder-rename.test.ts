@@ -87,7 +87,7 @@ vi.mock("@/lib/supabase-admin", () => ({
       from: () => ({
         download: () =>
           Promise.resolve({
-            data: { arrayBuffer: async () => new TextEncoder().encode("PDFDATA").buffer, type: "application/pdf" },
+            data: { arrayBuffer: async () => new TextEncoder().encode("%PDF-1.4 PDFDATA").buffer, type: "application/pdf" },
             error: null,
           }),
         createSignedUrl: () => Promise.resolve({ data: { signedUrl: "https://signed.example/url" } }),
