@@ -15,6 +15,7 @@ import { canGroundFormationState, canGroundEntityType } from '@/lib/offers/narra
 import { offerPreviewHref } from '@/lib/offers/offer-preview-href'
 import { parseServiceListReply } from '@/lib/offers/service-list-reply'
 import { OfferSendCheckBox } from './offer-send-check-box'
+import { localeFromLanguage } from '@/lib/locale'
 import {
   validatePaymentPlan,
   clientFacingPartLabel,
@@ -260,8 +261,8 @@ export function CreateOfferDialog({
     return () => { cancelled = true }
   }, [open])
 
-  const [language, setLanguage] = useState(
-    clientLanguage === 'Italian' || clientLanguage === 'it' ? 'it' : 'en'
+  const [language, setLanguage] = useState<string>(
+    localeFromLanguage(clientLanguage)
   )
   const [paymentType, setPaymentType] = useState('both')
   const [paymentGateway, setPaymentGateway] = useState('stripe')

@@ -26,6 +26,7 @@ import { createPortalNotification } from "@/lib/portal/notifications"
 import { safeAction, type ActionResult } from "@/lib/server-action"
 import { PORTAL_BASE_URL } from "@/lib/config"
 import { NO_STORAGE_REASON_SENTENCE } from "@/lib/crm-store/no-storage"
+import { isItalian } from "@/lib/locale"
 import {
   applyPrincipalOfficeDecision,
   type ApplyPrincipalOfficeResult,
@@ -96,8 +97,8 @@ const DEADLINE_TYPE_BY_KIND: Record<RenewalKind, "RA Renewal" | "Annual Report">
 
 /** Match contacts.language storing both 'it' (ISO) and 'Italian'. */
 export function isItalianLang(lang: string | null | undefined): boolean {
-  if (!lang) return false
-  return ["it", "italian"].includes(lang.toLowerCase())
+  // the shared reader: "Italian", "it", "Italiano", "Italy" … all mean Italian (lib/locale.ts)
+  return isItalian(lang)
 }
 
 /** Drive filename per SOP v7.0 — flat under Compliance/, year in name. */

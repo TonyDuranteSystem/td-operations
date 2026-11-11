@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { notifyClientOfAdminMessage } from "@/lib/portal/notifications"
 import { buildFormUrl, buildAdminPreviewUrl } from "@/lib/forms/smart-url"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { localeFromLanguage } from "@/lib/locale"
 
 export const dynamic = "force-dynamic"
 
@@ -60,7 +61,7 @@ export async function POST(
     .eq("id", recipientContactId)
     .maybeSingle()
 
-  const isItalian = recipientContact?.language === "it" || recipientContact?.language === "Italian"
+  const isItalian = localeFromLanguage(recipientContact?.language) === "it"
 
   // Idempotent: reuse existing pending add_new request for this account
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- contact_request_forms types not yet generated

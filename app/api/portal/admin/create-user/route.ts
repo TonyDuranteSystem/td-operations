@@ -5,6 +5,7 @@ import { isAdmin } from '@/lib/auth'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { NextRequest, NextResponse } from 'next/server'
 import { autoCreatePortalUser, sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
+import { localeFromLanguage } from '@/lib/locale'
 
 /**
  * POST /api/portal/admin/create-user
@@ -57,7 +58,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Contact has no email address' }, { status: 400 })
   }
 
-  const contactLang = contact.language === 'Italian' || contact.language === 'it' ? 'it' : 'en'
+  const contactLang = localeFromLanguage(contact.language)
 
   // Check if user already exists (paginated — P1.9)
   const existingUser = await findAuthUserByEmail(contact.email)
@@ -100,6 +101,7 @@ export async function POST(request: NextRequest) {
 
     // Ensure portal flags are set on ALL linked accounts
     const accountIdsToUpdate = allAccountIds.length > 0 ? allAccountIds : [account_id]
+    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, untouched by the language fix; extract to lib/operations/ per dev_task fda76fd3
     await supabaseAdmin
       .from('accounts')
       .update({
@@ -111,8 +113,10 @@ export async function POST(request: NextRequest) {
 
     // Ensure contact has portal_tier set
     if (!contactFull?.portal_tier) {
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, untouched by the language fix; extract to lib/operations/ per dev_task fda76fd3
       await supabaseAdmin
         .from('contacts')
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, untouched by the language fix; extract to lib/operations/ per dev_task fda76fd3
         .update({ portal_tier: effectiveTier, updated_at: new Date().toISOString() })
         .eq('id', targetContactId)
     }

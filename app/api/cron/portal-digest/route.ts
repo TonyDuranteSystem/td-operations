@@ -8,6 +8,7 @@ import { buildDigestSections, buildDigestHeadline, mergeTypeLabels, pickDigestBu
 import { escapeHtml } from '@/lib/html-escape'
 import { NextRequest, NextResponse } from 'next/server'
 import { logCron } from '@/lib/cron-log'
+import { localeFromLanguage } from '@/lib/locale'
 
 /**
  * GET /api/cron/portal-digest
@@ -195,7 +196,7 @@ export async function GET(request: NextRequest) {
 
       // Build per-type sections (pure helper — lib/portal/digest-render.ts).
       // Types with show_body (documents) render the file name under the title.
-      const isItalian = language === 'Italian' || language === 'it'
+      const isItalian = localeFromLanguage(language) === 'it'
       const sections = buildDigestSections(emailNotifs, typeLabels, isItalian)
 
       // Subject / opening / closing line: the normal digest wording, or the grouped "your services have started" email (S3).

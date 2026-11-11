@@ -17,6 +17,7 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
+import { localeFromLanguage } from "@/lib/locale"
 
 interface ConvertLeadBody {
   lead_id: string
@@ -84,7 +85,7 @@ export async function POST(request: Request) {
           full_name: lead.full_name,
           email: lead.email,
           phone: lead.phone,
-          language: lead.language === "Italian" ? "it" : "en",
+          language: localeFromLanguage(lead.language),
           is_test: lead.is_test || false,
         })
         .select("id")

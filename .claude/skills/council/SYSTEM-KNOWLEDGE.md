@@ -1,4 +1,5 @@
 # SYSTEM-KNOWLEDGE — the System Counselor's index to the live business and system
+_Last verified: 2026-11-11 — Claude (dev job `1a3f5c5b`: one invariant added to §3 — a client's language is read by ONE shared reader (`lib/locale.ts`); the stored free-text value is never compared to an exact word)._
 _Last verified: 2026-11-11 — Claude (dev job `9829a468`, the Contrabona case: a Company Closure bought for SEVERAL companies — one era marker added to §4 and one playbook row to §2; the old 'one closure line gives one job' picture is superseded once this ships)._
 _Last verified: 2026-11-09 — Claude (dev job `6f555c9f`, Tax Return item 7: one playbook row added to §2 — how a client's EXTENSION is filed; the old 'bulk filing by an outside team' picture is superseded for single-member LLCs once this ships)._
 _Last verified: 2026-11-06c — Claude (dev job `6f555c9f`: the client no longer CONFIRMS their tax-return data — era marker added to §4; the old 'client presses Confirm after staff approve' step is retired)._
@@ -96,6 +97,7 @@ What lives here instead:
 
 ## 3. Invariants — structurally true, not a row in a table
 
+- **A client's language is read by ONE shared reader, never by an exact-word compare (2026-11-11, Antonio: "make it flexible and not hardcoded").** `contacts.language` / `leads.language` are free text ("Italian", "it", "Italiano", "Italy "…); `localeFromLanguage()` / `isItalian()` in `lib/locale.ts` decide (anything starting with "ital", or "it", is Italian; everything else English) and a unit test fails if a file compares a language value to the word "Italian". A plan that says "if language === 'Italian'" is describing the old, broken pattern. Detail: `docs/systems/portal.md` (2026-11-11).
 **Two products, one codebase.** An internal CRM dashboard (staff only; also Antonio's phone app) and a client portal (clients log in). "Portal" always means the client one; "dashboard"/"CRM" always the internal one. Four domains point at the same deployment, one of them internal-only and never sent to clients; client-facing URLs come from the config helper, never hardcoded.
 
 **Two environments.** Production and sandbox are separate Supabase and Vercel projects. Sandbox is the only development environment, enforced structurally. **The MCP tools are the exception** — they are wired to production regardless of local settings, which is precisely why the Counselor can read live business truth, and precisely why nobody should use them to check sandbox state.
