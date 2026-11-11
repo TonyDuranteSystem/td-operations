@@ -75,6 +75,7 @@ import { HistoryOpeningsPanel } from '@/components/accounts/history-openings-pan
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import { resolveExtensionDeadline, type TaxReturnType } from '@/lib/tax/extension-deadline'
 import { isInstallment } from '@/lib/billing/payment-classification'
+import { stagingFileName } from '@/lib/storage/staging-name'
 
 const TABS = [
   { key: 'overview', label: 'Overview', icon: Building2, adminOnly: false },
@@ -1644,7 +1645,7 @@ function DBARow({
     }
     setUploading(true)
     try {
-      const storagePath = `crm-dba-uploads/${accountId}/${detailId}/${Date.now()}_${file.name}`
+      const storagePath = `crm-dba-uploads/${accountId}/${detailId}/${Date.now()}_${stagingFileName(file.name)}`
       // 1. Signed URL for Supabase Storage (bypass Vercel 4.5MB body limit).
       const sigRes = await fetch('/api/storage/upload', {
         method: 'POST',

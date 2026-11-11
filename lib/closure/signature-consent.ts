@@ -92,7 +92,11 @@ export function applyClosureSignatureConsent(
   data: Record<string, unknown>,
   ctx: { ip: string | null; userAgent: string | null; now: Date },
 ): { signed: boolean; changedAfterSigning?: boolean } {
-  const locale: 'en' | 'it' = data[CLOSURE_SIGNATURE_LOCALE_HINT] === 'it' ? 'it' : 'en'
+  // Which language the client saw the consent in: the box's hint; a form re-opened from a SENT closure (or an old tab) may not send it, and then the
+  // language recorded the first time stands in — an unchanged re-send from the Italian wizard used to be recorded as English (QA 2026-11-10, F9).
+  const hintLocale = data[CLOSURE_SIGNATURE_LOCALE_HINT]
+  const priorLocale = data.signature_consent_locale
+  const locale: 'en' | 'it' = hintLocale === 'it' || hintLocale === 'en' ? hintLocale : priorLocale === 'it' ? 'it' : 'en'
   // what the client saw when drawing: the box sends it; a form re-opened from a SENT closure carries the server's own fingerprint of what was sent
   // (`signature_for`, saved with the answers) — the same fact, so it stands in when the hint was not sent
   const seenHint = typeof data[CLOSURE_SIGNATURE_SEEN_HINT] === 'string' ? (data[CLOSURE_SIGNATURE_SEEN_HINT] as string) : null

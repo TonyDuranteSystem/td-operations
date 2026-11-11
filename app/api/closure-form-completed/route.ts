@@ -94,9 +94,32 @@ export async function POST(req: NextRequest) {
     if (explicitServiceDeliveryId) {
       const { data: explicitSd } = await supabaseAdmin
         .from("service_deliveries")
-        .select("id, status, account_id")
+        .select("id, status, account_id, contact_id, service_type")
         .eq("id", explicitServiceDeliveryId)
         .maybeSingle()
+      // The route is not reachable anonymously (401) or from a portal client's login (403), but staff sessions and the internal worker reach it, and the job id
+      // comes from the request body: a job is only accepted when it is a Company Closure that belongs to THIS submission's person — the same ownership rule the
+      // portal applies when the form is sent (lib/portal/closure-subject.ts). Without it, one person's submission id + token could move, annotate or file into
+      // another client's job (production QA 2026-11-10, hunter finding #13 — low risk because of the two locks in front, closed anyway). Checked before the
+      // status, so nothing is revealed about a job that is not theirs.
+      if (explicitSd) {
+        const submitter = (sub.contact_id as string | null) ?? null
+        let owns = false
+        if (submitter && explicitSd.service_type === "Company Closure") {
+          if (explicitSd.account_id) {
+            const { data: link } = await supabaseAdmin
+              .from("account_contacts")
+              .select("account_id")
+              .eq("account_id", explicitSd.account_id as string)
+              .eq("contact_id", submitter)
+              .maybeSingle()
+            owns = !!link
+          } else {
+            owns = explicitSd.contact_id === submitter
+          }
+        }
+        if (!owns) return NextResponse.json({ error: "That closure does not belong to this submission." }, { status: 403 })
+      }
       if (!explicitSd || explicitSd.status !== "active") {
         return NextResponse.json(
           { error: "This closure is no longer active — it may have already been completed or cancelled." },
@@ -162,6 +185,9 @@ export async function POST(req: NextRequest) {
         route: "closure-form-completed", formType: "closure", submittedData, uploadPaths, accountId, contactId, personName: clientName,
         driveFolderId: targetFolderId,
         storeRootSubFolder: destination?.storeRootSubFolder,
+        // On production the filing of three small files took longer than the default 20 s in two of three runs, and everything after it (the signature picture the
+        // letter needs) then waited for the 5-minute retry job (QA 2026-11-10, F4). This route may run 60 s: give the inline filing 35 s of it and keep the rest for the other steps.
+        deadlineMs: 35_000,
         // two upload origins: the external form (closure-uploads) and the portal wizard (onboarding-uploads) — same rule as the archive recipe
         bucket: "closure-uploads",
         resolveBucket: (path) => (isWizardUploadPath(path) ? "onboarding-uploads" : "closure-uploads"),
@@ -558,11 +584,20 @@ export async function POST(req: NextRequest) {
       // The STAFF detail — where the package went, and the "check this" line when the two checks disagreed — goes to the Calendar's team notes
       // (staff-only table, never shown to a client). Not repeated by a retry of the same pass.
       try {
-        const body = `Closure wizard: package filed ${filedWhere}.${destination?.disagreement ? ` CHECK: ${destination.disagreement}` : ""}`
+        // NOTE: is the non-blocking line (the client's EIN differs from our record although the company name matches — the job still moves on); it is
+        // deliberately NOT "CHECK:", which holds the job and shows in the finish question.
+        const body = `Closure wizard: package filed ${filedWhere}.${destination?.disagreement ? ` CHECK: ${destination.disagreement}` : ""}${destination?.note ? ` NOTE: ${destination.note}` : ""}`
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_notes is not in the generated types yet (lib/job-notes/read.ts)
         const notes = supabaseAdmin as any
-        const { data: same } = await notes.from("service_delivery_notes").select("id").eq("service_delivery_id", deliveryId).eq("body", body).limit(1)
-        if (!same || same.length === 0) {
+        // Not repeated by a retry of the same pass — but compared with the NEWEST wizard note only. Comparing with any older note let a client who wrote
+        // the wrong company, then the right one, then the SAME wrong one again, get no new CHECK line: the old identical line was found, nothing was
+        // written, and the newest note ("CHECK cleared") told staff everything was fine (production QA 2026-11-10, hunter finding).
+        const { data: latest } = await notes.from("service_delivery_notes").select("body").eq("service_delivery_id", deliveryId).eq("author_name", "Closure wizard").order("created_at", { ascending: false }).limit(3)
+        const recent = (latest ?? []) as Array<{ body: string | null }>
+        // a retry of a GOOD pass (no CHECK line of its own) finds the "CHECK cleared" note this same pass wrote as the newest one: the line before it is the one to compare with
+        const compareWith = recent[0] && String(recent[0].body ?? "").includes(CHECK_CLEARED_MARKER) && !destination?.disagreement ? recent.find((n) => !String(n.body ?? "").includes(CHECK_CLEARED_MARKER)) : recent[0]
+        const same = compareWith && compareWith.body === body ? [compareWith] : []
+        if (same.length === 0) {
           const { error: noteErr } = await notes.from("service_delivery_notes").insert({ service_delivery_id: deliveryId, body, author_name: "Closure wizard" })
           if (noteErr) throw new Error(noteErr.message)
         }

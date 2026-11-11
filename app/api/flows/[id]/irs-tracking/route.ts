@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { isCourier } from '@/lib/flows/courier'
+import { trackingNumberProblem } from '@/lib/flows/tracking-number'
 
 const MAX_TRACKING_LEN = 100
 
@@ -42,14 +43,14 @@ interface TrackingRow {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
 
-async function findDuplicate(trackingNumber: string, excludeSdId: string) {
+async function findDuplicate(trackingNumber: string, excludeSdId: string, alsoAs: string[] = []) {
   // .limit(1) + array access, not .maybeSingle() — this is a soft, informational
   // warning (never a hard block), so it must never throw even in the unlikely event
   // more than one OTHER case already shares this number.
   const { data: others } = await db
     .from('irs_shipment_tracking')
     .select('service_delivery_id')
-    .eq('tracking_number', trackingNumber)
+    .in('tracking_number', Array.from(new Set([trackingNumber, ...alsoAs])))
     .neq('service_delivery_id', excludeSdId)
     .limit(1)
   const other = others?.[0]
@@ -108,7 +109,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   try {
     const body = await req.json().catch(() => ({}))
     const courier = typeof body.courier === 'string' ? body.courier.trim() : ''
-    const trackingNumber = typeof body.tracking_number === 'string' ? body.tracking_number.trim() : ''
+    const rawTracking = typeof body.tracking_number === 'string' ? body.tracking_number.trim() : ''
+    // spaces and dashes typed for readability are not part of a carrier's number — the daily check looks the number up as saved
+    const trackingNumber = rawTracking.replace(/[\s-]+/g, '')
 
     if (!isCourier(courier)) {
       return NextResponse.json({ success: false, error: 'Please choose a valid courier.' }, { status: 400 })
@@ -123,6 +126,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       )
     }
 
+    // A made-up number ("abc") used to be saved and satisfied the step's tracking lock (production end-to-end test 2026-11-10).
+    const shapeProblem = trackingNumberProblem(courier, rawTracking)
+    if (shapeProblem) return NextResponse.json({ success: false, error: shapeProblem }, { status: 400 })
+
     const { data: sd } = await supabaseAdmin.from('service_deliveries').select('id').eq('id', params.id).maybeSingle()
     if (!sd) return NextResponse.json({ success: false, error: 'Flow not found' }, { status: 404 })
 
@@ -132,7 +139,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       .eq('service_delivery_id', params.id)
       .maybeSingle()
 
-    const unchanged = existing && existing.courier === courier && existing.tracking_number === trackingNumber
+    // A row saved before numbers were stored without spaces ("9400 1118 …") is the SAME number: comparing it as typed would reset its delivered / alert state on an
+    // idle re-save and the daily check would notify the client again.
+    const unchanged = existing && existing.courier === courier && String(existing.tracking_number ?? '').replace(/[\s-]+/g, '') === trackingNumber
 
     if (!unchanged) {
       // A real change (or first entry): reset every check-owned field. created_at is
@@ -158,12 +167,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       if (upsertErr) throw new Error(upsertErr.message)
     }
 
-    const duplicate_of = await findDuplicate(trackingNumber, params.id)
+    const duplicate_of = await findDuplicate(trackingNumber, params.id, [rawTracking])
     return NextResponse.json({
       success: true,
       tracking: {
         courier,
-        tracking_number: trackingNumber,
+        tracking_number: unchanged ? existing.tracking_number : trackingNumber,
         status: unchanged ? existing.status ?? null : null,
         delivered_at: unchanged ? existing.delivered_at ?? null : null,
         matched_ship_date: unchanged ? existing.matched_ship_date ?? null : null,

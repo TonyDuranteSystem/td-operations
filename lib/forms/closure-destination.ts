@@ -133,6 +133,21 @@ export function disagreementText(d: ClosureDisagreement, names: { typed: string;
 }
 
 /**
+ * A job linked to a company of ours, where the client wrote that company's NAME (so the job moves on) but a DIFFERENT 9-digit EIN than our record has:
+ * the move is right (names are matched on purpose — spelling and legal-form variants), but nobody should discover the difference only at the letter box.
+ * Returns one plain sentence for the job's staff notes, or null when there is nothing to say: no company, an EIN that agrees, our record having no
+ * EIN, or a client's number that is not nine digits (a typo is the client's to finish, not a conflict). A job with NO company never reaches this —
+ * there is no "our EIN" to compare with, and any EIN is simply what the client wrote.
+ */
+export function einDifferenceNote(p: { typedEin: unknown; linked: CompanyCandidate | null | undefined }): string | null {
+  const typed = digitsOnly(p.typedEin)
+  const ours = digitsOnly(p.linked?.ein_number)
+  if (!p.linked || typed.length !== 9 || ours.length !== 9 || typed === ours) return null
+  const company = p.linked.company_name ?? "this company"
+  return `The client wrote EIN ${String(p.typedEin).trim()} for ${company}, but our record has EIN ${p.linked.ein_number}. The job was moved on because the company name matches. The EIN letter will use our record — if the client's number is the right one, the company record needs correcting.`
+}
+
+/**
  * A correction must not change WHERE the package already is: the saver keeps a replayed package in the folder its summary was first filed in
  * (lib/crm-store/save-form.ts), so a corrected company name must not make the job's note / the pinned plan name a folder that does not exist.
  * `prior` is the folder name pinned by the first pass; it wins when both are person folders.
@@ -150,6 +165,8 @@ export interface ClosureDestination {
   kind: ClosureTarget["kind"]
   /** the plain-English "check this" line for staff, or null when everything agreed */
   disagreement: string | null
+  /** a plain note for staff that does NOT hold the job (the client's EIN differs from our record although the company name matches), or null */
+  note: string | null
   /**
    * The owner id the saver puts in the stored files' keys (`form-summary:<owner>:closure:<token>`): the person for "person-storage:…", the
    * company for "account-storage:…" AND for a company that kept a Drive folder id (the saver then redirects the files into the company's
@@ -193,9 +210,10 @@ export async function resolveClosureDestination(p: {
     // The company has no storage of its own yet, so the answer is the PERSON's storage: keep the package tidy in its own folder instead of
     // mixing it into "Personal documents" (no disagreement — the company IS the one being closed).
     const marker = parseStorageMarker(folderId)
-    if (marker?.kind === "contact") return { folderId, storeRootSubFolder: closureFolderName(typedName), kind: "company", disagreement: null, storageOwnerId: marker.id }
+    const note = einDifferenceNote({ typedEin: p.submittedData.llc_ein, linked: candidates.find((c) => c.id === target.accountId) })
+    if (marker?.kind === "contact") return { folderId, storeRootSubFolder: closureFolderName(typedName), kind: "company", disagreement: null, note, storageOwnerId: marker.id }
     // "account-storage:<id>" or the company's Drive folder id (which the saver turns into the company's storage): the company owns the files.
-    return { folderId, kind: "company", disagreement: null, storageOwnerId: target.accountId }
+    return { folderId, kind: "company", disagreement: null, note, storageOwnerId: target.accountId }
   }
 
   // Another company (or a disagreement): the PERSON's storage, never a company's.
@@ -208,5 +226,5 @@ export async function resolveClosureDestination(p: {
         matched: match.status === "one" ? nameOf(match.id) : null,
       })
     : null
-  return { folderId, storeRootSubFolder: closureFolderName(typedName), kind: "other_company", disagreement, storageOwnerId: parseStorageMarker(folderId)?.id ?? null }
+  return { folderId, storeRootSubFolder: closureFolderName(typedName), kind: "other_company", disagreement, note: null, storageOwnerId: parseStorageMarker(folderId)?.id ?? null }
 }

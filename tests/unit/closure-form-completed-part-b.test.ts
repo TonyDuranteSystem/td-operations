@@ -68,8 +68,9 @@ beforeEach(() => {
       submitted_data: { owner_name: "Christian Ranieri", llc_name: "Italyflow LLC", llc_ein: "55-1234567", llc_state: "NM" },
       upload_paths: [], contact_id: "contact-1", account_id: null, lead_id: null, drive_archive_meta: null,
     },
-    service_deliveries: { id: "sd-1", status: "active", account_id: null, notes: "" },
+    service_deliveries: { id: "sd-1", status: "active", account_id: null, contact_id: "contact-1", service_type: "Company Closure", notes: "" },
   }
+  h.single.account_contacts = { account_id: "acc-a" } // the submitter is linked to the job's company (only read when the job has one)
   h.list = { service_deliveries: [] }
   h.resolveDest.mockResolvedValue(otherCompany)
   h.filePackage.mockResolvedValue({ step: "storage_save", status: "ok", detail: "filed" })
@@ -87,6 +88,11 @@ describe("closure-form-completed — Part B", () => {
       delivery_id: "sd-1", if_current_stage: "Data Collection", target_stage: "State Compliance Check", skip_tasks: true, skip_notify: true,
     }))
     expect(stepOf(r.results, "sd_advance")).toMatchObject({ status: "ok" })
+  })
+
+  it("gives the inline filing 35 s (this route may run 60 s) so the signature picture is on the job when staff open the letter box (QA F4)", async () => {
+    await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
+    expect(h.filePackage).toHaveBeenCalledWith(expect.objectContaining({ deadlineMs: 35_000 }))
   })
 
   it("sends NO email to support — the old step is reported as skipped and Gmail is never called", async () => {
@@ -125,14 +131,14 @@ describe("closure-form-completed — Part B", () => {
   })
 
   it("the destination is decided with the named job's own company link when the submission has none", async () => {
-    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: "acc-a", notes: "" }
+    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: "acc-a", contact_id: "contact-1", service_type: "Company Closure", notes: "" }
     await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
     expect(h.resolveDest).toHaveBeenCalledWith(expect.objectContaining({ linkedAccountId: "acc-a", contactId: "contact-1" }))
   })
 
   it("the submission's own company link wins when it has one", async () => {
     ;(h.single.closure_submissions as Record<string, unknown>).account_id = "acc-sub"
-    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: "acc-job", notes: "" }
+    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: "acc-job", contact_id: "contact-1", service_type: "Company Closure", notes: "" }
     await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
     expect(h.resolveDest).toHaveBeenCalledWith(expect.objectContaining({ linkedAccountId: "acc-sub" }))
   })
@@ -193,7 +199,7 @@ describe("closure-form-completed — Part B", () => {
   })
 
   it("a cancelled or finished job is still refused (409) and nothing moves", async () => {
-    h.single.service_deliveries = { id: "sd-1", status: "cancelled", account_id: null, notes: "" }
+    h.single.service_deliveries = { id: "sd-1", status: "cancelled", account_id: null, contact_id: "contact-1", service_type: "Company Closure", notes: "" }
     const res = await POST(new Request("http://x", { method: "POST", body: JSON.stringify({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" }) }) as never)
     expect(res.status).toBe(409)
     expect(h.advance).not.toHaveBeenCalled()
@@ -221,14 +227,14 @@ describe("closure-form-completed — Part B", () => {
   })
 
   it("lists the filed files on the job (staff-only) once the filing is ok — by the owner of the files, with NO company stamped when the package is with the person (finding 14)", async () => {
-    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: "acc-a", notes: "" }
+    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: "acc-a", contact_id: "contact-1", service_type: "Company Closure", notes: "" }
     const r = await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
     expect(h.registerDocs).toHaveBeenCalledWith({ storageOwnerId: "owner-person", token: "tok-1", contactId: "contact-1", accountId: null, serviceDeliveryId: "sd-1" })
     expect(stepOf(r.results, "documents_register")).toMatchObject({ status: "ok", detail: "3 file(s) listed on the job" })
   })
 
   it("when the package really is with the job's company, that company is stamped on the listed files", async () => {
-    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: "acc-a", notes: "" }
+    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: "acc-a", contact_id: "contact-1", service_type: "Company Closure", notes: "" }
     h.resolveDest.mockResolvedValue({ folderId: "1AbCdEfDriveFolderId", kind: "company", disagreement: null, storageOwnerId: "acc-a" })
     await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
     expect(h.registerDocs).toHaveBeenCalledWith(expect.objectContaining({ storageOwnerId: "acc-a", accountId: "acc-a" }))
@@ -260,10 +266,28 @@ describe("closure-form-completed — Part B", () => {
 
   it("a retry of the same pass does not repeat the client-visible line (once a day) nor the staff note", async () => {
     const today = new Date().toISOString().split("T")[0]
-    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: null, notes: `x\n${today}: Closure form completed. Data filed.` }
-    h.list.service_delivery_notes = [{ id: "n-1" }] // the same staff note is already there
+    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: null, contact_id: "contact-1", service_type: "Company Closure", notes: `x\n${today}: Closure form completed. Data filed.` }
+    // the same staff note is already the NEWEST wizard note
+    h.list.service_delivery_notes = [{ id: "n-1", body: `Closure wizard: package filed in the person's folder "Company closure_Italyflow LLC".` }]
     await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
     expect(clientNote()).toBeUndefined()
+    expect(staffNote()).toBeUndefined()
+  })
+
+  it("the SAME wrong company written again after a 'CHECK cleared' note is a NEW warning, not swallowed as a repeat (hunter finding #1)", async () => {
+    const check = "CHECK: This closure is linked to A, but the client wrote \"B\" and that matches none of the person's companies."
+    h.resolveDest.mockResolvedValue({ ...otherCompany, disagreement: "This closure is linked to A, but the client wrote \"B\" and that matches none of the person's companies." })
+    // newest note first: the clear that followed the first CHECK
+    h.list.service_delivery_notes = [{ id: "n-3", body: "Closure wizard: CHECK cleared: the client now wrote A, which matches the company this job is linked to." }]
+    await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
+    expect(staffNote()?.body ?? "").toContain(check)
+  })
+
+  it("a retry right after the same CHECK line is still not repeated", async () => {
+    const d = "This closure is linked to A, but the client wrote \"B\" and that matches none of the person's companies."
+    h.resolveDest.mockResolvedValue({ ...otherCompany, disagreement: d })
+    h.list.service_delivery_notes = [{ id: "n-1", body: `Closure wizard: package filed in the person's folder "Company closure_Italyflow LLC". CHECK: ${d}` }]
+    await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
     expect(staffNote()).toBeUndefined()
   })
 
@@ -294,3 +318,78 @@ describe("closure-form-completed — Part B", () => {
     expect(staffNote()).toMatchObject({ author_name: "Closure wizard" })
   })
 })
+
+describe("closure-form-completed — the named job must belong to the submission (hunter finding #13, QA 2026-11-10)", () => {
+  it("refuses a job of ANOTHER person (403) and changes nothing", async () => {
+    h.single.service_deliveries = { id: "sd-victim", status: "active", account_id: null, contact_id: "someone-else", service_type: "Company Closure", notes: "" }
+    const res = await POST(new Request("http://x/api/closure-form-completed", { method: "POST", body: JSON.stringify({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-victim" }) }) as never)
+    expect(res.status).toBe(403)
+    expect(h.advance).not.toHaveBeenCalled()
+    expect(h.filePackage).not.toHaveBeenCalled()
+    expect(h.inserts).toEqual([])
+    expect(h.updates).toEqual([])
+  })
+
+  it("refuses a company job when the submitter is not one of that company's people", async () => {
+    h.single.service_deliveries = { id: "sd-co", status: "active", account_id: "acc-other", contact_id: null, service_type: "Company Closure", notes: "" }
+    h.single.account_contacts = null
+    const res = await POST(new Request("http://x/api/closure-form-completed", { method: "POST", body: JSON.stringify({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-co" }) }) as never)
+    expect(res.status).toBe(403)
+    expect(h.advance).not.toHaveBeenCalled()
+  })
+
+  it("refuses a job that is not a Company Closure, and a submission with no person behind it", async () => {
+    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: null, contact_id: "contact-1", service_type: "Tax Return", notes: "" }
+    const a = await POST(new Request("http://x/api/closure-form-completed", { method: "POST", body: JSON.stringify({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" }) }) as never)
+    expect(a.status).toBe(403)
+    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: null, contact_id: "contact-1", service_type: "Company Closure", notes: "" }
+    ;(h.single.closure_submissions as Record<string, unknown>).contact_id = null
+    const b = await POST(new Request("http://x/api/closure-form-completed", { method: "POST", body: JSON.stringify({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" }) }) as never)
+    expect(b.status).toBe(403)
+  })
+
+  it("still accepts the person's own job and a company job the submitter belongs to", async () => {
+    const own = await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
+    expect(own.ok).toBe(true)
+    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: "acc-a", contact_id: null, service_type: "Company Closure", notes: "" }
+    const company = await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
+    expect(company.ok).toBe(true)
+  })
+
+  it("a stale link to a cancelled closure that IS theirs still gets the plain 409, not a 403", async () => {
+    h.single.service_deliveries = { id: "sd-1", status: "cancelled", account_id: null, contact_id: "contact-1", service_type: "Company Closure", notes: "" }
+    const res = await POST(new Request("http://x/api/closure-form-completed", { method: "POST", body: JSON.stringify({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" }) }) as never)
+    expect(res.status).toBe(409)
+  })
+})
+
+describe("closure-form-completed — the client's EIN differs from our record (QA 2026-11-10, the non-blocking note)", () => {
+  it("writes a NOTE (not a CHECK) in the staff note, and the job still moves on", async () => {
+    h.resolveDest.mockResolvedValue({ folderId: "account-storage:acc-a", kind: "company", disagreement: null, note: "The client wrote EIN 55-1234567 for Acme LLC, but our record has EIN 88-7710002.", storageOwnerId: "acc-a" })
+    h.single.service_deliveries = { id: "sd-1", status: "active", account_id: "acc-a", contact_id: null, service_type: "Company Closure", notes: "" }
+    const r = await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
+    expect(h.advance).toHaveBeenCalledTimes(1)
+    expect(stepOf(r.results, "sd_advance")).toMatchObject({ status: "ok" })
+    const body = staffNote()?.body ?? ""
+    expect(body).toContain("NOTE: The client wrote EIN 55-1234567")
+    expect(body).not.toContain("CHECK:")
+  })
+
+  it("a job with no company of ours gets no EIN note at all", async () => {
+    await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
+    expect(staffNote()?.body ?? "").not.toContain("NOTE:")
+  })
+})
+
+describe("closure-form-completed — a retry after a good pass wrote its own 'CHECK cleared' note (hunter finding)", () => {
+  it("does not write the 'package filed' line twice", async () => {
+    const filed = `Closure wizard: package filed in the person's folder "Company closure_Italyflow LLC".`
+    h.list.service_delivery_notes = [
+      { id: "n-2", body: "Closure wizard: CHECK cleared: the client now wrote Italyflow LLC, which matches the company this job is linked to." },
+      { id: "n-1", body: filed },
+    ]
+    await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
+    expect(staffNote()).toBeUndefined()
+  })
+})
+

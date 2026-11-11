@@ -121,12 +121,17 @@ export async function POST(req: NextRequest) {
     }
     const closureData = data as Record<string, unknown>
     const { applyClosureSignatureConsent, clientIpFromForwardedFor, signaturePathsOf } = await import('@/lib/closure/signature-consent')
+    const { verifyClosureSignatureFile, ownWizardFolders } = await import('@/lib/closure/signature-verify')
+    const ownFolders = ownWizardFolders([rawAccountId, contact_id, identity.contactId, user.email, user.id])
+    // A file path that sits in someone else's folder is not this client's upload, wherever it was typed: it is removed before anything is filed.
+    const { dropForeignUploadPaths } = await import('@/lib/portal/wizard-uploads')
+    const droppedForeign = dropForeignUploadPaths(closureData, ownFolders)
+    if (droppedForeign.length > 0) console.warn(`[wizard-submit] closure: ${droppedForeign.length} upload path(s) outside the sender's own folders were removed`)
     const claimed = signaturePathsOf(closureData.signature_image)
     if (claimed.length > 0) {
-      const { verifyClosureSignatureFile, ownWizardFolders } = await import('@/lib/closure/signature-verify')
       const checked = await verifyClosureSignatureFile(
         claimed[claimed.length - 1],
-        ownWizardFolders([rawAccountId, contact_id, identity.contactId, user.email, user.id]),
+        ownFolders,
       )
       if (checked.ok === false) return NextResponse.json({ error: (checked as { error: string }).error }, { status: 400 })
     }
