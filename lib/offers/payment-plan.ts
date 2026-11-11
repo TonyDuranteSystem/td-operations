@@ -12,10 +12,14 @@
  *     the shortcut that costs a rebuild.
  *
  *  2. TRIGGERS ARE DATA, AND THERE IS NO DATE ENGINE. Each part carries {signing | event | date
- *     | manual}. "manual" is always available. A DATE-triggered part is something a human is
- *     REMINDED of — nothing fires on a schedule, and minting stays a click. That limit was
+ *     | step | manual}. "manual" is always available. A DATE-triggered part is something a human
+ *     is REMINDED of — nothing fires on a schedule, and minting stays a click. That limit was
  *     accepted explicitly when the design was approved: quietly adding a scheduler later would
- *     break the standing rule that nothing bills a client unattended.
+ *     break the standing rule that nothing bills a client unattended. A "step" part (2026-11-11,
+ *     Antonio: "when the EIN arrives") is the same thing keyed to a MOMENT instead of a day: the
+ *     Calendar's "Invoices to raise" list turns it red when the offer's job reaches that step.
+ *     Since 2026-11-11 NOTHING raises or sends a later part by itself — the daily job that used
+ *     to raise + email date parts is gone; a person clicks "Raise and send" on the Calendar.
  *
  *  3. ONE CURRENCY PER PLAN, REFUSED AT SAVE. Not a warning, not a coercion. The credit engine
  *     nets same-currency only, the bank matcher compares same-currency only, and the activation
@@ -29,7 +33,7 @@
  * "Partial Payment". `clientFacingPartLabel` below is the only sanctioned client-facing phrasing.
  */
 
-export type TrancheTriggerKind = "signing" | "event" | "date" | "manual"
+export type TrancheTriggerKind = "signing" | "event" | "date" | "manual" | "step"
 
 export interface TrancheTrigger {
   kind: TrancheTriggerKind
@@ -40,6 +44,16 @@ export interface TrancheTrigger {
   event?: string
   /** For kind='date': ISO date. A REMINDER, never a scheduler — see the header. */
   date?: string
+  /**
+   * For kind='step' ("when a step is reached", Antonio 2026-11-11): the service whose job must reach `stage`, e.g.
+   * { service_type: "Company Formation", stage: "EIN Received" }. Like a date, this is only a REMINDER: the Calendar's
+   * "Invoices to raise" list turns the part red when the job of THIS offer's service has reached that step (read from the
+   * job's own step number — nothing dispatches, nothing is created, nothing is sent). A person raises the invoice.
+   * Needs the job to carry the offer it came from (`service_deliveries.source_offer_token`) — see `lib/plan-invoices/steps.ts`.
+   * `label` (below) is the client-visible sentence, exactly as for a manual part.
+   */
+  service_type?: string
+  stage?: string
   /**
    * For kind='manual': what the client is waiting for, in plain words — e.g.
    * "when your bank account is opened". ⚠️ CLIENT-VISIBLE: this text renders on the client's
@@ -166,8 +180,17 @@ export function validatePaymentPlan(raw: unknown): PlanValidation {
 
     const trigger = (p.trigger ?? {}) as Record<string, unknown>
     const kind = trigger.kind as TrancheTriggerKind | undefined
-    if (kind !== "signing" && kind !== "event" && kind !== "date" && kind !== "manual") {
-      errors.push(`${at}: needs a trigger — on signing, on an event, on a date, or when you say so.`)
+    if (kind !== "signing" && kind !== "event" && kind !== "date" && kind !== "manual" && kind !== "step") {
+      errors.push(`${at}: needs a trigger — on signing, on a date, when a step is reached, or when you say so.`)
+    }
+    if (kind === "step") {
+      const serviceType = typeof trigger.service_type === "string" ? trigger.service_type.trim() : ""
+      const stage = typeof trigger.stage === "string" ? trigger.stage.trim() : ""
+      if (!serviceType || !stage) {
+        errors.push(`${at}: "when a step is reached" needs the service and the step (e.g. Company Formation → EIN Received).`)
+      } else if (serviceType.length > 80 || stage.length > 80) {
+        errors.push(`${at}: the service or step name is too long.`)
+      }
     }
     if (kind === "event") {
       const event = typeof trigger.event === "string" ? trigger.event : ""
@@ -210,6 +233,8 @@ export function validatePaymentPlan(raw: unknown): PlanValidation {
         kind: (kind ?? "manual") as TrancheTriggerKind,
         ...(typeof trigger.event === "string" && trigger.event ? { event: trigger.event } : {}),
         ...(typeof trigger.date === "string" && trigger.date ? { date: trigger.date } : {}),
+        ...(kind === "step" && typeof trigger.service_type === "string" && trigger.service_type.trim() ? { service_type: trigger.service_type.trim() } : {}),
+        ...(kind === "step" && typeof trigger.stage === "string" && trigger.stage.trim() ? { stage: trigger.stage.trim() } : {}),
         ...(typeof trigger.label === "string" && trigger.label.trim()
           ? { label: trigger.label.trim() }
           : {}),
@@ -312,6 +337,7 @@ export function clientFacingPartLabel(part: PaymentPlanPart, totalParts: number)
       return `${position}, due ${EVENT_WORDING[part.trigger.event ?? ""] ?? "when the agreed step is complete"}`
     case "date":
       return `${position}, due by ${clientFacingDate(part.trigger.date ?? "")}`
+    case "step":
     case "manual":
     default: {
       const label = part.trigger.label
@@ -469,7 +495,7 @@ export const PARTIAL_PAYMENT_LABEL = "Partial Payment"
  * and today's date, returns the raw two-part plan shape ready for `validatePaymentPlan`.
  *
  * `todayIso` is explicit, not read from `new Date()` inside — this codebase's own pattern for
- * date-based logic (see `duePartsToAutoRaise`), so a test can assert "30 days from a fixed date"
+ * date-based logic (see `classifyPlanPart` in lib/plan-invoices/classify.ts), so a test can assert "30 days from a fixed date"
  * without mocking the system clock.
  *
  * Splits by SUBTRACTION, not by halving twice: part 2 is `gross - part1`, so the two parts always

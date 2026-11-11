@@ -90,12 +90,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // real cash — flags staff toward the "Release commission" action. State-based
   // sweep, deliberately not a hook on any single payment-confirmation path.
   "/api/cron/plan-referrer-notify": "*/15 * * * *",
-  // Payment-plan parts whose date trigger has arrived — creates the invoice and
-  // sends it to the client automatically (never charges anything; the client
-  // still pays it themselves, same as any other invoice). Daily: date triggers
-  // don't need finer granularity. Council review 2026-08-27: the safe
-  // alternative to full unattended card auto-charging.
-  "/api/cron/plan-part-auto-raise": "0 9 * * *",
+  // /api/cron/plan-part-auto-raise removed 2026-11-11 (dev job ae3c19db, Antonio: "I want nothing automatic"). It raised AND emailed every date-triggered part of a payment plan each morning. Replaced by the Calendar tab "Invoices to raise": a part that is due turns red there and a person clicks "Raise and send".
   "/api/cron/card-autopay-charge": "0 11 * * *",
   // /api/cron/forms-archive-sweep removed 2026-10-22 — Stop Drive S4 (dev job 264bb882, Antonio). It was in DRY-RUN (report-only, never enqueued or alerted); its one standing candidate (an ITIN submission from 2026-07-24) was already filed in the person's storage, only its archived marker was never set.
   "/api/cron/airwallex-sync": "*/15 * * * *",
