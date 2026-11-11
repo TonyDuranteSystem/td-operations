@@ -79,6 +79,7 @@ export async function POST(request: Request) {
 
     // 3. Create contact if doesn't exist
     if (!contactId) {
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert, untouched by the language fix; extract to lib/operations/ per dev_task fda76fd3
       const { data: newContact, error: contactErr } = await supabaseAdmin
         .from("contacts")
         .insert({
