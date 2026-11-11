@@ -155,28 +155,6 @@ export function isRaisable(status: PartStatus): boolean {
 }
 
 /**
- * Which parts the auto-raise cron should act on RIGHT NOW — a date-triggered part whose date has
- * arrived, with no live invoice already occupying its slot.
- *
- * Deliberately reuses `isRaisable` rather than re-deriving "not raised" — same reasoning as that
- * function's own comment: a part a staffer already raised (even Draft/unsent) is NOT raisable,
- * and the cron must never mint a second invoice for a slot a human is already handling.
- *
- * `todayIso` is an explicit argument, not `new Date()` read inside — this codebase's own pattern
- * for date-based cron eligibility (see `decideReminder`/`decideSlaTier`), so a test can assert
- * "3 days after the due date" without mocking the system clock.
- */
-export function duePartsToAutoRaise(status: PlanStatus, todayIso: string): PartStatus[] {
-  return status.parts.filter(
-    (p) =>
-      p.part.trigger.kind === "date" &&
-      typeof p.part.trigger.date === "string" &&
-      p.part.trigger.date <= todayIso &&
-      isRaisable(p),
-  )
-}
-
-/**
  * Where an offer's plan stands, read from the database.
  *
  * Returns null when the offer carries no plan — which is every offer today — so callers can treat

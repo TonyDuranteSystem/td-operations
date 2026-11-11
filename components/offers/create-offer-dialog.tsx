@@ -22,6 +22,7 @@ import {
   type PaymentPlanPart,
   type TrancheTriggerKind,
 } from '@/lib/offers/payment-plan'
+import { defaultStepWording, type StepOption } from '@/lib/plan-invoices/steps'
 
 // ── Service catalog: loaded from DB ──
 interface CatalogService {
@@ -352,7 +353,7 @@ export function CreateOfferDialog({
   // just moves the error later.
   const [splitEnabled, setSplitEnabled] = useState(false)
   const [allowSplitPaymentChoice, setAllowSplitPaymentChoice] = useState(false)
-  const [splitParts, setSplitParts] = useState<Array<{ amount: string; kind: TrancheTriggerKind; date: string; label: string }>>([
+  const [splitParts, setSplitParts] = useState<Array<{ amount: string; kind: TrancheTriggerKind; date: string; label: string; service_type?: string; stage?: string }>>([
     { amount: '', kind: 'signing', date: '', label: '' },
     { amount: '', kind: 'manual', date: '', label: '' },
   ])
@@ -902,7 +903,8 @@ export function CreateOfferDialog({
         trigger: {
           kind: i === 0 ? ('signing' as TrancheTriggerKind) : p.kind,
           ...(p.kind === 'date' && i > 0 ? { date: p.date } : {}),
-          ...(p.kind === 'manual' && i > 0 && p.label.trim() ? { label: p.label.trim() } : {}),
+          ...(p.kind === 'step' && i > 0 ? { service_type: p.service_type ?? '', stage: p.stage ?? '' } : {}),
+          ...((p.kind === 'manual' || p.kind === 'step') && i > 0 && p.label.trim() ? { label: p.label.trim() } : {}),
         },
       })),
     [splitParts, currency, parsedAmounts],
@@ -911,6 +913,44 @@ export function CreateOfferDialog({
     () => (splitActive ? validatePaymentPlan(planDraft) : null),
     [splitActive, planDraft],
   )
+  // "When a step is reached" (dev job ae3c19db): the steps of the services bought in THIS offer whose job is tied to the offer (formation, ITIN),
+  // read from the step settings. Empty = the choice is not offered.
+  const boughtServiceTypes = useMemo(
+    () => selected.map(sv => catalog.find(c => c.id === sv.id)?.pipeline).filter((x): x is string => !!x),
+    [selected, catalog],
+  )
+  const [stepOptions, setStepOptions] = useState<StepOption[]>([])
+  const boughtKey = boughtServiceTypes.join(',')
+  useEffect(() => {
+    if (!open || !splitEnabled || !boughtKey) { setStepOptions([]); return }
+    let cancelled = false
+    fetch(`/api/crm/offer-plan-steps?services=${encodeURIComponent(boughtKey)}`)
+      .then(r => (r.ok ? r.json() : { steps: [] }))
+      .then(d => { if (!cancelled) setStepOptions(Array.isArray(d.steps) ? d.steps : []) })
+      .catch(() => { if (!cancelled) setStepOptions([]) })
+    return () => { cancelled = true }
+  }, [open, splitEnabled, boughtKey])
+  // Choosing "When a step is reached" pre-selects the first step (the EIN, for a formation) and writes the client's sentence for it.
+  const changePartKind = (i: number, kind: TrancheTriggerKind) =>
+    setSplitParts(prev => prev.map((p, j) => {
+      if (j !== i) return p
+      if (kind !== 'step') return { ...p, kind }
+      const first = stepOptions.find(o => o.stage_name.toLowerCase() === 'ein received') ?? stepOptions[0]
+      return first
+        ? { ...p, kind, service_type: first.service_type, stage: first.stage_name, label: p.label.trim() ? p.label : defaultStepWording(first.service_type, first.stage_name) }
+        : { ...p, kind }
+    }))
+  const changePartStep = (i: number, value: string) =>
+    setSplitParts(prev => prev.map((p, j) => {
+      if (j !== i) return p
+      const [service_type, ...rest] = value.split('|')
+      const stage = rest.join('|')
+      const oldDefault = p.service_type && p.stage ? defaultStepWording(p.service_type, p.stage) : ''
+      // Rewrite the client's sentence only when it is still the one we wrote for the previous step (never the author's own words).
+      const label = !p.label.trim() || p.label === oldDefault ? defaultStepWording(service_type, stage) : p.label
+      return { ...p, service_type, stage, label }
+    }))
+
   const planSum = planDraft.reduce((s, p) => s + p.amount, 0)
   // ⛔ COMPARED AGAINST THE ENGINE'S GROSS — services PLUS pre-conditions (`totalAmount`), which
   // is what computeOfferTotals sums and what decideSigningBill judges the plan against. Comparing
@@ -1912,14 +1952,41 @@ export function CreateOfferDialog({
                           <label className="text-xs text-muted-foreground">Due</label>
                           <select
                             value={part.kind}
-                            onChange={e => setSplitParts(prev => prev.map((p, j) => j === i ? { ...p, kind: e.target.value as TrancheTriggerKind } : p))}
+                            onChange={e => changePartKind(i, e.target.value as TrancheTriggerKind)}
                             className="block px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                           >
                             <option value="manual">When you say so</option>
                             <option value="date">On a date</option>
+                            {(stepOptions.length > 0 || part.kind === 'step') && <option value="step">When a step is reached</option>}
                           </select>
                         </div>
-                        {part.kind === 'date' ? (
+                        {part.kind === 'step' ? (
+                          <>
+                            <div>
+                              <label className="text-xs text-muted-foreground">Step</label>
+                              <select
+                                value={`${part.service_type ?? ''}|${part.stage ?? ''}`}
+                                onChange={e => changePartStep(i, e.target.value)}
+                                data-testid="plan-step-select"
+                                className="block px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              >
+                                {stepOptions.length === 0 && <option value={`${part.service_type ?? ''}|${part.stage ?? ''}`}>{part.service_type} → {part.stage}</option>}
+                                {stepOptions.map(o => (
+                                  <option key={`${o.service_type}|${o.stage_name}`} value={`${o.service_type}|${o.stage_name}`}>{o.service_type} → {o.stage_name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="flex-1 min-w-[200px]">
+                              <label className="text-xs text-muted-foreground">What the client reads — continues &quot;Part {i + 1} of {splitParts.length}, due …&quot;</label>
+                              <input
+                                type="text"
+                                value={part.label}
+                                onChange={e => setSplitParts(prev => prev.map((p, j) => j === i ? { ...p, label: e.target.value } : p))}
+                                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              />
+                            </div>
+                          </>
+                        ) : part.kind === 'date' ? (
                           <div>
                             <label className="text-xs text-muted-foreground">Date</label>
                             <input
@@ -1972,9 +2039,10 @@ export function CreateOfferDialog({
                     scheduler. Said here because the alternative is Antonio discovering it by a
                     payment that never arrived. */}
                 <p className="text-xs text-muted-foreground">
-                  Only the first part is invoiced automatically, at signing. Every later part is raised
-                  by you from the client&apos;s account page when it comes due — a date is a reminder, not
-                  a scheduler.
+                  Only the first part is invoiced automatically, at signing. Nothing else is ever raised or
+                  emailed by itself: when a later part is due (its date, or the step you chose) it shows on the
+                  Calendar under <b>Invoices to raise</b>, blinking red, and you click <b>Raise and send</b>.
+                  &quot;When you say so&quot; never turns red by itself — it waits in that list until you raise it.
                 </p>
 
                 {ambiguousAmounts.map(a => (

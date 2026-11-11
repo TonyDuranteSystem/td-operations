@@ -86,7 +86,7 @@ interface SidebarProps {
   isOwner?: boolean
   /** Ids of administrator-only items this non-administrator may still see (e.g. 'forms' for the people named in lib/auth/forms-access.ts). */
   extraNavIds?: string[]
-  badgeCounts?: { inbox: number; whatsapp?: number; tasks: number; portalChats?: number; teamChat?: number; talk?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; marketing?: number; devBoard?: number }
+  badgeCounts?: { inbox: number; whatsapp?: number; tasks: number; portalChats?: number; teamChat?: number; talk?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; marketing?: number; devBoard?: number; invoicesToRaise?: number }
   enabledFeatures?: string[]
   /** The signed-in login — keys this computer's own copy of the menu layout. */
   userId: string
@@ -195,6 +195,8 @@ export function Sidebar({
   const [liveReconReview, setLiveReconReview] = useState(badgeCounts?.reconciliationReview ?? 0)
   const [liveComm] = useState(badgeCounts?.commUnread ?? 0)
   const [liveDevBoard, setLiveDevBoard] = useState(badgeCounts?.devBoard ?? 0)
+  // Invoices the Calendar says are due to raise (red count on the Calendar item — dev job ae3c19db).
+  const [liveInvoices, setLiveInvoices] = useState(badgeCounts?.invoicesToRaise ?? 0)
   // Marketing: what the team is waiting on Antonio for (@mentions, direct messages, lead chats); 0 until he has joined the team
   const [liveMarketing, setLiveMarketing] = useState(0)
   const [liveWhatsNew, setLiveWhatsNew] = useState(0)
@@ -258,6 +260,7 @@ export function Sidebar({
           if (typeof data.devBoard === 'number') {
             setLiveDevBoard(data.devBoard)
           }
+          if (typeof data.invoicesToRaise === 'number') setLiveInvoices(data.invoicesToRaise)
           if (typeof data.marketing === 'number') setLiveMarketing(data.marketing)
         })
         .catch(() => {})
@@ -300,6 +303,7 @@ export function Sidebar({
             if (typeof data.inbox === 'number') setLiveInbox(data.inbox)
             if (typeof data.whatsapp === 'number') setLiveWhatsapp(data.whatsapp)
             if (typeof data.devBoard === 'number') setLiveDevBoard(data.devBoard)
+            if (typeof data.invoicesToRaise === 'number') setLiveInvoices(data.invoicesToRaise)
           })
           .catch(() => {})
       }, 3000)
@@ -419,7 +423,7 @@ export function Sidebar({
     if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }
     // The Calendar item opens the New Calendar for the people who may see it (never inside a window: no menu there anyway).
     if (item.id === 'calendar' && enabledFeatures.includes('new-calendar')) {
-      return { ...item, href: '/new-calendar', icon: CalendarDays, tooltip: 'The day-by-day work list: what is on us, what is waiting on someone else, what is finished. Renewals and annual reports are on its third tab.' }
+      return { ...item, href: '/new-calendar', icon: CalendarDays, badge: liveInvoices > 0 ? liveInvoices : undefined, tooltip: 'The day-by-day work list: what is on us, what is waiting on someone else, what is finished. Renewals and annual reports are on its third tab.' }
     }
     return item
   })

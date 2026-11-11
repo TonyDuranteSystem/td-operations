@@ -11,7 +11,6 @@ import {
   computePlanStatus,
   computePlanSettlementFromStatus,
   isRaisable,
-  duePartsToAutoRaise,
   DEAD_INVOICE_STATUSES,
   type TrancheInvoiceRow,
 } from "@/lib/offers/payment-plan-state"
@@ -134,48 +133,6 @@ describe("isRaisable — one condition, not a second opinion", () => {
       row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1250 }),
     ])
     expect(isRaisable(s.parts[0])).toBe(false)
-  })
-})
-
-describe("duePartsToAutoRaise — what the auto-raise cron acts on", () => {
-  const DATED_PLAN = validatePaymentPlan([
-    { seq: 1, amount: 1750, currency: "EUR", trigger: { kind: "signing" } },
-    { seq: 2, amount: 1750, currency: "EUR", trigger: { kind: "date", date: "2026-09-23" } },
-  ]).plan!
-
-  it("is empty before the due date arrives", () => {
-    const s = computePlanStatus(DATED_PLAN, [row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1750 })])
-    expect(duePartsToAutoRaise(s, "2026-09-22")).toEqual([])
-  })
-
-  it("includes the part on its due date, and every day after", () => {
-    const s = computePlanStatus(DATED_PLAN, [row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1750 })])
-    expect(duePartsToAutoRaise(s, "2026-09-23").map((p) => p.part.seq)).toEqual([2])
-    expect(duePartsToAutoRaise(s, "2026-10-01").map((p) => p.part.seq)).toEqual([2])
-  })
-
-  it("never includes a part a staffer already raised, even unsent — the cron must not mint a second invoice for a slot a human is handling", () => {
-    const s = computePlanStatus(DATED_PLAN, [
-      row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1750 }),
-      row({ tranche_seq: 2, invoice_status: "Draft" }),
-    ])
-    expect(duePartsToAutoRaise(s, "2026-10-01")).toEqual([])
-  })
-
-  it("never includes a signing-triggered part — signing is billed at signing, never by this cron", () => {
-    const s = computePlanStatus(DATED_PLAN, [])
-    // Part 1 (signing) is technically "not_raised" here (no invoice yet) and far in the "past"
-    // relative to any today — but it has no date trigger at all, so it can never match.
-    expect(duePartsToAutoRaise(s, "2099-01-01").map((p) => p.part.seq)).toEqual([2])
-  })
-
-  it("never includes a manual-triggered part — nothing in the system knows when a manual condition is met", () => {
-    const manualPlan = validatePaymentPlan([
-      { seq: 1, amount: 1000, currency: "USD", trigger: { kind: "signing" } },
-      { seq: 2, amount: 1000, currency: "USD", trigger: { kind: "manual", label: "when the bank account opens" } },
-    ]).plan!
-    const s = computePlanStatus(manualPlan, [row({ tranche_seq: 1, invoice_status: "Paid", amount_paid: 1000 })])
-    expect(duePartsToAutoRaise(s, "2099-01-01")).toEqual([])
   })
 })
 
