@@ -47,6 +47,15 @@ export const ALL_FLOW_TYPES = [...FLOW_TYPES, ...CONTACT_FLOW_TYPES] as const
 
 export type FlowType = (typeof ALL_FLOW_TYPES)[number]
 
+/** Flow types shown ONLY on the staff CRM contact page, never to the client. A Company Closure of a company we do not
+ *  track (or any closure the client is asked to describe in the portal wizard) lives on the PERSON — there is no
+ *  company page to open it from, so without this the closure workspace (the client's answers and documents) was
+ *  unreachable from the contact (Contrabona, 2026-11-11). It is deliberately NOT in CONTACT_FLOW_TYPES: that list
+ *  also feeds the CLIENT portal (Service Status, the flow page gate, the journey layout), which a closure must not join. */
+export const STAFF_CONTACT_FLOW_TYPES = ['Company Closure'] as const
+
+export type StaffFlowType = FlowType | (typeof STAFF_CONTACT_FLOW_TYPES)[number]
+
 /** Flow types whose SD is created lazily by a date-cron — eligible for a
  *  date-derived "scheduled" placeholder when no SD exists yet. */
 export const SCHEDULED_FLOW_DATE_COLUMN: Partial<Record<FlowType, 'ra_renewal_date' | 'annual_report_due_date'>> = {
@@ -57,7 +66,7 @@ export const SCHEDULED_FLOW_DATE_COLUMN: Partial<Record<FlowType, 'ra_renewal_da
 export type FlowStatus = 'scheduled' | 'active' | 'completed'
 
 export interface ResolvedFlow {
-  flow_type: FlowType
+  flow_type: StaffFlowType
   service_delivery_id: string | null
   stage_name: string | null
   stage_order: number | null
@@ -66,6 +75,10 @@ export interface ResolvedFlow {
   due_date: string | null
   account_id: string
   company_name: string | null
+  /** A job that is one of several from the same offer ("#2" — a contract that closes two companies has two
+   *  Company Closure jobs, named "… #1" / "… #2"), so their cards can be told apart before the client's form
+   *  names the company. Staff-only closure chips; null / absent for everything else. */
+  unit_label?: string | null
 }
 
 /** Minimal shape of a service_delivery row this resolver consumes. */
@@ -79,6 +92,8 @@ export interface SdRow {
   stage_entered_at: string | null
   created_at: string | null
   account_id: string | null
+  /** Only read for Company Closure (the "#n" in the job's name). */
+  service_name?: string | null
 }
 
 export interface AccountDates {
@@ -210,7 +225,7 @@ export function assembleFlows(account: AccountDates, sds: SdRow[]): ResolvedFlow
   const live = sds
     .filter((sd) => (FLOW_TYPES as readonly string[]).includes(sd.service_type ?? ''))
     .map((sd) => mapSdToFlow(sd, account))
-  const liveTypes = new Set<FlowType>(live.map((f) => f.flow_type))
+  const liveTypes = new Set<FlowType>(live.map((f) => f.flow_type as FlowType))
   const scheduled = buildScheduledFlows(account, liveTypes)
   return [...live, ...scheduled]
 }
@@ -259,14 +274,19 @@ export async function resolveFlows(accountId: string): Promise<ResolvedFlow[]> {
 export async function resolveFlowsByContact(contactId: string): Promise<ResolvedFlow[]> {
   const { data: sdRows } = await supabaseAdmin
     .from('service_deliveries')
-    .select('id, service_type, stage, stage_order, status, due_date, stage_entered_at, created_at, account_id')
+    .select('id, service_type, service_name, stage, stage_order, status, due_date, stage_entered_at, created_at, account_id')
     .eq('contact_id', contactId)
-    .in('service_type', CONTACT_FLOW_TYPES as unknown as string[])
+    .in('service_type', [...CONTACT_FLOW_TYPES, ...STAFF_CONTACT_FLOW_TYPES] as unknown as string[])
     .neq('status', 'cancelled')
     .order('updated_at', { ascending: false })
 
-  return ((sdRows ?? []) as SdRow[]).map((sd) => ({
-    flow_type: sd.service_type as FlowType,
+  const rows = (sdRows ?? []) as SdRow[]
+  // A closure chip is told apart by the company being closed: the CRM company for a closure on one of ours, else
+  // the name the client wrote in the closure form (known only once the form is in).
+  const closureNames = await closureCompanyNames(rows.filter((r) => r.service_type === 'Company Closure'))
+
+  return rows.map((sd) => ({
+    flow_type: sd.service_type as StaffFlowType,
     service_delivery_id: sd.id,
     stage_name: sd.stage,
     stage_order: sd.stage_order,
@@ -274,6 +294,50 @@ export async function resolveFlowsByContact(contactId: string): Promise<Resolved
     status: flowStatusFromSd(sd.status),
     due_date: sd.due_date,
     account_id: sd.account_id ?? '',
-    company_name: null,
+    company_name: closureNames.get(sd.id) ?? null,
+    unit_label: sd.service_type === 'Company Closure' ? closureUnitLabel(sd.service_name) : null,
   }))
+}
+
+/** "#2" from a closure job named "Company Closure - Client #2"; null when the name has no unit number. Pure. */
+export function closureUnitLabel(serviceName: string | null | undefined): string | null {
+  const m = /#(\d{1,2})\s*$/.exec(String(serviceName ?? ''))
+  return m ? `#${m[1]}` : null
+}
+
+/**
+ * The company a Company Closure job is about, per job: the CRM company for a closure on a company of ours, else the
+ * name the client typed in the closure form (wizard answer `llc_name`). A job whose form is not in yet has no name.
+ * Never throws — a failed lookup only means the chip has no name.
+ */
+async function closureCompanyNames(closures: SdRow[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+  if (closures.length === 0) return names
+  try {
+    const accountIds = Array.from(new Set(closures.map((c) => c.account_id).filter((x): x is string => !!x)))
+    if (accountIds.length > 0) {
+      const { data: accounts } = await supabaseAdmin.from('accounts').select('id, company_name').in('id', accountIds)
+      const byId = new Map((accounts ?? []).map((a) => [a.id as string, (a.company_name as string | null) ?? '']))
+      for (const c of closures) {
+        const n = c.account_id ? byId.get(c.account_id) : ''
+        if (n && n.trim()) names.set(c.id, n.trim())
+      }
+    }
+    const personLevel = closures.filter((c) => !c.account_id).map((c) => c.id)
+    if (personLevel.length > 0) {
+      const { data: wizards } = await supabaseAdmin
+        .from('wizard_progress')
+        .select('service_delivery_id, data')
+        .eq('wizard_type', 'closure')
+        .in('service_delivery_id', personLevel)
+      for (const w of wizards ?? []) {
+        const answers = (w.data ?? {}) as { llc_name?: unknown }
+        const n = typeof answers.llc_name === 'string' ? answers.llc_name.trim() : ''
+        if (w.service_delivery_id && n) names.set(w.service_delivery_id, n)
+      }
+    }
+  } catch {
+    // a missing name is cosmetic
+  }
+  return names
 }

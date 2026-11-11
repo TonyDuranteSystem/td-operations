@@ -8,6 +8,7 @@ import { ContactCallsSection } from '@/components/contacts/contact-calls-section
 import { resolveFlowsByContact } from '@/lib/flows/resolve-flows'
 import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
 import { ItinWorkspaceBanner } from '@/components/flows/itin-workspace-banner'
+import { ClosureWorkspaceBanner } from '@/components/flows/closure-workspace-banner'
 import { OnboardingWorkspaceBanner } from '@/components/flows/onboarding-workspace-banner'
 import { resolveOnboardingWorkspaceForContact } from '@/lib/flows/resolve-onboarding-workspace'
 import { isDashboardUser } from '@/lib/auth'
@@ -277,6 +278,12 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   const itinFlow = contactFlows.find(
     (f) => f.flow_type === 'ITIN' && f.status === 'active' && f.service_delivery_id,
   )
+  // Every ACTIVE Company Closure job on this person → one workspace banner each (a contract that closes two
+  // companies has two jobs). A closure on a person has no company page, so without this the closure workspace
+  // — the client's answers and documents — could not be opened from the contact (Contrabona, 2026-11-11).
+  const closureFlows = contactFlows.filter(
+    (f) => f.flow_type === 'Company Closure' && f.status === 'active' && f.service_delivery_id,
+  )
   // Onboarding workspace — the client's submitted data awaiting review, and/or
   // a just-reviewed company still needing its Registered Agent switched.
   const onboardingWorkspace = await resolveOnboardingWorkspaceForContact(params.id)
@@ -308,6 +315,15 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
           stage={itinFlow.stage_name}
         />
       )}
+      {closureFlows.map((f) => (
+        <ClosureWorkspaceBanner
+          key={f.service_delivery_id}
+          serviceDeliveryId={f.service_delivery_id as string}
+          stage={f.stage_name}
+          companyName={f.company_name}
+          unitLabel={f.unit_label}
+        />
+      ))}
       <OnboardingWorkspaceBanner
         pendingEntries={onboardingWorkspace.pendingEntries}
         reviewed={onboardingWorkspace.reviewed}

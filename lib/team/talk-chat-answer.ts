@@ -25,6 +25,9 @@ export interface TalkChatArgs {
   listGroupMemberIds: (threadId: string) => Promise<string[]>
 }
 
+/** How many pins older than the loaded messages come with the answer (the bar steps through them one by one). */
+export const OLDER_PINS_LIMIT = 20
+
 export type TalkChatResult =
   | { status: 200; body: Record<string, unknown> }
   | { status: 403 | 404; body: { error: string } }
@@ -57,8 +60,10 @@ export async function buildTalkChatAnswer(client: any, a: TalkChatArgs): Promise
   const dmKey: string | null = thread.thread_type === 'dm' ? (thread.dm_key ?? null) : null
   const peerId = dmKey ? dmKey.split(':').find(id => id && id !== userId) : null
 
-  const [withPreviews, peerRead, peerDelivered, memberReads, memberDelivered] = await Promise.all([
+  const [withPreviews, pinsRes, peerRead, peerDelivered, memberReads, memberDelivered] = await Promise.all([
     withReplyPreviews(messages, client),
+    // the pinned messages of this chat (after the access check above): the pinned bar must not lose a pin because it is older than the newest messages
+    client.from('internal_messages').select('*').eq('thread_id', threadId).not('pinned_at', 'is', null).is('deleted_at', null).order('pinned_at', { ascending: false }).limit(OLDER_PINS_LIMIT + 1),
     peerId ? client.from('internal_thread_reads').select('last_read_at').eq('thread_id', threadId).eq('user_id', peerId).maybeSingle() : null,
     peerId ? client.from('internal_thread_delivery').select('delivered_at').eq('thread_id', threadId).eq('user_id', peerId).maybeSingle() : null,
     groupMembers ? client.from('internal_thread_reads').select('user_id, last_read_at').eq('thread_id', threadId).in('user_id', groupMembers) : null,
@@ -72,6 +77,11 @@ export async function buildTalkChatAnswer(client: any, a: TalkChatArgs): Promise
       : null,
   ])
 
+  // Pins that are not among the messages above (older than the window). A failed lookup only means the bar shows the pins in view.
+  if (pinsRes?.error) console.error('team/threads/[id] (talk view): pins lookup failed', pinsRes.error)
+  const inWindow = new Set((messages as Array<{ id: string }>).map(m => m.id))
+  const olderPins = ((pinsRes?.data ?? []) as Array<{ id: string }>).filter(p => !inWindow.has(p.id)).slice(0, OLDER_PINS_LIMIT)
+
   return {
     status: 200,
     body: {
@@ -81,6 +91,7 @@ export async function buildTalkChatAnswer(client: any, a: TalkChatArgs): Promise
       peer_read_at: peerRead?.data?.last_read_at ?? null,
       peer_delivered_at: peerDelivered?.data?.delivered_at ?? null,
       messages: withPreviews,
+      older_pins: olderPins,
       has_more: hasMore,
       current_user_id: userId,
       current_user_name: a.userName,
