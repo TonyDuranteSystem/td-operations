@@ -21,14 +21,19 @@ export const WIZARD_DOCUMENT_FIELDS: readonly string[] = [
 ]
 
 /** What those boxes take: a PDF, a picture (including an iPhone HEIC photo and a TIFF scan) or a Word file. */
-export const WIZARD_DOCUMENT_EXTENSIONS: readonly string[] = ["pdf", "png", "jpg", "jpeg", "heic", "heif", "webp", "tif", "tiff", "gif", "bmp", "doc", "docx"]
+export const WIZARD_DOCUMENT_EXTENSIONS: readonly string[] = ["pdf", "png", "jpg", "jpeg", "jpe", "jfif", "heic", "heif", "webp", "avif", "tif", "tiff", "gif", "bmp", "doc", "docx"]
 
 /** Value for the file picker's `accept` attribute (a convenience for the client; the server rule is the control). */
-export const WIZARD_DOCUMENT_ACCEPT = ".pdf,.png,.jpg,.jpeg,.heic,.heif,.webp,.tif,.tiff,.gif,.bmp,.doc,.docx,application/pdf,image/*"
+export const WIZARD_DOCUMENT_ACCEPT = ".pdf,.png,.jpg,.jpeg,.jpe,.jfif,.heic,.heif,.webp,.avif,.tif,.tiff,.gif,.bmp,.doc,.docx,application/pdf,image/*"
+
+/** The boxes above, and the per-member passport boxes a company with several owners gets (`member_<n>_member_passport`). */
+export function isWizardDocumentField(fieldName: string): boolean {
+  return WIZARD_DOCUMENT_FIELDS.includes(fieldName) || /^member_\d+_member_passport$/.test(fieldName)
+}
 
 /** `null` when the file may go in this box, else a sentence for the client (English, then Italian — the wizard is bilingual). */
 export function wizardFileTypeProblem(fieldName: string, fileName: string): string | null {
-  if (!WIZARD_DOCUMENT_FIELDS.includes(fieldName)) return null
+  if (!isWizardDocumentField(fieldName)) return null
   const m = /\.([A-Za-z0-9]{1,8})$/.exec(String(fileName ?? "").trim())
   if (!m) return null
   const ext = m[1].toLowerCase()

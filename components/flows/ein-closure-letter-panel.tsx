@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { AlertTriangle, CheckCircle2, FileText, Loader2 } from 'lucide-react'
 import type { EinClosureFacts } from '@/lib/closure/ein-closure-package'
 import { MAX_ADDRESS_LINES, MAX_ADDRESS_LINE_CHARS } from '@/lib/closure/ein-letter-wording'
+import { normalizeCompanyName, einDigits } from '@/lib/closure/signature-consent'
 
 interface MadeInfo {
   documentId: string
@@ -110,6 +111,14 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
       : addressRows.some((l) => l.length > MAX_ADDRESS_LINE_CHARS)
         ? `An address line is longer than ${MAX_ADDRESS_LINE_CHARS} characters — split it over two lines.`
         : null
+  // the same comparison the server makes (case, punctuation and the legal form are ignored for the name; an EIN is its nine digits)
+  const changedFromClient = !!facts && !!edit && (normalizeCompanyName(edit.name) !== normalizeCompanyName(facts.wizardCompanyName) || einDigits(edit.ein) !== einDigits(facts.wizardEin))
+  // a job with no company of ours needs a name and an EIN in the box (a blank one would silently fall back to what the client wrote)
+  const detailsMissing = !!facts && !facts.hasCompany && !!edit && (!edit.name.trim() || !edit.ein.trim())
+  // the correction lives only in this page: after a reload the box shows the client's words again, so say what the saved letter was made for
+  const savedLetterCompany = facts?.existingLetter ? facts.existingLetter.name.replace(/^EIN Closure Letter\s*-\s*/i, '').replace(/\.pdf$/i, '').trim() : ''
+  const boxCompany = facts ? (facts.hasCompany || !edit ? facts.companyName : edit.name) : ''
+  const savedLetterDiffers = !!savedLetterCompany && !made && !!boxCompany.trim() && normalizeCompanyName(savedLetterCompany) !== normalizeCompanyName(boxCompany)
   const link = (id: string) => `/api/documents/${id}/preview`
   const shown = made ?? (facts?.existingLetter ? { documentId: facts.existingLetter.documentId, name: facts.existingLetter.name, pages: 0, attachedNotice: null } : null)
 
@@ -151,7 +160,7 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
           {!facts.hasCompany && edit && (
             <p className="text-xs text-zinc-500">
               This company is not one of ours, so the name and EIN come from what the client wrote — fix a typo here before the letter goes to the IRS.
-              {edit.name.trim() !== facts.wizardCompanyName.trim() || edit.ein.trim() !== facts.wizardEin.trim()
+              {changedFromClient
                 ? facts.hasSignature
                   ? ' You changed what the client wrote: they signed for their own version, so their signature will NOT be used and the letter will have a line to sign by hand.'
                   : ' You changed what the client wrote.'
@@ -192,12 +201,17 @@ export function EinClosureLetterPanel({ serviceDeliveryId }: { serviceDeliveryId
             </div>
           </fieldset>
 
+          {savedLetterDiffers && (
+            <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> The letter already made on this job is for “{savedLetterCompany}”, but the box shows “{boxCompany}”. Making the letter again replaces it with what the box shows.</p>
+          )}
+          {detailsMissing && <p className="text-xs text-red-700">Fill in the company name and the EIN before making the letter.</p>}
+
           {facts.warnings.map((w) => (
             <p key={w} className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {w}</p>
           ))}
 
           <div className="flex flex-wrap items-center gap-3">
-            <button type="button" disabled={busy || !address.trim() || !!addressTooLong} onClick={() => void make()} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:bg-zinc-300">
+            <button type="button" disabled={busy || !address.trim() || !!addressTooLong || detailsMissing} onClick={() => void make()} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:bg-zinc-300">
               {busy ? 'Making the letter…' : shown ? 'Make the letter again' : 'Make the letter'}
             </button>
             {shown && (

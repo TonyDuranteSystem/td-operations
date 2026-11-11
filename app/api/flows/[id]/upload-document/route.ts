@@ -232,7 +232,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const { uploadContentProblem } = await import('@/lib/flows/upload-content-check')
     const contentProblem = uploadContentProblem({ fileName, mimeType: fileMime, bytes: buffer })
     if (contentProblem) {
-      supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})   // a refused upload leaves no staged file behind
+      if (storagePath.startsWith('flow-uploads/') && !storagePath.includes('..')) {
+        supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})   // a refused upload leaves no staged file behind
+      }
       return NextResponse.json({ success: false, detail: contentProblem, error: contentProblem }, { status: 400 })
     }
 

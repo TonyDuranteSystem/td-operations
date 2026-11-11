@@ -60,7 +60,23 @@ describe('second production QA (2026-11-10) — the fixes are wired where the pr
     expect(panel).toMatch(/res\.status === 409\) \{\s*\/\/[^\n]*\n\s*setNoticeId\(null\)/)
   })
 
-  it('the signature box re-sends its language hint when a saved drawing is shown again', () => {
-    expect(read('components/portal/wizard/wizard-signature-field.tsx')).toMatch(/shownLocale !== locale\) onChange\(CLOSURE_SIGNATURE_LOCALE_HINT, locale\)/)
+  it('the signature box fills its language hint only when the re-opened form has none (a hint from signing time is never rewritten)', () => {
+    expect(read('components/portal/wizard/wizard-signature-field.tsx')).toMatch(/saved && !shownLocale\) onChange\(CLOSURE_SIGNATURE_LOCALE_HINT, locale\)/)
+  })
+
+  it('Go Back claims the step BEFORE it deletes or trashes anything (a lost race must leave the files alone)', () => {
+    const op = read('lib/operations/service-delivery.ts')
+    const fn = op.slice(op.indexOf('export async function revertServiceDelivery'))
+    const claim = fn.indexOf('revertUpdate.eq("stage", sd.stage)')
+    expect(claim).toBeGreaterThan(0)
+    expect(claim).toBeLessThan(fn.indexOf('store_trash_file'))
+    expect(claim).toBeLessThan(fn.indexOf('.delete()'))
+  })
+
+  it('the tracking route treats a number saved with spaces before this change as the same number', () => {
+    const route = read('app/api/flows/[id]/irs-tracking/route.ts')
+    expect(route).toMatch(/String\(existing\.tracking_number \?\? ''\)\.replace\(\/\[\\s-\]\+\/g, ''\) === trackingNumber/)
+    expect(route).toContain('findDuplicate(trackingNumber, params.id, [rawTracking])')
   })
 })
+

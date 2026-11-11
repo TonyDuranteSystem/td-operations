@@ -1577,6 +1577,49 @@ export async function revertServiceDelivery(
     }
   }
 
+  // The step is claimed FIRST, then the previous step's documents are cleaned up: the guarded write below is the point where two Go Backs at the same
+  // moment (or a Go Back racing a forward move) are told apart, and nothing may be deleted or trashed by a Go Back that then turns out to have lost.
+  // (If the clean-up is interrupted after the claim, the job is on the earlier step with its old files still listed — recoverable by re-uploading.)
+  // Move the SD back. Append a stage_history entry mirroring the forward
+  // shape so the audit trail reads symmetrically.
+  const historyEntry = {
+    from_stage: sd.stage || "New",
+    from_order: current.stage_order,
+    to_stage: previous.stage_name,
+    to_order: previous.stage_order,
+    advanced_at: new Date().toISOString(),
+    advanced_by: actor,
+    notes: params.notes || "Reverted to previous stage",
+  }
+  const stageHistory = Array.isArray(sd.stage_history)
+    ? [...sd.stage_history, historyEntry]
+    : [historyEntry]
+
+  const patch: Record<string, unknown> = {
+    stage: previous.stage_name,
+    stage_order: previous.stage_order,
+    stage_entered_at: new Date().toISOString(),
+    stage_history: stageHistory,
+    updated_at: new Date().toISOString(),
+  }
+  // Reverting out of a completed final stage re-opens the SD.
+  const statusReset = sd.status === "completed"
+  if (statusReset) {
+    patch.status = "active"
+    patch.end_date = null
+  }
+
+  // Applied ONLY if the job is still at the step it was read at: two Go Backs at the same moment both read the same step and both appended their own
+  // history line to the same list, so one line was lost (production end-to-end test 2026-11-10). The second one now finds the step already changed.
+  const revertUpdate = supabaseAdmin.from("service_deliveries").update(patch).eq("id", sd.id)
+  const revertedRows = await dbWrite(
+    (sd.stage === null || sd.stage === undefined ? revertUpdate.is("stage", null) : revertUpdate.eq("stage", sd.stage)).select("id"),
+    "service_deliveries.update.revert",
+  )
+  if (Array.isArray(revertedRows) && revertedRows.length === 0) {
+    return { success: false, outcome: "error", delivery_id: sd.id, service_type: sd.service_type, error: REVERT_JOB_MOVED }
+  }
+
   // 3-store. CRM Store pilot (sandbox only, job 685467b5): a document of that stage whose bytes live in
   // the new store goes to the STORE's trash (recoverable, legal holds apply) before its CRM row is
   // removed below — never left live and backed up with no CRM listing. A store file that could NOT be
@@ -1682,45 +1725,6 @@ export async function revertServiceDelivery(
     }
   }
 
-  // 4. Move the SD back. Append a stage_history entry mirroring the forward
-  // shape so the audit trail reads symmetrically.
-  const historyEntry = {
-    from_stage: sd.stage || "New",
-    from_order: current.stage_order,
-    to_stage: previous.stage_name,
-    to_order: previous.stage_order,
-    advanced_at: new Date().toISOString(),
-    advanced_by: actor,
-    notes: params.notes || "Reverted to previous stage",
-  }
-  const stageHistory = Array.isArray(sd.stage_history)
-    ? [...sd.stage_history, historyEntry]
-    : [historyEntry]
-
-  const patch: Record<string, unknown> = {
-    stage: previous.stage_name,
-    stage_order: previous.stage_order,
-    stage_entered_at: new Date().toISOString(),
-    stage_history: stageHistory,
-    updated_at: new Date().toISOString(),
-  }
-  // Reverting out of a completed final stage re-opens the SD.
-  const statusReset = sd.status === "completed"
-  if (statusReset) {
-    patch.status = "active"
-    patch.end_date = null
-  }
-
-  // Applied ONLY if the job is still at the step it was read at: two Go Backs at the same moment both read the same step and both appended their own
-  // history line to the same list, so one line was lost (production end-to-end test 2026-11-10). The second one now finds the step already changed.
-  const revertUpdate = supabaseAdmin.from("service_deliveries").update(patch).eq("id", sd.id)
-  const revertedRows = await dbWrite(
-    (sd.stage === null || sd.stage === undefined ? revertUpdate.is("stage", null) : revertUpdate.eq("stage", sd.stage)).select("id"),
-    "service_deliveries.update.revert",
-  )
-  if (Array.isArray(revertedRows) && revertedRows.length === 0) {
-    return { success: false, outcome: "error", delivery_id: sd.id, service_type: sd.service_type, error: REVERT_JOB_MOVED }
-  }
 
   // 5. Undo the completion's renewal-date roll when a completed renewal SD
   // is RE-OPENED — on ANY final stage name, not just "Closed". The old

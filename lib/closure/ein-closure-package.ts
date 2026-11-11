@@ -339,6 +339,10 @@ export async function loadEinClosureFacts(jobId: string, overrides?: { companyNa
   }
   if (sigDoc && hasConsent && !sigFileId) warnings.push("The client's signature picture is not in the new storage (or was removed), so it cannot be used — the letter has a line to sign by hand.")
   const usableSignature = !!sigFileId && hasConsent && signedForThisLetter
+  // The box fingerprint must not change when staff correct the name / EIN (the POST carries the fingerprint of the box they LOOKED at): so its signature
+  // term is decided on the client's own values, not the corrected ones. (Otherwise a signed job could never be corrected: every press ended in a 409.)
+  const signedForClientsValues = !answers || sameSignedCompany(signedFingerprint, `${normalizeCompanyName(hashCompanyName)}|${einDigits(hashEin)}|`)
+  const signatureInBox = !!sigFileId && hasConsent && signedForClientsValues
 
   const existing = docs.find((d) => /^EIN Closure Letter/i.test(d.file_name))
   if (notices.length === 0) warnings.push('No copy of the EIN letter is on this job. The IRS asks for one if the client still has it — the letter can go without it.')
@@ -354,7 +358,7 @@ export async function loadEinClosureFacts(jobId: string, overrides?: { companyNa
   }
 
   const factsHash = createHash('sha256')
-    .update(JSON.stringify({ c: hashCompanyName, e: hashEin, s: signerName, g: usableSignature ? sigFileId : null, n: notices.map((n) => `${n.documentId}:${n.storeFileId ?? ''}`).sort(), st: job.status }))
+    .update(JSON.stringify({ c: hashCompanyName, e: hashEin, s: signerName, g: signatureInBox ? sigFileId : null, n: notices.map((n) => `${n.documentId}:${n.storeFileId ?? ''}`).sort(), st: job.status }))
     .digest('hex')
     .slice(0, 16)
 

@@ -592,8 +592,11 @@ export async function POST(req: NextRequest) {
         // Not repeated by a retry of the same pass — but compared with the NEWEST wizard note only. Comparing with any older note let a client who wrote
         // the wrong company, then the right one, then the SAME wrong one again, get no new CHECK line: the old identical line was found, nothing was
         // written, and the newest note ("CHECK cleared") told staff everything was fine (production QA 2026-11-10, hunter finding).
-        const { data: latest } = await notes.from("service_delivery_notes").select("body").eq("service_delivery_id", deliveryId).eq("author_name", "Closure wizard").order("created_at", { ascending: false }).limit(1)
-        const same = (latest ?? []).filter((n: { body: string | null }) => n.body === body)
+        const { data: latest } = await notes.from("service_delivery_notes").select("body").eq("service_delivery_id", deliveryId).eq("author_name", "Closure wizard").order("created_at", { ascending: false }).limit(3)
+        const recent = (latest ?? []) as Array<{ body: string | null }>
+        // a retry of a GOOD pass (no CHECK line of its own) finds the "CHECK cleared" note this same pass wrote as the newest one: the line before it is the one to compare with
+        const compareWith = recent[0] && String(recent[0].body ?? "").includes(CHECK_CLEARED_MARKER) && !destination?.disagreement ? recent.find((n) => !String(n.body ?? "").includes(CHECK_CLEARED_MARKER)) : recent[0]
+        const same = compareWith && compareWith.body === body ? [compareWith] : []
         if (same.length === 0) {
           const { error: noteErr } = await notes.from("service_delivery_notes").insert({ service_delivery_id: deliveryId, body, author_name: "Closure wizard" })
           if (noteErr) throw new Error(noteErr.message)

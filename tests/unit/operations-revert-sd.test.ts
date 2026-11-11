@@ -470,6 +470,8 @@ describe("revertServiceDelivery — a job that moved meanwhile is not sent back 
     expect(res.success).toBe(false)
     expect(res.error).toBe(REVERT_JOB_MOVED)
     expect(logAction).not.toHaveBeenCalled()
+    // the claim comes first: the losing Go Back deleted nothing (no documents, no tracking number)
+    expect(capturedDocMatch).toBeNull()
   })
 })
 

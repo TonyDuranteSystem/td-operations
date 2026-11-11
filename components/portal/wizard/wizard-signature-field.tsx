@@ -57,11 +57,12 @@ export function WizardSignatureField({ name, value, onChange, onFileUpload, cont
     if (saved && !seen && signedFor) onChange(CLOSURE_SIGNATURE_SEEN_HINT, signedFor)
   }, [saved, seen, signedFor, onChange])
 
-  // The language the consent is shown in now is the one recorded when the form is sent again unchanged (the hint is consumed by the server at every
-  // send, so a re-opened form has none): without it an Italian re-send was recorded as English.
+  // A re-opened form has the drawing but no language hint (the server consumes it at every send): without one an Italian re-send was recorded as English.
+  // Only FILLED when missing — a hint set when the signature was drawn is the language the client saw while signing, and switching the page language afterwards
+  // must not rewrite it.
   const shownLocale = text(context?.[CLOSURE_SIGNATURE_LOCALE_HINT])
   useEffect(() => {
-    if (saved && shownLocale !== locale) onChange(CLOSURE_SIGNATURE_LOCALE_HINT, locale)
+    if (saved && !shownLocale) onChange(CLOSURE_SIGNATURE_LOCALE_HINT, locale)
   }, [saved, shownLocale, locale, onChange])
 
   useEffect(() => {

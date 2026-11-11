@@ -101,7 +101,8 @@ export function dropForeignUploadPaths(
 ): string[] {
   const dropped: string[] = []
   const foreign = (v: unknown): boolean => {
-    if (typeof v !== 'string' || !prefixes.some((p) => v.startsWith(p))) return false
+    // a wizard path never contains a space (the path minter replaces every character outside letters, digits and . _ - @): a sentence that merely starts with "tax/" is an answer, not a file
+    if (typeof v !== 'string' || /\s/.test(v) || !prefixes.some((p) => v.startsWith(p))) return false
     if (!isTraversalSafePath(v)) return true // a path that walks out of its folder is never one of the sender's
     const folder = v.split('/')[1] ?? ''
     return !ownFolders.includes(folder)

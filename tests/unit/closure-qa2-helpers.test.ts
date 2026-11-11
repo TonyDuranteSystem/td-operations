@@ -46,6 +46,11 @@ describe('uploadContentProblem — an empty or fake PDF is never saved (QA F2)',
     expect(uploadContentProblem({ fileName: 'empty.pdf', mimeType: 'application/pdf', bytes: Buffer.alloc(0) })).toMatch(/empty/)
     expect(uploadContentProblem({ fileName: 'empty.png', bytes: Buffer.alloc(0) })).toMatch(/empty/)
   })
+  it('a file that never claimed to be a PDF is not refused as a fake PDF just because the upload screen invented a PDF type', () => {
+    // the screens send "application/pdf" when the browser does not know the type (a .heic from a PC, a .msg)
+    expect(uploadContentProblem({ fileName: 'photo.heic', mimeType: 'application/pdf', bytes: Buffer.from([1, 2, 3, 4]) })).toBeNull()
+    expect(uploadContentProblem({ fileName: 'mail.msg', mimeType: 'application/pdf', bytes: Buffer.from('not a pdf') })).toBeNull()
+  })
   it('refuses a text file renamed .pdf and a pdf-typed file with no PDF inside', () => {
     expect(uploadContentProblem({ fileName: 'x.pdf', bytes: Buffer.from('hello, this is text') })).toMatch(/not a real PDF/)
     expect(uploadContentProblem({ fileName: 'x', mimeType: 'application/pdf', bytes: Buffer.from('<html></html>') })).toMatch(/not a real PDF/)
@@ -66,6 +71,12 @@ describe('wizardFileTypeProblem — the Articles take a document or a picture (Q
     for (const n of ['a.pdf', 'A.PDF', 'photo.HEIC', 'p.jpg', 'p.JPEG', 'scan.tiff', 'x.docx', 'x.webp']) {
       expect(wizardFileTypeProblem('articles_of_organization', n)).toBeNull()
     }
+  })
+  it('covers the per-member passport boxes of a company with several owners, and accepts a Windows .jfif photo', () => {
+    expect(wizardFileTypeProblem('member_2_member_passport', 'notes.txt')).not.toBeNull()
+    expect(wizardFileTypeProblem('member_2_member_passport', 'passport.pdf')).toBeNull()
+    expect(wizardFileTypeProblem('articles_of_organization', 'photo.jfif')).toBeNull()
+    expect(wizardFileTypeProblem('other_member_passport_notes', 'notes.txt')).toBeNull()
   })
   it('lets a name with no extension through, and leaves the other boxes open', () => {
     expect(wizardFileTypeProblem('ein_letter', 'scan')).toBeNull()
@@ -148,6 +159,11 @@ describe('dropForeignUploadPaths — a file in someone else folder is not this c
     expect(data.articles_of_organization).toEqual(['closure/acct-1/articles_of_organization_11111111_a.pdf'])
     expect(data.ein_letter).toBe('closure/contact-9/ein_letter_33333333_e.pdf')
     expect(data.notes).toBe('plain text')
+  })
+  it('a sentence that merely starts like a wizard folder is an answer, not a file', () => {
+    const data: Record<string, unknown> = { reason: 'tax/legal reasons, closing the company', other: 'closure/ what to do' }
+    expect(dropForeignUploadPaths(data, own)).toEqual([])
+    expect(data.reason).toBe('tax/legal reasons, closing the company')
   })
   it('treats a traversal path as foreign and ignores values that are not wizard paths', () => {
     const data: Record<string, unknown> = { a: 'closure/acct-1/../victim/x.pdf', b: 'tax/other/x.pdf', c: 'hello', d: 5, e: null }

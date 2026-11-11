@@ -14,8 +14,14 @@
 
 const PDF_HEADER = "%PDF-"
 
+/**
+ * Does the file CLAIM to be a PDF? By its name; the type is only trusted when the name says nothing (no extension) — the upload screens invent
+ * "application/pdf" when the browser does not know a file's type (a .heic from a PC, a .msg), and such a file never claimed to be a PDF.
+ */
 function looksLikePdf(fileName: string, mimeType: string | null | undefined): boolean {
-  return /\.pdf$/i.test(fileName) || /pdf/i.test(String(mimeType ?? ""))
+  if (/\.pdf$/i.test(fileName)) return true
+  const hasExtension = /\.[A-Za-z0-9]{1,8}$/.test(fileName)
+  return !hasExtension && /pdf/i.test(String(mimeType ?? ""))
 }
 
 /** `null` when the file is acceptable, else the plain sentence for staff. */

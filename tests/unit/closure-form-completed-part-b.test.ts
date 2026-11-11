@@ -381,3 +381,15 @@ describe("closure-form-completed — the client's EIN differs from our record (Q
   })
 })
 
+describe("closure-form-completed — a retry after a good pass wrote its own 'CHECK cleared' note (hunter finding)", () => {
+  it("does not write the 'package filed' line twice", async () => {
+    const filed = `Closure wizard: package filed in the person's folder "Company closure_Italyflow LLC".`
+    h.list.service_delivery_notes = [
+      { id: "n-2", body: "Closure wizard: CHECK cleared: the client now wrote Italyflow LLC, which matches the company this job is linked to." },
+      { id: "n-1", body: filed },
+    ]
+    await call({ submission_id: "sub-1", token: "tok-1", service_delivery_id: "sd-1" })
+    expect(staffNote()).toBeUndefined()
+  })
+})
+

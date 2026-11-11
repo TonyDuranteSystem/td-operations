@@ -557,5 +557,21 @@ describe('a closure for a company that is NOT ours â€” staff can fix the clientâ
     expect(bad.ok).toBe(false)
     expect((bad as { error?: string }).error).toMatch(/EIN must be 9 digits/)
   })
+
+  it('a job the client SIGNED can be corrected: the box fingerprint is the same with and without the correction, the letter is made, and the signature is not used (hunter blocker)', async () => {
+    const sigDoc = { id: 'd-sig', file_name: 'signature_image_ab12cd34_signature.png', document_type_name: null, drive_file_id: `store:${SIG_STORE_ID}`, created_at: '2026-11-10T15:22:03Z' }
+    const signed = { ...answers, signature_image: ['closure/x/signature_image_ab12cd34_signature.png'], signature_consent: 'text', signature_signed_at: '2026-11-10T18:30:00.000Z' }
+    seed({ submitted: signed, docRows: [...docs, sigDoc] })
+    saveContact.mockResolvedValue({ route: 'store', fileId: 'f', pointer: 'store:f', documentRowId: 'doc-new', status: 'created' })
+    const base = await loadEinClosureFacts(JOB)
+    expect(base.ok && base.facts.hasSignature).toBe(true)
+    const fixed = await loadEinClosureFacts(JOB, { companyName: 'Italyflow LLC', ein: '41-2330247' })
+    expect(fixed.ok && fixed.facts.hasSignature).toBe(false)
+    expect(base.ok && fixed.ok && base.facts.factsHash === fixed.facts.factsHash).toBe(true)
+    // pressing the button with the box's own fingerprint plus the correction works (it used to answer 409 for ever)
+    const r = await buildEinClosurePackage({ jobId: JOB, addressLines: ['1 Main St', 'Santa Fe, NM 87501'], noticeDocumentId: null, factsHash: base.ok ? base.facts.factsHash : null, companyName: 'Italyflow LLC', ein: '41-2330247' })
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.signed).toBe(false)
+  })
 })
 
