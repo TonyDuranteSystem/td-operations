@@ -28,6 +28,10 @@ export interface InvoiceToRaiseRow {
   /** Plain words for staff — why it is due, or what it waits for. */
   text: string
   stepNotFound: boolean
+  /** A step part whose service has no active job tied to the offer — it will not trigger by itself. */
+  jobMissing: boolean
+  /** A Draft already exists for this part but is addressed to a different payer than the offer's "Invoice to" — it must not be sent from here. */
+  payerMismatch: boolean
 }
 
 export interface InvoicesToRaise {

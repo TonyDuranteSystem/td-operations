@@ -11,20 +11,35 @@ const tables: Record<string, unknown[] | { error: { message: string } }> = {}
 const inserted: Array<{ table: string; row: unknown }> = []
 let offerRow: Record<string, unknown> | null = null
 let leadRow: Record<string, unknown> | null = null
+let leadError: string | null = null
+/** The payer columns of the invoice createTDInvoice handed back (null = the check has nothing to compare and lets it through). */
+let madePayerRow: Record<string, unknown> | null = null
+let claimWins = true
+const updates: Array<{ table: string; patch: unknown }> = []
+const calls: Array<{ table: string; method: string; args: unknown[] }> = []
 
 vi.mock("@/lib/supabase-admin", () => {
   const make = (table: string) => {
     const c: Record<string, unknown> = {}
+    let op = "select"
     const result = () => {
+      if (op === "update") return table === "payments" ? { data: claimWins ? [{ id: "pay-2" }] : [], error: null } : { data: [], error: null }
       const t = tables[table]
       if (t && !Array.isArray(t) && "error" in t) return { data: null, error: t.error }
       return { data: (t as unknown[]) ?? [], error: null }
     }
     c.select = () => c
-    c.in = () => c
+    c.in = (...a: unknown[]) => { calls.push({ table, method: "in", args: a }); return c }
     c.not = () => c
     c.eq = () => c
-    c.maybeSingle = async () => ({ data: table === "offers" ? offerRow : table === "leads" ? leadRow : null, error: null })
+    c.or = () => c
+    c.update = (patch: unknown) => { op = "update"; updates.push({ table, patch }); return c }
+    c.maybeSingle = async () => {
+      if (table === "offers") return { data: offerRow, error: null }
+      if (table === "leads") return leadError ? { data: null, error: { message: leadError } } : { data: leadRow, error: null }
+      if (table === "payments") return { data: madePayerRow, error: null }
+      return { data: null, error: null }
+    }
     c.insert = async (row: unknown) => { inserted.push({ table, row }); return { error: null } }
     c.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => Promise.resolve(result()).then(res, rej)
     return c
@@ -67,6 +82,12 @@ const statusFor = (second: Record<string, unknown>, rows: Array<Record<string, u
 
 beforeEach(() => {
   inserted.length = 0
+  updates.length = 0
+  calls.length = 0
+  claimWins = true
+  leadError = null
+  madePayerRow = null
+  for (const k of Object.keys(tables)) delete tables[k]
   createTDInvoice.mockReset()
   sendTDInvoice.mockReset()
   createTDInvoice.mockResolvedValue({ paymentId: "pay-2", invoiceNumber: "INV-2", status: "Draft" })
@@ -164,6 +185,75 @@ describe("raiseAndSendPlanPart — one click raises AND sends, to the person who
     expect(r.message).toContain("boom")
   })
 
+  it("EXACTLY ONE EMAIL: when several clicks get the same Draft back, only the click that wins the claim sends; the others say so and send nothing", async () => {
+    claimWins = false
+    const r = await raiseAndSendPlanPart({ token: "tok", seq: 2, actor: "a" })
+    expect(r).toMatchObject({ ok: true, sent: false, invoiceNumber: "INV-2" })
+    expect(r.message).toContain("already being sent")
+    expect(sendTDInvoice).not.toHaveBeenCalled()
+  })
+
+  it("the click that wins the claim stamps the Draft first, then sends once", async () => {
+    await raiseAndSendPlanPart({ token: "tok", seq: 2, actor: "a" })
+    expect(updates.filter((u) => u.table === "payments")[0].patch).toMatchObject({ sent_at: expect.any(String) })
+    expect(sendTDInvoice).toHaveBeenCalledTimes(1)
+  })
+
+  it("a send that fails after the invoice exists says so plainly, gives the claim back and leaves a Draft to re-send", async () => {
+    sendTDInvoice.mockRejectedValue(new Error("No contact email found for this account"))
+    const r = await raiseAndSendPlanPart({ token: "tok", seq: 2, actor: "a" })
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain("was created but could not be emailed")
+    expect(r.message).toContain("No contact email found")
+    expect(r.message).toContain("Send invoice")
+    expect(updates.filter((u) => u.table === "payments").map((u) => u.patch)).toContainEqual({ sent_at: null })
+  })
+
+  it("a Draft made elsewhere (the company page) for a DIFFERENT payer is refused: not claimed, not emailed", async () => {
+    madePayerRow = { account_id: "acct-company", contact_id: null, billing_entity_id: null }
+    const r = await raiseAndSendPlanPart({ token: "tok", seq: 2, actor: "a" })
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain("different payer")
+    expect(updates).toHaveLength(0)
+    expect(sendTDInvoice).not.toHaveBeenCalled()
+  })
+
+  it("a Draft that IS addressed to the offer's payer is sent normally", async () => {
+    madePayerRow = { account_id: null, contact_id: "c-mario", billing_entity_id: null }
+    const r = await raiseAndSendPlanPart({ token: "tok", seq: 2, actor: "a" })
+    expect(r).toMatchObject({ ok: true, sent: true })
+  })
+
+  it("an offer whose 'Invoice to' was never set follows where PART 1 went (the person), not the company it was linked to afterwards", async () => {
+    offerRow = { ...offerRow!, bill_to: null, account_id: "acct-newco" }
+    tables.payments = [{ tranche_seq: 1, invoice_status: "Paid", account_id: null, contact_id: "c-mario", billing_entity_id: null }]
+    await raiseAndSendPlanPart({ token: "tok", seq: 2, actor: "a" })
+    const call = createTDInvoice.mock.calls[0][0]
+    expect(call.account_id).toBeUndefined()
+    expect(call.contact_id).toBe("c-mario")
+  })
+
+  it("…and when part 1 has no invoice yet, the old rule stands (the offer's own company)", async () => {
+    offerRow = { ...offerRow!, bill_to: null, account_id: "acct-newco" }
+    tables.payments = []
+    await raiseAndSendPlanPart({ token: "tok", seq: 2, actor: "a" })
+    expect(createTDInvoice.mock.calls[0][0].account_id).toBe("acct-newco")
+  })
+
+  it("nets the PERSON's credit pool, like part 1 at signing", async () => {
+    await raiseAndSendPlanPart({ token: "tok", seq: 2, actor: "a" })
+    expect(createTDInvoice.mock.calls[0][0].credit_scope).toBe("contact")
+  })
+
+  it("a failed lookup of the lead's person stops the click (never an invoice with the wrong or no payer)", async () => {
+    offerRow = { ...offerRow!, contact_id: null }
+    leadError = "timeout"
+    const r = await raiseAndSendPlanPart({ token: "tok", seq: 2, actor: "a" })
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain("could not be looked up")
+    expect(createTDInvoice).not.toHaveBeenCalled()
+  })
+
   it("a date part carries its date as the invoice's due date; a step part has none", async () => {
     planStatus = statusFor({ kind: "date", date: "2026-11-27" })
     await raiseAndSendPlanPart({ token: "tok", seq: 2, actor: "a" })
@@ -241,6 +331,55 @@ describe("loadInvoicesToRaise — what the Calendar shows", () => {
     expect(await countInvoicesDue("2026-11-20")).toBeNull()
   })
 
+  it("the query asks only for signed or completed offers (a draft / sent / expired offer is never read)", async () => {
+    tables.offers = [planOffer("tok", EIN)]
+    await loadInvoicesToRaise("2026-11-20")
+    const q = calls.find((x) => x.table === "offers" && x.method === "in")
+    expect(q?.args).toEqual(["status", ["signed", "completed"]])
+  })
+
+  it("an offer whose 'Invoice to' was never set names the person part 1 went to, not the company it was linked to", async () => {
+    tables.offers = [planOffer("tok", EIN, { bill_to: null, account_id: "acct-newco" })]
+    tables.payments = [{ id: "p1", invoice_number: "INV-1", invoice_status: "Paid", amount_paid: 1900, amount: 1900, tranche_seq: 1, tranche_offer_token: "tok", due_date: null, account_id: null, contact_id: "c-mario", billing_entity_id: null }]
+    tables.accounts = [{ id: "acct-newco", company_name: "Newco LLC" }]
+    const r = await loadInvoicesToRaise("2026-11-20")
+    expect(r.rows[0].payerName).toBe("Mario Gabriele Contrabona")
+    expect(r.rows[0].payerHref).toBe("/contacts/c-mario")
+  })
+
+  it("a Draft addressed to a different payer is flagged on the row (and the text says why)", async () => {
+    tables.offers = [planOffer("tok", EIN)]
+    tables.payments = [
+      { id: "p1", invoice_number: "INV-1", invoice_status: "Paid", amount_paid: 1900, amount: 1900, tranche_seq: 1, tranche_offer_token: "tok", due_date: null, account_id: null, contact_id: "c-mario", billing_entity_id: null },
+      { id: "p2", invoice_number: "INV-2", invoice_status: "Draft", amount_paid: 0, amount: 1900, tranche_seq: 2, tranche_offer_token: "tok", due_date: null, account_id: "acct-company", contact_id: null, billing_entity_id: null },
+    ]
+    const r = await loadInvoicesToRaise("2026-11-20")
+    expect(r.rows[0]).toMatchObject({ due: true, payerMismatch: true })
+    expect(r.rows[0].text).toContain("different payer")
+  })
+
+  it("a Draft addressed to the right payer carries no warning", async () => {
+    tables.offers = [planOffer("tok", EIN)]
+    tables.payments = [
+      { id: "p2", invoice_number: "INV-2", invoice_status: "Draft", amount_paid: 0, amount: 1900, tranche_seq: 2, tranche_offer_token: "tok", due_date: null, account_id: null, contact_id: "c-mario", billing_entity_id: null },
+    ]
+    const r = await loadInvoicesToRaise("2026-11-20")
+    expect(r.rows[0].payerMismatch).toBe(false)
+  })
+
+  it("a step part whose service has no active job from this offer is flagged, not left looking like an ordinary wait", async () => {
+    tables.offers = [planOffer("tok", EIN)]
+    tables.service_deliveries = []
+    const r = await loadInvoicesToRaise("2026-11-20")
+    expect(r.rows[0]).toMatchObject({ due: false, jobMissing: true })
+  })
+
+  it("a failed read of the payer's name throws instead of quietly showing the offer's client name as 'Bill to'", async () => {
+    tables.offers = [planOffer("tok", EIN)]
+    tables.contacts = { error: { message: "contacts down" } }
+    await expect(loadInvoicesToRaise("2026-11-20")).rejects.toThrow("contacts down")
+  })
+
   it("the count equals the number of due rows", async () => {
     tables.offers = [planOffer("tok", EIN)]
     expect(await countInvoicesDue("2026-11-20")).toBe(1)
@@ -256,7 +395,7 @@ describe("nothing raises by itself any more", () => {
   })
   it("the only thing that raises a later part is the staff-only route, behind a login, naming just the offer and the part", () => {
     const src = readFileSync(join(root, "app/api/crm/admin-actions/raise-plan-part/route.ts"), "utf8")
-    expect(src).toContain("isDashboardUser(user)")
+    expect(src).toContain("isStaffUser(user)")
     expect(src).toContain("seq < 2")
     expect(src).toContain("raiseAndSendPlanPart({ token, seq, actor:")
   })

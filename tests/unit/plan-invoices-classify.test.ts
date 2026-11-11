@@ -141,3 +141,22 @@ describe("steps offered by the offer builder", () => {
     expect(defaultStepWording("ITIN", "Application Sent")).toBe('after the "Application Sent" step')
   })
 })
+
+describe("a step part that can never be reached (no active job from this offer)", () => {
+  const ein = { kind: "step", service_type: "Company Formation", stage: "EIN Received", label: "After the EIN arrives" }
+  it("is flagged jobMissing when the offer has no job of that service at all", () => {
+    const c = classify(ein, [], [])
+    expect(c).toMatchObject({ due: false, jobMissing: true, stepNotFound: false })
+    expect(c?.text).toContain("no active Company Formation job is tied to this offer")
+  })
+  it("is flagged when the only job was cancelled, or belongs to another offer", () => {
+    expect(classify(ein, [], [job({ status: "cancelled", stage_order: 8 })])?.jobMissing).toBe(true)
+    expect(classify(ein, [], [job({ source_offer_token: "someone-else", stage_order: 8 })])?.jobMissing).toBe(true)
+  })
+  it("is NOT flagged while an active job exists that simply has not reached the step", () => {
+    expect(classify(ein, [], [job({ stage_order: 2 })])?.jobMissing).toBe(false)
+  })
+  it("a step that is gone from the list is stepNotFound, not jobMissing", () => {
+    expect(classify({ ...ein, stage: "Nonexistent" }, [], [])).toMatchObject({ stepNotFound: true, jobMissing: false })
+  })
+})

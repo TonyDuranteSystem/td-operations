@@ -20,12 +20,12 @@ function Row({ r }: { r: InvoiceToRaiseRow }) {
   const amountText = money(r.amount, r.currency)
   const draft = r.reason?.kind === 'draft'
   return (
-    <li key={r.key} data-testid={r.due ? 'invoice-due' : 'invoice-coming'} className={`rounded-lg border p-4 ${r.due ? 'border-red-300 bg-red-50' : ''}`}>
+    <li key={r.key} data-testid={r.due ? 'invoice-due' : 'invoice-coming'} data-offer-token={r.offerToken} data-seq={r.seq} className={`rounded-lg border p-4 ${r.due ? 'border-red-300 bg-red-50' : ''}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-base font-semibold">{r.clientName}</p>
           <p className="text-sm text-zinc-600">{r.serviceLabel} · {r.partText}</p>
-          <p className={`mt-1 text-sm ${r.due ? 'font-medium text-red-800' : r.stepNotFound ? 'text-amber-800' : 'text-zinc-600'}`}>{r.text}</p>
+          <p className={`mt-1 text-sm ${r.payerMismatch ? 'font-semibold text-amber-900' : r.due ? 'font-medium text-red-800' : r.stepNotFound || r.jobMissing ? 'text-amber-800' : 'text-zinc-600'}`}>{r.text}</p>
           <p className="mt-1 text-sm text-zinc-700">
             Bill to:{' '}
             {r.payerHref ? <Link href={r.payerHref} prefetch={false} className="underline">{r.payerName ?? 'the client'}</Link> : <b>{r.payerName ?? 'unknown — check the offer'}</b>}
@@ -34,7 +34,7 @@ function Row({ r }: { r: InvoiceToRaiseRow }) {
         </div>
         <div className="flex flex-col items-end gap-2">
           <p className="text-xl font-semibold">{amountText}</p>
-          <RaiseButton offerToken={r.offerToken} seq={r.seq} summary={`${r.partText} — ${amountText}`} payerName={r.payerName} payerEmail={r.payerEmail} due={r.due} draft={draft} />
+          <RaiseButton offerToken={r.offerToken} seq={r.seq} summary={`${r.partText} — ${amountText}`} payerName={r.payerName} payerEmail={r.payerEmail} due={r.due} draft={draft} notDueText={r.due ? undefined : r.text} />
         </div>
       </div>
     </li>

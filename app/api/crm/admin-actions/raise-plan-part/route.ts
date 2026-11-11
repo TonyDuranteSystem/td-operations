@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { isDashboardUser } from '@/lib/auth'
+import { isStaffUser } from '@/lib/auth'
 import { raiseAndSendPlanPart } from '@/lib/plan-invoices/raise'
 
 /**
@@ -14,7 +14,7 @@ import { raiseAndSendPlanPart } from '@/lib/plan-invoices/raise'
 export async function POST(request: NextRequest) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isDashboardUser(user)) {
+  if (!user || !isStaffUser(user)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 

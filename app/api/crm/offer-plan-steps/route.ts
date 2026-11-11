@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isDashboardUser } from '@/lib/auth'
+import { isStaffUser } from '@/lib/auth'
 import { stepOptionsForServices, STEP_TRIGGER_SERVICE_TYPES, type StepOption } from '@/lib/plan-invoices/steps'
 
 /**
@@ -14,7 +14,7 @@ import { stepOptionsForServices, STEP_TRIGGER_SERVICE_TYPES, type StepOption } f
 export async function GET(request: NextRequest) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isDashboardUser(user)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!user || !isStaffUser(user)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const wanted = (request.nextUrl.searchParams.get('services') ?? '')
     .split(',')

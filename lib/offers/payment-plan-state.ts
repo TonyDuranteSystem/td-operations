@@ -306,10 +306,10 @@ export async function computePlanSettlement(offerToken: string): Promise<PlanSet
 /**
  * The card-fee rate a LATER part of a plan must inherit (council, 2026-08-11) — the single,
  * shared implementation. Part one gets its rate pinned by the signing webhook; without this, a
- * part raised after that — by a staffer or by the auto-raise cron — would otherwise pin whatever
+ * part raised after that — by a staffer on the account page or the Calendar — would otherwise pin whatever
  * the CURRENT configured rate is, charging a card fee a signed, waived-fee agreement never
- * carried. Two callers need the identical answer (the manual "Raise invoice" action and the
- * auto-raise cron); this exists so there is exactly one implementation, not two that can drift
+ * carried. Two callers need the identical answer (the account page's "Raise invoice" action and the
+ * Calendar's "Raise and send"); this exists so there is exactly one implementation, not two that can drift
  * (bug-hunter finding, 2026-08-27 auto-raise review: a second hand-rolled copy is exactly the
  * bug class already fixed once as dev_task 6ec6872a).
  *

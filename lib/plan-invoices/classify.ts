@@ -8,7 +8,8 @@
  * WHEN A PART IS DUE
  *  - on a DATE: the day arrives (today >= the date). It stays due, and says how many days late, until it is raised.
  *  - when a STEP is reached: the offer's job for that service has reached the step (its own step number is the target's or later, or the
- *    job is completed). A step that cannot be found is NOT due — it is flagged, never guessed.
+ *    job is completed). A step that cannot be found is NOT due — it is flagged, never guessed. A step whose service has no active job
+ *    tied to the offer can never be reached — it is flagged too (jobMissing), never left looking like an ordinary wait.
  *  - "when I say so" (manual): never due by itself; it is listed under "Coming up" with its reason, and staff may raise it any time.
  *  - a part with a Draft invoice (raised, not sent): due — the client has not been told, so a person still has to send it.
  * A part that already has a live invoice (sent, or paid) is not listed at all. Part 1 (signing) is never listed.
@@ -44,6 +45,8 @@ export interface PartClassification {
   text: string
   /** A step trigger whose step is not in the service's step list any more — shown, never silently dropped. */
   stepNotFound: boolean
+  /** A step trigger whose service has NO active job tied to this offer (never created, or only cancelled) — it can never be reached, so say so. */
+  jobMissing: boolean
 }
 
 const DAY = 86_400_000
@@ -55,6 +58,13 @@ export function shortDate(iso: string): string {
   if (Number.isNaN(d.getTime())) return iso
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
   return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+}
+
+/** Is there an active (not cancelled) job of this service that came from this offer? */
+export function hasActiveJob(p: { jobs: OfferJob[]; offerToken: string; serviceType: string }): boolean {
+  return p.jobs.some(
+    (j) => j.source_offer_token === p.offerToken && (j.service_type ?? "").trim().toLowerCase() === p.serviceType.trim().toLowerCase() && j.status !== "cancelled",
+  )
 }
 
 /** Has the offer's job for this service reached the step? Cancelled jobs never count. */
@@ -80,26 +90,32 @@ export function classifyPlanPart(p: { status: PartStatus; todayIso: string; offe
   // Raised but not sent: the client was never told.
   if (p.status.invoice && p.status.state === "raised_unsent") {
     const no = p.status.invoice.invoice_number
-    return { due: true, reason: { kind: "draft", invoiceNumber: no }, text: `Invoice ${no ?? ""} is a draft — the client has not been sent it`.replace("  ", " "), stepNotFound: false }
+    return { due: true, reason: { kind: "draft", invoiceNumber: no }, text: `Invoice ${no ?? ""} is a draft — the client has not been sent it`.replace("  ", " "), stepNotFound: false, jobMissing: false }
   }
 
   const t = part.trigger
   if (t.kind === "date" && t.date) {
     const late = Math.floor(dayNumber(p.todayIso) - dayNumber(t.date))
     if (late >= 0) {
-      return { due: true, reason: { kind: "date", date: t.date, daysLate: late }, text: late === 0 ? `Due today (${shortDate(t.date)})` : `Due ${shortDate(t.date)} — ${late} day${late === 1 ? "" : "s"} late`, stepNotFound: false }
+      return { due: true, reason: { kind: "date", date: t.date, daysLate: late }, text: late === 0 ? `Due today (${shortDate(t.date)})` : `Due ${shortDate(t.date)} — ${late} day${late === 1 ? "" : "s"} late`, stepNotFound: false, jobMissing: false }
     }
-    return { due: false, reason: null, text: `Due ${shortDate(t.date)}`, stepNotFound: false }
+    return { due: false, reason: null, text: `Due ${shortDate(t.date)}`, stepNotFound: false, jobMissing: false }
   }
 
   if (t.kind === "step" && t.service_type && t.stage) {
     const r = stepReached({ jobs: p.jobs, offerToken: p.offerToken, serviceType: t.service_type, stage: t.stage, stepOrders: p.stepOrders })
-    if (r.reached) return { due: true, reason: { kind: "step", serviceType: t.service_type, stage: t.stage }, text: `${t.service_type}: "${t.stage}" reached`, stepNotFound: false }
-    if (!r.found) return { due: false, reason: null, text: `Waiting for "${t.stage}" of ${t.service_type} — that step is not in the step list any more, check it`, stepNotFound: true }
-    return { due: false, reason: null, text: `Waiting for "${t.stage}" of ${t.service_type}`, stepNotFound: false }
+    if (r.reached) return { due: true, reason: { kind: "step", serviceType: t.service_type, stage: t.stage }, text: `${t.service_type}: "${t.stage}" reached`, stepNotFound: false, jobMissing: false }
+    if (!r.found) return { due: false, reason: null, text: `Waiting for "${t.stage}" of ${t.service_type} — that step is not in the step list any more, check it`, stepNotFound: true, jobMissing: false }
+    // The step exists but nothing can reach it: no active job of that service is tied to this offer (the service was never started —
+    // e.g. an ITIN skipped because the buyer already had one — or the job was cancelled). Saying "waiting" for ever would look like a
+    // working reminder while the client was promised an invoice at that step.
+    if (!hasActiveJob({ jobs: p.jobs, offerToken: p.offerToken, serviceType: t.service_type })) {
+      return { due: false, reason: null, text: `Waiting for "${t.stage}" of ${t.service_type} — but no active ${t.service_type} job is tied to this offer, so this will not trigger by itself. Check the offer.`, stepNotFound: false, jobMissing: true }
+    }
+    return { due: false, reason: null, text: `Waiting for "${t.stage}" of ${t.service_type}`, stepNotFound: false, jobMissing: false }
   }
 
   // "When I say so" (or anything unrecognised): never due by itself.
   const wording = clientFacingPartLabel(part, p.totalParts).replace(/^Part \d+ of \d+(, due | — due once complete: )?/, "")
-  return { due: false, reason: null, text: `Waiting: ${wording || "when you say so"}`, stepNotFound: false }
+  return { due: false, reason: null, text: `Waiting: ${wording || "when you say so"}`, stepNotFound: false, jobMissing: false }
 }

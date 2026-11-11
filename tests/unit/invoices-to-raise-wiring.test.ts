@@ -80,8 +80,30 @@ describe("the offer builder", () => {
 describe("the steps route", () => {
   it("is staff only, read-only, and under /api/crm (not the public /api/offers)", () => {
     const src = read("app/api/crm/offer-plan-steps/route.ts")
-    expect(src).toContain("isDashboardUser(user)")
+    expect(src).toContain("isStaffUser(user)")
     expect(src).not.toContain(".insert(")
     expect(src).not.toContain(".update(")
+  })
+})
+
+describe("found by the end-to-end QA run (browser + bug hunter)", () => {
+  it("the Raise button ignores a very fast second click, warns before billing a part that is not due, and tells the menu to refresh", () => {
+    const src = read("components/plan-invoices/raise-button.tsx")
+    expect(src).toContain("if (inFlight.current) return")
+    expect(src).toContain("This part is not due yet")
+    expect(src).toContain("td:invoices-to-raise-changed")
+    expect(read("components/dashboard/sidebar.tsx")).toContain("td:invoices-to-raise-changed")
+  })
+  it("the row passes its own words to the button as the not-due warning, only for rows that are not due", () => {
+    expect(read("components/plan-invoices/invoices-to-raise-tab.tsx")).toContain("notDueText={r.due ? undefined : r.text}")
+  })
+  it("both new routes accept staff only (not just 'anyone who is not a client')", () => {
+    expect(read("app/api/crm/offer-plan-steps/route.ts")).toContain("isStaffUser(user)")
+    expect(read("app/api/crm/admin-actions/raise-plan-part/route.ts")).toContain("isStaffUser(user)")
+  })
+  it("an invoice sent to a person with no company names the person on the PDF, not 'Client'", () => {
+    const src = read("lib/invoice-auto-send.ts")
+    expect(src.match(/account\?\.company_name \?\? \(recipientName \|\| "Client"\)/g)?.length).toBe(2)
+    expect(src).not.toMatch(/name: account\?\.company_name \?\? "Client"/)
   })
 })

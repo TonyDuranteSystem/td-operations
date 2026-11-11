@@ -271,6 +271,19 @@ export function Sidebar({
     return () => { clearTimeout(initialTimer); clearInterval(interval) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // "Invoices to raise": after a click on the Calendar's Raise and send, the red count on the Calendar item drops at once
+  // instead of waiting up to 15 seconds for the next refresh (the button announces it with this event).
+  useEffect(() => {
+    const refresh = () => {
+      fetch('/api/dashboard/badges')
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => { if (data && typeof data.invoicesToRaise === 'number') setLiveInvoices(data.invoicesToRaise) })
+        .catch(() => {})
+    }
+    window.addEventListener('td:invoices-to-raise-changed', refresh)
+    return () => window.removeEventListener('td:invoices-to-raise-changed', refresh)
+  }, [])
+
   // Fetch the global "What's New" unhandled total for the Portal Chats badge.
   // Same source the Portal Chats page uses; staff-only endpoint (403 → ignored).
   useEffect(() => {
