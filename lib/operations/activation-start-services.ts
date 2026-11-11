@@ -40,7 +40,7 @@
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { createSD } from "@/lib/operations/service-delivery"
 import { reportSystemError } from "@/lib/system-errors"
-import { getStartAtActivationServiceTypes, getContactEligibleServiceTypes, getRepeatableServiceTypes, LLC_MANAGEMENT_BUNDLE_TYPES } from "@/lib/services"
+import { getStartAtActivationServiceTypes, getContactEligibleServiceTypes, getRepeatableServiceTypes, getMultiUnitServiceTypes, LLC_MANAGEMENT_BUNDLE_TYPES } from "@/lib/services"
 
 export interface ActivationStep {
   step: string
@@ -53,9 +53,17 @@ export interface StartAtActivationSelection {
   pipelines: string[]
   /** Human-readable disagreements to report (never silently dropped). */
   mismatches: string[]
-  /** Types bought with quantity > 1 (only one SD is created — reported). */
+  /** Types bought with quantity > 1 (only one SD is created — reported — unless the type is `multi_unit`). */
   multiQuantity: string[]
+  /**
+   * How many UNITS were bought per type (2 closure lines, or one line with quantity 2, = 2). Types missing here
+   * are 1 unit. Only a `multi_unit` type (Company Closure) turns units into separate jobs.
+   */
+  units?: Record<string, number>
 }
+
+/** The offer builder's quantity box stops at 10, so no more than 10 jobs are ever made from one line. */
+export const MAX_UNITS = 10
 
 /**
  * Pure: which start-at-activation services did the client actually buy?
@@ -82,6 +90,7 @@ export function selectStartAtActivationPipelines(p: {
   const bought = new Set<string>()
   const multiQuantity = new Set<string>()
   const linesPerType = new Map<string, number>()
+  const unitsPerType = new Map<string, number>()
   for (const svc of services) {
     if (!svc || typeof svc !== "object") continue
     const type = canon(svc.pipeline_type)
@@ -90,11 +99,16 @@ export function selectStartAtActivationPipelines(p: {
     const isSelected = !svc.optional || selected.includes(name)
     if (!isSelected) continue
     bought.add(type)
-    // Two separate closure LINES (two old LLCs) count like quantity 2: only one
-    // SD is created and the rest are reported — never silently dropped.
+    // Two separate closure LINES (two old LLCs) count like quantity 2: one SD
+    // per unit for a multi_unit type; for any other type only one SD is created
+    // and the rest are reported — never silently dropped.
     linesPerType.set(type, (linesPerType.get(type) ?? 0) + 1)
+    const lineUnits = typeof svc.quantity === "number" && svc.quantity > 1 ? Math.floor(svc.quantity) : 1
+    unitsPerType.set(type, Math.min(MAX_UNITS, (unitsPerType.get(type) ?? 0) + lineUnits))
     if ((typeof svc.quantity === "number" && svc.quantity > 1) || (linesPerType.get(type) ?? 0) > 1) multiQuantity.add(type)
   }
+  const units: Record<string, number> = {}
+  for (const [t, n] of Array.from(unitsPerType)) if (n > 1) units[t] = n
 
   const mismatches: string[] = []
   for (const t of Array.from(bundled)) {
@@ -108,7 +122,7 @@ export function selectStartAtActivationPipelines(p: {
     }
   }
 
-  return { pipelines: Array.from(bought), mismatches, multiQuantity: Array.from(multiQuantity) }
+  return { pipelines: Array.from(bought), mismatches, multiQuantity: Array.from(multiQuantity), units }
 }
 
 function report(message: string, context: Record<string, unknown>) {
@@ -264,6 +278,8 @@ export async function createStartAtActivationSDs(p: {
   /** Types tagged `repeatable`: each purchase is a new job — an open one of the
    *  same type does not block creation (only this offer's own does). */
   repeatableTypes?: string[]
+  /** Types tagged `multi_unit` (Company Closure): bought N times = N separate jobs — see getMultiUnitServiceTypes. */
+  multiUnitTypes?: string[]
 }): Promise<ActivationStep[]> {
   const steps: ActivationStep[] = []
   const who = `${p.clientName || "unknown client"} (offer ${p.offerToken})`
@@ -299,15 +315,22 @@ export async function createStartAtActivationSDs(p: {
         continue
       }
 
-      // (a) already created from THIS offer — any status (a staff cancellation is respected).
+      // How many jobs this purchase makes: ONE, except a `multi_unit` type (Company Closure) bought in quantity N
+      // (N companies to close) — then N jobs, each with its own client form and workspace.
+      const multiUnit = (p.multiUnitTypes ?? []).includes(serviceType)
+      const wantedUnits = multiUnit ? Math.min(MAX_UNITS, Math.max(1, p.selection.units?.[serviceType] ?? 1)) : 1
+
+      // (a) already created from THIS offer — any status (a staff cancellation is respected). A retry that
+      // finds some of the units makes only the missing ones.
       const { data: byOffer, error: byOfferErr } = await supabase
         .from("service_deliveries")
         .select("id, status")
         .eq("service_type", serviceType)
         .eq("source_offer_token", p.offerToken)
-        .limit(1)
+        .limit(MAX_UNITS)
       if (byOfferErr) throw new Error(`offer lookup failed: ${byOfferErr.message}`)
-      if (byOffer && byOffer.length > 0) {
+      const existingUnits = byOffer?.length ?? 0
+      if (byOffer && existingUnits >= wantedUnits) {
         steps.push({ step: "start_at_activation", status: "existing", detail: `${serviceType} already created from this offer (${byOffer[0].status}): ${byOffer[0].id}` })
         continue
       }
@@ -335,7 +358,8 @@ export async function createStartAtActivationSDs(p: {
         if (accountIds.length) parts.push(`account_id.in.(${accountIds.join(",")})`)
         openFilter = parts.join(",")
       }
-      const { data: open, error: openErr } = repeatable
+      // Not when some units of THIS offer already exist (a retry): the open one found would be our own.
+      const { data: open, error: openErr } = repeatable || existingUnits > 0
         ? { data: [] as Array<{ id: string; status: string; account_id: string | null }>, error: null }
         : await supabase
             .from("service_deliveries")
@@ -346,44 +370,62 @@ export async function createStartAtActivationSDs(p: {
             .limit(1)
       if (openErr) throw new Error(`open ${serviceType} lookup failed: ${openErr.message}`)
       if (open && open.length > 0) {
-        const detail = `${serviceType} NOT created for ${who}: an open one already exists (${open[0].id}${open[0].account_id ? ", on a company" : ""}). If this contract is for a DIFFERENT company, add it by hand.`
+        const detail = `${serviceType} NOT created for ${who}: an open one already exists (${open[0].id}${open[0].account_id ? ", on a company" : ""}). If this contract is for a DIFFERENT company, add it by hand.${wantedUnits > 1 ? ` The contract bought ${wantedUnits} — none of them was created; add each by hand.` : ""}`
         steps.push({ step: "start_at_activation", status: "existing", detail })
         report(`[info] ${detail}`, { offerToken: p.offerToken, serviceType, existingSdId: open[0].id })
         continue
       }
 
-      try {
-        const sd = await createSD({
-          service_type: serviceType,
-          service_name: p.clientName ? `${serviceType} - ${p.clientName}` : serviceType,
-          contact_id: p.contactId,
-          account_id: scope.kind === "account" ? scope.accountId : null,
-          notes: `Auto-created from offer ${p.offerToken}`,
-          source_offer_token: p.offerToken,
-        })
-        steps.push({
-          step: "start_at_activation",
-          status: "created",
-          detail: `${serviceType} SD created (${scope.kind === "account" ? `on company ${scope.accountId}` : "contact-scoped"}): ${sd.id}`,
-        })
-        if (p.selection.multiQuantity.includes(serviceType)) {
-          const detail = `${serviceType} bought with quantity > 1 by ${who}: only ONE was created — add the others by hand`
+      // Unit 1 follows the scope (a company page → that company; otherwise the person). Units 2..N are ALWAYS on
+      // the person: a company has at most one active closure, and the company being closed is only known once the
+      // client fills the form. Names carry "#n" when there is more than one, so the jobs can be told apart.
+      const baseName = p.clientName ? `${serviceType} - ${p.clientName}` : serviceType
+      let raceDeduped = false
+      for (let unit = existingUnits + 1; unit <= wantedUnits; unit++) {
+        if (unit > 1 && !p.contactId) {
+          const detail = `${serviceType} unit ${unit} of ${wantedUnits} not created for ${who}: no contact linked to the offer — add it by hand`
           steps.push({ step: "start_at_activation", status: "skipped", detail })
           report(detail, { offerToken: p.offerToken, serviceType })
+          break
         }
-      } catch (createErr) {
-        // A concurrent run may have won the unique index — re-check (a).
-        const { data: winner } = await supabase
-          .from("service_deliveries")
-          .select("id")
-          .eq("service_type", serviceType)
-          .eq("source_offer_token", p.offerToken)
-          .limit(1)
-        if (winner && winner.length > 0) {
-          steps.push({ step: "start_at_activation", status: "existing", detail: `${serviceType} already created (race-deduped): ${winner[0].id}` })
-          continue
+        try {
+          const sd = await createSD({
+            service_type: serviceType,
+            service_name: wantedUnits > 1 ? `${baseName} #${unit}` : baseName,
+            contact_id: p.contactId,
+            account_id: unit === 1 && scope.kind === "account" ? scope.accountId : null,
+            notes: `Auto-created from offer ${p.offerToken}`,
+            source_offer_token: p.offerToken,
+            ...(unit > 1 && { offer_unit: unit }),
+          })
+          steps.push({
+            step: "start_at_activation",
+            status: "created",
+            detail: `${serviceType} SD${wantedUnits > 1 ? ` ${unit} of ${wantedUnits}` : ""} created (${unit === 1 && scope.kind === "account" ? `on company ${scope.accountId}` : "contact-scoped"}): ${sd.id}`,
+          })
+        } catch (createErr) {
+          // A concurrent run may have won the unique index — re-check (a): when this unit already exists the
+          // other run made it and is making the rest.
+          const { data: winner } = await supabase
+            .from("service_deliveries")
+            .select("id")
+            .eq("service_type", serviceType)
+            .eq("source_offer_token", p.offerToken)
+            .limit(MAX_UNITS)
+          if (winner && winner.length >= unit) {
+            steps.push({ step: "start_at_activation", status: "existing", detail: `${serviceType} already created (race-deduped): ${winner[0].id}` })
+            raceDeduped = true
+            break
+          }
+          throw wantedUnits > 1 && createErr instanceof Error
+            ? new Error(`unit ${unit} of ${wantedUnits}: ${createErr.message}`)
+            : createErr
         }
-        throw createErr
+      }
+      if (!multiUnit && !raceDeduped && p.selection.multiQuantity.includes(serviceType)) {
+        const detail = `${serviceType} bought with quantity > 1 by ${who}: only ONE was created — add the others by hand`
+        steps.push({ step: "start_at_activation", status: "skipped", detail })
+        report(detail, { offerToken: p.offerToken, serviceType })
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -476,9 +518,11 @@ async function createBoughtStartAtActivationServicesInner(p: {
 
   let contactScopedTypes: string[]
   let repeatableTypes: string[] = []
+  let multiUnitTypes: string[] = []
   try {
     contactScopedTypes = await getContactEligibleServiceTypes()
     repeatableTypes = await getRepeatableServiceTypes()
+    multiUnitTypes = await getMultiUnitServiceTypes()
   } catch (tagErr) {
     // Unknown scope → create nothing rather than risk the wrong person/company.
     const detail = `scope lookup failed: ${tagErr instanceof Error ? tagErr.message : String(tagErr)}`
@@ -502,6 +546,7 @@ async function createBoughtStartAtActivationServicesInner(p: {
     newCompanyContract: p.newCompanyContract ?? false,
     waitForNewCompany: p.waitForNewCompany ?? false,
     repeatableTypes,
+    multiUnitTypes,
   })
 }
 

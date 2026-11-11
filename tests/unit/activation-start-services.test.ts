@@ -142,7 +142,7 @@ describe("selectStartAtActivationPipelines", () => {
       bundledPipelines: ["Company Formation", "ITIN"],
       startAtActivationTypes: TYPES,
     })
-    expect(r).toEqual({ pipelines: [], mismatches: [], multiQuantity: [] })
+    expect(r).toEqual({ pipelines: [], mismatches: [], multiQuantity: [], units: {} })
   })
   it("two separate closure lines (two old LLCs) → flagged like quantity 2, never silently collapsed", () => {
     const r = selectStartAtActivationPipelines({
@@ -618,5 +618,165 @@ describe("decideStartServiceScope — company services wait for a NEW company", 
   })
   it("unknown catalog scope keeps the legacy behaviour", () => {
     expect(decideStartServiceScope({ serviceType: "Certificate of Incumbency", contactScopedTypes: null, accountId: null, waitForNewCompany: true })).toEqual({ kind: "contact" })
+  })
+})
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A closure bought for SEVERAL companies = several jobs (dev job 9829a468 — Contrabona, 2026-11-11).
+// A client bought a formation + the closure of TWO old companies: the offer builder had no quantity box and payment
+// made one job, so the second company had no job and no client form.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("selectStartAtActivationPipelines — units bought", () => {
+  const run = (services: unknown) => selectStartAtActivationPipelines({ services, selectedServices: null, bundledPipelines: ["Company Closure"], startAtActivationTypes: TYPES })
+  it("one line, no quantity → 1 unit (nothing listed)", () => {
+    expect(run([closureLine]).units).toEqual({})
+  })
+  it("one line with quantity 2 → 2 units", () => {
+    expect(run([{ ...closureLine, quantity: 2 }]).units).toEqual({ "Company Closure": 2 })
+  })
+  it("two separate lines → 2 units; a line with quantity 2 plus one more line → 3", () => {
+    expect(run([closureLine, { ...closureLine, name: "Closure B" }]).units).toEqual({ "Company Closure": 2 })
+    expect(run([{ ...closureLine, quantity: 2 }, { ...closureLine, name: "Closure B" }]).units).toEqual({ "Company Closure": 3 })
+  })
+  it("never more than 10 jobs from one purchase", () => {
+    expect(run([{ ...closureLine, quantity: 99 }]).units).toEqual({ "Company Closure": 10 })
+  })
+  it("an UNTICKED optional line is not a unit", () => {
+    expect(run([closureLine, { ...closureLine, name: "Closure B", optional: true }]).units).toEqual({})
+  })
+  it("a $0 / included line is a unit like any other (price never decides what is bought)", () => {
+    expect(run([{ name: "Company Closure", price: "$0", pipeline_type: "Company Closure", quantity: 2 }]).units).toEqual({ "Company Closure": 2 })
+    expect(run([{ name: "Company Closure", price: "Included", pipeline_type: "Company Closure", quantity: 2 }]).units).toEqual({ "Company Closure": 2 })
+  })
+})
+
+describe("createStartAtActivationSDs — a multi_unit service bought N times makes N jobs", () => {
+  const two = { pipelines: ["Company Closure"], mismatches: [], multiQuantity: ["Company Closure"], units: { "Company Closure": 2 } }
+  const MULTI = ["Company Closure"]
+  beforeEach(() => {
+    byOfferRows = []; byOfferAfterCreateRows = null; openRows = []; linkRows = []; openErr = null
+    createAttempted = false; orFilters.length = 0; reported.length = 0
+    createSD.mockReset()
+    let n = 0
+    createSD.mockImplementation(async () => { createAttempted = true; n += 1; return { id: `sd-${n}` } })
+  })
+
+  it("quantity 2 → two jobs on the PERSON, named #1 and #2, both carrying the offer; only unit 2 carries offer_unit; nothing to add by hand", async () => {
+    const steps = await createStartAtActivationSDs({ offerToken: "gabriel-contra-2026", clientName: "Gabriel Contra", contactId: "c1", selection: two, multiUnitTypes: MULTI })
+    expect(createSD).toHaveBeenCalledTimes(2)
+    const [first, second] = createSD.mock.calls.map((c) => c[0] as Record<string, unknown>)
+    expect(first).toMatchObject({ service_type: "Company Closure", service_name: "Company Closure - Gabriel Contra #1", contact_id: "c1", account_id: null, source_offer_token: "gabriel-contra-2026" })
+    expect(first).not.toHaveProperty("offer_unit")
+    expect(second).toMatchObject({ service_name: "Company Closure - Gabriel Contra #2", contact_id: "c1", account_id: null, source_offer_token: "gabriel-contra-2026", offer_unit: 2 })
+    expect(steps.map((s) => s.status)).toEqual(["created", "created"])
+    expect(reported).toEqual([])
+  })
+
+  it("a single closure keeps its plain name and no offer_unit (nothing changes for one company)", async () => {
+    await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: { pipelines: ["Company Closure"], mismatches: [], multiQuantity: [] }, multiUnitTypes: MULTI })
+    expect(createSD).toHaveBeenCalledTimes(1)
+    expect(createSD.mock.calls[0][0]).toMatchObject({ service_name: "Company Closure - X" })
+    expect(createSD.mock.calls[0][0]).not.toHaveProperty("offer_unit")
+  })
+
+  it("a type that is NOT multi_unit keeps the old rule: one job + a report to add the rest by hand", async () => {
+    const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: two, multiUnitTypes: [] })
+    expect(createSD).toHaveBeenCalledTimes(1)
+    expect(steps.map((s) => s.status)).toEqual(["created", "skipped"])
+  })
+
+  it("on a company page: unit 1 goes on THAT company, unit 2 on the person (a company has one active closure)", async () => {
+    await createStartAtActivationSDs({
+      offerToken: "t", clientName: "X", contactId: "c1", selection: two, multiUnitTypes: MULTI,
+      accountId: "acct-1", contactScopedTypes: ["Company Closure"],
+    })
+    const [first, second] = createSD.mock.calls.map((c) => c[0] as Record<string, unknown>)
+    expect(first).toMatchObject({ account_id: "acct-1" })
+    expect(second).toMatchObject({ account_id: null, contact_id: "c1", offer_unit: 2 })
+  })
+
+  it("a retry after a crash that left unit 1: makes ONLY unit 2", async () => {
+    byOfferRows = [{ id: "sd-old", status: "active" }]
+    const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: two, multiUnitTypes: MULTI })
+    expect(createSD).toHaveBeenCalledTimes(1)
+    expect(createSD.mock.calls[0][0]).toMatchObject({ service_name: "Company Closure - X #2", offer_unit: 2 })
+    expect(steps.map((s) => s.status)).toEqual(["created"])
+  })
+
+  it("a retry when both units exist (even a cancelled one) → nothing created", async () => {
+    byOfferRows = [{ id: "a", status: "active" }, { id: "b", status: "cancelled" }]
+    const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: two, multiUnitTypes: MULTI })
+    expect(createSD).not.toHaveBeenCalled()
+    expect(steps[0].status).toBe("existing")
+  })
+
+  it("a retry that finds unit 1 never trips over 'an open one exists' (that open one is our own)", async () => {
+    byOfferRows = [{ id: "sd-old", status: "active" }]
+    openRows = [{ id: "sd-old", status: "active", account_id: null }]
+    await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: two, multiUnitTypes: MULTI })
+    expect(createSD).toHaveBeenCalledTimes(1)
+  })
+
+  it("an open closure added BY HAND already exists → none of the units created, and the report says how many were bought", async () => {
+    openRows = [{ id: "hand", status: "active", account_id: null }]
+    const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: two, multiUnitTypes: MULTI })
+    expect(createSD).not.toHaveBeenCalled()
+    expect(steps[0].detail).toContain("bought 2")
+    expect(reported.join(" ")).toContain("bought 2")
+  })
+
+  it("a concurrent run wins unit 2 → 'existing', not an error", async () => {
+    byOfferAfterCreateRows = [{ id: "a" }, { id: "b" }]
+    let n = 0
+    createSD.mockImplementation(async () => { createAttempted = true; n += 1; if (n === 2) throw new Error("duplicate key value violates unique constraint"); return { id: `sd-${n}` } })
+    const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: two, multiUnitTypes: MULTI })
+    expect(steps.map((s) => s.status)).toEqual(["created", "existing"])
+    expect(reported).toEqual([])
+  })
+
+  it("unit 2 fails for real → an error that names the unit and the client, unit 1 stays created", async () => {
+    byOfferAfterCreateRows = [{ id: "a" }]
+    let n = 0
+    createSD.mockImplementation(async () => { createAttempted = true; n += 1; if (n === 2) throw new Error("boom"); return { id: `sd-${n}` } })
+    const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "Gabriel", contactId: "c1", selection: two, multiUnitTypes: MULTI })
+    expect(steps.map((s) => s.status)).toEqual(["created", "error"])
+    expect(steps[1].detail).toContain("unit 2 of 2")
+    expect(reported.join(" ")).toContain("Gabriel")
+  })
+
+  it("company-scoped offer with NO contact: unit 1 on the company, unit 2 cannot be made and is reported", async () => {
+    const steps = await createStartAtActivationSDs({
+      offerToken: "t", clientName: "X", contactId: null, selection: two, multiUnitTypes: MULTI,
+      accountId: "acct-1", contactScopedTypes: [],
+    })
+    expect(createSD).toHaveBeenCalledTimes(1)
+    expect(steps.map((s) => s.status)).toEqual(["created", "skipped"])
+    expect(reported.join(" ")).toContain("unit 2 of 2")
+  })
+})
+
+describe("closure multi-unit — wiring", () => {
+  const read = (f: string) => readFileSync(join(process.cwd(), f), "utf8")
+  it("createSD writes offer_unit only for unit 2 and up (an old database keeps working for single jobs)", () => {
+    expect(read("lib/operations/service-delivery.ts")).toContain("params.offer_unit != null && params.offer_unit >= 2 && { offer_unit: params.offer_unit }")
+  })
+  it("the migration tags closure multi_unit, sets the quantity box, adds the column and re-keys the per-offer lock by unit", () => {
+    const sql = read("scripts/migrations/20261111-1500-closure-multi-unit.sql")
+    expect(sql).toContain('"multi_unit"')
+    expect(sql).toContain('"supports_quantity": true')
+    expect(sql).toContain("ADD COLUMN IF NOT EXISTS offer_unit smallint")
+    expect(sql).toContain("(contact_id, source_offer_token, (COALESCE(offer_unit, 1)))")
+    expect(read("scripts/migrations/20261111-1500-closure-multi-unit.UNDO.sql")).toContain("DROP COLUMN IF EXISTS offer_unit")
+  })
+  it("the standalone payment path puts units 2..N of a multi_unit service on the person", () => {
+    const src = read("lib/operations/activate-service.ts")
+    expect(src).toContain("multiUnitTypes.includes(pipeline) && multiUnitNumber > 1")
+    expect(src).toContain("account_id: onPersonOnly ? null : accountId")
+  })
+  it("the staff-only closure flow type is NOT in the list the client portal reads", () => {
+    const src = read("lib/flows/resolve-flows.ts")
+    expect(src).toContain("export const STAFF_CONTACT_FLOW_TYPES = ['Company Closure'] as const")
+    expect(src).toContain("export const CONTACT_FLOW_TYPES = ['ITIN', 'Company Formation'] as const")
   })
 })

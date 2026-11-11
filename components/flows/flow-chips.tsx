@@ -1,10 +1,10 @@
 'use client'
 
 import Link from 'next/link'
-import { FileText, Landmark, ShieldCheck, Mailbox, ChevronRight, CalendarClock, UserCheck, Building2, PenLine } from 'lucide-react'
-import type { ResolvedFlow, FlowType } from '@/lib/flows/resolve-flows'
+import { FileText, Landmark, ShieldCheck, Mailbox, ChevronRight, CalendarClock, UserCheck, Building2, PenLine, DoorClosed } from 'lucide-react'
+import type { ResolvedFlow, StaffFlowType } from '@/lib/flows/resolve-flows'
 
-const FLOW_ICON: Record<FlowType, React.ComponentType<{ className?: string }>> = {
+const FLOW_ICON: Record<StaffFlowType, React.ComponentType<{ className?: string }>> = {
   'Tax Return': FileText,
   'State Annual Report': Landmark,
   'State RA Renewal': ShieldCheck,
@@ -12,6 +12,7 @@ const FLOW_ICON: Record<FlowType, React.ComponentType<{ className?: string }>> =
   'ITIN': UserCheck,
   'Company Formation': Building2,
   'Company Change Name': PenLine,
+  'Company Closure': DoorClosed,
 }
 
 interface FlowChipsProps {
@@ -53,6 +54,7 @@ export function FlowChips({ flows }: FlowChipsProps) {
                   <span className="text-sm font-medium text-zinc-900 truncate">
                     {flow.flow_type}
                     {flow.year ? ` ${flow.year}` : ''}
+                    {flow.unit_label ? ` ${flow.unit_label}` : ''}
                   </span>
                 </div>
                 {!isScheduled && <ChevronRight className="h-4 w-4 text-zinc-300 shrink-0" />}
@@ -61,6 +63,11 @@ export function FlowChips({ flows }: FlowChipsProps) {
                 {isScheduled && <CalendarClock className="h-3 w-3" />}
                 <span className="truncate">{stageLine}</span>
               </div>
+              {/* A contract that closes several companies has several closure jobs: the company being closed
+                  (from the client's form, or the CRM company) tells their cards apart. */}
+              {flow.flow_type === 'Company Closure' && flow.company_name && (
+                <div className="mt-1 truncate text-xs font-medium text-zinc-700">{flow.company_name}</div>
+              )}
               {isScheduled && (
                 <span className="mt-2 inline-block rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700 border border-amber-200">
                   Scheduled · no workspace yet
