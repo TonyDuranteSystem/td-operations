@@ -133,7 +133,7 @@ describe('wiring (source guards)', () => {
   })
 
   it('the page drops its heading, the team line and the Journey Log tab only in the app', () => {
-    expect(page).toContain('getClientAppMode()')
+    expect(page).toContain('getClientAppModeActive()')
     expect(page).toContain("view === 'log' && !isTeammate && !appMode")
     expect(page).toContain('{!appMode && (')
     expect(page).toContain('{!isTeammate && !appMode && (')

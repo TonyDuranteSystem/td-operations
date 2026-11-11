@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
-import { getClientAppMode } from '@/lib/app-mode/server'
+import { getClientAppModeActive } from '@/lib/app-mode/server'
 import { APP_BILLING_TAB } from '@/lib/portal-app/invoices'
 
 /**
@@ -9,6 +9,6 @@ import { APP_BILLING_TAB } from '@/lib/portal-app/invoices'
  * Inside the client iPhone app (dev job 056a70d0, Step 3c) the TD Billing entry opens the app's own TD Billing screen instead,
  * which the invoices page draws for `?tab=billing`. The website is unchanged.
  */
-export default function PortalBillingPage() {
-  redirect(getClientAppMode() ? `/portal/invoices?tab=${APP_BILLING_TAB}` : '/portal/invoices?tab=expenses')
+export default async function PortalBillingPage() {
+  redirect((await getClientAppModeActive()) ? `/portal/invoices?tab=${APP_BILLING_TAB}` : '/portal/invoices?tab=expenses')
 }

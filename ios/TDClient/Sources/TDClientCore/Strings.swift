@@ -8,6 +8,7 @@ public enum Msg: CaseIterable {
     case couldntLoad, tryAgain, noConnection
     case alertsTitle, alertsBody, alertsTurnOn, alertsNotNow, alertsOffStrip, alertsOpenSettings
     case fileNotOpened, ok
+    case menuUnavailable, signOutFailed
 }
 
 public enum Strings {
@@ -33,6 +34,8 @@ public enum Strings {
         case .alertsOpenSettings: return "Open iPhone Settings"
         case .fileNotOpened: return "Couldn't open this file. Try again."
         case .ok: return "OK"
+        case .menuUnavailable: return "The menu isn't available right now. Try again in a moment."
+        case .signOutFailed: return "Couldn't sign out. Check your connection and try again."
         }
     }
 
@@ -54,6 +57,8 @@ public enum Strings {
         case .alertsOpenSettings: return "Apri Impostazioni di iPhone"
         case .fileNotOpened: return "Impossibile aprire il file. Riprova."
         case .ok: return "Va bene"
+        case .menuUnavailable: return "Il menu non è disponibile in questo momento. Riprova tra poco."
+        case .signOutFailed: return "Impossibile uscire. Controlla la connessione e riprova."
         }
     }
 }

@@ -37,7 +37,7 @@ import { listTemplates } from './actions'
 import { listVendors } from './vendor-actions'
 import { isCardAutopayEnabled } from '@/lib/payments/card-autopay-config'
 import { latestDeliveryProblems } from '@/lib/portal/invoice-delivery'
-import { getClientAppMode } from '@/lib/app-mode/server'
+import { getClientAppModeActive } from '@/lib/app-mode/server'
 import { isClientAppPayEnabled } from '@/lib/portal-app/enabled'
 import { appInvoicesScreen, appInvoiceAreas, billingTotals, checklistStepTarget, invoicesRootHref, requiredFirst, tdInvoicesOf } from '@/lib/portal-app/invoices'
 import { AppInvoiceAreas, AppAreaHeader } from '@/components/portal/app-invoices'
@@ -64,7 +64,7 @@ export default async function PortalInvoicesPage({
   const params = await searchParams
   // Inside the client iPhone app the page opens on a LIST of areas, TD Billing is a screen of its own, and every other address is the
   // website's area exactly as drawn there (dev job 056a70d0, Step 3c). On the website `showTab` is always true: nothing below changes.
-  const appMode = getClientAppMode()
+  const appMode = await getClientAppModeActive()
   const appScreen = appMode ? appInvoicesScreen(params) : 'tab'
   const showTab = appScreen === 'tab'
   const appPayHidden = appMode ? !(await isClientAppPayEnabled()) : false
