@@ -88,9 +88,9 @@ describe("wiring", () => {
       expect(src).toMatch(/>= LOAD_LIMIT/)
     }
   })
-  it("the Pin menu item is opt-in: TD Talk and the portal chat never pass it", () => {
+  it("the Pin menu item is opt-in: the portal chat never passes it (TD Talk does since dev job b719980f, see talk-pins.test.ts)", () => {
     expect(read("components/marketing/lead-chat.tsx")).toContain("onTogglePin")
-    for (const f of ["components/talk/talk-app.tsx", "components/portal/portal-chat.tsx"]) {
+    for (const f of ["components/portal/portal-chat.tsx"]) {
       try { expect(read(f)).not.toContain("onTogglePin") } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e }
     }
   })
