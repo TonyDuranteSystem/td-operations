@@ -28,11 +28,17 @@ const COPY = {
 interface ClosureBannerProps {
   closure: PendingClosure
   locale: 'en' | 'it'
+  /** Set when the client owes more than one closure form (a contract that closes several companies): the cards
+   *  are numbered so they can be told apart ("Company 1 of 2"). Omitted for a single closure — nothing changes. */
+  position?: { index: number; total: number }
 }
 
-export function ClosureBanner({ closure, locale }: ClosureBannerProps) {
+export function ClosureBanner({ closure, locale, position }: ClosureBannerProps) {
   const c = COPY[locale] ?? COPY.en
   const desc = closure.companyName ? c.descNamed.replace('{name}', closure.companyName) : c.desc
+  const numbered = position && position.total > 1
+    ? ` (${position.index} ${locale === 'it' ? 'di' : 'of'} ${position.total})`
+    : ''
 
   return (
     <Link
@@ -43,7 +49,7 @@ export function ClosureBanner({ closure, locale }: ClosureBannerProps) {
         <AlertCircle className="h-6 w-6 text-white" />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-base font-semibold text-rose-900">{c.title}</p>
+        <p className="text-base font-semibold text-rose-900">{c.title}{numbered}</p>
         <p className="text-sm text-rose-700 mt-0.5">{desc}</p>
       </div>
       <span className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 text-white text-xs font-medium rounded-lg group-hover:bg-rose-700 transition-colors shrink-0">
