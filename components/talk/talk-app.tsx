@@ -26,6 +26,8 @@ import {
 import { TalkMessages } from '@/components/talk/talk-messages'
 import { TalkComposer, type TalkComposerMode, type TalkSendInput } from '@/components/talk/talk-composer'
 import { TalkMessageSheet } from '@/components/talk/talk-sheet'
+import { TalkPinnedBar } from '@/components/talk/talk-pinned-bar'
+import { allPins, applyPinOverrides, PIN_OVERRIDE_MS, syncOlderPin, type PinOverride } from '@/lib/talk/pins'
 import { TalkVoiceSwitch, TalkVoiceWakeBar } from '@/components/talk/talk-voice'
 import { AppYouButton } from '@/components/app-mode/app-you-button'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
@@ -56,6 +58,8 @@ function Avatar({ name, id, size = 'h-10 w-10 text-sm' }: { name: string; id: st
 /** What a chat's messages answer holds that the screen uses. */
 interface ChatAnswer {
   messages?: TalkMessage[]
+  /** pinned messages older than the newest messages above (the pinned bar must not lose them) */
+  older_pins?: TalkMessage[]
   has_more?: boolean
   peer_read_at?: string | null
   peer_delivered_at?: string | null
@@ -114,6 +118,9 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const [hasMore, setHasMore] = useState(false)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
   const olderRef = useRef<TalkMessage[]>([])
+  // pinned messages that are older than everything loaded (they come with the chat's answer); a pin or unpin I just did is remembered for a few seconds so a refresh already on its way cannot flip it back
+  const [olderPins, setOlderPins] = useState<TalkMessage[]>([])
+  const pinOverrides = useRef(new Map<string, PinOverride>())
   const windowRef = useRef<TalkMessage[]>([])
   // counts the changes that reached the server (a kept edit/delete/reaction confirmed or refused): a refresh that STARTED before one must not overwrite it with its older answer
   const changeSeqRef = useRef(0)
@@ -204,7 +211,9 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
 
   // puts a chat's messages answer on screen: the server's, or (phone app) the newest messages saved last time while the server's is on its way
   const applyChat = useCallback((d: ChatAnswer, silent: boolean) => {
-    const incoming = (d.messages ?? []) as TalkMessage[]
+    // a pin or unpin I just did wins over an answer that was already on its way when I did it
+    const incoming = applyPinOverrides((d.messages ?? []) as TalkMessage[], pinOverrides.current, Date.now())
+    if (Array.isArray(d.older_pins)) setOlderPins(applyPinOverrides(d.older_pins, pinOverrides.current, Date.now()).filter(p => !!p.pinned_at))
     // the live window slides forward when new messages arrive: what slid out must not fall into a gap between the older pages and the window
     if (olderRef.current.length > 0) {
       const slid = slidOutOfWindow(windowRef.current, incoming)
@@ -269,6 +278,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     setSelectedId(id)
     setMessages([])
     setOlder([]); setHasMore(false); setLoadingEarlier(false); olderRef.current = []; hasMoreRef.current = false; loadingEarlierRef.current = false
+    setOlderPins([])
     setPeerReadAt(null)
     setSheetMsg(null); setMode(null); setSearchOpen(false); setSearchQ(''); setHighlightId(null)
     setGroupInfoOpen(false); setNewGroupOpen(false); setGroupMemberIds([]); setMemberReads({})
@@ -399,6 +409,9 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
         if (m.thread_id === selectedIdRef.current) {
           setMessages(prev => prev.map(x => x.id === m.id ? { ...x, ...m } : x))
           if (olderRef.current.some(x => x.id === m.id)) setOlder(prev => prev.map(x => x.id === m.id ? { ...x, ...m } : x))
+          // a pin or unpin by someone else reaches the bar at once; a pinned message that is not loaded (older than everything on screen) is kept in the bar's own list
+          if (messagesRef.current.some(x => x.id === m.id)) setOlderPins(prev => prev.some(x => x.id === m.id) ? syncOlderPin(prev, m) : prev)
+          else setOlderPins(prev => syncOlderPin(prev, m))
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_thread_reads' }, payload => {
@@ -518,6 +531,32 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     const url = `${window.location.origin}${base}?thread=${encodeURIComponent(selectedIdRef.current ?? '')}&message=${encodeURIComponent(m.id)}`
     try { await navigator.clipboard.writeText(url); toast.success('Link copied.') } catch { toast.error('Could not copy.') }
   }, [base])
+
+  // Pin / Unpin (shared by everyone in the chat; the CRM Team Chat shows the same pins). Needs a connection: it is not kept for later like an edit.
+  // The target ("pinned" true / false) is worked out from what is drawn right now and sent explicitly, so a double tap or a lost answer can never flip it back.
+  const togglePin = useCallback(async (m: TalkMessage) => {
+    setSheetMsg(null)
+    const current = messagesRef.current.find(x => x.id === m.id) ?? m
+    const pin = !current.pinned_at
+    const threadAtStart = selectedIdRef.current
+    let res: Response
+    try {
+      res = await fetch(`/api/team/messages/${m.id}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: pin }) })
+    } catch {
+      toast.error(`Could not ${pin ? 'pin' : 'unpin'} the message. Pinning needs a connection — please try again.`)
+      return
+    }
+    const d = await res.json().catch(() => ({})) as { error?: string; message?: { pinned_at?: string | null } }
+    if (!res.ok) { toast.error(d.error || `Could not ${pin ? 'pin' : 'unpin'} the message. Please try again.`); return }
+    const at = d.message?.pinned_at ?? null
+    pinOverrides.current.set(m.id, { at, until: Date.now() + PIN_OVERRIDE_MS })
+    if (selectedIdRef.current !== threadAtStart) return // the chat changed while the pin was on its way: the other chat reads the server when it is opened
+    applyToMessage(m.id, { pinned_at: at })
+    // a pin older than everything loaded lives in the bar's own list
+    if (!messagesRef.current.some(x => x.id === m.id)) setOlderPins(prev => syncOlderPin(prev, { ...current, pinned_at: at }))
+    else setOlderPins(prev => prev.some(x => x.id === m.id) ? syncOlderPin(prev, { ...current, pinned_at: at }) : prev)
+    toast.success(pin ? 'Pinned.' : 'Unpinned.')
+  }, [applyToMessage])
 
   // Edit and delete are kept on the phone too: they show at once and reach the server as soon as the connection allows (a refusal is told to the person and the chat is reloaded).
   const edit = useCallback(async (id: string, text: string): Promise<boolean> => {
@@ -807,6 +846,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
         return { read: s.read.map(nameOf), waiting: s.waiting.map(nameOf) }
       }
     : undefined
+  const pins = allPins(shown, olderPins)
   const tickOf = (m: TalkMessage) => group
     ? tickStateAll(m, memberIdsNow.filter(id => id !== meId), memberReads, memberDelivered)
     : tickState(m, peerReadAt, peerDeliveredAt)
@@ -861,6 +901,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
           </div>
         </div>
       )}
+      {meId && !searchOpen && pins.length > 0 && <TalkPinnedBar key={`pinned-${selected.id}`} pins={pins} meId={meId} onOpen={id => void jumpTo(id)} onUnpin={m => void togglePin(m)} />}
       {meId && !searchOpen && (
         <TalkMessages
           threadId={selected.id} messages={withOutbox(shown, outbox.waiting)} outbox={{ retry: outbox.retry, discard: outbox.discard }} earlier={{ has: hasMore, loading: loadingEarlier, load: () => void loadEarlier() }} meId={meId} tickOf={tickOf} showSender={group} loading={loadingMsgs} readByOf={readByOf}
@@ -916,6 +957,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
           onCopyLink={() => void copyLink(sheetMsg)}
           onEdit={() => { setMode({ kind: 'edit', message: sheetMsg }); setSheetMsg(null) }}
           onDelete={() => void remove(sheetMsg)}
+          onTogglePin={() => void togglePin(sheetMsg)}
         />
       )}
     </div>

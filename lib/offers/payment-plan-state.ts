@@ -155,28 +155,6 @@ export function isRaisable(status: PartStatus): boolean {
 }
 
 /**
- * Which parts the auto-raise cron should act on RIGHT NOW — a date-triggered part whose date has
- * arrived, with no live invoice already occupying its slot.
- *
- * Deliberately reuses `isRaisable` rather than re-deriving "not raised" — same reasoning as that
- * function's own comment: a part a staffer already raised (even Draft/unsent) is NOT raisable,
- * and the cron must never mint a second invoice for a slot a human is already handling.
- *
- * `todayIso` is an explicit argument, not `new Date()` read inside — this codebase's own pattern
- * for date-based cron eligibility (see `decideReminder`/`decideSlaTier`), so a test can assert
- * "3 days after the due date" without mocking the system clock.
- */
-export function duePartsToAutoRaise(status: PlanStatus, todayIso: string): PartStatus[] {
-  return status.parts.filter(
-    (p) =>
-      p.part.trigger.kind === "date" &&
-      typeof p.part.trigger.date === "string" &&
-      p.part.trigger.date <= todayIso &&
-      isRaisable(p),
-  )
-}
-
-/**
  * Where an offer's plan stands, read from the database.
  *
  * Returns null when the offer carries no plan — which is every offer today — so callers can treat
@@ -328,10 +306,10 @@ export async function computePlanSettlement(offerToken: string): Promise<PlanSet
 /**
  * The card-fee rate a LATER part of a plan must inherit (council, 2026-08-11) — the single,
  * shared implementation. Part one gets its rate pinned by the signing webhook; without this, a
- * part raised after that — by a staffer or by the auto-raise cron — would otherwise pin whatever
+ * part raised after that — by a staffer on the account page or the Calendar — would otherwise pin whatever
  * the CURRENT configured rate is, charging a card fee a signed, waived-fee agreement never
- * carried. Two callers need the identical answer (the manual "Raise invoice" action and the
- * auto-raise cron); this exists so there is exactly one implementation, not two that can drift
+ * carried. Two callers need the identical answer (the account page's "Raise invoice" action and the
+ * Calendar's "Raise and send"); this exists so there is exactly one implementation, not two that can drift
  * (bug-hunter finding, 2026-08-27 auto-raise review: a second hand-rolled copy is exactly the
  * bug class already fixed once as dev_task 6ec6872a).
  *

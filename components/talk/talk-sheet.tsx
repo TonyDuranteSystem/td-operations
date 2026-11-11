@@ -25,7 +25,7 @@ export function TalkMessageSheet({
   onDelete: () => void
   /** Only chats with a per-person read position pass this (TD Marketing): "Mark unread" from this message on, for me only. */
   onMarkUnread?: () => void
-  /** Only chats that can pin (TD Marketing) pass this: Pin / Unpin for everyone who can see the message. */
+  /** Only chats that can pin (TD Talk, TD Marketing) pass this: Pin / Unpin for everyone who can see the message. */
   onTogglePin?: () => void
 }) {
   const { t, ts } = useTalkI18n()

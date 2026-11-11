@@ -1,6 +1,7 @@
 /**
- * Pinned messages (TD Marketing chats; pure). A pinned message is one the team wants to keep in view: it sits in a bar at the top of its chat.
+ * Pinned messages (TD Talk and the TD Marketing chats; pure). A pinned message is one the team wants to keep in view: it sits in a bar at the top of its chat.
  * The list is built only from the messages the viewer was already given, so a setter can never be shown a pin of a message she may not read.
+ * In TD Talk a pin is shared by everyone in the chat (the CRM Team Chat shows the same pins).
  */
 import type { TalkMessage } from '@/lib/talk/chat-model'
 
@@ -23,6 +24,17 @@ export const PIN_OVERRIDE_MS = 15_000
 export function applyPinOverrides<T extends { id: string; pinned_at?: string | null }>(list: readonly T[], overrides: ReadonlyMap<string, PinOverride>, now: number): T[] {
   if (overrides.size === 0) return list.slice()
   return list.map(m => { const o = overrides.get(m.id); return o && o.until > now ? { ...m, pinned_at: o.at } : m })
+}
+
+/**
+ * Keeps the list of pins that are older than the loaded messages in step with ONE message that just changed (a live update or my own pin):
+ * pinned and not deleted → it is in the list (merged over what was there), otherwise it is out.
+ */
+export function syncOlderPin<T extends { id: string; pinned_at?: string | null; deleted_at?: string | null }>(list: readonly T[], changed: T): T[] {
+  const existing = list.find(x => x.id === changed.id)
+  const without = list.filter(x => x.id !== changed.id)
+  if (!changed.pinned_at || changed.deleted_at) return without
+  return [...without, existing ? { ...existing, ...changed } : changed]
 }
 
 /** The pins the bar shows: those among the loaded messages, plus the ones older than the loaded window (a pin must not drop out because 500 newer messages arrived). */

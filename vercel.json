@@ -229,10 +229,6 @@
       "schedule": "*/15 * * * *"
     },
     {
-      "path": "/api/cron/plan-part-auto-raise",
-      "schedule": "0 9 * * *"
-    },
-    {
       "path": "/api/cron/card-autopay-charge",
       "schedule": "0 11 * * *"
     },

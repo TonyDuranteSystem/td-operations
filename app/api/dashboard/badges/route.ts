@@ -8,6 +8,8 @@ import { adminMemberContext } from '@/lib/marketing/guard'
 import { marketingChatUnread } from '@/lib/marketing/menu-unread'
 import { getWhatsappUnread } from '@/lib/inbox/whatsapp-unread'
 import { NextResponse } from 'next/server'
+import { countInvoicesDue } from '@/lib/plan-invoices/load'
+import { getOfficeDateString } from '@/lib/portal/office-hours'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -182,7 +184,10 @@ export async function GET(request: Request) {
       } catch (e) { console.error('[badges] marketing unread failed:', e instanceof Error ? e.message : e) }
     }
 
-    return NextResponse.json({ portalChats, teamChat, talk, inbox, whatsapp, tasks, overdueInvoices, reconciliationReview, devBoard, marketing, _debug: { supportUnread, antonioUnread } })
+    // Invoices the Calendar says are due to raise (later parts of a payment plan). Never allowed to break the other badges: null = could not be read, left out.
+    const invoicesToRaise = await countInvoicesDue(getOfficeDateString())
+
+    return NextResponse.json({ portalChats, teamChat, talk, inbox, whatsapp, tasks, overdueInvoices, reconciliationReview, devBoard, marketing, ...(invoicesToRaise !== null ? { invoicesToRaise } : {}), _debug: { supportUnread, antonioUnread } })
   } catch (err) {
     console.error('[dashboard/badges] Error:', err)
     return NextResponse.json({ portalChats: 0, inbox: 0, tasks: 0, overdueInvoices: 0, reconciliationReview: 0 })
