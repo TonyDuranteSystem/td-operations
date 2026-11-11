@@ -80,7 +80,7 @@ describe('portal layout wiring', () => {
   const layout = readFileSync(join(process.cwd(), 'app/portal/layout.tsx'), 'utf8')
 
   it('reads the client app marker once and hands it to the app-mode wrapper (signed out, access removed, team member, client)', () => {
-    expect(layout).toContain("getClientAppMode()")
+    expect(layout).toContain("getClientAppModeActive()")
     expect((layout.match(/<AppModeProvider initial=\{clientApp\}>/g) ?? []).length).toBe(4)
   })
 

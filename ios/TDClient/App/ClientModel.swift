@@ -38,10 +38,31 @@ final class ClientModel: ObservableObject {
     var pendingPath: String?
     private var registeredToken: String?
     private var askedForRemote = false
+    /// the company the page on screen shows (the page tells the app; see SelectionRules): the bar and the Menu list describe THAT company
+    private(set) var selection = ""
+    /// the address a page failed to load (so "Try again" opens THAT page, not the one before it)
+    var failedURL: URL?
+    /// a sign-out is in progress: nothing may ask the server or save the phone meanwhile
+    private var signingOut = false
+    /// bumped at every sign-out, so an answer that was already on its way for the person who left is thrown away
+    private var meEpoch = 0
+    /// the portal's sign-in page was shown since the phone was last saved (a person can sign in as someone else there without signing out first)
+    private var sawLoginPage = false
+    private var lastRegisterFailure: Date?
 
     @Published var me: Me?
     @Published var sheet: ClientSheet?
     @Published var currentPath = "/"
+    /// the `tab` of the page on screen (TD Billing is the invoices page with `?tab=billing`)
+    @Published var currentTab: String?
+    /// what the server last said to "who am I": nil = not asked yet
+    @Published var meOutcome: MeOutcome?
+    /// "Not now" was chosen and iPhone has never been asked: the Menu offers to ask again
+    @Published var alertsPending = false
+    /// a brand-new web view is made at every sign-out, so no page of the person who left stays in its history (back swipe)
+    @Published var webEpoch = 0
+    /// the server could not be told to forget this phone (no connection ...): the person is NOT signed out yet
+    @Published var signOutFailed = false
     /// the person (or iPhone Settings) said no to alerts
     @Published var alertsOff = false
     /// the page could not be loaded (no connection ...)
@@ -62,6 +83,7 @@ final class ClientModel: ObservableObject {
 
     func retry() {
         loadFailed = false
+        if let url = failedURL { failedURL = nil; web?.load(URLRequest(url: url)); return }
         if let web, web.url != nil { web.reload() } else { web?.load(URLRequest(url: AppConfig.serverURL.appendingPathComponent("portal"))) }
     }
 
@@ -73,11 +95,18 @@ final class ClientModel: ObservableObject {
         switch settings.authorizationStatus {
         case .notDetermined:
             alertsOff = false
-            if !UserDefaults.standard.bool(forKey: askedKey), sheet == nil { sheet = .alerts }
+            if UserDefaults.standard.bool(forKey: askedKey) {
+                alertsPending = true      // "Not now" was chosen earlier: the Menu offers to ask again
+            } else if sheet == nil {
+                alertsPending = false
+                sheet = .alerts
+            }
         case .authorized, .provisional, .ephemeral:
             alertsOff = false
+            alertsPending = false
             registerForRemoteOnce()
         case .denied:
+            alertsPending = false
             alertsOff = true
         @unknown default:
             break
@@ -96,6 +125,7 @@ final class ClientModel: ObservableObject {
     func turnOnAlerts() async {
         UserDefaults.standard.set(true, forKey: askedKey)
         sheet = nil
+        alertsPending = false
         let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])) ?? false
         if granted { alertsOff = false; registerForRemoteOnce() } else { alertsOff = true }
     }
@@ -103,6 +133,7 @@ final class ClientModel: ObservableObject {
     func notNow() {
         UserDefaults.standard.set(true, forKey: askedKey)
         sheet = nil
+        alertsPending = true
     }
 
     func openPhoneSettings() {
@@ -124,7 +155,8 @@ final class ClientModel: ObservableObject {
 
     /// Runs a request INSIDE the page, so it carries the signed-in session (the same cookies the portal itself uses). Returns the status and the text.
     private func pageRequest(method: String, path: String, body: String?) async -> (Int, String)? {
-        guard let web else { return nil }
+        // only while the page on screen IS our server (on a card page or another site the question would go to the wrong place)
+        guard let web, PageRules.mayRunRequest(pageHost: web.url?.host, serverHost: AppConfig.serverHost) else { return nil }
         let script = """
         const r = await fetch(path, { method, credentials: 'include', headers: { 'content-type': 'application/json' }, body: body });
         return JSON.stringify({ status: r.status, text: await r.text() });
@@ -138,29 +170,53 @@ final class ClientModel: ObservableObject {
         } catch { return nil }
     }
 
-    /// Asks the server who this person is and what they can open (the bar and the Menu come from the answer). Not signed in = no bar.
+    /// The page tells the app which company it shows; the bar and the Menu list are asked again about THAT company.
+    func setSelection(_ query: String) async {
+        guard query != selection else { return }
+        selection = query
+        await refreshMe()
+    }
+
+    /// Asks the server who this person is and what they can open (the bar and the Menu come from the answer). Not signed in or the app switched off = no bar;
+    /// a hiccup (a server fault, no connection) KEEPS the bar the person already has.
     func refreshMe() async {
-        guard let (status, text) = await pageRequest(method: "GET", path: "/api/portal/app/me", body: nil) else { return }
-        if status == 200, let data = text.data(using: .utf8), let decoded = try? JSONDecoder().decode(Me.self, from: data) {
+        guard !signingOut, let web, PageRules.mayRunRequest(pageHost: web.url?.host, serverHost: AppConfig.serverHost) else { return }
+        if PageRules.isLoginPath(currentPath) { sawLoginPage = true }
+        let epoch = meEpoch
+        let result = await pageRequest(method: "GET", path: SelectionRules.meAddress(selection: selection), body: nil)
+        // a sign-out happened while this was on its way: the answer is about the person who left
+        guard epoch == meEpoch, !signingOut else { return }
+        let outcome = MeRules.outcome(status: result?.0)
+        meOutcome = outcome
+        switch outcome {
+        case .signedIn:
+            guard let text = result?.1, let data = text.data(using: .utf8), let decoded = try? JSONDecoder().decode(Me.self, from: data) else { return }
             me = decoded
+            // someone signed in on the sign-in page (maybe as another person, without signing out first): save the phone again for whoever is signed in now
+            if sawLoginPage && !PageRules.isLoginPath(currentPath) { registeredToken = nil; lastRegisterFailure = nil; sawLoginPage = false }
             await checkAlerts()
             await registerDevice()
-        } else {
+        case .signedOut, .off:
             me = nil
             registeredToken = nil
+        case .unavailable:
+            break
         }
     }
 
     /// Saves this phone for alerts once there is both a token and a signed-in person (once per token; again after a sign-out and a new sign-in).
     func registerDevice() async {
-        guard let token = deviceToken, me != nil, registeredToken != token else { return }
+        guard !signingOut, let token = deviceToken, me != nil, registeredToken != token,
+              RegistrationRules.mayRetry(lastFailure: lastRegisterFailure, now: Date()) else { return }
         let body: [String: Any] = [
             "token": token, "bundleId": AppConfig.bundleId, "apnsEnv": AppConfig.apnsEnv, "deviceName": UIDevice.current.name,
             "appVersion": AppConfig.version, "appBuild": AppConfig.build,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: body), let json = String(data: data, encoding: .utf8) else { return }
+        let epoch = meEpoch
         if let (status, text) = await pageRequest(method: "PUT", path: "/api/portal/app/devices", body: json) {
-            if status == 200 { registeredToken = token; UserDefaults.standard.set(token, forKey: tokenKey) }
+            guard epoch == meEpoch, !signingOut else { return }
+            if status == 200 { registeredToken = token; lastRegisterFailure = nil; UserDefaults.standard.set(token, forKey: tokenKey) } else { lastRegisterFailure = Date() }
             note(status == 200 ? "Alerts: phone saved (\(AppConfig.apnsEnv))" : "Alerts: server said \(status) \(text.prefix(80))")
         } else {
             note("Alerts: could not reach the server")
@@ -177,19 +233,37 @@ final class ClientModel: ObservableObject {
 
     /// Removes this phone from the server (so a different person on this phone never gets this person's alerts), ends the sign-in on this phone and
     /// shows the portal's sign-in page. The portal has no sign-out button in the app (its side menu is hidden), so this is the app's own.
+    /// If the server could not be told (no connection ...) the person stays signed in and is asked to try again: ending the sign-in anyway would leave this
+    /// phone saved under the old person.
     func signOut() async {
+        guard !signingOut else { return }
+        signingOut = true
+        meEpoch += 1
+        defer { signingOut = false }
+        var removal: Int? = 200      // nothing to tell the server when this phone was never saved
         if let token = deviceToken ?? UserDefaults.standard.string(forKey: tokenKey) {
             let body = try? JSONSerialization.data(withJSONObject: ["token": token, "bundleId": AppConfig.bundleId])
-            _ = await pageRequest(method: "DELETE", path: "/api/portal/app/devices", body: body.flatMap { String(data: $0, encoding: .utf8) })
+            removal = await pageRequest(method: "DELETE", path: "/api/portal/app/devices", body: body.flatMap { String(data: $0, encoding: .utf8) })?.0
         }
+        guard SignOutRules.mayEndSession(removalStatus: removal) else { signOutFailed = true; return }
+        signOutFailed = false
         UserDefaults.standard.removeObject(forKey: tokenKey)
         registeredToken = nil
+        lastRegisterFailure = nil
+        sawLoginPage = false
         me = nil
+        meOutcome = .signedOut
+        selection = ""
         sheet = nil
-        try? await UNUserNotificationCenter.current().setBadgeCount(0)
+        alertsPending = false
+        let center = UNUserNotificationCenter.current()
+        try? await center.setBadgeCount(0)
+        center.removeAllDeliveredNotifications()   // the person who left must not leave their alerts on the lock screen
         let store = WKWebsiteDataStore.default()
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+        meEpoch += 1
         loadFailed = false
-        web?.load(URLRequest(url: AppConfig.serverURL.appendingPathComponent("portal")))
+        failedURL = nil
+        webEpoch += 1                              // a brand-new web view (it opens the portal's sign-in page): no page of the person who left stays in its history
     }
 }

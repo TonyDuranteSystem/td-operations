@@ -31,6 +31,29 @@ const CLOSURE_TYPES = ["Company Closure", "Client Offboarding"] as const
 const FORMATION_TYPE = "Company Formation"
 const OVERDUE_PAYMENT_STATUSES = ["Overdue", "Delinquent"] as const
 
+/**
+ * Which rule gives a company's Registered Agent start: "formation" (the agent
+ * began when we formed the company) or "onboarding" (the company already
+ * existed and we onboarded it).
+ *
+ * Antonio, 2026-11-10: **Client Since filled = we onboarded a company they
+ * already had; Client Since empty = we created the company.** That is the whole
+ * rule. A Company Formation job proves nothing (legacy onboardings were given
+ * one too: 16 of the 35 accounts with a wrong date have such a job) and the
+ * RA-switch date does not decide it either. A company with neither a Client
+ * Since nor any sign we formed it (no formation date, no formation job) stays
+ * null so the proposals never guess.
+ */
+export function decideRenewalIntake(input: {
+  hasFormationJob: boolean
+  formation_date: string | null
+  client_since: string | null
+}): "formation" | "onboarding" | null {
+  if (input.client_since) return "onboarding"
+  if (input.formation_date || input.hasFormationJob) return "formation"
+  return null
+}
+
 /** Account row loaded for status computation + calendar presentation. */
 export interface RenewalAccountRow {
   id: string
@@ -54,6 +77,14 @@ export interface RenewalAccountRow {
   gdrive_folder_url: string | null
   drive_folder_id: string | null
   portal_tier: string | null
+  // Other dates shown in the Calendar's renewal pop-up (optional: older callers/tests omit them)
+  onboarding_date?: string | null
+  portal_created_date?: string | null
+  cmra_renewal_date?: string | null
+  setup_fee_date?: string | null
+  setup_fee_paid_date?: string | null
+  cancellation_date?: string | null
+  dunning_pause_until?: string | null
 }
 
 export interface LoadedRenewalAccount {
@@ -114,7 +145,7 @@ export async function loadRenewalStatuses(
     let q = supabase
       .from("accounts")
       .select(
-        "id, company_name, account_type, status, state_of_formation, formation_date, ra_renewal_date, annual_report_due_date, is_test, is_internal, ein_number, entity_type, ra_switch_date, client_since, registered_agent_id, registered_agent_provider, registered_agent_address, gdrive_folder_url, drive_folder_id, portal_tier",
+        "id, company_name, account_type, status, state_of_formation, formation_date, ra_renewal_date, annual_report_due_date, is_test, is_internal, ein_number, entity_type, ra_switch_date, client_since, registered_agent_id, registered_agent_provider, registered_agent_address, gdrive_folder_url, drive_folder_id, portal_tier, onboarding_date, portal_created_date, cmra_renewal_date, setup_fee_date, setup_fee_paid_date, cancellation_date, dunning_pause_until",
       )
       .eq("status", "Active")
       .in("account_type", ["Client", "One-Time"])
@@ -256,14 +287,14 @@ export async function loadRenewalStatuses(
       today,
       upcomingWindowDays: opts.upcomingWindowDays,
     })
-    // Intake: a Company Formation SD (any status) proves TD formed the
-    // company; otherwise a recorded RA-switch/client-since points to
-    // onboarding. Neither → null, and proposals stay manual.
-    const intake: LoadedRenewalAccount["intake"] = formationSD
-      ? "formation"
-      : a.ra_switch_date || a.client_since
-        ? "onboarding"
-        : null
+    // Intake (Antonio, 2026-11-10): Client Since filled = we onboarded an existing
+    // company; empty = we created it. None of the two → null, proposals stay
+    // manual. (decideRenewalIntake)
+    const intake: LoadedRenewalAccount["intake"] = decideRenewalIntake({
+      hasFormationJob: !!formationSD,
+      formation_date: a.formation_date,
+      client_since: a.client_since,
+    })
     return { account: a, status, intake, renewalSDs: renewalSDsByAccount.get(a.id) ?? [] }
   })
 }

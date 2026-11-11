@@ -103,7 +103,8 @@ export function AppTdBilling({
             const state = billingRowState(row)
             const number = row.invoice_number || row.internal_ref || ''
             const amount = billingRowAmount(row)
-            const payable = payEnabled && state.canPay
+            // Just back from the card page: nothing is payable until the payment is booked (a second tap would open a second payment for the same balance).
+            const payable = payEnabled && state.canPay && !justPaid
             const content = (
               <>
                 <span className="min-w-0 flex-1">
