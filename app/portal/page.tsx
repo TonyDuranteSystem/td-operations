@@ -128,8 +128,8 @@ export default async function PortalDashboardPage() {
   const pendingClosures = contactId ? await getPendingClosures(contactId) : []
   const closureBanners = pendingClosures.length > 0 ? (
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0 space-y-3">
-      {pendingClosures.map(closure => (
-        <ClosureBanner key={closure.serviceDeliveryId} closure={closure} locale={locale} />
+      {pendingClosures.map((closure, i) => (
+        <ClosureBanner key={closure.serviceDeliveryId} closure={closure} locale={locale} position={{ index: i + 1, total: pendingClosures.length }} />
       ))}
     </div>
   ) : null
@@ -967,8 +967,8 @@ export default async function PortalDashboardPage() {
       </div>
 
       {/* Company Closure form still owed — named card, not a generic sidebar item */}
-      {pendingClosures.map(closure => (
-        <ClosureBanner key={closure.serviceDeliveryId} closure={closure} locale={locale} />
+      {pendingClosures.map((closure, i) => (
+        <ClosureBanner key={closure.serviceDeliveryId} closure={closure} locale={locale} position={{ index: i + 1, total: pendingClosures.length }} />
       ))}
 
       {/* What's New - one-time (per device) feature announcement, dismissed via localStorage */}

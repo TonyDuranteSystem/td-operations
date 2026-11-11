@@ -118,6 +118,13 @@ export interface CreateSDParams {
    * constrained) for other service types.
    */
   source_closure_token?: string | null
+  /**
+   * Which unit of a quantity offer this job is (2, 3, …; leave out for the first / only unit). Part of the
+   * per-offer Company Closure lock uq_closure_sd_active_per_offer (contact, offer, unit): a client who buys the
+   * closure of two companies gets two jobs from one offer. Only written when >= 2, so an environment without the
+   * column keeps working for every single-unit job (dev job 9829a468).
+   */
+  offer_unit?: number | null
 }
 
 export interface CreateSDResult {
@@ -371,6 +378,7 @@ export async function createSD(
         notes: params.notes || null,
         source_offer_token: params.source_offer_token ?? null,
         source_closure_token: params.source_closure_token ?? null,
+        ...(params.offer_unit != null && params.offer_unit >= 2 && { offer_unit: params.offer_unit }),
         stage_entered_at: new Date().toISOString(),
         is_test,
         ...(params.amount != null && {

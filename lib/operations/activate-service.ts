@@ -14,7 +14,7 @@ import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 import { createSD } from "@/lib/operations/service-delivery"
 import { selectStartAtActivationPipelines, isFormationContractWithoutFormation, createBoughtStartAtActivationServices } from "@/lib/operations/activation-start-services"
-import { getServiceBySlugStatic, getPerPersonServiceTypes, getRepeatableServiceTypes } from "@/lib/services"
+import { getServiceBySlugStatic, getPerPersonServiceTypes, getRepeatableServiceTypes, getMultiUnitServiceTypes } from "@/lib/services"
 import { reportSystemError } from "@/lib/system-errors"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { invoiceTargetForOffer, offerBillTo } from "@/lib/offers/bill-to-server"
@@ -803,9 +803,11 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     }
     let perPersonTypes: string[] = []
     let repeatableTypes: string[] = []
+    let multiUnitTypes: string[] = []
     try {
       perPersonTypes = await getPerPersonServiceTypes()
       repeatableTypes = await getRepeatableServiceTypes()
+      multiUnitTypes = await getMultiUnitServiceTypes()
     } catch (tagErr) {
       tellStaff(`service catalog lookup failed while creating services for ${who}: ${tagErr instanceof Error ? tagErr.message : String(tagErr)} — check the created services by hand`, { offerToken: activation.offer_token })
     }
@@ -950,10 +952,15 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           } else {
             // All other pipelines — createSD resolves the first stage
             // from pipeline_stages automatically.
+            // A multi_unit service (Company Closure ×N): unit 1 follows the offer's company, units 2..N are on the
+            // PERSON — a company has at most ONE active closure (uq_closure_sd_active_per_account), and the company
+            // being closed is only known once the client fills the form (dev job 9829a468).
+            const multiUnitNumber = existingOfferCount + unitIndex + 1
+            const onPersonOnly = multiUnitTypes.includes(pipeline) && multiUnitNumber > 1
             createParams = {
               service_type: pipeline,
               service_name: sdName,
-              account_id: accountId,
+              account_id: onPersonOnly ? null : accountId,
               contact_id: contactId,
               notes: `Auto-created from offer ${activation.offer_token}`,
               // Stamped like every other path (S1 E2E ★8): traceability + the
