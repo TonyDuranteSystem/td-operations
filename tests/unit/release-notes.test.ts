@@ -197,6 +197,17 @@ describe("the wiring that must not drift", () => {
     expect(page).toContain("BUNDLED_NOTES")
     expect(page.toLowerCase()).not.toContain("supabase")
   })
+  it("the header's three-dots menu has a Releases link and lists every entry vertically (one full-width button per line)", () => {
+    const header = read("components/dashboard/dashboard-header.tsx")
+    expect(header).toContain('href="/releases"')
+    expect(header).toContain("<HelpToggle stacked />")
+    expect(header).toContain("<DashboardPushToggle refreshOnMount stacked />")
+    expect(header).toContain("flex-col items-stretch")
+    // the stacked layout is opt-in: the phone header's compact toggle and the default one keep their old shape
+    const push = read("components/dashboard/push-toggle.tsx")
+    expect(push).toContain("stacked ? 'flex flex-col items-stretch gap-2' : 'flex items-center gap-2'")
+    expect(read("components/dashboard/sidebar.tsx")).toContain("<DashboardPushToggle compact refreshOnMount />")
+  })
   it("the pre-push hook runs the release-note gate", () => {
     expect(read(".husky/pre-push")).toContain("sh scripts/check-release-note.sh || exit 1")
   })
