@@ -9,7 +9,7 @@
   ],
   "steps": [
     { "name": "A file is added to a person", "detail": "From the CRM or from People in Finder", "flag": "new" },
-    { "name": "Finder is told in every place it shows that person", "detail": "People, and each company route already opened", "flag": "auto" },
+    { "name": "Finder is told in every place it shows them", "detail": "People, and each company route already opened", "flag": "auto" },
     { "name": "The file appears under the company without reopening", "detail": "Same list everywhere", "flag": "auto" }
   ]
 }
