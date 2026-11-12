@@ -5,6 +5,7 @@ import { Save, Loader2, Pencil, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
 import { useLocale } from '@/lib/portal/use-locale'
+import { AppProfileView } from '@/components/portal/app-overview/profile-view'
 
 interface ProfileEditorProps {
   contactId: string
@@ -21,9 +22,11 @@ interface ProfileEditorProps {
     address_zip: string
     address_country: string
   }
+  /** Client iPhone app only: draw the reading view as a profile header + short list. The website leaves this off. */
+  appView?: boolean
 }
 
-export function ProfileEditor({ contactId, initialData }: ProfileEditorProps) {
+export function ProfileEditor({ contactId, initialData, appView = false }: ProfileEditorProps) {
   const router = useRouter()
   const { t } = useLocale()
   const [editing, setEditing] = useState(false)
@@ -48,6 +51,9 @@ export function ProfileEditor({ contactId, initialData }: ProfileEditorProps) {
       setSaving(false)
     }
   }
+
+  // The client iPhone app reads the details as a profile header + a short list (dev job 056a70d0); the Edit button opens the very same form below.
+  if (!editing && appView) return <AppProfileView data={data} onEdit={() => setEditing(true)} />
 
   if (!editing) {
     return (

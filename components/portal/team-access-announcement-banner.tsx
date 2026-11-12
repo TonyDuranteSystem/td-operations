@@ -3,26 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Users, ArrowRight, X } from 'lucide-react'
 import Link from 'next/link'
-import { useAppMode } from '@/lib/app-mode/app-mode-context'
-import { AppAnnouncementCard } from '@/components/portal/app-announcement-card'
-
-// Bump the version suffix to re-show the banner to everyone after a major change.
-const DISMISS_KEY = 'td-team-access-announce-v1'
-
-const COPY = {
-  en: {
-    title: 'New: Invite your team to the portal',
-    desc: 'You can now give your colleagues their own portal login and choose exactly what each of them can see.',
-    cta: 'See how it works',
-    dismiss: 'Dismiss',
-  },
-  it: {
-    title: 'Novità: Invita il tuo team nel portale',
-    desc: 'Ora puoi dare ai tuoi collaboratori un accesso personale al portale e scegliere esattamente cosa ciascuno può vedere.',
-    cta: 'Scopri come funziona',
-    dismiss: 'Chiudi',
-  },
-}
+import { TEAM_COPY, TEAM_DISMISS_KEY, TEAM_HREF } from '@/lib/portal-app/news'
 
 /**
  * One-time (per device) announcement for Portal Team Access. Rendered ONLY for
@@ -31,12 +12,11 @@ const COPY = {
  * GuideAnnouncementBanner. Links to the "Invite your team" guide article.
  */
 export function TeamAccessAnnouncementBanner({ locale }: { locale: 'en' | 'it' }) {
-  const appMode = useAppMode()
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
     try {
-      if (!localStorage.getItem(DISMISS_KEY)) setVisible(true)
+      if (!localStorage.getItem(TEAM_DISMISS_KEY)) setVisible(true)
     } catch {
       // localStorage unavailable — skip banner
     }
@@ -44,7 +24,7 @@ export function TeamAccessAnnouncementBanner({ locale }: { locale: 'en' | 'it' }
 
   const handleDismiss = () => {
     try {
-      localStorage.setItem(DISMISS_KEY, '1')
+      localStorage.setItem(TEAM_DISMISS_KEY, '1')
     } catch {
       // no-op
     }
@@ -53,12 +33,7 @@ export function TeamAccessAnnouncementBanner({ locale }: { locale: 'en' | 'it' }
 
   if (!visible) return null
 
-  const c = COPY[locale] ?? COPY.en
-
-  // Inside the client iPhone app the words get the whole width (stacked card); the website's row is unchanged.
-  if (appMode) {
-    return <AppAnnouncementCard tone="violet" icon={Users} title={c.title} desc={c.desc} cta={c.cta} href="/portal/guide" dismissLabel={c.dismiss} onDismiss={handleDismiss} />
-  }
+  const c = TEAM_COPY[locale] ?? TEAM_COPY.en
 
   return (
     <div className="flex items-center gap-3 bg-violet-50 border border-violet-200 rounded-xl px-4 py-3">
@@ -70,7 +45,7 @@ export function TeamAccessAnnouncementBanner({ locale }: { locale: 'en' | 'it' }
         <p className="text-xs text-violet-700 mt-0.5">{c.desc}</p>
       </div>
       <Link
-        href="/portal/guide"
+        href={TEAM_HREF}
         onClick={handleDismiss}
         className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 text-white text-xs font-medium rounded-lg hover:bg-violet-700 transition-colors shrink-0"
       >
