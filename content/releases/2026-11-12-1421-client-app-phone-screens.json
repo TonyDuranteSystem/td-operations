@@ -7,5 +7,6 @@
     "Open Chat: one top row with the Topic button and refresh",
     "Tap a message: Reply, Pin and Mark unread appear under it",
     "The website itself looks exactly as before"
-  ]
+  ],
+  "screenshot": "client-app-chat-actions.png"
 }
