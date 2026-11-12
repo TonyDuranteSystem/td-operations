@@ -1,0 +1,15 @@
+{
+  "title": "TD Storage on the Mac now shows new files under the company as well",
+  "tag": "fixed",
+  "text": "A person's documents appear in two places in Finder: under People, and under each company they belong to (company, Contacts, the person). A new file used to show up in the People copy only, and under the company it stayed missing until the folder was reopened. Now the Mac app tells Finder about a change in both places. This needs the new version of the Mac app, which the team gets when it is offered.",
+  "points": [
+    "Works for any person or storage shown in more than one place, not only one company",
+    "Only the routes Finder has already shown are updated, and old ones are forgotten after 90 days",
+    "Nothing changes in the CRM itself"
+  ],
+  "steps": [
+    { "name": "A file is added to a person", "detail": "From the CRM or from People in Finder", "flag": "new" },
+    { "name": "Finder is told in every place it shows them", "detail": "People, and each company route already opened", "flag": "auto" },
+    { "name": "The file shows under the company at once", "detail": "Same list everywhere", "flag": "auto" }
+  ]
+}

@@ -74,8 +74,9 @@ final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
                 var deleted: [NSFileProviderItemIdentifier] = []
                 // one lookup per ITEM (a saved file leaves two feed rows), several at the same time: a day's backlog used to take ~10 minutes
                 let batch = ChangeBatch.collapse(page.changes)
-                var results = [Outcome](repeating: .skip, count: batch.count)
-                await withTaskGroup(of: (Int, Outcome).self) { group in
+                if !page.changes.isEmpty { Trace.log("workingSet.batch", ["rows": page.changes.count, "items": batch.count, "kinds": batch.map { "\($0.kind)" }.joined(separator: ",")]) }
+                var results = [[Outcome]](repeating: [], count: batch.count)
+                await withTaskGroup(of: (Int, [Outcome]).self) { group in
                     var next = min(ChangeBatch.parallelLookups, batch.count)
                     for i in 0..<next { group.addTask { (i, await self.resolve(batch[i])) } }
                     for await (i, outcome) in group {
@@ -83,7 +84,7 @@ final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
                         if next < batch.count { let j = next; next += 1; group.addTask { (j, await self.resolve(batch[j])) } }
                     }
                 }
-                for o in results {
+                for o in results.flatMap({ $0 }) {
                     switch o {
                     case .update(let item): updated.append(item)
                     case .delete(let id): deleted.append(id)
@@ -99,8 +100,29 @@ final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
     }
     private enum Outcome { case update(NSFileProviderItem), delete(NSFileProviderItemIdentifier), skip }
 
-    /// What one feed row means for Finder: an updated item, an item to drop, or nothing (the item is gone again, or cannot be read right now).
-    private func resolve(_ c: AppChange) async -> Outcome {
+    /// What one feed row means for Finder: the item itself, plus the same item under every "company › 2. Contacts › person" route Finder has been shown for
+    /// its storage (it has a different id there, and Finder is told nothing about it otherwise — a new file stayed invisible under the company until the
+    /// folder was reopened). Each is an updated item, an item to drop, or nothing (the item is gone again, or cannot be read right now).
+    private func resolve(_ c: AppChange) async -> [Outcome] {
+        let plain = await resolvePlain(c)
+        guard c.kind != .owner, let owner = c.ownerId else { return [plain] }
+        var out = [plain]
+        let id: ItemID = c.kind == .file ? .file(owner: owner, file: c.id) : .folder(owner: owner, folder: c.id)
+        let routes = ViaRegistry.shared.links(for: owner)
+        Trace.log("workingSet.via", ["kind": "\(c.kind)", "op": "\(c.op)", "routes": routes.count])
+        for link in routes {
+            let shown = id.shown(via: link)
+            if c.op == .delete { out.append(.delete(FPItem.identifier(for: shown))); continue }
+            if case .delete = plain { continue }          // the plain answer says "drop it" (a storage's top folder): nothing to show under a route either
+            if case .skip = plain { continue }            // gone again or unreadable: do not invent it under a route
+            let item = try? await catalog.item(for: shown)
+            Trace.log("workingSet.via.item", ["found": item != nil])
+            if let item { out.append(.update(item)) }
+        }
+        return out
+    }
+
+    private func resolvePlain(_ c: AppChange) async -> Outcome {
         let id: ItemID?
         switch c.kind {
         case .file: id = c.ownerId.map { .file(owner: $0, file: c.id) }
