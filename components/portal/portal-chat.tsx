@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
+import { createPortal } from 'react-dom'
 import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, ArrowUp, CheckCheck, ChevronUp, ChevronDown, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, MailOpen, Building2, Sparkles, Check, Users, User as UserIcon } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
@@ -27,6 +28,8 @@ import { format, parseISO, isToday, isYesterday } from 'date-fns'
 import dynamic from 'next/dynamic'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { chooseOpeningTopic } from '@/lib/portal-app/chat-topic'
+import { APP_FRAME_SLOT_ID } from '@/lib/portal-app/frame'
+import { tapOpensActions, nextActionsFor } from '@/lib/portal-app/chat-actions'
 import { AppTopicButton } from '@/components/portal/chat/app-topic-button'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
@@ -399,6 +402,36 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   const [isDragging, setIsDragging] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const [pinHighlightId, setPinHighlightId] = useState<string | null>(null)
+
+  // Client iPhone app only: the message whose small action row (Reply / Pin / Mark unread / React) is open. A tap on a message opens it.
+  const [actionsFor, setActionsFor] = useState<string | null>(null)
+  // Client iPhone app only: the Topic button and the refresh button sit in the app's top row, right after the screen's name, not in a row of the
+  // chat's own. `frameSlot` is that spot once found; `slotMissing` (the spot never appeared) brings the chat's own row back so the Topic button is never lost.
+  const [frameSlot, setFrameSlot] = useState<HTMLElement | null>(null)
+  const [slotMissing, setSlotMissing] = useState(false)
+  // The row opens BELOW the tapped message: when that is the newest message it would sit under the "Replying in" bar, so the message (with its row)
+  // is scrolled just into view (a message already fully on screen does not move).
+  useEffect(() => {
+    if (!appMode || !actionsFor) return
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`pc-msg-${actionsFor}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [appMode, actionsFor])
+  useEffect(() => {
+    if (!appMode) return
+    let live = true
+    let tries = 0
+    const find = () => {
+      if (!live) return
+      const el = document.getElementById(APP_FRAME_SLOT_ID)
+      if (el) { setFrameSlot(el); setSlotMissing(false) }
+      else if (tries++ < 30) requestAnimationFrame(find)
+      else setSlotMissing(true)
+    }
+    find()
+    return () => { live = false }
+  }, [appMode])
 
   // Pin/unpin a message (client side). Realtime reconciles both chats; refresh() is a fallback.
   const togglePin = async (id: string, pinned: boolean) => {
@@ -894,17 +927,36 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Refresh button — replaces pull-to-refresh gesture on chat page */}
-      <FastTooltip label={t('portalChat.refreshMessages')}>
-        <button
-          onClick={handleRefresh}
-          disabled={isRefreshing || loading}
-          className="absolute top-2 right-2 z-10 p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
-          aria-label={t('portalChat.refreshMessages')}
-        >
-          <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
-        </button>
-      </FastTooltip>
+      {/* Refresh button — replaces pull-to-refresh gesture on chat page. Inside the client iPhone app it lives in the app's top row (below). */}
+      {(!appMode || slotMissing) && (
+        <FastTooltip label={t('portalChat.refreshMessages')}>
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing || loading}
+            className="absolute top-2 right-2 z-10 p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
+            aria-label={t('portalChat.refreshMessages')}
+          >
+            <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
+          </button>
+        </FastTooltip>
+      )}
+      {/* Client iPhone app: the Topic button and the refresh button go into the app's top row, right after the screen's name (one slim row, no second row). */}
+      {appMode && frameSlot && createPortal(
+        <>
+          <AppTopicButton activeTopic={activeTopic} topicOrder={topicOrder} unreadByTopic={unreadByTopic} onChoose={chooseTopic} />
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isRefreshing || loading}
+            aria-label={t('portalChat.refreshMessages')}
+            data-testid="app-chat-refresh"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-500 disabled:opacity-40"
+          >
+            <RotateCw className={cn('h-[18px] w-[18px]', isRefreshing && 'animate-spin')} aria-hidden="true" />
+          </button>
+        </>,
+        frameSlot,
+      )}
       {/* Drag overlay */}
       {isDragging && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center border-2 border-dashed border-blue-400 bg-blue-50/90 rounded-xl pointer-events-none">
@@ -950,8 +1002,9 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
           </div>
         )
       })()}
-      {/* Inside the client iPhone app the row of topic pills below is replaced by ONE Topic button (Step 3b). */}
-      {appMode && (
+      {/* Inside the client iPhone app the row of topic pills below is replaced by ONE Topic button (Step 3b), drawn in the app's top row (above).
+          Only if that spot never appears does the chat draw its own row, so the Topic button can never be lost. */}
+      {appMode && slotMissing && (
         <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-3 pr-12" data-testid="app-chat-header">
           <p className="min-w-0 truncate text-sm text-zinc-600">{t('chat.team')}</p>
           <AppTopicButton activeTopic={activeTopic} topicOrder={topicOrder} unreadByTopic={unreadByTopic} onChoose={chooseTopic} />
@@ -1117,8 +1170,8 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                   </div>
                 )}
                 <div className={cn('flex mb-1 items-end gap-1', isOwn ? 'justify-end' : 'justify-start')}>
-                  {/* Reply button — left side for own messages */}
-                  {isOwn && (
+                  {/* Reply button — left side for own messages. Not in the client iPhone app: there a TAP on the message opens one small action row. */}
+                  {isOwn && !appMode && (
                     <>
                       <FastTooltip label={msg.pinned_at ? t('portalChat.unpin') : t('portalChat.pin')}>
                         <button
@@ -1140,12 +1193,17 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                       </FastTooltip>
                     </>
                   )}
-                  <div className={cn(
-                    'max-w-[75%] px-3.5 py-2 rounded-2xl text-sm',
+                  <div
+                    // Client iPhone app: a tap opens / closes this message's action row, unless it was meant for a link, button, picture or voice note inside it.
+                    onClick={appMode ? (e) => { if (tapOpensActions(e.target as Element, window.getSelection()?.toString())) setActionsFor(cur => nextActionsFor(cur, msg.id)) } : undefined}
+                    className={cn(
+                    appMode ? 'max-w-[88%]' : 'max-w-[75%]',
+                    'px-3.5 py-2 rounded-2xl text-sm',
                     isOwn
                       ? 'bg-blue-600 text-white rounded-br-md'
                       : 'bg-zinc-100 text-zinc-900 rounded-bl-md',
-                    msg.client_kept_unread && 'border-l-2 border-blue-400'
+                    msg.client_kept_unread && 'border-l-2 border-blue-400',
+                    appMode && actionsFor === msg.id && 'ring-2 ring-blue-300'
                   )}>
                     {/* PR 2 Step 6 — sender_context badge. Shown when the
                         message was tagged at send time. NULL = legacy
@@ -1289,8 +1347,8 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                       )}
                     </p>
                   </div>
-                  {/* Reply button — right side for other's messages */}
-                  {!isOwn && (
+                  {/* Reply button — right side for other's messages (not in the client iPhone app: see above) */}
+                  {!isOwn && !appMode && (
                     <>
                       <FastTooltip label={t('portalChat.reply')}>
                         <button
@@ -1324,11 +1382,44 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                     </>
                   )}
                 </div>
+                {/* Client iPhone app: the one small action row of the TAPPED message (Reply / Pin / Mark unread; React is the smiley just below). Full-size
+                    buttons (Apple's 44-point rule) but only ever one row, for one message, instead of three icons beside every message. */}
+                {appMode && actionsFor === msg.id && (
+                  <div data-testid="app-message-actions" className={cn('mb-1 flex flex-wrap items-center gap-2 px-1', isOwn ? 'justify-end' : 'justify-start')}>
+                    <button
+                      type="button"
+                      onClick={() => { setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type, attachments: msg.attachments }); setActionsFor(null) }}
+                      className="flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3.5 text-[13px] font-medium text-zinc-700"
+                    >
+                      <Reply className="h-4 w-4" aria-hidden="true" />
+                      {t('portalChat.reply')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { togglePin(msg.id, !msg.pinned_at); setActionsFor(null) }}
+                      className={cn('flex items-center gap-1.5 rounded-full border bg-white px-3.5 text-[13px] font-medium', msg.pinned_at ? 'border-amber-300 text-amber-700' : 'border-zinc-200 text-zinc-700')}
+                    >
+                      <Pin className={cn('h-4 w-4', msg.pinned_at && 'fill-amber-400')} aria-hidden="true" />
+                      {msg.pinned_at ? t('portalChat.unpin') : t('portalChat.pin')}
+                    </button>
+                    {!isOwn && msg.sender_type === 'admin' && (
+                      <button
+                        type="button"
+                        onClick={() => { toggleKeepUnread(msg.id, !msg.client_kept_unread); setActionsFor(null) }}
+                        className={cn('flex items-center gap-1.5 rounded-full border bg-white px-3.5 text-[13px] font-medium', msg.client_kept_unread ? 'border-blue-300 text-blue-700' : 'border-zinc-200 text-zinc-700')}
+                      >
+                        <MailOpen className="h-4 w-4" aria-hidden="true" />
+                        {msg.client_kept_unread ? t('portalChat.markRead') : t('portalChat.markUnread')}
+                      </button>
+                    )}
+                  </div>
+                )}
                 {/* Emoji reactions strip — under the bubble, aligned to the message side.
                     Skipped for system messages (e.g. the office-closed auto-reply): the CRM
                     renders those as centered pills with no reaction strip, so allowing a
-                    reaction here would be invisible to staff. */}
-                {msg.sender_type !== 'system' && (
+                    reaction here would be invisible to staff. Client iPhone app: only the reactions that already exist
+                    (and no strip at all when there are none) until the message is tapped; the add-reaction smiley then shows. */}
+                {msg.sender_type !== 'system' && (!appMode || actionsFor === msg.id || (msg.reactions?.length ?? 0) > 0) && (
                   <div className={cn('px-1 mb-1', isOwn ? 'flex justify-end' : 'flex justify-start')}>
                     <MessageReactions
                       messageId={msg.id}
@@ -1339,6 +1430,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                       staffLabel={t('chat.team')}
                       seenKeys={isOwn ? seenReactionKeys : undefined}
                       onReactionsSeen={onReactionsSeen}
+                      hideAdd={appMode && actionsFor !== msg.id}
                     />
                   </div>
                 )}

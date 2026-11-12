@@ -132,6 +132,17 @@
    button's classes to be more specific than it (a plain `.iubenda-tp-btn` rule loses). */
 [data-app-mode="true"] body .iubenda-tp-btn.iubenda-cs-preferences-link { display: none !important; }
 
+/* Client iPhone app (dev job 056a70d0, Antonio's phone test 12 Nov 2026): the consent tool also draws a "Notice at collection" + "Your Privacy Choices"
+   box at the very end of every page. On a phone it stacks into two big bordered boxes (and the app's 44 px button rule made them taller) and took
+   a fifth of the Chat screen. Inside the app it becomes ONE slim line of small links (still there: they are the privacy-law links), and on the Chat
+   screen, which is exactly one screen tall, it is not drawn at all (the Chat page carries data-app-screen="chat"). The tool's own phone rules
+   set the stacking and borders, so these name `body` and use !important where it also does or where the 44 px rule would win. */
+[data-app-mode="true"] body .iub__us-widget { padding: 4px 16px 12px; font-size: 12px; justify-content: flex-start; }
+[data-app-mode="true"] body .iub__us-widget__wrapper { flex-direction: row !important; flex-wrap: wrap; background: transparent; border: 0 !important; border-radius: 0; }
+[data-app-mode="true"] body .iub__us-widget__link { font-size: 12px; font-weight: 500; padding: 10px 14px 10px 0 !important; border: 0 !important; min-height: 0 !important; }
+[data-app-mode="true"] body .iub__us-widget__link--privacy-choices { flex-direction: row !important; margin-left: 0 !important; }
+[data-app-mode="true"]:has([data-app-screen="chat"]) body .iub__us-widget { display: none !important; }
+
 /* TD Social phone app, Portal chats (dev job 2072bc3e, Step 1b, fix-list item 6): the row of six tabs (Messages, What's New,
    Idea request, To Do, Email, Worker) does not fit 390 px, so inside the app it scrolls sideways and each tab keeps its own
    width instead of being squeezed until the labels overlap their icons. Outside the app nothing changes. */
