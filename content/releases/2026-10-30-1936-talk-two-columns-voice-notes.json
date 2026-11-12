@@ -1,0 +1,9 @@
+{
+  "title": "TD Talk: two columns on wide screens, and old voice notes no longer download on open",
+  "tag": "improved",
+  "text": "On wide screens TD Talk now keeps the chat list in a left column and opens the chat beside it; phones still show one screen at a time. Opening a chat also no longer downloads all its old voice notes: only the newest one is loaded ahead so it plays at once, and older ones load when you tap them.",
+  "points": [
+    "The open chat's row is highlighted, and its unread number is hidden while it is on screen.",
+    "New voice-note uploads are kept by the browser for a year, so they are not fetched again every time."
+  ]
+}

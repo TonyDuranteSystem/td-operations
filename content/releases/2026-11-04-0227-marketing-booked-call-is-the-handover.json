@@ -1,0 +1,11 @@
+{
+  "title": "TD Marketing: booking Rocco's free call is the hand-over, and screens say who has the lead",
+  "tag": "improved",
+  "text": "The setter now passes a lead on by booking the free 15-minute call (a WhatsApp call, no Zoom) with a note for Rocco; booking it makes the lead Rocco's at once, and cancelling the call sends it back. Booked leads wait in one column, Calls prenotate, until Rocco chooses a result. A call whose time has passed (30 minutes after the start) gets a red \"Call time passed\" tag and sits at the top.",
+  "points": [
+    "Gone: Pass to Rocco, the seller's Contacted step, Pick this lead, Give it back, and the Pick button on the Today page.",
+    "Screens now say who has the lead: With the setter, With you, With <name>.",
+    "Rocco sees the setter's booking note in the call box as \"Note from the setter\".",
+    "A missed call is Rocco's to follow up, with Not ready now or a note."
+  ]
+}

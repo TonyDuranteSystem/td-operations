@@ -1,0 +1,10 @@
+{
+  "title": "Staff are told when a Supabase incident is the cause: red bar and clearer upload messages",
+  "tag": "new",
+  "text": "When Supabase (our database and file storage) has an open incident that can affect us, a red bar appears at the top of the CRM, TD Talk and the Marketing workspace, quoting Supabase's own title and latest update. A failed workspace upload or a waiting chat message now says Supabase has an open storage incident instead of a generic error, so you know it is not your connection.",
+  "points": [
+    "Antonio, Luca and Jodi get one notification when an incident opens and one when it is resolved.",
+    "Clients only see \"Uploads are temporarily unavailable, please try again shortly.\" while a storage incident is open; they never see the cause.",
+    "If Supabase's status cannot be read, nothing is shown: it never claims all clear."
+  ]
+}

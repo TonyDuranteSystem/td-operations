@@ -113,6 +113,15 @@ if [ -f scripts/check-system-docs-freshness.sh ]; then
   echo "✅ System docs in sync."
 fi
 
+# Releases — a push that changes APP code must add a release note (content/releases/*.json): what the change does, in plain
+# English, shown to the team on the "New release available" bar and kept on the Releases page. Dev job 616dc839.
+# Override (rare, deliberate): ALLOW_RELEASE_NOTE_SKIP=1 git push ...
+echo "📰 Checking release note (Releases)..."
+if [ -f scripts/check-release-note.sh ]; then
+  sh scripts/check-release-note.sh || exit 1
+  echo "✅ Release note in place."
+fi
+
 # System Atlas — the master map's APPENDICES are generated from live code. They rotted
 # badly once (2026-05-29 → 2026-08-02: 41 vs 49 tool groups, 18 vs 26 hooks, rules
 # stopping at R106 while CLAUDE.md reached R113) because nothing regenerated them and

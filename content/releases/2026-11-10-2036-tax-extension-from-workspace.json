@@ -1,0 +1,11 @@
+{
+  "title": "Tax Return: file the extension from the workspace with Form 7004 and a fax",
+  "tag": "new",
+  "text": "For single-member LLCs, the plain Upload Extension Receipt box at the 1st Installment Paid step is now an extension box. It makes the official IRS Form 7004 and faxes it to the IRS from the workspace. When the fax is delivered (checked every 10 minutes, or press Check now), the 7004 and the fax receipt are joined into one document the client can see, the job moves to Extension Filed, and the client gets a chat message about the extension with the new deadline, in English or Italian.",
+  "points": [
+    "One client at a time. There is no batch.",
+    "The IRS fax number is an editable field, pre-filled with the last one that was delivered.",
+    "Multi-member LLCs and corporations keep the plain upload box.",
+    "The first real 7004 fax is the first live proof, because a real fax could not be tested before release."
+  ]
+}

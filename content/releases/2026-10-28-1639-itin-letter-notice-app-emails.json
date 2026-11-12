@@ -1,0 +1,10 @@
+{
+  "title": "ITIN letter and stage emails: clients with the app get one notice, not an email on top",
+  "tag": "improved",
+  "text": "When the IRS ITIN approval letter is uploaded, the client now gets a portal chat message and a notification; an email goes out only as the usual \"you have an unread message\" reminder, not straight away. Milestone emails sent when a case moves stage, for every service, are now skipped for a client who has the app, because the push notification already reached them. The \"Your ITIN is ready\" notice can now be dismissed.",
+  "points": [
+    "In the ITIN workspace the three upload boxes show a Document type list that follows the Storage rule, with the right type already selected.",
+    "Staff see \"client notified\" only when the message really went out; if the last step did not finish an amber warning shows instead of a green tick.",
+    "Emails that need the client to act, such as signing the SS-4, are unchanged."
+  ]
+}

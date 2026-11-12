@@ -1,0 +1,10 @@
+{
+  "title": "TD Storage Mac app: new folders, rename, move and trash from Finder",
+  "tag": "new",
+  "text": "Version 0.2.8 of the TD Storage Mac app creates in the CRM a folder you paste into Finder; before, it stayed only on that Mac, and a repeated paste reuses the same folder. Version 0.2.9 lets you rename, move and Move to Trash from Finder: the change reaches the CRM, and a trash goes to the CRM trash, where it can be restored. This works in Business and My files; a client's folders are still changed only in the CRM.",
+  "points": [
+    "Nothing is ever erased from Finder, and a fixed folder or a storage's top folder is never touched.",
+    "The Mac needs the new app version to get these.",
+    "Restoring from Finder's own Trash is done in the CRM."
+  ]
+}

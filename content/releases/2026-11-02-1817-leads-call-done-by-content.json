@@ -1,0 +1,10 @@
+{
+  "title": "Leads: Call Done is judged by what was said on the call, and Undo has no timer",
+  "tag": "improved",
+  "text": "The automatic move from Call Scheduled to Call Done no longer depends on how long the recording is. It reads the recording's transcript: two voices must each have said real words, and one of them must not be the team or the notetaker. A recording with no real conversation leaves the booked call open, so the lead still asks \"Did this call happen?\". The automatic move itself is still switched off.",
+  "points": [
+    "Undo this move has no time limit: it works while the lead is still where the system put it and nothing else has happened to it.",
+    "Each automatic move now shows a \"Moved because...\" line on the lead.",
+    "A call a person already answered is never overruled by a later copy of the recording."
+  ]
+}

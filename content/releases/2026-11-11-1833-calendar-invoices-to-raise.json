@@ -1,0 +1,10 @@
+{
+  "title": "Calendar: later payment-plan parts show under Invoices and are raised by a click",
+  "tag": "new",
+  "text": "Later parts of a payment plan now show on the Calendar's Invoices tab when they are due, blinking red, with a red count on the Calendar menu item. One click raises the invoice and sends it to the person who signed the offer. The old morning job that raised these invoices by itself is removed.",
+  "points": [
+    "One click sends one email only.",
+    "An offer with no Invoice to follows the payer of part 1.",
+    "A draft made for another payer is never sent from here, and steps with no job are flagged."
+  ]
+}

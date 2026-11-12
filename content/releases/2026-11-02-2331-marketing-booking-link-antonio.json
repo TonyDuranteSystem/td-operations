@@ -1,0 +1,11 @@
+{
+  "title": "TD Marketing: a booking link with Antonio that offers only times when both are free",
+  "tag": "new",
+  "text": "In the TD Marketing workspace, Rocco can now make a Link with Antonio for a lead. It offers only times when he and Antonio are both free, and the client books, moves or cancels on a public page with no login. Each booking gets its own Zoom meeting and one Google Calendar event, and the client's emails follow the language of the page. Moves and cancels made in the Calendar are followed by the link, Zoom and the client's email.",
+  "points": [
+    "A lead that already has a booked call cannot get a second link; a booking cut off halfway gives its time back after 5 minutes.",
+    "The Google invitation is sent only after the call is recorded on the lead.",
+    "Cancelling puts a lead that is still booked back to the stage it was in before the booking.",
+    "The first real booking found a fault where a lead Rocco had picked was refused; it was fixed the same day."
+  ]
+}

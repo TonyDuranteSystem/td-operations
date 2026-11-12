@@ -1,0 +1,10 @@
+{
+  "title": "Team Chat: Claude can attach files to a post, and save web pages to My files",
+  "tag": "new",
+  "text": "Claude can now attach a file from My files (the From Claude folder) to a Team Chat / TD Talk post, up to 5 files per message. The file is copied so its link opens without a login, and if any file is refused nothing is posted. Claude's My files save tools also accept web pages (.html) now.",
+  "points": [
+    "Files outside the From Claude folder, and risky types such as scripts, programs and web pages, are refused for attaching.",
+    "Only Antonio's own Claude session can attach files from My files.",
+    "Every public copy is recorded in an audit log."
+  ]
+}

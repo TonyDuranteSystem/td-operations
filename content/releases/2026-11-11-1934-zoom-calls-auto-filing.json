@@ -1,0 +1,10 @@
+{
+  "title": "Zoom calls: automatic filing into year and month folders (ships switched off)",
+  "tag": "new",
+  "text": "A call recorded on the Mac arrives as a date-named folder at the top of Business > Zoom Calls, and until now someone had to file it by hand with Sort by date. A new automatic job, running every 10 minutes, files a finished call folder into TD Zoom Calls, where Sort by date puts it in year and month folders. A call inside a Marketing booking goes to TD Marketing Calls instead. It ships switched off, so nothing is filed automatically until it is turned on.",
+  "points": [
+    "A folder is filed only after nothing in it has changed for 10 minutes and no upload for it is open.",
+    "At most 10 calls per run, and only folders are moved.",
+    "Each filing is written to the activity log with where the call came from: a Calendly booking or started straight from Zoom."
+  ]
+}

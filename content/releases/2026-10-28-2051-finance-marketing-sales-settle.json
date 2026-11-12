@@ -1,0 +1,11 @@
+{
+  "title": "Finance now settles TD Marketing sales: the card moves only after the payment is matched",
+  "tag": "improved",
+  "text": "The Stripe payment sync now runs every 3 minutes instead of every 6 hours. When a payment made through one of Rocco's payment links arrives, Finance matches it to its sale and lead first; only then is the sale marked paid, the lead's card moved, the paid call recorded with its invoice and credit, and the invoice emailed to the lead once. A card can therefore take up to about 3 minutes to move after the client pays.",
+  "points": [
+    "A payment whose amount, lead or link does not agree with the sale is parked in Finance for review and the card does not move.",
+    "The receipt email can be in Italian: the person's own language, or Italian for a new person when the lead's ad campaign is named Italian.",
+    "Only payments from the last 4 days are settled automatically; older ones stay in Finance for a person to look at.",
+    "The Stripe webhook no longer marks a Marketing sale as paid by itself."
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "title": "MyLLC Manager 2.0: the client iPhone and iPad app is built and in private testing",
+  "tag": "new",
+  "text": "The client portal now exists as a real app, MyLLC Manager 2.0, for iPhone and iPad. It has a native bottom bar and Menu, files, sign out, English and Italian, and it asks for permission to send alerts after sign-in. A build was sent to Apple's TestFlight for private testing on 10 November. It has not been submitted to Apple for review and is not in the App Store yet.",
+  "points": [
+    "The server side for the app was switched on in production on 10 November. The website works the same as before.",
+    "Lock-screen alerts say only who wrote and what kind of thing it is, never the message, a file name or an amount, and go to the same people who get the browser alert.",
+    "The plan is a private test first, then a public launch in January 2027.",
+    "It also runs on iPad."
+  ]
+}

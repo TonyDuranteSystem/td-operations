@@ -1,0 +1,9 @@
+{
+  "title": "Formation names: Reinstate a name the client rejected",
+  "tag": "new",
+  "text": "A name the client rejected, or rejected by mistake, could never be brought back. The Formation names panel now has a Reinstate button, with a confirmation, on names marked Client rejected. It reserves the name again and sends the client a fresh approval card, cancelling any outdated new-names request.",
+  "points": [
+    "Names refused by the state, or already filed, stay blocked.",
+    "Adding a name that was already used still follows the same duplicate rule as before."
+  ]
+}

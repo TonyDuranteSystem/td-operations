@@ -1,0 +1,9 @@
+{
+  "title": "TD Talk: bug and reply voice alerts, microphone asked once, deleted messages disappear",
+  "tag": "improved",
+  "text": "In #td-bug a new bug now plays the recorded voice \"New TD bug\", and a reply says \"New TD bug reply\" (or \"New reply\" in other channels). A deleted message now disappears instead of showing \"This message was deleted\". Recording a voice note is built to ask for the microphone only once, keeps the screen awake while you record, and keeps what was recorded if the phone ends the recording early.",
+  "points": [
+    "The microphone is let go after 3 minutes without recording or when the app goes to the background, then asked for again.",
+    "A blocked microphone now shows a plain message with the iPhone Settings steps."
+  ]
+}

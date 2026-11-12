@@ -1,0 +1,11 @@
+{
+  "title": "Portal Chats: the microphone now records a real voice note, for clients and staff",
+  "tag": "new",
+  "text": "In the client portal chat the microphone used to turn speech into typed text and throw the audio away. It now records a real voice note and sends it as the message, using the same recorder as TD Talk. Staff get the same in Portal Chats: the recording shows with a small player and nothing goes out until staff press Send and confirm. Voice notes have a Show text button.",
+  "points": [
+    "Clients cannot download a voice note. Staff keep the Download link in Portal Chats and on the contact chat.",
+    "A recording the phone cuts short is held, not sent. Leaving the chat while recording asks first: Send it, Throw it away or Keep.",
+    "A voice-only message reads Voice note in alerts and conversation lists, including the alert a client gets from staff.",
+    "Contracts for new offers now say voice notes instead of voice dictation. Offers already made keep their old wording."
+  ]
+}

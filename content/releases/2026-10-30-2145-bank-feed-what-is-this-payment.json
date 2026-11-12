@@ -1,0 +1,11 @@
+{
+  "title": "Bank Feed: \"What is this payment?\" asks an AI who paid and why (owner only)",
+  "tag": "new",
+  "text": "On the Match popup in Finance, Bank Feed, the owner can press What is this payment? An AI reads the CRM, both mailboxes, portal chats, the conversation log, WhatsApp and Telegram, team chat and staff notes, and looks at companies, calls and offers near the payment date, then says who paid and why. Sources are marked as found by the system or cited by the AI, and the result is saved on the payment. It only reads.",
+  "points": [
+    "If the payer is already in the CRM the popup offers to create an invoice for them, with a small Not them? line; only when nobody is found does it offer a new person plus invoice.",
+    "A person who is not in the CRM can be invoiced from the feed; duplicates by email or by the same name are refused and the existing one is named.",
+    "Optional tick: write the story on the invoice's internal note, labelled AI-written and unverified.",
+    "A payment that Stripe says was refunded or disputed is stopped before anything is created."
+  ]
+}

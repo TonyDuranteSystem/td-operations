@@ -1,0 +1,10 @@
+{
+  "title": "Marketing: Zoom recordings are copied into the CRM storage every 15 minutes",
+  "tag": "new",
+  "text": "A new check runs every 15 minutes, looks at the last 7 days of finished Zoom cloud recordings and is built to copy them into the Zoom marketing folder in Storage (Business > Zoom Calls). Rocco's login gives all of its recordings; Antonio's own login gives only meetings made by the booking link, so a client consultation never lands there. Meetings made by the booking link now record to the cloud by themselves.",
+  "points": [
+    "The folder is found by its name; if there is none, or two, nothing is saved and the run says why.",
+    "A recording over 450 MB is reported and left in Zoom.",
+    "New Test Zoom box on the Marketing Team page (admin only): makes one 15-minute test meeting, deletes it at once and checks that recordings can be read."
+  ]
+}
