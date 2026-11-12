@@ -7,5 +7,30 @@
     "Clients now see Preparation as 'Being prepared' (Italian 'In preparazione') instead of 'With Accountant', and their tax banner follows the real steps.",
     "The fax box is for single-member LLCs only (others keep the old link). Delivery is checked every 10 minutes or with Check now, and a failed fax raises one alert and moves nothing.",
     "System Health now shows the runs of the fax-check job."
+  ],
+  "stepsTitle": "How a Tax Return moves now",
+  "steps": [
+    {
+      "name": "Preparation",
+      "detail": "The prepared-return upload box moved here"
+    },
+    {
+      "name": "Sent for Signature",
+      "detail": "You send the return for e-signature from the job",
+      "flag": "new"
+    },
+    {
+      "name": "Signed",
+      "detail": "From here you can fax the signed copy to the IRS",
+      "flag": "new"
+    },
+    {
+      "name": "Fax to the IRS",
+      "detail": "Delivery is checked every 10 minutes, or with Check now"
+    },
+    {
+      "name": "TR Filed",
+      "detail": "When the fax is delivered, the receipt is saved in the company's Tax folder"
+    }
   ]
 }

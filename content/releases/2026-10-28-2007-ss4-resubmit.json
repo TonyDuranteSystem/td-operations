@@ -6,5 +6,28 @@
     "Preview the draft, then use the normal Send to Client for Signature; once it is signed the usual fax task and email follow.",
     "All the usual checks (state, signer, registered agent in the company's state, county) run before anything is archived, so a failed check changes nothing.",
     "Faxes and fax confirmation emails of the replaced SS-4 no longer count for the corrected one."
+  ],
+  "stepsTitle": "How an SS-4 is replaced",
+  "steps": [
+    {
+      "name": "Pick a reason",
+      "detail": "In the Resubmit SS-4 panel on the SS-4 Sent to IRS stage"
+    },
+    {
+      "name": "Checks run",
+      "detail": "State, signer, registered agent and county are checked before anything is archived"
+    },
+    {
+      "name": "Old SS-4 archived",
+      "detail": "Kept whole, with when and why"
+    },
+    {
+      "name": "Corrected draft made",
+      "detail": "In the same stage. Nothing is sent to the client automatically."
+    },
+    {
+      "name": "Send to Client for Signature",
+      "detail": "Preview first. Once signed, the usual fax task and email follow."
+    }
   ]
 }

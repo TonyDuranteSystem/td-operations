@@ -6,5 +6,25 @@
     "A folder is filed only after nothing in it has changed for 10 minutes and no upload for it is open.",
     "At most 10 calls per run, and only folders are moved.",
     "Each filing is written to the activity log with where the call came from: a Calendly booking or started straight from Zoom."
+  ],
+  "stepsTitle": "How a Zoom call is filed",
+  "steps": [
+    {
+      "name": "Call recorded on the Mac",
+      "detail": "Arrives as a date-named folder at the top of Business > Zoom Calls"
+    },
+    {
+      "name": "Folder settles",
+      "detail": "Nothing in it changed for 10 minutes and no upload is open"
+    },
+    {
+      "name": "Filed automatically",
+      "detail": "Every 10 minutes into TD Zoom Calls (a Marketing booking goes to TD Marketing Calls)",
+      "flag": "off"
+    },
+    {
+      "name": "Sort by date",
+      "detail": "Puts it in year and month folders"
+    }
   ]
 }

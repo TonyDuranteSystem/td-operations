@@ -5,6 +5,9 @@
 # shows the team before they refresh, and what the Releases page keeps. So a push that changes APP code must also ADD a release note
 # (content/releases/<id>.json). Tests, docs, scripts, hooks and notes alone need none.
 #
+# Every new note must also SHOW what it does (Antonio 2026-11-12): a screenshot, or "steps" (a process diagram of 2 to 6 boxes), unless it is
+# tagged behind-the-scenes (nobody can see it).
+#
 # Also keeps the notes in time order: a new note must sort AFTER the newest note already on main, otherwise a page built in between
 # would never be told about it (the panel lists notes newer than the one a page was built with). Fix = make a fresh file with
 #   node scripts/new-release-note.js <short-name>
@@ -57,6 +60,20 @@ for id in $NEW_NOTES; do
   if [ "$id" = "$NEWEST" ] || [ "$top" != "$id" ]; then
     fail "   The note \"$id\" is not newer than the newest note on main (\"$NEWEST\").
    Another change was released after you started; rename your note with a later time (the part after the date)."
+  fi
+done
+
+# Each new note must show what it does: a picture (screenshot) or a process diagram (steps), unless it is behind-the-scenes (Antonio 2026-11-12).
+# A file that is not valid JSON is left to the unit test (it names the problem); the gate only judges notes it can read.
+NOTES_DIR="${RELEASE_NOTES_DIR:-content/releases}"
+for id in $NEW_NOTES; do
+  file="$NOTES_DIR/$id.json"
+  [ -f "$file" ] || continue
+  if ! node -e "let n;try{n=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))}catch(e){process.exit(0)};const ok=!n||n.tag==='behind-the-scenes'||(typeof n.screenshot==='string'&&n.screenshot!=='')||(Array.isArray(n.steps)&&n.steps.length>=2);process.exit(ok?0:1)" "$file" 2>/dev/null; then
+    fail "   The note \"$id\" shows nothing: every release must show what it does.
+   Add a screenshot (a file in public/release-notes/, sandbox test data only) when something on screen changed,
+   or \"steps\" (2 to 6 boxes, drawn as a diagram) when it is a process or workspace.
+   A change nobody can see is tagged \"behind-the-scenes\" and needs neither."
   fi
 done
 

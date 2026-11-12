@@ -7,5 +7,28 @@
     "The IRS fax number is an editable field, pre-filled with the last one that was delivered.",
     "Multi-member LLCs and corporations keep the plain upload box.",
     "The first real 7004 fax is the first live proof, because a real fax could not be tested before release."
+  ],
+  "stepsTitle": "How the extension is filed",
+  "steps": [
+    {
+      "name": "1st Installment Paid",
+      "detail": "The extension box makes the official IRS Form 7004"
+    },
+    {
+      "name": "Fax sent",
+      "detail": "The 7004 is faxed to the IRS from the workspace"
+    },
+    {
+      "name": "Fax delivered",
+      "detail": "Checked every 10 minutes, or press Check now"
+    },
+    {
+      "name": "Extension Filed",
+      "detail": "The 7004 and the fax receipt are joined into one document the client can see"
+    },
+    {
+      "name": "Client messaged",
+      "detail": "A chat message with the new deadline, in English or Italian"
+    }
   ]
 }
