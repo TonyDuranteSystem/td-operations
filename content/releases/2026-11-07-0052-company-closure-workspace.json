@@ -7,5 +7,36 @@
     "Support is no longer emailed when the wizard arrives, the client is told nothing when the job moves, and the plain 'Start closure' to-do is gone: the job lives in the Calendar.",
     "Closing cancels the company's other open services, pending deadlines and unpaid invoices, closes its open to-dos, and sets the company to Closed with portal access off.",
     "A stale link to a cancelled or finished closure now shows a clear card (English and Italian) instead of starting a job."
+  ],
+  "stepsTitle": "How the job moves",
+  "steps": [
+    {
+      "name": "Data Collection",
+      "detail": "Client sends the closure wizard",
+      "flag": "auto"
+    },
+    {
+      "name": "State Compliance Check",
+      "detail": "The client's files are saved where their answers point"
+    },
+    {
+      "name": "State Dissolution Filing",
+      "detail": "Needs the state's confirmation uploaded",
+      "flag": "locked"
+    },
+    {
+      "name": "IRS Closure",
+      "detail": "Needs the tracking number",
+      "flag": "locked"
+    },
+    {
+      "name": "Waiting for the IRS",
+      "detail": "Daily tracking check. The client is told nothing.",
+      "flag": "new"
+    },
+    {
+      "name": "Closing",
+      "detail": "Asks first and names the company. For one of our companies it closes the whole company."
+    }
   ]
 }

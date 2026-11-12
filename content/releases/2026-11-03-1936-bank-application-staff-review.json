@@ -7,5 +7,24 @@
     "Staff are notified with \"Bank application RESUBMITTED\" when a client sends back a corrected application.",
     "On the client form the Seminole shipping address is just a heading and three lines; the client never sees where the application goes.",
     "iPhone photos are named by what is stored (.jpg); if a Submit may not have reached Gmail, staff are asked to check Sent mail first."
+  ],
+  "stepsTitle": "How a bank application goes out",
+  "steps": [
+    {
+      "name": "Client sends the application",
+      "detail": "It is no longer emailed on its own"
+    },
+    {
+      "name": "Waits for review",
+      "detail": "Calendar > Applications to review, and the Forms page. Or Send back to client with a new link."
+    },
+    {
+      "name": "Reviewed",
+      "detail": "Staff press Reviewed"
+    },
+    {
+      "name": "Submit",
+      "detail": "To the bank contact, after a confirmation box that shows what leaves and where"
+    }
   ]
 }

@@ -7,5 +7,29 @@
     "Articles that do not belong to the submission give a Try again error and nothing is saved.",
     "Filing IDs copied from a PDF with odd dashes are accepted.",
     "The flow page keeps a lasting \"no State Filing ID yet\" line until one is saved."
+  ],
+  "stepsTitle": "How the State Filing ID is saved",
+  "steps": [
+    {
+      "name": "Articles uploaded or reviewed",
+      "detail": "Formation: Filed with State window. Onboarding: review."
+    },
+    {
+      "name": "The reader finds a number",
+      "detail": "A State Filing ID card shows it"
+    },
+    {
+      "name": "View the real document",
+      "detail": "Opens in a floating window. Confirm stays locked until you have.",
+      "flag": "locked"
+    },
+    {
+      "name": "Staff confirm",
+      "detail": "Or correct it, or say the document has none"
+    },
+    {
+      "name": "Saved to the company",
+      "detail": "Only into an empty Filing ID"
+    }
   ]
 }

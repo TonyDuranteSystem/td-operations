@@ -6,5 +6,20 @@
     "One click sends one email only.",
     "An offer with no Invoice to follows the payer of part 1.",
     "A draft made for another payer is never sent from here, and steps with no job are flagged."
+  ],
+  "stepsTitle": "How a later payment-plan part is raised",
+  "steps": [
+    {
+      "name": "Part comes due",
+      "detail": "Shows on Calendar > Invoices, blinking red, with a red count on the Calendar menu"
+    },
+    {
+      "name": "One click",
+      "detail": "Raises the invoice"
+    },
+    {
+      "name": "Invoice sent",
+      "detail": "Emailed to the person who signed the offer, one email only"
+    }
   ]
 }

@@ -7,5 +7,24 @@
     "Screens now say who has the lead: With the setter, With you, With <name>.",
     "Rocco sees the setter's booking note in the call box as \"Note from the setter\".",
     "A missed call is Rocco's to follow up, with Not ready now or a note."
+  ],
+  "stepsTitle": "How a lead is handed over",
+  "steps": [
+    {
+      "name": "Setter books the free call",
+      "detail": "A 15-minute WhatsApp call, with a note for Rocco"
+    },
+    {
+      "name": "Lead is Rocco's at once",
+      "detail": "Cancelling the call sends it back"
+    },
+    {
+      "name": "Waits in Calls prenotate",
+      "detail": "30 minutes after the start it gets a red 'Call time passed' tag"
+    },
+    {
+      "name": "Rocco chooses a result",
+      "detail": "A missed call is his to follow up"
+    }
   ]
 }

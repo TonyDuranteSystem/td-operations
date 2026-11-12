@@ -11,8 +11,8 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
-  NOTE_TAGS, PANEL_NOTES_MAX, isHiddenNote, isNoteId, newestFirst, noteDayLabel, noteMoment, noteProblems, notesForPanel, parseNote, parseNotesJson,
-  type ReleaseNote,
+  NOTE_STEPS_MAX, NOTE_TAGS, PANEL_NOTES_MAX, STEP_FLAGS, hasVisual, isHiddenNote, isNoteId, newestFirst, noteDayLabel, noteMoment, noteProblems, notesForPanel, parseNote, parseNotesJson,
+  visualProblem, type ReleaseNote,
 } from "@/lib/release/release-notes"
 import { WINDOW_PAGE_ROOTS } from "@/lib/windows/window-model"
 
@@ -23,7 +23,10 @@ const { readReleaseNotes, releaseNotesEnv } = requireCjs("../../scripts/release-
   releaseNotesEnv: (dir: string) => { RELEASE_NOTES_JSON: string; NEXT_PUBLIC_NEWEST_NOTE: string }
 }
 
-const note = (id: string, over: Partial<ReleaseNote> = {}): ReleaseNote => ({ id, title: `Title ${id}`, tag: "new", text: "What it does.", points: [], screenshot: null, ...over })
+/** Releases written after this one must carry a picture or a process diagram (the rule started with the next release). */
+const VISUAL_RULE_AFTER = "2026-11-12-1249-three-dots-menu-releases"
+
+const note = (id: string, over: Partial<ReleaseNote> = {}): ReleaseNote => ({ id, title: `Title ${id}`, tag: "new", text: "What it does.", points: [], screenshot: null, steps: [], stepsTitle: null, ...over })
 
 describe("every real release note in content/releases/ is well formed", () => {
   const notes = readReleaseNotes("content/releases")
@@ -39,6 +42,14 @@ describe("every real release note in content/releases/ is well formed", () => {
     expect(new Set(ids).size).toBe(ids.length)
     expect([...ids].sort()).toEqual(ids)
   })
+  it("every release after the rule started (Antonio, 2026-11-12) shows what it does: a picture or steps, unless it is behind-the-scenes", () => {
+    const after = notes.filter(n => (n.id as string) > VISUAL_RULE_AFTER)
+    expect(after.length).toBeGreaterThan(0)
+    for (const n of after) {
+      const { id, ...rest } = n
+      expect(visualProblem(rest), String(id)).toBeNull()
+    }
+  })
   it("every picture a note names exists in public/release-notes/", () => {
     for (const n of notes) if (typeof n.screenshot === "string") expect(existsSync(join("public/release-notes", n.screenshot)), `${n.id}: ${n.screenshot}`).toBe(true)
   })
@@ -48,7 +59,7 @@ describe("noteProblems / parseNote", () => {
   const ok = { title: "Zoom calls are filed for you", tag: "new", text: "Finished calls land in the Zoom folder." }
   it("accepts a complete note and trims it", () => {
     expect(noteProblems("2026-11-11-1934-zoom", ok)).toEqual([])
-    expect(parseNote("2026-11-11-1934-zoom", { ...ok, title: "  T  ", points: [" a "], screenshot: "zoom.png" })).toEqual({ id: "2026-11-11-1934-zoom", title: "T", tag: "new", text: ok.text, points: ["a"], screenshot: "zoom.png" })
+    expect(parseNote("2026-11-11-1934-zoom", { ...ok, title: "  T  ", points: [" a "], screenshot: "zoom.png" })).toEqual({ id: "2026-11-11-1934-zoom", title: "T", tag: "new", text: ok.text, points: ["a"], screenshot: "zoom.png", steps: [], stepsTitle: null })
   })
   it("names each problem: empty title or text, unknown tag, bad id, too long, bad picture name", () => {
     expect(noteProblems("2026-11-11-1934-zoom", { ...ok, title: " " })).toContain("title is empty")
@@ -68,6 +79,47 @@ describe("noteProblems / parseNote", () => {
   it("all four tags exist and only behind-the-scenes is hidden", () => {
     expect([...NOTE_TAGS]).toEqual(["new", "improved", "fixed", "behind-the-scenes"])
     expect(NOTE_TAGS.filter(t => isHiddenNote({ tag: t }))).toEqual(["behind-the-scenes"])
+  })
+})
+
+describe("process diagram (steps) and the picture-or-diagram rule", () => {
+  const ok = { title: "Closure has a new step", tag: "new", text: "The job has a new Waiting for the IRS step." }
+  const steps = [{ name: "Data Collection", detail: "Client sends the wizard", flag: "auto" }, { name: "Closing" }]
+  it("accepts 2 to 6 steps and gives them a clean shape", () => {
+    expect(noteProblems("2026-11-13-0900-x", { ...ok, steps })).toEqual([])
+    const parsed = parseNote("2026-11-13-0900-x", { ...ok, steps: [{ name: " A ", detail: " d ", flag: "locked" }, { name: "B", flag: null }], stepsTitle: " How the job moves " })
+    expect(parsed?.steps).toEqual([{ name: "A", detail: "d", flag: "locked" }, { name: "B", detail: null, flag: null }])
+    expect(parsed?.stepsTitle).toBe("How the job moves")
+    expect(parseNote("2026-11-13-0900-x", ok)?.steps).toEqual([])
+  })
+  it("names each problem: one step, too many, no name, too long, unknown flag, bad title", () => {
+    expect(noteProblems("2026-11-13-0900-x", { ...ok, steps: [{ name: "A" }] }).join()).toContain("2 to 6")
+    expect(noteProblems("2026-11-13-0900-x", { ...ok, steps: Array.from({ length: NOTE_STEPS_MAX + 1 }, (_, i) => ({ name: `S${i}` })) }).join()).toContain("2 to 6")
+    expect(noteProblems("2026-11-13-0900-x", { ...ok, steps: [{ name: " " }, { name: "B" }] })).toContain("a step has no name")
+    expect(noteProblems("2026-11-13-0900-x", { ...ok, steps: [{ name: "x".repeat(51) }, { name: "B" }] }).join()).toContain("name is longer")
+    expect(noteProblems("2026-11-13-0900-x", { ...ok, steps: [{ name: "A", flag: "huge" }, { name: "B" }] }).join()).toContain("flag")
+    expect(noteProblems("2026-11-13-0900-x", { ...ok, steps: [{ name: "A", detail: "x".repeat(111) }, { name: "B" }] }).join()).toContain("detail")
+    expect(noteProblems("2026-11-13-0900-x", { ...ok, steps: "A then B" }).join()).toContain("steps must be a list")
+    expect(noteProblems("2026-11-13-0900-x", { ...ok, steps, stepsTitle: " " }).join()).toContain("stepsTitle")
+    expect([...STEP_FLAGS]).toEqual(["auto", "locked", "new", "off"])
+  })
+  it("an empty steps list means no diagram (and is allowed)", () => {
+    expect(noteProblems("2026-11-13-0900-x", { ...ok, steps: [] })).toEqual([])
+    expect(hasVisual(note("2026-11-13-0900-x", { steps: [] }))).toBe(false)
+  })
+  it("hasVisual: a picture or at least two steps", () => {
+    expect(hasVisual(note("2026-11-13-0900-x"))).toBe(false)
+    expect(hasVisual(note("2026-11-13-0900-x", { screenshot: "a.png" }))).toBe(true)
+    expect(hasVisual(note("2026-11-13-0900-x", { steps: [{ name: "A", detail: null, flag: null }, { name: "B", detail: null, flag: null }] }))).toBe(true)
+  })
+  it("visualProblem: behind-the-scenes needs nothing; every other release needs a picture or steps", () => {
+    expect(visualProblem({ ...ok, tag: "behind-the-scenes" })).toBeNull()
+    expect(visualProblem({ ...ok })).toContain("picture")
+    expect(visualProblem({ ...ok, screenshot: "a.png" })).toBeNull()
+    expect(visualProblem({ ...ok, steps })).toBeNull()
+    expect(visualProblem({ ...ok, steps: [{ name: "A" }] })).toContain("picture")
+    expect(visualProblem({ ...ok, screenshot: "" })).toContain("picture")
+    expect(visualProblem(null)).toBeNull()
   })
 })
 
@@ -247,5 +299,33 @@ describe("scripts/check-release-note.sh (the push gate)", () => {
   })
   it("the deliberate override lets it through", () => {
     expect(run("lib/a.ts", "", "", { ALLOW_RELEASE_NOTE_SKIP: "1" }).code).toBe(0)
+  })
+  describe("every new note must show what it does: a picture or steps (unless behind-the-scenes)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "notes-gate-"))
+    const base = { title: "T", text: "X" }
+    const put = (id: string, body: Record<string, unknown>) => writeFileSync(join(dir, `${id}.json`), JSON.stringify({ ...base, ...body }))
+    const gate = (id: string, extra: Record<string, string> = {}) => run(`lib/a.ts\ncontent/releases/${id}.json`, `content/releases/${id}.json`, "2026-11-11-1000-a", { RELEASE_NOTES_DIR: dir, ...extra })
+    it("blocks a note with no picture and no steps, and says what to add", () => {
+      put("2026-11-12-2000-bare", { tag: "new" })
+      const r = gate("2026-11-12-2000-bare")
+      expect(r.code).toBe(1)
+      expect(r.out).toContain("shows nothing")
+      expect(r.out).toContain("behind-the-scenes")
+    })
+    it("blocks a note with a single step (a diagram needs at least two)", () => {
+      put("2026-11-12-2001-one", { tag: "new", steps: [{ name: "A" }] })
+      expect(gate("2026-11-12-2001-one").code).toBe(1)
+    })
+    it("passes a note with a screenshot, with two or more steps, or tagged behind-the-scenes", () => {
+      put("2026-11-12-2002-shot", { tag: "improved", screenshot: "a.png" })
+      put("2026-11-12-2003-steps", { tag: "new", steps: [{ name: "A" }, { name: "B" }] })
+      put("2026-11-12-2004-bts", { tag: "behind-the-scenes" })
+      for (const id of ["2026-11-12-2002-shot", "2026-11-12-2003-steps", "2026-11-12-2004-bts"]) expect(gate(id).code, id).toBe(0)
+    })
+    it("leaves a file that is not valid JSON to the unit test, and the override lets a bare note through", () => {
+      writeFileSync(join(dir, "2026-11-12-2005-broken.json"), "{ not json")
+      expect(gate("2026-11-12-2005-broken").code).toBe(0)
+      expect(gate("2026-11-12-2000-bare", { ALLOW_RELEASE_NOTE_SKIP: "1" }).code).toBe(0)
+    })
   })
 })

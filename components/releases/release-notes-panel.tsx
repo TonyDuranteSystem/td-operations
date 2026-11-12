@@ -27,7 +27,7 @@ export function ReleaseNotesPanel({ notes, more, onRefresh, onClose }: { notes: 
           <button type="button" onClick={onClose} aria-label="Close" className="shrink-0 rounded p-1 hover:bg-muted"><X className="h-4 w-4" /></button>
         </div>
         <div className="space-y-3 overflow-y-auto p-4">
-          {notes.map(n => <ReleaseNoteCard key={n.id} note={n} showDay />)}
+          {notes.map(n => <ReleaseNoteCard key={n.id} note={n} showDay compact />)}
           {more > 0 && <p className="text-xs text-muted-foreground">…and {more} more older {more === 1 ? 'update' : 'updates'} — see all of them on the Releases page.</p>}
         </div>
         <div className="flex items-center justify-between gap-3 border-t px-4 py-3">

@@ -6,5 +6,21 @@
     "Undo this move has no time limit: it works while the lead is still where the system put it and nothing else has happened to it.",
     "Each automatic move now shows a \"Moved because...\" line on the lead.",
     "A call a person already answered is never overruled by a later copy of the recording."
+  ],
+  "stepsTitle": "How Call Done is decided",
+  "steps": [
+    {
+      "name": "Call recorded",
+      "detail": "The lead sits on Call Scheduled"
+    },
+    {
+      "name": "Transcript read",
+      "detail": "Two voices must each say real words, and one must not be the team or the notetaker"
+    },
+    {
+      "name": "Lead moves to Call Done",
+      "detail": "If not, the call stays open. The automatic move is switched off.",
+      "flag": "off"
+    }
   ]
 }
