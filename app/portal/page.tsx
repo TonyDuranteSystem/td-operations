@@ -44,6 +44,7 @@ import { ClosureBanner } from '@/components/portal/closure-banner'
 import { getPendingClosures } from '@/lib/portal/pending-closures'
 import { OfferBanner } from '@/components/portal/offer-banner'
 import { AnnouncementBanners, type PortalAnnouncement } from '@/components/portal/announcement-banners'
+import { easternDateString, isAnnouncementLive, type AnnouncementWindow } from '@/lib/portal/announcement-window'
 import { APP_BASE_URL } from '@/lib/config'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { parseISO, format } from 'date-fns'
@@ -948,10 +949,12 @@ export default async function PortalDashboardPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: annData } = await (supabaseAdmin as any)
       .from('portal_announcements')
-      .select('id, title, message, title_en, message_en, type, dismissible')
+      .select('id, title, message, title_en, message_en, type, dismissible, active_from, active_until')
       .eq('active', true)
       .order('created_at', { ascending: false })
-    portalAnnouncements = (annData ?? []) as PortalAnnouncement[]
+    // The start / end dates the team sets in the CRM are honoured here (they used to be ignored, so a dated announcement only left when someone switched it off).
+    const today = easternDateString(new Date())
+    portalAnnouncements = ((annData ?? []) as (PortalAnnouncement & AnnouncementWindow)[]).filter(a => isAnnouncementLive(a, today))
   } catch {
     // table doesn't exist yet — no banners shown
   }

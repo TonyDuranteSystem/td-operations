@@ -3,13 +3,17 @@ import { maskSecret } from '@/lib/portal-app/mask'
 import { addressView, initialsFor, profileAddressLines } from '@/lib/portal-app/overview-format'
 import {
   ANNOUNCEMENT_DISMISS_PREFIX,
+  BANNER_DISMISS_PREFIX,
   GUIDE_COPY,
   GUIDE_DISMISS_KEY,
   GUIDE_HREF,
   TEAM_COPY,
   TEAM_DISMISS_KEY,
   TEAM_HREF,
+  bannerItems,
+  bannerKeyFor,
   buildNewsItems,
+  isTeamAnnouncement,
   visibleNewsItems,
   type NewsAnnouncementRow,
 } from '@/lib/portal-app/news'
@@ -154,5 +158,43 @@ describe('visibleNewsItems', () => {
   it('is empty (so the round button disappears) once everything closable is closed and nothing permanent exists', () => {
     const only = buildNewsItems({ locale: 'en', canManageTeam: false, announcements: [] })
     expect(visibleNewsItems(only, new Set([GUIDE_DISMISS_KEY]))).toEqual([])
+  })
+})
+
+describe('the floating banner', () => {
+  const ann = (over: Partial<NewsAnnouncementRow> = {}): NewsAnnouncementRow => ({
+    id: 'a1', title: 'Titolo', message: 'Messaggio', title_en: 'Title', message_en: 'Message', type: 'info', dismissible: true, ...over,
+  })
+  const all = buildNewsItems({ locale: 'en', canManageTeam: true, announcements: [ann(), ann({ id: 'a2', dismissible: false })] })
+  const none = new Set<string>()
+
+  it('only a team-written announcement can pop up: never the Relay guide or the team-invite card', () => {
+    expect(all.filter(isTeamAnnouncement).map(i => i.id)).toEqual(['announcement-a1', 'announcement-a2'])
+    expect(bannerItems(all, none, none).map(i => i.id)).toEqual(['announcement-a1', 'announcement-a2'])
+    expect(bannerItems(buildNewsItems({ locale: 'en', canManageTeam: true, announcements: [] }), none, none)).toEqual([])
+  })
+
+  it('closing the banner hides it, but the announcement stays under the News button', () => {
+    const [first] = all.filter(isTeamAnnouncement)
+    const seen = new Set([bannerKeyFor(first)])
+    expect(bannerItems(all, none, seen).map(i => i.id)).toEqual(['announcement-a2'])
+    expect(visibleNewsItems(all, none).map(i => i.id)).toContain('announcement-a1')
+  })
+
+  it('an announcement the client already closed under News never pops up as a banner', () => {
+    const closed = new Set([`${ANNOUNCEMENT_DISMISS_PREFIX}a1`])
+    expect(bannerItems(all, closed, none).map(i => i.id)).toEqual(['announcement-a2'])
+  })
+
+  it('an announcement that cannot be closed still has a banner that can be closed', () => {
+    const seen = new Set([bannerKeyFor(all.find(i => i.id === 'announcement-a2') as (typeof all)[number])])
+    expect(bannerItems(all, none, seen).map(i => i.id)).toEqual(['announcement-a1'])
+  })
+
+  it('remembers the banner under its own key, so it can never clash with the News "closed" key', () => {
+    const key = bannerKeyFor(all.filter(isTeamAnnouncement)[0])
+    expect(key).toBe(`${BANNER_DISMISS_PREFIX}announcement-a1`)
+    expect(key).not.toBe(`${ANNOUNCEMENT_DISMISS_PREFIX}a1`)
+    expect(key.startsWith(BANNER_DISMISS_PREFIX)).toBe(true)
   })
 })

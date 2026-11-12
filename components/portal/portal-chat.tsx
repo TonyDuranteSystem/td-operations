@@ -1442,12 +1442,14 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       </div>
       {/* Jump to latest — floating pill, bottom-center of the messages area.
           Inverted styling vs the "Older messages" pill. Shows when scrolled
-          >200px from the bottom, smooth-scrolls to newest, hides at bottom. */}
+          >200px from the bottom, smooth-scrolls to newest, hides at bottom.
+          The position classes sit on the FastTooltip wrapper (which is `relative inline-flex`): put on the button inside, they were placed
+          against that near-empty wrapper at the left edge and the pill hung half off the screen (found live 2026-11-12). */}
       {showJumpToLatest && (
-        <FastTooltip label={t('portalChat.jumpToLatest')}>
+        <FastTooltip label={t('portalChat.jumpToLatest')} className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10">
           <button
             onClick={jumpToLatest}
-            className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-zinc-800 rounded-full shadow-lg hover:bg-zinc-700 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-zinc-800 rounded-full shadow-lg hover:bg-zinc-700 transition-colors"
             aria-label={t('portalChat.jumpToLatest')}
           >
             <ChevronDown className="h-3 w-3" />
