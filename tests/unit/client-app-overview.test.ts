@@ -260,4 +260,30 @@ describe('wiring (source guards)', () => {
     // the website's banner builds the key as td-portal-ann- + the announcement id (written with a plain join so the lint rule about "${" in strings stays quiet)
     expect(src('components/portal/announcement-banners.tsx')).toContain(['`td-portal-ann-$', '{ann.id}`'].join(''))
   })
+  it('the floating banner is drawn by the News button into the page body, hidden while the sheet is open, and remembers itself under its own key', () => {
+    const btn = src('components/portal/app-overview/news-button.tsx')
+    expect(btn).toContain('AppNewsBanner')
+    expect(btn).toContain('banner.length > 0 && !open')
+    expect(btn).toContain('bannerKeyFor')
+    expect(src('components/portal/app-overview/news-banner.tsx')).toContain('createPortal')
+    expect(src('components/portal/app-overview/news-banner.tsx')).toContain('app-news-banner-close')
+  })
+
+  it('the home page honours the announcements\' start and end dates, for the website and the app alike', () => {
+    const page = src('app/portal/page.tsx')
+    expect(page).toContain('active_from, active_until')
+    expect(page).toContain('isAnnouncementLive(a, today)')
+    expect(page).toContain('easternDateString(new Date())')
+  })
+
+  it('the "Latest" pill in the chat is positioned by the tooltip wrapper, not by the button inside it (the button hung off the left edge)', () => {
+    const chat = src('components/portal/portal-chat.tsx')
+    const at = chat.indexOf("<FastTooltip label={t('portalChat.jumpToLatest')}")
+    expect(at).toBeGreaterThan(0)
+    const tag = chat.slice(at, chat.indexOf('>', at + 10) + 1)
+    expect(tag).toContain('absolute bottom-3 left-1/2 -translate-x-1/2')
+    const button = chat.slice(chat.indexOf('<button', at), chat.indexOf('>', chat.indexOf('<button', at)) + 1)
+    expect(button).not.toContain('absolute')
+    expect(button).not.toContain('left-1/2')
+  })
 })

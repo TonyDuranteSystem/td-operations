@@ -4,12 +4,14 @@
 // Every announcement (Relay guide, team-invite, the ones the team writes in the CRM) lives behind this one button instead of being a big
 // card at the top of the screen. A red number says how many are still open on this phone; tapping it opens them in a sheet. When every one
 // is closed the button disappears. "Closed" is remembered on the phone (the same keys the website's banners use).
+// It also owns the floating banner: a team-written announcement the client has not been shown yet pops up above the bottom bar (see news.ts).
 import { useCallback, useEffect, useState } from 'react'
 import { Globe, Megaphone, Users, type LucideIcon } from 'lucide-react'
 import { BottomSheet } from '@/components/app-mode/bottom-sheet'
 import { AppAnnouncementCard } from '@/components/portal/app-announcement-card'
 import { useLocale } from '@/lib/portal/use-locale'
-import { visibleNewsItems, type NewsIcon, type NewsItem } from '@/lib/portal-app/news'
+import { bannerItems, bannerKeyFor, isTeamAnnouncement, visibleNewsItems, type NewsIcon, type NewsItem } from '@/lib/portal-app/news'
+import { AppNewsBanner } from './news-banner'
 
 const ICONS: Record<NewsIcon, LucideIcon> = { globe: Globe, users: Users, megaphone: Megaphone }
 
@@ -26,6 +28,20 @@ function readClosed(items: NewsItem[]): Set<string> {
   return closed
 }
 
+/** Which announcements' banners this phone has already shown and closed. */
+function readBannerSeen(items: NewsItem[]): Set<string> {
+  const seen = new Set<string>()
+  for (const item of items) {
+    if (!isTeamAnnouncement(item)) continue
+    try {
+      if (localStorage.getItem(bannerKeyFor(item))) seen.add(bannerKeyFor(item))
+    } catch {
+      // storage unavailable: the banner shows (it is closed for this visit only)
+    }
+  }
+  return seen
+}
+
 function remember(key: string) {
   try {
     localStorage.setItem(key, '1')
@@ -38,10 +54,12 @@ export function AppNewsButton({ items }: { items: NewsItem[] }) {
   const { t } = useLocale()
   // null until this phone's storage has been read, so nothing flashes in and out.
   const [closed, setClosed] = useState<Set<string> | null>(null)
+  const [bannerSeen, setBannerSeen] = useState<Set<string> | null>(null)
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
     setClosed(readClosed(items))
+    setBannerSeen(readBannerSeen(items))
   }, [items])
 
   const close = useCallback((key: string) => {
@@ -50,6 +68,21 @@ export function AppNewsButton({ items }: { items: NewsItem[] }) {
   }, [])
 
   const visible = closed ? visibleNewsItems(items, closed) : []
+  const banner = closed && bannerSeen ? bannerItems(items, closed, bannerSeen) : []
+
+  // The banner is gone for good once it was tapped or closed (remembered per announcement), and it never sits on top of the open sheet.
+  const hideBanner = () => {
+    for (const i of banner) remember(bannerKeyFor(i))
+    setBannerSeen(prev => {
+      const next = new Set(prev ?? [])
+      for (const i of banner) next.add(bannerKeyFor(i))
+      return next
+    })
+  }
+  const openFromBanner = () => {
+    hideBanner()
+    setOpen(true)
+  }
   if (visible.length === 0) return null
 
   const closable = visible.filter(i => i.dismissKey !== null)
@@ -100,6 +133,15 @@ export function AppNewsButton({ items }: { items: NewsItem[] }) {
           )}
         </div>
       </BottomSheet>
+      {banner.length > 0 && !open && (
+        <AppNewsBanner
+          title={banner.length === 1 ? banner[0].title : t('app.overview.bannerMany').replace('{n}', String(banner.length))}
+          hint={t('app.overview.bannerTap')}
+          closeLabel={t('app.overview.close')}
+          onOpen={openFromBanner}
+          onDismiss={hideBanner}
+        />
+      )}
     </>
   )
 }
