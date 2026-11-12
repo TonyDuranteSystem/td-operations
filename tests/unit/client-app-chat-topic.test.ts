@@ -128,8 +128,38 @@ describe('wiring (source guards)', () => {
 
   it('the website\'s pill row stays and is only hidden in the app; the Topic button draws only in the app', () => {
     expect(chat).toContain('<div className="app-hide px-3 pt-2 pb-1 border-b border-zinc-100 flex items-center gap-1.5 overflow-x-auto">')
-    expect(chat).toMatch(/\{appMode && \(\s*<div[^>]*data-testid="app-chat-header"/)
+    // 12 Nov 2026 (Antonio's phone test): the Topic button now sits in the app's TOP ROW, right after the screen's name, by way of a spot the app frame
+    // draws; the chat's own header row is only the fallback when that spot never appears, so the button can never be lost.
+    expect(chat).toMatch(/\{appMode && slotMissing && \(\s*<div[^>]*data-testid="app-chat-header"/)
+    expect(chat).toMatch(/\{appMode && frameSlot && createPortal\(\s*<>\s*<AppTopicButton /)
     expect(chat).toContain('chooseOpeningTopic({ serverUnread, messages, newestAnswerRule: appMode })')
+  })
+
+  it('the top row draws the spot on the Chat screens only, with the id the chat looks for', () => {
+    const frame = readFileSync(join(process.cwd(), 'components/portal/client-app-frame.tsx'), 'utf8')
+    expect(frame).toContain('{frameHasChatSlot(pathname) && <div id={APP_FRAME_SLOT_ID}')
+    expect(chat).toContain('document.getElementById(APP_FRAME_SLOT_ID)')
+  })
+
+  it('in the app a message has no icons beside it: a tap opens one action row, and the add-reaction smiley waits for the tap; the website keeps its icons', () => {
+    expect(chat).toContain('{isOwn && !appMode && (')
+    expect(chat).toContain('{!isOwn && !appMode && (')
+    expect(chat).toContain('tapOpensActions(e.target as Element, window.getSelection()?.toString())')
+    expect(chat).toContain('hideAdd={appMode && actionsFor !== msg.id}')
+    expect(chat).toContain('data-testid="app-message-actions"')
+  })
+
+  it('the Chat page is exactly the screen minus the 52 px top row in the app, and carries the marker that hides the privacy box', () => {
+    expect(page).toContain("data-app-screen={appMode ? 'chat' : undefined}")
+    expect(page).toContain('h-[calc(100dvh-52px)]')
+    // the website's size is untouched
+    expect(page).toContain('h-[calc(100dvh-3.5rem)] lg:h-[calc(100dvh-6rem)]')
+  })
+
+  it('the privacy box is slimmed in the app and hidden on the Chat screen, all behind the app marker', () => {
+    const css = readFileSync(join(process.cwd(), 'app/globals.css'), 'utf8')
+    expect(css).toContain('[data-app-mode="true"] body .iub__us-widget__wrapper')
+    expect(css).toContain('[data-app-mode="true"]:has([data-app-screen="chat"]) body .iub__us-widget { display: none !important; }')
   })
 
   it('the page drops its heading, the team line and the Journey Log tab only in the app', () => {

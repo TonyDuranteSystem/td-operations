@@ -90,7 +90,14 @@ export default async function PortalChatPage({
   const activeView = view === 'log' && !isTeammate && !appMode ? 'log' : 'chat'
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto h-[calc(100dvh-3.5rem)] lg:h-[calc(100dvh-6rem)] flex flex-col overflow-hidden">
+    <div
+      // Inside the app the page is exactly "the screen minus the 52 px top row" with a slim edge, and the website's top-bar spacer / padding are gone
+      // (they left a blank strip and squeezed the messages). The marker lets the stylesheet hide the privacy box on this screen only.
+      data-app-screen={appMode ? 'chat' : undefined}
+      className={appMode
+        ? 'px-2 pb-2 max-w-4xl mx-auto h-[calc(100dvh-52px)] flex flex-col overflow-hidden'
+        : 'p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto h-[calc(100dvh-3.5rem)] lg:h-[calc(100dvh-6rem)] flex flex-col overflow-hidden'}
+    >
       {!appMode && (
         <div className="mb-3 sm:mb-4">
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('chat.title', locale)}</h1>
