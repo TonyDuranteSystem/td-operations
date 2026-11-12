@@ -14,6 +14,10 @@ import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
 import { PortalFlowStatusSection } from '@/components/portal/flow-status-section'
 import { ActionItems } from '@/components/portal/action-items'
 import { PersonalInfoCards } from '@/components/portal/personal-info-cards'
+import { AppCompanyHero } from '@/components/portal/app-overview/company-hero'
+import { AppAddressCards, type AppAddressItem } from '@/components/portal/app-overview/address-cards'
+import { buildNewsItems } from '@/lib/portal-app/news'
+import { addressView } from '@/lib/portal-app/overview-format'
 import { getPersonalInfo } from '@/lib/portal/personal-info'
 import { Building2, Shield, MapPin, Calendar, FileText, Mail, Phone, User, ChevronRight, ListChecks, ShieldCheck, Package } from 'lucide-react'
 import Link from 'next/link'
@@ -139,10 +143,16 @@ export default async function PortalDashboardPage() {
   // contact). On every home-page branch below: the company-client page places them inside its own card grid,
   // every other branch renders `personalCards` under its dashboard.
   const personalInfo = await getPersonalInfo(contactId)
+  // Inside the client iPhone app the Overview is drawn for a phone (dev job 056a70d0): the company card, one round News button instead of the
+  // announcement cards, a profile header, an Identity & Tax card that is always there, and the four addresses as cards. Everything below that
+  // reads `inClientApp` is the app's own drawing; the website's drawing is exactly what it was. The "What's New" card tells people to install
+  // the portal as an app, turn on push and use the pin and unread icons: all wrong inside the app (it IS the app, its alerts are the app's own,
+  // and the chat has no such icons), so the app never draws it either.
+  const inClientApp = await getClientAppModeActive()
   const personalCards = personalInfo ? (
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pt-0 sm:pt-0 lg:pt-0">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <PersonalInfoCards data={personalInfo} locale={locale} translations={translations} />
+        <PersonalInfoCards data={personalInfo} locale={locale} translations={translations} appMode={inClientApp} />
       </div>
     </div>
   ) : null
@@ -914,9 +924,6 @@ export default async function PortalDashboardPage() {
   // Inside the client iPhone app with its Pay switch OFF the "View Offer" banner is not drawn: it links to the offer page, which signs the agreement and
   // then takes the card payment itself, so the switch must cover this door too (bug hunt 2026-11-10, finding 2). The website always shows it.
   const offerHiddenInApp = pendingOffer ? (await getClientAppModeActive()) && !(await isClientAppPayEnabled()) : false
-  // The "What's New" card tells people to install the portal as an app, turn on push and use the pin and unread icons: all wrong inside the
-  // client iPhone app (it IS the app, its alerts are the app's own, and the chat has no such icons), so the app never draws it.
-  const inClientApp = await getClientAppModeActive()
 
   // Service Status — client-facing flow progress (Tax Return / Annual Report /
   // RA Renewal / CMRA) driven by active service_deliveries + per-stage
@@ -958,16 +965,48 @@ export default async function PortalDashboardPage() {
   }
   const isMultiMember = account.entity_type?.toLowerCase().includes('multi') || members.length > 1
 
+  // The four addresses for the client iPhone app's cards (dev job 056a70d0). Same four, same wording and same "structured or old free-text line"
+  // choice as the website's single box below (addressView mirrors AddressInfoRow); only the drawing differs.
+  const appAddressLabels = {
+    address: t('addresses.labelAddress', locale, translations),
+    suite: t('addresses.labelSuite', locale, translations),
+    city: t('addresses.labelCity', locale, translations),
+    state: t('addresses.labelState', locale, translations),
+    zip: t('addresses.labelZip', locale, translations),
+  }
+  const appAddressEmpty = t('dashboard.addressNotOnFile', locale, translations)
+  const appAddressItems: AppAddressItem[] = inClientApp
+    ? [
+        { key: 'registered-agent', icon: 'shield', tone: 'green', label: t('dashboard.raAddress', locale, translations), description: t('addresses.raSubtitleDefault', locale, translations), ...addressView(account.registered_agent_address_parts, account.registered_agent_address, appAddressLabels), emptyText: appAddressEmpty },
+        { key: 'principal-office', icon: 'file', tone: 'amber', label: t('dashboard.principalOffice', locale, translations), description: t(account.suite_number ? 'addresses.principalSubtitleV2' : 'addresses.principalSubtitle', locale, translations), ...addressView(account.legal_address_parts, account.legal_address, appAddressLabels), emptyText: appAddressEmpty },
+        { key: 'mailing', icon: 'mail', tone: 'blue', label: t('dashboard.mailingAddress', locale, translations), description: t('addresses.mailingSubtitle', locale, translations), ...addressView(account.mailing_card_parts, account.mailing_card_address, appAddressLabels), emptyText: appAddressEmpty },
+        { key: 'shipping', icon: 'box', tone: 'rose', label: t('dashboard.shippingAddress', locale, translations), description: t('addresses.shippingSubtitle', locale, translations), ...addressView(account.shipping_address_parts, account.shipping_address, appAddressLabels), emptyText: appAddressEmpty },
+      ]
+    : []
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{account.company_name}</h1>
-        <p className="text-zinc-500 text-xs sm:text-sm mt-1">
-          {account.entity_type && `${account.entity_type} \u2022 `}
-          {account.state_of_formation && `${account.state_of_formation}`}
-        </p>
-      </div>
+      {/* Header. Client iPhone app: the company card (name, type, state, EIN, formation, filing ID) with the round News button in its corner replaces
+          the heading and the Company Info box below (dev job 056a70d0). The website keeps its heading. */}
+      {inClientApp ? (
+        <AppCompanyHero
+          name={account.company_name}
+          entityType={account.entity_type ?? null}
+          state={account.state_of_formation ?? null}
+          ein={account.ein_number ? formatEin(account.ein_number) : null}
+          formed={formatDate(account.formation_date)}
+          filingId={account.filing_id ?? null}
+          news={buildNewsItems({ locale, canManageTeam, announcements: portalAnnouncements })}
+        />
+      ) : (
+        <div>
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{account.company_name}</h1>
+          <p className="text-zinc-500 text-xs sm:text-sm mt-1">
+            {account.entity_type && `${account.entity_type} \u2022 `}
+            {account.state_of_formation && `${account.state_of_formation}`}
+          </p>
+        </div>
+      )}
 
       {/* Company Closure form still owed — named card, not a generic sidebar item */}
       {pendingClosures.map((closure, i) => (
@@ -1006,14 +1045,20 @@ export default async function PortalDashboardPage() {
         <RenewalBanner token={renewalOffer.token} locale={locale} />
       )}
 
-      {/* Relay Wire guide announcement — dismissible per device via localStorage */}
-      <GuideAnnouncementBanner locale={locale} />
+      {/* The three kinds of announcement. The website shows them as cards at the top; the client iPhone app puts all of them behind the round News
+          button on the company card above, so none is drawn here (dev job 056a70d0). */}
+      {!inClientApp && (
+        <>
+          {/* Relay Wire guide announcement — dismissible per device via localStorage */}
+          <GuideAnnouncementBanner locale={locale} />
 
-      {/* Team Access feature announcement — account-admins only, dismissible per device */}
-      {canManageTeam && <TeamAccessAnnouncementBanner locale={locale} />}
+          {/* Team Access feature announcement — account-admins only, dismissible per device */}
+          {canManageTeam && <TeamAccessAnnouncementBanner locale={locale} />}
 
-      {/* DB-backed portal announcements — managed from CRM Config → Announcements */}
-      <AnnouncementBanners announcements={portalAnnouncements} locale={locale} />
+          {/* DB-backed portal announcements — managed from CRM Config → Announcements */}
+          <AnnouncementBanners announcements={portalAnnouncements} locale={locale} />
+        </>
+      )}
 
       {/* Profile completion banner — shown for standalone tax-return clients
           with missing contact fields (phone, address, DOB, citizenship). The
@@ -1138,8 +1183,9 @@ export default async function PortalDashboardPage() {
       {/* Action Items Widget */}
       <ActionItems data={actionItems} />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Company Info Card */}
+      <div className={inClientApp ? 'grid grid-cols-1 gap-4' : 'grid grid-cols-1 lg:grid-cols-2 gap-4'}>
+        {/* Company Info Card (the app's company card at the top of the page already shows all of this) */}
+        {!inClientApp && (
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
           <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('dashboard.companyInfo', locale, translations)}</h2>
           <div className="space-y-2.5 text-sm">
@@ -1150,67 +1196,78 @@ export default async function PortalDashboardPage() {
             {account.filing_id && <InfoRow icon={FileText} label={t('profile.filingId', locale, translations)} value={account.filing_id} />}
           </div>
         </div>
+        )}
 
         {/* The person's own details (Antonio, 2026-11-05): Informazioni Personali + the passport/ITIN card. The
             personal card stands beside Info Azienda; the identity card tucks in under Info Azienda. */}
-        {personalInfo && <PersonalInfoCards data={personalInfo} locale={locale} translations={translations} rowSpan />}
+        {personalInfo && <PersonalInfoCards data={personalInfo} locale={locale} translations={translations} rowSpan appMode={inClientApp} />}
+
+        {/* Client iPhone app: the same four addresses as four cards (dev job 056a70d0). */}
+        {inClientApp && (
+          <AppAddressCards
+            title={t('addresses.title', locale, translations)}
+            items={appAddressItems}
+          />
+        )}
 
         {/* Your Addresses Card — always shows all four, full width so the
             descriptions have room to breathe (Antonio, dev job 254834cc,
             2026-09-17: descriptions must stay full-length, not shortened;
             every account shows all four, never silently hiding one). */}
-        <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3 lg:col-span-2">
-          <div>
-            <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('addresses.title', locale, translations)}</h2>
-            <p className="text-xs text-zinc-600 mt-0.5">{t('addresses.subtitle', locale, translations)}</p>
+        {!inClientApp && (
+          <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3 lg:col-span-2">
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('addresses.title', locale, translations)}</h2>
+              <p className="text-xs text-zinc-600 mt-0.5">{t('addresses.subtitle', locale, translations)}</p>
+            </div>
+            <div className="space-y-4">
+              <AddressInfoRow
+                icon={ShieldCheck}
+                accent="emerald"
+                label={t('dashboard.raAddress', locale, translations)}
+                description={t('addresses.raSubtitleDefault', locale, translations)}
+                parts={account.registered_agent_address_parts}
+                legacyValue={account.registered_agent_address}
+                emptyText={t('dashboard.addressNotOnFile', locale, translations)}
+                locale={locale}
+                translations={translations}
+              />
+              <AddressInfoRow
+                icon={FileText}
+                accent="amber"
+                label={t('dashboard.principalOffice', locale, translations)}
+                description={t(account.suite_number ? 'addresses.principalSubtitleV2' : 'addresses.principalSubtitle', locale, translations)}
+                parts={account.legal_address_parts}
+                legacyValue={account.legal_address}
+                emptyText={t('dashboard.addressNotOnFile', locale, translations)}
+                locale={locale}
+                translations={translations}
+              />
+              <AddressInfoRow
+                icon={Mail}
+                accent="blue"
+                label={t('dashboard.mailingAddress', locale, translations)}
+                description={t('addresses.mailingSubtitle', locale, translations)}
+                parts={account.mailing_card_parts}
+                legacyValue={account.mailing_card_address}
+                emptyText={t('dashboard.addressNotOnFile', locale, translations)}
+                locale={locale}
+                translations={translations}
+              />
+              <AddressInfoRow
+                icon={Package}
+                accent="rose"
+                label={t('dashboard.shippingAddress', locale, translations)}
+                description={t('addresses.shippingSubtitle', locale, translations)}
+                parts={account.shipping_address_parts}
+                legacyValue={account.shipping_address}
+                emptyText={t('dashboard.addressNotOnFile', locale, translations)}
+                locale={locale}
+                translations={translations}
+              />
+            </div>
           </div>
-          <div className="space-y-4">
-            <AddressInfoRow
-              icon={ShieldCheck}
-              accent="emerald"
-              label={t('dashboard.raAddress', locale, translations)}
-              description={t('addresses.raSubtitleDefault', locale, translations)}
-              parts={account.registered_agent_address_parts}
-              legacyValue={account.registered_agent_address}
-              emptyText={t('dashboard.addressNotOnFile', locale, translations)}
-              locale={locale}
-              translations={translations}
-            />
-            <AddressInfoRow
-              icon={FileText}
-              accent="amber"
-              label={t('dashboard.principalOffice', locale, translations)}
-              description={t(account.suite_number ? 'addresses.principalSubtitleV2' : 'addresses.principalSubtitle', locale, translations)}
-              parts={account.legal_address_parts}
-              legacyValue={account.legal_address}
-              emptyText={t('dashboard.addressNotOnFile', locale, translations)}
-              locale={locale}
-              translations={translations}
-            />
-            <AddressInfoRow
-              icon={Mail}
-              accent="blue"
-              label={t('dashboard.mailingAddress', locale, translations)}
-              description={t('addresses.mailingSubtitle', locale, translations)}
-              parts={account.mailing_card_parts}
-              legacyValue={account.mailing_card_address}
-              emptyText={t('dashboard.addressNotOnFile', locale, translations)}
-              locale={locale}
-              translations={translations}
-            />
-            <AddressInfoRow
-              icon={Package}
-              accent="rose"
-              label={t('dashboard.shippingAddress', locale, translations)}
-              description={t('addresses.shippingSubtitle', locale, translations)}
-              parts={account.shipping_address_parts}
-              legacyValue={account.shipping_address}
-              emptyText={t('dashboard.addressNotOnFile', locale, translations)}
-              locale={locale}
-              translations={translations}
-            />
-          </div>
-        </div>
+        )}
 
         {/* Members Card — shown for multi-member LLCs or when multiple contacts */}
         {isMultiMember && members.length > 0 && (

@@ -3,33 +3,16 @@
 import { useEffect, useState } from 'react'
 import { Globe, ArrowRight, X } from 'lucide-react'
 import Link from 'next/link'
-import { useAppMode } from '@/lib/app-mode/app-mode-context'
-import { AppAnnouncementCard } from '@/components/portal/app-announcement-card'
+import { GUIDE_COPY, GUIDE_DISMISS_KEY, GUIDE_HREF } from '@/lib/portal-app/news'
 
-const DISMISS_KEY = 'td-guide-relay-docs-v1'
-
-const COPY = {
-  en: {
-    title: 'Relay — International Payments: Document Upload Guide',
-    desc: 'See exactly which documents to upload to unlock international wire transfers on your Relay account.',
-    cta: 'View Guide',
-    dismiss: 'Dismiss',
-  },
-  it: {
-    title: 'Relay — International Payments: Document Upload Guide',
-    desc: 'See exactly which documents to upload to unlock international wire transfers on your Relay account.',
-    cta: 'View Guide',
-    dismiss: 'Dismiss',
-  },
-}
+// The words and the "closed" key live in lib/portal-app/news.ts: the client iPhone app shows this same announcement inside its News sheet.
 
 export function GuideAnnouncementBanner({ locale }: { locale: 'en' | 'it' }) {
-  const appMode = useAppMode()
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
     try {
-      if (!localStorage.getItem(DISMISS_KEY)) setVisible(true)
+      if (!localStorage.getItem(GUIDE_DISMISS_KEY)) setVisible(true)
     } catch {
       // localStorage unavailable — skip banner
     }
@@ -37,7 +20,7 @@ export function GuideAnnouncementBanner({ locale }: { locale: 'en' | 'it' }) {
 
   const handleDismiss = () => {
     try {
-      localStorage.setItem(DISMISS_KEY, '1')
+      localStorage.setItem(GUIDE_DISMISS_KEY, '1')
     } catch {
       // no-op
     }
@@ -46,12 +29,7 @@ export function GuideAnnouncementBanner({ locale }: { locale: 'en' | 'it' }) {
 
   if (!visible) return null
 
-  const c = COPY[locale] ?? COPY.en
-
-  // Inside the client iPhone app the words get the whole width (stacked card); the website's row is unchanged.
-  if (appMode) {
-    return <AppAnnouncementCard tone="blue" icon={Globe} title={c.title} desc={c.desc} cta={c.cta} href="/portal/guide/relay-docs" dismissLabel={c.dismiss} onDismiss={handleDismiss} />
-  }
+  const c = GUIDE_COPY[locale] ?? GUIDE_COPY.en
 
   return (
     <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
@@ -63,7 +41,7 @@ export function GuideAnnouncementBanner({ locale }: { locale: 'en' | 'it' }) {
         <p className="text-xs text-blue-700 mt-0.5">{c.desc}</p>
       </div>
       <Link
-        href="/portal/guide/relay-docs"
+        href={GUIDE_HREF}
         onClick={handleDismiss}
         className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors shrink-0"
       >

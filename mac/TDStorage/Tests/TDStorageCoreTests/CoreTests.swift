@@ -746,3 +746,60 @@ final class PushPlanTests: XCTestCase {
     }
     func testTheWaitIsWithinWhatTheCRMAllows() { XCTAssertEqual(PushPlan.waitSeconds, 20) }
 }
+
+final class ViaRegistryTests: XCTestCase {
+    private func fresh() -> ViaRegistry {
+        let d = UserDefaults(suiteName: "td-via-\(UUID().uuidString)")!
+        return ViaRegistry(defaults: d, key: "k")
+    }
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testTheRoutesShownForAStorageAreRemembered() {
+        let r = fresh()
+        r.record(link: "co1:ct1:person9", now: t0)
+        r.record(link: "co2:ct2:person9", now: t0)
+        r.record(link: "co1:ct1:person7", now: t0)
+        XCTAssertEqual(r.links(for: "person9", now: t0), ["co1:ct1:person9", "co2:ct2:person9"])
+        XCTAssertEqual(r.links(for: "person7", now: t0), ["co1:ct1:person7"])
+        XCTAssertEqual(r.links(for: "nobody", now: t0), [])
+    }
+
+    func testAPersonWithNoStorageOrAMalformedLinkIsNotKept() {
+        let r = fresh()
+        r.record(link: "co1:ct1:c-contact5", now: t0)
+        r.record(link: "co1::person9", now: t0)
+        r.record(link: "garbage", now: t0)
+        XCTAssertEqual(r.count, 0)
+    }
+
+    func testARouteNotSeenFor90DaysIsForgotten() {
+        let r = fresh()
+        r.record(link: "co1:ct1:person9", now: t0)
+        XCTAssertEqual(r.links(for: "person9", now: t0.addingTimeInterval(89 * 86_400)).count, 1)
+        XCTAssertEqual(r.links(for: "person9", now: t0.addingTimeInterval(91 * 86_400)).count, 0)
+    }
+
+    func testSeeingARouteAgainKeepsItAlive() {
+        let r = fresh()
+        r.record(link: "co1:ct1:person9", now: t0)
+        r.record(link: "co1:ct1:person9", now: t0.addingTimeInterval(80 * 86_400))
+        XCTAssertEqual(r.links(for: "person9", now: t0.addingTimeInterval(150 * 86_400)).count, 1)
+    }
+
+    func testTheListNeverGrowsPastItsCapAndDropsTheOldest() {
+        let r = fresh()
+        for i in 0..<(ViaRegistry.maxLinks + 5) { r.record(link: "co:ct:p\(i)", now: t0.addingTimeInterval(Double(i) * 60)) }
+        XCTAssertEqual(r.count, ViaRegistry.maxLinks)
+        XCTAssertEqual(r.links(for: "p0", now: t0.addingTimeInterval(Double(ViaRegistry.maxLinks) * 60)).count, 0)
+        XCTAssertEqual(r.links(for: "p\(ViaRegistry.maxLinks + 4)", now: t0.addingTimeInterval(Double(ViaRegistry.maxLinks) * 60)).count, 1)
+    }
+
+    func testTheRouteMatchesTheIdFinderWasGiven() {
+        // the id of a file shown through a route is exactly "v:<link>|f:<owner>:<file>", which resolves back to the plain file
+        let link = "co1:ct1:person9"
+        let shown = ItemID.file(owner: "person9", file: "fA").shown(via: link)
+        XCTAssertEqual(shown.raw, "v:co1:ct1:person9|f:person9:fA")
+        XCTAssertEqual(shown.underlying, .file(owner: "person9", file: "fA"))
+        XCTAssertEqual(ViaRegistry.target(of: link), "person9")
+    }
+}
