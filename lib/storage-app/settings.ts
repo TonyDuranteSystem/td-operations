@@ -8,7 +8,7 @@
  * Example value:
  *   { "clientSaves": { "owners": ["<store owner id | account id | contact id>", …] | "all", "ownerKinds": ["company","person"], "folderKinds": ["custom","correspondence"] },
  *     "keepSecondsSensitive": 120, "keepSecondsNormal": 900, "maxSaveMB": 2048, "readLimitMB": 2048, "writeLimitMB": 5120,
- *     "leaseHours": 24, "maxMacsPerLogin": 5, "resyncMinutes": 10, "updateCheckMinutes": 60, "updateHintSeconds": 60, "requireSecondFactor": true, "sensitiveTypes": ["passport", …] }
+ *     "leaseHours": 87600, "maxMacsPerLogin": 10, "resyncMinutes": 10, "updateCheckMinutes": 60, "updateHintSeconds": 60, "requireSecondFactor": true, "sensitiveTypes": ["passport", …] }
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { LEASE_MS, MAX_ACTIVE_DEVICES_PER_USER } from "./tokens"
@@ -85,7 +85,7 @@ export function parseSettings(raw: unknown, env: Record<string, string | undefin
     maxSaveMB: num(r.maxSaveMB, 1, ABSOLUTE_MAX_SAVE_MB, d.maxSaveMB),
     readLimitMB: num(r.readLimitMB, 10, 1_000_000, d.readLimitMB),
     writeLimitMB: num(r.writeLimitMB, 10, 1_000_000, d.writeLimitMB),
-    leaseHours: num(r.leaseHours, 1, 720, d.leaseHours),
+    leaseHours: num(r.leaseHours, 1, 87_600, d.leaseHours),
     maxMacsPerLogin: Math.round(num(r.maxMacsPerLogin, 1, 20, d.maxMacsPerLogin)),
     resyncMinutes: num(r.resyncMinutes, 1, 1440, d.resyncMinutes),
     pushWaitSeconds: num(r.pushWaitSeconds, 0, PUSH_WAIT_MAX_SECONDS, d.pushWaitSeconds),   // how long a Mac's "tell me when something changes" question may stay open (0 = off: the Mac falls back to asking once a minute)

@@ -1,0 +1,15 @@
+{
+  "title": "TD Storage on the Mac no longer signs itself out after a day",
+  "tag": "improved",
+  "text": "Until now a Mac that had not reached the CRM for 24 hours was signed out and its TD Storage folder was removed. That limit is gone: the app stays signed in until someone signs that Mac out from the Macs page. Each login can now have up to 10 Macs instead of 5. Nobody needs to reinstall: Macs already installed pick the new rule up by themselves.",
+  "points": [
+    "Signing a Mac out from the Macs signed in page still cuts it off at once",
+    "Keep FileVault on for any Mac that holds the files",
+    "The time limit can still be set again from the settings if it is ever needed"
+  ],
+  "steps": [
+    { "name": "Mac stays closed or offline for days", "detail": "Before: signed out after 24 hours. Now: nothing happens", "flag": "new" },
+    { "name": "Mac opens again", "detail": "It reconnects and the TD Storage folder is still there", "flag": "auto" },
+    { "name": "Lost or stolen Mac", "detail": "Sign it out from the Macs signed in page", "flag": "locked" }
+  ]
+}
