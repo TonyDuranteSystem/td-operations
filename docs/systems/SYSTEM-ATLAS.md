@@ -81,7 +81,7 @@ This is the single map of the whole system: every feature, where it lives, the r
 
 ## Appendix A — MCP tools
 <!-- GENERATED:mcp-tools -->
-_Regenerated 2026-11-11. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
+_Regenerated 2026-11-12. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
 
 **52 active tool groups**, **228 distinct tool names defined** in `lib/mcp/tools/` (a definition count, NOT a registration count — an unregistered file would inflate it; the group list below is the authoritative active set).
 
@@ -90,7 +90,7 @@ _Regenerated 2026-11-11. Source of truth: uncommented `register*Tools(server)` i
 
 ## Appendix B — Hooks & guardrails
 <!-- GENERATED:hooks -->
-_Regenerated 2026-11-11. Files in `.claude/hooks/` (test harnesses excluded); "registered" = referenced by a command in `.claude/settings.json`._
+_Regenerated 2026-11-12. Files in `.claude/hooks/` (test harnesses excluded); "registered" = referenced by a command in `.claude/settings.json`._
 
 **26 hook scripts**, of which **24 are registered** in settings.
 
@@ -101,9 +101,9 @@ _(bold = registered and firing; plain = present but not wired, e.g. a manual uti
 
 ## Appendix C — Surface area
 <!-- GENERATED:surface -->
-_Regenerated 2026-11-11 by directory scan._
+_Regenerated 2026-11-12 by directory scan._
 
-- CRM dashboard pages (56): `accounts` `addresses` `audit` `bofa-intake` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `forms` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `marketing-leads` `new-calendar` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `research` `sandbox-mail` `service-catalog` `services` `storage` `storage-app` `system-health` `tasks` `tax-returns` `td-talk` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
+- CRM dashboard pages (57): `accounts` `addresses` `audit` `bofa-intake` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `forms` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `marketing-leads` `new-calendar` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `releases` `research` `sandbox-mail` `service-catalog` `services` `storage` `storage-app` `system-health` `tasks` `tax-returns` `td-talk` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
 - Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
 - API route groups (103)
 - Code modules (97): `accounts` `ai-agent` `app` `app-mode` `archive` `audit` `auth` `billing` `bofa-intake` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `closure` `code-tasks` `contacts` `contracts` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `embed` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `forms-hub` `harbor-compliance` `hooks` `inbox` `incoming-payments` `infra` `internal` `invoices` `itin` `job-notes` `jobs` `leads` `lease` `legal` `marketing` `mcp` `media` `members` `messaging` `nav` `new-calendar` `notes` `notifications` `oa` `offers` `open-services` `operations` `partners` `payments` `pdf` `per-record-activity` `plan-invoices` `portal` `portal-app` `portal-chats` `public-forms` `push` `release` `research` `scan` `schemas` `security` `services` `ss4` `storage` `storage-app` `supabase` `system-health` `talk` `tasks` `tax` `td-communication` `team` `theme` `todo-board` `types` `ui` `utils` `windows`
@@ -128,7 +128,7 @@ Every system listed above now has a deep doc under `docs/systems/`, each written
 
 ## Appendix D — Guardrail rules
 <!-- GENERATED:rules -->
-_Regenerated 2026-11-11 from the R-rule list in CLAUDE.md — **44 rules**, highest is R115._
+_Regenerated 2026-11-12 from the R-rule list in CLAUDE.md — **45 rules**, highest is R116._
 
 - **R005** — td-operations.vercel.app is INTERNAL: NEVER send this domain to clients. {file:lib/config.ts}
 - **R012** — All client-facing URLs MUST use APP_BASE_URL from {file:lib/config.ts} — never hardcode domains; the .husky/pre-push hook blocks hardcoded domains.
@@ -174,11 +174,12 @@ _Regenerated 2026-11-11 from the R-rule list in CLAUDE.md — **44 rules**, high
 - **R113** — ASK THE SYSTEM COUNSELOR FIRST, ON EVERY INVESTIGATION (2026-08-02). Before forming a theory about any investigation — bug, "how does X work", audit, or a feature touching an existing flow — consult the system-counselor subagent FIRST, in c …_(truncated — read the full rule in CLAUDE.md)_
 - **R114** — ATTACHING A FILE TO A TD TALK / TEAM-CHAT POST (2026-11-05, PRs #960 + #965, dev job f34c915d). …_(truncated — read the full rule in CLAUDE.md)_
 - **R115** — PRODUCTION BUILD ≠ DEV SERVER (2026-11-08, dev job 7303c42c). Unit tests, next dev and the sandbox (a local dev server) run the source as written; PRODUCTION runs Next 14's minified SWC build on Node 24, and that build can change code. …_(truncated — read the full rule in CLAUDE.md)_
+- **R116** — EVERY APP-CODE PUSH CARRIES A RELEASE NOTE (2026-11-12, dev job 616dc839, PR #1066). The CRM's blue "New release available" bar now has a "See what's new" panel, and the Releases page (/releases) keeps the history. …_(truncated — read the full rule in CLAUDE.md)_
 <!-- /GENERATED:rules -->
 
 ## Appendix E — Subsystem deep docs
 <!-- GENERATED:deep-docs -->
-_Regenerated 2026-11-11. Every subsystem doc under `docs/systems/` (58 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
+_Regenerated 2026-11-12. Every subsystem doc under `docs/systems/` (59 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-04)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-06)_
@@ -187,12 +188,12 @@ _Regenerated 2026-11-11. Every subsystem doc under `docs/systems/` (58 docs), wi
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-11-11)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-11-06)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-11-05)_
-- [client-app.md](client-app.md) — Client iPhone App (MyLLC Manager 2.0) _(verified 2026-11-10)_
+- [client-app.md](client-app.md) — Client iPhone App (MyLLC Manager 2.0) _(verified 2026-11-12)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-10-20)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-11-11)_
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-11-07)_
-- [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-11-11)_
+- [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-11-12)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-11-10)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
@@ -200,7 +201,7 @@ _Regenerated 2026-11-11. Every subsystem doc under `docs/systems/` (58 docs), wi
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-11-10)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-11)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-11-11)_
-- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-06)_
+- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-12)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-10)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-10-28)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-11-11)_
@@ -217,17 +218,18 @@ _Regenerated 2026-11-11. Every subsystem doc under `docs/systems/` (58 docs), wi
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-10)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-11-11)_
-- [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-11-05)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-11-12)_
+- [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-11-12)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-11-06)_
+- [releases.md](releases.md) — Releases (what each release does — update bar panel + history page) _(verified 2026-11-12)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [scan-document.md](scan-document.md) — Scan document (the chat attach tool) _(verified 2026-11-10)_
 - [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-04)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [social-app.md](social-app.md) — TD Social (iPhone app) — "app mode" on the web side _(verified 2026-11-10)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-11-05)_
-- [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-04)_
-- [storage.md](storage.md) — CRM Storage _(verified 2026-11-10)_
+- [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-12)_
+- [storage.md](storage.md) — CRM Storage _(verified 2026-11-11)_
 - [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-05)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-11)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-11-10)_

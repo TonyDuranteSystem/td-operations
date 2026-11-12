@@ -1,0 +1,6 @@
+{
+  "title": "A blue bar tells you when a new CRM release is available",
+  "tag": "new",
+  "text": "Open CRM pages now check which release the live site is running. When it is newer than the page you have open, a blue 'New release available - refresh to update' bar appears. The page never reloads by itself, so you refresh when you are ready.",
+  "points": []
+}

@@ -1,0 +1,11 @@
+{
+  "title": "The client iPhone app: cards, Chat and the privacy links now fit a phone",
+  "tag": "improved",
+  "text": "Antonio's first phone test showed crowded screens. Inside the app only (the website is unchanged): the announcement cards on the Overview now stack, with the words across the full width and one big button, and the \"What's New\" card is no longer shown there. In Chat, the Topic button sits in the top row next to the screen name, messages use the whole screen, and tapping a message opens one small row with Reply, Pin and Mark unread instead of three icons beside every message. The privacy links are one slim line at the bottom, hidden on Chat.",
+  "points": [
+    "Open the MyLLC Manager app, then Overview: the cards are stacked",
+    "Open Chat: one top row with the Topic button and refresh",
+    "Tap a message: Reply, Pin and Mark unread appear under it",
+    "The website itself looks exactly as before"
+  ]
+}

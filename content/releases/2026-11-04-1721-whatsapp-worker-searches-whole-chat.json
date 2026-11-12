@@ -1,0 +1,10 @@
+{
+  "title": "Inbox WhatsApp Worker searches the whole chat and reads voice-note transcripts",
+  "tag": "improved",
+  "text": "The WhatsApp Worker in the Inbox used to see only the newest 30 messages of a chat, so it could say a price was never mentioned when it had been said earlier. It now searches the whole open chat (up to 5,000 messages) by words, sender and dates, including voice-note transcripts and quoted replies, and says how much it covered. Times it shows follow your own clock, so they match your screen.",
+  "points": [
+    "Voice notes in WhatsApp chats can now be played and their transcript read by everyone who can use the Inbox, not only staff. Photos, videos and documents stay staff-only.",
+    "The Worker gives the result first, without describing where it looked.",
+    "Messages hidden from your own screen stay hidden from the Worker too."
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "title": "TD Talk: pin messages and see them in a bar under the chat header",
+  "tag": "new",
+  "text": "The message menu in TD Talk now has Pin and Unpin. The newest pinned message shows in a bar under the chat header: tap it to jump to the message, press X to unpin, or use the arrow to step through several pins. Pins are shared by everyone in the chat and are the same pins the CRM Team Chat shows.",
+  "points": [
+    "Pinning needs a connection. It does not work offline.",
+    "The Marketing chat's pinned bar is unchanged."
+  ]
+}

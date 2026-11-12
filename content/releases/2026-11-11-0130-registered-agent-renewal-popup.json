@@ -1,0 +1,11 @@
+{
+  "title": "Calendar: Registered Agent renewal pop-up shows every date and lets staff correct it",
+  "tag": "new",
+  "text": "Click a Registered Agent renewal row on the Calendar to open a pop-up listing every date the CRM holds for that company, each with a one-line meaning. 'This date is wrong - correct it' lets staff enter the right date with a required reason. A new amber list at the top of the Calendar shows companies whose renewal date does not follow the rule: the anniversary of Client Since if it is filled, otherwise the anniversary of Formation.",
+  "points": [
+    "Annual report rows behave exactly as before.",
+    "Correcting the date also updates the open renewal job. If it has not started and the new date is over 30 days away, it is cancelled and returns 30 days before.",
+    "Staff only. Correcting a date never files anything and never contacts the client.",
+    "Use the amber list to fix old records one company at a time."
+  ]
+}

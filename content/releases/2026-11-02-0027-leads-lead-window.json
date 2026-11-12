@@ -1,0 +1,10 @@
+{
+  "title": "Leads: click a lead to open its window with calls, story and a follow-up draft",
+  "tag": "new",
+  "text": "Clicking a lead in the Leads table or board opens a floating window with its calls, offer, notes, story and call transcript. Every call is now its own record, with a Did it happen? question when there is no recording, and emails and WhatsApp messages appear in the lead's story. You can set an owner (Antonio) and a follow-up date, and write a follow-up draft with a rewrite assistant.",
+  "points": [
+    "A recording can move a lead from Call Scheduled to Call Done by itself, with a 24-hour undo, but that is switched off for now: the window only logs what it would have moved.",
+    "Sending from the window is also off for now; copy the text and send it by hand. Once sending is on, the table and window show Follow-up sent, with channel and date.",
+    "Drafts are checked against the lead's own facts so they do not invent promises such as prices or free consultations."
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "title": "Tax questionnaire review: write a request next to each client answer",
+  "tag": "new",
+  "text": "When you review a client's tax questionnaire, you can write what the client must fix next to any submitted answer (a pencil icon, saved as you type), and Request Changes sends all the requests together. The client sees each request under the answer it is about, and after resubmitting, each flagged answer shows whether it was updated. Request Changes with nothing written works as before.",
+  "points": [
+    "Approving saves the approved answers once for each client submit. The answers card shows Saved, Saving or Failed with the reason, and a Retry saving button.",
+    "An earlier-copies card lets you Keep hidden (history) or Keep visible each earlier version as its own file. Nothing is deleted."
+  ],
+  "stepsTitle": "How a review request travels",
+  "steps": [
+    {
+      "name": "You review the answers",
+      "detail": "A pencil icon next to any submitted answer, saved as you type"
+    },
+    {
+      "name": "Request Changes",
+      "detail": "Sends all the requests together"
+    },
+    {
+      "name": "Client sees each request",
+      "detail": "Under the answer it is about"
+    },
+    {
+      "name": "Client resubmits",
+      "detail": "Each flagged answer shows whether it was updated"
+    }
+  ]
+}

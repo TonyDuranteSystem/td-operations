@@ -914,6 +914,9 @@ export default async function PortalDashboardPage() {
   // Inside the client iPhone app with its Pay switch OFF the "View Offer" banner is not drawn: it links to the offer page, which signs the agreement and
   // then takes the card payment itself, so the switch must cover this door too (bug hunt 2026-11-10, finding 2). The website always shows it.
   const offerHiddenInApp = pendingOffer ? (await getClientAppModeActive()) && !(await isClientAppPayEnabled()) : false
+  // The "What's New" card tells people to install the portal as an app, turn on push and use the pin and unread icons: all wrong inside the
+  // client iPhone app (it IS the app, its alerts are the app's own, and the chat has no such icons), so the app never draws it.
+  const inClientApp = await getClientAppModeActive()
 
   // Service Status — client-facing flow progress (Tax Return / Annual Report /
   // RA Renewal / CMRA) driven by active service_deliveries + per-stage
@@ -972,7 +975,7 @@ export default async function PortalDashboardPage() {
       ))}
 
       {/* What's New - one-time (per device) feature announcement, dismissed via localStorage */}
-      <WhatsNewBanner />
+      {!inClientApp && <WhatsNewBanner />}
 
       {/* Offer banner — persistent until the offer is completed or expired */}
       {pendingOffer && !offerHiddenInApp && (

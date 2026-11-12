@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import { Globe, ArrowRight, X } from 'lucide-react'
 import Link from 'next/link'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
+import { AppAnnouncementCard } from '@/components/portal/app-announcement-card'
 
 const DISMISS_KEY = 'td-guide-relay-docs-v1'
 
@@ -22,6 +24,7 @@ const COPY = {
 }
 
 export function GuideAnnouncementBanner({ locale }: { locale: 'en' | 'it' }) {
+  const appMode = useAppMode()
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
@@ -44,6 +47,11 @@ export function GuideAnnouncementBanner({ locale }: { locale: 'en' | 'it' }) {
   if (!visible) return null
 
   const c = COPY[locale] ?? COPY.en
+
+  // Inside the client iPhone app the words get the whole width (stacked card); the website's row is unchanged.
+  if (appMode) {
+    return <AppAnnouncementCard tone="blue" icon={Globe} title={c.title} desc={c.desc} cta={c.cta} href="/portal/guide/relay-docs" dismissLabel={c.dismiss} onDismiss={handleDismiss} />
+  }
 
   return (
     <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">

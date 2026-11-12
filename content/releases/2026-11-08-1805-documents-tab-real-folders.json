@@ -1,0 +1,9 @@
+{
+  "title": "Documents tab on account and contact pages now shows the real Storage folders",
+  "tag": "improved",
+  "text": "For a company or person whose files live in Storage, the Documents tab now shows the Storage screen itself, with the same folders and the same actions as the Storage page. The Open in Storage button is gone because it is no longer needed.",
+  "points": [
+    "The tab buttons are locked while an upload, a drop, a bulk action or a merged PDF waiting for its upload questions is running.",
+    "If part of the screen fails to load, Retry reloads only what failed."
+  ]
+}

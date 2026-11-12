@@ -1,0 +1,9 @@
+{
+  "title": "Leads: New Lead from a call",
+  "tag": "new",
+  "text": "The Leads page has a new button, New Lead from a call, beside New Lead. It lists recorded calls from the last 30 days that have no lead, client contact or company attached. Pick one and the normal New Lead form opens with the call attached and the status set to Call Done.",
+  "points": [
+    "Name and email are filled in only when exactly one outside person with an email was on the call; otherwise they are left blank to type.",
+    "If the call already has someone attached, the lead is not created."
+  ]
+}

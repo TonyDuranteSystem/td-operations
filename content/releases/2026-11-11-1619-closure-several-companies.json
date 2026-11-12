@@ -1,0 +1,29 @@
+{
+  "title": "A client can now buy the closure of several companies in one offer",
+  "tag": "new",
+  "text": "The offer builder now has a quantity box for Company Closure. When the offer is paid, one closure job is made for each company (numbered #1, #2 and so on) instead of only one, and the client portal shows one numbered closure form card for each company still owed.",
+  "points": [
+    "On the CRM contact page, each active closure job shows as a banner and as a chip in the Flows strip. Staff only; clients do not see it.",
+    "A retried payment only makes the jobs that are missing, never a second copy of one that exists.",
+    "In the contract, an add-on that is included at $0 now says Included - no separate charge instead of a total fee of 0, payable in full."
+  ],
+  "stepsTitle": "How a closure for several companies is made",
+  "steps": [
+    {
+      "name": "Offer",
+      "detail": "The offer builder has a quantity box for Company Closure"
+    },
+    {
+      "name": "Offer paid",
+      "detail": "Payment starts the jobs; a retried payment only makes the missing ones"
+    },
+    {
+      "name": "One closure job per company",
+      "detail": "Numbered #1, #2 and so on"
+    },
+    {
+      "name": "Client portal",
+      "detail": "One numbered closure form card for each company still owed"
+    }
+  ]
+}

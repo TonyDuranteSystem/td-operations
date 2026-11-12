@@ -1,0 +1,9 @@
+{
+  "title": "WhatsApp: pairing code only on request, and a Recover missing messages button",
+  "tag": "new",
+  "text": "The WhatsApp tab in the Inbox has a new Recover missing messages button (all staff): it asks the Mac Mini to re-read the phone's last 7 days, saves anything the CRM missed and tells you how many were recovered. The red link banner now has a Get a pairing code button for the owner: codes are made only on request, up to 5 per hour, instead of the Mac making all of them by itself after a logout.",
+  "points": [
+    "The answer can take about a minute, because the Mac checks in once a minute.",
+    "Built and rehearsed, but not yet tested on a real logout of the live phone link."
+  ]
+}

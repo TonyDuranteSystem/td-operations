@@ -1,0 +1,11 @@
+{
+  "title": "Storage: Claude can edit a file by sending only the change",
+  "tag": "new",
+  "text": "Claude can now find, open and change files in Storage without sending the whole file again, using five new tools that work only in Antonio's own session. A change to a file the client can see is not applied directly: it waits as a proposal in the file's version list, with a note, an Accept this change button and a Discard button. Other changes are saved as a new numbered version and the old copy is kept.",
+  "points": [
+    "The tools only work once Antonio switches Claude's file access on.",
+    "Accepting a proposal asks whether the client should see the new version.",
+    "A proposal made from an older version is refused when the file has since moved on, so newer work is never undone.",
+    "Signed files, passports and IDs, replaced files and filed files are never changed this way."
+  ]
+}

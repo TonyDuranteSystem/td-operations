@@ -1,0 +1,10 @@
+{
+  "title": "Releases is now in the three-dots menu, and the menu lists everything vertically",
+  "tag": "improved",
+  "text": "The three-dots menu at the top right of the CRM now has a Releases entry that opens the history of what changed and when. Every entry in that menu (Help, Notifications, Test, Releases) now sits on its own line, full width, instead of wrapping side by side.",
+  "points": [
+    "Click the three dots at the top right, then Releases",
+    "Releases is also still in the left menu"
+  ],
+  "screenshot": "header-menu-releases.png"
+}

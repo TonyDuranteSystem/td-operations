@@ -1,0 +1,11 @@
+{
+  "title": "Releases: see what a new release does before you refresh",
+  "tag": "new",
+  "text": "When the blue \"New release available\" bar appears, it now has a \"See what's new\" button. It opens a short description of what changed, in plain English, with a picture when something looks different. Nothing reloads until you press Refresh, so whatever you are typing is safe. Every release is also kept on the new Releases page in the left menu, newest first, so you can look back at any of them later.",
+  "points": [
+    "Open the blue bar's \"See what's new\" to read it first, then Refresh when you are ready.",
+    "Releases (left menu) lists every update, with filters for New, Improved and Fixed.",
+    "Changes nobody can see are tagged \"Behind the scenes\" and are hidden unless you ask for them."
+  ],
+  "screenshot": "releases-panel.png"
+}
