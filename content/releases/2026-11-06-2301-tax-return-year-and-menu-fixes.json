@@ -1,0 +1,10 @@
+{
+  "title": "Tax Return fixes: correct year shown, and no false Complete Setup in the client menu",
+  "tag": "fixed",
+  "text": "A Tax Return for 2025 no longer says 2026 in the job title and the Chat tab: the year is now the filing year minus one, or the year named in the job's own name. The pipeline sync now updates the tax record of the return's own year, and the Tax Documents upload box starts on the open return's year. In the client portal, the menu no longer shows Complete Setup (Completa Registrazione) for a Tax Return with nothing left to fill in.",
+  "points": [
+    "Chats that already carry the wrong year are renamed by a separate one-off update that was not part of this release.",
+    "The sync never pulls a record that is already TR Filed back.",
+    "Formation, Banking Fintech and ITIN jobs still show Complete Setup as before."
+  ]
+}

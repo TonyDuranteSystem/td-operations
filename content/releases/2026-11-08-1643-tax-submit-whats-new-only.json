@@ -1,0 +1,8 @@
+{
+  "title": "Tax form submitted: staff are now told only through What's New",
+  "tag": "improved",
+  "text": "When a client submits their tax data, the Review tax data card is no longer created on the To-Do board and no email is sent to support. The note in What's New is now the only signal for staff, for both the portal form and the older emailed form.",
+  "points": [
+    "Messages to the client asking for changes, and the notice when staff apply changes, are unchanged."
+  ]
+}

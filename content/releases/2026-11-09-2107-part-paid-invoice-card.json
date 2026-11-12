@@ -1,0 +1,5 @@
+{
+  "title": "Part-paid invoices: paying by card charges only what is still owed",
+  "tag": "fixed",
+  "text": "When a client has already wired part of a Tony Durante invoice, paying by card now charges only the balance still owed plus the card fee on that balance. A wire transfer has no fee. This is the same on every Pay button, in the client portal and in the emailed link, and the card payment page, the invoice email and the staff overage alert now say what the amount is."
+}

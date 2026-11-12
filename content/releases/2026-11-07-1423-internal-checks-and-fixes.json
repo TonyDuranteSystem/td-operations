@@ -1,0 +1,6 @@
+{
+  "title": "Behind the scenes: Claude session checks, App Review login and test repairs",
+  "tag": "behind-the-scenes",
+  "text": "Nothing to see in the CRM here. The checks that review Claude's answers in code sessions no longer make it send a whole answer twice. Claude sessions were told how to attach files to Team Chat posts. The automatic checks that compare the database with the code were updated for two new Marketing chat rules, and a flaky phone-alert test was made stable. A narrow practice login was also set up for Apple's App Review of TD Social: password only, limited to one practice team and to 90 days at most.",
+  "points": []
+}

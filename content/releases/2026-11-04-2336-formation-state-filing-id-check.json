@@ -1,0 +1,11 @@
+{
+  "title": "State Filing ID: read from the Articles and checked against the real document first",
+  "tag": "new",
+  "text": "When the Articles of Organization are uploaded (Formation, Filed with State window) or reviewed (Onboarding), a State Filing ID card shows the number the reader found, with a View the real document button that opens the file in a floating window. Staff confirm the number, correct it, or say the document has none. Confirm stays locked until the document has actually been shown, and an unchecked number is never saved. The checked number goes onto the new company, only into an empty Filing ID.",
+  "points": [
+    "The card warns if the box holds something that looks like an EIN, SSN or ITIN.",
+    "Articles that do not belong to the submission give a Try again error and nothing is saved.",
+    "Filing IDs copied from a PDF with odd dashes are accepted.",
+    "The flow page keeps a lasting \"no State Filing ID yet\" line until one is saved."
+  ]
+}

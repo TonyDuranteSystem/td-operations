@@ -1,0 +1,9 @@
+{
+  "title": "Calendar: AI Polish in the Message the client box",
+  "tag": "new",
+  "text": "The Message the client box in the Calendar's case workspace now has the same AI Polish wand and language toggle as Portal Chats. It cleans up the grammar of your draft and writes it in the language the client writes in, or keeps your language if you switch that on. If the client has written nothing it can read, it asks Which language? (English or Italian). Polishing never sends anything.",
+  "points": [
+    "Text you keep typing while it polishes is never overwritten.",
+    "The Onboarding workspace version of this box was not tested."
+  ]
+}

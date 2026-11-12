@@ -1,0 +1,10 @@
+{
+  "title": "Offers: one shared \"can this offer be sent?\" check; the box beside Send is not on yet",
+  "tag": "improved",
+  "text": "Every check that can stop an offer from being sent now lives in one place, used by Send, Publish Offer and Activate Lead. One real change: if the yearly-fee check or the offer's packages cannot be read, Send now stops and asks you to try again instead of carrying on silently. A new box, Before this offer can be sent, for draft offers is built but switched off for now. Create Offer re-reads the service list every time it opens and keeps what is on screen if the answer is bad.",
+  "points": [
+    "An Add a new service button inside Create Offer was built and then removed again.",
+    "The Service Catalog's New Service page tells a non-administrator \"Only an administrator can add a service\".",
+    "A new service whose later parts failed to save is reported and reopened for editing instead of being refused as a duplicate."
+  ]
+}

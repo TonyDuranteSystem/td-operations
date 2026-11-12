@@ -1,0 +1,11 @@
+{
+  "title": "Company Closure: new Waiting for the IRS step, two locks, and the wizard now moves the job",
+  "tag": "new",
+  "text": "The Company Closure job has a screen on every step with the portal chat box, and a new Waiting for the IRS step before Closing. When the client sends the closure wizard, the job now moves from Data Collection to State Compliance Check by itself and the client's files are saved where their answers point. Finishing the job asks first and names the company, and for one of our companies Closing now closes the whole company.",
+  "points": [
+    "State Dissolution Filing needs the state's confirmation uploaded, and IRS Closure needs the tracking number, before the job can move on.",
+    "Support is no longer emailed when the wizard arrives, the client is told nothing when the job moves, and the plain 'Start closure' to-do is gone: the job lives in the Calendar.",
+    "Closing cancels the company's other open services, pending deadlines and unpaid invoices, closes its open to-dos, and sets the company to Closed with portal access off.",
+    "A stale link to a cancelled or finished closure now shows a clear card (English and Italian) instead of starting a job."
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "title": "ITIN letters: dates are read again and a letter is no longer filed under the wrong person",
+  "tag": "fixed",
+  "text": "The ITIN letter reader was not picking up dates on the live CRM, and it does again. The ITIN card in Portal Chats also makes fewer wrong matches: relatives who share a family name and an email are no longer taken for the same person. Saving a file typed ITIN Letter in a person's Storage no longer writes the ITIN blindly. It checks that the letter is an IRS ITIN notice read clearly, that it names this person, and that no other contact holds the ITIN.",
+  "points": [
+    "A different ITIN or issue date already on the record is kept, not replaced.",
+    "The issue date is written only when it was read clearly. It is never today's date any more.",
+    "If a check says no, the file is still saved and the message says why in plain words.",
+    "The hint in the Save to Storage pop-up no longer says that Storage skips the who-check."
+  ]
+}

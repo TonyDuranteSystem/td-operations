@@ -1,0 +1,9 @@
+{
+  "title": "Portal Chats: Chats and Pinned chips, and a Copy text button on voice notes",
+  "tag": "improved",
+  "text": "The Portal Chats list now has Chats and Pinned chips and opens on Chats. Chats is a plain list of conversations where a client or the team wrote, newest first, leaving out pinned ones and ones with an unhandled client action. Pinned conversations are under Pinned, and ones with an unhandled client action stay under What's New. Voice notes also got a Copy text button.",
+  "points": [
+    "The other chips keep their usual order.",
+    "The ID and tax-document reminder in WhatsApp was removed."
+  ]
+}

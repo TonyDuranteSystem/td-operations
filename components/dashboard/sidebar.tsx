@@ -50,6 +50,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Sparkles,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { toast } from 'sonner'
@@ -152,6 +153,8 @@ const defaultNavigation: NavItem[] = [
   // power-user governance (status / tags / translations).
   { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings, tooltip: 'Configure invoice templates, payment methods, and default settings.' },
   { id: 'email-templates', name: 'Email Templates', href: '/email-templates', icon: Mail, tooltip: 'Manage reusable email templates used by the CRM compose dialog. Placeholders like {{first_name}} are filled at send time.' },
+  // Releases (dev job 616dc839, Antonio 2026-11-11): every release of the CRM, what changed and what it does — the history behind the blue "New release available" bar.
+  { id: 'releases', name: 'Releases', href: '/releases', icon: Sparkles, tooltip: 'Every update to the CRM, newest first — what changed and what it does. The blue "New release available" bar links here.' },
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true, tooltip: 'Manage staff accounts, roles, and permissions.' },
   { id: 'code-tasks', name: 'Code Tasks', href: '/code-tasks', icon: Bot, adminOnly: true, tooltip: 'Live view of Claude code sessions started from Slack — watch in real time, type to steer, and end a session. Admin only.' },
   // NOTE: 'tools' lives up in the Pipeline cluster (moved 2026-06-15 — it was

@@ -1,4 +1,6 @@
+const path = require('path')
 const { withSentryConfig } = require('@sentry/nextjs')
+const { releaseNotesEnv } = require('./scripts/release-notes-env')
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -61,6 +63,9 @@ const nextConfig = {
   // (local dev) → empty → the check stays off.
   env: {
     NEXT_PUBLIC_BUILD_SHA: process.env.NEXT_PUBLIC_BUILD_SHA || (process.env.VERCEL_GIT_COMMIT_SHA || '').slice(0, 7),
+    // What each release does (dev job 616dc839): content/releases/*.json compiled into the build — RELEASE_NOTES_JSON (server only) and
+    // NEXT_PUBLIC_NEWEST_NOTE (the page's "seen up to here" mark). See scripts/release-notes-env.js and docs/systems/releases.md.
+    ...releaseNotesEnv(path.join(__dirname, 'content', 'releases')),
   },
   eslint: {
     // Warnings in MCP tool files should not block production builds.

@@ -1,0 +1,11 @@
+{
+  "title": "Client portal: one flat menu, and personal details on Panoramica",
+  "tag": "improved",
+  "text": "In the client portal the menu is now one flat list instead of the Personale and Aziende headings: Panoramica, Chat, Referral, Clienti e Fatture, Documenti, Team, Genera Documenti, Firma Documenti, Fatture TD, Apertura Conto Bancario, Richiedi un Servizio, then La Mia Azienda and Guida. Panoramica gets an Informazioni Personali card (the same editor as Profilo, with a Cambia Password link) and a read-only Identità e Tasse card showing passport and ITIN.",
+  "points": [
+    "For company clients, Panoramica no longer shows Servizi Attivi, Scadenze Imminenti, Storico Pagamenti and Dichiarazioni Fiscali.",
+    "Profilo and TD Communication are no longer menu entries; the pages still exist.",
+    "Clients with no company yet now see Panoramica in the menu.",
+    "Team members without a contact record never get the personal cards."
+  ]
+}

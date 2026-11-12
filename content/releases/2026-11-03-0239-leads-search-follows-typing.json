@@ -1,0 +1,9 @@
+{
+  "title": "Leads search: the list follows what you type and a click goes to the lead's row",
+  "tag": "improved",
+  "text": "On the Leads page, the list under the search box now follows what you type. If the person is not in the current tab, the page moves to the tab that has them; if they are in the current tab, small \"Also matches in ...\" buttons show matches elsewhere. Clicking a name in the dropdown now goes to that lead's row, highlighted, instead of opening the lead page.",
+  "points": [
+    "Clearing the box resets the list at once.",
+    "The dropdown stays closed after you pick a name."
+  ]
+}

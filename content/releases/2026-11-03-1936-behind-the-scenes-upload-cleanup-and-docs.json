@@ -1,0 +1,5 @@
+{
+  "title": "Behind the scenes: daily clean-up of unused bank-application uploads",
+  "tag": "behind-the-scenes",
+  "text": "A daily clean-up now deletes temporary bank-application uploads that nothing needs any more: older than 24 hours, already copied to Storage, replaced by a newer copy, belonging to a revoked or reset link, or from a link opened and abandoned over 35 days ago. It never deletes anything in the CRM Storage or a file a submitted application still needs. Internal notes about the bank-application review were also corrected to say it is live."
+}

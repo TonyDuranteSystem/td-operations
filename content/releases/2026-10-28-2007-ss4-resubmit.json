@@ -1,0 +1,10 @@
+{
+  "title": "SS-4 Resubmit: replace a wrong SS-4 without moving the case back",
+  "tag": "new",
+  "text": "On the \"SS-4 Sent to IRS\" stage of a Company Formation case, a new Resubmit SS-4 panel lets staff correct an SS-4 that was signed or faxed and turned out wrong, for example when the IRS rejected it. You pick a reason; the old SS-4 is archived whole, with when and why, and a corrected draft is created in the same stage. Nothing is sent to the client automatically.",
+  "points": [
+    "Preview the draft, then use the normal Send to Client for Signature; once it is signed the usual fax task and email follow.",
+    "All the usual checks (state, signer, registered agent in the company's state, county) run before anything is archived, so a failed check changes nothing.",
+    "Faxes and fax confirmation emails of the replaced SS-4 no longer count for the corrected one."
+  ]
+}

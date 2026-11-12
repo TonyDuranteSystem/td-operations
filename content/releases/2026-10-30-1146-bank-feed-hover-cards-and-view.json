@@ -1,0 +1,10 @@
+{
+  "title": "Bank Feed: hover cards on invoice numbers, and the list keeps its place on refresh",
+  "tag": "improved",
+  "text": "Resting the mouse on an invoice number anywhere in the Bank Feed now shows a small card with the client, what the invoice is for, the amount and its status. Your filter tab, page, search and source filter are now kept in the page address, so a refresh, or a Confirm, Reject or Match, no longer sends you back to All, page 1.",
+  "points": [
+    "Invoices written to a person (no company) now show the person's name instead of a dash or \"no client on this invoice\".",
+    "Prev / Next and the \"Showing a-b of n\" line also appear above the list.",
+    "The proposed invoice in the yellow Auto-matched candidate banner has the same hover card."
+  ]
+}

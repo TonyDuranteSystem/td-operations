@@ -1,0 +1,11 @@
+{
+  "title": "Tax Return jobs: working Approve, e-signature steps and a fax to the IRS",
+  "tag": "improved",
+  "text": "On a Tax Return job, Approve and File with IRS now work (they used to fail with 'Stage not found'). The prepared-return upload box moved to the Preparation step, and two new steps follow it: Sent for Signature and Signed. You send the return for e-signature from the job, and from the Signed step you can fax the signed copy to the IRS. When the fax is delivered, the receipt is saved in the company's Tax folder and the job moves to TR Filed.",
+  "points": [
+    "The client's Confirm step is gone: staff approval releases the reviewed answers with no message to the client.",
+    "Clients now see Preparation as 'Being prepared' (Italian 'In preparazione') instead of 'With Accountant', and their tax banner follows the real steps.",
+    "The fax box is for single-member LLCs only (others keep the old link). Delivery is checked every 10 minutes or with Check now, and a failed fax raises one alert and moves nothing.",
+    "System Health now shows the runs of the fax-check job."
+  ]
+}
