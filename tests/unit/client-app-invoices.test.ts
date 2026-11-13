@@ -19,6 +19,9 @@ import {
   billingRowState,
   billingTotals,
   checklistStepTarget,
+  setupScreenStepTarget,
+  SETUP_BANK_ANCHOR,
+  SETUP_LOGO_ANCHOR,
   requiredFirst,
   tdInvoicesOf,
   type BillingExpense,
@@ -133,6 +136,34 @@ describe('checklistStepTarget', () => {
     expect(checklistStepTarget('payment', ['sales', 'expenses'])).toBeNull()
     expect(checklistStepTarget('customer', ['setup', 'sales'])).toBeNull()
     expect(checklistStepTarget(undefined, all)).toBeNull()
+  })
+
+  it('keeps the company a person is managing, like the list rows do', () => {
+    expect(checklistStepTarget('customer', all, 'acct-1')).toBe('/portal/invoices?tab=customers&accountId=acct-1')
+    expect(checklistStepTarget('payment', all, 'a&b')).toBe('/portal/invoices?tab=setup&accountId=a%26b')
+  })
+})
+
+describe('setupScreenStepTarget (the steps drawn on the Setup screen itself)', () => {
+  const all: InvoiceTabId[] = ['setup', 'customers', 'sales', 'vendors', 'expenses']
+
+  it('the first customer opens Customers (another area), keeping the managed company', () => {
+    expect(setupScreenStepTarget('customer', all, { canEditLogo: true })).toBe('/portal/invoices?tab=customers')
+    expect(setupScreenStepTarget('customer', all, { canEditLogo: true, managedAccountId: 'acct-1' })).toBe('/portal/invoices?tab=customers&accountId=acct-1')
+  })
+
+  it('the logo and how customers pay jump to their card on the same screen', () => {
+    expect(setupScreenStepTarget('logo', all, { canEditLogo: true })).toBe(`#${SETUP_LOGO_ANCHOR}`)
+    expect(setupScreenStepTarget('payment', all, { canEditLogo: true })).toBe(`#${SETUP_BANK_ANCHOR}`)
+  })
+
+  it('a person who may not change the logo has no jump for it (the card is not drawn)', () => {
+    expect(setupScreenStepTarget('logo', all, { canEditLogo: false })).toBeNull()
+  })
+
+  it('is not a link to an area the person cannot open, or for an unknown rule', () => {
+    expect(setupScreenStepTarget('customer', ['setup', 'sales'], { canEditLogo: true })).toBeNull()
+    expect(setupScreenStepTarget(undefined, all, { canEditLogo: true })).toBeNull()
   })
 })
 
