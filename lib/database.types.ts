@@ -14479,6 +14479,7 @@ export type Database = {
       portal_announcements: {
         Row: {
           active: boolean
+          app_only: boolean
           active_from: string | null
           active_until: string | null
           created_at: string
@@ -14493,6 +14494,7 @@ export type Database = {
         }
         Insert: {
           active?: boolean
+          app_only?: boolean
           active_from?: string | null
           active_until?: string | null
           created_at?: string
@@ -14507,6 +14509,7 @@ export type Database = {
         }
         Update: {
           active?: boolean
+          app_only?: boolean
           active_from?: string | null
           active_until?: string | null
           created_at?: string

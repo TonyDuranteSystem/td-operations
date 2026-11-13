@@ -26,7 +26,7 @@ export async function GET() {
   try {
     const { data, error } = await sb
       .from('portal_announcements')
-      .select('id, title, message, title_en, message_en, type, active, dismissible, active_from, active_until, created_at, updated_at')
+      .select('id, title, message, title_en, message_en, type, active, dismissible, active_from, active_until, app_only, created_at, updated_at')
       .order('created_at', { ascending: false })
 
     if (error) return NextResponse.json({ announcements: [] })
@@ -54,6 +54,7 @@ export async function POST(request: NextRequest) {
     active?: boolean
     active_from?: string | null
     active_until?: string | null
+    app_only?: boolean
   } | null
 
   if (!body) return NextResponse.json({ error: 'Invalid body' }, { status: 400 })
@@ -75,8 +76,9 @@ export async function POST(request: NextRequest) {
       active: body.active !== false,
       active_from: body.active_from || null,
       active_until: body.active_until || null,
+      app_only: body.app_only === true,
     })
-    .select('id, title, message, title_en, message_en, type, active, dismissible, active_from, active_until, created_at, updated_at')
+    .select('id, title, message, title_en, message_en, type, active, dismissible, active_from, active_until, app_only, created_at, updated_at')
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
