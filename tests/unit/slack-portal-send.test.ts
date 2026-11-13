@@ -77,6 +77,7 @@ const notifyClientOfAdminMessage = vi.fn().mockResolvedValue(undefined)
 vi.mock("@/lib/portal/notifications", () => ({
   createPortalNotification: (...a: unknown[]) => createPortalNotification(...a),
   notifyClientOfAdminMessage: (...a: unknown[]) => notifyClientOfAdminMessage(...a),
+  waitForClientAlert: () => Promise.resolve(),
 }))
 
 const logAction = vi.fn()
