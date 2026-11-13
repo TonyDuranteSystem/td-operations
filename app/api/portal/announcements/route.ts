@@ -21,6 +21,7 @@ export async function GET() {
       .from('portal_announcements')
       .select('id, title, message, title_en, message_en, type, dismissible')
       .eq('active', true)
+      .eq('app_only', false)
       .or(`active_from.is.null,active_from.lte.${today}`)
       .or(`active_until.is.null,active_until.gte.${today}`)
       .order('created_at', { ascending: false })

@@ -229,7 +229,7 @@ describe('wiring (source guards)', () => {
   })
 
   it('the three announcement kinds are not drawn on the page in the app: they live behind the News button', () => {
-    expect(page).toMatch(/\{!inClientApp && \(\s*<>[\s\S]*?<GuideAnnouncementBanner locale=\{locale\} \/>[\s\S]*?<TeamAccessAnnouncementBanner locale=\{locale\} \/>[\s\S]*?<AnnouncementBanners announcements=\{portalAnnouncements\} locale=\{locale\} \/>[\s\S]*?<\/>\s*\)\}/)
+    expect(page).toMatch(/\{!inClientApp && \(\s*<>[\s\S]*?<GuideAnnouncementBanner locale=\{locale\} \/>[\s\S]*?<TeamAccessAnnouncementBanner locale=\{locale\} \/>[\s\S]*?<AnnouncementBanners announcements=\{visibleOnWebsite\(portalAnnouncements\)\} locale=\{locale\} \/>[\s\S]*?<\/>\s*\)\}/)
   })
 
   it('the four addresses are four cards in the app and the website\'s single box otherwise', () => {

@@ -45,6 +45,7 @@ import { getPendingClosures } from '@/lib/portal/pending-closures'
 import { OfferBanner } from '@/components/portal/offer-banner'
 import { AnnouncementBanners, type PortalAnnouncement } from '@/components/portal/announcement-banners'
 import { easternDateString, isAnnouncementLive, type AnnouncementWindow } from '@/lib/portal/announcement-window'
+import { visibleOnWebsite } from '@/lib/portal/announcement-audience'
 import { APP_BASE_URL } from '@/lib/config'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { parseISO, format } from 'date-fns'
@@ -949,7 +950,7 @@ export default async function PortalDashboardPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: annData } = await (supabaseAdmin as any)
       .from('portal_announcements')
-      .select('id, title, message, title_en, message_en, type, dismissible, active_from, active_until')
+      .select('id, title, message, title_en, message_en, type, dismissible, active_from, active_until, app_only')
       .eq('active', true)
       .order('created_at', { ascending: false })
     // The start / end dates the team sets in the CRM are honoured here (they used to be ignored, so a dated announcement only left when someone switched it off).
@@ -1059,7 +1060,7 @@ export default async function PortalDashboardPage() {
           {canManageTeam && <TeamAccessAnnouncementBanner locale={locale} />}
 
           {/* DB-backed portal announcements — managed from CRM Config → Announcements */}
-          <AnnouncementBanners announcements={portalAnnouncements} locale={locale} />
+          <AnnouncementBanners announcements={visibleOnWebsite(portalAnnouncements)} locale={locale} />
         </>
       )}
 

@@ -11,6 +11,8 @@ export interface PortalAnnouncement {
   message_en: string | null
   type: 'info' | 'warning' | 'success'
   dismissible: boolean
+  /** true = only the client iPhone app draws it (the website never does); the page filters these out before the banners. */
+  app_only?: boolean
 }
 
 const TYPE_STYLES = {

@@ -1,0 +1,12 @@
+{
+  "title": "Announcements can now be shown only inside the client app",
+  "tag": "new",
+  "text": "In Config, Announcements, a new \"Show in\" choice: Everywhere (as before) or App only. An app-only announcement shows in the client iPhone app, under the News button and as the floating banner, and never on the client website. Use it for news about the app itself, such as a welcome, while it is not in the store yet. The list marks these with an \"App only\" badge. Also fixed: editing an announcement no longer clears its start and end dates.",
+  "points": [
+    "Open Config, then Announcements, then New",
+    "Under Show in, pick App only",
+    "Website clients never see it; the app shows it as the floating banner and in News",
+    "Edit an announcement with dates: the dates stay"
+  ],
+  "screenshot": "announcement-app-only-choice.png"
+}
