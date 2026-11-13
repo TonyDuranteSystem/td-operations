@@ -16,6 +16,8 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { todayInNewYork } from "@/lib/leads/list-filters"
+import { listContactCalls, bookedCallsToShow, contactCallChip } from "@/lib/leads/contact-calls"
 
 interface CallRow {
   id: string
@@ -54,9 +56,35 @@ export async function ContactCallsSection({ contactId }: { contactId: string }) 
     .limit(25)
 
   const calls = (data ?? []) as CallRow[]
-  if (calls.length === 0) return null
+
+  // Calls booked through a made booking link by someone who is already a contact (no lead exists, so they have no other home). Tolerant: a missing table or a
+  // read error is "none". A booked call disappears from this list once a call summary exists for the same New York day (the summary above already shows it).
+  const booked = bookedCallsToShow(await listContactCalls(supabaseAdmin, contactId), calls.map((c) => c.created_at).filter((d): d is string => !!d))
+
+  if (calls.length === 0 && booked.length === 0) return null
+  const todayNy = todayInNewYork(new Date())
 
   return (
+    <>
+    {booked.length > 0 && (
+      <div className="bg-white rounded-lg border p-5 mb-4">
+        <h3 className="text-sm font-semibold mb-3">Booked calls ({booked.length})</h3>
+        <ul className="space-y-2">
+          {booked.map((b) => (
+            <li key={b.id} className="text-sm flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-medium truncate">{b.event_type_name || "Call"}</div>
+                <div className="text-xs text-muted-foreground">
+                  {b.scheduled_start ? `${new Date(b.scheduled_start).toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "medium", timeStyle: "short" })} ET` : "Time not known"}
+                </div>
+              </div>
+              <span className="text-xs rounded-full border px-2 py-0.5 shrink-0">{contactCallChip(b, todayNy)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    )}
+    {calls.length > 0 && (
     <div className="bg-white rounded-lg border p-5 mb-4">
       <h3 className="text-sm font-semibold mb-3">Calls ({calls.length})</h3>
       <ul className="space-y-3">
@@ -112,5 +140,7 @@ export async function ContactCallsSection({ contactId }: { contactId: string }) 
         })}
       </ul>
     </div>
+    )}
+    </>
   )
 }

@@ -121,6 +121,7 @@ export function miniDb(seed: Record<string, Row[]> = {}, opts: MiniDbOptions = {
     add('gte', (c, v) => (r) => String(r[c as string] ?? '') >= String(v))
     add('lte', (c, v) => (r) => String(r[c as string] ?? '') <= String(v))
     add('not', (c, o, v) => (r) => (o === 'is' && v === null ? r[c as string] !== null && r[c as string] !== undefined : true))
+    b.or = () => b // a PostgREST .or() text filter is NOT interpreted: it matches every row (use a seed that already fits)
     b.select = () => { returning = true; return b }
     b.order = (col: string, o?: { ascending?: boolean }) => { orderBy = { col, asc: o?.ascending !== false }; return b }
     b.limit = (k: number) => { max = k; return b }

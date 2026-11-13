@@ -42,3 +42,9 @@ REVOKE ALL ON public.call_checks FROM anon, authenticated;
 SELECT public.marketing_lock_all_tables();
 
 COMMIT;
+
+-- verify (the Supabase SQL editor shows only this LAST result): row-level security must be on and anon/authenticated must hold no privileges, so client_grants must be 0
+SELECT c.relname AS table_name, c.relrowsecurity AS rls_on,
+       (SELECT count(*) FROM information_schema.role_table_grants g WHERE g.table_schema = 'public' AND g.table_name = c.relname AND g.grantee IN ('anon', 'authenticated')) AS client_grants
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'public' AND c.relname = 'call_checks';

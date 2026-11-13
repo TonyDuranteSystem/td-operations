@@ -7,6 +7,14 @@
 /** Migrations at or before this prefix predate the rule (the lock itself is in 20261018-0110). */
 export const LOCK_RULE_AFTER = "20261018-0110"
 
+/**
+ * From this prefix on (the Booking page migrations, 2026-11-13) a table must ALSO carry the two lines that really keep a logged-in client out: row-level security
+ * switched on AND `REVOKE ALL ... FROM anon, authenticated`. Why: marketing_lock_all_tables() only turns RLS on and adds a permissive "any logged-in token" policy for a
+ * table that has RLS OFF — so a migration that forgets those two lines leaves the table readable by a portal client with their own token (it happened once, on app_settings).
+ * Older migrations are not held to this (several predate the rule and have no REVOKE); they are not edited.
+ */
+export const STRICT_LOCK_FROM = "20261113-1700"
+
 /** The sortable prefix of a migration file name: YYYYMMDD-HHMM. */
 export function migrationPrefix(fileName: string): string | null {
   const m = /^(\d{8}-\d{4})/.exec(fileName)
@@ -43,5 +51,24 @@ export function lockViolations(fileName: string, sql: string): string[] {
       problems.push(`creates ${t} without ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY`)
     }
   }
+  if (prefix >= STRICT_LOCK_FROM) {
+    for (const t of tables) {
+      if (!new RegExp(`alter\\s+table\\s+(?:if\\s+exists\\s+)?(?:public\\.)?"?${t}"?\\s+enable\\s+row\\s+level\\s+security`, "i").test(clean)) {
+        problems.push(`creates ${t} without ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY`)
+      }
+      if (!revokesFromClients(clean, t)) problems.push(`creates ${t} without REVOKE ALL ON ${t} FROM anon, authenticated (a logged-in client could read it)`)
+    }
+  }
   return problems
+}
+
+/** True when the SQL revokes every privilege on the table from BOTH anon and authenticated. */
+function revokesFromClients(clean: string, table: string): boolean {
+  const re = new RegExp(`revoke\\s+all\\s+(?:privileges\\s+)?on\\s+(?:table\\s+)?(?:public\\.)?"?${table}"?\\s+from\\s+([^;]+);`, "gi")
+  let m: RegExpExecArray | null
+  while ((m = re.exec(clean))) {
+    const roles = m[1].toLowerCase()
+    if (/\banon\b/.test(roles) && /\bauthenticated\b/.test(roles)) return true
+  }
+  return false
 }

@@ -43,3 +43,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_catalog_entries_booking_kind_name
   WHERE catalog_id = 'booking_kinds';
 
 COMMIT;
+
+-- verify (the Supabase SQL editor shows only this LAST result): four active kinds, each with a rule
+SELECT slug, display_name, status, metadata FROM public.catalog_entries WHERE catalog_id = 'booking_kinds' ORDER BY (metadata->>'sort_order')::int;
