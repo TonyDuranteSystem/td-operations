@@ -122,6 +122,12 @@ public enum SignOutRules {
     }
 }
 
+public enum AlertRefreshRules {
+    /// An alert that arrives while the app is open: seconds after which the bar's numbers are asked for again. The first is at once (the number shows while the
+    /// person is on another screen); the second waits for an open chat page to mark the message read, so a number the person already cleared by reading never stays on the bar.
+    public static let delays: [TimeInterval] = [0, 4]
+}
+
 public enum RegistrationRules {
     /// After the server refused to save the phone (too many phones, a fault ...) the app does not ask again on every page change, only every few minutes.
     public static func mayRetry(lastFailure: Date?, now: Date, wait: TimeInterval = 600) -> Bool {
