@@ -1852,23 +1852,25 @@ export async function sendPortalMessageFromWorker(input: {
   // In-app notification + client email (fire-and-forget; a wiring failure never
   // fails the send the client already received).
   try {
-    const { createPortalNotification, notifyClientOfAdminMessage } = await import(
+    const { createPortalNotification, notifyClientOfAdminMessage, waitForClientAlert } = await import(
       "@/lib/portal/notifications"
     )
-    createPortalNotification({
+    const clientAlert = createPortalNotification({
       account_id: accountId ?? undefined,
       contact_id: resolvedContactId ?? undefined,
       type: "chat",
       title: "New message from Tony Durante Team",
       body: message.slice(0, 100),
       link: buildPortalChatLink({ accountId, topic }),
-    }).catch(() => {})
+    })
     notifyClientOfAdminMessage({
       account_id: accountId,
       contact_id: resolvedContactId,
       topic,
       messagePreview: message,
     }).catch(() => {})
+    // wait (at most 4 s) for the client's browser + iPhone-app alert: a serverless function may be stopped as soon as it has answered
+    await waitForClientAlert(clientAlert)
   } catch {
     // notification wiring failure never fails the send
   }

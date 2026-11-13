@@ -14,7 +14,7 @@ import { createPortalNotification } from "@/lib/portal/notifications"
 describe("createPortalNotification returns its failure (dev job e2fee7e7)", () => {
   beforeEach(() => { insertResult = { error: null } })
   it("ok → error null", async () => {
-    expect(await createPortalNotification({ contact_id: "c", type: "t", title: "x" })).toEqual({ error: null })
+    expect((await createPortalNotification({ contact_id: "c", type: "t", title: "x" })).error).toBeNull()
   })
   it("insert error → returned, not swallowed", async () => {
     insertResult = { error: { message: "boom" } }
