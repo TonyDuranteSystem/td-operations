@@ -12,6 +12,7 @@ struct ContentView: View {
             case .checking:
                 ProgressView("Checking…")
             case .signedOut:
+                if let note = model.signedOutNote { Label(note, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
                 Text("Sign in with your CRM login. A page opens in your browser; approve this Mac there.")
                 Button("Sign in…") { Task { await model.signIn() } }.keyboardShortcut(.defaultAction)
             case .waiting(let code, let link):
@@ -26,6 +27,7 @@ struct ContentView: View {
                 if let problem = model.browserProblem { Text(problem).font(.callout).foregroundStyle(.orange) }
             case .signedIn(let who):
                 Label("Signed in as \(who)", systemImage: "checkmark.seal")
+                if let notice = model.expiryNotice { Label(notice, systemImage: "clock.badge.exclamationmark").foregroundStyle(.orange) }
                 Text("TD Storage is in the Finder sidebar.").foregroundStyle(.secondary)
                 HStack {
                     Button("Open in Finder") { model.openInFinder() }
