@@ -181,8 +181,8 @@ _Regenerated 2026-11-13 from the R-rule list in CLAUDE.md — **45 rules**, high
 <!-- GENERATED:deep-docs -->
 _Regenerated 2026-11-13. Every subsystem doc under `docs/systems/` (59 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
-- [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-04)_
-- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-06)_
+- [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-13)_
+- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-13)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-06)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-11-11)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-11-13)_
@@ -199,7 +199,7 @@ _Regenerated 2026-11-13. Every subsystem doc under `docs/systems/` (59 docs), wi
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-11-06)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-11-10)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-11)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-13)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-11-11)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-12)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-13)_
@@ -210,7 +210,7 @@ _Regenerated 2026-11-13. Every subsystem doc under `docs/systems/` (59 docs), wi
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-13)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-11)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-11)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-11)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-13)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-11-06)_
 - [payment-plans.md](payment-plans.md) — Payment plans (a setup fee paid in parts) and the Calendar's "Invoices to raise" _(verified 2026-11-11)_

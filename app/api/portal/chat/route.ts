@@ -4,7 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { getTeammateScopeOrNull, requirePortalCapability } from '@/lib/portal/team/gate'
 import { pickChatSenderName } from '@/lib/portal/chat-sender-name'
-import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
+import { createPortalNotification, notifyClientOfAdminMessage, waitForClientAlert } from '@/lib/portal/notifications'
 import { isPortalAdminEmailEnabled } from '@/lib/settings'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { CRM_BASE_URL, PORTAL_BASE_URL } from '@/lib/config'
@@ -584,7 +584,7 @@ export async function POST(request: NextRequest) {
 
   // Notify client when admin sends a message
   if (senderType === 'admin') {
-    createPortalNotification({
+    const clientAlert = createPortalNotification({
       account_id: account_id || undefined,
       contact_id: resolvedContactId || undefined,
       type: 'chat',
@@ -592,13 +592,15 @@ export async function POST(request: NextRequest) {
       // a message that is only a voice note says so (otherwise the notification body would be empty)
       body: chatPreviewText(message, attachments).slice(0, 100),
       link: buildPortalChatLink({ accountId: account_id || null, topic }),
-    }).catch(() => {})
+    })
     notifyClientOfAdminMessage({
       account_id: account_id || null,
       contact_id: resolvedContactId || null,
       topic,
       messagePreview: chatPreviewText(message, attachments),
     }).catch(() => {})
+    // wait (at most 4 s) for the client's browser + iPhone-app alert: a serverless function may be stopped as soon as it has answered
+    await waitForClientAlert(clientAlert)
   }
 
   // Notify admin when client sends a message. The email is gated by an

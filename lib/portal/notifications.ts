@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendPushToAccount, sendPushToContact } from './web-push'
+import { waitForPhoneLeg } from '@/lib/app/phone-leg'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { buildPortalChatLink } from '@/lib/portal/chat-link'
 import { escapeHtml } from '@/lib/html-escape'
@@ -33,7 +34,7 @@ export async function createPortalNotification(params: {
   /** Text for the instant push only, when it must differ from the bell row's body — e.g. a lock
    * screen should not show the text of the client's own message. Defaults to `body`. */
   pushBody?: string
-}): Promise<{ error: string | null }> {
+}): Promise<{ error: string | null; pushDone?: Promise<void> }> {
   // Returns the failure instead of swallowing it, so a caller that reports
   // per-channel results (notifyClientActionRequired) no longer says "ok" for a
   // bell that was never created. Existing callers ignore the return value.
@@ -52,29 +53,43 @@ export async function createPortalNotification(params: {
     return { error: error.message }
   }
 
-  // Send Web Push (fire-and-forget) — prefer contact, fallback to account
+  // Send Web Push + the client iPhone app's lock-screen alert — prefer contact, fallback to account.
+  // The send starts here and is NOT awaited, so every existing caller behaves as before. The promise is handed back as `pushDone`
+  // (it never rejects) so a caller that answers an HTTP request right after can wait for it with `waitForClientAlert`: a serverless
+  // function may be stopped as soon as it has answered, which cut off the phone alert of a team chat message (13 Nov 2026).
+  let pushDone: Promise<void> = Promise.resolve()
   if (params.contact_id) {
-    sendPushToContact(params.contact_id, {
+    pushDone = sendPushToContact(params.contact_id, {
       title: params.title,
       body: pushBody ?? (params.body || ''),
       url: params.link || '/portal',
       tag: params.type,
       clientKind: params.type, // the client iPhone app shows fixed words for this kind, never the title or body
-    }).catch(() => {})
+    }).then(() => undefined, () => undefined)
   } else if (params.account_id) {
-    sendPushToAccount(params.account_id, {
+    pushDone = sendPushToAccount(params.account_id, {
       title: params.title,
       body: pushBody ?? (params.body || ''),
       url: params.link || '/portal',
       tag: params.type,
       clientKind: params.type, // the client iPhone app shows fixed words for this kind, never the title or body
-    }).catch(() => {})
+    }).then(() => undefined, () => undefined)
   }
 
   // Email is now handled by the digest cron (/api/cron/portal-digest)
   // which batches all pending notifications into one email per client every 5 minutes.
   // No immediate email — only push notifications are instant.
-  return { error: null }
+  return { error: null, pushDone }
+}
+
+/**
+ * For a route that answers its caller right after the team wrote to a client: wait (at most PHONE_WAIT_MS, 4 s) for the alert
+ * `createPortalNotification` started — the browser alert and the client iPhone app's lock-screen alert — before the function is allowed to stop.
+ * Pass the promise `createPortalNotification` returned (not awaited yet). Never rejects and never waits longer than the cap, so a slow Apple or
+ * browser service cannot hold the reply; the alert keeps its own limits whatever happens here.
+ */
+export function waitForClientAlert(notification: Promise<{ pushDone?: Promise<unknown> } | null | undefined>): Promise<void> {
+  return waitForPhoneLeg(notification.then(result => (result ? result.pushDone : undefined)))
 }
 
 /**
