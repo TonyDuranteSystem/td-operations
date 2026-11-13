@@ -117,11 +117,20 @@ export function visibleNewsItems(items: NewsItem[], closedKeys: ReadonlySet<stri
   return items.filter(i => i.dismissKey === null || !closedKeys.has(i.dismissKey))
 }
 
+/**
+ * The announcements this device already closed, kept so the News button can always show what the news was ("Earlier" in the sheet).
+ * They stay until the team switches the announcement off. One that cannot be closed is never "earlier": it is always open.
+ */
+export function earlierNewsItems(items: NewsItem[], closedKeys: ReadonlySet<string>): NewsItem[] {
+  return items.filter(i => i.dismissKey !== null && closedKeys.has(i.dismissKey))
+}
+
 // ── The floating banner (app only) ────────────────────────────────────────────────────────────────────────────────────────────────────────
 // When the team publishes an announcement, the Overview shows a small floating banner ("tap to read") above the bottom bar until the client
-// taps it or closes it. Only the announcements the team wrote in the CRM can pop up: the Relay guide and the team-invite card are always
-// "open" for most people, so they stay behind the News button and never nag. Closing the banner is remembered under its OWN key, so it only
-// hides the banner; the announcement stays under the News button (with its red number) until the client closes it there.
+// taps it, or chooses "Later" (or swipes it down). Only the announcements the team wrote in the CRM can pop up: the Relay guide and the team-invite card are always
+// "open" for most people, so they stay behind the News button and never nag. Reading it (tapping the banner, or opening the News button) is
+// remembered under its OWN key, so it only hides the banner; the announcement stays under the News button (with its red number) until the
+// client closes it there. "Later" hides the banner for this visit only (kept in memory, not on the phone), so it is back the next time the app opens.
 
 /** localStorage key prefix that remembers "this announcement's banner was already shown and closed on this phone". */
 export const BANNER_DISMISS_PREFIX = 'td-portal-ann-banner-'

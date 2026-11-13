@@ -16,7 +16,7 @@ import { TemplateList } from '@/components/portal/template-list'
 import { VendorList } from '@/components/portal/vendor-list'
 import { ExpensesHeader } from '@/components/portal/expenses-header'
 import { AutopayCard } from '@/components/portal/autopay-card'
-import { Receipt, Plus, ArrowDownLeft, ArrowUpRight, Building2, Users, Settings2 } from 'lucide-react'
+import { Receipt, Plus, ArrowDownLeft, ArrowUpRight, Building2, ChevronRight, Users, Settings2 } from 'lucide-react'
 import { CustomersPanel } from '@/components/portal/customers-panel'
 import { LogoUpload } from '@/components/portal/logo-upload'
 import { BankAccounts } from '@/components/portal/bank-accounts'
@@ -39,7 +39,7 @@ import { isCardAutopayEnabled } from '@/lib/payments/card-autopay-config'
 import { latestDeliveryProblems } from '@/lib/portal/invoice-delivery'
 import { getClientAppModeActive } from '@/lib/app-mode/server'
 import { isClientAppPayEnabled } from '@/lib/portal-app/enabled'
-import { appInvoicesScreen, appInvoiceAreas, billingTotals, checklistStepTarget, invoicesRootHref, requiredFirst, tdInvoicesOf } from '@/lib/portal-app/invoices'
+import { appInvoicesScreen, appInvoiceAreas, billingTotals, checklistStepTarget, invoicesRootHref, requiredFirst, SETUP_BANK_ANCHOR, SETUP_LOGO_ANCHOR, setupScreenStepTarget, tdInvoicesOf } from '@/lib/portal-app/invoices'
 import { AppInvoiceAreas, AppAreaHeader } from '@/components/portal/app-invoices'
 import { AppTdBilling } from '@/components/portal/app-td-billing'
 
@@ -280,7 +280,7 @@ export default async function PortalInvoicesPage({
         label: tr(item.labelKey),
         required: item.required,
         done: item.done,
-        href: checklistStepTarget(guides.checklist.items.find(i => i.id === item.id)?.rule, visibleTabs.map(x => x.id)),
+        href: checklistStepTarget(guides.checklist.items.find(i => i.id === item.id)?.rule, visibleTabs.map(x => x.id), partnerAccountId),
       }))
     : null
   // TD Billing = the invoices from Tony Durante LLC among the expenses this person may see (same history start date as the list).
@@ -535,25 +535,42 @@ export default async function PortalInvoicesPage({
           <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3" data-tour="setup-checklist">
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('invoices.setupChecklist', locale, translations)}</h2>
             <ul className="divide-y">
-              {checklist.map(item => (
-                <li key={item.id} className="flex items-center gap-3 py-2 text-sm">
-                  <span className={`h-5 w-5 rounded-full border-2 flex items-center justify-center text-[11px] text-white ${item.done ? 'bg-emerald-600 border-emerald-600' : 'border-zinc-300'}`}>{item.done ? '✓' : ''}</span>
-                  <span className="flex-1 text-zinc-800">{t(item.labelKey, locale, translations)}</span>
-                  <span className={`text-xs ${item.required ? 'text-amber-700 font-medium' : 'text-zinc-400'}`}>
-                    {item.required ? t('invoices.setupRequired', locale, translations) : t('invoices.setupOptional', locale, translations)}
-                  </span>
-                </li>
-              ))}
+              {checklist.map(item => {
+                // Inside the app each step is a tap: the first customer opens Customers, the logo and the bank details jump down to their card
+                // on this same screen. The website keeps the plain list.
+                const href = appMode && guides
+                  ? setupScreenStepTarget(guides.checklist.items.find(i => i.id === item.id)?.rule, visibleTabs.map(x => x.id), { canEditLogo, managedAccountId: partnerAccountId })
+                  : null
+                const row = (
+                  <>
+                    <span className={`h-5 w-5 rounded-full border-2 flex items-center justify-center text-[11px] text-white ${item.done ? 'bg-emerald-600 border-emerald-600' : 'border-zinc-300'}`}>{item.done ? '✓' : ''}</span>
+                    <span className="flex-1 text-zinc-800">{t(item.labelKey, locale, translations)}</span>
+                    <span className={`text-xs ${item.required ? 'text-amber-700 font-medium' : 'text-zinc-400'}`}>
+                      {item.required ? t('invoices.setupRequired', locale, translations) : t('invoices.setupOptional', locale, translations)}
+                    </span>
+                    {href && <ChevronRight className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />}
+                  </>
+                )
+                if (!href) return <li key={item.id} className="flex items-center gap-3 py-2 text-sm">{row}</li>
+                const linkClass = 'flex min-h-11 items-center gap-3 py-2 text-sm'
+                return (
+                  <li key={item.id} data-testid={`app-setup-screen-step-${item.id}`}>
+                    {href.startsWith('#')
+                      ? <a href={href} className={linkClass}>{row}</a>
+                      : <Link href={href} className={linkClass}>{row}</Link>}
+                  </li>
+                )
+              })}
             </ul>
           </div>
           )}
           {canEditLogo && (
-          <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
+          <div id={SETUP_LOGO_ANCHOR} className="scroll-mt-4 bg-white rounded-xl border shadow-sm p-6 space-y-4">
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.invoiceLogo', locale, translations)}</h2>
             <LogoUpload accountId={selectedAccountId} currentUrl={setupFacts.logoUrl} />
           </div>
           )}
-          <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4" data-tour="setup-payment">
+          <div id={SETUP_BANK_ANCHOR} className="scroll-mt-4 bg-white rounded-xl border shadow-sm p-6 space-y-4" data-tour="setup-payment">
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.bankDetails', locale, translations)}</h2>
             <BankAccounts accountId={selectedAccountId} readOnly={!canEditBank} />
           </div>

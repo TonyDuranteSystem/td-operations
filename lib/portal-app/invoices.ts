@@ -72,11 +72,31 @@ export function requiredFirst<T extends { required: boolean }>(steps: readonly T
 
 /**
  * Where a set-up step leads. The rule names are the website's (`CHECKLIST_RULES`): adding how customers pay and adding the logo are both
- * done on Setup, the first customer on Customers. A step whose area this person cannot open is not a link.
+ * done on Setup, the first customer on Customers. A step whose area this person cannot open is not a link. A person managing a client's
+ * company keeps that company (`&accountId=`), the website's own address word.
  */
-export function checklistStepTarget(rule: ChecklistRule | undefined, visible: ReadonlyArray<InvoiceTabId>): string | null {
+export function checklistStepTarget(rule: ChecklistRule | undefined, visible: ReadonlyArray<InvoiceTabId>, managedAccountId?: string | null): string | null {
   const tab: InvoiceTabId | null = rule === 'customer' ? 'customers' : rule === 'payment' || rule === 'logo' ? 'setup' : null
-  return tab && visible.includes(tab) ? `/portal/invoices?tab=${tab}` : null
+  return tab && visible.includes(tab) ? `/portal/invoices?tab=${tab}${accountQuery(managedAccountId)}` : null
+}
+
+/** The ids of the logo and bank cards on the Setup area, so a step can jump down to them (they are on the same screen as the steps). */
+export const SETUP_LOGO_ANCHOR = 'invoice-setup-logo'
+export const SETUP_BANK_ANCHOR = 'invoice-setup-bank'
+
+/**
+ * Where a step on the SETUP screen itself leads (the steps are drawn there too, as a plain list on the website). The first customer is
+ * another area (a page address); the logo and how customers pay are cards on this same screen (a `#` jump, nothing to load). The logo card
+ * exists only for a person allowed to change it, so without that there is no jump for the logo step.
+ */
+export function setupScreenStepTarget(
+  rule: ChecklistRule | undefined,
+  visible: ReadonlyArray<InvoiceTabId>,
+  opts: { canEditLogo: boolean; managedAccountId?: string | null },
+): string | null {
+  if (rule === 'logo') return opts.canEditLogo ? `#${SETUP_LOGO_ANCHOR}` : null
+  if (rule === 'payment') return `#${SETUP_BANK_ANCHOR}`
+  return checklistStepTarget(rule, visible, opts.managedAccountId)
 }
 
 // ── TD Billing ──────────────────────────────────────────────────────────────────

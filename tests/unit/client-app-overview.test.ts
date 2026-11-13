@@ -266,7 +266,29 @@ describe('wiring (source guards)', () => {
     expect(btn).toContain('banner.length > 0 && !open')
     expect(btn).toContain('bannerKeyFor')
     expect(src('components/portal/app-overview/news-banner.tsx')).toContain('createPortal')
-    expect(src('components/portal/app-overview/news-banner.tsx')).toContain('app-news-banner-close')
+    expect(src('components/portal/app-overview/news-banner.tsx')).toContain('app-news-banner-later')
+  })
+
+  it('the banner offers "Later" and a swipe down (not just a close X), and "Later" is kept in memory only, so the banner is back next visit', () => {
+    const banner = src('components/portal/app-overview/news-banner.tsx')
+    expect(banner).toContain('onTouchMove')
+    expect(banner).toContain('BANNER_SWIPE_DISTANCE')
+    expect(banner).not.toContain('app-news-banner-close')
+    const btn = src('components/portal/app-overview/news-button.tsx')
+    expect(btn).toContain('putAwayForNow')
+    // "Later" must never write to the phone's storage: only reading the news does
+    const later = btn.slice(btn.indexOf('const putBannerAway'), btn.indexOf('const openSheet'))
+    expect(later).not.toContain('remember(')
+    expect(btn).toContain('onLater={putBannerAway}')
+  })
+
+  it('the News button is always there and lists what was already read under "Earlier"', () => {
+    const btn = src('components/portal/app-overview/news-button.tsx')
+    expect(btn).toContain('earlierNewsItems')
+    expect(btn).toContain('app-news-earlier')
+    expect(btn).toContain('visible.length > 0 && (')
+    // it goes away only when there is nothing at all to show, never because everything was closed
+    expect(btn).toContain('if (visible.length === 0 && earlier.length === 0) return null')
   })
 
   it('the home page honours the announcements\' start and end dates, for the website and the app alike', () => {

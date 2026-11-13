@@ -11,6 +11,7 @@ import {
   TEAM_DISMISS_KEY,
   TEAM_HREF,
   bannerItems,
+  earlierNewsItems,
   bannerKeyFor,
   buildNewsItems,
   isTeamAnnouncement,
@@ -196,5 +197,36 @@ describe('the floating banner', () => {
     expect(key).toBe(`${BANNER_DISMISS_PREFIX}announcement-a1`)
     expect(key).not.toBe(`${ANNOUNCEMENT_DISMISS_PREFIX}a1`)
     expect(key.startsWith(BANNER_DISMISS_PREFIX)).toBe(true)
+  })
+})
+
+describe('the News button keeps what the client already read ("Earlier")', () => {
+  const ann = (over: Partial<NewsAnnouncementRow> = {}): NewsAnnouncementRow => ({
+    id: 'a1', title: 'Titolo', message: 'Messaggio', title_en: 'Title', message_en: 'Message', type: 'info', dismissible: true, ...over,
+  })
+  const all = buildNewsItems({ locale: 'en', canManageTeam: true, announcements: [ann(), ann({ id: 'a2', dismissible: false })] })
+
+  it('nothing closed yet: nothing is "earlier"', () => {
+    expect(earlierNewsItems(all, new Set())).toEqual([])
+  })
+
+  it('a closed announcement moves from the open list to "earlier", and is still listed (so the client can read it again)', () => {
+    const closed = new Set([`${ANNOUNCEMENT_DISMISS_PREFIX}a1`])
+    expect(earlierNewsItems(all, closed).map(i => i.id)).toEqual(['announcement-a1'])
+    expect(visibleNewsItems(all, closed).map(i => i.id)).not.toContain('announcement-a1')
+  })
+
+  it('an announcement that cannot be closed is never "earlier": it is always open', () => {
+    const closed = new Set([`${ANNOUNCEMENT_DISMISS_PREFIX}a2`])
+    expect(earlierNewsItems(all, closed)).toEqual([])
+    expect(visibleNewsItems(all, closed).map(i => i.id)).toContain('announcement-a2')
+  })
+
+  it('open + earlier always add up to every announcement (none is lost, none is listed twice)', () => {
+    const closed = new Set([GUIDE_DISMISS_KEY, `${ANNOUNCEMENT_DISMISS_PREFIX}a1`])
+    const open = visibleNewsItems(all, closed).map(i => i.id)
+    const earlier = earlierNewsItems(all, closed).map(i => i.id)
+    expect([...open, ...earlier].sort()).toEqual(all.map(i => i.id).sort())
+    expect(open.filter(id => earlier.includes(id))).toEqual([])
   })
 })
