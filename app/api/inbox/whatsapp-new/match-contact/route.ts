@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { findContactByPhone } from "@/lib/messaging/contact-match"
+import { findAllMatchesByPhone } from "@/lib/messaging/contact-match"
 import { jidToE164 } from "@/lib/messaging/phone"
 import { findNameSuggestion } from "@/lib/messaging/name-suggestion"
-import { suggestedSaveName } from "@/lib/messaging/name-match"
+import { isOneToOneNumberKey, suggestedSaveName } from "@/lib/messaging/name-match"
 
 export const dynamic = "force-dynamic"
 
@@ -41,8 +41,21 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ match: null, alreadyLinked: true })
   }
 
-  const match = await findContactByPhone(jidToE164(group.external_group_id))
-  if (match) return NextResponse.json({ match, alreadyLinked: false, nameSuggestion: null })
+  // Every lead/contact that holds this exact number, however it is written (digits only). One → shown as the match; several → the bar lets
+  // staff choose (nothing here picks a person). A failed read is an ERROR, never "no match" — otherwise the bar would offer to add a
+  // number that is already on file.
+  let matches: Awaited<ReturnType<typeof findAllMatchesByPhone>> = []
+  if (isOneToOneNumberKey(group.external_group_id)) {
+    try {
+      matches = await findAllMatchesByPhone(jidToE164(group.external_group_id))
+    } catch (err) {
+      console.error("[match-contact] number lookup failed:", err instanceof Error ? err.message : err)
+      return NextResponse.json({ error: "Could not check this number right now." }, { status: 500 })
+    }
+  }
+  if (matches.length > 0) {
+    return NextResponse.json({ match: matches.length === 1 ? matches[0] : null, matches, alreadyLinked: false, nameSuggestion: null })
+  }
 
   // No client has this number. A known client may be writing from a second number: if the sender's name fits exactly one
   // existing contact, the banner offers to add this number to them (suggest only — a person clicks). Never blocks the page.
