@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unsupported_grant_type" }, { status: 400, headers: H })
   } catch (e) {
     if (e instanceof DeviceAuthError) {
-      return NextResponse.json({ error: e.code, error_description: e.message }, { status: e.code === "access_denied" || e.code === "device_revoked" ? 403 : 400, headers: H })
+      return NextResponse.json({ error: e.code, error_description: e.message }, { status: e.code === "access_denied" || e.code === "device_revoked" ? 403 : e.code === "temporarily_unavailable" ? 503 : 400, headers: H })
     }
     return NextResponse.json({ error: "server_error", error_description: "Could not complete the sign-in. Please try again." }, { status: 500, headers: H })
   }
