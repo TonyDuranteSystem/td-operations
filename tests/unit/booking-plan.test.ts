@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { decideLinkPlan, parseMinutes, recorderFor, payModeFor, type LinkPlanInput } from "@/lib/booking/plan"
+import { decideLinkPlan, parseMinutes, recorderFor, payModeFor, type LinkPlanInput, type LinkPlanResult } from "@/lib/booking/plan"
 import type { KindRule } from "@/lib/booking/kinds"
 
 const META = {
@@ -11,9 +11,10 @@ const META = {
 const kind = (slug: keyof typeof META) => ({ slug, label: slug[0].toUpperCase() + slug.slice(1), metadata: META[slug] })
 const base = (over: Partial<LinkPlanInput> = {}): LinkPlanInput => ({ person: { state: "new" }, kind: kind("lead"), minutes: 30, ...over })
 const plan = (over: Partial<LinkPlanInput> = {}) => decideLinkPlan(base(over))
+const errorsOf = (r: LinkPlanResult): string[] => ("errors" in r ? r.errors : [])
 const okPlan = (over: Partial<LinkPlanInput> = {}) => {
   const r = plan(over)
-  if (!r.ok) throw new Error(r.errors.join(" | "))
+  if (!r.ok) throw new Error(errorsOf(r).join(" | "))
   return r.plan
 }
 
@@ -43,7 +44,7 @@ describe("length: 30 = standard reusable link, any other = one-time", () => {
   it("a bad length is refused with a plain sentence", () => {
     const r = plan({ minutes: "45.5" })
     expect(r.ok).toBe(false)
-    expect(!r.ok && r.errors[0]).toMatch(/whole number of minutes/)
+    expect(errorsOf(r)[0]).toMatch(/whole number of minutes/)
   })
 })
 
@@ -121,7 +122,7 @@ describe("money", () => {
   it("a paid link cannot use a kind that saves nothing", () => {
     const r = plan({ person: { state: "new" }, kind: kind("private"), minutes: 45, payment: { amount: "100", currency: "USD" } })
     expect(r.ok).toBe(false)
-    expect(!r.ok && r.errors.join(" ")).toMatch(/saves nothing/)
+    expect(errorsOf(r).join(" ")).toMatch(/saves nothing/)
   })
   it("a payment description over 80 characters is refused", () => {
     expect(plan({ minutes: 45, payment: { amount: "100", currency: "USD", label: "x".repeat(81) } }).ok).toBe(false)
@@ -153,7 +154,7 @@ describe("kinds that need setup are refused", () => {
   })
   it("reports every problem at once, not only the first", () => {
     const r = plan({ kind: { slug: "x", label: "X", metadata: null }, minutes: "no" })
-    expect(!r.ok && r.errors.length).toBeGreaterThanOrEqual(2)
+    expect(errorsOf(r).length).toBeGreaterThanOrEqual(2)
   })
 })
 

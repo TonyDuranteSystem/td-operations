@@ -13,7 +13,7 @@ describe("link id", () => {
   it("is 22 URL-safe characters (128 bits) and different every time", () => {
     const ids = new Set(Array.from({ length: 200 }, () => newLinkId()))
     expect(ids.size).toBe(200)
-    for (const id of ids) {
+    for (const id of Array.from(ids)) {
       expect(id).toHaveLength(22)
       expect(isStrictLinkId(id)).toBe(true)
     }
