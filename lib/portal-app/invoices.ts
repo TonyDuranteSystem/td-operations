@@ -6,8 +6,10 @@
  * only a different way of showing what the page already works out; the numbers, the history start date and who may see which area stay
  * the website's own rules (`lib/portal/invoice-hub.ts`). Nothing here reads the database.
  */
+import { format, parseISO } from 'date-fns'
 import type { InvoiceTabId } from '@/lib/portal/invoice-hub'
 import type { ChecklistRule } from '@/lib/portal/guides/guides'
+import type { MoneyByCurrency } from '@/lib/portal/invoice-totals'
 
 /** The address word for the TD Billing screen: `/portal/invoices?tab=billing`. Not a tab of the website (the website never reads it). */
 export const APP_BILLING_TAB = 'billing'
@@ -97,6 +99,68 @@ export function setupScreenStepTarget(
   if (rule === 'logo') return opts.canEditLogo ? `#${SETUP_LOGO_ANCHOR}` : null
   if (rule === 'payment') return `#${SETUP_BANK_ANCHOR}`
   return checklistStepTarget(rule, visible, opts.managedAccountId)
+}
+
+// ── The Invoices home, the Sales and Expenses lists (dev job 056a70d0, "invoices in gray") ─────────────────────────────────────────────
+
+/** How many of the newest invoices the Invoices home lists before "See all". */
+export const LATEST_INVOICES = 3
+
+export type InvoicesHomeMode = 'steps' | 'summary' | 'links'
+
+/**
+ * What the Invoices home draws at the top.
+ *   steps   = a client whose required set-up steps are not all done: the "before your first invoice" card leads (most companies today);
+ *   summary = everything needed is in and the person may see Sales: the graphite "owed to you" card, the latest invoices;
+ *   links   = a person with no Sales area (no company, only personal expenses): just the list of areas.
+ * The decision uses the page's existing required-steps count (`setupMissing`), never "has customers" or "has invoices".
+ */
+export function invoicesHomeMode(input: { isClientHub: boolean; setupMissing: number; canSeeSales: boolean }): InvoicesHomeMode {
+  if (input.isClientHub && input.setupMissing > 0) return 'steps'
+  return input.canSeeSales ? 'summary' : 'links'
+}
+
+/** "$150.00" / "€1,256.00" lines, one per currency actually present (dollars first); a zero in `zeroCurrency` when there is nothing. */
+export function moneyLines(map: MoneyByCurrency, zeroCurrency: 'USD' | 'EUR' = 'USD'): string[] {
+  const lines = (['USD', 'EUR'] as const)
+    .filter(c => map[c] !== undefined && map[c] !== 0)
+    .map(c => `${c === 'EUR' ? '\u20AC' : '$'}${map[c].toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+  return lines.length > 0 ? lines : [`${zeroCurrency === 'EUR' ? '\u20AC' : '$'}0.00`]
+}
+
+/** The colour family of a status pill: paid green, still owed amber, overdue red, draft/cancelled gray. */
+export type StatusTone = 'ok' | 'warn' | 'bad' | 'draft'
+
+export function salesStatusTone(status: string): StatusTone {
+  if (status === 'Paid') return 'ok'
+  if (status === 'Sent' || status === 'Partial') return 'warn'
+  if (status === 'Overdue') return 'bad'
+  return 'draft'
+}
+
+export function expenseStatusTone(status: string): StatusTone {
+  if (status === 'Paid') return 'ok'
+  if (status === 'Pending') return 'warn'
+  if (status === 'Overdue') return 'bad'
+  return 'draft'
+}
+
+/** "October 2026" for a date (an ISO date or timestamp); empty for none or an unreadable one. */
+export function monthHeading(iso: string | null | undefined): string {
+  if (!iso) return ''
+  try { return format(parseISO(iso), 'MMMM yyyy') } catch { return '' }
+}
+
+/** Groups rows (already newest first) under month headings, keeping their order; a row with no readable date joins the group before it. */
+export function groupByMonth<T extends { issue_date: string | null }>(rows: readonly T[]): { label: string; rows: T[] }[] {
+  const groups: { label: string; rows: T[] }[] = []
+  for (const row of rows) {
+    const label = monthHeading(row.issue_date)
+    const last = groups[groups.length - 1]
+    if (last && (label === '' || label === last.label)) last.rows.push(row)
+    else groups.push({ label, rows: [row] })
+  }
+  return groups
 }
 
 // ── TD Billing ──────────────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ import { pickBankAccountId, bankCurrencyNote } from '@/lib/portal/bank-account-c
 import { nextRecurringDate, isValidCustomMonths, CUSTOM_MONTHS_MIN, CUSTOM_MONTHS_MAX } from '@/lib/portal/recurring-date'
 import Link from 'next/link'
 import { MoneyInput } from '@/components/portal/money-input'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
 
 interface Customer {
   id: string
@@ -58,6 +59,8 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const { t } = useLocale()
+  // Inside the client iPhone app the form gets item cards, hints and a bottom bar; the website keeps its layout (labels appear at phone width only).
+  const appMode = useAppMode()
 
   // Customer
   const [customerId, setCustomerId] = useState(initialData?.customerId ?? '')
@@ -233,7 +236,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
+    <form onSubmit={handleSubmit} className="space-y-6" data-app-gray={appMode ? '' : undefined}>
       {/* Header */}
       <div className="flex items-center gap-4">
         <Link href="/portal/invoices" className="p-2 rounded-lg hover:bg-zinc-100">
@@ -244,7 +247,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
         </h1>
       </div>
 
-      <div className="bg-white rounded-xl border shadow-sm p-6 space-y-6">
+      <div className={`bg-white rounded-xl border shadow-sm ${appMode ? 'p-4' : 'p-6'} space-y-6`}>
         {/* From Template */}
         {mode === 'create' && templates && templates.length > 0 && (
           <div>
@@ -313,6 +316,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
                 </button>
               </div>
             )}
+            {appMode && !showNewCustomer && <p className="mt-1 text-xs text-zinc-500">{t('app.invoiceForm.customerHint')}</p>}
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.currency')}</label>
@@ -328,7 +332,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
         </div>
 
         {/* Dates */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className={`grid ${appMode ? 'grid-cols-2' : 'grid-cols-1 sm:grid-cols-2'} gap-4`}>
           <div>
             <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.issueDate')}</label>
             <input
@@ -364,6 +368,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
               <option value="yearly">{t('invoices.yearly')}</option>
               <option value="custom">{t('invoices.custom')}</option>
             </select>
+            {appMode && <p className="mt-1 text-xs text-zinc-500">{t('app.invoiceForm.repeatHint')}</p>}
           </div>
           {recurringFrequency === 'custom' && (
             <div className="sm:col-span-2" data-testid="invoice-recurring-custom">
@@ -421,42 +426,81 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
               <span></span>
             </div>
 
-            {items.map((item, i) => (
-              <div key={i} className="grid grid-cols-1 sm:grid-cols-[1fr,80px,100px,100px,40px] gap-2 items-start">
-                <input
-                  type="text"
-                  value={item.description}
-                  onChange={e => updateItem(i, 'description', e.target.value)}
-                  placeholder={t('invoices.itemDescPlaceholder')}
-                  className="px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <input
-                  type="number"
-                  value={item.quantity}
-                  onChange={e => updateItem(i, 'quantity', Number(e.target.value))}
-                  min="0.01"
-                  step="0.01"
-                  className="px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <MoneyInput
-                  value={item.unit_price}
-                  onChange={n => updateItem(i, 'unit_price', n)}
-                  testId={`invoice-item-price-${i}`}
-                  className="px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <div className="px-3 py-2 text-sm bg-zinc-50 border rounded-lg text-zinc-700 font-medium">
-                  {currencySymbol}{(Number(item.quantity) * Number(item.unit_price)).toFixed(2)}
+            {items.map((item, i) => {
+              // Every box says what it is. The website's column titles above only show from the tablet width up, so below it each field carries
+              // its own small label (the app words are friendlier: "What is it for?", "Price each").
+              const labelClass = 'sm:hidden mb-1 block text-xs font-medium text-zinc-500'
+              return (
+              <div
+                key={i}
+                data-testid="invoice-item"
+                className={appMode
+                  ? 'grid grid-cols-2 gap-3 rounded-2xl border border-zinc-200 bg-zinc-50/60 p-4'
+                  : 'grid grid-cols-1 sm:grid-cols-[1fr,80px,100px,100px,40px] gap-2 items-start'}
+              >
+                {appMode && (
+                  <div className="col-span-2 flex items-center justify-between text-xs font-bold uppercase tracking-wide text-zinc-500">
+                    <span>{t('app.invoiceForm.itemN').replace('{n}', String(i + 1))}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeItem(i)}
+                      disabled={items.length <= 1}
+                      aria-label={t('app.invoiceForm.removeItem')}
+                      className="flex h-9 w-9 items-center justify-center rounded-full text-zinc-400 disabled:opacity-30"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+                <div className={appMode ? 'col-span-2' : ''}>
+                  <label className={labelClass}>{appMode ? t('app.invoiceForm.whatFor') : t('invoices.description')}</label>
+                  <input
+                    type="text"
+                    value={item.description}
+                    onChange={e => updateItem(i, 'description', e.target.value)}
+                    placeholder={t('invoices.itemDescPlaceholder')}
+                    className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 </div>
-                <button
-                  type="button"
-                  onClick={() => removeItem(i)}
-                  disabled={items.length <= 1}
-                  className="p-2 rounded-lg text-zinc-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-30 transition-colors"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                <div>
+                  <label className={labelClass}>{appMode ? t('app.invoiceForm.quantity') : t('invoices.qty')}</label>
+                  <input
+                    type="number"
+                    value={item.quantity}
+                    onChange={e => updateItem(i, 'quantity', Number(e.target.value))}
+                    min="0.01"
+                    step="0.01"
+                    className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>{appMode ? t('app.invoiceForm.priceEach') : t('invoices.price')}</label>
+                  <MoneyInput
+                    value={item.unit_price}
+                    onChange={n => updateItem(i, 'unit_price', n)}
+                    testId={`invoice-item-price-${i}`}
+                    className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div className={appMode ? 'col-span-2 flex items-center justify-between' : ''}>
+                  <label className={appMode ? 'text-sm font-medium text-zinc-500' : labelClass}>{appMode ? t('app.invoiceForm.itemTotal') : t('invoices.amount')}</label>
+                  <div className="px-3 py-2 text-sm bg-zinc-50 border rounded-lg text-zinc-700 font-medium">
+                    {currencySymbol}{(Number(item.quantity) * Number(item.unit_price)).toFixed(2)}
+                  </div>
+                </div>
+                {!appMode && (
+                  <button
+                    type="button"
+                    onClick={() => removeItem(i)}
+                    disabled={items.length <= 1}
+                    className="p-2 rounded-lg text-zinc-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-30 transition-colors"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
               </div>
-            ))}
+              )
+            })}
           </div>
           <button
             type="button"
@@ -550,21 +594,30 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
         </div>
       </div>
 
-      {/* Actions */}
-      <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">
+      {/* Actions: in the app a bar stays at the bottom while the form scrolls, with the total on the main button */}
+      <div className={appMode
+        ? 'sticky bottom-0 z-10 -mx-6 grid grid-cols-[auto_1fr] gap-3 border-t border-zinc-200 bg-white/95 px-6 pb-4 pt-3 backdrop-blur'
+        : 'flex flex-col-reverse sm:flex-row justify-end gap-3'}
+        data-testid={appMode ? 'invoice-form-bar' : undefined}
+      >
         <Link
           href="/portal/invoices"
-          className="px-4 py-2.5 text-sm border rounded-lg hover:bg-zinc-50 text-center"
+          className={appMode
+            ? 'flex min-h-[46px] items-center justify-center rounded-[14px] bg-zinc-200 px-4 text-sm font-semibold text-zinc-900'
+            : 'px-4 py-2.5 text-sm border rounded-lg hover:bg-zinc-50 text-center'}
         >
           {t('common.cancel')}
         </Link>
         <button
           type="submit"
           disabled={isPending}
-          className="flex items-center gap-2 px-6 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          className={appMode
+            ? 'flex min-h-[46px] items-center justify-center gap-2 rounded-[14px] bg-zinc-800 px-4 text-[15px] font-bold text-white disabled:opacity-50'
+            : 'flex items-center gap-2 px-6 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors'}
         >
           {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
           {mode === 'create' ? t('invoices.create') : t('invoices.save')}
+          {appMode && <span className="tabular-nums"> · {currencySymbol}{total.toFixed(2)}</span>}
         </button>
       </div>
     </form>

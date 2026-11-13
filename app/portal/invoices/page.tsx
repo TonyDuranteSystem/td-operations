@@ -39,8 +39,9 @@ import { isCardAutopayEnabled } from '@/lib/payments/card-autopay-config'
 import { latestDeliveryProblems } from '@/lib/portal/invoice-delivery'
 import { getClientAppModeActive } from '@/lib/app-mode/server'
 import { isClientAppPayEnabled } from '@/lib/portal-app/enabled'
-import { appInvoicesScreen, appInvoiceAreas, billingTotals, checklistStepTarget, invoicesRootHref, requiredFirst, SETUP_BANK_ANCHOR, SETUP_LOGO_ANCHOR, setupScreenStepTarget, tdInvoicesOf } from '@/lib/portal-app/invoices'
-import { AppInvoiceAreas, AppAreaHeader } from '@/components/portal/app-invoices'
+import { accountQuery, appInvoicesScreen, appInvoiceAreas, billingTotals, checklistStepTarget, invoicesHomeMode, invoicesRootHref, LATEST_INVOICES, moneyLines, requiredFirst, salesStatusTone, SETUP_BANK_ANCHOR, SETUP_LOGO_ANCHOR, setupScreenStepTarget, tdInvoicesOf } from '@/lib/portal-app/invoices'
+import { AppInvoiceAreas, AppAreaHeader, type AppLatestInvoice } from '@/components/portal/app-invoices'
+import { format, parseISO } from 'date-fns'
 import { AppTdBilling } from '@/components/portal/app-td-billing'
 
 export default async function PortalInvoicesPage({
@@ -283,6 +284,31 @@ export default async function PortalInvoicesPage({
         href: checklistStepTarget(guides.checklist.items.find(i => i.id === item.id)?.rule, visibleTabs.map(x => x.id), partnerAccountId),
       }))
     : null
+  // The Invoices home (dev job 056a70d0): the graphite "owed to you" card, the latest invoices, the gear. Same numbers the Sales tab used
+  // to print in three tall cards (per currency, never added together); "overdue" is what is still owed on invoices marked Overdue.
+  const homeMode = appMode ? invoicesHomeMode({ isClientHub, setupMissing, canSeeSales: visibleTabs.some(x => x.id === 'sales') }) : 'links'
+  const zeroCurrency = zeroCurrencyFor(sales.invoiced, sales.paid, sales.outstanding)
+  const appSummary = appMode && homeMode === 'summary'
+    ? {
+        owed: moneyLines(sales.outstanding, zeroCurrency),
+        paid: formatMoneyMap(sales.paid, zeroCurrency),
+        overdue: formatMoneyMap(salesTotals(statsRowsVisible.filter(r => r.status === 'Overdue')).outstanding, zeroCurrency),
+      }
+    : null
+  const dayLabel = (iso: string | null) => { try { return iso ? format(parseISO(iso), 'MMM d') : '' } catch { return '' } }
+  const appLatest: AppLatestInvoice[] = appMode && homeMode !== 'links'
+    ? mapped.slice(0, LATEST_INVOICES).map(inv => ({
+        id: inv.id,
+        customer: inv.customer_name,
+        number: inv.invoice_number,
+        dateLabel: dayLabel(inv.issue_date),
+        amountLabel: moneyLines({ [inv.currency === 'EUR' ? 'EUR' : 'USD']: Number(inv.total) })[0],
+        status: inv.status,
+        tone: salesStatusTone(inv.status),
+        href: `/portal/invoices/${inv.id}`,
+      }))
+    : []
+  const appSetupHref = visibleTabs.some(x => x.id === 'setup') ? `/portal/invoices?tab=setup${accountQuery(partnerAccountId)}` : null
   // TD Billing = the invoices from Tony Durante LLC among the expenses this person may see (same history start date as the list).
   // Only the fields the screen shows go to the browser (no attachment links).
   const billingRows = appMode && appScreen === 'billing'
@@ -312,14 +338,34 @@ export default async function PortalInvoicesPage({
     pending: formatMoneyMap(billingMoney.pending),
   }
 
+  // One block of the Setup screen: the website's white card with its own small title, or inside the app a gray heading over a calm card.
+  const SetupCard = ({ id, title, tour, children }: { id?: string; title: string; tour?: string; children: React.ReactNode }) => appMode ? (
+    <section id={id} data-tour={tour} className="scroll-mt-4 space-y-2">
+      <h2 className="px-1 text-[11px] font-bold uppercase tracking-[0.09em] text-zinc-500">{title}</h2>
+      <div className="rounded-[18px] border border-zinc-200 bg-white p-4">{children}</div>
+    </section>
+  ) : (
+    <div id={id} data-tour={tour} className="scroll-mt-4 bg-white rounded-xl border shadow-sm p-6 space-y-4">
+      <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{title}</h2>
+      {children}
+    </div>
+  )
+
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6" data-app-gray={appMode ? '' : undefined}>
       {appMode && appScreen === 'areas' && (
         <AppInvoiceAreas
           subtitle={companyName ? (showHub ? tr('app.invoicesSubtitle').replace('{company}', () => companyName) : companyName) : selectedAccountId ? tr('app.invoicesSubtitleNoCompany') : tr('invoices.yourPersonalExpenses')}
+          mode={homeMode}
           steps={appSteps}
           stepsLeft={setupMissing}
           areas={appAreas}
+          summary={appSummary}
+          latest={appLatest}
+          salesCount={salesStats.total}
+          newInvoiceHref={selectedAccountId ? '/portal/invoices/new' : null}
+          setupHref={appSetupHref}
+          seeAllHref={`/portal/invoices?tab=sales${accountQuery(partnerAccountId)}`}
           tr={tr}
         />
       )}
@@ -327,7 +373,20 @@ export default async function PortalInvoicesPage({
         <AppTdBilling rows={billingRows} totals={billingBoxes} payEnabled={!appPayHidden} year={new Date().getFullYear()} justPaid={params.paid === '1'} />
       )}
       {appMode && appScreen === 'tab' && (
-        <AppAreaHeader backLabel={tr('app.backToInvoices')} backHref={invoicesRootHref(partnerAccountId)} title={tr(visibleTabs.find(x => x.id === activeTab)?.labelKey ?? 'nav.invoices')} />
+        <AppAreaHeader
+          backLabel={tr('app.backToInvoices')}
+          backHref={invoicesRootHref(partnerAccountId)}
+          title={activeTab === 'setup' ? tr('app.inv.setupTitle') : tr(visibleTabs.find(x => x.id === activeTab)?.labelKey ?? 'nav.invoices')}
+          action={
+            showTab && activeTab === 'sales' && selectedAccountId ? (
+              <Link href="/portal/invoices/new" data-testid="app-area-new" aria-label={tr('app.inv.newInvoice')} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-white">
+                <Plus className="h-5 w-5" aria-hidden="true" />
+              </Link>
+            ) : showTab && activeTab === 'expenses' && selectedAccountId ? (
+              <ExpensesHeader accountId={selectedAccountId} vendors={vendors} round />
+            ) : undefined
+          }
+        />
       )}
       {/* Slim "New: take the tour" strip: only while the tour is still being offered to this login (never in view-as) */}
       {isClientHub && guides && !viewingAsClient && !appMode && shouldOfferTour(tourPref, guides.tour) && (
@@ -377,7 +436,7 @@ export default async function PortalInvoicesPage({
             activeTab={activeTab}
           />
         )}
-        {showTab && activeTab === 'sales' && selectedAccountId && (
+        {showTab && !appMode && activeTab === 'sales' && selectedAccountId && (
           <Link
             data-tour="sales-new"
             href="/portal/invoices/new"
@@ -387,7 +446,7 @@ export default async function PortalInvoicesPage({
             {t('invoices.new', locale, translations)}
           </Link>
         )}
-        {showTab && activeTab === 'expenses' && selectedAccountId && (
+        {showTab && !appMode && activeTab === 'expenses' && selectedAccountId && (
           <ExpensesHeader accountId={selectedAccountId} vendors={vendors} />
         )}
       </div>
@@ -440,7 +499,8 @@ export default async function PortalInvoicesPage({
       {/* ── Sales Tab ── */}
       {showTab && activeTab === 'sales' && (
         <>
-          {/* Stats */}
+          {/* Stats (the app shows these numbers on its Invoices home instead) */}
+          {!appMode && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.totalInvoiced', locale, translations)}</p>
@@ -455,6 +515,7 @@ export default async function PortalInvoicesPage({
               <p className="text-lg sm:text-xl font-semibold text-amber-600 mt-1">{salesStats.outstanding}</p>
             </div>
           </div>
+          )}
 
           <div data-tour="sales-list">
           {mapped.length === 0 ? (
@@ -471,7 +532,7 @@ export default async function PortalInvoicesPage({
               </Link>
             </div>
           ) : (
-            <InvoiceList invoices={mapped} />
+            <InvoiceList invoices={mapped} compact={appMode} />
           )}
           </div>
 
@@ -491,7 +552,21 @@ export default async function PortalInvoicesPage({
             />
           )}
 
-          {/* Stats */}
+          {/* Stats: the website's three cards; the app's one slim strip */}
+          {appMode ? (
+            <div data-testid="app-expense-strip" className="grid grid-cols-3 overflow-hidden rounded-[18px] border border-zinc-200 bg-white">
+              {[
+                { label: tr('app.inv.total'), value: expenseStats.totalAmount, tone: 'text-zinc-900' },
+                { label: t('expenses.totalPaid', locale, translations), value: expenseStats.paid, tone: 'text-emerald-700' },
+                { label: t('expenses.totalPending', locale, translations), value: expenseStats.pending, tone: 'text-amber-700' },
+              ].map((box, i) => (
+                <div key={box.label} className={`min-w-0 px-3 py-3 ${i > 0 ? 'border-l border-zinc-200' : ''}`}>
+                  <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-zinc-500">{box.label}</p>
+                  <p className={`mt-0.5 break-words text-[15px] font-bold leading-tight tabular-nums ${box.tone}`}>{box.value}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('expenses.totalExpenses', locale, translations)}</p>
@@ -506,6 +581,7 @@ export default async function PortalInvoicesPage({
               <p className="text-lg sm:text-xl font-semibold text-amber-600 mt-1">{expenseStats.pending}</p>
             </div>
           </div>
+          )}
 
           {expenses.length === 0 ? (
             <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
@@ -518,6 +594,7 @@ export default async function PortalInvoicesPage({
               expenses={expenses}
               initialFilter={defaultExpenseFilter === 'paid' ? 'Paid' : 'All'}
               hidePay={appPayHidden}
+              compact={appMode}
             />
           )}
         </>
@@ -531,8 +608,8 @@ export default async function PortalInvoicesPage({
       {/* ── Setup Tab (hub): logo, bank accounts, payment link — the same cards that used to live on Profile ── */}
       {showTab && activeTab === 'setup' && selectedAccountId && setupFacts && (
         <div className="space-y-4" data-testid="invoice-setup">
-          {isClientHub && (
-          <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3" data-tour="setup-checklist">
+          {isClientHub && (!appMode || setupMissing > 0) && (
+          <div className={appMode ? 'rounded-[18px] border border-zinc-200 bg-white p-4 space-y-3' : 'bg-white rounded-xl border shadow-sm p-5 space-y-3'} data-tour="setup-checklist">
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('invoices.setupChecklist', locale, translations)}</h2>
             <ul className="divide-y">
               {checklist.map(item => {
@@ -565,19 +642,16 @@ export default async function PortalInvoicesPage({
           </div>
           )}
           {canEditLogo && (
-          <div id={SETUP_LOGO_ANCHOR} className="scroll-mt-4 bg-white rounded-xl border shadow-sm p-6 space-y-4">
-            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.invoiceLogo', locale, translations)}</h2>
-            <LogoUpload accountId={selectedAccountId} currentUrl={setupFacts.logoUrl} />
-          </div>
+            <SetupCard id={SETUP_LOGO_ANCHOR} title={t('profile.invoiceLogo', locale, translations)}>
+              <LogoUpload accountId={selectedAccountId} currentUrl={setupFacts.logoUrl} />
+            </SetupCard>
           )}
-          <div id={SETUP_BANK_ANCHOR} className="scroll-mt-4 bg-white rounded-xl border shadow-sm p-6 space-y-4" data-tour="setup-payment">
-            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.bankDetails', locale, translations)}</h2>
+          <SetupCard id={SETUP_BANK_ANCHOR} title={t('profile.bankDetails', locale, translations)} tour="setup-payment">
             <BankAccounts accountId={selectedAccountId} readOnly={!canEditBank} />
-          </div>
-          <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
-            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.paymentGateway', locale, translations)}</h2>
+          </SetupCard>
+          <SetupCard title={t('profile.paymentGateway', locale, translations)}>
             <PaymentLinks accountId={selectedAccountId} readOnly={!canEditLinks} />
-          </div>
+          </SetupCard>
         </div>
       )}
 
