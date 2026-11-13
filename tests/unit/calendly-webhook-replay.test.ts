@@ -3,11 +3,13 @@
  *
  * Reads the stored real Calendly bookings from a folder OUTSIDE the repo (BOOKING_REPLAY_DIR, file payloads.json —
  * they hold real emails and are never committed), runs the webhook handler on every one of them against a recording
- * fake database in ~19 different situations, and either
+ * fake database in 20 different situations, and either
  *   BOOKING_REPLAY_MODE=record  → saves golden.json (run ONLY on unmodified code; refuses to overwrite), or
  *   BOOKING_REPLAY_MODE=compare → runs the same replay and requires the result to equal golden.json.
  * BOOKING_REPLAY_LEVEL=strict (default: every query, write, module call, log line and the answer must be identical)
  * or =behaviour (writes, module calls and the answer only — used once new, switched-off code reads one more setting).
+ *
+ * BOOKING_REPLAY_SIGNED=1 sets the signing secret and signs every request; BOOKING_REPLAY_SETTING=absent|off|page|live|throws|error sets the `booking` switch.
  *
  * With BOOKING_REPLAY_DIR unset the whole file is skipped, so `npm run test:unit` and CI never touch real data.
  */
@@ -66,6 +68,9 @@ import { POST } from '@/app/api/webhooks/calendly/route'
 const DIR = process.env.BOOKING_REPLAY_DIR
 const MODE = process.env.BOOKING_REPLAY_MODE === 'record' ? 'record' : 'compare'
 const LEVEL = process.env.BOOKING_REPLAY_LEVEL === 'behaviour' ? 'behaviour' : 'strict'
+// BOOKING_REPLAY_SIGNED=1: the signing secret is set and every request is validly signed (the production situation). BOOKING_REPLAY_SETTING: the `booking` switch (absent|off|page|live|throws|error).
+const SIGNED = process.env.BOOKING_REPLAY_SIGNED === '1'
+const TEST_SECRET = 'replay-test-secret'
 
 interface StoredPayload { id: string; created_at: string; review_status: string; payload: unknown }
 interface Golden {
@@ -81,7 +86,7 @@ async function runOne(payload: unknown, scenarioIndex: number): Promise<Trace> {
   const trace = beginRun(scenario)
   process.env.CALENDLY_INTAKE_MODE = scenario.mode ?? 'auto_create'
   try {
-    const res = await POST(makeReq(payload) as unknown as NextRequest)
+    const res = await POST(makeReq(payload, SIGNED ? TEST_SECRET : undefined) as unknown as NextRequest)
     trace.response = { status: res.status, body: await res.json() }
   } catch (e) {
     trace.response = { thrown: e instanceof Error ? e.message : String(e) }
@@ -98,7 +103,8 @@ describe.skipIf(!DIR)('calendly webhook replay (real stored bookings, private fo
 
   beforeAll(() => {
     payloads = JSON.parse(fs.readFileSync(path.join(DIR!, 'payloads.json'), 'utf8'))
-    delete process.env.CALENDLY_WEBHOOK_SECRET
+    if (SIGNED) process.env.CALENDLY_WEBHOOK_SECRET = TEST_SECRET
+    else delete process.env.CALENDLY_WEBHOOK_SECRET
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-11-13T12:00:00.000Z'))
     const warn = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => recordLog('warn: ' + a.map(String).join(' ')))
@@ -115,7 +121,7 @@ describe.skipIf(!DIR)('calendly webhook replay (real stored bookings, private fo
       for (let i = 0; i < SCENARIOS.length; i++) results[p.id][SCENARIOS[i].name] = await runOne(p.payload, i)
     }
 
-    // coverage numbers only (no emails): how the 19 situations ended across all bookings
+    // coverage numbers only (no emails): how the 20 situations ended across all bookings
     const outcomes: Record<string, Record<string, number>> = {}
     for (const s of SCENARIOS) {
       outcomes[s.name] = {}
@@ -136,6 +142,7 @@ describe.skipIf(!DIR)('calendly webhook replay (real stored bookings, private fo
       return
     }
 
+    if (process.env.BOOKING_REPLAY_DUMP === '1') fs.writeFileSync(path.join(DIR!, 'current.json'), JSON.stringify(results), { mode: 0o600 })
     const golden: Golden = JSON.parse(fs.readFileSync(goldenPath, 'utf8'))
     expect(golden.payloadCount).toBe(payloads.length)
     let identical = 0
@@ -148,7 +155,7 @@ describe.skipIf(!DIR)('calendly webhook replay (real stored bookings, private fo
       }
     }
     const summary = { level: LEVEL, goldenRouteSha256: golden.routeSha256, currentRouteSha256: routeSha, runs: payloads.length * SCENARIOS.length, identical, different: diffs.length, firstDifferences: diffs.slice(0, 10), outcomes }
-    fs.writeFileSync(path.join(DIR!, `last-compare-${LEVEL}.json`), JSON.stringify(summary, null, 2), { mode: 0o600 })
+    fs.writeFileSync(path.join(DIR!, `last-compare-${LEVEL}${SIGNED ? '-signed-' + (process.env.BOOKING_REPLAY_SETTING ?? 'absent') : ''}.json`), JSON.stringify(summary, null, 2), { mode: 0o600 })
     expect(diffs).toEqual([])
     expect(identical).toBe(payloads.length * SCENARIOS.length)
   }, 180_000)

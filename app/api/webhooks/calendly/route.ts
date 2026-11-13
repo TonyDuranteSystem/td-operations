@@ -26,7 +26,10 @@ import { extractInviteeFields } from "@/lib/calendly/parse-invitee"
 import { extractPaidBooking } from "@/lib/calendly/paid-booking"
 import { recordPaidCall } from "@/lib/operations/paid-call-credit"
 import { isEstablishedClientContact } from "@/lib/calendly/existing-client-tag"
-import { runLegacyLeadTail } from "@/lib/calendly/legacy-lead-tail"
+import { runLegacyLeadTail, type LegacyTailHooks } from "@/lib/calendly/legacy-lead-tail"
+import { webhookBranchEnabled } from "@/lib/booking-links/switch"
+import { resolveLinkPhase1, applyBookingLink, type LinkContext } from "@/lib/booking-links/engine"
+import { raiseCallCheck } from "@/lib/booking-links/call-checks"
 
 // Escape ILIKE metacharacters so a real email containing `_`/`%` can't
 // pattern-match an unrelated row (same pattern as app/api/webhooks/circleback/route.ts).
@@ -143,6 +146,17 @@ export async function POST(req: NextRequest) {
 
     const db = getSupabase()
 
+    // ─── Booking links, PHASE 1 (read-only; skipped unless the `booking` switch is live AND the signing secret is set) ───
+    // A booking made through a link Antonio created carries the link's id in utm_term. Fail-open: any problem here leaves linkCtx null
+    // and the booking is handled exactly as before.
+    let linkCtx: LinkContext | null = null
+    try {
+      if (await webhookBranchEnabled(db, process.env.CALENDLY_WEBHOOK_SECRET)) linkCtx = await resolveLinkPhase1(db, payload)
+    } catch (err) {
+      console.error("[calendly-webhook] booking-link lookup failed:", err instanceof Error ? err.message : String(err))
+      linkCtx = null
+    }
+
     // Check for existing lead/contact (used by both modes). Escaped +
     // deterministically ordered (oldest first) so a real email containing a
     // wildcard character, or a legacy duplicate row, can't flip which row
@@ -204,12 +218,13 @@ export async function POST(req: NextRequest) {
     let referrerContactId: string | null = null
     let referrerName: string | null = null
     let referralCode: string | null = null
-    if (fields.referralCode) {
+    // When a made link's row was found, the referrer comes from that row ONLY (decided in Phase 2); the address-based lookup below is skipped.
+    if (fields.referralCode && !linkCtx?.row) {
       try {
         const { data: referrer } = await db
           .from("contacts")
           .select("id, full_name")
-          .ilike("referral_code", fields.referralCode)
+          .ilike("referral_code", escapeLikePattern(fields.referralCode))
           .maybeSingle()
         if (referrer) {
           referrerContactId = referrer.id
@@ -286,13 +301,15 @@ export async function POST(req: NextRequest) {
     // (which only lists 'pending_review'/'auto_linked' and the processed set) —
     // auto-created bookings already became leads and need no review. Without this,
     // the column default 'pending_review' would clutter the Intake pending list.
-    await db.from("webhook_events").insert({
+    // .select("id") so a booking that needs a look but whose card cannot be saved can still be marked for review on this stored copy.
+    const storedEvent = await db.from("webhook_events").insert({
       source: "calendly",
       event_type: payload.event || "unknown",
       external_id: payload.payload?.uri || "unknown",
       payload,
       review_status: "auto_created",
-    })
+    }).select("id")
+    const webhookEventId: string | null = (Array.isArray(storedEvent?.data) ? storedEvent.data[0]?.id : null) ?? null
 
     // ─── WS-A: PAID BOOKING → revenue + a deductible credit ───
     // Detection is structural (a successful payment object), never an event
@@ -328,6 +345,32 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ─── Booking links, PHASE 2 (after the paid-call step, which keeps keying on the booker's email and runs first) ───
+    // Judges the match, claims a one-time link, and applies the kind's rule: save the call under the contact, or run the lead path below with the link's
+    // extras. Anything thrown falls back to today's path and raises a card. It can answer here itself (call saved under the contact / nothing to save).
+    let tailHooks: LegacyTailHooks | undefined
+    if (linkCtx && linkCtx.lookup !== "no_tag") {
+      try {
+        const out = await applyBookingLink({ db, payload, fields, ctx: linkCtx, existingLeads, webhookEventId })
+        if (out.kind === "handled") return NextResponse.json(out.body)
+        if (out.kind === "legacy") {
+          tailHooks = out.hooks
+          referrerContactId = out.referrer?.contactId ?? null
+          referrerName = out.referrer?.name ?? null
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error("[calendly-webhook] booking-link step failed (booking handled as usual):", message)
+        tailHooks = undefined
+        if (linkCtx.row) { referrerContactId = null; referrerName = null }
+        await raiseCallCheck(
+          db,
+          { kind: "effect_failed", dedupeKey: linkCtx.tag.inviteeUri ?? linkCtx.tag.eventUri ?? "unknown", bookingLinkId: linkCtx.row?.id ?? null, eventUri: linkCtx.tag.eventUri, payload: { reason: message.slice(0, 200), booker_email: fields.email, booker_name: fields.name } },
+          { webhookEventId },
+        )
+      }
+    }
+
     // Everything from here on (update the lead that already exists, or create a new one, attribute a referral,
     // keep the booking as its own call) lives in lib/calendly/legacy-lead-tail.ts — moved there unchanged.
     const tail = await runLegacyLeadTail({
@@ -338,6 +381,7 @@ export async function POST(req: NextRequest) {
       taggedContactId,
       referrerContactId,
       referrerName,
+      hooks: tailHooks,
     })
     if (tail.kind === "insert_failed") {
       return NextResponse.json({ error: tail.message }, { status: 500 })

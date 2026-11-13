@@ -9,6 +9,8 @@
  * named by BOOKING_REPLAY_DIR and are never committed.
  */
 
+import { createHmac } from 'node:crypto'
+
 export interface Scenario {
   name: string
   mode?: 'auto_create' | 'staging'
@@ -128,6 +130,14 @@ function resolveQuery(table: string, ops: Array<[string, unknown[]]>, terminal: 
     if (eqCols.includes('calendly_event_uri')) return asRows(sc.leadCallExists ? [{ id: 'call-existing' }] : [])
     return asRows([])
   }
+  if (table === 'app_settings') {
+    // the booking switch, set for a whole replay run by BOOKING_REPLAY_SETTING (absent | off | page | live | throws)
+    const setting = process.env.BOOKING_REPLAY_SETTING ?? 'absent'
+    if (setting === 'throws') throw new Error('settings read failed')
+    if (setting === 'error') return { data: null, error: { message: 'settings read failed' } }
+    if (setting === 'absent') return asRows([])
+    return asRows([{ value: { mode: setting } }])
+  }
   if (table === 'webhook_events') {
     if (has('select')) return asRows([{ id: 'event-1' }])
     return { data: null, error: null }
@@ -157,16 +167,23 @@ export function fakeClient() {
       }
       builder.maybeSingle = async () => finish('maybeSingle')
       builder.single = async () => finish('single')
-      builder.then = (onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) => Promise.resolve(finish('await')).then(onF, onR)
+      builder.then = (onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) => new Promise((resolve) => resolve(finish('await'))).then(onF, onR)
       return builder
     },
   }
 }
 
-export function makeReq(body: unknown) {
+/** With a secret, the request carries a valid Calendly signature (t=<now>,v1=<hmac>) — Date.now() is whatever the test froze it to. */
+export function makeReq(body: unknown, secret?: string) {
+  const text = JSON.stringify(body)
+  let signature: string | null = null
+  if (secret) {
+    const t = Math.floor(Date.now() / 1000)
+    signature = `t=${t},v1=${createHmac('sha256', secret).update(`${t}.${text}`).digest('hex')}`
+  }
   return {
-    text: async () => JSON.stringify(body),
-    headers: { get: () => null },
+    text: async () => text,
+    headers: { get: (name: string) => (name.toLowerCase() === 'calendly-webhook-signature' ? signature : null) },
   }
 }
 

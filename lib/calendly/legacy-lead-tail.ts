@@ -22,6 +22,30 @@ export interface ExistingLeadRow {
   existing_client_contact_id?: string | null
 }
 
+/**
+ * Optional hooks for a booking that came through a made booking link (Booking page). With NO hooks the tail behaves exactly as it always did.
+ * A hook that throws is swallowed: it can never change what the tail did or what the webhook answers.
+ */
+export interface LegacyTailHooks {
+  /** first line of the notes of a lead THIS booking creates (the "Booking kind: <label>" mark) */
+  notesPrefix?: string | null
+  /** the language to write on a lead THIS booking creates, used only when the booking itself carried none */
+  languageFallback?: string | null
+  /** called once the tail has succeeded, with the lead this booking made (created) or updated */
+  onLeadResolved?: (leadId: string, created: boolean) => Promise<void> | void
+  /** called after the referral attribution step: attributed | already_attributed | failed */
+  onReferral?: (outcome: "attributed" | "already_attributed" | "failed") => Promise<void> | void
+}
+
+async function runHook(fn: (() => Promise<void> | void) | undefined): Promise<void> {
+  if (!fn) return
+  try {
+    await fn()
+  } catch (err) {
+    console.error("[calendly-webhook] booking-link hook failed:", err instanceof Error ? err.message : String(err))
+  }
+}
+
 export interface LegacyTailInput {
   db: SupabaseClient
   /** the whole Calendly payload, as parsed from the request body */
@@ -34,6 +58,7 @@ export interface LegacyTailInput {
   /** set only from a verified referral code resolving to a real contact */
   referrerContactId: string | null
   referrerName: string | null
+  hooks?: LegacyTailHooks
 }
 
 export type LegacyTailResult =
@@ -61,7 +86,7 @@ export async function keepBooking(db: SupabaseClient, leadId: string, payload: R
 }
 
 export async function runLegacyLeadTail(input: LegacyTailInput): Promise<LegacyTailResult> {
-  const { db, payload, fields, existingLeads, taggedContactId, referrerContactId, referrerName } = input
+  const { db, payload, fields, existingLeads, taggedContactId, referrerContactId, referrerName, hooks } = input
 
   if (existingLeads && existingLeads.length > 0) {
     const lead = existingLeads[0]
@@ -84,6 +109,7 @@ export async function runLegacyLeadTail(input: LegacyTailInput): Promise<LegacyT
     await keepBooking(db, lead.id, payload)
 
     console.warn(`[calendly-webhook] [legacy] Updated existing lead ${lead.id} — ${fields.name} (${fields.email})`)
+    await runHook(hooks?.onLeadResolved ? () => hooks.onLeadResolved!(lead.id, false) : undefined)
     return { kind: "updated", leadId: lead.id }
   }
 
@@ -109,13 +135,14 @@ export async function runLegacyLeadTail(input: LegacyTailInput): Promise<LegacyT
     source: referrerContactId ? "Referral" : "Calendly",
     channel: "Calendly",
     status: "Call Scheduled",
-    notes: buildLeadNotes(fields),
+    notes: hooks?.notesPrefix ? `${hooks.notesPrefix}\n${buildLeadNotes(fields)}` : buildLeadNotes(fields),
     ...(taggedContactId ? { existing_client_contact_id: taggedContactId } : {}),
   }
   if (fields.firstName) leadRecord.first_name = fields.firstName
   if (fields.lastName) leadRecord.last_name = fields.lastName
   if (fields.phone) leadRecord.phone = fields.phone
   if (fields.language) leadRecord.language = fields.language
+  else if (hooks?.languageFallback) leadRecord.language = hooks.languageFallback
   if (fields.callDate) leadRecord.call_date = fields.callDate
   if (fields.reason) leadRecord.reason = fields.reason
   if (referrerName) leadRecord.referrer_name = referrerName
@@ -148,13 +175,16 @@ export async function runLegacyLeadTail(input: LegacyTailInput): Promise<LegacyT
         // Tell the referrer their link was registered (chat + email). Fire-and-forget.
         void notifyReferrerLinked({ referralId: refRes.id, referrerContactId, referredLeadId: newLead.id })
       }
+      await runHook(hooks?.onReferral ? () => hooks.onReferral!(refRes.created ? "attributed" : "already_attributed") : undefined)
     } catch {
       /* attribution is additive — never block lead creation */
+      await runHook(hooks?.onReferral ? () => hooks.onReferral!("failed") : undefined)
     }
   }
 
   await keepBooking(db, newLead.id, payload)
 
   console.warn(`[calendly-webhook] Created new lead ${newLead.id} — ${fields.name} (${fields.email})`)
+  await runHook(hooks?.onLeadResolved ? () => hooks.onLeadResolved!(newLead.id, true) : undefined)
   return { kind: "created", leadId: newLead.id, referrerContactId }
 }
