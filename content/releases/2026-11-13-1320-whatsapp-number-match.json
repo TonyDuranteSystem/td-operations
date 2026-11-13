@@ -1,0 +1,12 @@
+{
+  "title": "WhatsApp Inbox: a number written with spaces is now recognized, you choose when it is on several people, and a chat shows the sender's own name",
+  "tag": "improved",
+  "text": "The yellow line over a WhatsApp chat could miss a person whose phone number is saved with spaces or dashes, then wrongly offer to \"add this number\" to someone who already had it. It now reads the number however it is written. When the same number is saved on several records (for example two contacts and a lead), the chat shows all of them, with what each one is and its company, and you click the right one to link the chat; nothing is picked for you. Also, when nobody has named a chat, the list and the top of the chat now show the name the other person gave on their own WhatsApp, marked \"WhatsApp name\" because it is not a CRM record.",
+  "points": [
+    "Open a WhatsApp chat whose number is saved on two or more records: pick the right one in the yellow line",
+    "A number saved as \"+39 349 703 7513\" is now found like \"+393497037513\"",
+    "A chat nobody named shows the sender's own WhatsApp name, marked \"WhatsApp name\"",
+    "The automatic linking in the background is unchanged: it still refuses to guess between several people"
+  ],
+  "screenshot": "whatsapp-number-match.png"
+}
