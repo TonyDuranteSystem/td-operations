@@ -13,6 +13,8 @@ export interface AnnouncementRow {
   type: 'info' | 'warning' | 'success'
   active: boolean
   dismissible: boolean
+  /** true = shown only inside the client iPhone app (never on the website) */
+  app_only: boolean
   active_from: string | null
   active_until: string | null
   created_at: string
@@ -41,6 +43,7 @@ function AnnouncementDialog({
   const [type, setType] = useState<'info' | 'warning' | 'success'>(row?.type ?? 'info')
   const [dismissible, setDismissible] = useState(row?.dismissible !== false)
   const [active, setActive] = useState(row?.active !== false)
+  const [appOnly, setAppOnly] = useState(row?.app_only === true)
   const [activeFrom, setActiveFrom] = useState(row?.active_from ?? '')
   const [activeUntil, setActiveUntil] = useState(row?.active_until ?? '')
   const [saving, setSaving] = useState(false)
@@ -61,6 +64,7 @@ function AnnouncementDialog({
         type,
         dismissible,
         active,
+        app_only: appOnly,
         active_from: activeFrom || null,
         active_until: activeUntil || null,
       })
@@ -95,6 +99,19 @@ function AnnouncementDialog({
               placeholder="Message text shown to all portal clients..." />
           </div>
         </div>
+
+        {/* Where it shows: everywhere (website + app) or only inside the client iPhone app */}
+        <fieldset className="space-y-2 pt-1 border-t border-zinc-100" data-testid="announcement-show-in">
+          <legend className="text-sm font-medium text-zinc-700 pt-3">Show in</legend>
+          <label className="flex items-start gap-2 text-sm text-zinc-700 cursor-pointer">
+            <input type="radio" name="announcement-show-in" checked={!appOnly} onChange={() => setAppOnly(false)} className="mt-1" />
+            <span>Everywhere <span className="text-xs text-zinc-400">(client website and the app, as before)</span></span>
+          </label>
+          <label className="flex items-start gap-2 text-sm text-zinc-700 cursor-pointer">
+            <input type="radio" name="announcement-show-in" checked={appOnly} onChange={() => setAppOnly(true)} className="mt-1" />
+            <span><span className="font-medium">App only</span> <span className="text-xs text-zinc-400">(clients see it only inside the TD App; nothing on the website)</span></span>
+          </label>
+        </fieldset>
 
         {/* Date range */}
         <div className="grid grid-cols-2 gap-3 pt-1 border-t border-zinc-100">
@@ -204,7 +221,7 @@ export function AnnouncementsTab({ initialRows }: { initialRows: AnnouncementRow
     <div>
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-zinc-500">
-          Banners shown to all portal clients on their dashboard.
+          Banners shown to portal clients on their dashboard: everywhere, or only inside the client app.
         </p>
         <button onClick={() => setDialog('new')}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-zinc-900 text-white rounded-lg hover:bg-zinc-700">
@@ -234,7 +251,12 @@ export function AnnouncementsTab({ initialRows }: { initialRows: AnnouncementRow
               {rows.map(row => (
                 <tr key={row.id} className={row.active ? '' : 'opacity-50'}>
                   <td className="px-4 py-3">
-                    <p className="font-medium text-zinc-900">{row.title_en ?? row.title}</p>
+                    <p className="font-medium text-zinc-900">
+                      {row.title_en ?? row.title}
+                      {row.app_only && (
+                        <span data-testid="announcement-app-only-badge" className="ml-2 inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-violet-100 text-violet-700 align-middle">App only</span>
+                      )}
+                    </p>
                     <p className="text-xs text-zinc-500 mt-0.5 max-w-xs truncate">{row.message_en ?? row.message}</p>
                   </td>
                   <td className="px-4 py-3">

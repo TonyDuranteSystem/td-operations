@@ -75,6 +75,14 @@ final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
                 // one lookup per ITEM (a saved file leaves two feed rows), several at the same time: a day's backlog used to take ~10 minutes
                 let batch = ChangeBatch.collapse(page.changes)
                 if !page.changes.isEmpty { Trace.log("workingSet.batch", ["rows": page.changes.count, "items": batch.count, "kinds": batch.map { "\($0.kind)" }.joined(separator: ",")]) }
+                // WHERE each changed person's storage is also shown (under every company that lists the person): asked from the CRM, not learned from Finder,
+                // because a company folder Finder had cached before was never re-listed (a file stayed missing there). A real failure ends this page so
+                // Finder asks again from the same place; an older CRM without the answer (not found) simply gives nothing.
+                let asked = RouteBook.shared.needingCheck(batch.compactMap { $0.kind == .owner ? nil : $0.ownerId })
+                for question in RouteBook.questions(asked) {
+                    do { RouteBook.shared.apply(asked: question, routes: try await api.routes(owners: question)) }
+                    catch StorageAPIError.notFound { RouteBook.shared.apply(asked: question, routes: []) }
+                }
                 var results = [[Outcome]](repeating: [], count: batch.count)
                 await withTaskGroup(of: (Int, [Outcome]).self) { group in
                     var next = min(ChangeBatch.parallelLookups, batch.count)

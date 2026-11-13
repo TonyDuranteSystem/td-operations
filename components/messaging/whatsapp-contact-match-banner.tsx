@@ -21,6 +21,8 @@ interface ContactMatch {
   id: string
   name: string
   accountName?: string | null
+  /** A contact's first company — linking the chat to this person also links it. */
+  accountId?: string | null
 }
 
 interface NameSuggestion {
@@ -67,7 +69,7 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
   const [addingNewPerson, setAddingNewPerson] = useState(false)
   const [, bumpDismiss] = useState(0)
 
-  const { data, isLoading } = useQuery<{ match: ContactMatch | null; alreadyLinked: boolean; nameSuggestion?: NameSuggestion | null; suggestedName?: string | null }>({
+  const { data, isLoading } = useQuery<{ match: ContactMatch | null; matches?: ContactMatch[]; alreadyLinked: boolean; nameSuggestion?: NameSuggestion | null; suggestedName?: string | null; error?: string }>({
     queryKey: ['whatsapp-contact-match', groupId],
     queryFn: () => fetch(`/api/inbox/whatsapp-new/match-contact?groupId=${encodeURIComponent(groupId)}`).then((r) => r.json()),
   })
@@ -161,10 +163,34 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
       toast.success(`Saved ${name.trim()}`)
       queryClient.invalidateQueries({ queryKey: ['whatsapp-contact-match', groupId] })
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-messages', groupId] })
       onSaved?.()
       setRecordType(null)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not save.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** "This number is on several records — this is the one": link the chat to the person staff picked (nothing is picked for them). */
+  const handleLinkMatch = async (m: ContactMatch) => {
+    setSaving(true)
+    try {
+      const res = await fetch('/api/inbox/whatsapp-new/create-record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(m.type === 'lead' ? { groupId, existingLeadId: m.id } : { groupId, existingContactId: m.id, accountId: m.accountId ?? undefined }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || 'Could not link this chat — please try again.')
+      toast.success(`Linked ${m.name}`)
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-contact-match', groupId] })
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-messages', groupId] })
+      onSaved?.()
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not link this chat — please try again.')
     } finally {
       setSaving(false)
     }
@@ -185,6 +211,7 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
       toast.success(`Linked ${contact.name}`)
       queryClient.invalidateQueries({ queryKey: ['whatsapp-contact-match', groupId] })
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-messages', groupId] })
       onSaved?.()
       setRecordType(null)
     } catch (err) {
@@ -196,6 +223,43 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
 
   if (isLoading) return null
   if (data?.alreadyLinked) return null
+
+  // A failed lookup is shown as a failure — never as "no match" (that would offer to save a number that may already be on file).
+  if (data?.error) {
+    return (
+      <div data-tour="wa-match-banner" className="px-4 py-1.5 bg-zinc-50 border-b text-xs text-zinc-500">
+        {data.error} Open the chat again to retry.
+      </div>
+    )
+  }
+
+  // The same number is on several records (duplicates, or a lead next to its contact): staff choose, the system never guesses.
+  const several = data?.matches ?? []
+  if (!recordType && several.length > 1) {
+    return (
+      <div data-tour="wa-match-banner" className="px-4 py-2 bg-amber-50 border-b border-amber-100 text-xs text-amber-900 space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-medium">This number is on {several.length} records. Which one is this chat?</span>
+          <button onClick={() => setRecordType('lead')} className="shrink-0 font-medium text-blue-700 hover:text-blue-800">
+            Save as someone new
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {several.map((m) => (
+            <button
+              key={`${m.type}:${m.id}`}
+              onClick={() => handleLinkMatch(m)}
+              disabled={saving}
+              className="rounded-md border border-amber-300 bg-white px-2.5 py-1 text-left text-zinc-800 hover:bg-amber-100 disabled:opacity-40"
+            >
+              <span className="font-medium">{m.name || 'No name'}</span>
+              <span className="text-zinc-500"> · {m.type === 'lead' ? 'Lead' : 'Contact'}{m.accountName ? ` · ${m.accountName}` : ''}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
 
   if (data?.match) {
     const { type, name: matchName, accountName } = data.match
@@ -224,6 +288,7 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
         toast.success(`Added this number to ${c.name}`)
         queryClient.invalidateQueries({ queryKey: ['whatsapp-contact-match', groupId] })
         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-messages', groupId] })
         onSaved?.()
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : 'Could not add the number — please try again.')

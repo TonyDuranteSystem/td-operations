@@ -116,3 +116,35 @@ export function buildNewsItems(input: { locale: string; canManageTeam: boolean; 
 export function visibleNewsItems(items: NewsItem[], closedKeys: ReadonlySet<string>): NewsItem[] {
   return items.filter(i => i.dismissKey === null || !closedKeys.has(i.dismissKey))
 }
+
+/**
+ * The announcements this device already closed, kept so the News button can always show what the news was ("Earlier" in the sheet).
+ * They stay until the team switches the announcement off. One that cannot be closed is never "earlier": it is always open.
+ */
+export function earlierNewsItems(items: NewsItem[], closedKeys: ReadonlySet<string>): NewsItem[] {
+  return items.filter(i => i.dismissKey !== null && closedKeys.has(i.dismissKey))
+}
+
+// ── The floating banner (app only) ────────────────────────────────────────────────────────────────────────────────────────────────────────
+// When the team publishes an announcement, the Overview shows a small floating banner ("tap to read") above the bottom bar until the client
+// taps it, or chooses "Later" (or swipes it down). Only the announcements the team wrote in the CRM can pop up: the Relay guide and the team-invite card are always
+// "open" for most people, so they stay behind the News button and never nag. Reading it (tapping the banner, or opening the News button) is
+// remembered under its OWN key, so it only hides the banner; the announcement stays under the News button (with its red number) until the
+// client closes it there. "Later" hides the banner for this visit only (kept in memory, not on the phone), so it is back the next time the app opens.
+
+/** localStorage key prefix that remembers "this announcement's banner was already shown and closed on this phone". */
+export const BANNER_DISMISS_PREFIX = 'td-portal-ann-banner-'
+
+/** True for an announcement the team wrote in the CRM (the only kind that may pop up as the banner). */
+export function isTeamAnnouncement(item: NewsItem): boolean {
+  return item.id.startsWith('announcement-')
+}
+
+export function bannerKeyFor(item: NewsItem): string {
+  return `${BANNER_DISMISS_PREFIX}${item.id}`
+}
+
+/** The announcements that should be in the banner right now: written by the team, still open under the News button, banner not yet closed. */
+export function bannerItems(items: NewsItem[], closedKeys: ReadonlySet<string>, bannerSeenKeys: ReadonlySet<string>): NewsItem[] {
+  return visibleNewsItems(items, closedKeys).filter(i => isTeamAnnouncement(i) && !bannerSeenKeys.has(bannerKeyFor(i)))
+}

@@ -1,0 +1,12 @@
+{
+  "title": "Client app: banner Later, News button always there, tappable Setup steps, uploads show at once",
+  "tag": "improved",
+  "text": "In the client iPhone app, the news banner now has a Later button (or swipe it down): it comes back the next time the app opens, until the client has read it. The News button in the company card is always there; the red number shows only when something is new, and what was already read stays listed under Earlier. In Invoices, Setup, every step is now a tap: the first customer opens Customers, the logo and bank steps jump to their card. On the Documents page, in the app and on the website, a client's own upload now appears at once with Waiting for review until staff show it.",
+  "points": [
+    "App: wait for the news banner, tap Later, or drag it down",
+    "App: tap the megaphone: new news on top, Earlier below",
+    "App: Invoices, Setup, tap Add your first customer",
+    "Upload a file in Documents: it shows with Waiting for review"
+  ],
+  "screenshot": "client-app-news-later.png"
+}

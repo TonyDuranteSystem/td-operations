@@ -26,3 +26,13 @@ export async function loadAllowList(): Promise<string[]> {
   if (error) return []                        // cannot read it → nobody (fail closed)
   return parseAllowList(data?.value)
 }
+
+/** Like `loadAllowList` but a read that FAILED is `null` ("could not check"), not an empty list ("nobody is allowed") — the app must not sign Macs out because of a hiccup. */
+export async function loadAllowListStrict(): Promise<string[] | null> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- app_settings value is jsonb
+    const { data, error } = await (supabaseAdmin as any).from("app_settings").select("value").eq("key", ALLOWED_EMAILS_KEY).maybeSingle()
+    if (error) return null
+    return parseAllowList(data?.value)
+  } catch { return null }
+}

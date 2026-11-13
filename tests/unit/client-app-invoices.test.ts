@@ -19,6 +19,15 @@ import {
   billingRowState,
   billingTotals,
   checklistStepTarget,
+  invoicesHomeMode,
+  moneyLines,
+  salesStatusTone,
+  expenseStatusTone,
+  monthHeading,
+  groupByMonth,
+  setupScreenStepTarget,
+  SETUP_BANK_ANCHOR,
+  SETUP_LOGO_ANCHOR,
   requiredFirst,
   tdInvoicesOf,
   type BillingExpense,
@@ -133,6 +142,34 @@ describe('checklistStepTarget', () => {
     expect(checklistStepTarget('payment', ['sales', 'expenses'])).toBeNull()
     expect(checklistStepTarget('customer', ['setup', 'sales'])).toBeNull()
     expect(checklistStepTarget(undefined, all)).toBeNull()
+  })
+
+  it('keeps the company a person is managing, like the list rows do', () => {
+    expect(checklistStepTarget('customer', all, 'acct-1')).toBe('/portal/invoices?tab=customers&accountId=acct-1')
+    expect(checklistStepTarget('payment', all, 'a&b')).toBe('/portal/invoices?tab=setup&accountId=a%26b')
+  })
+})
+
+describe('setupScreenStepTarget (the steps drawn on the Setup screen itself)', () => {
+  const all: InvoiceTabId[] = ['setup', 'customers', 'sales', 'vendors', 'expenses']
+
+  it('the first customer opens Customers (another area), keeping the managed company', () => {
+    expect(setupScreenStepTarget('customer', all, { canEditLogo: true })).toBe('/portal/invoices?tab=customers')
+    expect(setupScreenStepTarget('customer', all, { canEditLogo: true, managedAccountId: 'acct-1' })).toBe('/portal/invoices?tab=customers&accountId=acct-1')
+  })
+
+  it('the logo and how customers pay jump to their card on the same screen', () => {
+    expect(setupScreenStepTarget('logo', all, { canEditLogo: true })).toBe(`#${SETUP_LOGO_ANCHOR}`)
+    expect(setupScreenStepTarget('payment', all, { canEditLogo: true })).toBe(`#${SETUP_BANK_ANCHOR}`)
+  })
+
+  it('a person who may not change the logo has no jump for it (the card is not drawn)', () => {
+    expect(setupScreenStepTarget('logo', all, { canEditLogo: false })).toBeNull()
+  })
+
+  it('is not a link to an area the person cannot open, or for an unknown rule', () => {
+    expect(setupScreenStepTarget('customer', ['setup', 'sales'], { canEditLogo: true })).toBeNull()
+    expect(setupScreenStepTarget(undefined, all, { canEditLogo: true })).toBeNull()
   })
 })
 
@@ -541,5 +578,83 @@ describe('wiring (source guards)', () => {
     expect((layout.match(/<Suspense fallback=\{null\}><ClientAppFrame /g) ?? []).length).toBe(2)
     expect(src('components/portal/client-app-frame.tsx')).toContain("useSearchParams()?.get('tab')")
     expect(src('components/portal/client-app-frame.tsx')).toContain("screenTitleFor(pathname, me?.items ?? [], tab, { invoices: t('nav.invoices'), billing: t('nav.tdBilling'), chat: t('nav.chat') })")
+  })
+})
+
+describe('invoicesHomeMode (what the Invoices home draws first)', () => {
+  it('a client with required set-up steps open sees the steps first, whatever else they have (most companies today)', () => {
+    expect(invoicesHomeMode({ isClientHub: true, setupMissing: 2, canSeeSales: true })).toBe('steps')
+    expect(invoicesHomeMode({ isClientHub: true, setupMissing: 1, canSeeSales: true })).toBe('steps')
+  })
+  it('once the required steps are done the owed-to-you card leads', () => {
+    expect(invoicesHomeMode({ isClientHub: true, setupMissing: 0, canSeeSales: true })).toBe('summary')
+  })
+  it('a team member never gets the steps card (it is the client\'s own checklist) but sees the summary when they may see Sales', () => {
+    expect(invoicesHomeMode({ isClientHub: false, setupMissing: 3, canSeeSales: true })).toBe('summary')
+  })
+  it('a person with no Sales area (no company) gets the plain list', () => {
+    expect(invoicesHomeMode({ isClientHub: false, setupMissing: 0, canSeeSales: false })).toBe('links')
+    expect(invoicesHomeMode({ isClientHub: true, setupMissing: 0, canSeeSales: false })).toBe('links')
+  })
+})
+
+describe('moneyLines', () => {
+  it('one line per currency, dollars first', () => {
+    expect(moneyLines({ EUR: 1256, USD: 150 })).toEqual(['$150.00', '\u20AC1,256.00'])
+  })
+  it('only the currency that is present', () => {
+    expect(moneyLines({ EUR: 99.5 })).toEqual(['\u20AC99.50'])
+  })
+  it('nothing owed is a single zero, in the currency the other boxes use', () => {
+    expect(moneyLines({})).toEqual(['$0.00'])
+    expect(moneyLines({}, 'EUR')).toEqual(['\u20AC0.00'])
+    expect(moneyLines({ USD: 0 })).toEqual(['$0.00'])
+  })
+})
+
+describe('status tones', () => {
+  it('sales: paid green, sent and part-paid amber, overdue red, everything else gray', () => {
+    expect(salesStatusTone('Paid')).toBe('ok')
+    expect(salesStatusTone('Sent')).toBe('warn')
+    expect(salesStatusTone('Partial')).toBe('warn')
+    expect(salesStatusTone('Overdue')).toBe('bad')
+    expect(salesStatusTone('Draft')).toBe('draft')
+    expect(salesStatusTone('Cancelled')).toBe('draft')
+    expect(salesStatusTone('')).toBe('draft')
+  })
+  it('expenses: paid green, pending amber, overdue red, cancelled gray', () => {
+    expect(expenseStatusTone('Paid')).toBe('ok')
+    expect(expenseStatusTone('Pending')).toBe('warn')
+    expect(expenseStatusTone('Overdue')).toBe('bad')
+    expect(expenseStatusTone('Cancelled')).toBe('draft')
+  })
+})
+
+describe('month groups for the Sales and Expenses lists', () => {
+  it('names the month, and is empty for a missing or unreadable date', () => {
+    expect(monthHeading('2026-10-16')).toBe('October 2026')
+    expect(monthHeading('2026-10-16T09:00:00Z')).toBe('October 2026')
+    expect(monthHeading(null)).toBe('')
+    expect(monthHeading('not a date')).toBe('')
+  })
+  it('keeps the newest-first order and starts a new group when the month changes', () => {
+    const rows = [
+      { id: 'a', issue_date: '2026-11-02' },
+      { id: 'b', issue_date: '2026-11-01' },
+      { id: 'c', issue_date: '2026-10-30' },
+      { id: 'd', issue_date: '2026-10-02' },
+      { id: 'e', issue_date: '2026-09-09' },
+    ]
+    const groups = groupByMonth(rows)
+    expect(groups.map(g => g.label)).toEqual(['November 2026', 'October 2026', 'September 2026'])
+    expect(groups.map(g => g.rows.map(r => r.id))).toEqual([['a', 'b'], ['c', 'd'], ['e']])
+  })
+  it('a row with no date joins the group before it and nothing is lost', () => {
+    const groups = groupByMonth([{ id: 'a', issue_date: '2026-11-02' }, { id: 'b', issue_date: null }, { id: 'c', issue_date: '2026-10-02' }])
+    expect(groups.flatMap(g => g.rows.map(r => r.id))).toEqual(['a', 'b', 'c'])
+    expect(groups[0].rows.map(r => r.id)).toEqual(['a', 'b'])
+  })
+  it('no rows, no groups', () => {
+    expect(groupByMonth([])).toEqual([])
   })
 })

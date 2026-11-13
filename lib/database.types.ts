@@ -14481,6 +14481,7 @@ export type Database = {
           active: boolean
           active_from: string | null
           active_until: string | null
+          app_only: boolean
           created_at: string
           dismissible: boolean
           id: string
@@ -14495,6 +14496,7 @@ export type Database = {
           active?: boolean
           active_from?: string | null
           active_until?: string | null
+          app_only?: boolean
           created_at?: string
           dismissible?: boolean
           id?: string
@@ -14509,6 +14511,7 @@ export type Database = {
           active?: boolean
           active_from?: string | null
           active_until?: string | null
+          app_only?: boolean
           created_at?: string
           dismissible?: boolean
           id?: string

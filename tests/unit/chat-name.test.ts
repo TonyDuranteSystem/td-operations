@@ -48,3 +48,30 @@ describe("isJunkChatName / formatChatPhone", () => {
     expect(formatChatPhone(null)).toBe("Unknown number")
   })
 })
+
+describe("sender-name fallback (Antonio, 2026-11-13: the phone knew the name, the CRM header showed only the number)", () => {
+  const KEY = "393662406426@c.us"
+
+  it("uses the sender's WhatsApp name only when nothing better exists, and says where it came from", async () => {
+    const { resolveChatNameWithSource } = await import("@/lib/messaging/chat-name")
+    expect(resolveChatNameWithSource({ senderName: "Vincenzo (Avvocato) Randazzo", externalGroupId: KEY })).toEqual({ name: "Vincenzo (Avvocato) Randazzo", source: "whatsapp" })
+    expect(resolveChatNameWithSource({ savedName: "Vincenzo R", senderName: "x y", externalGroupId: KEY })).toEqual({ name: "Vincenzo R", source: "phone" })
+    expect(resolveChatNameWithSource({ contactName: "Santo Catania", savedName: "S", senderName: "x y", externalGroupId: KEY })).toEqual({ name: "Santo Catania", source: "crm" })
+    expect(resolveChatNameWithSource({ externalGroupId: KEY })).toEqual({ name: "+393662406426", source: "number" })
+  })
+
+  it("never uses a junk sender name: our business name, TD Team, a bare number, Unknown", async () => {
+    const { resolveChatNameWithSource, pickSenderName } = await import("@/lib/messaging/chat-name")
+    for (const bad of ["Tony Durante LLC", "TD Team", "td team", "+393662406426", "Unknown", "", null]) {
+      expect(resolveChatNameWithSource({ senderName: bad, externalGroupId: KEY }).source).toBe("number")
+    }
+    expect(pickSenderName(["TD Team", null, "Tony Durante LLC", "Vincenzo R"], KEY)).toBe("Vincenzo R")
+    expect(pickSenderName(["TD Team"], KEY)).toBeNull()
+    expect(pickSenderName([], KEY)).toBeNull()
+  })
+
+  it("keeps the newest usable name first", async () => {
+    const { pickSenderName } = await import("@/lib/messaging/chat-name")
+    expect(pickSenderName(["Newest Name", "Older Name"], KEY)).toBe("Newest Name")
+  })
+})
