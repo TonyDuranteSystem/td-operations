@@ -124,6 +124,18 @@
    the whole height it is given instead of leaving a dead strip at the bottom. */
 [data-app-mode="true"] .app-fill { height: 100%; }
 
+/* Invoicing in gray (dev job 056a70d0): inside the client iPhone app the invoicing screens (the Invoices page and the invoice form carry
+   data-app-gray) drop the website's blue for graphite grays. Only colours; every rule starts with the app marker. */
+[data-app-mode="true"] [data-app-gray] .text-blue-600,
+[data-app-mode="true"] [data-app-gray] .text-blue-700 { color: #374151; }
+[data-app-mode="true"] [data-app-gray] .text-blue-800,
+[data-app-mode="true"] [data-app-gray] .text-blue-900 { color: #1f2937; }
+[data-app-mode="true"] [data-app-gray] .bg-blue-600 { background-color: #2b2f36; }
+[data-app-mode="true"] [data-app-gray] .bg-blue-50,
+[data-app-mode="true"] [data-app-gray] .bg-blue-100 { background-color: #f3f4f6; }
+[data-app-mode="true"] [data-app-gray] .border-blue-200 { border-color: #e5e7eb; }
+[data-app-mode="true"] [data-app-gray] .focus\:ring-blue-500:focus { --tw-ring-color: #9ca3af; }
+
 /* Client iPhone app (dev job 056a70d0, Step 3): the website's always-visible cookie-preferences button floats in the bottom-right corner
    on every portal page and would sit on top of page content, just above the app's own bottom bar. Only that button is hidden inside the
    app; the cookie notice itself is not touched (it shows only when the consent tool decides to ask), and what the app says about cookies

@@ -11,7 +11,7 @@ describe('placeWaitingUploads', () => {
     const out = placeWaitingUploads({ companyDocs: company, myDocs: mine, waiting: [doc('w1', 5, '2026-11-13T17:35:00Z')], alreadyListedIds: new Set(), hasPersonalList: true })
     expect(out.companyDocs.map(d => d.id)).toEqual(['w1', 'c1'])
     expect(out.myDocs.map(d => d.id)).toEqual(['m1'])
-    expect([...out.waitingIds]).toEqual(['w1'])
+    expect(Array.from(out.waitingIds)).toEqual(['w1'])
   })
 
   it('a personal paper goes to My Documents, never the company list', () => {
