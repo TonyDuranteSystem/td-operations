@@ -34,7 +34,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     // an alert that arrives while the app is open is still shown as a banner
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound, .badge]
+        // the numbers on the bar (Chat, Documents ...) change with the alert, not only the next time the person moves
+        await MainActor.run { ClientModel.shared.alertArrivedWhileOpen() }
+        return [.banner, .list, .sound, .badge]
     }
 
     // tapping an alert opens the page the server named (a same-site path, checked again in `open`)

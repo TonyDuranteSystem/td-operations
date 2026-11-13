@@ -72,6 +72,16 @@ final class ClientModel: ObservableObject {
 
     // MARK: pages
 
+    /// An alert arrived while the app is open (AppDelegate.willPresent): the bar's numbers are asked again now and once more a few seconds later (`AlertRefreshRules`).
+    func alertArrivedWhileOpen() {
+        for delay in AlertRefreshRules.delays {
+            Task { @MainActor in
+                if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+                await self.refreshMe()
+            }
+        }
+    }
+
     /// Only a same-site path is ever opened from a link or an alert (never an address of another site, never protocol-relative).
     func open(path: String) {
         guard let safe = AlertRouting.safeRelativePath(path), let url = URL(string: safe, relativeTo: AppConfig.serverURL)?.absoluteURL else { return }
