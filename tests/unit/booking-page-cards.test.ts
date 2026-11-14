@@ -26,11 +26,13 @@ describe("the day-to-day Calendar knows nothing about the Booking page", () => {
 describe("the Booking page carries the cards", () => {
   const page = read("app/(dashboard)/booking/page.tsx")
   const workspace = read("components/booking/booking-workspace.tsx")
-  it("reads them only after the admin check and the switch, and hands them to the workspace", () => {
-    const gate = page.indexOf("isSecureAdmin(user ?? null)")
+  it("reads them only after the staff check, once, and hands them to the Links and calls tab (the tab bar shows the count)", () => {
+    const gate = page.indexOf("isBookingStaff(user ?? null)")
     expect(gate).toBeGreaterThan(-1)
     expect(gate).toBeLessThan(page.indexOf("loadOpenChecks("))
-    expect(page).toContain("cards={")
+    expect(page).toContain("checks={checks}")
+    expect(page).toContain("callsCount={checks.ok ? checks.count : null}")
+    expect(read("components/booking/links-and-calls-tab.tsx")).toContain("cards={")
   })
   it("shows them as a section of the page, with the count, and never links to the Calendar", () => {
     expect(workspace).toContain("<CallsToCheckTab cards={cards} off={off} />")

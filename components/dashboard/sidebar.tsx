@@ -15,7 +15,6 @@ import {
   Settings,
   Calendar,
   CalendarDays,
-  CalendarPlus,
   LogOut,
   Menu,
   X,
@@ -120,11 +119,12 @@ const defaultNavigation: NavItem[] = [
   { id: 'dev-board', name: 'Dev Board', href: '/dev-board', icon: LayoutGrid, tooltip: 'Dev-tracker board — every dev job by channel (td-dev/td-bug/td-support): request, findings, approved plan, milestones and status. Claude Code sessions keep it current so nothing is lost.' },
   { id: 'storage', name: 'Storage', href: '/storage', icon: HardDrive, tooltip: 'General-purpose CRM storage — folders and files organized by staff. Not connected to Google Drive.' },
   { id: 'forms', name: 'Forms', href: '/forms', icon: ClipboardList, adminOnly: true, tooltip: 'Standalone forms that are not tied to a client — view a form, make a one-time link to send, and read what comes back. Admins and the staff logins named for it.' },
-  { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
+  // Booking (dev job a1839d8b, Antonio 2026-11-14): the Leads page now lives INSIDE the Booking page as its first tab, so this one row replaces the old Leads row (same place, same group).
+  // Every staff login that saw Leads sees it (admin and team); the page itself turns anyone else away. While the Calendly link side is turned off an administrator sees a small "Links off"
+  // tag (the layout passes 'booking-off' to administrators only); staff see no tag, because Leads works the same either way.
+  { id: 'booking', name: 'Booking', href: '/booking', icon: Target, tooltip: 'Leads — new inquiries that haven\'t signed yet, the first stage of the client journey — plus a Calendly link for a chosen person and kind of call, the links you made, and the calls to check.' },
   { id: 'marketing', name: 'Marketing', href: '/marketing-leads', icon: Megaphone, adminOnly: true, tooltip: 'TD Marketing — the master view of Rocco\'s team: leads from the ads, who is working them, what needs you today, and the Meta connection. Admin only.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
-  // Booking page (dev job 19d2654a): admin only. An administrator always sees it (the layout passes the 'booking' feature); while the setting is off the row carries an "Off" tag.
-  { id: 'booking', name: 'Booking', href: '/booking', icon: CalendarPlus, adminOnly: true, featureFlag: 'booking', tooltip: 'Make a Calendly link for a chosen person and kind of call (lead, client, partner, private), see the links you made and the calls to check. Admin only; "Off" means it is turned off for now.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
   { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2, tooltip: 'LLCs and companies. Each account has services, documents, invoices, and a timeline.' },
   { id: 'conversations', name: 'Conversations', href: '/conversations', icon: Tag, tooltip: 'Client threads tagged by client + topic — pull up everything for a client or a topic. Auto-tagged from #td-support.' },
@@ -445,8 +445,8 @@ export function Sidebar({
     if (item.id === 'dev-board' && liveDevBoard > 0) return { ...item, badge: liveDevBoard }
     if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
     if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }
-    // The Booking item says "Off" while the page is turned off (the layout passes 'booking-off'): an administrator still sees it and can look at the page.
-    if (item.id === 'booking' && enabledFeatures.includes('booking-off')) return { ...item, tag: 'Off' }
+    // The Booking item says "Links off" while the Calendly link side is turned off (the layout passes 'booking-off' to administrators only). The Leads tab inside it works either way.
+    if (item.id === 'booking' && enabledFeatures.includes('booking-off')) return { ...item, tag: 'Links off' }
     // The Calendar item opens the New Calendar for the people who may see it (never inside a window: no menu there anyway).
     if (item.id === 'calendar' && enabledFeatures.includes('new-calendar')) {
       return { ...item, href: '/new-calendar', icon: CalendarDays, badge: liveInvoices > 0 ? liveInvoices : undefined, tooltip: 'The day-by-day work list: what is on us, what is waiting on someone else, what is finished. Renewals and annual reports are on its third tab.' }
