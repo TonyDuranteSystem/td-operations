@@ -106,7 +106,7 @@ _Regenerated 2026-11-14 by directory scan._
 - CRM dashboard pages (57): `accounts` `addresses` `audit` `bofa-intake` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `forms` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `marketing-leads` `new-calendar` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `releases` `research` `sandbox-mail` `service-catalog` `services` `storage` `storage-app` `system-health` `tasks` `tax-returns` `td-talk` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
 - Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
 - API route groups (103)
-- Code modules (99): `accounts` `ai-agent` `app` `app-mode` `archive` `audit` `auth` `billing` `bofa-intake` `booking` `booking-links` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `closure` `code-tasks` `contacts` `contracts` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `embed` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `forms-hub` `harbor-compliance` `hooks` `inbox` `incoming-payments` `infra` `internal` `invoices` `itin` `job-notes` `jobs` `leads` `lease` `legal` `marketing` `mcp` `media` `members` `messaging` `nav` `new-calendar` `notes` `notifications` `oa` `offers` `open-services` `operations` `partners` `payments` `pdf` `per-record-activity` `plan-invoices` `portal` `portal-app` `portal-chats` `public-forms` `push` `release` `research` `scan` `schemas` `security` `services` `ss4` `storage` `storage-app` `supabase` `system-health` `talk` `tasks` `tax` `td-communication` `team` `theme` `todo-board` `types` `ui` `utils` `windows`
+- Code modules (100): `accounts` `ai-agent` `app` `app-mode` `archive` `audit` `auth` `billing` `bofa-intake` `booking` `booking-links` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `closure` `code-tasks` `contacts` `contracts` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `embed` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `forms-hub` `harbor-compliance` `hooks` `inbox` `incoming-payments` `infra` `internal` `invoices` `itin` `job-notes` `jobs` `leads` `lease` `legal` `marketing` `mcp` `media` `members` `messaging` `nav` `new-calendar` `notes` `notifications` `oa` `offers` `open-services` `operations` `partners` `payments` `pdf` `per-record-activity` `plan-invoices` `portal` `portal-app` `portal-chats` `public-forms` `push` `release` `research` `scan` `schemas` `security` `services` `signed-contracts` `ss4` `storage` `storage-app` `supabase` `system-health` `talk` `tasks` `tax` `td-communication` `team` `theme` `todo-board` `types` `ui` `utils` `windows`
 - Database tables: 322 _(ground truth: `lib/database.types.ts`)_
 <!-- /GENERATED:surface -->
 
@@ -179,7 +179,7 @@ _Regenerated 2026-11-14 from the R-rule list in CLAUDE.md — **45 rules**, high
 
 ## Appendix E — Subsystem deep docs
 <!-- GENERATED:deep-docs -->
-_Regenerated 2026-11-14. Every subsystem doc under `docs/systems/` (60 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
+_Regenerated 2026-11-14. Every subsystem doc under `docs/systems/` (61 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-13)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-13)_
@@ -226,6 +226,7 @@ _Regenerated 2026-11-14. Every subsystem doc under `docs/systems/` (60 docs), wi
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [scan-document.md](scan-document.md) — Scan document (the chat attach tool) _(verified 2026-11-10)_
 - [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-04)_
+- [signed-contracts.md](signed-contracts.md) — Signed contracts (the card on the Contact page) _(verified 2026-11-13)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [social-app.md](social-app.md) — TD Social (iPhone app) — "app mode" on the web side _(verified 2026-11-10)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-11-05)_
