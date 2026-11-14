@@ -1,6 +1,7 @@
 'use client'
 
 import { useRouter, useSearchParams } from 'next/navigation'
+import { leadsListHref } from '@/lib/leads/leads-url'
 import Link from 'next/link'
 import { useEffect, useTransition } from 'react'
 import { ChevronRight, ChevronLeft, Phone, Mail, UserCheck, Send, HelpCircle } from 'lucide-react'
@@ -72,7 +73,7 @@ export function LeadsTable({ items, stats, currentPage, totalPages, totalCount }
     if (page > 1) params.set('page', String(page))
     else params.delete('page')
     startTransition(() => {
-      router.push(`/leads?${params.toString()}`)
+      router.push(leadsListHref(params))
     })
   }
 

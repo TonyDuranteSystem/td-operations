@@ -24,7 +24,7 @@ export async function retryActivation(
 
   if (result.success && result.outcome === 'activated') {
     revalidatePath('/client-health')
-    revalidatePath('/leads')
+    revalidatePath('/booking')
     return { success: true }
   }
 

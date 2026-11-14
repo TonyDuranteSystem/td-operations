@@ -156,7 +156,7 @@ export async function createLeadFromIntake(
       .eq('id', webhookEventId)
 
     revalidatePath('/intake')
-    revalidatePath('/leads')
+    revalidatePath('/booking')
 
     return { success: true, lead_id: newLead.id }
   } catch (err) {

@@ -1,6 +1,9 @@
 /**
- * A standing scan over the Booking page's own files: every API route must open with the shared admin gate, every page and layout must turn a non-admin away
- * before it reads anything, and nothing booking-related may fall back to the weaker staff checks. Pure (the test reads the files and passes the text in).
+ * A standing scan over the Booking page's own files: every API route must open with ONE of the two named gates — "any staff" (requireBookingStaffRoute /
+ * requireBookingStaffJsonRoute) or "admin only" (requireAdminRoute / requireAdminJsonRoute) — every page and layout must turn a non-staff (or non-admin)
+ * visitor away before it reads anything, and nothing booking-related may fall back to the weaker checks. Pure (the test reads the files and passes the text in).
+ * Each handler / page DECLARES its level by the gate it uses (the scan reports it: bookingRouteAccess / bookingPageAccess), so a section can be narrowed from
+ * staff to admin later by changing one word, and the five-role test then expects a team login to be refused there.
  *
  * How it reads a file (the scan FAILS CLOSED — anything it cannot read is a violation, never a pass):
  *   1. comments and the inside of strings/regexes are blanked, so a word in a comment or a string is never mistaken for code;
@@ -8,8 +11,11 @@
  *      `export { a as X }`, `export { X }`, `export { a as X } from "..."`, `export * from "..."`, `export default ...`;
  *   3. each exported handler is resolved to its own body (a re-export is followed to the function in the same file; one from ANOTHER file or wrapped in a call is unreadable = violation);
  *   4. the guard must be inside THAT handler's body — not somewhere else in the file, not in a neighbouring handler.
- * The behaviour test (tests/unit/booking-admin-gate.test.ts) is the real proof of the gate; this scan keeps a future route from forgetting it at all.
+ * The behaviour tests (tests/unit/booking-access-gate.test.ts, booking-routes-five-roles.test.ts) are the real proof of the gates; this scan keeps a future route from forgetting one at all.
  */
+
+/** The two named levels: "staff" = an administrator or a team login; "admin" = an administrator only. */
+export type BookingAccess = "staff" | "admin"
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 const READ_ONLY_METHODS = ["GET", "HEAD", "OPTIONS"]
@@ -318,28 +324,39 @@ function findExports(text: string): ExportedItem[] {
 
 // ─── the guards ─────────────────────────────────────────────
 
-/** The gate must be the first `await` of the handler, its result kept and handed straight back when it is not null. */
-function routeGateProblem(method: string, body: string): string | null {
+/**
+ * The gate must be the first `await` of the handler, its result kept and handed straight back when it is not null. A reading method (GET/HEAD/OPTIONS) may use either
+ * level's plain or JSON gate; anything that changes data must use a JSON gate (which also proves the request came from our own page). The level is the gate's family.
+ */
+function routeGateCheck(method: string, body: string): { problem: string | null; access: BookingAccess | null } {
+  const readOnly = READ_ONLY_METHODS.includes(method)
+  const needed = readOnly ? "await requireBookingStaffRoute() (any staff) or await requireAdminRoute() (admin only)" : "await requireBookingStaffJsonRoute(req) (any staff) or await requireAdminJsonRoute(req) (admin only)"
+  const fail = (problem: string) => ({ problem, access: null })
   const firstAwait = body.search(/\bawait\b/)
-  const needed = READ_ONLY_METHODS.includes(method) ? "await requireAdminRoute()" : "await requireAdminJsonRoute(req)"
-  if (firstAwait < 0) return `${method} never calls the admin gate (it must open with ${needed})`
+  if (firstAwait < 0) return fail(`${method} never calls a booking gate (it must open with ${needed})`)
   const head = body.slice(firstAwait)
-  const gate = READ_ONLY_METHODS.includes(method) ? /^await\s+requireAdmin(?:Json)?Route\s*\(/ : /^await\s+requireAdminJsonRoute\s*\(/
+  const gate = readOnly
+    ? /^await\s+(requireBookingStaff(?:Json)?Route|requireAdmin(?:Json)?Route)\s*\(/
+    : /^await\s+(requireBookingStaffJsonRoute|requireAdminJsonRoute)\s*\(/
   const g = gate.exec(head)
-  if (!g) return `${method} does not open with ${needed}`
+  if (!g) return fail(`${method} does not open with ${needed}`)
   const kept = /(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*$/.exec(body.slice(0, firstAwait))
-  if (!kept) return `${method} calls the gate but does not keep its answer (write: const denied = ${needed})`
+  if (!kept) return fail(`${method} calls the gate but does not keep its answer (write: const denied = ${needed.split(" (")[0]})`)
   const open = firstAwait + g[0].length - 1
   const close = matchClose(body, open)
-  if (close < 0) return `${method}: could not read the gate call`
+  if (close < 0) return fail(`${method}: could not read the gate call`)
   const name = kept[1]
   const handedBack = new RegExp(`^\\s*;?\\s*if\\s*\\(\\s*${name.replace(/\$/g, "\\$")}\\s*(?:!==?\\s*null\\s*)?\\)\\s*(?:\\{\\s*)?return\\s+${name.replace(/\$/g, "\\$")}\\b`)
-  if (!handedBack.test(body.slice(close))) return `${method} calls the gate but does not hand its refusal back (write: if (${name}) return ${name})`
-  return null
+  if (!handedBack.test(body.slice(close))) return fail(`${method} calls the gate but does not hand its refusal back (write: if (${name}) return ${name})`)
+  return { problem: null, access: g[1].startsWith("requireBookingStaff") ? "staff" : "admin" }
 }
 
-/** A page / layout function: an `if` whose condition turns a non-admin away (`!isSecureAdmin(...)`) and then redirects / 404s / returns / throws, before any database read. */
-function pageGuardProblem(body: string): string | null {
+/**
+ * A page / layout function: an `if` whose condition turns a visitor away (`!isBookingStaff(...)` for any staff, `!isSecureAdmin(...)` for admin only) and then
+ * redirects / 404s / returns / throws, before any database read. When a condition names both, the page is reported as the weaker level (staff) so a test never
+ * expects more protection than the page gives.
+ */
+function pageGuardCheck(body: string): { problem: string | null; access: BookingAccess | null } {
   const ifRe = /\bif\s*\(/g
   let m: RegExpExecArray | null
   while ((m = ifRe.exec(body))) {
@@ -347,27 +364,32 @@ function pageGuardProblem(body: string): string | null {
     const end = matchClose(body, open)
     if (end < 0) continue
     const cond = body.slice(open + 1, end - 1)
-    if (!/!\s*isSecureAdmin\s*\(/.test(cond)) continue
+    const staff = /!\s*isBookingStaff\s*\(/.test(cond)
+    const admin = /!\s*isSecureAdmin\s*\(/.test(cond)
+    if (!staff && !admin) continue
     if (!/^\s*(?:\{\s*)?(?:redirect|notFound|return|throw)\b/.test(body.slice(end))) continue
-    if (/\.\s*(?:from|rpc)\s*\(|\bfetch\s*\(/.test(body.slice(0, m.index))) return "reads data BEFORE it checks the visitor is an admin"
-    return null
+    if (/\.\s*(?:from|rpc)\s*\(|\bfetch\s*\(/.test(body.slice(0, m.index))) return { problem: "reads data BEFORE it checks who the visitor is", access: null }
+    return { problem: null, access: staff ? "staff" : "admin" }
   }
-  return "never turns a non-admin away (expected: if (!isSecureAdmin(user)) redirect(...))"
+  return { problem: "never turns a visitor away (expected: if (!isBookingStaff(user)) notFound() for any staff, or if (!isSecureAdmin(user)) notFound() for admin only)", access: null }
 }
 
 // ─── the two public scans ───────────────────────────────────
 
-export function adminRouteViolations(fileName: string, source: string): string[] {
+/** The whole reading of one route file: what is wrong with it, and the level each correctly gated handler declares. */
+export function analyseBookingRoute(fileName: string, source: string): { problems: string[]; access: Record<string, BookingAccess> } {
   const problems: string[] = []
-  for (const w of WEAK) if (w.test(source)) problems.push(`${fileName}: uses a weaker check (${w.source}) — booking routes are admin-only`)
+  const access: Record<string, BookingAccess> = {}
+  for (const w of WEAK) if (w.test(source)) problems.push(`${fileName}: uses a weaker check (${w.source}) — booking routes use requireBookingStaffRoute (any staff) or requireAdminRoute (admin only)`)
   const text = blankNonCode(source)
-  if (text === null) return [...problems, `${fileName}: the file ends inside a string, comment or template — this scan cannot read it`]
+  if (text === null) return { problems: [...problems, `${fileName}: the file ends inside a string, comment or template — this scan cannot read it`], access }
   for (const item of findExports(text)) {
     if (METHODS.includes(item.name)) {
       if (item.body === null) problems.push(`${fileName}: ${item.name} ${item.problem ?? "cannot be read"}`)
       else {
-        const p = routeGateProblem(item.name, item.body)
-        if (p) problems.push(`${fileName}: ${p}`)
+        const c = routeGateCheck(item.name, item.body)
+        if (c.problem) problems.push(`${fileName}: ${c.problem}`)
+        else if (c.access) access[item.name] = c.access
       }
     } else if (ROUTE_SETTINGS.includes(item.name)) {
       continue
@@ -375,16 +397,26 @@ export function adminRouteViolations(fileName: string, source: string): string[]
       problems.push(`${fileName}: exports "${item.name}", which is neither a handler nor a route setting${item.problem ? ` (${item.problem})` : ""}`)
     }
   }
-  return problems
+  return { problems, access }
 }
 
-/** Pages and layouts of the Booking page: the admin check must be in the function that renders (the middleware's admin-only list cannot be edited, so the page guards itself). */
-export function adminPageViolations(fileName: string, source: string): string[] {
+export function bookingRouteViolations(fileName: string, source: string): string[] {
+  return analyseBookingRoute(fileName, source).problems
+}
+
+/** The level each handler of a route file declares (only handlers that pass the scan are listed). */
+export function bookingRouteAccess(fileName: string, source: string): Record<string, BookingAccess> {
+  return analyseBookingRoute(fileName, source).access
+}
+
+/** The whole reading of one page / layout file. `access` is the level of its default export (null when the file has a problem). */
+export function analyseBookingPage(fileName: string, source: string): { problems: string[]; access: BookingAccess | null } {
   const problems: string[] = []
-  for (const w of WEAK) if (w.test(source)) problems.push(`${fileName}: uses a weaker check (${w.source}) — the Booking page is admin-only`)
+  let access: BookingAccess | null = null
+  for (const w of WEAK) if (w.test(source)) problems.push(`${fileName}: uses a weaker check (${w.source}) — Booking pages use isBookingStaff (any staff) or isSecureAdmin (admin only)`)
   if (/^\s*(?:\/\/[^\n]*\n|\/\*[\s\S]*?\*\/\s*)*["']use client["']/.test(source)) problems.push(`${fileName}: is a client component, which cannot check the visitor on the server — pages and layouts here must be server components`)
   const text = blankNonCode(source)
-  if (text === null) return [...problems, `${fileName}: the file ends inside a string, comment or template — this scan cannot read it`]
+  if (text === null) return { problems: [...problems, `${fileName}: the file ends inside a string, comment or template — this scan cannot read it`], access }
   let sawDefault = false
   for (const item of findExports(text)) {
     const guarded = item.name === "default" || PAGE_FUNCTIONS.includes(item.name)
@@ -392,13 +424,24 @@ export function adminPageViolations(fileName: string, source: string): string[] 
     if (guarded) {
       if (item.body === null) problems.push(`${fileName}: ${item.name} ${item.problem ?? "cannot be read"}`)
       else {
-        const p = pageGuardProblem(item.body)
-        if (p) problems.push(`${fileName}: ${item.name} ${p}`)
+        const c = pageGuardCheck(item.body)
+        if (c.problem) problems.push(`${fileName}: ${item.name} ${c.problem}`)
+        else if (item.name === "default") access = c.access
       }
     } else if (!PAGE_STATIC.includes(item.name)) {
       problems.push(`${fileName}: exports "${item.name}", which this scan does not know${item.problem ? ` (${item.problem})` : ""}`)
     }
   }
-  if (!sawDefault) problems.push(`${fileName}: has no default export (every booking page and layout must render, and must check isSecureAdmin first)`)
-  return problems
+  if (!sawDefault) problems.push(`${fileName}: has no default export (every booking page and layout must render, and must check isBookingStaff or isSecureAdmin first)`)
+  return { problems, access: problems.length === 0 ? access : null }
+}
+
+/** Pages and layouts of the Booking page: the check must be in the function that renders (the middleware's admin-only list cannot be edited, so the page guards itself). */
+export function bookingPageViolations(fileName: string, source: string): string[] {
+  return analyseBookingPage(fileName, source).problems
+}
+
+/** The level the page's default export declares, or null when the file has a problem. */
+export function bookingPageAccess(fileName: string, source: string): BookingAccess | null {
+  return analyseBookingPage(fileName, source).access
 }

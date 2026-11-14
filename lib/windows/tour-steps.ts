@@ -85,7 +85,7 @@ export const STEPS: TourStep[] = [
     kind: 'act',
     title: 'Open a page in a window',
     body: 'The "Open in a window" button at the bottom of the left menu lists every page you can open this way.',
-    example: 'You are in Inbox and want to check a lead. Open Leads in a window and Inbox stays exactly where it is.',
+    example: 'You are in Inbox and want to check a lead. Open Booking (Leads is its first tab) in a window and Inbox stays exactly where it is.',
     tryIt: 'Click "Open in a window" (we circled it), then choose Accounts.',
     waiting: 'Waiting for you to open a window. Pick any page from the list.',
     done: 'Done. Accounts is open on top of your page.',
@@ -127,10 +127,10 @@ export const STEPS: TourStep[] = [
     kind: 'act',
     title: 'A faster way to open one',
     body: 'Hold {OPT} and click any page in the left menu. It opens in a window instead of replacing your page.',
-    example: 'You are in Portal Chats and want Leads next to it. Point at Network in the left menu, hold {OPT} and click Leads.',
-    tryIt: 'Point at Network in the left menu, then hold {OPT} and click Leads.',
-    waiting: 'Waiting: hold {OPT} and click Leads (it is inside Network in the left menu).',
-    done: 'Done. Leads is open in a window.',
+    example: 'You are in Portal Chats and want Leads next to it. Point at Network in the left menu, hold {OPT} and click Booking (Leads is its first tab).',
+    tryIt: 'Point at Network in the left menu, then hold {OPT} and click Booking.',
+    waiting: 'Waiting: hold {OPT} and click Booking (it is inside Network in the left menu).',
+    done: 'Done. Booking, with Leads, is open in a window.',
     more: [
       'Other ways: point at a menu item and click the three dots, then "Open in a window". In search ({CMD}+K), press {CMD}+Enter on a result to open it in a window; plain Enter opens it here.',
       'No mouse? Use the "Open in a window" button with Tab and Enter.',
@@ -200,13 +200,22 @@ export function enterStep(p: TourProgress, index: number): TourProgress {
   return { ...p, stepIndex: i, flags: { ...NO_FLAGS } }
 }
 
+/**
+ * The practice page of the 'fast-way' step: the Booking page (the menu row that opens the Leads list, now its first tab) or a lead page itself (/leads/<id>, and the old /leads address that redirects
+ * to the Booking page). Query and hash are ignored.
+ */
+export function isLeadsPracticeUrl(url: string): boolean {
+  const path = url.split(/[?#]/)[0]
+  return path === '/booking' || path.startsWith('/booking/') || path === '/leads' || path.startsWith('/leads/')
+}
+
 /** Fold one thing the person did to a window into the progress. */
 export function applyWindowEvent(p: TourProgress, ev: WindowEventDetail): TourProgress {
   switch (ev.type) {
     case 'opened': {
       const opened = ev.reused || p.opened.includes(ev.id) ? p.opened : [...p.opened, ev.id]
       const practiceId = p.practiceId ?? ev.id
-      const leads = ev.url.split(/[?#]/)[0].startsWith('/leads')
+      const leads = isLeadsPracticeUrl(ev.url)
       return { ...p, opened, practiceId, flags: { ...p.flags, openedLeads: p.flags.openedLeads || leads } }
     }
     case 'moved':
@@ -292,7 +301,7 @@ export function precheck(step: TourStep, p: TourProgress, snap: WindowsSnapshot)
       }
       return { kind: 'missing', canOpen: true }
     case 'fast-way':
-      if (snap.count >= MAX_WINDOWS && !snap.urls.some(u => u.split(/[?#]/)[0].startsWith('/leads'))) {
+      if (snap.count >= MAX_WINDOWS && !snap.urls.some(isLeadsPracticeUrl)) {
         return {
           kind: 'blocked',
           note: 'You already have 3 windows open, which is the most allowed. Skip this step, or close one first.',
@@ -341,9 +350,9 @@ export function ringSelector(step: TourStep, p: TourProgress, snap: WindowsSnaps
         : `${win} [data-win-part="minimize"]`
     }
     case 'fast-way':
-      // Leads sits inside the Network group in the standard menu: ring the Leads link when its panel is open (or when it has been
+      // Booking (which now holds the Leads list as its first tab) sits inside the Network group in the standard menu: ring the Booking link when its panel is open (or when it has been
       // moved to the main list), otherwise the Network row to point at. In order of preference; the ring takes the first that exists.
-      return '[data-flyout] a[href="/leads"] || aside a[href="/leads"] || [data-testid="menu-group-g-network"]'
+      return '[data-flyout] a[href="/booking"] || aside a[href="/booking"] || [data-testid="menu-group-g-network"]'
     case 'close': {
       const target = [...p.opened].reverse().find(id => snap.ids.includes(id))
       return target ? `[data-win-id="${target}"] [data-win-part="close"]` : null

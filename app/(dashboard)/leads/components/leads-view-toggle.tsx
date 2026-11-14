@@ -1,6 +1,7 @@
 'use client'
 
 import { useRouter, useSearchParams } from 'next/navigation'
+import { leadsListHref } from '@/lib/leads/leads-url'
 import { List, LayoutGrid } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -21,7 +22,7 @@ export function LeadsViewToggle({ currentView }: LeadsViewToggleProps) {
     }
     // Reset page when switching views
     params.delete('page')
-    router.push(`/leads?${params.toString()}`)
+    router.push(leadsListHref(params))
   }
 
   return (

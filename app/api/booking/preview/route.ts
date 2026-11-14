@@ -1,15 +1,15 @@
 import { NextRequest } from "next/server"
-import { requireAdminJsonRoute } from "@/lib/auth/require-admin-route"
+import { requireBookingStaffJsonRoute } from "@/lib/auth/require-booking-staff-route"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { judgeLink } from "@/lib/booking/make-link"
 import { loadTemplates, templateFor } from "@/lib/booking/templates"
 import { BAD_BODY, fail, ok, personRefFrom, readJsonObject, refuseWhileOff } from "@/lib/booking/route-helpers"
 
-/** Booking page: "When it gets booked, the system will:" for the choices on the page. Reads only, nothing is saved. Admin only. */
+/** Booking page: "When it gets booked, the system will:" for the choices on the page. Reads only, nothing is saved. Any staff (administrator or team). */
 export const dynamic = "force-dynamic"
 
 export async function POST(req: NextRequest) {
-  const denied = await requireAdminJsonRoute(req)
+  const denied = await requireBookingStaffJsonRoute(req)
   if (denied) return denied
   const off = await refuseWhileOff()
   if (off) return off

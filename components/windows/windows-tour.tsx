@@ -15,7 +15,7 @@ import {
   OPEN_FEEDBACK_EVENT, START_TOUR_EVENT, canOpenWindowNow, requestOpenWindow,
 } from '@/lib/windows/windows-context'
 import {
-  AUTO_COMPLETES, STEPS, TOUR_VERSION, applyWindowEvent, detectPlatform, enterStep, fillKeys, isStepDone, keyNames, newProgress,
+  AUTO_COMPLETES, STEPS, TOUR_VERSION, applyWindowEvent, detectPlatform, enterStep, fillKeys, isLeadsPracticeUrl, isStepDone, keyNames, newProgress,
   precheck, ringSelector, type Precheck, type StepId, type TourProgress,
 } from '@/lib/windows/tour-steps'
 import { FEEDBACK_MAX, FEEDBACK_MIN, type FeedbackInput } from '@/lib/windows/tour-feedback'
@@ -218,10 +218,10 @@ export function WindowsTour({ userId }: { userId: string }) {
     if (r.kind === 'auto' && r.practiceId) setProgress(p => ({ ...p, practiceId: r.practiceId ?? p.practiceId }))
   }, [open, standalone, step, progress, snapshot])
 
-  // The page behind changed to Leads by a plain click while we wait for an {OPT}-click.
+  // The page behind changed to Booking (the Leads list) by a plain click while we wait for an {OPT}-click.
   useEffect(() => {
     if (!open || standalone || step.id !== 'fast-way') return
-    if (pathAtEntry.current !== null && pathname !== pathAtEntry.current && pathname.startsWith('/leads')) setPlainClickNudge(true)
+    if (pathAtEntry.current !== null && pathname !== pathAtEntry.current && isLeadsPracticeUrl(pathname)) setPlainClickNudge(true)
   }, [open, standalone, step.id, pathname])
 
   // A narrow screen pauses the tour (windows can't be drawn there).
@@ -434,13 +434,13 @@ function StepBody({
           )}
           {nudge && !done && (
             <p className="text-[13px] text-amber-800">
-              That opened the page here instead of in a window. No problem. Hold {keys.opt} and click Leads again.
+              That opened the page here instead of in a window. No problem. Hold {keys.opt} and click Booking again.
             </p>
           )}
           {covered && !done && entry.kind === 'ok' && (
             <p className="text-[13px] text-amber-800">
               {step.id === 'fast-way'
-                ? 'A window is covering the left menu. Drag it aside, or click Minimize on its dark bar, so you can reach Leads.'
+                ? 'A window is covering the left menu. Drag it aside, or click Minimize on its dark bar, so you can reach Booking.'
                 : 'Something is covering the circled spot. Move the window or this card aside.'}
             </p>
           )}
