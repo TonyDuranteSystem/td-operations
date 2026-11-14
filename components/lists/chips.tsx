@@ -11,8 +11,12 @@ const CHIP_CLASS: Record<InstallmentChipKind, string> = {
   duplicate: 'bg-red-100 text-red-700',
 }
 
-/** The small Paid / Pending / Overdue / Not invoiced chip next to an installment amount (this year's invoice). */
+/**
+ * The small Paid / Pending / Overdue chip next to an installment amount (the chosen year's invoice). Nothing is drawn when no installment
+ * invoice exists for that year: the amount is the agreed contract amount, and "Not invoiced" next to it read as if something were wrong.
+ */
 export function InstallmentChip({ chip }: { chip: InstallmentChipData }) {
+  if (chip.kind === 'not_invoiced') return null
   const label = chip.kind === 'duplicate' ? `${chip.count} invoices` : INSTALLMENT_CHIP_LABEL[chip.kind]
   return (
     <span

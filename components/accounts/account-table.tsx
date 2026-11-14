@@ -10,8 +10,14 @@ import { CreateAccountDialog } from './create-account-dialog'
 import { SegmentedFilter } from '@/components/lists/segmented-filter'
 import { AmountCell } from '@/components/lists/amount-cell'
 import { EntityChip, KindChip, StatusChip } from '@/components/lists/chips'
+import { ColumnsMenu } from '@/components/lists/columns-menu'
+import { LetterBar } from '@/components/lists/letter-bar'
+import { LISTS_CONTAINER, ListStyles } from '@/components/lists/list-styles'
+import { YearSelect } from '@/components/lists/year-select'
 import { useAmountOverrides } from '@/components/lists/use-amount-overrides'
 import { isAmountLocked, perYearLabel, perYearTotal } from '@/lib/crm-lists/amounts'
+import { chosenColumns, gridMinWidth, gridTemplate, hasColumn } from '@/lib/crm-lists/columns'
+import { accountCellText, accountMetaText } from '@/lib/crm-lists/cells'
 import { ACCOUNT_STATUS_CHOICES, KIND_CHOICES, TYPE_CHOICES, TYPE_NOT_SET, type AccountFacets } from '@/lib/crm-lists/filters'
 
 interface AccountTableProps {
@@ -28,16 +34,31 @@ interface AccountTableProps {
   currentPage: number
   totalPages: number
   totalCount: number
+  /** The extra fields this person chose. */
+  columns: string[]
+  letter: string
+  letters: { all: number; byLetter: Record<string, number> }
+  year: number
+  years: number[]
+  defaultYear: number
 }
 
-const GRID = 'md:grid-cols-[minmax(220px,1fr)_110px_62px_100px_168px_160px_90px_80px]'
+type FilterKey = 'q' | 'status' | 'kind' | 'type' | 'letter' | 'year'
 
-export function AccountTable({ items, query, statusFilter, kindFilter, typeFilter, facets, stats, currentPage, totalPages, totalCount }: AccountTableProps) {
+// Wide (the table has the room the chosen fields need): company, the chosen fields, 1st Inst, 2nd Inst, Per year, then any "after" field
+// (Overdue) — the columns come from --cols. Narrower: company (chosen fields on one small line under it) + the three money columns.
+// Phone: the company, then its three money values side by side with labels.
+const MID_COLS = 'md:grid-cols-[minmax(0,1fr)_130px_130px_84px] md:gap-2.5 lc-row'
+const ROW_GRID = `grid grid-cols-3 gap-x-3 gap-y-1 ${MID_COLS}`
+const HEAD_GRID = `hidden md:grid ${MID_COLS}`
+
+export function AccountTable({ items, query, statusFilter, kindFilter, typeFilter, facets, stats, currentPage, totalPages, totalCount, columns, letter, letters, year, years, defaultYear }: AccountTableProps) {
   const router = useRouter()
   const [search, setSearch] = useState(query)
   const [isPending, startTransition] = useTransition()
   const [showCreate, setShowCreate] = useState(false)
   const { overrides, apply } = useAmountOverrides(items)
+  const yearParam = year === defaultYear ? '' : String(year)
   // The filter values we've actually told the server about — updated
   // synchronously the instant we act, NOT after the async navigation
   // resolves. Covers EVERY filter, not just search: this page has several
@@ -46,7 +67,7 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
   // the second call fell back to a still-stale prop for it. Found by
   // adversarial review, 2026-09-03 (round 3 — the original round-2 fix only
   // covered search).
-  const lastFiltersRef = useRef({ q: query, status: statusFilter, kind: kindFilter, type: typeFilter })
+  const lastFiltersRef = useRef<Record<FilterKey, string>>({ q: query, status: statusFilter, kind: kindFilter, type: typeFilter, letter, year: yearParam })
 
   // Resync when the URL changed for a reason OTHER than our own action —
   // browser back/forward, or a link elsewhere setting these params. See
@@ -54,28 +75,33 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
   // "prop changed" check.
   useEffect(() => {
     const last = lastFiltersRef.current
-    if (query !== last.q || statusFilter !== last.status || kindFilter !== last.kind || typeFilter !== last.type) {
-      lastFiltersRef.current = { q: query, status: statusFilter, kind: kindFilter, type: typeFilter }
+    if (query !== last.q || statusFilter !== last.status || kindFilter !== last.kind || typeFilter !== last.type || letter !== last.letter || yearParam !== last.year) {
+      lastFiltersRef.current = { q: query, status: statusFilter, kind: kindFilter, type: typeFilter, letter, year: yearParam }
       setSearch(query)
     }
-  }, [query, statusFilter, kindFilter, typeFilter])
+  }, [query, statusFilter, kindFilter, typeFilter, letter, yearParam])
 
   function buildParams(overridesParams: Record<string, string> = {}) {
     const params = new URLSearchParams()
-    const q = overridesParams.q ?? lastFiltersRef.current.q
-    const s = overridesParams.status ?? lastFiltersRef.current.status
-    const k = overridesParams.kind ?? lastFiltersRef.current.kind
-    const t = overridesParams.type ?? lastFiltersRef.current.type
+    const cur = lastFiltersRef.current
+    const q = overridesParams.q ?? cur.q
+    const s = overridesParams.status ?? cur.status
+    const k = overridesParams.kind ?? cur.kind
+    const t = overridesParams.type ?? cur.type
+    const l = overridesParams.letter ?? cur.letter
+    const y = overridesParams.year ?? cur.year
     const p = overridesParams.page ?? ''
     if (q) params.set('q', q)
     if (s) params.set('status', s)
     if (k) params.set('kind', k)
     if (t) params.set('type', t)
+    if (l) params.set('letter', l)
+    if (y) params.set('year', y)
     if (p && p !== '1') params.set('page', p)
     return params.toString()
   }
 
-  function updateFilter(key: 'q' | 'status' | 'kind' | 'type', value: string) {
+  function updateFilter(key: FilterKey, value: string) {
     lastFiltersRef.current = { ...lastFiltersRef.current, [key]: value }
     startTransition(() => {
       router.push(`/accounts?${buildParams({ [key]: value, page: '1' })}`)
@@ -119,11 +145,16 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
     { value: TYPE_NOT_SET, label: 'Not set', count: facets.type[TYPE_NOT_SET] },
   ]
 
+  const { before, tail } = chosenColumns('accounts', columns)
+  const rowVars = { '--cols': gridTemplate('accounts', columns) } as React.CSSProperties
+  const first = `1st Inst · ${year}`
+  const second = `2nd Inst · ${year}`
+
   return (
     <div className="space-y-4">
       {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <form onSubmit={handleSearch} className="flex-1 relative max-w-md">
+      <div className="flex flex-wrap items-center gap-3">
+        <form onSubmit={handleSearch} className="relative w-full max-w-md flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input
             type="text"
@@ -133,19 +164,24 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
             className="w-full pl-9 pr-4 py-2 rounded-lg border bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </form>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition-colors shrink-0 sm:ml-auto"
-        >
-          <Plus className="h-4 w-4" />
-          New Account
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <ColumnsMenu list="accounts" selected={columns} always="Company, 1st Inst, 2nd Inst, Per year" />
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition-colors shrink-0"
+          >
+            <Plus className="h-4 w-4" />
+            New Account
+          </button>
+        </div>
       </div>
-      <div className="flex flex-wrap gap-x-6 gap-y-3">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <SegmentedFilter label="Status" options={statusOptions} value={statusFilter} onChange={v => updateFilter('status', v)} disabled={isPending} />
         <SegmentedFilter label="Client kind" options={kindOptions} value={kindFilter} onChange={v => updateFilter('kind', v)} disabled={isPending} />
         <SegmentedFilter label="Company type" options={typeOptions} value={typeFilter} onChange={v => updateFilter('type', v)} disabled={isPending} />
+        <YearSelect year={year} years={years} onChange={y => updateFilter('year', y === defaultYear ? '' : String(y))} disabled={isPending} />
       </div>
+      <LetterBar value={letter} counts={letters} onChange={l => updateFilter('letter', l)} disabled={isPending} />
 
       {/* Stats row */}
       <div className="flex gap-3 flex-wrap text-sm">
@@ -161,36 +197,43 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-lg border overflow-x-auto">
-        <div className={cn('min-w-[1110px] transition-opacity', isPending && 'opacity-50')}>
-          {/* Header */}
-          <div className={cn('hidden md:grid gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider', GRID)}>
+      <div className="bg-white rounded-lg border overflow-x-auto" style={LISTS_CONTAINER}>
+        <ListStyles minWidth={gridMinWidth('accounts', columns)} />
+        <div className={cn('transition-opacity', isPending && 'opacity-50')} style={rowVars}>
+          {/* Header (wide and medium windows) */}
+          <div className={cn(HEAD_GRID, 'px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider')}>
             <span>Company</span>
-            <span>Contact</span>
-            <span>Type</span>
-            <span>Status</span>
-            <span>1st Inst</span>
-            <span>2nd Inst</span>
+            {before.map(c => (
+              <span key={c.id} className="lc-x">{c.short ?? c.label}</span>
+            ))}
+            <span>{first}</span>
+            <span>{second}</span>
             <span>Per year</span>
-            <span className="text-right">Overdue</span>
+            {tail.map(c => (
+              <span key={c.id} className="lc-x text-right">{c.short ?? c.label}</span>
+            ))}
           </div>
 
           {/* Rows */}
           {items.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-              No companies found
+              {letter ? 'No company starts with that letter under the filters you have on.' : 'No companies found'}
             </div>
           ) : (
             items.map(item => {
               const o = overrides[item.id]
-              const first = o && 'installment_1_amount' in o ? (o.installment_1_amount ?? null) : item.installment_1_amount
-              const second = o && 'installment_2_amount' in o ? (o.installment_2_amount ?? null) : item.installment_2_amount
+              const firstAmount = o && 'installment_1_amount' in o ? (o.installment_1_amount ?? null) : item.installment_1_amount
+              const secondAmount = o && 'installment_2_amount' in o ? (o.installment_2_amount ?? null) : item.installment_2_amount
               const updatedAt = o?.updated_at ?? item.updated_at
               const locked = isAmountLocked(item.status)
               const total = perYearTotal(
-                { amount: first, currency: item.installment_1_currency },
-                { amount: second, currency: item.installment_2_currency },
+                { amount: firstAmount, currency: item.installment_1_currency },
+                { amount: secondAmount, currency: item.installment_2_currency },
               )
+              // The chosen fields on one small line under the company name, for a window too narrow to show them as columns.
+              const meta = [...before, ...tail]
+                .map(c => accountMetaText(item, c.id, c.short ?? c.label))
+                .filter((x): x is string => !!x)
               return (
                 <div
                   key={item.id}
@@ -199,45 +242,42 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                     router.push(`/accounts/${item.id}`)
                   }}
                   className={cn(
-                    'grid grid-cols-1 gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center cursor-pointer',
-                    GRID,
+                    'px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-start cursor-pointer',
+                    ROW_GRID,
                     locked && 'opacity-60',
                   )}
                 >
                   {/* Company */}
-                  <div className="min-w-0">
+                  <div className="col-span-3 min-w-0 md:col-span-1">
                     <p className="flex items-center gap-1.5 font-medium text-sm truncate">
                       <Link href={`/accounts/${item.id}`} className="truncate hover:underline" onClick={e => e.stopPropagation()}>
                         {item.company_name}
                       </Link>
-                      <KindChip kind={item.account_type} />
+                      {!hasColumn(columns, 'kind') && <KindChip kind={item.account_type} />}
                     </p>
-                    {item.state_of_formation && (
-                      <p className="text-xs text-muted-foreground">{item.state_of_formation}</p>
-                    )}
+                    {meta.length > 0 && <p className="lc-m mt-0.5 text-xs text-muted-foreground">{meta.join(' · ')}</p>}
                   </div>
 
-                  {/* Contact */}
-                  <div className="text-xs text-muted-foreground truncate hidden md:block">
-                    {item.contact_name ?? '—'}
-                  </div>
-
-                  {/* Company type */}
-                  <div className="hidden md:block">
-                    <EntityChip entityType={item.entity_type} />
-                  </div>
-
-                  {/* Status */}
-                  <div className="hidden md:block">
-                    <StatusChip status={item.status} />
-                  </div>
+                  {/* The chosen fields, as columns (wide window) */}
+                  {before.map(c => (
+                    <div key={c.id} className="lc-x min-w-0 truncate pt-0.5 text-xs text-muted-foreground">
+                      {c.id === 'type' ? (
+                        <EntityChip entityType={item.entity_type} />
+                      ) : c.id === 'status' ? (
+                        <StatusChip status={item.status} />
+                      ) : (
+                        (accountCellText(item, c.id) ?? '—')
+                      )}
+                    </div>
+                  ))}
 
                   {/* 1st Inst */}
-                  <div className="hidden md:block">
+                  <div className="min-w-0">
+                    <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground md:hidden">{first}</span>
                     <AmountCell
                       accountId={item.id}
                       field="installment_1_amount"
-                      amount={first}
+                      amount={firstAmount}
                       currency={item.installment_1_currency}
                       locked={locked}
                       updatedAt={updatedAt}
@@ -247,11 +287,12 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                   </div>
 
                   {/* 2nd Inst */}
-                  <div className="hidden md:block">
+                  <div className="min-w-0">
+                    <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground md:hidden">{second}</span>
                     <AmountCell
                       accountId={item.id}
                       field="installment_2_amount"
-                      amount={second}
+                      amount={secondAmount}
                       currency={item.installment_2_currency}
                       locked={locked}
                       updatedAt={updatedAt}
@@ -261,18 +302,23 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                   </div>
 
                   {/* Per year: added up on screen, never typed */}
-                  <div className="hidden md:block text-sm font-semibold tabular-nums">
+                  <div className="min-w-0 text-sm font-semibold tabular-nums">
+                    <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground md:hidden">Per year</span>
                     {total.kind === 'none' ? <span className="text-muted-foreground font-normal">—</span> : perYearLabel(total)}
                   </div>
 
-                  {/* Overdue */}
-                  <div className="hidden md:flex justify-end">
-                    {item.payment_overdue > 0 && (
-                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">
-                        {item.payment_overdue}
-                      </span>
-                    )}
-                  </div>
+                  {/* Fields placed after the money (Overdue) */}
+                  {tail.map(c => (
+                    <div key={c.id} className="lc-xf justify-end">
+                      {c.id === 'overdue' ? (
+                        item.payment_overdue > 0 ? (
+                          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">{item.payment_overdue}</span>
+                        ) : null
+                      ) : (
+                        <span className="text-xs text-muted-foreground">{accountCellText(item, c.id) ?? '—'}</span>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )
             })

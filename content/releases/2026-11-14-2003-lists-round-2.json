@@ -1,0 +1,12 @@
+{
+  "title": "Choose your columns, pick the invoice year, and jump by letter",
+  "tag": "new",
+  "text": "The Accounts and Contacts lists now let you decide what you see. Open Columns, tick the fields you want (formation date, EIN, address, registered agent, passport on file and more) and the list remembers your choice on every computer you sign in from. Invoice year picks which year's Paid, Pending or Overdue chips you see. Click a letter to see only the names that start with it.",
+  "points": [
+    "\"Not invoiced\" is gone from next to the amounts. The amount is the agreed contract amount, so a chip only appears when an installment invoice exists for the year you picked.",
+    "On a narrow window the extra fields move to one line under the name instead of being cut off, and come back as columns when there is room.",
+    "Tier is now called Portal stage. A company's status is a field you can tick; a Closed, Cancelled or Offboarding company always shows it, because its row is greyed and locked.",
+    "Some fields are mostly empty in the CRM today, for example Lead source and Client since. They show a dash."
+  ],
+  "screenshot": "lists-round-2.png"
+}
