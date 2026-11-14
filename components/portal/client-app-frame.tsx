@@ -10,8 +10,7 @@ import { Menu } from 'lucide-react'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { useLocale } from '@/lib/portal/use-locale'
 import { APP_FRAME_SLOT_ID, frameHasChatSlot, screenTitleFor, type AppMenuItem } from '@/lib/portal-app/frame'
-
-interface ClientBridge { webkit?: { messageHandlers?: { tdclient?: { postMessage: (m: string) => void } } } }
+import { postToApp } from '@/lib/portal-app/native-bridge'
 
 interface MeAnswer { menuBadge?: number; items?: AppMenuItem[] }
 
@@ -27,7 +26,7 @@ export function ClientAppFrame({ selectionQuery, switcher }: { selectionQuery: s
   // message from this site's main frame and checks the words before using them (lib: ios/TDClient/Sources/TDClientCore/Rules.swift `SelectionRules`).
   useEffect(() => {
     if (!appMode) return
-    ;(window as unknown as ClientBridge).webkit?.messageHandlers?.tdclient?.postMessage(`selection:${selectionQuery}`)
+    postToApp(`selection:${selectionQuery}`)
   }, [appMode, selectionQuery])
 
   // The number on the button and the screen names come from the app's own server answer, so the website's menu rule and the app can
@@ -67,7 +66,7 @@ export function ClientAppFrame({ selectionQuery, switcher }: { selectionQuery: s
         type="button"
         aria-label={label}
         data-testid="client-app-menu"
-        onClick={() => (window as unknown as ClientBridge).webkit?.messageHandlers?.tdclient?.postMessage('menu')}
+        onClick={() => postToApp('menu')}
         className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-zinc-300 bg-white text-zinc-900"
       >
         <Menu className="h-[22px] w-[22px]" aria-hidden="true" />

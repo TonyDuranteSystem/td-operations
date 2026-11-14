@@ -29,6 +29,7 @@ import { isFloatingChatEnabled, isFloatingWindowsEnabled } from '@/lib/settings'
 import { isFramedNavigation } from '@/lib/embed/embedded-request'
 import { getOpenServicesAudience } from '@/lib/open-services/audience'
 import { canViewOpenServices } from '@/lib/open-services/access'
+import { readBookingMode } from '@/lib/booking-links/switch'
 import {
   EmbeddedProvider,
   ChromeOnly,
@@ -197,6 +198,9 @@ export default async function DashboardLayout({
   // The "New Calendar" menu item shows only to people the page itself would let in (same switch, same rule), so it can never be a
   // dead link. One cheap setting read on top of the user we already have; it fails closed (no item) on any problem.
   const showNewCalendar = bare ? false : canViewOpenServices(user, await openServicesAudiencePromise)
+  // The Booking menu item: an administrator only. It shows in every state; while the `booking` setting is off (missing / malformed / unreadable = off) it carries an "Off" tag and the page is read-only.
+  const showBooking = !bare && admin
+  const bookingOff = showBooking && (await readBookingMode(supabaseAdmin)) === 'off'
 
   return (
     <Providers>
@@ -231,6 +235,7 @@ export default async function DashboardLayout({
             extraNavIds={extraNavIds}
             badgeCounts={badgeCounts}
             enabledFeatures={showNewCalendar ? ['new-calendar'] : []}
+            moreFeatures={showBooking ? (bookingOff ? ['booking', 'booking-off'] : ['booking']) : []}
           />
         </ChromeOnly>
         {/* pt-14 (not a spacer div) compensates for the fixed mobile top bar:

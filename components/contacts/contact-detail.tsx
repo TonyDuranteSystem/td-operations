@@ -32,6 +32,9 @@ import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
 import { ReferralsGivenCard } from '@/components/referrals/referrals-given-card'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
+import { SignedContractsCard } from '@/components/contacts/signed-contracts-card'
+import { replaceEntry } from '@/lib/signed-contracts/list'
+import type { SignedContractEntry } from '@/lib/signed-contracts/types'
 import type { OfferPackageOption } from '@/lib/types/offer'
 import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from '@/components/accounts/service-deliveries-section'
 import type { PipelineStage } from '@/components/accounts/sd-pipeline-stepper'
@@ -293,6 +296,11 @@ interface ContactDetailProps {
   stagesByServiceType?: Record<string, PipelineStage[]>
   /** Contact-scoped flows (ITIN, …) — rendered as flow chips. */
   flows?: ResolvedFlow[]
+  /** Signed contracts card (Overview): the contracts this person signed, read from where they already are. */
+  signedContracts?: SignedContractEntry[]
+  signedContractsError?: string | null
+  /** Only an owner may correct a saved installment amount. */
+  canEditSignedAmounts?: boolean
 }
 
 // ─── Main Component ───
@@ -312,9 +320,15 @@ export function ContactDetail({
   stepperDeliveries = [],
   stagesByServiceType = {},
   flows = [],
+  signedContracts = [],
+  signedContractsError = null,
+  canEditSignedAmounts = false,
 }: ContactDetailProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
+  // the Signed contracts lines live here, not inside the card: the Overview tab (and the card) is dropped when another tab opens,
+  // so a corrected amount held only in the card would show the old one again on coming back
+  const [signedEntries, setSignedEntries] = useState(signedContracts)
   // an upload / group action is running in the Documents tab's storage screen: leaving the tab would close it mid-way
   const [storeBusy, setStoreBusy] = useState(false)
   const [showChainAudit, setShowChainAudit] = useState(false)
@@ -532,6 +546,10 @@ export function ContactDetail({
           offers={offers}
           pendingActivations={pendingActivations}
           wizardProgress={wizardProgress}
+          signedContracts={signedEntries}
+          onSignedContractCorrected={(next) => setSignedEntries((prev) => replaceEntry(prev, next))}
+          signedContractsError={signedContractsError}
+          canEditSignedAmounts={canEditSignedAmounts}
         />
       )}
       {activeTab === 'services' && (
@@ -645,6 +663,10 @@ function OverviewTab({
   offers,
   pendingActivations,
   wizardProgress,
+  signedContracts,
+  onSignedContractCorrected,
+  signedContractsError,
+  canEditSignedAmounts,
 }: {
   contact: ContactRecord
   accounts: LinkedAccount[]
@@ -653,6 +675,10 @@ function OverviewTab({
   offers: OfferRecord[]
   pendingActivations: PendingActivationRecord[]
   wizardProgress: WizardProgressRecord[]
+  signedContracts: SignedContractEntry[]
+  onSignedContractCorrected: (next: SignedContractEntry) => void
+  signedContractsError: string | null
+  canEditSignedAmounts: boolean
 }) {
   const [note, setNote] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -854,15 +880,23 @@ function OverviewTab({
         )}
       </div>
 
-      {/* Offer Status Card */}
-      <OfferStatusCard
-        offers={offers}
-        contactId={contact.id}
-        contactName={contact.full_name ?? ''}
-        contactEmail={contact.email ?? ''}
-        contactLanguage={contact.language}
-        pendingActivations={pendingActivations}
-      />
+      {/* Offers, and directly under them the contracts the client signed after reading them (one grid cell, so they stay together) */}
+      <div className="space-y-6">
+        <OfferStatusCard
+          offers={offers}
+          contactId={contact.id}
+          contactName={contact.full_name ?? ''}
+          contactEmail={contact.email ?? ''}
+          contactLanguage={contact.language}
+          pendingActivations={pendingActivations}
+        />
+        <SignedContractsCard
+          entries={signedContracts}
+          onEntryCorrected={onSignedContractCorrected}
+          loadError={signedContractsError}
+          canEditAmounts={canEditSignedAmounts}
+        />
+      </div>
 
       {/* Wizard Progress Card */}
       <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} />

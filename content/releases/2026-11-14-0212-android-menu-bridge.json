@@ -1,0 +1,6 @@
+{
+  "title": "Groundwork for the Android app: the client app's Menu button now reaches an Android phone too",
+  "tag": "behind-the-scenes",
+  "text": "Inside the client app, the round Menu button and the company choice used to talk only to an iPhone. The page now speaks to an Android phone as well, so the Menu button and the bottom bar will work in the Android version that is being built. Nothing changes today: the iPhone app behaves exactly as before, and a normal website visit is untouched. Clients cannot see this yet.",
+  "points": []
+}

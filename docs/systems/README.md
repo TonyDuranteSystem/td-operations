@@ -97,6 +97,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [offers.md](offers.md) | Offers & contracts — publish→sign→pay→activate, the 3 states (R094) | ✅ written |
 | [payment-plans.md](payment-plans.md) | Payment plans — a setup fee paid in parts, who pays, and the Calendar's "Invoices to raise" (nothing automatic; a person clicks) | ✅ written |
 | [service-contracts.md](service-contracts.md) | Service contracts — stored, versioned, owner-approved wording for NEW services, frozen on every offer | ✅ written |
+| [signed-contracts.md](signed-contracts.md) | Signed contracts — the Contact page card: what the client signed, the installment amounts saved in the system, open the PDF, owner-only correction | ✅ written |
 | [banking-bankfeed.md](banking-bankfeed.md) | Banking applications + bank-feed auto-reconciliation (matcher, td_bank_feeds) | ✅ written |
 | [pnl-engine.md](pnl-engine.md) | P&L / Balance Sheet engine — one `buildPnlWorkbook`, `/tools/pnl` (client + external), K-1/M-2 | ✅ written |
 | [td-books.md](td-books.md) | TD Books (My Finances) — `td_books_transactions`, invoice-first routing target, S-corp books foundation | ✅ written |

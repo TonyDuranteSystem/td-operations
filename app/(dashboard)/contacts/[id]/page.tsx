@@ -11,7 +11,9 @@ import { ItinWorkspaceBanner } from '@/components/flows/itin-workspace-banner'
 import { ClosureWorkspaceBanner } from '@/components/flows/closure-workspace-banner'
 import { OnboardingWorkspaceBanner } from '@/components/flows/onboarding-workspace-banner'
 import { resolveOnboardingWorkspaceForContact } from '@/lib/flows/resolve-onboarding-workspace'
-import { isDashboardUser } from '@/lib/auth'
+import { isDashboardUser, isOwnerOnly } from '@/lib/auth'
+import { loadSignedContractsForContact } from '@/lib/signed-contracts/load'
+import type { SignedContractEntry } from '@/lib/signed-contracts/types'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/types'
 import type { OfferPackageOption } from '@/lib/types/offer'
@@ -288,6 +290,16 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   // a just-reviewed company still needing its Registered Agent switched.
   const onboardingWorkspace = await resolveOnboardingWorkspaceForContact(params.id)
 
+  // Signed contracts card: read from where the signed files already are. A failure shows a plain note in the card and never
+  // takes the page down.
+  let signedContracts: SignedContractEntry[] = []
+  let signedContractsError: string | null = null
+  try {
+    signedContracts = await loadSignedContractsForContact(params.id, contact.email ?? null)
+  } catch (err) {
+    signedContractsError = err instanceof Error ? err.message : 'Please reload the page.'
+  }
+
   return (
     <div className="p-6 lg:p-8">
       <div className="mb-4 flex justify-end gap-2">
@@ -344,6 +356,9 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         stepperDeliveries={stepperDeliveries}
         stagesByServiceType={stagesByServiceType}
         flows={contactFlows}
+        signedContracts={signedContracts}
+        signedContractsError={signedContractsError}
+        canEditSignedAmounts={isOwnerOnly(user)}
       />
     </div>
   )
