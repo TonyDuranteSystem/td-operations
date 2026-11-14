@@ -32,6 +32,17 @@ class MeApiTest {
         assertEquals(0, me.menuBadge)
     }
 
+    // bug hunt 14 Nov, finding 1: the server's own sentence for a refused login is shown in the Menu, but only a short plain one
+    @Test fun theServersSentenceForARefusedLoginIsShown() {
+        assertEquals("Partners use the website for now.", parseRefusal("""{"error":"Partners use the website for now.","code":"NOT_FOR_PARTNERS"}"""))
+        assertNull(parseRefusal("""{"error":""}"""))
+        assertNull(parseRefusal("""{"code":"NO_ACCESS"}"""))
+        assertNull(parseRefusal("<html>Forbidden</html>"))
+        assertNull(parseRefusal(""))
+        assertNull(parseRefusal("""{"error":"${"x".repeat(201)}"}"""))
+        assertNull(parseRefusal("""{"error":"line one\nline two"}"""))
+    }
+
     @Test fun anAnswerThatIsNotUsableGivesNothingAndTheBarIsKept() {
         assertNull(parseMe(""))
         assertNull(parseMe("<html>Sign in</html>"))

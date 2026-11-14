@@ -39,6 +39,10 @@ class ClientViewModel : ViewModel() {
     /** what the server last said to "who am I": null = not asked yet */
     var meOutcome by mutableStateOf<MeOutcome?>(null)
         private set
+
+    /** the server's own sentence when it refused this login (a partner, staff, a removed team member): the Menu shows it instead of an empty list */
+    var refusalMessage by mutableStateOf<String?>(null)
+        private set
     var menuOpen by mutableStateOf(false)
     var currentPath by mutableStateOf("/")
         private set
@@ -134,9 +138,10 @@ class ClientViewModel : ViewModel() {
         if (epoch != meEpoch || signingOut) return
         val outcome = MeRules.outcome(answer?.status)
         meOutcome = outcome
+        refusalMessage = if (outcome == MeOutcome.REFUSED) parseRefusal(answer?.text.orEmpty()) else null
         when (outcome) {
             MeOutcome.SIGNED_IN -> parseMe(answer?.text.orEmpty())?.let { me = it }
-            MeOutcome.SIGNED_OUT, MeOutcome.OFF -> me = null
+            MeOutcome.SIGNED_OUT, MeOutcome.REFUSED, MeOutcome.OFF -> me = null
             MeOutcome.UNAVAILABLE -> Unit
         }
     }
@@ -165,6 +170,7 @@ class ClientViewModel : ViewModel() {
                 controller?.clearEverything()
                 me = null
                 meOutcome = MeOutcome.SIGNED_OUT
+                refusalMessage = null
                 selection = ""
                 menuOpen = false
                 meEpoch += 1

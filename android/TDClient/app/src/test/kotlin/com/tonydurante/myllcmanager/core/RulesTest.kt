@@ -96,16 +96,36 @@ class RulesTest {
     @Test fun meOutcomeKeepsTheBarOnAHiccup() {
         assertEquals(MeOutcome.SIGNED_IN, MeRules.outcome(200))
         assertEquals(MeOutcome.SIGNED_OUT, MeRules.outcome(401))
-        assertEquals(MeOutcome.SIGNED_OUT, MeRules.outcome(403))
+        // 403 = somebody IS signed in with a login the app does not serve: the Menu keeps Sign out and shows the server's sentence (bug hunt 14 Nov, finding 1)
+        assertEquals(MeOutcome.REFUSED, MeRules.outcome(403))
         assertEquals(MeOutcome.OFF, MeRules.outcome(503))
         assertEquals(MeOutcome.UNAVAILABLE, MeRules.outcome(500))
         assertEquals(MeOutcome.UNAVAILABLE, MeRules.outcome(502))
         assertEquals(MeOutcome.UNAVAILABLE, MeRules.outcome(429))
         assertEquals(MeOutcome.UNAVAILABLE, MeRules.outcome(null))
         assertTrue(MeOutcome.SIGNED_OUT.clearsBar)
+        assertTrue(MeOutcome.REFUSED.clearsBar)
         assertTrue(MeOutcome.OFF.clearsBar)
         assertFalse(MeOutcome.UNAVAILABLE.clearsBar)
         assertFalse(MeOutcome.SIGNED_IN.clearsBar)
+    }
+
+    // bug hunt 14 Nov, finding 2: a refreshed sign-in the server sends back to the app's own call must reach the web view's cookie jar
+    @Test fun everySetCookieLineOfAnAnswerIsKept() {
+        val headers: Map<String?, List<String>> = mapOf(
+            null to listOf("HTTP/1.1 200 OK"),
+            "Content-Type" to listOf("application/json"),
+            "set-cookie" to listOf("sb-access-token=abc; Path=/; HttpOnly; Secure", "sb-refresh-token=def; Path=/; HttpOnly; Secure"),
+            "Set-Cookie" to listOf("portal_mode=client; Path=/", " "),
+        )
+        val found = CookieRules.setCookieLines(headers)
+        assertEquals(3, found.size) // the header name is matched in any capitals; the blank line is dropped; the status line and other headers are not cookies
+        assertEquals(
+            setOf("sb-access-token=abc; Path=/; HttpOnly; Secure", "sb-refresh-token=def; Path=/; HttpOnly; Secure", "portal_mode=client; Path=/"),
+            found.toSet(),
+        )
+        assertTrue(CookieRules.setCookieLines(null).isEmpty())
+        assertTrue(CookieRules.setCookieLines(mapOf("Content-Type" to listOf("text/html"))).isEmpty())
     }
 
     // finding 11: TD Billing is the invoices page with ?tab=billing

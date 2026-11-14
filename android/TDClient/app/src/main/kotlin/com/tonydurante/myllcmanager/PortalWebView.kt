@@ -28,7 +28,6 @@ import com.tonydurante.myllcmanager.core.LinkRules
 import com.tonydurante.myllcmanager.core.Msg
 import com.tonydurante.myllcmanager.core.SelectionRules
 import org.json.JSONObject
-import android.util.Base64
 
 /**
  * The portal in a web view. Its browser name ends in `TDClient/<version> TDAndroid`, which is how the portal knows to draw itself for the app (no website menu,
@@ -80,6 +79,7 @@ object PortalWebView {
                 web.clearCache(true)
                 web.clearHistory()
                 web.clearFormData()
+                FileHandler.clearAll(web.context) // the photos and files of the person who left (a passport photo must not stay on the phone)
             }
         }
         web.loadUrl(AppConfig.serverUrl + "/portal")
@@ -91,7 +91,8 @@ object PortalWebView {
         when {
             body == "menu" -> vm.menuOpen = true
             body.startsWith("selection:") -> SelectionRules.query(body)?.let { vm.setSelection(it) }
-            body.startsWith("file:") -> activity.receiveFile(body.removePrefix("file:"))
+            // a message that is too long to be a file we accept is refused before anything is copied or read (the page has no size limit of its own)
+            body.startsWith("file:") -> if (body.length > FileRules.MAX_MESSAGE_CHARS) activity.say(Msg.FILE_NOT_OPENED) else activity.receiveFile(body)
             body.startsWith("file-error:") -> activity.say(Msg.FILE_NOT_OPENED)
         }
     }
@@ -206,13 +207,4 @@ object PortalWebView {
         }
     }
 
-    /** Decodes the file the page handed over (`{name, type, data}` with the bytes in base64) and returns it, or null when it is not a usable file. */
-    fun decodeFile(json: String): Triple<String, String?, ByteArray>? = try {
-        val o = JSONObject(json)
-        val data = o.getString("data")
-        if (data.length.toLong() * 3 / 4 > FileHandler.MAX_BYTES) null
-        else Triple(o.optString("name"), o.optString("type").ifEmpty { null }, Base64.decode(data, Base64.DEFAULT))
-    } catch (e: Exception) {
-        null
-    }
 }

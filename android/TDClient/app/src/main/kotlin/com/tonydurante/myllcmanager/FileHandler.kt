@@ -11,20 +11,35 @@ import java.util.UUID
 
 /**
  * Files from the portal (a PDF, a picture, an office document): written to the app's own cache folder and handed to the phone's viewer.
- * The same job as the iPhone's `FileOpener` (Quick Look). The copy is temporary: old ones are removed when the app starts.
+ * The same job as the iPhone's `FileOpener` (Quick Look). The copy is temporary: old ones are removed when the app starts, and ALL of them when
+ * somebody signs out (a photo of a passport must not stay on the phone of the person who left).
  */
 object FileHandler {
     /** the biggest file the app takes from a page (a larger one is refused with the same "couldn't open" message) */
-    const val MAX_BYTES = 40L * 1024 * 1024
+    const val MAX_BYTES = FileRules.MAX_FILE_BYTES
 
+    /** files opened in the phone's viewer */
     private const val FOLDER = "td-files"
+
+    /** photos taken for an upload button (the page reads them later, so they cannot be deleted the moment the picker answers) */
+    const val PHOTO_FOLDER = "td-photos"
     private const val KEEP_MS = 24L * 60 * 60 * 1000
 
     private fun root(context: Context) = File(context.cacheDir, FOLDER)
+    private fun photos(context: Context) = File(context.cacheDir, PHOTO_FOLDER)
 
+    /** Removes the copies older than a day, in both folders. */
     fun cleanOld(context: Context) {
         val limit = System.currentTimeMillis() - KEEP_MS
-        root(context).listFiles()?.filter { it.lastModified() < limit }?.forEach { it.deleteRecursively() }
+        for (folder in listOf(root(context), photos(context))) {
+            folder.listFiles()?.filter { it.lastModified() < limit }?.forEach { it.deleteRecursively() }
+        }
+    }
+
+    /** Removes every copy, in both folders (sign-out). */
+    fun clearAll(context: Context) {
+        root(context).deleteRecursively()
+        photos(context).deleteRecursively()
     }
 
     /** Saves the bytes under a safe name in a fresh folder of the cache. */
@@ -39,17 +54,19 @@ object FileHandler {
         return MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "*/*"
     }
 
-    /** Opens the file in the phone's own viewer. Returns false when no app on the phone can show it. */
-    fun open(context: Context, file: File, mimeType: String?): Boolean {
+    /** Opens the file in the phone's own viewer. Returns false when no app on the phone can show it (or the phone refuses the hand-over). */
+    fun open(context: Context, file: File, mimeType: String?): Boolean = try {
         val uri = FileProvider.getUriForFile(context, "${BuildConfig.APPLICATION_ID}.files", file)
         val intent = Intent(Intent.ACTION_VIEW)
             .setDataAndType(uri, mimeFor(file, mimeType))
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        return try {
-            context.startActivity(Intent.createChooser(intent, null))
-            true
-        } catch (e: ActivityNotFoundException) {
-            false
-        }
+        context.startActivity(Intent.createChooser(intent, null))
+        true
+    } catch (e: ActivityNotFoundException) {
+        false
+    } catch (e: IllegalArgumentException) { // the provider cannot name this file
+        false
+    } catch (e: SecurityException) {
+        false
     }
 }

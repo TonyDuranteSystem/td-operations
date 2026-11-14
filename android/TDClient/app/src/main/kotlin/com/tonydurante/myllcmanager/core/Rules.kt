@@ -86,8 +86,14 @@ enum class MeOutcome {
     /** 200: the bar and the Menu list come from the answer */
     SIGNED_IN,
 
-    /** 401 / 403: nobody signed in (or a login the app does not serve): no bar */
+    /** 401: nobody is signed in: no bar */
     SIGNED_OUT,
+
+    /**
+     * 403: somebody IS signed in, but with a login the app does not serve (a partner, a staff member, a team member whose access was removed):
+     * no bar, the server's own plain sentence in the Menu, and Sign out stays (the person must be able to leave; bug hunt 14 Nov 2026, finding 1)
+     */
+    REFUSED,
 
     /** 503: the app is switched off on the server: no bar (the website's own pages show instead) */
     OFF,
@@ -95,16 +101,32 @@ enum class MeOutcome {
     /** anything else (a server hiccup, no connection): KEEP the bar the person already has */
     UNAVAILABLE;
 
-    val clearsBar: Boolean get() = this == SIGNED_OUT || this == OFF
+    val clearsBar: Boolean get() = this == SIGNED_OUT || this == REFUSED || this == OFF
 }
 
 object MeRules {
     fun outcome(status: Int?): MeOutcome = when (status) {
         null -> MeOutcome.UNAVAILABLE
         200 -> MeOutcome.SIGNED_IN
-        401, 403 -> MeOutcome.SIGNED_OUT
+        401 -> MeOutcome.SIGNED_OUT
+        403 -> MeOutcome.REFUSED
         503 -> MeOutcome.OFF
         else -> MeOutcome.UNAVAILABLE
+    }
+}
+
+/**
+ * The app's own calls to the server (the "who am I" check, a file download) reach the server with the page's sign-in cookies. The server may answer with a
+ * REFRESHED sign-in (the old one had expired): those cookies must be kept, or the page is left holding a spent refresh token (bug hunt 14 Nov 2026, finding 2).
+ */
+object CookieRules {
+    /** Every `Set-Cookie` line of an answer (the header name is matched without regard to capitals; an empty line is dropped). */
+    fun setCookieLines(headers: Map<String?, List<String>>?): List<String> {
+        if (headers == null) return emptyList()
+        return headers.entries
+            .filter { it.key != null && it.key.equals("Set-Cookie", ignoreCase = true) }
+            .flatMap { it.value }
+            .filter { it.isNotBlank() }
     }
 }
 

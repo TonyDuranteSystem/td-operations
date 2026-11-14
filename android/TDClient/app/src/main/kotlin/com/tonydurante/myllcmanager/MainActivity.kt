@@ -12,6 +12,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,6 +40,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
+import com.tonydurante.myllcmanager.core.FileRules
 import com.tonydurante.myllcmanager.core.LinkRules
 import com.tonydurante.myllcmanager.core.Msg
 import com.tonydurante.myllcmanager.core.PageRules
@@ -95,7 +97,10 @@ class MainActivity : ComponentActivity() {
 
     @OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        // The app is always light (its colours are fixed), so the clock and battery icons must always be DARK. The default follows the phone's dark mode
+        // and would draw white icons on this light screen (bug hunt 14 Nov 2026, finding 4).
+        val lightBars = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+        enableEdgeToEdge(statusBarStyle = lightBars, navigationBarStyle = lightBars)
         super.onCreate(savedInstanceState)
         FileHandler.cleanOld(this)
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
@@ -143,7 +148,7 @@ class MainActivity : ComponentActivity() {
         val initial = mutableListOf<Intent>()
         val types = params.acceptTypes.filter { it.isNotBlank() }
         if (types.isEmpty() || types.any { it.startsWith("image") || it == "*/*" }) {
-            val folder = File(cacheDir, "td-photos").apply { mkdirs() }
+            val folder = File(cacheDir, FileHandler.PHOTO_FOLDER).apply { mkdirs() }
             val file = File(folder, "IMG_${System.currentTimeMillis()}.jpg")
             val uri = FileProvider.getUriForFile(this, "${BuildConfig.APPLICATION_ID}.files", file)
             photoFile = file
@@ -184,13 +189,21 @@ class MainActivity : ComponentActivity() {
     }
 
     /** A file the page handed over as text (`{name, type, data}`): saved and opened in the phone's viewer. */
-    fun receiveFile(json: String) {
-        val decoded = PortalWebView.decodeFile(json)
-        if (decoded == null) { say(Msg.FILE_NOT_OPENED); return }
-        val (name, type, bytes) = decoded
+    fun receiveFile(message: String) {
         lifecycleScope.launch {
-            val file = withContext(Dispatchers.IO) { FileHandler.save(this@MainActivity, name, type, bytes) }
-            if (!FileHandler.open(this@MainActivity, file, type)) say(Msg.FILE_NOT_OPENED)
+            // reading, decoding and writing happen off the main thread; anything that goes wrong (no space left, a name the phone refuses, too little
+            // memory for a big file) is the plain "couldn't open" message, never a closed app
+            val saved = withContext(Dispatchers.IO) {
+                try {
+                    val file = FileRules.decodeMessage(message.removePrefix("file:")) ?: return@withContext null
+                    FileHandler.save(this@MainActivity, file.name, file.type, file.bytes) to file.type
+                } catch (e: Exception) {
+                    null
+                } catch (e: OutOfMemoryError) {
+                    null
+                }
+            }
+            if (saved == null || !FileHandler.open(this@MainActivity, saved.first, saved.second)) say(Msg.FILE_NOT_OPENED)
         }
     }
 
@@ -206,12 +219,17 @@ class MainActivity : ComponentActivity() {
                     try {
                         c.connectTimeout = 15_000
                         c.readTimeout = 60_000
+                        c.instanceFollowRedirects = false // the sign-in cookie must never follow a redirect to another address, and a redirect to the sign-in page is not a file
                         c.setRequestProperty("User-Agent", vm.userAgent)
                         if (!cookie.isNullOrEmpty()) c.setRequestProperty("Cookie", cookie)
-                        if (c.responseCode !in 200..299 || c.contentLengthLong > FileHandler.MAX_BYTES) return@withContext null
-                        val name = com.tonydurante.myllcmanager.core.FileRules.nameFromDisposition(c.getHeaderField("Content-Disposition")) ?: suggestedName
+                        val status = c.responseCode
+                        keepSessionCookies(url, c.headerFields)
+                        if (status !in 200..299 || c.contentLengthLong > FileHandler.MAX_BYTES) return@withContext null
+                        val name = FileRules.nameFromDisposition(c.getHeaderField("Content-Disposition")) ?: suggestedName
                         val type = c.contentType ?: mimeType
-                        Triple(FileHandler.save(this@MainActivity, name, type, c.inputStream.use { it.readBytes() }), type, name)
+                        // a file of unknown size is read only up to the limit
+                        val bytes = c.inputStream.use { FileRules.readUpTo(it, FileHandler.MAX_BYTES) } ?: return@withContext null
+                        FileHandler.save(this@MainActivity, name, type, bytes) to type
                     } finally {
                         c.disconnect()
                     }

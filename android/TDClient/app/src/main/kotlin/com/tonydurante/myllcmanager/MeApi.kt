@@ -1,5 +1,7 @@
 package com.tonydurante.myllcmanager
 
+import android.webkit.CookieManager
+import com.tonydurante.myllcmanager.core.CookieRules
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -26,8 +28,31 @@ fun parseMe(text: String): Me? = try {
     null
 }
 
+/**
+ * The plain sentence the server gives when it refuses a login the app does not serve (`{"error": "..."}`, status 403), or null when there is none.
+ * Only a short ordinary sentence is believed (it is shown to the person in the Menu).
+ */
+fun parseRefusal(text: String): String? = try {
+    val message = JSONObject(text).optString("error").trim()
+    if (message.isEmpty() || message.length > 200 || message.any { it.isISOControl() }) null else message
+} catch (e: Exception) {
+    null
+}
+
 /** One answer from the server: the status code and the text, or null when there was no answer at all (offline, a timeout). */
 data class ServerAnswer(val status: Int, val text: String)
+
+/**
+ * Hands the cookies an answer carries (a refreshed sign-in) to the web view's cookie jar, as if the page itself had asked. Without this the page keeps the
+ * old, already spent refresh token (bug hunt 14 Nov 2026, finding 2). `url` is the address the answer came from (redirects are off, so it is that address).
+ */
+fun keepSessionCookies(url: String, headers: Map<String?, List<String>>?) {
+    val lines = CookieRules.setCookieLines(headers)
+    if (lines.isEmpty()) return
+    val jar = CookieManager.getInstance()
+    lines.forEach { jar.setCookie(url, it) }
+    jar.flush()
+}
 
 /**
  * The app's own questions to the server. They carry the page's sign-in (the same cookies the portal itself uses, read from the web view's cookie jar)
@@ -47,6 +72,7 @@ object ServerCalls {
                 c.setRequestProperty("User-Agent", userAgent)
                 if (!cookie.isNullOrEmpty()) c.setRequestProperty("Cookie", cookie)
                 val status = c.responseCode
+                keepSessionCookies(AppConfig.serverUrl, c.headerFields)
                 val stream = if (status in 200..299) c.inputStream else c.errorStream
                 ServerAnswer(status, stream?.bufferedReader()?.use { it.readText() }.orEmpty())
             } finally {

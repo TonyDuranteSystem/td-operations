@@ -45,6 +45,61 @@ class FileRulesTest {
         assertTrue(n.length <= 130)
     }
 
+    // bug hunt 14 Nov, finding 5: the phone's file system refuses a name over 255 BYTES, and 85 emoji or Chinese characters are already more than that
+    @Test fun aLongNameOfWideCharactersIsCutByBytesNotCharacters() {
+        for (wide in listOf("日".repeat(90), "😀".repeat(90), "è".repeat(200))) {
+            val n = FileRules.safeName("$wide.pdf", null)
+            assertTrue("$n is ${n.toByteArray().size} bytes", n.toByteArray(Charsets.UTF_8).size <= 210)
+            assertTrue(n.endsWith(".pdf"))
+            // never cut in the middle of an emoji: every first half is followed by its second half and every second half is preceded by its first
+            for (i in n.indices) {
+                if (Character.isHighSurrogate(n[i])) assertTrue(i + 1 < n.length && Character.isLowSurrogate(n[i + 1]))
+                if (Character.isLowSurrogate(n[i])) assertTrue(i > 0 && Character.isHighSurrogate(n[i - 1]))
+            }
+        }
+        val emoji = FileRules.safeName("😀".repeat(90) + ".pdf", null)
+        assertEquals(emoji, String(emoji.toByteArray(Charsets.UTF_8), Charsets.UTF_8)) // survives a round trip: no half characters
+        // a very long "extension" is not kept as one
+        val odd = FileRules.safeName("a." + "b".repeat(300), null)
+        assertTrue(odd.toByteArray().size <= 200)
+        // a short ordinary name is untouched
+        assertEquals("Invoice 5714.pdf", FileRules.safeName("Invoice 5714.pdf", "application/pdf"))
+    }
+
+    // finding 5 and 7: what the page hands over is checked before anything is made, and an empty or broken file is never opened
+    @Test fun aFileFromThePageIsDecodedOrRefused() {
+        val ok = FileRules.decodeMessage("""{"name":"a.pdf","type":"application/pdf","data":"SGVsbG8="}""")!!
+        assertEquals("a.pdf", ok.name)
+        assertEquals("application/pdf", ok.type)
+        assertEquals("Hello", String(ok.bytes))
+        // line breaks inside the base64 text are fine
+        assertEquals("Hello", String(FileRules.decodeMessage("""{"name":"a","data":"SGVs\nbG8="}""")!!.bytes))
+        assertNull(FileRules.decodeMessage("""{"name":"a.pdf","type":"application/pdf","data":""}""")) // a failed read in the page
+        assertNull(FileRules.decodeMessage("""{"name":"a.pdf","data":"!!!not base64!!!"}"""))
+        assertNull(FileRules.decodeMessage("""{"name":"a.pdf"}"""))
+        assertNull(FileRules.decodeMessage("not json"))
+        // too big: refused from the length of the text, before any bytes are made
+        val big = "A".repeat(((FileRules.MAX_FILE_BYTES + 1024) * 4 / 3).toInt())
+        assertNull(FileRules.decodeMessage("""{"name":"a.pdf","data":"$big"}"""))
+        assertTrue(FileRules.MAX_MESSAGE_CHARS > FileRules.MAX_FILE_BYTES)
+    }
+
+    @Test fun aFileOfUnknownSizeIsReadOnlyUpToTheLimit() {
+        val small = ByteArray(1000) { it.toByte() }
+        assertEquals(1000, FileRules.readUpTo(small.inputStream(), 5000)!!.size)
+        assertEquals(1000, FileRules.readUpTo(small.inputStream(), 1000)!!.size) // exactly the limit is allowed
+        assertNull(FileRules.readUpTo(small.inputStream(), 999))
+        assertEquals(0, FileRules.readUpTo(ByteArray(0).inputStream(), 10)!!.size)
+        // a long stream stops as soon as the limit is passed, without reading the rest
+        var read = 0L
+        val endless = object : java.io.InputStream() {
+            override fun read(): Int = 1
+            override fun read(b: ByteArray, off: Int, len: Int): Int { read += len; return len }
+        }
+        assertNull(FileRules.readUpTo(endless, 100_000))
+        assertTrue(read < 200_000)
+    }
+
     @Test fun theNameInAContentDispositionHeaderIsFound() {
         assertEquals("QA%20Test.pdf", FileRules.nameFromDisposition("attachment; filename=\"QA%20Test.pdf\""))
         assertEquals("a.pdf", FileRules.nameFromDisposition("attachment; filename=a.pdf"))

@@ -141,7 +141,12 @@ fun MenuSheet(vm: ClientViewModel) {
                 } else {
                     item {
                         Text(
-                            if (vm.meOutcome == null || vm.meOutcome == MeOutcome.SIGNED_OUT) AppConfig.say(Msg.SIGN_IN_FIRST) else AppConfig.say(Msg.MENU_UNAVAILABLE),
+                            when (vm.meOutcome) {
+                                null, MeOutcome.SIGNED_OUT -> AppConfig.say(Msg.SIGN_IN_FIRST)
+                                // somebody is signed in with a login the app does not serve: the server says why in plain words
+                                MeOutcome.REFUSED -> vm.refusalMessage ?: AppConfig.say(Msg.MENU_UNAVAILABLE)
+                                else -> AppConfig.say(Msg.MENU_UNAVAILABLE)
+                            },
                             modifier = Modifier.padding(20.dp),
                         )
                     }
