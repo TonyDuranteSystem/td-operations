@@ -1,35 +1,28 @@
 'use client'
 
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, useTransition } from 'react'
-import { Search, Building2, AlertCircle, ChevronRight, ChevronLeft, Plus } from 'lucide-react'
+import { Search, AlertCircle, ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { AccountListItem } from '@/lib/types'
-import Link from 'next/link'
 import { CreateAccountDialog } from './create-account-dialog'
-
-const ENTITY_COLORS: Record<string, string> = {
-  'Single Member LLC': 'bg-blue-100 text-blue-700',
-  'Multi Member LLC': 'bg-indigo-100 text-indigo-700',
-  'C-Corp Elected': 'bg-violet-100 text-violet-700',
-}
-
-const HEALTH_COLORS: Record<string, string> = {
-  Healthy: 'text-emerald-600',
-  'At Risk': 'text-amber-600',
-  Critical: 'text-red-600',
-}
+import { SegmentedFilter } from '@/components/lists/segmented-filter'
+import { AmountCell } from '@/components/lists/amount-cell'
+import { EntityChip, KindChip, StatusChip } from '@/components/lists/chips'
+import { useAmountOverrides } from '@/components/lists/use-amount-overrides'
+import { isAmountLocked, perYearLabel, perYearTotal } from '@/lib/crm-lists/amounts'
+import { ACCOUNT_STATUS_CHOICES, KIND_CHOICES, TYPE_CHOICES, TYPE_NOT_SET, type AccountFacets } from '@/lib/crm-lists/filters'
 
 interface AccountTableProps {
   items: AccountListItem[]
   query: string
   statusFilter: string
+  kindFilter: string
   typeFilter: string
+  facets: AccountFacets
   stats: {
     total: number
-    smllc: number
-    mmllc: number
-    corp: number
     withOverdue: number
   }
   currentPage: number
@@ -37,50 +30,52 @@ interface AccountTableProps {
   totalCount: number
 }
 
-export function AccountTable({ items, query, statusFilter, typeFilter, stats, currentPage, totalPages, totalCount }: AccountTableProps) {
+const GRID = 'md:grid-cols-[minmax(220px,1fr)_110px_62px_100px_168px_160px_90px_80px]'
+
+export function AccountTable({ items, query, statusFilter, kindFilter, typeFilter, facets, stats, currentPage, totalPages, totalCount }: AccountTableProps) {
   const router = useRouter()
   const [search, setSearch] = useState(query)
   const [isPending, startTransition] = useTransition()
   const [showCreate, setShowCreate] = useState(false)
+  const { overrides, apply } = useAmountOverrides(items)
   // The filter values we've actually told the server about — updated
   // synchronously the instant we act, NOT after the async navigation
-  // resolves. Covers EVERY filter, not just search: this page has TWO other
-  // filters (status, type) — firing one then the other before the first
-  // navigation resolves used to silently drop the first one, because the
-  // second call fell back to a still-stale prop for it. Found by
+  // resolves. Covers EVERY filter, not just search: this page has several
+  // other filters (status, kind, type) — firing one then another before the
+  // first navigation resolves used to silently drop the first one, because
+  // the second call fell back to a still-stale prop for it. Found by
   // adversarial review, 2026-09-03 (round 3 — the original round-2 fix only
   // covered search).
-  const lastFiltersRef = useRef({ q: query, status: statusFilter, type: typeFilter })
+  const lastFiltersRef = useRef({ q: query, status: statusFilter, kind: kindFilter, type: typeFilter })
 
   // Resync when the URL changed for a reason OTHER than our own action —
   // browser back/forward, or a link elsewhere setting these params. See
   // leads-table.tsx for why this is guarded on the ref, not a plain
   // "prop changed" check.
   useEffect(() => {
-    if (
-      query !== lastFiltersRef.current.q ||
-      statusFilter !== lastFiltersRef.current.status ||
-      typeFilter !== lastFiltersRef.current.type
-    ) {
-      lastFiltersRef.current = { q: query, status: statusFilter, type: typeFilter }
+    const last = lastFiltersRef.current
+    if (query !== last.q || statusFilter !== last.status || kindFilter !== last.kind || typeFilter !== last.type) {
+      lastFiltersRef.current = { q: query, status: statusFilter, kind: kindFilter, type: typeFilter }
       setSearch(query)
     }
-  }, [query, statusFilter, typeFilter])
+  }, [query, statusFilter, kindFilter, typeFilter])
 
-  function buildParams(overrides: Record<string, string> = {}) {
+  function buildParams(overridesParams: Record<string, string> = {}) {
     const params = new URLSearchParams()
-    const q = overrides.q ?? lastFiltersRef.current.q
-    const s = overrides.status ?? lastFiltersRef.current.status
-    const t = overrides.type ?? lastFiltersRef.current.type
-    const p = overrides.page ?? ''
+    const q = overridesParams.q ?? lastFiltersRef.current.q
+    const s = overridesParams.status ?? lastFiltersRef.current.status
+    const k = overridesParams.kind ?? lastFiltersRef.current.kind
+    const t = overridesParams.type ?? lastFiltersRef.current.type
+    const p = overridesParams.page ?? ''
     if (q) params.set('q', q)
     if (s) params.set('status', s)
+    if (k) params.set('kind', k)
     if (t) params.set('type', t)
     if (p && p !== '1') params.set('page', p)
     return params.toString()
   }
 
-  function updateFilter(key: 'q' | 'status' | 'type', value: string) {
+  function updateFilter(key: 'q' | 'status' | 'kind' | 'type', value: string) {
     lastFiltersRef.current = { ...lastFiltersRef.current, [key]: value }
     startTransition(() => {
       router.push(`/accounts?${buildParams({ [key]: value, page: '1' })}`)
@@ -110,11 +105,25 @@ export function AccountTable({ items, query, statusFilter, typeFilter, stats, cu
     }
   }
 
+  const statusOptions = [
+    ...ACCOUNT_STATUS_CHOICES.map(s => ({ value: s, label: s, count: facets.status[s] })),
+    { value: 'all', label: 'All', count: facets.status.all },
+  ]
+  const kindOptions = [
+    { value: '', label: 'All', count: facets.kind.all },
+    ...KIND_CHOICES.map(k => ({ value: k, label: k === 'One-Time' ? 'One-time' : k, count: facets.kind[k] })),
+  ]
+  const typeOptions = [
+    { value: '', label: 'All', count: facets.type.all },
+    ...TYPE_CHOICES.map(t => ({ value: t.value, label: t.label, count: facets.type[t.value] })),
+    { value: TYPE_NOT_SET, label: 'Not set', count: facets.type[TYPE_NOT_SET] },
+  ]
+
   return (
     <div className="space-y-4">
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-3">
-        <form onSubmit={handleSearch} className="flex-1 relative">
+        <form onSubmit={handleSearch} className="flex-1 relative max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input
             type="text"
@@ -124,39 +133,24 @@ export function AccountTable({ items, query, statusFilter, typeFilter, stats, cu
             className="w-full pl-9 pr-4 py-2 rounded-lg border bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </form>
-        <select
-          value={statusFilter}
-          onChange={e => updateFilter('status', e.target.value)}
-          className="px-3 py-2 rounded-lg border bg-white text-sm"
-        >
-          <option value="Active">Active</option>
-          <option value="all">All</option>
-          <option value="Closed">Closed</option>
-          <option value="Cancelled">Cancellati</option>
-        </select>
-        <select
-          value={typeFilter}
-          onChange={e => updateFilter('type', e.target.value)}
-          className="px-3 py-2 rounded-lg border bg-white text-sm"
-        >
-          <option value="">All types</option>
-          <option value="Single Member LLC">SMLLC</option>
-          <option value="Multi Member LLC">MMLLC</option>
-          <option value="C-Corp Elected">C-Corp</option>
-        </select>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition-colors shrink-0"
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-800 transition-colors shrink-0 sm:ml-auto"
         >
           <Plus className="h-4 w-4" />
           New Account
         </button>
       </div>
+      <div className="flex flex-wrap gap-x-6 gap-y-3">
+        <SegmentedFilter label="Status" options={statusOptions} value={statusFilter} onChange={v => updateFilter('status', v)} disabled={isPending} />
+        <SegmentedFilter label="Client kind" options={kindOptions} value={kindFilter} onChange={v => updateFilter('kind', v)} disabled={isPending} />
+        <SegmentedFilter label="Company type" options={typeOptions} value={typeFilter} onChange={v => updateFilter('type', v)} disabled={isPending} />
+      </div>
 
       {/* Stats row */}
       <div className="flex gap-3 flex-wrap text-sm">
         <span className="px-3 py-1 rounded-full bg-zinc-100 text-zinc-700 font-medium">
-          {stats.total} totali
+          {stats.total} total
         </span>
         {stats.withOverdue > 0 && (
           <span className="px-3 py-1 rounded-full bg-red-100 text-red-700 font-medium flex items-center gap-1">
@@ -167,91 +161,121 @@ export function AccountTable({ items, query, statusFilter, typeFilter, stats, cu
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-lg border overflow-hidden">
-        <div className={cn('transition-opacity', isPending && 'opacity-50')}>
+      <div className="bg-white rounded-lg border overflow-x-auto">
+        <div className={cn('min-w-[1110px] transition-opacity', isPending && 'opacity-50')}>
           {/* Header */}
-          <div className="hidden md:grid md:grid-cols-[1fr,140px,100px,120px,80px,80px,32px] gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            <span>Azienda</span>
-            <span>Contatto</span>
-            <span>Tipo</span>
+          <div className={cn('hidden md:grid gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider', GRID)}>
+            <span>Company</span>
+            <span>Contact</span>
+            <span>Type</span>
             <span>Status</span>
-            <span className="text-center">Services</span>
-            <span className="text-center">Overdue</span>
-            <span></span>
+            <span>1st Inst</span>
+            <span>2nd Inst</span>
+            <span>Per year</span>
+            <span className="text-right">Overdue</span>
           </div>
 
           {/* Rows */}
           {items.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-              Nessun account trovato
+              No companies found
             </div>
           ) : (
-            items.map(item => (
-              <Link
-                key={item.id}
-                href={`/accounts/${item.id}`}
-                className="grid grid-cols-1 md:grid-cols-[1fr,140px,100px,120px,80px,80px,32px] gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center"
-              >
-                {/* Company */}
-                <div className="flex items-center gap-2 min-w-0">
-                  <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
+            items.map(item => {
+              const o = overrides[item.id]
+              const first = o && 'installment_1_amount' in o ? (o.installment_1_amount ?? null) : item.installment_1_amount
+              const second = o && 'installment_2_amount' in o ? (o.installment_2_amount ?? null) : item.installment_2_amount
+              const updatedAt = o?.updated_at ?? item.updated_at
+              const locked = isAmountLocked(item.status)
+              const total = perYearTotal(
+                { amount: first, currency: item.installment_1_currency },
+                { amount: second, currency: item.installment_2_currency },
+              )
+              return (
+                <div
+                  key={item.id}
+                  onClick={e => {
+                    if ((e.target as HTMLElement).closest('[data-no-nav]')) return
+                    router.push(`/accounts/${item.id}`)
+                  }}
+                  className={cn(
+                    'grid grid-cols-1 gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-center cursor-pointer',
+                    GRID,
+                    locked && 'opacity-60',
+                  )}
+                >
+                  {/* Company */}
                   <div className="min-w-0">
-                    <p className="font-medium text-sm truncate">{item.company_name}</p>
+                    <p className="flex items-center gap-1.5 font-medium text-sm truncate">
+                      <Link href={`/accounts/${item.id}`} className="truncate hover:underline" onClick={e => e.stopPropagation()}>
+                        {item.company_name}
+                      </Link>
+                      <KindChip kind={item.account_type} />
+                    </p>
                     {item.state_of_formation && (
                       <p className="text-xs text-muted-foreground">{item.state_of_formation}</p>
                     )}
                   </div>
-                </div>
 
-                {/* Contact */}
-                <div className="text-xs text-muted-foreground truncate hidden md:block">
-                  {item.contact_name ?? '—'}
-                </div>
+                  {/* Contact */}
+                  <div className="text-xs text-muted-foreground truncate hidden md:block">
+                    {item.contact_name ?? '—'}
+                  </div>
 
-                {/* Entity type */}
-                <div className="hidden md:block">
-                  {item.entity_type && (
-                    <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', ENTITY_COLORS[item.entity_type] ?? 'bg-zinc-100')}>
-                      {item.entity_type === 'Single Member LLC' ? 'SMLLC' :
-                       item.entity_type === 'Multi Member LLC' ? 'MMLLC' :
-                       item.entity_type === 'C-Corp Elected' ? 'Corp' : item.entity_type}
-                    </span>
-                  )}
-                </div>
+                  {/* Company type */}
+                  <div className="hidden md:block">
+                    <EntityChip entityType={item.entity_type} />
+                  </div>
 
-                {/* Health */}
-                <div className="hidden md:block">
-                  {item.client_health && (
-                    <span className={cn('text-xs font-medium', HEALTH_COLORS[item.client_health])}>
-                      {item.client_health}
-                    </span>
-                  )}
-                </div>
+                  {/* Status */}
+                  <div className="hidden md:block">
+                    <StatusChip status={item.status} />
+                  </div>
 
-                {/* Services */}
-                <div className="hidden md:flex justify-center">
-                  {item.service_count > 0 && (
-                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                      {item.service_count}
-                    </span>
-                  )}
-                </div>
+                  {/* 1st Inst */}
+                  <div className="hidden md:block">
+                    <AmountCell
+                      accountId={item.id}
+                      field="installment_1_amount"
+                      amount={first}
+                      currency={item.installment_1_currency}
+                      locked={locked}
+                      updatedAt={updatedAt}
+                      chip={item.chip_1}
+                      onSaved={apply}
+                    />
+                  </div>
 
-                {/* Overdue */}
-                <div className="hidden md:flex justify-center">
-                  {item.payment_overdue > 0 && (
-                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">
-                      {item.payment_overdue}
-                    </span>
-                  )}
-                </div>
+                  {/* 2nd Inst */}
+                  <div className="hidden md:block">
+                    <AmountCell
+                      accountId={item.id}
+                      field="installment_2_amount"
+                      amount={second}
+                      currency={item.installment_2_currency}
+                      locked={locked}
+                      updatedAt={updatedAt}
+                      chip={item.chip_2}
+                      onSaved={apply}
+                    />
+                  </div>
 
-                {/* Arrow */}
-                <div className="hidden md:flex justify-end">
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  {/* Per year: added up on screen, never typed */}
+                  <div className="hidden md:block text-sm font-semibold tabular-nums">
+                    {total.kind === 'none' ? <span className="text-muted-foreground font-normal">—</span> : perYearLabel(total)}
+                  </div>
+
+                  {/* Overdue */}
+                  <div className="hidden md:flex justify-end">
+                    {item.payment_overdue > 0 && (
+                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+                        {item.payment_overdue}
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </Link>
-            ))
+              )
+            })
           )}
         </div>
       </div>
@@ -260,7 +284,7 @@ export function AccountTable({ items, query, statusFilter, typeFilter, stats, cu
       {totalPages > 1 && (
         <div className="flex items-center justify-between pt-2">
           <p className="text-xs text-muted-foreground">
-            {((currentPage - 1) * 50) + 1}–{Math.min(currentPage * 50, totalCount)} di {totalCount}
+            {((currentPage - 1) * 50) + 1}–{Math.min(currentPage * 50, totalCount)} of {totalCount} · 50 per page
           </p>
           <div className="flex items-center gap-1">
             <button
