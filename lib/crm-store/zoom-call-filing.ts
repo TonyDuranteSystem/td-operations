@@ -9,6 +9,7 @@
  * The switch is `app_settings.zoom_call_filing` = {"mode":"off" | "dry_run" | "live"}. Missing / malformed = off. Claude flips it (never a button for Antonio).
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { listContactCallsInWindow } from "@/lib/leads/contact-calls"
 import {
   MAX_PER_RUN, decide, isCallFolderName, isQuiet, orderForRun, originText,
   type Booking, type CandidateFolder, type Destination, type Origin,
@@ -246,6 +247,11 @@ export function liveFilingDeps(opts: { now?: () => Date; zoomCallsId?: string; m
       for (const l of (links.data ?? []) as Array<{ client_name: string | null; starts_at: string; ends_at: string | null }>) {
         out.push({ kind: "marketing", start: new Date(l.starts_at), end: l.ends_at ? new Date(l.ends_at) : null, who: l.client_name })
       }
+
+      // A client's / partner's call booked through a made booking link is logged in contact_calls (it has no lead, so lead_calls cannot hold it). Third read, TOLERANT
+      // on purpose: a missing table (code deployed before the migration) or a read error means "none" and never stops the filing. Without this a client call that
+      // overlaps a marketing window would be filed as marketing.
+      for (const c of await listContactCallsInWindow(db(), from, to)) out.push({ kind: "calendly", start: new Date(c.start), end: null, who: c.who })
       return out
     },
 

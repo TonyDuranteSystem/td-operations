@@ -2433,6 +2433,272 @@ export type Database = {
           },
         ]
       }
+      booking_links: {
+        Row: {
+          account_id: string | null
+          claimed_at: string | null
+          claimed_email: string | null
+          claimed_event_uri: string | null
+          claimed_invitee_uri: string | null
+          contact_id: string | null
+          created_at: string
+          created_by: string | null
+          duration_minutes: number | null
+          effects_done_at: string | null
+          expires_at: string | null
+          id: string
+          kind_entry_id: string | null
+          kind_label: string
+          last_opened_at: string | null
+          lead_id: string | null
+          once: boolean
+          open_count: number
+          person_emails: string[]
+          person_language: string | null
+          person_name: string | null
+          public_id: string
+          referral_outcome: string | null
+          referrer_code: string | null
+          referrer_contact_id: string | null
+          revoked_at: string | null
+          rule_snapshot: Json
+          rule_version: number
+          share_url: string | null
+          status: string
+          template_slug: string | null
+          updated_at: string
+        }
+        Insert: {
+          account_id?: string | null
+          claimed_at?: string | null
+          claimed_email?: string | null
+          claimed_event_uri?: string | null
+          claimed_invitee_uri?: string | null
+          contact_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          duration_minutes?: number | null
+          effects_done_at?: string | null
+          expires_at?: string | null
+          id?: string
+          kind_entry_id?: string | null
+          kind_label: string
+          last_opened_at?: string | null
+          lead_id?: string | null
+          once?: boolean
+          open_count?: number
+          person_emails?: string[]
+          person_language?: string | null
+          person_name?: string | null
+          public_id: string
+          referral_outcome?: string | null
+          referrer_code?: string | null
+          referrer_contact_id?: string | null
+          revoked_at?: string | null
+          rule_snapshot?: Json
+          rule_version?: number
+          share_url?: string | null
+          status?: string
+          template_slug?: string | null
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string | null
+          claimed_at?: string | null
+          claimed_email?: string | null
+          claimed_event_uri?: string | null
+          claimed_invitee_uri?: string | null
+          contact_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          duration_minutes?: number | null
+          effects_done_at?: string | null
+          expires_at?: string | null
+          id?: string
+          kind_entry_id?: string | null
+          kind_label?: string
+          last_opened_at?: string | null
+          lead_id?: string | null
+          once?: boolean
+          open_count?: number
+          person_emails?: string[]
+          person_language?: string | null
+          person_name?: string | null
+          public_id?: string
+          referral_outcome?: string | null
+          referrer_code?: string | null
+          referrer_contact_id?: string | null
+          revoked_at?: string | null
+          rule_snapshot?: Json
+          rule_version?: number
+          share_url?: string | null
+          status?: string
+          template_slug?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "booking_links_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "booking_links_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "booking_links_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "booking_links_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "booking_links_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "booking_links_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+          {
+            foreignKeyName: "booking_links_kind_entry_id_fkey"
+            columns: ["kind_entry_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "booking_links_kind_entry_id_fkey"
+            columns: ["kind_entry_id"]
+            isOneToOne: false
+            referencedRelation: "service_catalog"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "booking_links_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "booking_links_referrer_contact_id_fkey"
+            columns: ["referrer_contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "booking_links_referrer_contact_id_fkey"
+            columns: ["referrer_contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+        ]
+      }
+      call_checks: {
+        Row: {
+          answer: string | null
+          answered_at: string | null
+          answered_by: string | null
+          booking_link_id: string | null
+          calendly_event_uri: string | null
+          contact_id: string | null
+          created_at: string
+          dedupe_key: string
+          id: string
+          kind: string
+          lead_id: string | null
+          payload: Json
+          remind_at: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          answer?: string | null
+          answered_at?: string | null
+          answered_by?: string | null
+          booking_link_id?: string | null
+          calendly_event_uri?: string | null
+          contact_id?: string | null
+          created_at?: string
+          dedupe_key: string
+          id?: string
+          kind: string
+          lead_id?: string | null
+          payload?: Json
+          remind_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          answer?: string | null
+          answered_at?: string | null
+          answered_by?: string | null
+          booking_link_id?: string | null
+          calendly_event_uri?: string | null
+          contact_id?: string | null
+          created_at?: string
+          dedupe_key?: string
+          id?: string
+          kind?: string
+          lead_id?: string | null
+          payload?: Json
+          remind_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "call_checks_booking_link_id_fkey"
+            columns: ["booking_link_id"]
+            isOneToOne: false
+            referencedRelation: "booking_links"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "call_checks_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "call_checks_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+          {
+            foreignKeyName: "call_checks_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       call_summaries: {
         Row: {
           account_id: string | null
@@ -4753,6 +5019,114 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "document_types"
             referencedColumns: ["type_name"]
+          },
+        ]
+      }
+      contact_calls: {
+        Row: {
+          account_id: string | null
+          booked_at: string | null
+          booking_link_id: string | null
+          calendly_event_uri: string | null
+          contact_id: string
+          created_at: string
+          event_type_name: string | null
+          id: string
+          moved_to: string | null
+          scheduled_date: string | null
+          scheduled_start: string | null
+          source: string
+          state: string
+          updated_at: string
+        }
+        Insert: {
+          account_id?: string | null
+          booked_at?: string | null
+          booking_link_id?: string | null
+          calendly_event_uri?: string | null
+          contact_id: string
+          created_at?: string
+          event_type_name?: string | null
+          id?: string
+          moved_to?: string | null
+          scheduled_date?: string | null
+          scheduled_start?: string | null
+          source?: string
+          state?: string
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string | null
+          booked_at?: string | null
+          booking_link_id?: string | null
+          calendly_event_uri?: string | null
+          contact_id?: string
+          created_at?: string
+          event_type_name?: string | null
+          id?: string
+          moved_to?: string | null
+          scheduled_date?: string | null
+          scheduled_start?: string | null
+          source?: string
+          state?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contact_calls_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contact_calls_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contact_calls_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "contact_calls_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "contact_calls_booking_link_id_fkey"
+            columns: ["booking_link_id"]
+            isOneToOne: false
+            referencedRelation: "booking_links"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contact_calls_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contact_calls_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+          {
+            foreignKeyName: "contact_calls_moved_to_fkey"
+            columns: ["moved_to"]
+            isOneToOne: false
+            referencedRelation: "contact_calls"
+            referencedColumns: ["id"]
           },
         ]
       }
