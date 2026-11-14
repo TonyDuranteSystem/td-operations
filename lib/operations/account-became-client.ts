@@ -1,7 +1,8 @@
 /**
  * Server side: save "How they became our client" on an account — either a CHANGE (a person picks Formed by us / Onboarded after the
  * pop-up asked them to check the dates) or a CONFIRM (a person presses "It's correct" on the guess). Both stamp who and when, so
- * "To check" (checked_at empty) always means nobody has looked at it yet. Every save is written to the audit log.
+ * "To check" (checked_at empty) always means nobody has looked at it yet. A company that has never been saved only has a guess on
+ * screen; confirming it saves the answer shown (value). Every save is written to the audit log.
  *
  * The write is matched on the `updated_at` the person saw, so two people cannot overwrite each other. The database also guards the two
  * allowed values (trigger trg_accounts_became_client_how_guard). The database client is passed in so this can be tested without one.
@@ -38,8 +39,15 @@ export async function writeBecameClientHow(
   const before = isBecameClientHow(account.became_client_how) ? account.became_client_how : null
   let next: BecameClientHow
   if (input.mode === 'confirm') {
-    if (!before) return { success: false, error: `Choose ${BECAME_CLIENT_LABEL.formed_by_us} or ${BECAME_CLIENT_LABEL.onboarded} first.` }
-    next = before
+    if (before) {
+      // the answer is already saved: confirming keeps it. If the page was showing a different one, it is out of date.
+      if (isBecameClientHow(input.value) && input.value !== before) return { success: false, error: STALE }
+      next = before
+    } else {
+      // nothing saved yet (a company that only had a guess on screen): confirming saves the answer the person was looking at
+      if (!isBecameClientHow(input.value)) return { success: false, error: `Choose ${BECAME_CLIENT_LABEL.formed_by_us} or ${BECAME_CLIENT_LABEL.onboarded} first.` }
+      next = input.value
+    }
   } else {
     if (!isBecameClientHow(input.value)) return { success: false, error: `Choose ${BECAME_CLIENT_LABEL.formed_by_us} or ${BECAME_CLIENT_LABEL.onboarded}.` }
     next = input.value

@@ -92,10 +92,32 @@ describe('confirming a guess ("It\'s correct")', () => {
     expect((log.payload as { summary: string }).summary).toBe('How 2L Consulting LLC became our client confirmed: Onboarded')
   })
 
-  it('refuses to confirm when there is nothing to confirm', async () => {
+  it('refuses to confirm when nothing is saved and the screen sent no answer', async () => {
     scripts['accounts.select'] = account({ became_client_how: null })
-    const r = await writeBecameClientHow(db, { accountId: ID, mode: 'confirm', expectedUpdatedAt: 'U1', actor })
-    expect(r).toEqual({ success: false, error: 'Choose Formed by us or Onboarded first.' })
+    for (const value of [undefined, null, 'formed', '']) {
+      const r = await writeBecameClientHow(db, { accountId: ID, mode: 'confirm', value: value as never, expectedUpdatedAt: 'U1', actor })
+      expect(r).toEqual({ success: false, error: 'Choose Formed by us or Onboarded first.' })
+    }
+    expect(calls_('accounts', 'update').length).toBe(0)
+  })
+
+  it('a company that only had a guess on screen: confirming saves the answer that was shown, and logs it as a confirmation from nothing', async () => {
+    scripts['accounts.select'] = account({ became_client_how: null })
+    const r = await writeBecameClientHow(db, { accountId: ID, mode: 'confirm', value: 'formed_by_us', expectedUpdatedAt: 'U1', actor })
+    expect(r).toEqual({ success: true, value: 'formed_by_us' })
+    expect(calls_('accounts', 'update')[0].payload).toMatchObject({ became_client_how: 'formed_by_us', became_client_how_checked_by: actor })
+    const [log] = calls_('action_log', 'insert')
+    expect(log.payload).toMatchObject({ action_type: 'account_became_client_how_confirmed', details: { from: null, to: 'formed_by_us', mode: 'confirm' } })
+    expect((log.payload as { summary: string }).summary).toBe('How 2L Consulting LLC became our client confirmed: Formed by us')
+  })
+
+  it('confirming an answer that is already saved keeps the saved one; a screen showing a different one is out of date', async () => {
+    const same = await writeBecameClientHow(db, { accountId: ID, mode: 'confirm', value: 'onboarded', expectedUpdatedAt: 'U1', actor })
+    expect(same).toEqual({ success: true, value: 'onboarded' })
+    calls.length = 0
+    const other = await writeBecameClientHow(db, { accountId: ID, mode: 'confirm', value: 'formed_by_us', expectedUpdatedAt: 'U1', actor })
+    expect(other.success).toBe(false)
+    expect(other.error).toMatch(/updated since the page loaded/)
     expect(calls_('accounts', 'update').length).toBe(0)
   })
 })

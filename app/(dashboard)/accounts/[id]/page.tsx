@@ -18,7 +18,7 @@ import { OnboardingWorkspaceBanner } from '@/components/flows/onboarding-workspa
 import { resolveOnboardingWorkspaceForContact, EMPTY_ONBOARDING_WORKSPACE, type OnboardingWorkspaceData } from '@/lib/flows/resolve-onboarding-workspace'
 import { HARBOR } from '@/lib/renewal-links'
 import { loadBecameClientFacts } from '@/lib/accounts/became-client-load'
-import { guessBecameClient } from '@/lib/accounts/became-client'
+import { guessBecameClient, type BecameClientHow } from '@/lib/accounts/became-client'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import type { OfferPackageOption } from '@/lib/types/offer'
 
@@ -53,15 +53,16 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
 
   if (!account) notFound()
 
-  // "How they became our client": while the answer is still only a guess, say in one sentence where the guess comes from (the signed
-  // contract, or Client Since). A failed read only drops the sentence; the row still works.
-  let becameClientHint: string | null = null
-  if (account.account_type === 'Client' && account.became_client_how && !account.became_client_how_checked_at) {
+  // "How they became our client": every client company nobody has checked yet gets a guess worked out right now from its signed
+  // contract (or Client Since) — whatever its status, and whether or not an answer was saved earlier. Nothing is stored until a person
+  // confirms or changes it. A failed read leaves the guess out; the row then says the contract could not be read.
+  let becameClientGuess: { value: BecameClientHow; hint: string } | null = null
+  if (account.account_type === 'Client' && !account.became_client_how_checked_at) {
     try {
       const guess = guessBecameClient(await loadBecameClientFacts(account.id, account.client_since ?? null))
-      if (guess.value === account.became_client_how) becameClientHint = guess.hint
+      becameClientGuess = { value: guess.value, hint: guess.hint }
     } catch (err) {
-      console.error('[accounts] became-client hint could not be loaded:', err instanceof Error ? err.message : err)
+      console.error('[accounts] became-client guess could not be loaded:', err instanceof Error ? err.message : err)
     }
   }
 
@@ -703,7 +704,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         stepperDeliveries={stepperDeliveries}
         stagesByServiceType={stagesByServiceType}
         dbaServiceDeliveries={dbaServiceDeliveries}
-        becameClientHint={becameClientHint}
+        becameClientGuess={becameClientGuess}
       />
     </div>
   )

@@ -42,6 +42,7 @@ import { FileManager } from './file-manager'
 import { MoveToStorePanel } from '@/components/storage/move-to-store-panel'
 import { AccountDocumentsList } from './account-documents-list'
 import { BecameClientRow } from './became-client-row'
+import type { GuessSummary } from '@/lib/accounts/became-client'
 import { StoreBusyScope, STORE_BUSY_HINT } from './store-busy'
 import { CorrespondenceUpload } from './correspondence-upload'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
@@ -168,8 +169,8 @@ interface DocumentRecord {
 // again when the panel's data needs change.
 
 interface AccountDetailProps {
-  /** one sentence saying where the unchecked "How they became our client" guess comes from */
-  becameClientHint?: string | null
+  /** the guess for "How they became our client" worked out from the contract and dates (null when it could not be read) */
+  becameClientGuess?: GuessSummary | null
   account: Account
   /** Client-facing base URL for the current environment (server-computed). */
   appBaseUrl?: string
@@ -696,7 +697,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [], becameClientHint = null }: AccountDetailProps) {
+export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [], becameClientGuess = null }: AccountDetailProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   // AccountJourney's progress tracker (Signed/Paid/Activated) still wants
@@ -1033,7 +1034,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
       {/* Tab content */}
       {activeTab === 'overview' && (
         <>
-          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} becameClientHint={becameClientHint} />
+          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} becameClientGuess={becameClientGuess} />
           {/* Recent emails (auto-matched + linked) — visible without hunting
               for the Emails tab (Antonio 2026-07-08) */}
           <div className="px-4 pb-4">
@@ -2525,7 +2526,7 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {}, becameClientHint = null }: { becameClientHint?: string | null; account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {}, becameClientGuess = null }: { becameClientGuess?: GuessSummary | null; account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
   const router = useRouter()
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -2604,7 +2605,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
             value={account.became_client_how ?? null}
             checkedAt={account.became_client_how_checked_at ?? null}
             checkedBy={account.became_client_how_checked_by ?? null}
-            hint={becameClientHint}
+            guess={becameClientGuess}
             formationDate={account.formation_date ?? null}
             clientSince={account.client_since ?? null}
             raSwitchDate={account.ra_switch_date ?? null}

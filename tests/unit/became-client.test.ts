@@ -5,7 +5,10 @@ import {
   becameClientLabel,
   changeHeadsUp,
   checkedByName,
+  etDay,
+  evidenceLine,
   guessBecameClient,
+  planConfirm,
   isBecameClientHow,
   type BecameClientFacts,
 } from '@/lib/accounts/became-client'
@@ -93,6 +96,54 @@ describe('changeHeadsUp — the amber line in the pop-up', () => {
   it('stays quiet when the answer fits Client Since', () => {
     expect(changeHeadsUp('onboarded', '2026-04-18')).toBeNull()
     expect(changeHeadsUp('formed_by_us', null)).toBeNull()
+  })
+})
+
+describe('evidenceLine and planConfirm — what stands under "To check" and when "It\'s correct" needs a second look', () => {
+  const formed = { value: 'formed_by_us' as const, hint: 'The signed formation contract (May 27, 2026) says we formed it.' }
+
+  it('the guess agrees: just the hint, and confirming is direct (when Client Since fits)', () => {
+    expect(evidenceLine('formed_by_us', formed)).toBe(formed.hint)
+    expect(planConfirm('formed_by_us', formed, null)).toEqual({ direct: true, warnings: [] })
+  })
+
+  it('the shown answer is not the one the records point to: says so, and confirming opens the pop-up', () => {
+    expect(evidenceLine('onboarded', formed)).toBe(`The records point to Formed by us instead. ${formed.hint}`)
+    const plan = planConfirm('onboarded', formed, '2026-04-18')
+    expect(plan.direct).toBe(false)
+    expect(plan.warnings).toEqual([`The records point to Formed by us instead. ${formed.hint}`])
+  })
+
+  it('the contract could not be read: says so plainly, and confirming opens the pop-up', () => {
+    expect(evidenceLine('onboarded', null)).toBe('The signed contract could not be read just now, so this answer was not compared with it. Reload the page to try again.')
+    expect(planConfirm('onboarded', null, '2026-04-18').direct).toBe(false)
+  })
+
+  it('an answer that does not fit Client Since gets the Client Since warning even when the contract agrees', () => {
+    const plan = planConfirm('formed_by_us', formed, '2026-04-18')
+    expect(plan.direct).toBe(false)
+    expect(plan.warnings).toEqual(['Client Since is filled in, and that usually means the company was onboarded, not formed by us.'])
+  })
+
+  it('two warnings when both apply', () => {
+    expect(planConfirm('onboarded', formed, null).warnings).toHaveLength(2)
+  })
+})
+
+describe('etDay — the business day in New York', () => {
+  it('a UTC instant late in the evening New York time is still that New York day', () => {
+    expect(etDay('2026-05-28T01:30:00Z')).toBe('2026-05-27') // 9:30 pm May 27 in New York
+    expect(etDay('2026-12-05T04:59:59Z')).toBe('2026-12-04') // winter time: 11:59 pm Dec 4
+    expect(etDay('2026-05-27T15:00:00+00:00')).toBe('2026-05-27')
+  })
+  it('a date without a time is left as it is', () => {
+    expect(etDay('2026-05-27')).toBe('2026-05-27')
+  })
+  it('nothing or nonsense gives null', () => {
+    expect(etDay(null)).toBeNull()
+    expect(etDay(undefined)).toBeNull()
+    expect(etDay('')).toBeNull()
+    expect(etDay('not a date')).toBeNull()
   })
 })
 

@@ -100,6 +100,46 @@ export function changeHeadsUp(to: BecameClientHow, clientSince: string | null): 
   return null
 }
 
+/** The part of a guess the screen needs (the page sends this to the row). */
+export interface GuessSummary {
+  value: BecameClientHow
+  hint: string
+}
+
+/**
+ * The sentence under an unchecked answer: where the guess comes from, or — when the answer shown is not the one the records point to,
+ * or the records could not be read — plainly say so. `guess` is null when the contract lookup failed.
+ */
+export function evidenceLine(value: BecameClientHow, guess: GuessSummary | null): string {
+  if (!guess) return 'The signed contract could not be read just now, so this answer was not compared with it. Reload the page to try again.'
+  if (guess.value !== value) return `The records point to ${BECAME_CLIENT_LABEL[guess.value]} instead. ${guess.hint}`
+  return guess.hint
+}
+
+/**
+ * "It's correct" on an unchecked answer. When nothing looks off it saves at once; otherwise the pop-up opens first, with the dates and
+ * these warnings, so a person never marks as checked something that disagrees with the records without seeing it.
+ */
+export function planConfirm(value: BecameClientHow, guess: GuessSummary | null, clientSince: string | null): { direct: boolean; warnings: string[] } {
+  const warnings: string[] = []
+  if (!guess || guess.value !== value) warnings.push(evidenceLine(value, guess))
+  const dates = changeHeadsUp(value, clientSince)
+  if (dates) warnings.push(dates)
+  return { direct: warnings.length === 0, warnings }
+}
+
+/**
+ * The calendar day (YYYY-MM-DD) an instant falls on in New York — the business's day. A date-only value is returned as it is.
+ * Cutting a UTC timestamp at 10 characters would show the next day for anything signed after 7-8 pm New York time.
+ */
+export function etDay(iso: string | null | undefined): string | null {
+  if (!iso) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
+}
+
 /** "dashboard:antonio.durante" -> "antonio.durante" */
 export function checkedByName(by: string | null | undefined): string {
   return (by ?? '').replace(/^dashboard:/, '').trim()
