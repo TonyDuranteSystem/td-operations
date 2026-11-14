@@ -43,6 +43,33 @@ export async function fixAccountNameSpelling(accountId: string, newName: string)
   return { success: true }
 }
 
+/**
+ * "How they became our client" (Formed by us / Onboarded) on the account's Company Info. `change` saves the new answer after the
+ * pop-up asked a person to check the dates; `confirm` marks the current guess as checked ("It's correct"). Either way the save stamps
+ * who and when, and is written to the audit log. Staff only.
+ */
+export async function setBecameClientHow(
+  accountId: string,
+  value: string | null,
+  mode: 'change' | 'confirm',
+  updatedAt: string,
+): Promise<{ success: boolean; error?: string; warning?: string }> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isStaffUser(user)) return { success: false, error: 'Not allowed.' }
+  const { writeBecameClientHow } = await import('@/lib/operations/account-became-client')
+  const result = await writeBecameClientHow(supabaseAdmin, {
+    accountId,
+    mode,
+    value,
+    expectedUpdatedAt: updatedAt || null,
+    actor: await getDashboardActor(),
+  })
+  if (!result.success) return { success: false, error: result.error }
+  revalidatePath(`/accounts/${accountId}`)
+  return { success: true, warning: result.warning }
+}
+
 export async function updateAccountField(
   accountId: string,
   field: string,

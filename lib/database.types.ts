@@ -398,6 +398,9 @@ export type Database = {
           cancellation_requested: boolean | null
           client_health: string | null
           client_since: string | null
+          became_client_how: string | null
+          became_client_how_checked_at: string | null
+          became_client_how_checked_by: string | null
           cmra_amount: number | null
           cmra_renewal_date: string | null
           communication_email: string | null
@@ -492,6 +495,9 @@ export type Database = {
           cancellation_requested?: boolean | null
           client_health?: string | null
           client_since?: string | null
+          became_client_how?: string | null
+          became_client_how_checked_at?: string | null
+          became_client_how_checked_by?: string | null
           cmra_amount?: number | null
           cmra_renewal_date?: string | null
           communication_email?: string | null
@@ -590,6 +596,9 @@ export type Database = {
           cancellation_requested?: boolean | null
           client_health?: string | null
           client_since?: string | null
+          became_client_how?: string | null
+          became_client_how_checked_at?: string | null
+          became_client_how_checked_by?: string | null
           cmra_amount?: number | null
           cmra_renewal_date?: string | null
           communication_email?: string | null

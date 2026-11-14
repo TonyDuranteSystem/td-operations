@@ -1,0 +1,12 @@
+{
+  "title": "How a company became our client, on the account page",
+  "tag": "new",
+  "text": "Every client company now says how it became our client: Formed by us, or Onboarded (it already existed). The answer sits in Company Info, right above Formation, next to the dates it explains. Each company starts with a guess, read from its signed contract or from Client Since, marked To check until a person confirms it. Changing the answer opens a pop-up that shows the three dates and asks you to check them before saving.",
+  "points": [
+    "Open a client company and look in Company Info, above Formation.",
+    "A guess shows an amber To check tag and one line saying where it comes from. Press It's correct, or pick the other answer.",
+    "Changing it opens a pop-up with Formation, Client Since and RA Switch Date. Save only when the dates are right.",
+    "Nothing is invoiced from this yet. It is the first step before the yearly invoices are rebuilt."
+  ],
+  "screenshot": "account-how-they-became-client.png"
+}

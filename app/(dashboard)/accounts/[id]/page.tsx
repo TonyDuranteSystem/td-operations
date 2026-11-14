@@ -17,6 +17,8 @@ import { TaxWorkspaceBanner } from '@/components/flows/tax-workspace-banner'
 import { OnboardingWorkspaceBanner } from '@/components/flows/onboarding-workspace-banner'
 import { resolveOnboardingWorkspaceForContact, EMPTY_ONBOARDING_WORKSPACE, type OnboardingWorkspaceData } from '@/lib/flows/resolve-onboarding-workspace'
 import { HARBOR } from '@/lib/renewal-links'
+import { loadBecameClientFacts } from '@/lib/accounts/became-client-load'
+import { guessBecameClient } from '@/lib/accounts/became-client'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import type { OfferPackageOption } from '@/lib/types/offer'
 
@@ -50,6 +52,18 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     .single()
 
   if (!account) notFound()
+
+  // "How they became our client": while the answer is still only a guess, say in one sentence where the guess comes from (the signed
+  // contract, or Client Since). A failed read only drops the sentence; the row still works.
+  let becameClientHint: string | null = null
+  if (account.account_type === 'Client' && account.became_client_how && !account.became_client_how_checked_at) {
+    try {
+      const guess = guessBecameClient(await loadBecameClientFacts(account.id, account.client_since ?? null))
+      if (guess.value === account.became_client_how) becameClientHint = guess.hint
+    } catch (err) {
+      console.error('[accounts] became-client hint could not be loaded:', err instanceof Error ? err.message : err)
+    }
+  }
 
   // Fetch partner name if linked
   let partnerName: string | null = null
@@ -689,6 +703,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         stepperDeliveries={stepperDeliveries}
         stagesByServiceType={stagesByServiceType}
         dbaServiceDeliveries={dbaServiceDeliveries}
+        becameClientHint={becameClientHint}
       />
     </div>
   )

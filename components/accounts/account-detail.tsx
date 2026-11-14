@@ -41,6 +41,7 @@ import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/pl
 import { FileManager } from './file-manager'
 import { MoveToStorePanel } from '@/components/storage/move-to-store-panel'
 import { AccountDocumentsList } from './account-documents-list'
+import { BecameClientRow } from './became-client-row'
 import { StoreBusyScope, STORE_BUSY_HINT } from './store-busy'
 import { CorrespondenceUpload } from './correspondence-upload'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
@@ -167,6 +168,8 @@ interface DocumentRecord {
 // again when the panel's data needs change.
 
 interface AccountDetailProps {
+  /** one sentence saying where the unchecked "How they became our client" guess comes from */
+  becameClientHint?: string | null
   account: Account
   /** Client-facing base URL for the current environment (server-computed). */
   appBaseUrl?: string
@@ -693,7 +696,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [] }: AccountDetailProps) {
+export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [], becameClientHint = null }: AccountDetailProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   // AccountJourney's progress tracker (Signed/Paid/Activated) still wants
@@ -1030,7 +1033,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
       {/* Tab content */}
       {activeTab === 'overview' && (
         <>
-          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} />
+          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} becameClientHint={becameClientHint} />
           {/* Recent emails (auto-matched + linked) — visible without hunting
               for the Emails tab (Antonio 2026-07-08) */}
           <div className="px-4 pb-4">
@@ -2522,7 +2525,7 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {} }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {}, becameClientHint = null }: { becameClientHint?: string | null; account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
   const router = useRouter()
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -2593,6 +2596,19 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           <EditableField icon={Building2} label="Entity Type" value={account.entity_type ?? ''} type="select" options={ENTITY_OPTIONS} onSave={makeAccountSaver('entity_type')} />
           <EditableField icon={Users} label="Member Structure" value={account.member_structure ?? ''} type="select" options={[{ label: 'Single Member', value: 'single_member' }, { label: 'Multi Member', value: 'multi_member' }]} onSave={makeAccountSaver('member_structure')} />
           <EditableField icon={MapPin} label="State" value={account.state_of_formation ?? ''} onSave={makeAccountSaver('state_of_formation')} />
+          <BecameClientRow
+            accountId={account.id}
+            companyName={account.company_name}
+            accountType={account.account_type}
+            updatedAt={account.updated_at}
+            value={account.became_client_how ?? null}
+            checkedAt={account.became_client_how_checked_at ?? null}
+            checkedBy={account.became_client_how_checked_by ?? null}
+            hint={becameClientHint}
+            formationDate={account.formation_date ?? null}
+            clientSince={account.client_since ?? null}
+            raSwitchDate={account.ra_switch_date ?? null}
+          />
           <EditableField icon={Calendar} label="Formation" value={account.formation_date ?? ''} type="date" onSave={makeAccountSaver('formation_date')} />
           <EditableField icon={Calendar} label="Client Since" value={account.client_since ?? ''} type="date" onSave={makeAccountSaver('client_since')} />
           <EditableField icon={Calendar} label="RA Switch Date" value={account.ra_switch_date ?? ''} type="date" onSave={makeAccountSaver('ra_switch_date')} />

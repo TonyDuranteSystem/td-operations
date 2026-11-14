@@ -100,6 +100,9 @@ export interface Account {
   // the migration ships. Access yields `undefined` when the column is missing;
   // the `?` keeps callers safe via `??` fallback.
   client_since?: string | null
+  became_client_how?: string | null
+  became_client_how_checked_at?: string | null
+  became_client_how_checked_by?: string | null
   ra_switch_date?: string | null
   /** The legal name before the most recent name change (Change Name). Absent in production until migration 20261019-1400 runs. */
   previous_name?: string | null
