@@ -17,6 +17,8 @@ import { TaxWorkspaceBanner } from '@/components/flows/tax-workspace-banner'
 import { OnboardingWorkspaceBanner } from '@/components/flows/onboarding-workspace-banner'
 import { resolveOnboardingWorkspaceForContact, EMPTY_ONBOARDING_WORKSPACE, type OnboardingWorkspaceData } from '@/lib/flows/resolve-onboarding-workspace'
 import { HARBOR } from '@/lib/renewal-links'
+import { loadBecameClientFacts } from '@/lib/accounts/became-client-load'
+import { guessBecameClient, type BecameClientHow } from '@/lib/accounts/became-client'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import type { OfferPackageOption } from '@/lib/types/offer'
 
@@ -50,6 +52,19 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     .single()
 
   if (!account) notFound()
+
+  // "How they became our client": every client company nobody has checked yet gets a guess worked out right now from its signed
+  // contract (or Client Since) — whatever its status, and whether or not an answer was saved earlier. Nothing is stored until a person
+  // confirms or changes it. A failed read leaves the guess out; the row then says the contract could not be read.
+  let becameClientGuess: { value: BecameClientHow; hint: string } | null = null
+  if (account.account_type === 'Client' && !account.became_client_how_checked_at) {
+    try {
+      const guess = guessBecameClient(await loadBecameClientFacts(account.id, account.client_since ?? null))
+      becameClientGuess = { value: guess.value, hint: guess.hint }
+    } catch (err) {
+      console.error('[accounts] became-client guess could not be loaded:', err instanceof Error ? err.message : err)
+    }
+  }
 
   // Fetch partner name if linked
   let partnerName: string | null = null
@@ -689,6 +704,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         stepperDeliveries={stepperDeliveries}
         stagesByServiceType={stagesByServiceType}
         dbaServiceDeliveries={dbaServiceDeliveries}
+        becameClientGuess={becameClientGuess}
       />
     </div>
   )
