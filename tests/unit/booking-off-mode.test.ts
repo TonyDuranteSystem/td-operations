@@ -8,7 +8,8 @@ import { OFF_REFUSAL, OFF_TEXT, OFF_TITLE } from "@/lib/booking/mode-text"
 
 /**
  * The Booking page TURNED OFF (Antonio, 14 Nov: "I want to see it in product but turned off"). While the `booking` setting is absent, malformed or "off":
- * an administrator still sees the page read-only; every route that changes or sends anything refuses in plain words; no write reaches the database and nothing reaches Calendly.
+ * an administrator AND a team login (dev job a1839d8b: staff may open the page) still see the "Links and calls" tab read-only; every route that changes or sends anything refuses in plain words
+ * for both; no write reaches the database and nothing reaches Calendly. The LEADS tab is not affected by the setting at all (proved below).
  * `page` and `live` work as before. Reads (the lists) keep working, including on a database whose booking tables are empty or not there yet.
  */
 const h = vi.hoisted(() => ({ user: null as unknown, db: null as unknown }))
@@ -45,8 +46,9 @@ beforeEach(() => {
 })
 
 describe("while the page is OFF, no change and no send gets through any route", () => {
-  for (const [label, settings] of OFF_SETTINGS) {
-    it(`${label}: every changing handler of every booking route answers 403 'Turned off', writes nothing and never calls Calendly`, async () => {
+  for (const role of ["admin", "team"] as const) for (const [label, settings] of OFF_SETTINGS) {
+    it(`${role}, ${label}: every changing handler of every booking route answers 403 'Turned off', writes nothing and never calls Calendly`, async () => {
+      h.user = ROLES[role]
       const seen: string[] = []
       for (const file of routeFiles) {
         for (const [method, fn] of await handlersOf(file)) {
@@ -65,10 +67,20 @@ describe("while the page is OFF, no change and no send gets through any route", 
       expect(seen.length).toBe(6) // links POST, revoke POST, kinds POST, kinds PATCH, preview POST, checks answer POST
     })
   }
-  it("a non-admin is still refused first (the ordinary 403), off or not", async () => {
-    h.user = ROLES.team
-    h.db = miniDb({ app_settings: [] })
-    for (const file of routeFiles) for (const [method, fn] of await handlersOf(file)) expect((await fn(req(method), ctx)).status).toBe(403)
+  it("anyone who is not staff is still refused first (the ordinary 403, not the 'Turned off' answer), off or not, and nothing is read", async () => {
+    for (const role of ["partner", "client", "marketing", "anonymous", "selfDeclaredAdmin", "selfDeclaredTeam", "unknownRole", "noRole"] as const) {
+      h.user = ROLES[role]
+      const db: MiniDb = miniDb({ app_settings: [] })
+      h.db = db
+      for (const file of routeFiles) {
+        for (const [method, fn] of await handlersOf(file)) {
+          const res = await fn(req(method), ctx)
+          expect(res.status, `${role} ${method}`).toBe(403)
+          expect((await res.json()).error, `${role} ${method}`).not.toBe(OFF_REFUSAL)
+        }
+      }
+      expect(db.log, role).toEqual([])
+    }
   })
 })
 
@@ -102,31 +114,66 @@ describe("the setting being page or live gives back today's behaviour", () => {
 })
 
 describe("the page and the menu while off", () => {
-  it("an administrator opens the page: the real workspace, in 'off' mode, with the reads still made", async () => {
-    h.db = miniDb({ app_settings: [], catalog_entries: [], booking_links: [], call_checks: [] })
+  type Shell = { props: { children: [{ props: { children: unknown[] } }, { type: { name?: string }; props: Record<string, unknown> }] } }
+  it("an administrator and a team login open the page on the Links and calls tab: the real workspace, in 'off' mode, with the reads still made", async () => {
     const Page = (await import("../../app/(dashboard)/booking/page")).default
-    const el = (await Page()) as { props: { children: { props: { mode: string; links: unknown[]; cards: unknown[]; kinds: unknown[] } } } }
-    expect(el.props.children.props.mode).toBe("off")
-    expect(el.props.children.props.links).toEqual([])
-    expect(el.props.children.props.cards).toEqual([])
-  })
-  it("a non-admin still gets the ordinary not-found page", async () => {
-    h.db = miniDb({ app_settings: [] })
-    const Page = (await import("../../app/(dashboard)/booking/page")).default
-    for (const role of ["team", "partner", "client", "marketing", "anonymous"] as const) {
+    for (const role of ["admin", "team"] as const) {
       h.user = ROLES[role]
-      await expect(Page(), role).rejects.toThrow("NEXT_NOT_FOUND")
+      h.db = miniDb({ app_settings: [], catalog_entries: [], booking_links: [], call_checks: [] })
+      const el = (await Page({ searchParams: { tab: "links" } })) as unknown as Shell
+      const tab = el.props.children[1]
+      expect(tab.type.name, role).toBe("LinksAndCallsTab")
+      expect(tab.props.mode, role).toBe("off")
+      expect((tab.props.checks as { ok: boolean; cards: unknown[] }).ok, role).toBe(true)
+      expect((tab.props.checks as { cards: unknown[] }).cards, role).toEqual([])
     }
   })
-  it("the page no longer turns an off setting into not-found; the menu item shows to every administrator, with an 'Off' tag while off", () => {
+  it("the Leads tab is the same in EVERY state of the setting: it is given the address's parameters and nothing about the setting (the Turned off banner can never reach it)", async () => {
+    const Page = (await import("../../app/(dashboard)/booking/page")).default
+    for (const settings of [[], [{ key: "booking", value: { mode: "off" } }], [{ key: "booking", value: { mode: "page" } }], [{ key: "booking", value: { mode: "live" } }], [{ key: "booking", value: { mode: "banana" } }]]) {
+      for (const sp of [{}, { tab: "leads" }, { tab: "leads", q: "x", client: "clients", page: "2" }, { tab: "nonsense" }]) {
+        h.user = ROLES.team
+        h.db = miniDb({ app_settings: settings, booking_links: [], call_checks: [] })
+        const el = (await Page({ searchParams: sp })) as unknown as Shell
+        const tab = el.props.children[1]
+        expect(tab.type.name, JSON.stringify([settings, sp])).toBe("LeadsWorkspace")
+        expect(Object.keys(tab.props)).toEqual(["searchParams"])
+        expect(tab.props.searchParams).toEqual(sp)
+      }
+    }
+    const leadsBody = fs.readFileSync(path.join(ROOT, "components/leads/leads-workspace.tsx"), "utf8")
+    expect(leadsBody).not.toMatch(/booking-links|readBookingMode|OFF_TITLE|OFF_TEXT|mode-text/)
+  })
+  it("the tab bar shows the Off mark on the Links and calls tab only, never on Leads", async () => {
+    const { BookingTabs } = await import("../../components/booking/booking-tabs")
+    const el = BookingTabs({ active: "leads", callsCount: 3, off: true }) as unknown as { props: { children: Array<{ props: { children: unknown } }> } }
+    const [leadsTab, linksTab] = el.props.children
+    expect(JSON.stringify(leadsTab.props.children)).toBe('"Leads"')
+    expect(JSON.stringify(linksTab.props.children)).toContain("off-tag")
+    expect(JSON.stringify(linksTab.props.children)).toContain("tab-calls-count")
+  })
+  it("anyone who is not staff still gets the ordinary not-found page", async () => {
+    h.db = miniDb({ app_settings: [] })
+    const Page = (await import("../../app/(dashboard)/booking/page")).default
+    for (const role of ["partner", "client", "marketing", "anonymous"] as const) {
+      h.user = ROLES[role]
+      await expect(Page({ searchParams: {} }), role).rejects.toThrow("NEXT_NOT_FOUND")
+    }
+  })
+  it("the menu: Booking is ONE row for every staff login (it replaced the Leads row); an administrator alone sees a 'Links off' tag while the link side is off; staff never see a tag", () => {
     const page = fs.readFileSync(path.join(ROOT, "app/(dashboard)/booking/page.tsx"), "utf8")
     expect(page).not.toMatch(/=== "off"\) notFound\(\)/)
     const layout = fs.readFileSync(path.join(ROOT, "app/(dashboard)/layout.tsx"), "utf8")
-    expect(layout).toContain("const showBooking = !bare && admin")
-    expect(layout).toContain("['booking', 'booking-off']")
+    expect(layout).toContain("const bookingOff = !bare && admin && (await readBookingMode(supabaseAdmin)) === 'off'")
+    expect(layout).toContain("moreFeatures={bookingOff ? ['booking-off'] : []}")
     const sidebar = fs.readFileSync(path.join(ROOT, "components/dashboard/sidebar.tsx"), "utf8")
     expect(sidebar).toContain("item.id === 'booking' && enabledFeatures.includes('booking-off')")
-    expect(sidebar).toContain("adminOnly: true, featureFlag: 'booking'")
+    expect(sidebar).toContain("tag: 'Links off'")
+    const row = sidebar.split("\n").find((l) => l.includes("{ id: 'booking'")) ?? ""
+    expect(row).toContain("href: '/booking'")
+    expect(row).not.toContain("adminOnly")
+    expect(row).not.toContain("featureFlag")
+    expect(sidebar).not.toContain("{ id: 'leads'")
   })
   it("every control that makes, stops or answers something is inactive while off, with the reason shown", () => {
     const maker = fs.readFileSync(path.join(ROOT, "components/booking/link-maker.tsx"), "utf8")

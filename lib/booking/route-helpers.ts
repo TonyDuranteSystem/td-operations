@@ -1,5 +1,5 @@
 /**
- * Booking page — small helpers shared by the /api/booking routes. Called only AFTER the admin gate has passed (requireAdminRoute / requireAdminJsonRoute).
+ * Booking page — small helpers shared by the /api/booking routes. Called only AFTER a booking gate has passed (requireBookingStaffRoute / requireBookingStaffJsonRoute for any staff, requireAdminRoute / requireAdminJsonRoute for admin only).
  * Errors are answered as { error: "plain words" } (R099) so the page can show the real reason.
  */
 
@@ -50,7 +50,7 @@ export function ok(body: Record<string, unknown>): NextResponse {
 
 /**
  * While the Booking page is TURNED OFF (the `booking` setting is absent / malformed / "off"), every route that changes or sends anything refuses, in plain words,
- * BEFORE it reads a body or touches a table or Calendly. Called right after the admin gate by every handler that is not a plain read. An unreadable setting counts as off.
+ * BEFORE it reads a body or touches a table or Calendly. Called right after the gate by every handler that is not a plain read. An unreadable setting counts as off.
  */
 export async function refuseWhileOff(): Promise<NextResponse | null> {
   const mode = await readBookingMode(supabaseAdmin)
