@@ -238,7 +238,7 @@ export function LinkMaker({
               {searchError && <p className="mt-2 text-sm text-red-700" role="alert">{searchError}</p>}
               <div className="mt-2 grid max-h-52 gap-1 overflow-auto">
                 {hits.map((h) => (
-                  <button key={`${h.type}-${h.id}`} type="button" aria-pressed={picked?.id === h.id} onClick={() => pickPerson(h)} className={`flex items-center justify-between gap-2 rounded-md border px-3 py-1.5 text-left text-sm ${picked?.id === h.id ? "border-zinc-900 bg-white" : "border-transparent bg-zinc-100 hover:border-zinc-400"}`} data-testid="person-hit">
+                  <button key={`${h.type}-${h.id}`} type="button" aria-pressed={picked?.id === h.id} onClick={() => pickPerson(h)} className={`flex items-center justify-between gap-2 rounded-md border px-3 py-1.5 text-left text-sm ${picked?.id === h.id ? "border-blue-500 bg-blue-500/10" : "border-transparent bg-zinc-100 hover:border-zinc-400"}`} data-testid="person-hit">
                     <span className="min-w-0"><span className="block truncate">{h.name}</span><small className="block truncate text-xs text-zinc-500">{h.sub}</small></span>
                     <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${BADGE_CLASS[h.badge] ?? BADGE_CLASS.Contact}`}>{h.badge}</span>
                   </button>
@@ -263,7 +263,7 @@ export function LinkMaker({
           {kindsError && <p className="text-sm text-red-700" role="alert">{kindsError}</p>}
           <div className="flex flex-wrap gap-1.5" data-testid="kinds">
             {activeKinds.map((k) => (
-              <button key={k.slug} type="button" disabled={!k.ready} aria-pressed={kindSlug === k.slug} onClick={() => { setKindSlug(k.slug); setKindHint("") }} className={`rounded-full border px-3 py-1 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${kindSlug === k.slug ? "border-zinc-900 ring-1 ring-zinc-900" : "hover:border-zinc-400"}`}>
+              <button key={k.slug} type="button" disabled={!k.ready} aria-pressed={kindSlug === k.slug} onClick={() => { setKindSlug(k.slug); setKindHint("") }} className={`rounded-full border px-3 py-1 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${kindSlug === k.slug ? "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500" : "hover:border-zinc-400"}`}>
                 {k.name}{!k.ready && <span className="ml-1 text-xs text-amber-700">needs setup</span>}
               </button>
             ))}
@@ -295,7 +295,7 @@ export function LinkMaker({
           <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500">How long?</span>
           <div className="flex flex-wrap gap-1.5" data-testid="durations">
             {DURATIONS.map(([v, label]) => (
-              <button key={v} type="button" aria-pressed={durPick === v} onClick={() => setDurPick(v)} className={`rounded-full border px-3 py-1 text-sm font-medium ${durPick === v ? "border-zinc-900 ring-1 ring-zinc-900" : "hover:border-zinc-400"}`}>{label}</button>
+              <button key={v} type="button" aria-pressed={durPick === v} onClick={() => setDurPick(v)} className={`rounded-full border px-3 py-1 text-sm font-medium ${durPick === v ? "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500" : "hover:border-zinc-400"}`}>{label}</button>
             ))}
           </div>
           {durPick === "other" && <input type="text" inputMode="numeric" value={durOther} onChange={(e) => setDurOther(e.target.value)} placeholder="Minutes, for example 90" aria-label="Minutes" className="mt-2 w-full rounded-md border px-3 py-2 text-sm" data-testid="minutes-other" />}

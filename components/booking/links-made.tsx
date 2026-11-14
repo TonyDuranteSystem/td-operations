@@ -84,9 +84,11 @@ export function LinksMade({ links, error, onChanged, onMakeAgain }: { links: Lin
                   <td className="border-b px-2.5 py-2"><span className={BADGE}>{l.kindLabel}</span></td>
                   <td className="border-b px-2.5 py-2 text-zinc-700">{callText(l)}</td>
                   <td className="border-b px-2.5 py-2 text-zinc-700">{madeText(l.madeAt)}</td>
-                  <td className="border-b px-2.5 py-2"><span className={`text-[12.5px] font-semibold ${STATUS_CLASS[l.status] ?? ""}`}>{l.what}</span></td>
+                  <td className="border-b px-2.5 py-2">
+                    <span className={`text-[12.5px] font-semibold ${STATUS_CLASS[l.status] ?? ""}`}>{l.what}</span>
+                    {note?.id === l.id && <span className={`mt-1 block max-w-[260px] text-xs font-semibold ${note.bad ? "text-red-700" : "text-green-700"}`} role={note.bad ? "alert" : "status"}>{note.text}</span>}
+                  </td>
                   <td className="whitespace-nowrap border-b px-2.5 py-2 text-right">
-                    {note?.id === l.id && <span className={`mr-2 text-xs font-semibold ${note.bad ? "text-red-700" : "text-green-700"}`}>{note.text}</span>}
                     {l.status === "open" && (
                       <>
                         <button type="button" onClick={() => copy(l)} className="mr-1.5 rounded-md border px-2.5 py-1 text-xs font-medium">Copy</button>
