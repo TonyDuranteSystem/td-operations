@@ -18,6 +18,8 @@ import { OnboardingWorkspaceBanner } from '@/components/flows/onboarding-workspa
 import { resolveOnboardingWorkspaceForContact, EMPTY_ONBOARDING_WORKSPACE, type OnboardingWorkspaceData } from '@/lib/flows/resolve-onboarding-workspace'
 import { HARBOR } from '@/lib/renewal-links'
 import { loadBecameClientFacts } from '@/lib/accounts/became-client-load'
+import { loadSignedContractLinesForOffers } from '@/lib/signed-contracts/load-for-account'
+import type { AccountContractLine } from '@/lib/signed-contracts/account-lines'
 import { guessBecameClient, type BecameClientHow } from '@/lib/accounts/became-client'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import type { OfferPackageOption } from '@/lib/types/offer'
@@ -239,6 +241,16 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     .or(offerOrFilter)
     .order('created_at', { ascending: false })
   const offers = (offersRaw ?? []) as unknown as AccountOfferRow[]
+
+  // The "Signed contract" line (dev job 49676dfe): the signed contracts of EXACTLY the offers above — this page's own rule for which
+  // offers belong to this company, never the Contact card's wider one. A failed read gives null: the line then says the contracts
+  // could not be read, instead of "No signed contract in the system".
+  let signedContractLines: AccountContractLine[] | null = null
+  try {
+    signedContractLines = await loadSignedContractLinesForOffers(offers.map((o) => ({ token: o.token, contract_type: o.contract_type })))
+  } catch (err) {
+    console.error('[accounts] signed contracts could not be loaded:', err instanceof Error ? err.message : err)
+  }
 
   // Activation state for EVERY offer above, keyed by token — not just one.
   const offerTokens = offers.map((o) => o.token)
@@ -705,6 +717,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         stagesByServiceType={stagesByServiceType}
         dbaServiceDeliveries={dbaServiceDeliveries}
         becameClientGuess={becameClientGuess}
+        signedContractLines={signedContractLines}
       />
     </div>
   )
