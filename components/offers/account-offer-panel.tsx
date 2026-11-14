@@ -4,9 +4,10 @@ import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   FileText, Send, Trash2, RotateCcw, ExternalLink, Loader2, Eye, CreditCard, Check, X,
-  CheckCircle2, Clock,
+  CheckCircle2, Clock, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { activationFlags, offerSummaryItems } from '@/lib/offers/offer-summary'
 import { CreateOfferDialog } from './create-offer-dialog'
 import { WelcomeLinkButton, type WelcomeLinkButtonHandle } from './welcome-link-button'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
@@ -76,6 +77,9 @@ interface AccountOfferPanelProps {
    *  its OWN entry — never assume there is only one offer's worth of
    *  activation state to go around. */
   pendingActivations?: Record<string, PendingActivationShape>
+  /** The card starts closed, with one line per offer (type + status) in the header. The company page uses it (Antonio 2026-11-14,
+   *  dev job bbd2e644); the Contact page keeps the card open as before. */
+  startClosed?: boolean
 }
 
 export function AccountOfferPanel({
@@ -87,20 +91,54 @@ export function AccountOfferPanel({
   offers,
   isAdmin,
   pendingActivations = {},
+  startClosed = false,
 }: AccountOfferPanelProps) {
   const [showCreateOffer, setShowCreateOffer] = useState(false)
+  const [open, setOpen] = useState(!startClosed)
 
   // Newest first — matches every other offer listing in the app (Finance,
   // the lead page's offer history, the lifecycle timeline).
   const sortedOffers = [...offers].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+  const summary = offerSummaryItems(offers, pendingActivations)
 
   return (
-    <div className="bg-white rounded-lg border p-5 space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-          <FileText className="h-4 w-4" />
-          Offers{sortedOffers.length > 0 ? ` (${sortedOffers.length})` : ''}
-        </h3>
+    <div className="bg-white rounded-lg border p-5 space-y-4" data-testid="offers-card">
+      <div className="flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          data-testid="offers-toggle"
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5 text-left"
+        >
+          <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+            {open ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+            <FileText className="h-4 w-4" />
+            Offers{sortedOffers.length > 0 ? ` (${sortedOffers.length})` : ''}
+          </h3>
+          {!open && sortedOffers.length > 0 && (
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1" data-testid="offers-summary">
+              {summary.map((item, i) => (
+                <span key={item.id} className="flex items-center gap-1.5" data-testid="offers-summary-item">
+                  {i > 0 && <span className="text-zinc-300">·</span>}
+                  <span className="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-700">{item.type}</span>
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${OFFER_STATUS_COLORS[item.statusKey] || 'bg-zinc-100 text-zinc-700'}`}>
+                    {item.status}
+                  </span>
+                  {item.activation === 'activated' && (
+                    <span className="text-xs font-medium px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">Activated</span>
+                  )}
+                  {item.activation === 'activated_unpaid' && (
+                    <span className="text-xs font-medium px-2 py-0.5 rounded bg-amber-100 text-amber-700">Activated · payment pending</span>
+                  )}
+                </span>
+              ))}
+            </span>
+          )}
+          {!open && sortedOffers.length === 0 && (
+            <span className="text-xs text-zinc-500">No offer exists for this account</span>
+          )}
+        </button>
         <button
           onClick={() => {
             if (!clientEmail) {
@@ -116,7 +154,7 @@ export function AccountOfferPanel({
         </button>
       </div>
 
-      {sortedOffers.length === 0 ? (
+      {!open ? null : sortedOffers.length === 0 ? (
         <p className="text-sm text-zinc-500 text-center py-4">No offer exists for this account</p>
       ) : (
         <div className="space-y-3">
@@ -198,8 +236,7 @@ function OfferCard({
   // Activation state (decoupled from payment). "Activated · payment pending"
   // is the persistent reminder that the contract was turned on before the
   // money arrived — it stays visible so the activation isn't forgotten.
-  const isActivated = !!pendingActivation?.activated_at || pendingActivation?.status === 'activated'
-  const isPaid = !!pendingActivation?.payment_confirmed_at
+  const { isActivated, isPaid } = activationFlags(pendingActivation)
   const activatedAwaitingPayment = isActivated && !isPaid
   // "Activate now" only makes sense before activation, on a signed contract.
   const canActivateNow = isAdmin && offer.status === 'signed' && !isActivated
