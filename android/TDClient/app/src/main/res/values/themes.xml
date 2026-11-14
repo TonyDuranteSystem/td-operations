@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- the window behind the page: the portal's own light background, so a page that is still loading never flashes dark -->
+    <style name="Theme.MyLLC" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/portal_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
