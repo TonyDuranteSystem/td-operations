@@ -42,25 +42,25 @@ export function describePlan(input: PreviewInput): PreviewLine[] {
   })
 
   if (plan.recorder === "none") {
-    lines.push({ label: "Page", text: "Only on your calendar. No page is created or changed." })
+    lines.push({ label: "Page", text: "No page is created or changed." })
     lines.push({ label: "Record", text: "Nothing is created." })
     lines.push({ label: "Recording", text: "Still transcribed and filed with your other Zoom calls. Nothing links it to a person." })
   } else if (plan.recorder === "attach") {
-    lines.push({ label: "Page", text: `The call is saved on ${possessive(nm)} contact page, under Calls, and shows on your calendar.` })
+    lines.push({ label: "Page", text: `The call is saved on ${possessive(nm)} contact page, under Calls.` })
     lines.push({ label: "Record", text: "No lead is created. The booking is kept on the contact, so nothing is lost." })
     lines.push({ label: "Recording", text: "Linked to the same contact page." })
   } else if (personState === "lead") {
-    lines.push({ label: "Page", text: `The booking is added to ${possessive(nm)} lead and shows on your calendar.` })
+    lines.push({ label: "Page", text: `The booking is added to ${possessive(nm)} lead.` })
     lines.push({ label: "Record", text: "No duplicate lead is made. Same as today." })
     lines.push({ label: "Recording", text: "Linked by email, as today." })
   } else if (personState === "contact") {
     // a kind that treats an existing contact "as today": the booking becomes a lead tagged as an existing client's call
-    lines.push({ label: "Page", text: "The booking becomes a lead, as today, tagged as an existing client's call, and shows on your calendar." })
+    lines.push({ label: "Page", text: "The booking becomes a lead, as today, tagged as an existing client's call." })
     lines.push({ label: "Record", text: "Same as today: the lead is made by the booking itself." })
     lines.push({ label: "Recording", text: "Linked by email, as today." })
   } else {
     const marked = plan.rule.mark_lead ? `, marked ${label}` : ""
-    lines.push({ label: "Page", text: `A new lead appears in Leads${marked}, and on your calendar.` })
+    lines.push({ label: "Page", text: `A new lead appears in Leads${marked}.` })
     lines.push({ label: "Record", text: plan.rule.mark_lead ? `A new lead is created, marked ${label}. No new kind of record is added.` : "A new lead is created, as it is today." })
     lines.push({ label: "Recording", text: "Linked by email, as today." })
   }

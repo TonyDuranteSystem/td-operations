@@ -3,7 +3,7 @@
  * Stage 1b shows three kinds: mismatch (someone else booked a link made for a person), unknown_id (a booking came through a link we could not use) and
  * effect_failed (a booking could not be filed the way its link said). The paid-call card is Stage 3 and has no writer yet, so it is never listed here.
  *
- * Every function takes the database client as an argument and never throws. A failed read is reported as a failure — the Calendar tab must never show
+ * Every function takes the database client as an argument and never throws. A failed read is reported as a failure — the Booking page must never show
  * "nothing needs you" because a read broke.
  *
  * Answering is claim-first: the card goes open -> answering in ONE conditional update (two clicks cannot both act), the action runs, and a failure puts the card back

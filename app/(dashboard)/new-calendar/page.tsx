@@ -12,11 +12,10 @@ import { NewCalendarView } from '@/components/new-calendar/new-calendar-view'
 import { LiveRefresh } from '@/components/new-calendar/live-refresh'
 import { loadWaitingPayments } from '@/lib/incoming-payments/load'
 import type { WaitingRow } from '@/lib/incoming-payments/classify'
-import { canUseForms, isSecureAdmin } from '@/lib/auth'
+import { canUseForms } from '@/lib/auth'
 import { loadWaitingApplications, type WaitingApplication } from '@/lib/bofa-intake/waiting'
 import { loadInvoicesToRaise, type InvoicesToRaise } from '@/lib/plan-invoices/load'
 import { getOfficeDateString } from '@/lib/portal/office-hours'
-import { loadCallsTab, type CallsTabData } from '@/lib/booking/calls-tab'
 
 /**
  * New Calendar (dev job 40235e3c, child of be7da01a): the day-by-day work list the team opens every morning — what is on us,
@@ -37,20 +36,8 @@ export default async function NewCalendarPage({ searchParams }: { searchParams: 
   // the Forms menu item). Anyone else who types the address of that tab simply lands on the first tab.
   const seesApplications = canUseForms(access.user)
   const requested = parseParams(searchParams ?? {})
+  const params = requested.tab === 'applications' && !seesApplications ? withTab(requested, 'jobs') : requested
   const now = new Date()
-  // The Calls to check tab (the booked calls the system could not settle by itself) is Antonio's only: it holds people's names and the answer buttons change records.
-  // It shows only while the Booking page is switched on (or cards are still waiting). Anyone else who types its address lands on the first tab.
-  let calls: CallsTabData | null = null
-  if (isSecureAdmin(access.user)) {
-    try {
-      calls = await loadCallsTab(now)
-    } catch (err) {
-      console.error('[new-calendar] calls to check could not be read:', err)
-      Sentry.captureException(err, { tags: { area: 'new-calendar-calls' } })
-    }
-  }
-  const seesCalls = !!calls && calls.visible
-  const params = (requested.tab === 'applications' && !seesApplications) || (requested.tab === 'calls' && !seesCalls) ? withTab(requested, 'jobs') : requested
 
   // The What's New tab does not use the Open services data: skip the (heavy) load there, so a failed Open services read
   // can never hide the news, and every refresh of the news tab stays cheap.
@@ -122,5 +109,5 @@ export default async function NewCalendarPage({ searchParams }: { searchParams: 
     )
   }
 
-  return <NewCalendarView model={model} params={params} greeting={greeting} payments={payments} applications={applications} showApplications={seesApplications} invoices={invoices} calls={seesCalls ? calls : null} />
+  return <NewCalendarView model={model} params={params} greeting={greeting} payments={payments} applications={applications} showApplications={seesApplications} invoices={invoices} />
 }

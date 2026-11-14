@@ -4,7 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { answerCheck } from "@/lib/booking/checks"
 import { BAD_BODY, currentAdmin, fail, ok, readJsonObject } from "@/lib/booking/route-helpers"
 
-/** Calendar tab "Calls to check": Antonio's answer to one card. Admin only. Body: { answer: "same_person" | "different_person" | "dismiss" }. */
+/** Booking page, section "Calls to check": Antonio's answer to one card. Admin only. Body: { answer: "same_person" | "different_person" | "dismiss" }. */
 export const dynamic = "force-dynamic"
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

@@ -1,9 +1,9 @@
 "use client"
 
 /**
- * Calendar tab "Calls to check" — the booked calls the system could not settle by itself, one card each, with Antonio's own buttons.
- * Lives outside components/new-calendar on purpose: the Calendar's own files make no requests and write nothing (a test pins that); the buttons here do.
- * `cards` is null when the read failed — the tab says so, it never says "nothing needs you" then.
+ * Booking page, section "Calls to check" — the booked calls the system could not settle by itself, one card each, with Antonio's own buttons.
+ * (The day-to-day work Calendar is a different page and is not touched by the Booking page.)
+ * `cards` is null when the read failed — the section says so, it never says "nothing needs you" then.
  */
 
 import { useState } from "react"

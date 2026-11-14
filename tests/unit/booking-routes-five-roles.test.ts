@@ -102,7 +102,7 @@ describe("the Booking page", () => {
   })
 })
 
-describe("the Calendar's Calls to check tab", () => {
+describe("the Booking page's Calls to check section", () => {
   it("the answer route is the only way cards change, and it is in the walk above (admin-only)", () => {
     expect(routeFiles.some((f) => /checks[\\/]\[id\][\\/]answer[\\/]route\.ts$/.test(f))).toBe(true)
   })

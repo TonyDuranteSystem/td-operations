@@ -44,7 +44,7 @@ describe("describePlan: the words of the approved mockup, only what the engine d
   it("someone new on a lead kind: new lead + the sales questions", () => {
     const t = text(describePlan({ plan: plan("lead", "new"), personState: "new", personName: null, hasEmails: false }))
     expect(t).toContain("The person answers your sales questions first.")
-    expect(t).toContain("A new lead appears in Leads, and on your calendar.")
+    expect(t).toContain("A new lead appears in Leads.")
     expect(t).toContain("There is no email to compare with, so every booking on this link is treated the same way.")
   })
   it("a partner request: the new lead is marked Partner", () => {
@@ -78,6 +78,13 @@ describe("describePlan: the words of the approved mockup, only what the engine d
       for (const state of ["new", "lead", "contact"] as const) {
         const t = text(describePlan({ plan: plan(slug, state), personState: state, personName: "X", hasEmails: true })).toLowerCase()
         expect(t).not.toMatch(/pay|credit|referr|which client/)
+      }
+    }
+  })
+  it("never says the booking 'shows on your calendar' (the Booking page has no calendar of its own yet, and the day-to-day Calendar is another page)", () => {
+    for (const slug of ["lead", "client", "partner", "private"] as const) {
+      for (const state of ["new", "lead", "contact"] as const) {
+        expect(text(describePlan({ plan: plan(slug, state), personState: state, personName: "X", hasEmails: true })).toLowerCase()).not.toMatch(/calendar/)
       }
     }
   })

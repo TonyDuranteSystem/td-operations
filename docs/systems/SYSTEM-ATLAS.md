@@ -209,7 +209,7 @@ _Regenerated 2026-11-14. Every subsystem doc under `docs/systems/` (61 docs), wi
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-13)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-11-10)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-13)_
-- [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-14)_
+- [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-11)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-11)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-13)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_

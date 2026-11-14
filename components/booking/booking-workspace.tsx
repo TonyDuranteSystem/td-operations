@@ -2,17 +2,18 @@
 
 /**
  * Booking page (Stage 1b) — the screen: "Make a link" on the left, "Links I made" on the right, and the "calls need you" line underneath.
- * The words are Antonio's, from the approved mockup. Parts that belong to later stages (the week calendar, clients' referral links, paying, a referrer) are not here.
+ * "Calls to check" is a section of this page (Antonio, 14 Nov: the day-to-day work Calendar is a different page and stays as it is). The words are Antonio's, from the approved mockup. Parts that belong to later stages (the week calendar, clients' referral links, paying, a referrer) are not here.
  * A computer screen only: nothing is drawn for a phone.
  */
 
 import { useCallback, useState } from "react"
-import Link from "next/link"
 import type { KindDto } from "@/lib/booking/kinds-admin"
 import type { LinkDto } from "@/lib/booking/links"
 import { callApi, messageOf } from "@/components/booking/api"
 import { LinkMaker } from "@/components/booking/link-maker"
 import { LinksMade } from "@/components/booking/links-made"
+import { CallsToCheckTab } from "@/components/calls-to-check/calls-tab"
+import type { CardDto } from "@/lib/booking/checks"
 
 export interface MakeAgain {
   nonce: number
@@ -32,8 +33,7 @@ export function BookingWorkspace({
   links: initialLinks,
   linksError,
   callTypesReady,
-  needsYou,
-  calendarOpen,
+  cards,
 }: {
   dateText: string
   kinds: KindDto[] | null
@@ -41,8 +41,8 @@ export function BookingWorkspace({
   links: LinkDto[] | null
   linksError: string | null
   callTypesReady: boolean
-  needsYou: number | null
-  calendarOpen: boolean
+  /** the bookings waiting for a look; null = they could not be read */
+  cards: CardDto[] | null
 }) {
   const [kinds, setKinds] = useState<KindDto[] | null>(initialKinds)
   const [links, setLinks] = useState<LinkDto[] | null>(initialLinks)
@@ -88,17 +88,18 @@ export function BookingWorkspace({
         <LinksMade links={links} error={linksProblem} onChanged={refreshLinks} onMakeAgain={(l) => setAgain({ nonce: Date.now(), contactId: l.contactId, leadId: l.leadId, name: l.personName, email: l.email, kindSlug: l.kindSlug, minutes: l.minutes, once: l.once })} />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3" data-testid="needs-banner">
+      <section id="calls" className="space-y-3" data-testid="calls-section">
         <div>
-          <p className="font-semibold">{needsYou === null ? "Could not read the calls to check" : needsYou === 0 ? "Nothing needs you" : `${needsYou} call${needsYou === 1 ? "" : "s"} need${needsYou === 1 ? "s" : ""} you`}</p>
-          <p className="text-sm text-zinc-600">{calendarOpen ? "They wait on your Calendar, in the tab \"Calls to check\"." : "They wait on the Calendar, in the tab \"Calls to check\" (the Calendar is switched off for now)."}</p>
+          <h2 className="text-base font-semibold">
+            Calls to check{" "}
+            {cards !== null && (
+              <span className={`ml-1 rounded-full px-2 py-0.5 align-middle font-mono text-xs ${cards.length > 0 ? "bg-red-100 text-red-700" : "bg-zinc-100 text-zinc-600"}`} data-testid="calls-count">{cards.length}</span>
+            )}
+          </h2>
+          <p className="text-sm text-zinc-600">{cards === null ? "The calls to check could not be read." : cards.length === 0 ? "Nothing needs you." : `${cards.length} call${cards.length === 1 ? "" : "s"} need${cards.length === 1 ? "s" : ""} you.`}</p>
         </div>
-        {calendarOpen && (
-          <Link href="/new-calendar?tab=calls" prefetch={false} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700">
-            Open Calls to check
-          </Link>
-        )}
-      </div>
+        <CallsToCheckTab cards={cards} />
+      </section>
     </div>
   )
 }
