@@ -61,11 +61,13 @@ const SIDEBAR_WIZARD_SERVICE_TYPES: string[] = (WIZARD_SERVICE_TYPES as readonly
 const TAX_RETURN_SERVICE_TYPE = "Tax Return"
 
 /**
- * Tax Return is a CONDITIONAL sidebar trigger (Antonio, 2026-11-06 — Vairon
- * Marketing LLC). A Tax Return SD stays `active` from the first installment
- * until staff close it, long after the return is filed, so "an active Tax
- * Return exists" is not "the client owes us the tax questionnaire": Vairon sat
- * at "TR Filed" with nothing to fill in and still saw "Completa Registrazione".
+ * Tax Return is a CONDITIONAL sidebar trigger (Antonio, 2026-11-06). A Tax
+ * Return SD stays `active` through the whole season — extension filed, data
+ * collection, review, preparation — and for most of it the client owes us
+ * nothing, so "an active Tax Return exists" is not "the client owes us the tax
+ * questionnaire". (The case that surfaced this, a job sitting at "TR Filed", was
+ * a one-off: it had been half-closed by two manual edits that never set its
+ * status. A job moved through the normal path closes itself at "TR Filed".)
  * The tax wizard's own rule — the one resolver the wizard page, the submit route
  * and the home cards already use — decides whether the entrance is offered.
  */
