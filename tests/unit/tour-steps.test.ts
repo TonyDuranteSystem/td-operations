@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest"
 import {
   STEPS, TOUR_VERSION, detectPlatform, keyNames, fillKeys, stepIndexOf, newProgress, enterStep, applyWindowEvent,
-  isStepDone, precheck, ringSelector, AUTO_COMPLETES, type TourProgress, type StepId,
+  isStepDone, isLeadsPracticeUrl, precheck, ringSelector, AUTO_COMPLETES, type TourProgress, type StepId,
 } from "@/lib/windows/tour-steps"
 import { EMPTY_SNAPSHOT, type WindowsSnapshot } from "@/lib/windows/windows-store"
 
@@ -146,6 +146,18 @@ describe("is a step done", () => {
     const then = applyWindowEvent(leads, { type: "opened", id: "w3", url: "/accounts", reused: false })
     expect(isStepDone(step("fast-way"), then, snap())).toBe(true)
   })
+  it("'fast-way' is also done by a window opened on the Booking page (the Leads list lives there now), with or without a query, and not by an unrelated page", () => {
+    const base = at("fast-way")
+    for (const url of ["/booking", "/booking?tab=leads", "/booking?tab=leads&q=x#a"]) {
+      expect(isStepDone(step("fast-way"), applyWindowEvent(base, { type: "opened", id: "w2", url, reused: false }), snap()), url).toBe(true)
+    }
+    for (const url of ["/accounts", "/bookings", "/inbox?x=/booking"]) {
+      expect(isStepDone(step("fast-way"), applyWindowEvent(base, { type: "opened", id: "w2", url, reused: false }), snap()), url).toBe(false)
+    }
+    expect(isLeadsPracticeUrl("/booking")).toBe(true)
+    expect(isLeadsPracticeUrl("/leads/abc")).toBe(true)
+    expect(isLeadsPracticeUrl("/accounts")).toBe(false)
+  })
   it("'fast-way' is done by a window opened on Leads, with or without a query", () => {
     const base = at("fast-way", { practiceId: "w1" })
     expect(isStepDone(step("fast-way"), applyWindowEvent(base, { type: "opened", id: "w2", url: "/leads", reused: false }), snap())).toBe(true)
@@ -212,10 +224,11 @@ describe("what the ring points at", () => {
     expect(ringSelector(step("hide-restore"), p, snap({ ids: ["w1"] }))).toBe('[data-win-id="w1"] [data-win-part="minimize"]')
     expect(ringSelector(step("hide-restore"), p, snap({ ids: ["w1"], minimized: ["w1"] }))).toBe('[data-win-part="tray-chip"][data-win-id="w1"]')
   })
-  it("the Leads item in the left menu for the fast way, and X of the window the person opened for 'close'", () => {
-    // Leads sits inside Network now: the Leads link when its panel is open (or when moved to the main list), else the Network row — in that order
+  it("the Booking item (it holds the Leads list now) in the left menu for the fast way, and X of the window the person opened for 'close'", () => {
+    // Booking sits inside Network now: the Booking link when its panel is open (or when moved to the main list), else the Network row — in that order
     const ring = ringSelector(step("fast-way"), newProgress(), snap())
-    expect(ring?.split(" || ")).toEqual(['[data-flyout] a[href="/leads"]', 'aside a[href="/leads"]', '[data-testid="menu-group-g-network"]'])
+    expect(ring?.split(" || ")).toEqual(['[data-flyout] a[href="/booking"]', 'aside a[href="/booking"]', '[data-testid="menu-group-g-network"]'])
+    expect(step("fast-way").tryIt).toContain("Booking")
     expect(step("fast-way").tryIt).toContain("Network")
     expect(ringSelector(step("close"), at("close", { practiceId: "w1", opened: ["w1", "w2"] }), snap({ ids: ["w1", "w2"], count: 2 }))).toBe('[data-win-id="w2"] [data-win-part="close"]')
   })

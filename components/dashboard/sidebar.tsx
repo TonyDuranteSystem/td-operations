@@ -89,6 +89,8 @@ interface SidebarProps {
   extraNavIds?: string[]
   badgeCounts?: { inbox: number; whatsapp?: number; tasks: number; portalChats?: number; teamChat?: number; talk?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; marketing?: number; devBoard?: number; invoicesToRaise?: number }
   enabledFeatures?: string[]
+  /** further menu features switched on for this login (the Booking item); kept apart so the Calendar's own flag line stays as pinned */
+  moreFeatures?: string[]
   /** The signed-in login — keys this computer's own copy of the menu layout. */
   userId: string
   /** The layout saved on this login (read on the server), or null when the person has not changed the standard one. */
@@ -117,7 +119,10 @@ const defaultNavigation: NavItem[] = [
   { id: 'dev-board', name: 'Dev Board', href: '/dev-board', icon: LayoutGrid, tooltip: 'Dev-tracker board — every dev job by channel (td-dev/td-bug/td-support): request, findings, approved plan, milestones and status. Claude Code sessions keep it current so nothing is lost.' },
   { id: 'storage', name: 'Storage', href: '/storage', icon: HardDrive, tooltip: 'General-purpose CRM storage — folders and files organized by staff. Not connected to Google Drive.' },
   { id: 'forms', name: 'Forms', href: '/forms', icon: ClipboardList, adminOnly: true, tooltip: 'Standalone forms that are not tied to a client — view a form, make a one-time link to send, and read what comes back. Admins and the staff logins named for it.' },
-  { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
+  // Booking (dev job a1839d8b, Antonio 2026-11-14): the Leads page now lives INSIDE the Booking page as its first tab, so this one row replaces the old Leads row (same place, same group).
+  // Every staff login that saw Leads sees it (admin and team); the page itself turns anyone else away. While the Calendly link side is turned off an administrator sees a small "Links off"
+  // tag (the layout passes 'booking-off' to administrators only); staff see no tag, because Leads works the same either way.
+  { id: 'booking', name: 'Booking', href: '/booking', icon: Target, tooltip: 'Leads — new inquiries that haven\'t signed yet, the first stage of the client journey — plus a Calendly link for a chosen person and kind of call, the links you made, and the calls to check.' },
   { id: 'marketing', name: 'Marketing', href: '/marketing-leads', icon: Megaphone, adminOnly: true, tooltip: 'TD Marketing — the master view of Rocco\'s team: leads from the ads, who is working them, what needs you today, and the Meta connection. Admin only.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
@@ -174,10 +179,13 @@ export function Sidebar({
   isOwner = false,
   extraNavIds = [],
   badgeCounts,
-  enabledFeatures = [],
+  enabledFeatures: enabledFeaturesProp = [],
+  moreFeatures = [],
   initialMenuLayout = null,
   menuLayoutStatus = 'none',
 }: SidebarProps) {
+  // The Calendar's flag arrives as `enabledFeatures`, any further flag (the Booking item) as `moreFeatures`; the rows below read one merged list.
+  const enabledFeatures = [...enabledFeaturesProp, ...moreFeatures]
   const pathname = usePathname()
   // Inbox and WhatsApp are the same page told apart by the address, so the menu has to read the query too.
   const search = useSearchParams()?.toString() ?? ''
@@ -437,6 +445,8 @@ export function Sidebar({
     if (item.id === 'dev-board' && liveDevBoard > 0) return { ...item, badge: liveDevBoard }
     if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
     if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }
+    // The Booking item says "Links off" while the Calendly link side is turned off (the layout passes 'booking-off' to administrators only). The Leads tab inside it works either way.
+    if (item.id === 'booking' && enabledFeatures.includes('booking-off')) return { ...item, tag: 'Links off' }
     // The Calendar item opens the New Calendar for the people who may see it (never inside a window: no menu there anyway).
     if (item.id === 'calendar' && enabledFeatures.includes('new-calendar')) {
       return { ...item, href: '/new-calendar', icon: CalendarDays, badge: liveInvoices > 0 ? liveInvoices : undefined, tooltip: 'The day-by-day work list: what is on us, what is waiting on someone else, what is finished. Renewals and annual reports are on its third tab.' }

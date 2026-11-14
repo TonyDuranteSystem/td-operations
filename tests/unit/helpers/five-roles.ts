@@ -13,9 +13,16 @@ export const ROLES: Record<string, FakeUser | null> = {
   anonymous: null,
   // user_metadata is writable by the account holder: claiming admin there must change nothing
   selfDeclaredAdmin: { id: "u-liar", email: "liar@example.com", app_metadata: { role: "client" }, user_metadata: { role: "admin" } },
+  // ...and a team-looking claim in user_metadata must not make a client staff either
+  selfDeclaredTeam: { id: "u-liar2", email: "liar2@example.com", app_metadata: { role: "client" }, user_metadata: { role: "team" } },
+  // a login whose role is not one of the five (the sandbox has one called "staff"), and one with no role at all: neither is staff
+  unknownRole: { id: "u-unknown", email: "unknown@example.com", app_metadata: { role: "staff" } },
+  noRole: { id: "u-norole", email: "norole@example.com", app_metadata: {} },
 }
 
 export const NON_ADMIN_ROLES = Object.keys(ROLES).filter((r) => r !== "admin")
+/** Everyone the "any staff" gate must refuse: all but the administrator and the team login. */
+export const NON_STAFF_ROLES = Object.keys(ROLES).filter((r) => r !== "admin" && r !== "team")
 
 /** A database stand-in that fails the test the moment anything touches it. */
 export function throwingDb(onTouch: () => void) {

@@ -1,101 +1,141 @@
 import { createClient } from '@/lib/supabase/server'
 import { ContactsTable } from '@/components/contacts/contacts-table'
-import type { ContactListItem } from '@/lib/types'
+import type { ContactCompanyLine, ContactListItem } from '@/lib/types'
+import { contactLinkCounts, contactMatches, parseContactFilters, type FilterableCompany } from '@/lib/crm-lists/filters'
+import { fetchAllRows, loadInstallmentChips, newYorkYear } from '@/lib/crm-lists/queries'
 
 const PAGE_SIZE = 50
 
 export default async function ContactsPage({
   searchParams,
 }: {
-  searchParams: { q?: string; status?: string; page?: string }
+  searchParams: { q?: string; status?: string; link?: string; cstatus?: string; kind?: string; ctype?: string; page?: string }
 }) {
   const supabase = createClient()
   const query = searchParams.q?.trim() ?? ''
+  // Every contact is "active" today; the setting stays in the URL (old links keep working) but has no control on the page.
   const statusFilter = searchParams.status ?? 'active'
+  const filters = parseContactFilters(searchParams)
   const currentPage = Math.max(1, parseInt(searchParams.page ?? '1', 10) || 1)
 
-  let dbQuery = supabase
-    .from('contacts')
-    .select('id, full_name, email, phone, language, citizenship, portal_tier, status, itin_number, passport_on_file, created_at', { count: 'exact' })
-    .order('full_name', { ascending: true })
+  // 1. Every person that matches the search, in name order.
+  const people = await fetchAllRows((from, to) => {
+    let q = supabase.from('contacts').select('id, full_name').order('full_name', { ascending: true }).order('id', { ascending: true }).range(from, to)
+    if (statusFilter && statusFilter !== 'all') q = q.eq('status', statusFilter)
+    if (query) q = q.or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
+    return q
+  })
 
-  if (statusFilter && statusFilter !== 'all') {
-    dbQuery = dbQuery.eq('status', statusFilter)
-  }
-  if (query) {
-    dbQuery = dbQuery.or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
-  }
-
-  const from = (currentPage - 1) * PAGE_SIZE
-  dbQuery = dbQuery.range(from, from + PAGE_SIZE - 1)
-
-  const { data: contacts, count: totalCount } = await dbQuery
-  const totalPages = Math.ceil((totalCount ?? 0) / PAGE_SIZE)
-
-  // Get account links for each contact
-  const contactIds = (contacts ?? []).map(c => c.id)
-  const accountMap: Record<string, { count: number; names: string }> = {}
-  if (contactIds.length > 0) {
-    const { data: links } = await supabase
-      .from('account_contacts')
-      .select('contact_id, account:accounts(company_name)')
-      .in('contact_id', contactIds)
-
-    if (links) {
-      for (const l of links) {
-        const account = l.account as unknown as { company_name: string } | null
-        if (!accountMap[l.contact_id]) {
-          accountMap[l.contact_id] = { count: 0, names: '' }
-        }
-        accountMap[l.contact_id].count++
-        if (account) {
-          accountMap[l.contact_id].names = accountMap[l.contact_id].names
-            ? `${accountMap[l.contact_id].names}, ${account.company_name}`
-            : account.company_name
-        }
-      }
+  // 2. Which companies each person is linked to, with just the words the filters use.
+  const [links, accounts] = await Promise.all([
+    fetchAllRows((from, to) =>
+      supabase.from('account_contacts').select('contact_id, account_id').order('contact_id', { ascending: true }).order('account_id', { ascending: true }).range(from, to),
+    ),
+    fetchAllRows((from, to) =>
+      supabase.from('accounts').select('id, company_name, status, account_type, entity_type').order('id', { ascending: true }).range(from, to),
+    ),
+  ])
+  const accountById = new Map(accounts.map(a => [a.id, a]))
+  const companiesByContact = new Map<string, { id: string; company_name: string; filter: FilterableCompany }[]>()
+  for (const l of links) {
+    const a = l.account_id ? accountById.get(l.account_id) : undefined
+    if (!a) continue
+    const list = companiesByContact.get(l.contact_id) ?? []
+    if (!list.some(x => x.id === a.id)) {
+      list.push({ id: a.id, company_name: a.company_name, filter: { status: a.status, account_type: a.account_type, entity_type: a.entity_type } })
     }
+    companiesByContact.set(l.contact_id, list)
   }
+  for (const list of Array.from(companiesByContact.values())) list.sort((x, y) => x.company_name.localeCompare(y.company_name))
 
-  const items: ContactListItem[] = (contacts ?? []).map(c => ({
-    id: c.id,
-    full_name: c.full_name,
-    email: c.email,
-    phone: c.phone,
-    language: c.language,
-    citizenship: c.citizenship,
-    portal_tier: c.portal_tier,
-    status: c.status,
-    itin_number: c.itin_number,
-    passport_on_file: c.passport_on_file,
-    account_count: accountMap[c.id]?.count ?? 0,
-    account_names: accountMap[c.id]?.names ?? null,
-    created_at: c.created_at,
-  }))
+  const withCompanies = people.map(p => ({ ...p, companies: companiesByContact.get(p.id) ?? [] }))
+  const linkCounts = contactLinkCounts(withCompanies.map(p => ({ companies: p.companies.map(c => c.filter) })), filters)
+  const filtered = withCompanies.filter(p => contactMatches(p.companies.map(c => c.filter), filters))
+  const totalCount = filtered.length
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE)
 
-  const stats = {
-    total: totalCount ?? 0,
-    withAccounts: items.filter(c => c.account_count > 0).length,
-    withItin: items.filter(c => c.itin_number).length,
-    withPassport: items.filter(c => c.passport_on_file).length,
-  }
+  // 3. Full details for just the people on this page, and the money for their companies.
+  const pageRows = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const pageIds = pageRows.map(p => p.id)
+  const pageAccountIds = Array.from(new Set(pageRows.flatMap(p => p.companies.map(c => c.id))))
+
+  const [contactDetails, accountDetails, chipMap] = await Promise.all([
+    pageIds.length > 0
+      ? supabase
+          .from('contacts')
+          .select('id, full_name, email, phone, language, citizenship, portal_tier, status, itin_number, passport_on_file, created_at')
+          .in('id', pageIds)
+      : Promise.resolve({ data: [] }),
+    pageAccountIds.length > 0
+      ? supabase
+          .from('accounts')
+          .select('id, installment_1_amount, installment_1_currency, installment_2_amount, installment_2_currency, setup_fee_amount, setup_fee_currency, updated_at')
+          .in('id', pageAccountIds)
+      : Promise.resolve({ data: [] }),
+    loadInstallmentChips(supabase, pageAccountIds, newYorkYear()),
+  ])
+  const contactById = new Map((contactDetails.data ?? []).map(c => [c.id, c]))
+  const moneyById = new Map((accountDetails.data ?? []).map(a => [a.id, a]))
+
+  const items: ContactListItem[] = pageRows.flatMap(p => {
+    const c = contactById.get(p.id)
+    if (!c) return []
+    const lines: ContactCompanyLine[] = p.companies.map(co => {
+      const m = moneyById.get(co.id)
+      return {
+        account_id: co.id,
+        company_name: co.company_name,
+        entity_type: co.filter.entity_type,
+        account_type: co.filter.account_type,
+        status: co.filter.status,
+        installment_1_amount: m?.installment_1_amount ?? null,
+        installment_1_currency: m?.installment_1_currency ?? null,
+        installment_2_amount: m?.installment_2_amount ?? null,
+        installment_2_currency: m?.installment_2_currency ?? null,
+        setup_fee_amount: m?.setup_fee_amount ?? null,
+        setup_fee_currency: m?.setup_fee_currency ?? null,
+        updated_at: m?.updated_at ?? '',
+        chip_1: chipMap[co.id]?.first ?? { kind: 'not_invoiced', count: 0 },
+        chip_2: chipMap[co.id]?.second ?? { kind: 'not_invoiced', count: 0 },
+      }
+    })
+    return [
+      {
+        id: c.id,
+        full_name: c.full_name,
+        email: c.email,
+        phone: c.phone,
+        language: c.language,
+        citizenship: c.citizenship,
+        portal_tier: c.portal_tier,
+        status: c.status,
+        itin_number: c.itin_number,
+        passport_on_file: c.passport_on_file,
+        account_count: lines.length,
+        account_names: lines.map(l => l.company_name).join(', ') || null,
+        created_at: c.created_at,
+        companies: lines,
+      },
+    ]
+  })
 
   return (
     <div className="p-6 lg:p-8">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Contacts</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          {stats.total} contacts — {stats.withAccounts} with LLCs, {stats.withItin} with ITIN, {stats.withPassport} with passport
+          {linkCounts.all} contacts — {linkCounts.with} with a company, {linkCounts.none} with no company
         </p>
       </div>
       <ContactsTable
         items={items}
         query={query}
         statusFilter={statusFilter}
-        stats={stats}
+        filters={filters}
+        linkCounts={linkCounts}
         currentPage={currentPage}
         totalPages={totalPages}
-        totalCount={totalCount ?? 0}
+        totalCount={totalCount}
       />
     </div>
   )
