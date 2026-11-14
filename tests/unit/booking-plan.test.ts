@@ -141,6 +141,11 @@ describe("referrer", () => {
   it("refused when the kind saves nothing", () => {
     expect(plan({ person: { state: "new" }, kind: kind("private"), referrer: ref }).ok).toBe(false)
   })
+  it("a link with a referrer is ALWAYS one-time, even at the standard 30 minutes (a reusable link would credit whoever opens it)", () => {
+    expect(okPlan({ person: { state: "new" }, kind: kind("lead"), minutes: 30, referrer: ref }).once).toBe(true)
+    // control: the same link without a referrer is still the reusable standard link
+    expect(okPlan({ person: { state: "new" }, kind: kind("lead"), minutes: 30 }).once).toBe(false)
+  })
   it("refused when the referrer is not eligible (a partner, a test person, a merged contact) or has no code", () => {
     expect(plan({ referrer: { ...ref, eligible: false } }).ok).toBe(false)
     expect(plan({ referrer: { ...ref, hasCode: false, code: null } }).ok).toBe(false)

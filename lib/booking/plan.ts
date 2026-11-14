@@ -5,7 +5,7 @@
  * What it decides
  *   - the rule of the chosen kind (from the catalog row; a kind with no rule = "needs setup" = refused)
  *   - what will happen to this person's booking (`recorder`: attach under the contact | lead as today | nothing)
- *   - length: any whole number of minutes 1-720; exactly 30 = the standard reusable link, anything else = a one-time link
+ *   - length: any whole number of minutes 1-720; exactly 30 = the standard reusable link, anything else (and every paid link, and every link with a referrer) = a one-time link
  *   - which Calendly template: the plain Zoom one, or the one that asks sales questions (only for a NEW person, on a FREE call, whose kind asks for it and makes a lead)
  *   - money (paid links): the amount goes through the SAME parser as the CRM payment-link maker (6 digits, at most 50,000, a tick above 2,000), at least 0.50, USD or EUR only,
  *     and `payMode` says how the payment will be booked (new person or lead = credit; an established client = revenue only; unknown = revenue only)
@@ -119,7 +119,8 @@ export function decideLinkPlan(input: LinkPlanInput): LinkPlanResult {
   }
   if (errors.length) return { ok: false, errors }
 
-  const once = minutes !== STANDARD_MINUTES || payment !== null
+  // A referrer earns a credit for whoever claims the link, so the link must close on its first booking (never the reusable standard link, even at 30 minutes).
+  const once = minutes !== STANDARD_MINUTES || payment !== null || referrer !== null
   const template: TemplateRole = input.person.state === "new" && payment === null && rule.sales_template && recorder === "lead" ? "sales" : "plain"
 
   return {

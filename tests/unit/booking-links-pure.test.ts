@@ -95,6 +95,22 @@ describe("decideLinkMatch", () => {
     expect(d(row({ expires_at: "2026-11-13T11:59:59Z" }))).toEqual({ action: "inactive", reason: "expired" })
     expect(d(row({ expires_at: "2026-11-13T12:00:01Z" }))).toEqual({ action: "claim" })
   })
+  it("a CLAIMED link that has since expired still honours its own reschedule (the booking was legitimately claimed before it expired)", () => {
+    const r = row({ status: "claimed", claimed_invitee_uri: "inv-0", claimed_email: "maria@x.com", expires_at: "2026-11-13T11:00:00Z" })
+    expect(d(r, { oldInvitee: "inv-0" })).toEqual({ action: "reschedule" })
+  })
+  it("a CLAIMED link that has since expired still recognises a replay of its own booking", () => {
+    const r = row({ status: "claimed", claimed_invitee_uri: "inv-1", expires_at: "2026-11-13T11:00:00Z" })
+    expect(d(r)).toEqual({ action: "replay", effectsDone: false })
+  })
+  it("expiry still stops a different booking on an open link, and a different booking on an expired claimed link is simply 'used'", () => {
+    expect(d(row({ expires_at: "2026-11-13T11:00:00Z" }))).toEqual({ action: "inactive", reason: "expired" })
+    expect(d(row({ status: "claimed", claimed_invitee_uri: "inv-OTHER", expires_at: "2026-11-13T11:00:00Z" }))).toEqual({ action: "used" })
+  })
+  it("a reschedule from the wrong person on an expired claimed link is still refused", () => {
+    const r = row({ status: "claimed", claimed_invitee_uri: "inv-0", claimed_email: "maria@x.com", expires_at: "2026-11-13T11:00:00Z" })
+    expect(d(r, { oldInvitee: "inv-0", bookerEmail: "stranger@y.com" })).toEqual({ action: "used" })
+  })
   it("a booking with no invitee address cannot be a replay", () => {
     expect(d(row({ status: "claimed", claimed_invitee_uri: null }), { inviteeUri: null })).toEqual({ action: "used" })
   })
@@ -143,10 +159,15 @@ describe("buildDestination", () => {
 })
 
 describe("decideReferralCredit", () => {
-  const f = (o = {}) => ({ hasReferrer: true, mismatch: false, createdNewLead: true, bookerEstablished: false as boolean | null, ...o })
+  const f = (o = {}) => ({ hasReferrer: true, mismatch: false, createdNewLead: true, bookerEstablished: false as boolean | null, linkOneTime: true, emailChecked: true, ...o })
   it("credits only for a matching, brand-new, not-yet-client booker", () => expect(decideReferralCredit(f())).toEqual({ credit: true }))
   it("no referrer on the row = no credit", () => expect(decideReferralCredit(f({ hasReferrer: false }))).toEqual({ credit: false, outcome: "no_referrer" }))
   it("a wrong-email booking never earns a credit (a card asks instead)", () => expect(decideReferralCredit(f({ mismatch: true }))).toEqual({ credit: false, outcome: "mismatch" }))
+  it("a reusable link never credits: whoever opens it would be credited to the referrer", () => expect(decideReferralCredit(f({ linkOneTime: false }))).toEqual({ credit: false, outcome: "reusable_link" }))
+  it("a link with no email to check never credits: the first stranger to open it would be credited", () => expect(decideReferralCredit(f({ emailChecked: false }))).toEqual({ credit: false, outcome: "no_email_to_check" }))
+  it("a link refused for either reason is refused even when everything else is perfect", () => {
+    expect(decideReferralCredit(f({ linkOneTime: false, emailChecked: false })).credit).toBe(false)
+  })
   it("an existing lead is not a new person", () => expect(decideReferralCredit(f({ createdNewLead: false }))).toEqual({ credit: false, outcome: "not_new_lead" }))
   it("an established client is not a new person", () => expect(decideReferralCredit(f({ bookerEstablished: true }))).toEqual({ credit: false, outcome: "booker_is_client" }))
   it("if the client check could not be made, no credit (fails closed)", () => expect(decideReferralCredit(f({ bookerEstablished: null }))).toEqual({ credit: false, outcome: "booker_unchecked" }))

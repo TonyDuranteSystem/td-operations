@@ -353,6 +353,8 @@ export async function POST(req: NextRequest) {
       try {
         const out = await applyBookingLink({ db, payload, fields, ctx: linkCtx, existingLeads, webhookEventId })
         if (out.kind === "handled") return NextResponse.json(out.body)
+        // The link table could not be read for a booking that carries our tag: nothing was created; ask Calendly to send it again.
+        if (out.kind === "retry") return NextResponse.json({ error: "Booking link lookup failed — please retry", retry: true }, { status: 503 })
         if (out.kind === "legacy") {
           tailHooks = out.hooks
           referrerContactId = out.referrer?.contactId ?? null

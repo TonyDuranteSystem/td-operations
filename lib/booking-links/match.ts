@@ -5,7 +5,7 @@
  * The decision, in the order it is made:
  *   unknown      a tag in our strict shape but no such link                       -> card, today's behaviour
  *   replay       this very booking was already claimed (Calendly re-sent it)      -> re-run the effects until they are marked done; NEVER the legacy path
- *   inactive     the link was revoked / has expired                                -> card, today's behaviour
+ *   inactive     the link was revoked, or expired before anyone claimed it         -> card, today's behaviour (a CLAIMED link's own reschedule/replay outlives its expiry)
  *   mismatch     the booker's email is not one of the person's emails             -> NO claim, card, today's behaviour, no referral credit
  *   reschedule   a NEW booking that replaces the claimed one (old invitee named)  -> move the claim to the new booking, move the old call
  *   used         a one-time link that another booking already took                -> card, today's behaviour
@@ -65,9 +65,11 @@ export function decideLinkMatch(input: LinkMatchInput): LinkDecision {
   if (row.once && inviteeUri && row.claimed_invitee_uri === inviteeUri) return { action: "replay", effectsDone: row.effects_done_at !== null }
 
   if (row.revoked_at) return { action: "inactive", reason: "revoked" }
-  if (row.expires_at && new Date(row.expires_at).getTime() <= now.getTime()) return { action: "inactive", reason: "expired" }
+  const claimed = row.once && row.status === "claimed"
+  // Expiry only stops a link nobody has taken yet. A link already claimed before it expired still honours its own booking's reschedule (a replay is caught above).
+  if (!claimed && row.expires_at && new Date(row.expires_at).getTime() <= now.getTime()) return { action: "inactive", reason: "expired" }
 
-  if (row.once && row.status === "claimed") {
+  if (claimed) {
     // A reschedule re-fires the booking with a NEW invitee URI and names the old one. It is the same person: the email must still fit.
     if (oldInvitee && row.claimed_invitee_uri === oldInvitee) {
       const sameAsClaim = row.claimed_email ? normalizeEmail(row.claimed_email) === normalizeEmail(bookerEmail) : null

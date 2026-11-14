@@ -19,9 +19,9 @@ import { findContactByAnyEmail, type AliasContact } from "@/lib/operations/conta
 import { parseRuleSnapshot, type RuleSnapshot } from "@/lib/booking/kinds"
 import { recorderFor, type PersonState } from "@/lib/booking/plan"
 import { extractLinkTag, type LinkTag } from "@/lib/booking-links/tag"
-import { decideLinkMatch } from "@/lib/booking-links/match"
+import { decideLinkMatch, normalizeEmail } from "@/lib/booking-links/match"
 import { claimLink, findLinkByClaimedInvitee, findLinkByPublicId, markEffectsDone, moveClaim, setLeadIfEmpty, setReferralOutcome, type BookingLinkRow } from "@/lib/booking-links/store"
-import { clip, raiseCallCheck, type CallCheckFallback, type CallCheckKind } from "@/lib/booking-links/call-checks"
+import { clip, raiseCallCheck, REVIEW_STATUS_LINK_CHECK, type CallCheckFallback, type CallCheckKind } from "@/lib/booking-links/call-checks"
 import { decideReferralCredit } from "@/lib/booking-links/referral"
 import { normalizeLeadLanguage } from "@/lib/booking-links/language"
 
@@ -74,6 +74,8 @@ export interface Phase2Input {
 export type Phase2Outcome =
   | { kind: "passthrough" }
   | { kind: "handled"; body: Record<string, unknown> }
+  /** the link table could not be read for a booking carrying OUR tag: the route answers 503 so Calendly sends the booking again (nothing is created meanwhile) */
+  | { kind: "retry"; message: string }
   | { kind: "legacy"; referrer: { contactId: string; name: string | null } | null; hooks: LegacyTailHooks }
 
 const LEGACY_NO_REFERRER: Phase2Outcome = { kind: "legacy", referrer: null, hooks: {} }
@@ -157,11 +159,26 @@ export async function applyBookingLink(input: Phase2Input): Promise<Phase2Outcom
   if (ctx.lookup === "no_tag") return { kind: "passthrough" }
 
   if (ctx.lookup === "error") {
+    // A booking that carries OUR tag (the strict 22-character id) is one Antonio made a link for: reading the link failed, so we cannot tell what it should do.
+    // Falling through to today's lead path would quietly make a stray lead for a client's call. Answer "try again" instead — Calendly re-sends it. Paid-call step has
+    // already run (idempotent on the charge), so a retry cannot double the money. Anything WITHOUT our tag (untagged, an ad keyword, a reschedule found only by its old booking) stays fail-open.
+    const strict = !!tag.linkId
     try {
       const { reportSystemError } = await import("@/lib/system-errors")
-      await reportSystemError({ source: "server", route: "/api/webhooks/calendly", message: `Booking link lookup failed (booking handled as usual): ${ctx.errorMessage ?? "unknown error"}`, context: { invitee_uri: tag.inviteeUri } })
+      await reportSystemError({
+        source: "server",
+        route: "/api/webhooks/calendly",
+        message: strict
+          ? `Booking link lookup failed (booking sent back to Calendly to retry): ${ctx.errorMessage ?? "unknown error"}`
+          : `Booking link lookup failed (booking handled as usual): ${ctx.errorMessage ?? "unknown error"}`,
+        context: { invitee_uri: tag.inviteeUri },
+      })
     } catch { /* best effort */ }
-    return { kind: "passthrough" }
+    if (!strict) return { kind: "passthrough" }
+    try {
+      if (input.webhookEventId) await db.from("webhook_events").update({ review_status: REVIEW_STATUS_LINK_CHECK }).eq("id", input.webhookEventId)
+    } catch { /* best effort: the system error above is the primary trail */ }
+    return { kind: "retry", message: clip(ctx.errorMessage, 160) ?? "link lookup failed" }
   }
 
   if (ctx.lookup === "none" || !ctx.row) {
@@ -293,7 +310,14 @@ async function runEffects(input: Phase2Input & { now: Date }, row: BookingLinkRo
   const createsLead = !existingLeads || existingLeads.length === 0
   let referrer: { contactId: string; name: string | null } | null = null
   if (row.referrer_contact_id) {
-    const verdict = decideReferralCredit({ hasReferrer: true, mismatch: false, createdNewLead: createsLead, bookerEstablished: person.established })
+    const verdict = decideReferralCredit({
+      hasReferrer: true,
+      mismatch: false,
+      linkOneTime: row.once,
+      emailChecked: row.person_emails.some((e) => normalizeEmail(e) !== ""),
+      createdNewLead: createsLead,
+      bookerEstablished: person.established,
+    })
     if (verdict.credit) {
       let name: string | null = null
       try {
