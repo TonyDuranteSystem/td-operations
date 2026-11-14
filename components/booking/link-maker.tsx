@@ -9,6 +9,7 @@ import type { PreviewLine } from "@/lib/booking/preview"
 import { callApi, messageOf } from "@/components/booking/api"
 import type { MakeAgain } from "@/components/booking/booking-workspace"
 import { OFF_REASON } from "@/lib/booking/mode-text"
+import { isItalian } from "@/lib/locale"
 
 type MadeLink = { id: string; publicId: string; url: string; email: string | null; language: "Italian" | "English" | null }
 type Preview = { ok: true; lines: PreviewLine[]; once: boolean; minutes: number; ready: boolean } | { ok: false; errors: string[] }
@@ -34,7 +35,7 @@ function parseMinutes(pick: string, other: string): number | null {
 }
 
 function draftTexts(url: string, language: "Italian" | "English" | null) {
-  return language === "Italian"
+  return isItalian(language)
     ? { subject: "Prenota una chiamata con Tony Durante", body: `Ecco il link per prenotare la nostra chiamata: ${url}` }
     : { subject: "Book a call with Tony Durante", body: `Here is the link to book our call: ${url}` }
 }
