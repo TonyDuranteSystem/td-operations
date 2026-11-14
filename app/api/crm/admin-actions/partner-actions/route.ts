@@ -20,6 +20,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/portal-auth'
+import { localeFromLanguage } from '@/lib/locale'
 
 export async function POST(req: NextRequest) {
   try {
@@ -222,7 +223,7 @@ export async function POST(req: NextRequest) {
         // Send welcome email
         const { gmailPost } = await import('@/lib/gmail')
         const clientName = contact?.full_name?.split(' ')[0] || 'Partner'
-        const isItalian = contact?.language === 'Italian'
+        const isItalian = localeFromLanguage(contact?.language) === 'it'
 
         const subject = isItalian
           ? `Il tuo portale partner è pronto — Tony Durante LLC`

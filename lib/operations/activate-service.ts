@@ -342,7 +342,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
                 full_name: lead.full_name,
                 email: lead.email,
                 phone: lead.phone,
-                language: lead.language === "Italian" ? "it" : "en",
+                language: localeFromLanguage(lead.language),
               })
               .select()
               .single(),
@@ -403,7 +403,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
                 full_name: leads[0].full_name,
                 email: leads[0].email,
                 phone: leads[0].phone,
-                language: leads[0].language === "Italian" ? "it" : "en",
+                language: localeFromLanguage(leads[0].language),
               })
               .select()
               .single(),
@@ -1125,7 +1125,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         .eq("id", contactId)
         .single()
 
-      const lang = contact?.language === "Italian" || contact?.language === "it" ? "it" : "en"
+      const lang = localeFromLanguage(contact?.language)
       const emailResult = await sendPortalWelcomeEmail({
         email: portalResult.email,
         fullName: activation.client_name,
@@ -1970,7 +1970,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       if (existingForm && existingForm.length > 0) {
         steps.push({ step: "data_form", status: "existing", detail: `${formConfig.formName} already exists: ${(existingForm[0] as Record<string, unknown>).token}` })
       } else {
-        const formLang = lead.language === "Italian" || lead.language === "it" ? "it" : "en"
+        const formLang = localeFromLanguage(lead.language)
 
         // Phase 0 safety: derive entity_type from the signed contract instead of hardcoding "SMLLC".
         // For formation + onboarding: read contracts.llc_type (SMLLC | MMLLC | Corporation).

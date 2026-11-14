@@ -7,6 +7,7 @@ import { sanitizePdfLine } from '@/lib/pdf/sanitize'
 import { wrapPdfText } from '@/lib/pdf/wrap-text'
 import { resolveMailingAddress } from '@/lib/addresses'
 import { displayCustomerAddress } from '@/lib/portal/customer-address'
+import { localeFromLanguage } from '@/lib/locale'
 
 /**
  * Builds the PDF of a client sales invoice. Shared by the PDF download route and the Send route, so
@@ -54,7 +55,7 @@ export async function renderInvoicePdf(opts: {
       .eq('id', invoice.contact_id)
       .single()
     const rawLang = contact?.language
-    if (rawLang === 'Italian' || rawLang === 'it') {
+    if (localeFromLanguage(rawLang) === 'it') {
       lang = 'it'
     }
   }

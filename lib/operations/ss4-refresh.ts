@@ -41,6 +41,7 @@ import { logAction } from "@/lib/mcp/action-log"
 import { formatCountyAndState, companyOfficialRow, isTdLargoAddressRow } from "@/lib/addresses"
 import { checkAgentInCompanyState } from "@/lib/formation/registered-agent-state"
 import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
+import { localeFromLanguage } from "@/lib/locale"
 import {
   decideSs4Signer,
   ss4SignerAlertMessage,
@@ -199,7 +200,7 @@ export function computeSs4RefreshUpdates(args: {
     target.responsible_party_itin = signerContact.itin_number || null
     target.responsible_party_phone = signerContact.phone || null
     target.responsible_party_title = title
-    target.language = signerContact.language === "Italian" ? "it" : "en"
+    target.language = localeFromLanguage(signerContact.language)
   }
 
   const changed = Object.keys(target).filter(

@@ -18,6 +18,7 @@ import { decideSigningBill } from "@/lib/offers/payment-plan"
 import { pinnedRateForInheritance } from "@/lib/payments/card-fee-config"
 import { emitOfferSignedEvent } from "@/lib/portal/chat-events"
 import { normalizeFormationState } from "@/lib/formation/states"
+import { localeFromLanguage } from "@/lib/locale"
 
 export interface WebhookOutcome {
   status: number
@@ -191,7 +192,7 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
               full_name: lead.full_name,
               email: lead.email,
               phone: lead.phone,
-              language: lead.language === "Italian" ? "it" : "en",
+              language: localeFromLanguage(lead.language),
               status: "active",
               // is_test (full E2E QA, 2026-08-28): without this, a test lead's real
               // signature silently produced a real, non-test contact + invoice —

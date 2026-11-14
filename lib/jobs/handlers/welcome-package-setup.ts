@@ -26,6 +26,7 @@ import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { autoDocumentCreationEnabled } from "@/lib/jobs/auto-document-creation-switch"
 import { getOrCreateBankingSubmission } from "@/lib/operations/banking-submission"
 import { companyCmraAddressLine } from "@/lib/operations/suite"
+import { localeFromLanguage } from "@/lib/locale"
 
 interface WelcomePackagePayload {
   account_id: string
@@ -185,7 +186,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
 
   await updateJobProgress(job.id, result)
 
-  const lang = contact.language === "Italian" || contact.language === "it" ? "it" : "en"
+  const lang = localeFromLanguage(contact.language)
   const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
 
   // ─── 3. OPERATING AGREEMENT ───

@@ -22,6 +22,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 import { getOrCreateBankingSubmission } from "@/lib/operations/banking-submission"
 import { companyCmraAddressLine } from "@/lib/operations/suite"
+import { localeFromLanguage } from "@/lib/locale"
 
 const BASE_URL = APP_BASE_URL
 
@@ -89,7 +90,7 @@ Prerequisites:
           return { content: [{ type: "text" as const, text: `❌ Contact not found.` }] }
         }
 
-        const lang = contact.language === "Italian" || contact.language === "it" ? "it" : "en"
+        const lang = localeFromLanguage(contact.language)
         const clientName = contact.first_name || contact.full_name
         const year = new Date().getFullYear()
         const today = new Date().toISOString().slice(0, 10)

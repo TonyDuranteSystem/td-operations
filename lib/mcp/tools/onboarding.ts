@@ -11,6 +11,7 @@ import { legacyFormSlug } from "@/lib/portal/submission-token"
 import { contactIdForLead } from "@/lib/crm-store/lead-form-store"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
+import { localeFromLanguage } from "@/lib/locale"
 
 export function registerOnboardingTools(server: McpServer) {
 
@@ -104,7 +105,7 @@ export function registerOnboardingTools(server: McpServer) {
         }
 
         // 8. Determine language
-        const formLang = language || (lead.language === "Italian" || lead.language === "it" ? "it" : "en")
+        const formLang = language || localeFromLanguage(lead.language)
 
         // 9. Insert
         const { data: submission, error: insErr } = await supabaseAdmin

@@ -32,6 +32,7 @@ import { generateW7Pdf, generate1040NRPdf, generateScheduleOIPdf } from "@/lib/i
 import { dispatchWorkflowForFormCompletion } from "@/lib/tasks/dispatch-workflow-for-event"
 import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import type { Json } from "@/lib/database.types"
+import { localeFromLanguage } from "@/lib/locale"
 
 export async function POST(req: NextRequest) {
   try {
@@ -122,7 +123,7 @@ export async function POST(req: NextRequest) {
             // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task fda76fd3
             supabaseAdmin.from("contacts").insert({
               full_name: lead.full_name, email: lead.email, phone: lead.phone,
-              language: lead.language === "Italian" ? "it" : "en",
+              language: localeFromLanguage(lead.language),
             }).select("id").single(),
             "contacts.insert"
           )

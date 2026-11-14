@@ -28,6 +28,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { localeFromLanguage } from "@/lib/locale"
 
 export interface GetOrCreateBankingSubmissionParams {
   accountId: string
@@ -124,7 +125,7 @@ export async function getOrCreateBankingSubmission(
   const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
   const year = new Date().getFullYear()
   const token = buildToken(provider, companySlug, year)
-  const lang = contact?.language === "Italian" || contact?.language === "it" ? "it" : "en"
+  const lang = localeFromLanguage(contact?.language)
 
   const { data: inserted, error: insertErr } = await supabaseAdmin
     .from("banking_submissions")
