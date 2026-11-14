@@ -55,6 +55,9 @@ export async function updateAccountField(
     'registered_agent_provider', 'ra_renewal_date', 'annual_report_due_date', 'ra_switch_date', 'client_since', 'notes',
     'installment_1_amount', 'installment_1_currency',
     'installment_2_amount', 'installment_2_currency',
+    // Setup fee amount: saved from the Contacts list (saveListAmount in list-actions.ts, which also enforces the Closed /
+    // Cancelled / Offboarding lock). The other setup_fee_* columns stay on the Clients Audit page.
+    'setup_fee_amount',
     'communication_email',
     // Path 2 address FK columns
     'business_legal_address_id', 'business_mailing_address_id', 'registered_agent_id', 'shipping_address_id',

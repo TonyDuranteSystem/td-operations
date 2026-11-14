@@ -1,114 +1,116 @@
 import { createClient } from '@/lib/supabase/server'
 import { AccountTable } from '@/components/accounts/account-table'
 import type { AccountListItem } from '@/lib/types'
+import { accountFacetCounts, companyMatches, parseAccountFilters } from '@/lib/crm-lists/filters'
+import { fetchAllRows, loadInstallmentChips, loadOverdueCounts, newYorkYear } from '@/lib/crm-lists/queries'
 
 const PAGE_SIZE = 50
 
 export default async function AccountsPage({
   searchParams,
 }: {
-  searchParams: { q?: string; status?: string; type?: string; page?: string }
+  searchParams: { q?: string; status?: string; kind?: string; type?: string; page?: string }
 }) {
   const supabase = createClient()
   const query = searchParams.q?.trim() ?? ''
-  const statusFilter = searchParams.status ?? 'Active'
-  const typeFilter = searchParams.type ?? ''
+  const filters = parseAccountFilters(searchParams)
   const currentPage = Math.max(1, parseInt(searchParams.page ?? '1', 10) || 1)
 
-  let dbQuery = supabase
-    .from('accounts')
-    .select('id, company_name, entity_type, status, state_of_formation, formation_date, client_health, created_at', { count: 'exact' })
-    .order('company_name', { ascending: true })
+  // Every company that matches the search, with just the three filterable words. The filters, the counts on each choice and the
+  // header all work off this one list, so they always agree (the old header counted only the 50 on the page).
+  const base = await fetchAllRows((from, to) => {
+    let q = supabase
+      .from('accounts')
+      .select('id, company_name, status, account_type, entity_type')
+      .order('company_name', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to)
+    if (query) q = q.ilike('company_name', `%${query}%`)
+    return q
+  })
 
-  if (statusFilter && statusFilter !== 'all') {
-    dbQuery = dbQuery.eq('status', statusFilter)
-  }
-  if (typeFilter) {
-    dbQuery = dbQuery.eq('entity_type', typeFilter)
-  }
-  if (query) {
-    dbQuery = dbQuery.ilike('company_name', `%${query}%`)
-  }
+  const facets = accountFacetCounts(base, filters)
+  const filtered = base.filter(a => companyMatches(a, filters))
+  const totalCount = filtered.length
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE)
 
-  const from = (currentPage - 1) * PAGE_SIZE
-  dbQuery = dbQuery.range(from, from + PAGE_SIZE - 1)
+  const overdueMap = await loadOverdueCounts(supabase)
 
-  const { data: accounts, count: totalCount } = await dbQuery
-  const totalPages = Math.ceil((totalCount ?? 0) / PAGE_SIZE)
+  const pageRows = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const accountIds = pageRows.map(a => a.id)
 
-  // Get primary contact for each account
-  const accountIds = (accounts ?? []).map(a => a.id)
+  const detailById: Record<string, {
+    state_of_formation: string | null
+    installment_1_amount: number | null
+    installment_1_currency: string | null
+    installment_2_amount: number | null
+    installment_2_currency: string | null
+    updated_at: string
+  }> = {}
   const contactMap: Record<string, { name: string; email: string | null }> = {}
-  if (accountIds.length > 0) {
-    const { data: contacts } = await supabase
-      .from('account_contacts')
-      .select('account_id, contact:contacts(full_name, email)')
-      .in('account_id', accountIds)
+  let chipMap: Awaited<ReturnType<typeof loadInstallmentChips>> = {}
 
-    if (contacts) {
-      for (const c of contacts) {
-        const contact = c.contact as unknown as { full_name: string; email: string | null } | null
-        if (contact && !contactMap[c.account_id]) {
-          contactMap[c.account_id] = { name: contact.full_name, email: contact.email }
-        }
+  if (accountIds.length > 0) {
+    const [{ data: details }, { data: links }, chips] = await Promise.all([
+      supabase
+        .from('accounts')
+        .select('id, state_of_formation, installment_1_amount, installment_1_currency, installment_2_amount, installment_2_currency, updated_at')
+        .in('id', accountIds),
+      supabase
+        .from('account_contacts')
+        .select('account_id, contact:contacts(full_name, email)')
+        .in('account_id', accountIds),
+      loadInstallmentChips(supabase, accountIds, newYorkYear()),
+    ])
+    for (const d of details ?? []) {
+      detailById[d.id] = {
+        state_of_formation: d.state_of_formation,
+        installment_1_amount: d.installment_1_amount,
+        installment_1_currency: d.installment_1_currency,
+        installment_2_amount: d.installment_2_amount,
+        installment_2_currency: d.installment_2_currency,
+        updated_at: d.updated_at ?? '',
       }
     }
-  }
-
-  // Get overdue payment counts
-  const today = new Date().toISOString().split('T')[0]
-  const overdueMap: Record<string, number> = {}
-  if (accountIds.length > 0) {
-    const { data: overdue } = await supabase
-      .from('payments')
-      .select('account_id')
-      .in('account_id', accountIds)
-      .in('status', ['Due', 'Overdue', 'Partially Paid'])
-      .lt('due_date', today)
-
-    if (overdue) {
-      for (const p of overdue) {
-        overdueMap[p.account_id] = (overdueMap[p.account_id] ?? 0) + 1
+    for (const c of links ?? []) {
+      const contact = c.contact as unknown as { full_name: string; email: string | null } | null
+      if (contact && !contactMap[c.account_id]) {
+        contactMap[c.account_id] = { name: contact.full_name, email: contact.email }
       }
     }
+    chipMap = chips
   }
 
-  // Get service counts
-  const serviceMap: Record<string, number> = {}
-  if (accountIds.length > 0) {
-    const { data: services } = await supabase
-      .from('service_deliveries')
-      .select('account_id')
-      .in('account_id', accountIds)
-      .eq('status', 'active')
-
-    if (services) {
-      for (const s of services) {
-        serviceMap[s.account_id!] = (serviceMap[s.account_id!] ?? 0) + 1
-      }
+  const items: AccountListItem[] = pageRows.map(a => {
+    const d = detailById[a.id]
+    return {
+      id: a.id,
+      company_name: a.company_name,
+      entity_type: a.entity_type,
+      account_type: a.account_type,
+      status: a.status,
+      state_of_formation: d?.state_of_formation ?? null,
+      contact_name: contactMap[a.id]?.name ?? null,
+      contact_email: contactMap[a.id]?.email ?? null,
+      payment_overdue: overdueMap[a.id] ?? 0,
+      installment_1_amount: d?.installment_1_amount ?? null,
+      installment_1_currency: d?.installment_1_currency ?? null,
+      installment_2_amount: d?.installment_2_amount ?? null,
+      installment_2_currency: d?.installment_2_currency ?? null,
+      updated_at: d?.updated_at ?? '',
+      chip_1: chipMap[a.id]?.first ?? { kind: 'not_invoiced', count: 0 },
+      chip_2: chipMap[a.id]?.second ?? { kind: 'not_invoiced', count: 0 },
     }
-  }
+  })
 
-  const items: AccountListItem[] = (accounts ?? []).map(a => ({
-    id: a.id,
-    company_name: a.company_name,
-    entity_type: a.entity_type,
-    status: a.status,
-    state_of_formation: a.state_of_formation,
-    formation_date: a.formation_date,
-    client_health: a.client_health,
-    contact_name: contactMap[a.id]?.name ?? null,
-    contact_email: contactMap[a.id]?.email ?? null,
-    service_count: serviceMap[a.id] ?? 0,
-    payment_overdue: overdueMap[a.id] ?? 0,
-  }))
-
+  // Header numbers cover every company in the current view, not just this page.
   const stats = {
-    total: items.length,
-    smllc: items.filter(a => a.entity_type === 'Single Member LLC').length,
-    mmllc: items.filter(a => a.entity_type === 'Multi Member LLC').length,
-    corp: items.filter(a => a.entity_type === 'C-Corp Elected').length,
-    withOverdue: items.filter(a => a.payment_overdue > 0).length,
+    total: totalCount,
+    smllc: filtered.filter(a => a.entity_type === 'Single Member LLC').length,
+    mmllc: filtered.filter(a => a.entity_type === 'Multi Member LLC').length,
+    corp: filtered.filter(a => a.entity_type === 'C-Corp Elected').length,
+    typeNotSet: filtered.filter(a => !a.entity_type).length,
+    withOverdue: filtered.filter(a => (overdueMap[a.id] ?? 0) > 0).length,
   }
 
   return (
@@ -116,18 +118,21 @@ export default async function AccountsPage({
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Accounts</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          {stats.total} aziende — {stats.smllc} SMLLC, {stats.mmllc} MMLLC, {stats.corp} Corp
+          {stats.total} companies — {stats.smllc} SMLLC, {stats.mmllc} MMLLC, {stats.corp} Corp
+          {stats.typeNotSet > 0 ? `, ${stats.typeNotSet} type not set` : ''}
         </p>
       </div>
       <AccountTable
         items={items}
         query={query}
-        statusFilter={statusFilter}
-        typeFilter={typeFilter}
+        statusFilter={filters.status}
+        kindFilter={filters.kind}
+        typeFilter={filters.type}
+        facets={facets}
         stats={stats}
         currentPage={currentPage}
         totalPages={totalPages}
-        totalCount={totalCount ?? 0}
+        totalCount={totalCount}
       />
     </div>
   )

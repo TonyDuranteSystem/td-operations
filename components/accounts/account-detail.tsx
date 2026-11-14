@@ -74,7 +74,7 @@ import { differenceInDays, parseISO, format } from 'date-fns'
 import { HistoryOpeningsPanel } from '@/components/accounts/history-openings-panel'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import { resolveExtensionDeadline, type TaxReturnType } from '@/lib/tax/extension-deadline'
-import { isInstallment } from '@/lib/billing/payment-classification'
+import { findInstallmentInvoice } from '@/lib/billing/installment-invoices'
 import { stagingFileName } from '@/lib/storage/staging-name'
 
 const TABS = [
@@ -1455,38 +1455,9 @@ function InstallmentsSection({ account, payments, makeAccountSaver }: { account:
   )
 }
 
-/**
- * Which invoice(s) is this account's installment N for `year`? Uses the same
- * structured identity (account + payment_category + year, via isInstallment)
- * as the write-side duplicate guard in createTDInvoice — never amount or
- * description text, which is how the ShoppyVerse duplicate went unnoticed.
- *
- * Returns EVERY REAL match, not just one: when a duplicate invoice exists for
- * the same installment+year (the exact shape this fix is closing off going
- * forward, and the shape ShoppyVerse was already in), silently picking the
- * first one would hide the duplicate from staff instead of surfacing it.
- *
- * "Real" excludes a $0 / no-invoice-number row on top of isInstallment's own
- * live check (which now correctly excludes Cancelled/Voided/Credit — widened
- * 2026-09-01, bug-hunter council review — so a separate Voided/Credit filter
- * here would just be a second copy of the same rule; don't reintroduce one).
- * The $0 exclusion is a genuinely different concern isInstallment must NOT
- * absorb: production has a legitimate pattern (Partner Alliance LLC + Morgan
- * & Taylor International LLC, consolidated first-installment billing) of a
- * $0 companion record on the non-billed account so CRON ELIGIBILITY still
- * sees "installment paid" via isInstallment — but it is not a second REAL
- * invoice and must never trigger the duplicate warning here.
- * `payments` is already scoped to this account by the caller's query.
- */
-function findInstallmentInvoice(payments: Payment[], n: 1 | 2, year: number): Payment[] {
-  return payments.filter(p =>
-    isInstallment(p, n, { year }) &&
-    (Number(p.total) || 0) > 0 &&
-    !!p.invoice_number &&
-    p.invoice_number !== '1.0' &&
-    p.invoice_number !== '2.0'
-  )
-}
+// findInstallmentInvoice (which invoice(s) are this account's installment N for `year`) now lives in
+// lib/billing/installment-invoices.ts, shared with the chip on the Accounts and Contacts lists so the screens cannot disagree.
+// It returns EVERY REAL match (a duplicate must be visible), via the structured isInstallment identity, never amount or text.
 
 function InstallmentBadge({ matches, onInvoice }: { matches: Payment[]; onInvoice?: () => void }) {
   if (matches.length === 0) {
