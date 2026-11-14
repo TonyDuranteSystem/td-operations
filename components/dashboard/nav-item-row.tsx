@@ -22,6 +22,8 @@ export interface NavItem {
   purpleBadge?: number
   /** Two rows that show the SAME number share a key, so a group holding both counts it once in its total. */
   badgeKey?: string
+  /** A small plain word after the name (the Booking item says "Off" while the page is turned off). */
+  tag?: string
   adminOnly?: boolean
   /**
    * Visible ONLY to the code-level owner account. Stricter than adminOnly, and
@@ -84,6 +86,7 @@ export function NavItemRow({ item, isActive, onMobileClose, move, onMenuOpenChan
       >
         <item.icon className="h-4 w-4 shrink-0" />
         <span className="flex-1 min-w-0 truncate">{item.name}</span>
+        {item.tag && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-200 text-amber-900 shrink-0" data-testid="nav-tag">{item.tag}</span>}
         {item.badge != null && item.badge > 0 && (
           <span className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center animate-pulse', badgeStepAside)}>
             {item.badge > 999 ? '999+' : item.badge}

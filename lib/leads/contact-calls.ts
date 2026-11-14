@@ -1,7 +1,7 @@
 // Calls booked by someone who is ALREADY A CONTACT, through a made booking link whose kind says "attach" (Booking page, Stage 1a).
 // lead_calls cannot hold them: its lead_id is NOT NULL and lead-only. contact_calls is a thin APPEND-ONLY LOG — one row per booked call, with a state
 // (scheduled | moved | cancelled). Deliberately NO "done" state and NO recording matching: calls that really happened are already shown from call_summaries;
-// the contact page lists a log row as a "Booked call" only while no call summary exists for that day, and the Zoom filing reads the log so a client call
+// the contact page lists a log row as a "Booked call" only while no call summary matches that call's own start time, and the Zoom filing reads the log so a client call
 // that overlaps a marketing window is not filed as marketing.
 //
 // Every function takes the service client as an argument, NEVER throws into a webhook or a page, and treats a missing table (the code is deployed before
@@ -134,10 +134,31 @@ export async function listContactCallsInWindow(db: Db, fromIso: string, toIso: s
   }
 }
 
-/** Pure: which logged calls the contact page shows — those with no call summary on the same New York day (a summary means the call is already shown there). */
+/** A call summary is stored when the recording arrives, AFTER the call: it matches a logged call that started up to this long before it (a long call + the recording's processing). */
+const SUMMARY_AFTER_START_MS = 8 * 60 * 60 * 1000
+/** ...or one that was planned to start just after it (a call that began a little early). */
+const SUMMARY_BEFORE_START_MS = 60 * 60 * 1000
+
+/**
+ * Pure: which logged calls the contact page shows — those no call summary accounts for. A summary accounts for ONE logged call: the latest still-scheduled call that
+ * started up to 8 hours before the summary arrived (else one planned to start within the hour after it). So a second call on the same New York day is NOT hidden by the
+ * first call's summary (it used to be: any summary that day hid every call that day). A call with no known start time, or one that was moved or cancelled, is always shown.
+ */
 export function bookedCallsToShow(rows: readonly ContactCallRow[], summaryIsoDates: readonly string[]): ContactCallRow[] {
-  const summaryDays = new Set(summaryIsoDates.map((iso) => nyDate(iso)))
-  return rows.filter((r) => !(r.scheduled_date && summaryDays.has(r.scheduled_date)))
+  const times = summaryIsoDates.map((d) => Date.parse(d)).filter((t) => Number.isFinite(t)).sort((a, b) => a - b)
+  const candidates = rows
+    .filter((r) => r.state === 'scheduled' && !!r.scheduled_start && Number.isFinite(Date.parse(r.scheduled_start)))
+    .map((r) => ({ row: r, start: Date.parse(r.scheduled_start as string) }))
+    .sort((a, b) => a.start - b.start)
+  const covered = new Set<ContactCallRow>()
+  for (const t of times) {
+    const free = candidates.filter((c) => !covered.has(c.row) && c.start <= t + SUMMARY_BEFORE_START_MS && c.start >= t - SUMMARY_AFTER_START_MS)
+    if (free.length === 0) continue
+    const before = free.filter((c) => c.start <= t)
+    const hit = before.length ? before[before.length - 1] : free[0]
+    covered.add(hit.row)
+  }
+  return rows.filter((r) => !covered.has(r))
 }
 
 /** Pure: the short label next to a logged call. A past call still 'scheduled' is "Not confirmed", never "Scheduled": nothing tells us it happened. */
